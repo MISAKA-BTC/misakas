@@ -114,7 +114,7 @@ assignment_wire_enum!(AssignmentSettlementFundingV2;0=>(),1=>(NativeOutpoint));
 // fixed Borsh decode. Any future heap field requires a reviewed visitor update.
 use crate::{
     Hash64,
-    config::params::{AssignmentNativePreimagesV2, PositiveCourtPolicyV2},
+    config::params::{AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, PositiveCourtPolicyV2},
     palw_positive_assignment_funds_v2::{
         AssignmentFeeScheduleV2, AssignmentMoneyQuoteV2, AssignmentPhysicalProfileV2, AssignmentPhysicalUsageV2,
     },
@@ -150,8 +150,8 @@ native_struct!(AssignmentSourceQuoteDescriptorV2;digest,units,data_bytes,opening
 wire_struct!(AssignmentSourceQuoteDescriptorV2;Digest,u64,u64,u64,u64);
 native_struct!(AssignmentCustodyDescriptorV2;reservation,liability,preimage_bytes,retention_until_daa,retained_bytes,replay_bytes,replay_work,heap_bytes);
 wire_struct!(AssignmentCustodyDescriptorV2;AcceptedMaterial,AcceptedMaterial,[Digest; ASSIGNMENT_OPEN_PREIMAGES_V2],u64,u64,u64,u64,u64);
-native_struct!(AssignmentAdmissionMaterialV2;version,revision,assignment,unsigned_bundle,origin,network,ruleset,fired_rules,branch_anchor,assignment_policy,positive_policy,native_preimages,certification_policy,network_prompt_form,class_prompt_form,job,registered,source,money,custody);
-wire_struct!(AssignmentAdmissionMaterialV2;u16,u16,AssignmentId,Digest,AcceptedOrigin,Digest,Digest,Digest,NativeHash64,AssignmentPolicyV2,PositiveCourtPolicyV2,AssignmentNativePreimagesV2,PalwSecurityCertificationPolicyV1,PalwPromptIdsFormV1,PalwPromptIdsFormV1,AssignmentJobDescriptorV2,AssignmentRegisteredDescriptorV2,AssignmentSourceQuoteDescriptorV2,AssignmentMoneyQuoteV2,AssignmentCustodyDescriptorV2);
+native_struct!(AssignmentAdmissionMaterialV2;version,revision,assignment,unsigned_bundle,origin,network,ruleset,fired_rules,branch_anchor,assignment_policy,positive_policy,native_preimages,funding_relay,certification_policy,network_prompt_form,class_prompt_form,job,registered,source,money,custody);
+wire_struct!(AssignmentAdmissionMaterialV2;u16,u16,AssignmentId,Digest,AcceptedOrigin,Digest,Digest,Digest,NativeHash64,AssignmentPolicyV2,PositiveCourtPolicyV2,AssignmentNativePreimagesV2,AssignmentFundingRelayProfileV2,PalwSecurityCertificationPolicyV1,PalwPromptIdsFormV1,PalwPromptIdsFormV1,AssignmentJobDescriptorV2,AssignmentRegisteredDescriptorV2,AssignmentSourceQuoteDescriptorV2,AssignmentMoneyQuoteV2,AssignmentCustodyDescriptorV2);
 wire_struct!(AssignmentLiveCapsV2;u32,u32,u32,u32,u32);
 wire_struct!(AssignmentPolicyV2;u16,u16,AssignmentModeV2,Digest,Digest,Digest,Digest,Digest,Digest,Digest,Digest,AssignmentLiveCapsV2,u64,u32,u32,u32,u32,u32,u32,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64,u64);
 native_enum!(AssignmentCancellationRuleV2;PreserveEarnedAndLiabilityV1);
@@ -194,3 +194,6 @@ native_enum!(AssignmentSourceResponsibilityV2;FeeOnlyV1);
 assignment_wire_enum!(AssignmentSourceResponsibilityV2;0=>());
 native_enum!(AssignmentSourceReleaseV2;AfterSignedDutiesRetentionAndLiabilityV1);
 assignment_wire_enum!(AssignmentSourceReleaseV2;0=>());
+
+native_enum!(AssignmentFundingRelayProfileV2;CooperativeV1,RequiresRelayV2{fired_rules,ruleset,policy,fees,physical});
+assignment_wire_enum!(AssignmentFundingRelayProfileV2;0=>(),1=>(crate::Hash,Digest,FundingRelayPolicyV2,FundingRelayFeeScheduleV2,FundingRelayPhysicalProfileV2));

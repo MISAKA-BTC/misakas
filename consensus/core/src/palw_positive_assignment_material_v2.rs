@@ -7,7 +7,7 @@
 //! data. This module supplies no native admission, fund or credit capability.
 use crate::{
     Hash64,
-    config::params::{AssignmentNativePreimagesV2, PositiveCourtPolicyV2},
+    config::params::{AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, PositiveCourtPolicyV2},
     palw_positive_assignment_funds_v2::{AssignmentMoneyQuoteV2, quote_assignment_money_v2},
     palw_positive_source_geometry_v2::SourceCatalogQuoteV2,
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
@@ -186,6 +186,7 @@ pub struct AssignmentAdmissionMaterialV2 {
     pub assignment_policy: AssignmentPolicyV2,
     pub positive_policy: PositiveCourtPolicyV2,
     pub native_preimages: AssignmentNativePreimagesV2,
+    pub funding_relay: AssignmentFundingRelayProfileV2,
     pub certification_policy: PalwSecurityCertificationPolicyV1,
     pub network_prompt_form: PalwPromptIdsFormV1,
     pub class_prompt_form: PalwPromptIdsFormV1,
@@ -217,6 +218,7 @@ impl AssignmentAdmissionMaterialV2 {
         self.assignment_policy.check_terms(&row.bundle.terms, self.origin.accepted_daa)?;
         self.positive_policy.validate_shape().map_err(|_| ContractError::Scope)?;
         self.native_preimages.validate(&self.assignment_policy).map_err(|_| ContractError::Scope)?;
+        self.funding_relay.validate_original_scope(self.fired_rules).map_err(|_| ContractError::Scope)?;
         self.certification_policy.validate().map_err(|_| ContractError::Scope)?;
         self.job.validate()?;
         if self.version != 2 || self.revision != 1 {

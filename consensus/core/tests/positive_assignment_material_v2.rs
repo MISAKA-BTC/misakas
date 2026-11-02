@@ -84,7 +84,12 @@ fn actual_control_boundary_matches_borsh_and_envelope_extent_without_padding() {
     changed.input_count = 0;
     assert!(changed.canonical_bytes().is_err());
 }
+#[path = "support/funding_relay.rs"]
+mod funding_relay_fixture;
 fn fixture() -> (AssignmentRow, AssignmentAdmissionMaterialV2, PalwJobContextV2) {
+    fixture_with_relay(false)
+}
+fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissionMaterialV2, PalwJobContextV2) {
     let mut positive = PositiveCourtFenceV2::unapproved_probe_at(ForkActivation::new(1)).policy;
     let native = AssignmentNativePreimagesV2 {
         assignment_fees: AssignmentFeeScheduleV2 {
@@ -185,11 +190,21 @@ fn fixture() -> (AssignmentRow, AssignmentAdmissionMaterialV2, PalwJobContextV2)
         refund_window_daa: 50,
         retention_window_daa: 500,
     };
+    use kaspa_consensus_core::config::params::{AssignmentFundingRelayProfileV2, PositiveAssignmentFenceV2, TESTNET_PARAMS};
+    let mut params = TESTNET_PARAMS;
+    params.palw_positive_court_v2 = Some(PositiveCourtFenceV2 { activation: ForkActivation::new(0), policy: positive.clone() });
+    params.palw_positive_assignment_v2 =
+        Some(PositiveAssignmentFenceV2 { activation: ForkActivation::new(0), policy, native_preimages: Some(native.clone()) });
+    if requires_relay {
+        params.palw_positive_funding_relay_v2 = Some(funding_relay_fixture::relay_fence(0));
+    }
+    let scope = params.palw_positive_assignment_rule_scope_v2_at(10).unwrap();
+    let funding_relay = AssignmentFundingRelayProfileV2::capture_at_intake(&params, 10).unwrap();
     let terms = AssignmentTermsV2 {
         version: 2,
         revision: 1,
         network: d(20),
-        ruleset: misaka_palw_positive_contract::native::ruleset_id(d(21), policy.positive_policy),
+        ruleset: Digest(scope.ruleset().as_bytes()),
         branch_anchor: NativeHash64([22; 64]),
         mode: policy.mode,
         registered_class: d(23),
@@ -330,11 +345,12 @@ fn fixture() -> (AssignmentRow, AssignmentAdmissionMaterialV2, PalwJobContextV2)
         origin: origin(),
         network: terms.network,
         ruleset: terms.ruleset,
-        fired_rules: d(21),
+        fired_rules: scope.fired_rules_digest(),
         branch_anchor: terms.branch_anchor,
         assignment_policy: policy,
         positive_policy: positive,
         native_preimages: native,
+        funding_relay,
         certification_policy: PalwSecurityCertificationPolicyV1 {
             m: 1,
             k: 1,
@@ -379,7 +395,7 @@ fn fixture() -> (AssignmentRow, AssignmentAdmissionMaterialV2, PalwJobContextV2)
         worker_key: [0; PUBKEY_BYTES],
         positive_policy: policy.positive_policy,
         assignment_policy: policy.id(),
-        fired_rules: d(21),
+        fired_rules: scope.fired_rules_digest(),
         job: Digest(job.job_id.as_bytes()),
         input: Digest(job.prompt_token_ids_hash.as_bytes()),
         context: Digest(job.context_hash().as_bytes()),
@@ -479,4 +495,27 @@ fn bounded_fixed_codec_and_original_job_profile_are_checked() {
     changed.job.network[63] = 1;
     assert!(changed.job.check_native(&changed_job).is_err());
     changed.check_row(&row).unwrap_err();
+}
+
+#[test]
+fn required_relay_profile_is_retained_in_original_material_without_current_policy_fallback() {
+    let (row, material, _) = fixture_with_relay(true);
+    assert!(material.funding_relay.requires_relay());
+    material.check_row(&row).unwrap();
+    let raw = borsh::to_vec(&material).unwrap();
+    let restored = AssignmentAdmissionMaterialV2::decode(&raw, 16 << 10).unwrap();
+    assert_eq!(restored, material);
+    restored.check_row(&row).unwrap();
+    let mut downgraded = restored.clone();
+    downgraded.funding_relay = kaspa_consensus_core::config::params::AssignmentFundingRelayProfileV2::CooperativeV1;
+    assert_ne!(downgraded.id(), material.id());
+    assert!(downgraded.check_row(&row).is_err());
+    let mut changed = restored;
+    let kaspa_consensus_core::config::params::AssignmentFundingRelayProfileV2::RequiresRelayV2 { fees, .. } =
+        &mut changed.funding_relay
+    else {
+        panic!("required original profile")
+    };
+    fees.retirement += 1;
+    assert!(changed.check_row(&row).is_err());
 }

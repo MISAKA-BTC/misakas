@@ -387,52 +387,10 @@ fn signed_money_quote_is_stable_across_eligible_acceptance_clocks() {
     assert_eq!(quote(150).unwrap(), quote(199).unwrap());
 }
 
-fn relay_fence(at: u64) -> PositiveFundingRelayFenceV2 {
-    use misaka_palw_positive_contract::assignment::funding_relay_policy::*;
-    let fees = FundingRelayFeeScheduleV2 {
-        version: 2,
-        revision: 1,
-        admission: 1,
-        per_signature: 1,
-        per_frame_byte: 1,
-        per_retained_byte_daa: 1,
-        per_database_byte: 1,
-        per_replay_read: 1,
-        per_replay_work: 1,
-        retirement: 1,
-    };
-    let physical = FundingRelayPhysicalProfileV2 {
-        version: 2,
-        revision: 1,
-        max_frame_bytes: 64_000,
-        max_decoded_bytes: 64_000,
-        max_heap_bytes: 128_000,
-        max_retained_bytes: 64_000,
-        max_database_bytes: 128_000,
-        max_batch_bytes: 256_000,
-        max_replay_reads: 100,
-        max_replay_work: 1_000_000,
-        max_signatures: 2,
-    };
-    let policy = FundingRelayPolicyV2 {
-        version: 2,
-        revision: 1,
-        max_pending_global: 100,
-        max_pending_per_poster: 10,
-        max_pending_per_prover: 10,
-        max_account_candidates: 3,
-        max_account_continuations: 5,
-        max_stored_rows: 1000,
-        max_declared_amount: 1_000_000,
-        register_window_daa: 100,
-        funding_window_daa: 300,
-        custody_window_daa: 1000,
-        rollback_margin_daa: 10,
-        metadata_fee_schedule: fees.id(),
-        physical_custody_profile: physical.id(),
-    };
-    PositiveFundingRelayFenceV2 { activation: ForkActivation::new(at), policy, fees, physical }
-}
+#[path = "support/funding_relay.rs"]
+mod funding_relay_fixture;
+use funding_relay_fixture::relay_fence;
+
 #[test]
 fn relay_metadata_is_some_only_and_every_shipped_preset_remains_dormant() {
     for p in [MAINNET_PARAMS, TESTNET_PARAMS, TESTNET11_PARAMS, SIMNET_PARAMS, DEVNET_PARAMS, palw_t12_shipped_params()] {
@@ -504,4 +462,39 @@ fn relay_selection_rejects_missing_assignment_and_substituted_physical_or_fee_pr
         assert!(changed.palw_positive_funding_relay_v2_at(1000).is_none());
         assert!(changed.validate_palw_positive_funding_relay_v2().is_err());
     }
+}
+
+#[test]
+fn original_intake_profile_is_not_reselected_after_relay_activation_or_removal() {
+    let mut p = selected(1000);
+    p.palw_positive_funding_relay_v2 = Some(relay_fence(5000));
+    let old = AssignmentFundingRelayProfileV2::capture_at_intake(&p, 1000).unwrap();
+    assert_eq!(old, AssignmentFundingRelayProfileV2::CooperativeV1);
+    assert_eq!(borsh::to_vec(&old).unwrap(), vec![0]);
+    let captured = AssignmentFundingRelayProfileV2::capture_at_intake(&p, 5000).unwrap();
+    assert!(captured.requires_relay());
+    let original_scope = p.palw_positive_assignment_rule_scope_v2_at(5000).unwrap();
+    let raw = borsh::to_vec(&captured).unwrap();
+    assert_eq!(raw.len(), 433);
+    assert_eq!(raw[0], 1);
+    p.palw_positive_funding_relay_v2 = None;
+    assert_eq!(AssignmentFundingRelayProfileV2::capture_at_intake(&p, 6000).unwrap(), old);
+    let retained = borsh::from_slice::<AssignmentFundingRelayProfileV2>(&raw).unwrap();
+    retained.validate_original_scope(original_scope.fired_rules_digest()).unwrap();
+    assert!(retained.requires_relay());
+    assert!(!old.requires_relay());
+    assert_eq!(retained, captured);
+    assert!(retained.validate_original_scope(d(99)).is_err());
+}
+#[test]
+fn invalid_armed_relay_never_downgrades_new_intake_to_cooperative() {
+    let mut p = selected(1000);
+    p.palw_positive_funding_relay_v2 = Some(relay_fence(1000));
+    p.palw_positive_funding_relay_v2.as_mut().unwrap().fees.retirement += 1;
+    assert!(AssignmentFundingRelayProfileV2::capture_at_intake(&p, 1000).is_err());
+    p.palw_positive_funding_relay_v2.as_mut().unwrap().activation = ForkActivation::new(5000);
+    assert_eq!(AssignmentFundingRelayProfileV2::capture_at_intake(&p, 1000).unwrap(), AssignmentFundingRelayProfileV2::CooperativeV1);
+    p.palw_positive_assignment_v2 = None;
+    assert!(AssignmentFundingRelayProfileV2::capture_at_intake(&p, 6000).is_err());
+    assert!(borsh::from_slice::<AssignmentFundingRelayProfileV2>(&[255]).is_err());
 }

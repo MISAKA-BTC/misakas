@@ -4,7 +4,7 @@ use super::*;
 use crate::tx::{Transaction, UtxoEntry};
 use crate::{
     block::BlockTransactionsV3,
-    config::params::{AssignmentNativePreimagesV2, Params, PositiveAssignmentRuleScopeV2},
+    config::params::{AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, Params, PositiveAssignmentRuleScopeV2},
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1},
     palw_positive_assignment_certification_v2::{AssignmentGateCClockErrorV2, AssignmentGateCClockV2},
     palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
@@ -21,6 +21,7 @@ pub struct NativeAssignmentRulesV2 {
     policy: AssignmentPolicyV2,
     positive: crate::config::params::PositiveCourtPolicyV2,
     preimages: Option<AssignmentNativePreimagesV2>,
+    intake_funding_relay: AssignmentFundingRelayProfileV2,
     network: Digest,
     prompt_form: PalwPromptIdsFormV1,
     gate_c: Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>,
@@ -36,6 +37,7 @@ impl NativeAssignmentRulesV2 {
             policy: fence.policy,
             positive,
             preimages: fence.native_preimages.clone(),
+            intake_funding_relay: AssignmentFundingRelayProfileV2::capture_at_intake(params, daa).ok()?,
             network: Digest(network.as_bytes()),
             prompt_form,
             gate_c,
@@ -52,6 +54,11 @@ impl NativeAssignmentRulesV2 {
     }
     pub fn native_preimages(&self) -> Option<&AssignmentNativePreimagesV2> {
         self.preimages.as_ref()
+    }
+    /// NEW intake selection only. Continuing contracts use their retained
+    /// original material, including when current intake is later changed.
+    pub fn intake_funding_relay(&self) -> &AssignmentFundingRelayProfileV2 {
+        &self.intake_funding_relay
     }
     pub fn network(&self) -> Digest {
         self.network
@@ -212,9 +219,10 @@ impl NativeHeapV1 for NativeAssignmentRulesV2 {
     fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
         // All fields are bounded fixed policy/preimage values. No Params or
         // peer variable collection is hidden behind this immutable descriptor.
-        let Self { scope, policy, positive, preimages, network, prompt_form, gate_c } = self;
+        let Self { scope, policy, positive, preimages, intake_funding_relay, network, prompt_form, gate_c } = self;
         fn require_fixed_copy<T: Copy>(_: &T) {}
         require_fixed_copy(scope);
+        require_fixed_copy(intake_funding_relay);
         require_fixed_copy(policy);
         require_fixed_copy(network);
         require_fixed_copy(prompt_form);
