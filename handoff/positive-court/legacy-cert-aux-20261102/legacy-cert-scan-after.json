@@ -1,0 +1,30 @@
+{
+  "command": [
+    "rustc",
+    "--edition=2024",
+    "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/legacy-cert-aux-20261102/operator-scripts/legacy-cert-scan-after.rs",
+    "-o",
+    "/tmp/misaka-legacy-cert-scan-after-20261102",
+    "-L",
+    "dependency=/Users/wata/Downloads/MISAKA-testnet/target/debug/deps",
+    "--extern",
+    "borsh=/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libborsh-c57124d88bb5020f.rlib",
+    "--extern",
+    "kaspa_consensus_core=/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-9df8f20c21ee352b.rlib"
+  ],
+  "source_sha256": "0cf0a00b5ad7fb32308c2b04820ac1c6aaed1493c632aa408cffbec2863b38f9",
+  "rlib_sha256": {
+    "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libborsh-c57124d88bb5020f.rlib": "5532aa752af250630dc85869e908413d1ecf7975ad76a0d28e15fd50f6bf8fd7",
+    "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-9df8f20c21ee352b.rlib": "f72abf41bd1744b1af6072b555b3ca6b1a7aeeea3e43f16775deb339b71eccf9"
+  },
+  "compile_exit": 0,
+  "compile_stdout": "",
+  "compile_stderr": "",
+  "elapsed_compile_seconds": 1.485988208,
+  "scope": "old canonical row codec shape only; zero diagnostic header, not actual accepted state/funding/P",
+  "binary_sha256": "6927d218fceda318c9df71f68088452db6f0783287f3aaa46c7c5d43a380da14",
+  "run_exit": 0,
+  "run_stdout": "empty control: success=true error=None\nlegacy S: success=true error=None\nlegacy V: success=true error=None\nlegacy K: success=true error=None\nlegacy H: success=true error=None\n",
+  "run_stderr": "",
+  "rlib_unchanged": true
+}

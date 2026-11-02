@@ -1,0 +1,8 @@
+{
+  "snapshot": "exec-fresh-functional-first.running-snapshot.log",
+  "bytes": 390281,
+  "sha256": "fc6c3d52fcd46ef06b5a9b5ecb9350b6d117215677fd007ff7e7cced5abf1344",
+  "partial_only": true,
+  "complete_result": false,
+  "live_log": "exec-fresh-functional-first.log"
+}

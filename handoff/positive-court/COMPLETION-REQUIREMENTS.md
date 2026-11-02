@@ -306,3 +306,38 @@ complete existing K/H bounded codecs/inventory plus meaningful malformed-row
 and legacy regression coverage. This does not authorize a new P row or change
 old signatures, IDs, roles, policy or money. The independent native assignment
 RFC/ADR adoption question remains pending.
+
+## Existing K/H correction and initially interrupted verification
+
+The exact existing kernel certification K and held-reward H row types now have
+bounded codecs/inventory at `27a371268`. Three selected Core tests and the
+recompiled original preflight counterexample pass before the shared generated
+artifacts disappear. K/H bytes and IDs retain their existing meanings; unknown
+P/version/malformed shapes refuse. This is codec compatibility, not full legacy
+accepted-history/fund/recovery equivalence or native Positive admission.
+
+Broader regression and static checks hit the actual disk floor and did not
+pass. Shared debug/native artifacts subsequently disappear and the free space
+recovers. A fresh original Cargo regression build, including actual native
+dependencies, is live; its exact process/handle and still-required checks are
+recorded in [the codec evidence](legacy-cert-aux-20261102/README.md). No missing
+binary/archive is restored and declared fresh. The earlier complete three-role
+measurement retains its pre-correction source qualification. The full seven
+stages and every A01–A12/T01–T44 native obligation remain unproven/in scope.
+
+## K/H correction: fresh verification complete
+
+After the shared generated artifacts disappear, the original regression
+sources and native dependencies are rebuilt normally in a new target with
+functional opt0, debug assertions and overflow checks. All 42 selected outer
+runtime cases (39 existing + 3 codec cases) and strict selected Core/Exec
+Clippy pass on the same source map at `27a371268`. Native archives/bindings
+are actual new compiler outputs with recorded SHA values, not missing cache
+files backfilled as fresh. All groups are empty; failed compile/disk-floor
+attempts remain failures. See [the final source audit](legacy-cert-aux-20261102/final-source-validation.json).
+
+This verifies the existing K/H codec compatibility increment. It does not
+prove full native legacy money/history/recovery equivalence or any new
+Positive authority/P/consumer/activation. All seven stages and individual
+A01–A12/T01–T44 native requirements remain in scope and unproven. The older
+three-role model performance measurement retains its own exact source pins.
