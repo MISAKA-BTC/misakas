@@ -26,18 +26,26 @@ struct BlockBody(kaspa_consensus_core::block::BlockTransactionsV3);
 
 impl MemSizeEstimator for BlockBody {
     fn estimate_mem_bytes(&self) -> usize {
-        const NORMAL_SIG_SIZE: usize = 66;
-        let (inputs, outputs) = self.0.iter().fold((0, 0), |(ins, outs), tx| (ins + tx.inputs.len(), outs + tx.outputs.len()));
-        // TODO: consider tracking transactions by bytes accurately (preferably by saving the size in a field)
-        // We avoid zooming in another level and counting exact bytes for sigs and scripts for performance reasons.
-        // Outliers with longer signatures are rare enough and their size is eventually bounded by mempool standards
-        // or in the worst case by max block mass.
-        // A similar argument holds for spk within outputs, but in this case the constant is already counted through the SmallVec used within.
-        inputs * (size_of::<TransactionInput>() + NORMAL_SIG_SIZE)
-            + outputs * size_of::<TransactionOutput>()
-            + self.0.len() * size_of::<Transaction>()
-            + size_of::<Vec<Transaction>>()
-            + size_of::<Self>()
+        // This is the immutable allocation retained by a cache entry, not a
+        // serialized-length estimate. PQ P2PKH witnesses are normally 7,226 B,
+        // and their 69 B output scripts spill the 35 B inline SmallVec.
+        let mut bytes = size_of::<Self>()
+            .saturating_add(size_of::<Vec<Transaction>>())
+            .saturating_add(2 * size_of::<usize>()) // Arc strong/weak counters
+            .saturating_add(self.0.capacity().saturating_mul(size_of::<Transaction>()));
+        for tx in self.0.iter() {
+            bytes = bytes
+                .saturating_add(tx.inputs.capacity().saturating_mul(size_of::<TransactionInput>()))
+                .saturating_add(tx.outputs.capacity().saturating_mul(size_of::<TransactionOutput>()))
+                .saturating_add(tx.payload.capacity());
+            for input in &tx.inputs {
+                bytes = bytes.saturating_add(input.signature_script.capacity());
+            }
+            for output in &tx.outputs {
+                bytes = bytes.saturating_add(output.script_public_key.heap_capacity_bytes());
+            }
+        }
+        bytes
     }
 }
 
@@ -102,3 +110,7 @@ impl BlockTransactionsStore for DbBlockTransactionsStore {
 #[cfg(test)]
 #[path = "block_transactions/retained_body_v3_tests.rs"]
 mod retained_body_v3_tests;
+
+#[cfg(test)]
+#[path = "block_transactions/capacity_weight_tests.rs"]
+mod capacity_weight_tests;
