@@ -41,6 +41,13 @@ const INPUT: &[u32] = &[510, 4096, 273, 436, 3368, 310, 281, 1924, 4217, 13782, 
 const E: u64 = 1 << 28;
 const REQUEST_CAP: u64 = 8 << 30;
 const PROVIDER_BYTES: u64 = 64 << 20;
+const PROVIDER_CALL_LEAVES: usize = 1024;
+const PROVIDER_CALL_READ_BYTES: u64 = 1 << 20;
+const PROVIDER_CALL_RETURN_BYTES: u64 = 4 << 20;
+// R5 charges the conservative per-call envelope, not actual pread bytes. Its
+// finite total derives from the opening-attempt cap. Actual requested file IO
+// independently remains capped at 4 GiB in IoBudget, with no retry refund.
+const PROVIDER_ENVELOPE_TOTAL: u64 = (1 << 20) * PROVIDER_CALL_READ_BYTES;
 const DISK_CAP: u64 = 320 << 20; // Geometry predicts 305,797,608 aggregate tape bytes.
 const BASELINE_FAILED_DISK_CAP: u64 = 64 << 20;
 const FILE_BYTES: u64 = 103402560;
@@ -179,13 +186,12 @@ impl TirByteSourceV1 for FileBytes<'_> {
         require(stamp(self.file)? == self.stamp, "source changed before opening")?;
         let (base, len) = self.checked.locate(p, layer).ok_or("tensor absent")?;
         require(add(at, buf.len() as u64)? <= len, "piece leaves tensor")?;
-        let mut got = 0;
-        while got < buf.len() {
-            self.budget.charge(Usage { calls: 1, bytes: (buf.len() - got) as u64, ..Usage::default() })?;
-            let n = self.file.read_at(&mut buf[got..], add(base, add(at, got as u64)?)?).map_err(|_| "bounded pread refused")?;
-            require(n > 0, "truncated source")?;
-            got += n;
-        }
+        require(!buf.is_empty() && buf.len() <= PALW_TIR_ROW_PIECE_BYTES_V1 as usize, "single original-file piece cap")?;
+        // One bounded syscall per requested piece. A short read is refused and
+        // remains charged; retrying it here could exceed the per-call envelope.
+        self.budget.charge(Usage { calls: 1, bytes: buf.len() as u64, ..Usage::default() })?;
+        let got = self.file.read_at(buf, add(base, at)?).map_err(|_| "bounded pread refused")?;
+        require(got == buf.len(), "short source piece")?;
         require(stamp(self.file)? == self.stamp, "source changed during opening")
     }
 }
@@ -239,17 +245,17 @@ impl<'a> Provider<'a> {
     }
     fn admit(&self, leaves: &[u32]) -> R<()> {
         self.source.budget.charge(Usage { openings: 1, ..Usage::default() })?;
-        require(!leaves.is_empty() && leaves.len() <= 4096, "finite provider opening cardinality")?;
+        require(!leaves.is_empty() && leaves.len() <= PROVIDER_CALL_LEAVES, "finite provider opening cardinality")?;
         require(leaves.iter().all(|i| *i < self.tree.leaf_count()), "opening index")?;
         let output = mul(leaves.len() as u64, add(self.max_name, 1024 + 32 * 64 + 256)?)?;
-        require(output <= 16 << 20, "provider return envelope")
+        require(output <= PROVIDER_CALL_RETURN_BYTES, "provider return envelope")
     }
 }
 impl TirParamOpenerV1 for Provider<'_> {
     fn param_scratch_storage_v1(&self, leaves: &[u32]) -> Option<u64> {
         // sorted leaf IDs plus current/next u64 level vectors coexist.
         // Returned pieces/siblings have their separate result envelope.
-        (leaves.len() <= 4096).then_some(8192 + leaves.len() as u64 * 32)
+        (leaves.len() <= PROVIDER_CALL_LEAVES).then_some(8192 + leaves.len() as u64 * 32)
     }
     fn param_opening(&self, i: u32) -> Option<PalwArtifactOpeningV1> {
         self.admit(&[i]).ok()?;
@@ -284,13 +290,22 @@ fn node_limits() -> FullRelationLimits {
     l.plan.max_geometry_visits = 1 << 28;
     l.plan.max_plan_bytes = 1 << 28;
     l.plan.uncommitted_tile_lanes = 64;
-    l.plan.max_elements_per_relation = 1 << 20;
-    l.plan.max_terms_per_relation = 1 << 24;
+    // These are enforced evaluation ceilings, not promised work. The old
+    // generous caps implied a >16-GiB conservative workspace despite a 512-MiB
+    // owner and therefore refused even relation zero. Tighter finite per-tile
+    // limits keep that workspace inside its real owner; any larger closure
+    // still refuses. No relation, arithmetic or original model is changed.
+    l.plan.max_elements_per_relation = 1 << 14;
+    l.plan.max_terms_per_relation = 1 << 17;
     l.plan.max_peak_target_bytes = 16 << 20;
     l.source.max_target_bytes = 16 << 20;
     l.source.max_material_bytes = 16 << 20;
-    l.source.max_auth_storage_bytes = 64 << 20;
-    l.source.max_workspace_bytes = 512 << 20;
+    l.source.max_auth_storage_bytes = 256 << 20;
+    // 64 lanes x 2048 reduction entries can request two source lanes per
+    // term. Keep those enforced reads and the conservative evaluator backing
+    // together inside the actual one-GiB builder owner and global 8-GiB ledger.
+    l.source.max_source_reads = 1 << 18;
+    l.source.max_workspace_bytes = 1 << 30;
     l.max_record_bytes = 256 << 20;
     l.max_record_heap_bytes = 64 << 20;
     l
@@ -302,10 +317,10 @@ fn panel_limits() -> WidePanelLimitsV2 {
         max_tape_bytes: DISK_CAP,
         max_live_heap_bytes: 6 << 30,
         max_visits: 1 << 46,
-        max_io_bytes: 4 << 30,
+        max_io_bytes: 2 * PROVIDER_ENVELOPE_TOTAL,
         max_hash_work: 1 << 46,
         max_proof_attempts: 1 << 20,
-        max_provider_bytes: 4 << 30,
+        max_provider_bytes: PROVIDER_ENVELOPE_TOTAL,
         max_provider_scratch: 1 << 20,
         max_material_bytes: 16 << 20,
         max_claim_bytes: 16 << 20,
@@ -313,18 +328,35 @@ fn panel_limits() -> WidePanelLimitsV2 {
         external_retained_bytes: E + PROVIDER_BYTES,
     }
 }
-fn record_limits() -> StreamRecordLimitsV2 {
+fn record_limits(external: u64) -> StreamRecordLimitsV2 {
     StreamRecordLimitsV2 {
         max_record_bytes: 256 << 20,
         max_claim_values: 1 << 20,
         max_read_bytes: 4 << 30,
         max_read_calls: 1 << 24,
-        max_extra_heap_bytes: 2 << 30,
+        max_extra_heap_bytes: REQUEST_CAP,
         metadata_auth_bytes: 512 << 20,
         signature_workspace_bytes: 1 << 20,
-        external_retained_bytes: 6 << 30,
+        external_retained_bytes: external,
     }
 }
+/// Exact local scope only: all actual parents remain alive in run_loaded.
+/// The eight-GiB bound still covers existing + introduced requests together.
+/// This does not authenticate native funding or make an external DTO a lease.
+fn reserve_stream_increment(
+    l: &Ledger,
+    reserve: &TirMemoryReserverV1,
+    existing: u64,
+    whole: u64,
+    role: &'static str,
+) -> Result<TirMemoryLeaseV1, FullRelationError> {
+    if l.live.load(Ordering::SeqCst) < existing || whole > REQUEST_CAP {
+        return Err(FullRelationError::Budget);
+    }
+    let new = whole.checked_sub(existing).filter(|n| *n > 0).ok_or(FullRelationError::Budget)?;
+    reserve(role, hash(CLASS), hash(CONTEXT), new).map_err(|_| FullRelationError::Budget)
+}
+
 fn report(phase: &str, start: Instant, l: &Ledger, extra: serde_json::Value) {
     let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
     let status = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
@@ -456,9 +488,9 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
     .map_err(|e| format!("Node preparation {e:?}"))?;
     let authenticated = signed.authenticate();
     let mut own = owners();
-    own.metadata_auth_bytes = 512 << 20;
-    own.metadata_auth_work = 1 << 36;
-    own.source_auth_bytes = 64 << 20;
+    own.metadata_auth_bytes = 1 << 30;
+    own.metadata_auth_work = 1 << 24;
+    own.source_auth_bytes = 256 << 20;
     own.retained_record_bytes = 64 << 20;
     own.material_limits = prep.source_limits();
     let builder = WidePanelBuilderV2::prepare(
@@ -467,24 +499,33 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
         &authenticated,
         &signed.rooted,
         &provider,
-        WideProviderEnvelopeV2 { per_call_io: 16 << 20, per_call_work: 1 << 24, max_result_bytes: 16 << 20 },
+        WideProviderEnvelopeV2 {
+            per_call_io: PROVIDER_CALL_READ_BYTES,
+            per_call_work: 1 << 24,
+            max_result_bytes: PROVIDER_CALL_RETURN_BYTES,
+        },
         own,
         reserve,
     )?;
     let mut tape = builder.claims_tape(tempfile::tempfile().map_err(|_| "claims tape")?)?;
     let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([97; 32]);
-    require(
-        l.live.load(Ordering::SeqCst) <= record_limits().external_retained_bytes,
-        "actual producer standing claims exceed record allowance",
-    )?;
-    let record = tape.freeze_record(
-        &prep,
-        capture.binding()?,
-        generated,
-        principal(panel.verification_key.as_ref()),
-        record_limits(),
-        reserve,
-    )?;
+    // This isolated caller keeps actual loaded/provider/capture/builder owners
+    // alive through both record and checker use. The Core quote includes those
+    // existing owners in its WHOLE operation bound. Reserve only its introduced
+    // increment; do not count the same live leases twice. No peer scalar or
+    // native authority is accepted here, and no owned result escapes this scope.
+    let record_external = l.live.load(Ordering::SeqCst);
+    let record_acquire = |whole| reserve_stream_increment(l, reserve, record_external, whole, "measurement-record-increment");
+    let record = prep
+        .freeze_stream_record(
+            capture.binding()?,
+            generated,
+            principal(panel.verification_key.as_ref()),
+            &mut tape,
+            record_limits(record_external),
+            &record_acquire,
+        )
+        .map_err(|e| format!("record admission {e:?}"))?;
     let sig = *libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, &record.signing_digest().0, record.signature_context(), [0; 32])
         .map_err(|_| "Panel signature")?
         .as_ref();
@@ -496,7 +537,8 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
     );
     tape.rewind();
     let start = Instant::now();
-    let node_reserve = |n| reserve("measurement-cold-node", hash(CLASS), hash(CONTEXT), n).map_err(|_| FullRelationError::Budget);
+    let node_external = l.live.load(Ordering::SeqCst);
+    let node_reserve = |whole| reserve_stream_increment(l, reserve, node_external, whole, "measurement-node-increment");
     let fresh = FullRelationPreparationV2::authenticate(
         &signed.rooted,
         inputs.class,
@@ -519,21 +561,42 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
             tape,
             *panel.verification_key.as_ref(),
             sig,
-            record_limits(),
+            record_limits(node_external),
             &node_reserve,
         )
         .map_err(|e| format!("Node begin {e:?}"))?;
     let relations = prep.plan().summary().relations;
+    report(
+        "node-started",
+        start,
+        l,
+        serde_json::json!({"required_relations":relations,"file_io_hard_cap":io.max.bytes,"conservative_envelope_cap":PROVIDER_ENVELOPE_TOTAL}),
+    );
     let mut frontier = 0;
     let mut producer_material_ns = 0u128;
     let mut node_check_ns = 0u128;
     for i in 0..relations {
         let relation = prep.plan().relation_at(i).ok_or("relation omitted")?;
         let material_started = Instant::now();
-        let material = builder.material(i, frontier)?;
+        let material = builder.material(i, frontier).map_err(|e| {
+            format!(
+                "material {i}/{relations}, checked={}, file_usage={:?}, work={:?}: {e}",
+                node.checked_relations(),
+                io.used.get(),
+                work.meter()
+            )
+        })?;
         producer_material_ns += material_started.elapsed().as_nanos();
         let node_started = Instant::now();
-        let result = node.submit(&material.as_borrowed(), material.target()).map_err(|e| format!("Node relation {i}: {e:?}"))?;
+        let result = node.submit(&material.as_borrowed(), material.target()).map_err(|e| {
+            format!(
+                "Node relation {i}/{relations}: {e:?}; kind={:?}; material={:?}; file_usage={:?}; work={:?}",
+                relation.kind,
+                material.as_borrowed().preflight(prep.source_limits()),
+                io.used.get(),
+                work.meter()
+            )
+        })?;
         node_check_ns += node_started.elapsed().as_nanos();
         require(
             result == if i + 1 == relations { StreamSubmitV2::NeedEof } else { StreamSubmitV2::Continue },
@@ -541,6 +604,14 @@ fn run_loaded(file: &mut File, inputs: LocalForwardInputsV2<'_>, l: &Ledger, res
         )?;
         if matches!(relation.kind, ExpandedRelationKind::Legacy(_)) {
             frontier += 1;
+        }
+        if (i + 1) % 1024 == 0 {
+            report(
+                "node-progress",
+                start,
+                l,
+                serde_json::json!({"checked_relations":node.checked_relations(),"required_relations":relations,"file_usage":format!("{:?}",io.used.get()),"producer_material_ns":producer_material_ns,"node_check_ns":node_check_ns}),
+            );
         }
     }
     require(node.finish().map_err(|e| format!("Node EOF {e:?}"))? == CheckOutcome::Matched, "Node result")?;
@@ -800,17 +871,42 @@ fn finite_original_file_provider_authenticates_pieces_and_refuses_changed_files(
         let provider =
             Provider::build(file, checked, f.artifact, f.job.shape_profile_id, f.job.context_hash(), &budget, &reserve).unwrap();
         assert_eq!(l.live.load(Ordering::SeqCst), PROVIDER_BYTES);
-        let scratch = provider.param_scratch_storage_v1(&[0; 4096]).unwrap();
-        assert!(scratch >= 4096 * (4 + 8 + 8) + 4096);
+        let scratch = provider.param_scratch_storage_v1(&[0; PROVIDER_CALL_LEAVES]).unwrap();
+        assert!(scratch >= PROVIDER_CALL_LEAVES as u64 * (4 + 8 + 8) + 4096);
         assert!(scratch <= panel_limits().max_provider_scratch);
-        assert_eq!(provider.param_scratch_storage_v1(&[0; 4097]), None);
+        assert_eq!(provider.param_scratch_storage_v1(&[0; PROVIDER_CALL_LEAVES + 1]), None);
         let before = budget.used.get();
         assert!(provider.param_multiproof(&[0, 0]).is_none());
         assert_eq!(budget.used.get().openings, before.openings + 1);
         assert_eq!(budget.used.get().calls, before.calls);
         let opening = provider.param_opening(0).unwrap();
         kaspa_consensus_core::palw_artifact::verify_artifact_opening_v1(&opening, f.artifact).unwrap();
-        assert_eq!(budget.used.get().openings, before.openings + 2);
+        // Real proof plus the enforced read-cache allowance must fit its owner
+        // before expensive trained execution. The old 64-MiB declaration could
+        // not even cover this read cap with an otherwise tiny valid material.
+        let proof = provider.param_carriage(&[0]).unwrap();
+        let empty = kaspa_consensus_core::palw_step_refute::PalwStepInputRowV1 { preimages: vec![], run_siblings: vec![] };
+        let material = kaspa_consensus_core::palw_tir_court_v1::source_only::wide_v2::TirSourceOnlyMaterialV2 {
+            operands: &empty,
+            params: &proof,
+            prompt_token_ids: &[],
+            prompt_ids_openings: &[],
+            decode_tokens: None,
+        };
+        let limits = node_limits().source;
+        let quote = material.preflight(limits).unwrap();
+        assert!(quote.logical_auth_storage_bytes > 64 << 20);
+        let mut insufficient = limits;
+        insufficient.max_auth_storage_bytes = 64 << 20;
+        assert!(matches!(
+            material.preflight(insufficient),
+            Err(kaspa_consensus_core::palw_tir_court_v1::source_only::TirSourceOnlyErrorV1::Budget)
+        ));
+        let mut oversized = [0u8; PALW_TIR_ROW_PIECE_BYTES_V1 as usize + 1];
+        let io_before = budget.used.get();
+        assert!(provider.source.read_bytes(0, None, 0, &mut oversized).is_err());
+        assert_eq!(budget.used.get(), io_before);
+        assert_eq!(budget.used.get().openings, before.openings + 3);
         let (base, _) = checked.locate(0, None).unwrap();
         file.write_at(&[123], base).unwrap();
         let before = budget.used.get();
