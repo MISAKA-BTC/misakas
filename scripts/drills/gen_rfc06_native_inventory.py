@@ -142,7 +142,7 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        'crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1','crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1',
        'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1',
        # RFC-0018 (2026-10-15): the SecurityCertified rows of kernel route aux 136.
-       'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
+       'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
        'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1',
        # RFC-0006 consumer v2 (2026-10-15): the router binding rows of kernel route aux 139.
        'crate::palw_router_binding_v2::PalwRouterBindingRowV2',

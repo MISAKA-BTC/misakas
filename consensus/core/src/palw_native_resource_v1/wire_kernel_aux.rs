@@ -237,9 +237,13 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
                 prefix,
                 crate::palw_security_certification_v1::CERTIFICATION_CLAIM_PREFIX_V1
                     | crate::palw_security_certification_v1::CERTIFICATION_NATIVE_MINING_PREFIX_V39
+                    | crate::palw_security_certification_v1::CERTIFICATION_KERNEL_CLAIM_PREFIX_V1
             ) =>
         {
             crate::palw_security_certification_v1::PalwClaimCertificationRowV1::scan_native_wire_v1(frame)?
+        }
+        136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_KERNEL_HOLD_PREFIX_V1 => {
+            crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1::scan_native_wire_v1(frame)?
         }
         136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_CLASS_PREFIX_V1 => {
             crate::palw_security_certification_v1::PalwCertificationClassRowV1::scan_native_wire_v1(frame)?
@@ -1246,4 +1250,24 @@ fn any_aux_row_v1<R: Read>(
         }
     }
     best.ok_or_else(|| wire::wire_bad("no audited layout accepts this ambiguous aux row"))?.allocation(n, 1)
+}
+
+// Existing version-1 kernel reward hold. This adapter only checks its codec;
+// it grants no payout, certification, or native admission authority.
+impl NativeWireScanV1 for crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1 {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        reader.step()?;
+        if reader.short()? != crate::palw_security_certification_v1::PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1 {
+            return Err(wire::wire_bad("unsupported kernel certified reward hold version"));
+        }
+        let mut sum = NativeWireShapeV1::default();
+        for _ in 0..5 {
+            sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        }
+        for _ in 0..2 {
+            sum = sum.merge(u64::scan_native_wire_v1(reader)?)?;
+        }
+        Ok(sum)
+    }
 }
