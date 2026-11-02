@@ -60,7 +60,7 @@ test transport::tests::counts_unused_capacity_and_nested_empty_values ... ok
 test transport_budget_tests::all_accepted_large_items_encode_without_needing_more_admission ... ok
 test transport_budget_tests::cancelled_queue_returns_session_and_unused_capacity_tickets ... ok
 test transport_budget_tests::codec_peak_is_admitted_before_queue_acceptance_without_waiting ... ok
-test transport_budget_tests::conversion_unwind_drops_source_before_its_retained_ticket ... 
+test transport_budget_tests::conversion_unwind_drops_source_before_its_retained_ticket ...
 thread 'transport_budget_tests::conversion_unwind_drops_source_before_its_retained_ticket' (612997) panicked at src/../../../utils/tower/tests/transport_budget.rs:89:72:
 intentional conversion failure
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
@@ -79,4 +79,3 @@ test result: ok. 33 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; fin
 running 0 tests
 
 test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-

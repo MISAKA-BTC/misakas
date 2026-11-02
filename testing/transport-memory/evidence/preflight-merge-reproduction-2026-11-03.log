@@ -8,7 +8,7 @@ thread 'preflight_tests::real_p2p_oneof_merged_256_by_three_fragments_require_ex
 unsupported merge must not return a false heap bound
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 FAILED
-test preflight_tests::singular_merged_256_by_three_fragments_require_explicit_unsupported ... 
+test preflight_tests::singular_merged_256_by_three_fragments_require_explicit_unsupported ...
 thread 'preflight_tests::singular_merged_256_by_three_fragments_require_explicit_unsupported' (607880) panicked at src/preflight_tests.rs:111:5:
 unsupported merge must not return a false heap bound
 singular merge: independent=6696 actual=8376
@@ -23,4 +23,3 @@ failures:
 test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s
 
 error: test failed, to rerun pass `--lib`
-
