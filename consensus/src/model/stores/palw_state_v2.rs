@@ -1190,12 +1190,18 @@ mod tests {
         store.set_tip_batch(&mut batch, block, &PalwChainStateV2::genesis()).unwrap();
         db.write(batch).unwrap();
         assert_eq!(store.load_tip_cached(&params()).unwrap().unwrap().0, block);
+        std::fs::write(std::env::var_os("MISAKA_NATIVE_PRESSURE_RESULT").unwrap(), b"passed").unwrap();
     }
 
     #[test]
     fn nested_native_pressure_is_local_and_corrupt_frames_remain_data_errors() {
         // Isolate the global bank and its optional capabilities from parallel
         // tests. The child runs real storage, preflight and nested consistency.
+        let marker = std::env::temp_dir().join(format!(
+            "misaka-native-pressure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
         let status = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
@@ -1203,10 +1209,13 @@ mod tests {
                 "--nocapture",
             ])
             .env("MISAKA_NATIVE_PRESSURE_CHILD", "1")
+            .env("MISAKA_NATIVE_PRESSURE_RESULT", &marker)
             .env("MISAKA_MEMORY_BUDGET_BYTES", (64u64 << 20).to_string())
             .status()
             .unwrap();
         assert!(status.success());
+        assert_eq!(std::fs::read(&marker).unwrap(), b"passed", "the filtered child test must actually run");
+        std::fs::remove_file(marker).unwrap();
     }
 
     #[test]

@@ -30,7 +30,7 @@ LazyFree observations record sampling start time, success/failure and bytes. Rea
 | PALW model/replay workspace | Existing PALW execution/share/host ledger retained; model workspace is not charged again into the process bank. This is not complete retained-allocation coverage for model caches. |
 | RocksDB native caches, ordinary DAG/UTXO caches, allocator retained arenas, all SDK allocations | **Not fully covered.** Their RSS consumes live headroom, but unaudited retained allocations do not each own process-bank tickets. |
 
-Native request tickets can still carry conservative whole-operation peaks for an owner's lifetime; this may refuse additional work earlier than actual RSS alone would require. No model root, quantization, rounding, context length or KV approximation was changed.
+Existing low-frequency phase/periodic memory logs include the process limit, reserved/retained/pending bytes and all four class totals alongside PSS, without a new log timer. Native request tickets can still carry conservative whole-operation peaks for an owner's lifetime; this may refuse additional work earlier than actual RSS alone would require. No model root, quantization, rounding, context length or KV approximation was changed.
 
 ## Legacy growth boundaries not converted in the first implementation
 
@@ -65,5 +65,5 @@ Seven additional large construction boundaries now use `grow_pending_memory_v1`:
 - Standalone std `rustc --test core/src/memory_budget.rs`: 7 tests pass (shared classes, clone lifetime, split/merge/growth rollback, concurrent last-byte admission, pending/materialized progress, host hook I/O recovery, ancestor/root cgroup capacity).
 - Standalone LazyFree module harness: 2 tests pass (initial/failed/stale/recovered readings, backwards timestamp, slow sample).
 - Standalone host-ledger harness using the production module with only logging/file-identity/libc bindings stubbed: 5 tests pass, including real separate child processes competing for the same free bytes, release then progress, replacement and I/O recovery, and both PALW-estimate/pending admission orders. This is not a full daemon build.
-- Added Cargo-native tests for real DB concurrent cold reads/failed decode then repair, and ordinary recognized native carriage/projection ownership. Full Cargo/daemon tests are delegated to the parent integration checkout to avoid concurrent heavy builds.
+- Added Cargo-native tests for real DB concurrent cold reads/failed decode then repair, ordinary recognized native carriage/projection ownership, and an isolated real-DB outer-carriage-fits/nested-row-capacity-refused regression. Nested resource/context errors remain local; semantic inconsistency and malformed frame controls remain data errors, and a repaired valid row makes progress. The child writes a completion marker so a misspelled exact filter cannot silently pass. Full Cargo/daemon tests are delegated to the parent integration checkout to avoid concurrent heavy builds.
 - No remote operation or deployment performed by this work item. Combined slow-peer/snapshot/IBD/reorg and real LLM maximum-context soak remains required before claiming production OOM remediation.
