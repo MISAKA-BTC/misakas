@@ -227,6 +227,34 @@ fn owners() -> WidePanelOwnersV2 {
 fn provider() -> WideProviderEnvelopeV2 {
     WideProviderEnvelopeV2 { per_call_io: 1 << 20, per_call_work: 1 << 20, max_result_bytes: 1 << 16 }
 }
+// Local producer values only; this tuple is not a new peer/native codec.
+fn material_encoding(material: &misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelMaterialV2<'_, '_, '_>) -> Vec<u8> {
+    let m = material.as_borrowed();
+    borsh::to_vec(&(
+        m.operands,
+        m.params,
+        m.prompt_token_ids,
+        m.prompt_ids_openings,
+        m.decode_tokens.map(|p| (p.rows_root, &p.generated_token_ids)),
+        material.target().map(|t| (t.opening, t.preimage, t.trace)),
+    ))
+    .unwrap()
+}
+fn material_meter_delta(
+    after: misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelMeterV2,
+    before: misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelMeterV2,
+) -> misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelMeterV2 {
+    use misaka_palw_tir_exec::node::positive_wide_material_v2::WidePanelMeterV2;
+    WidePanelMeterV2 {
+        visits: after.visits - before.visits,
+        io_bytes: after.io_bytes - before.io_bytes,
+        hash_work: after.hash_work - before.hash_work,
+        proof_attempts: after.proof_attempts - before.proof_attempts,
+        provider_bytes: after.provider_bytes - before.provider_bytes,
+        copied_bytes: after.copied_bytes - before.copied_bytes,
+        tape_bytes: after.tape_bytes - before.tape_bytes,
+    }
+}
 fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
     let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.class.class_id(&f.artifact)).unwrap();
@@ -294,8 +322,16 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
     let mut rejected = false;
     for index in 0..n {
         let progress = checker.progress();
+        let before_first = builder.meter();
         let material = builder.material(index as u64, progress.legacy_frontier).unwrap();
         assert!(builder.material(index as u64, progress.legacy_frontier).is_err());
+        // The existing source/frame owners remain live; additionally own both
+        // serialized test exports before allocation. Each fresh walk has its
+        // own randomized membership table, but canonical bytes and cost agree.
+        let _exports = reserver("test-repeated-material-exports", f.job.shape_profile_id, f.job.context_hash(), 4 << 20).unwrap();
+        let first_bytes = material_encoding(&material);
+        assert!(first_bytes.len() <= 2 << 20);
+        let after_first = builder.meter();
         let outcome = checker.submit(&material.as_borrowed(), material.target());
         let mut diagnostics = kaspa_consensus_core::palw_tir_court_v1::source_only::wide_v2::EvaluationDiagnosticsV2::default();
         let observed_outcome = observed.submit_with_diagnostics(&material.as_borrowed(), material.target(), &mut diagnostics);
@@ -303,6 +339,16 @@ fn exercise(f: &Fixture<'_>, wrong_miner: bool, wrong_panel: bool) {
         assert_eq!(observed.progress(), checker.progress(), "observation must not change coverage, verdict or spent charges");
         assert_eq!(diagnostics.stage, kaspa_consensus_core::palw_tir_court_v1::source_only::wide_v2::EvaluationStageV2::Complete);
         assert!(diagnostics.work.is_some() && diagnostics.workspace_bytes.is_some());
+        drop(material);
+        let repeated = builder.material(index as u64, progress.legacy_frontier).unwrap();
+        let second_bytes = material_encoding(&repeated);
+        assert_eq!(first_bytes, second_bytes, "membership seed cannot change canonical materials");
+        assert_eq!(
+            material_meter_delta(after_first, before_first),
+            material_meter_delta(builder.meter(), after_first),
+            "repeat/seed changes cannot omit or refund cumulative work"
+        );
+        drop(repeated);
         if outcome == Err(FullRelationError::PanelMismatch) {
             assert!(wrong_panel);
             assert_eq!(checker.progress().outcome, CheckOutcome::WitnessRejected);

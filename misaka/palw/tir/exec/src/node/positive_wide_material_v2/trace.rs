@@ -14,7 +14,7 @@ use misaka_palw_tir::{
     lane_geometry::{broadcast_index, gather_data_coordinate, gather_index_coordinate, ravel, unravel},
     types::strides,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 #[derive(Default)]
 pub(super) struct Reads {
     pub steps: BTreeSet<u64>,
@@ -22,15 +22,19 @@ pub(super) struct Reads {
     pub prompt: bool,
     pub decode: bool,
 }
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Task {
     Node(DemandContext, u16, usize, bool),
     Value(DemandContext, RefKey, usize),
     Fixed(u32, u16, Option<u16>, usize),
     History(u32, u16, Option<u16>, u32, usize),
 }
+// With the pinned std table implementation, even eight transient buckets per
+// admitted frame plus pending storage fit the existing 1024-byte/frame owner.
+// Force a review if the private task grows beyond the conservative lane size.
+const _: () = assert!(std::mem::size_of::<Task>() <= 64);
 // Ref itself lacks Ord; this private key has no serialized representation.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum RefKey {
     Node(u16),
     Carry(u8),
@@ -55,7 +59,11 @@ struct Walk<'b, 'c, 'a> {
     b: &'b WidePanelBuilderV2<'c, 'a>,
     frontier: u64,
     pending: Vec<Task>,
-    seen: BTreeSet<Task>,
+    // Membership only: traversal order comes from pending, never this table.
+    // Reads remain ordered sets for canonical source/proof construction. Keep
+    // the existing 1024-byte/frame owner and all spent-work/frame limits; no
+    // smaller memory quote or refunded visits are inferred from this change.
+    seen: HashSet<Task>,
     reads: Reads,
 }
 impl Walk<'_, '_, '_> {
@@ -305,7 +313,7 @@ impl Walk<'_, '_, '_> {
 }
 pub(super) fn discover(b: &WidePanelBuilderV2<'_, '_>, r: &ExpandedRelation) -> Result<Reads, Error> {
     let cap = usize::try_from(b.capture.session.limits.max_trace_frames).map_err(|_| "wide trace capacity")?;
-    let mut w = Walk { b, frontier: r.legacy_frontier, pending: vec_exact(cap)?, seen: BTreeSet::new(), reads: Reads::default() };
+    let mut w = Walk { b, frontier: r.legacy_frontier, pending: vec_exact(cap)?, seen: HashSet::new(), reads: Reads::default() };
     match r.kind {
         ExpandedRelationKind::RecomputeNode { ctx, node, first_lane, lane_count, .. } => {
             for l in first_lane..first_lane + u64::from(lane_count) {
