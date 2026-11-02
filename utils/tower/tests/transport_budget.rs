@@ -1,6 +1,6 @@
 use http_body_util::BodyExt;
 use kaspa_core::memory_budget::{MemoryBudget, MemoryClass};
-use kaspa_utils_tower::transport::{BudgetedProstCodec, Outbound, RetainedSize};
+use kaspa_utils_tower::transport::{BudgetedProstCodec, Outbound, RetainedSize, convert_preallocated};
 use prost::Message;
 use std::sync::{
     Arc,
@@ -26,6 +26,71 @@ impl Drop for Session {
 }
 fn bank(bytes: u64) -> Arc<MemoryBudget> {
     MemoryBudget::new(bytes, [bytes; 4])
+}
+
+#[derive(Debug)]
+struct DropCheckedMessage {
+    blob: Blob,
+    bank: Arc<MemoryBudget>,
+    observed: Arc<AtomicUsize>,
+}
+impl Message for DropCheckedMessage {
+    fn encode_raw(&self, dst: &mut impl prost::bytes::BufMut) {
+        self.blob.encode_raw(dst);
+    }
+    fn merge_field(
+        &mut self,
+        tag: u32,
+        wire: prost::encoding::WireType,
+        src: &mut impl prost::bytes::Buf,
+        ctx: prost::encoding::DecodeContext,
+    ) -> Result<(), prost::DecodeError> {
+        self.blob.merge_field(tag, wire, src, ctx)
+    }
+    fn encoded_len(&self) -> usize {
+        self.blob.encoded_len()
+    }
+    fn clear(&mut self) {
+        self.blob.clear();
+    }
+}
+impl RetainedSize for DropCheckedMessage {
+    fn retained_heap_bytes(&self) -> u64 {
+        self.blob.retained_heap_bytes()
+    }
+}
+impl Drop for DropCheckedMessage {
+    fn drop(&mut self) {
+        self.observed.store(self.bank.snapshot().reserved_bytes as usize, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn failed_admission_drops_backing_before_releasing_generation_ticket() {
+    let shared = bank(8192);
+    let lease = shared.try_reserve(MemoryClass::Snapshot, 4096).unwrap();
+    lease.materialized();
+    let observed = Arc::new(AtomicUsize::new(0));
+    let message =
+        DropCheckedMessage { blob: Blob { value: vec![7; 128] }, bank: Arc::clone(&shared), observed: Arc::clone(&observed) };
+    assert!(Outbound::with_preallocated(message, &bank(0), lease, Vec::new()).is_err());
+    assert!(observed.load(Ordering::SeqCst) > 0, "ticket returned before backing destructor");
+    assert_eq!(shared.snapshot().reserved_bytes, 0);
+}
+
+#[test]
+fn conversion_unwind_drops_source_before_its_retained_ticket() {
+    let shared = bank(8192);
+    let retained = shared.try_reserve(MemoryClass::Native, 4096).unwrap();
+    retained.materialized();
+    let observed = Arc::new(AtomicUsize::new(0));
+    let source = DropCheckedMessage { blob: Blob { value: vec![1; 128] }, bank: Arc::clone(&shared), observed: Arc::clone(&observed) };
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        convert_preallocated(source, Some(retained), None, |_| -> () { panic!("intentional conversion failure") });
+    }));
+    assert!(failure.is_err());
+    assert!(observed.load(Ordering::SeqCst) > 0);
+    assert_eq!(shared.snapshot().reserved_bytes, 0);
 }
 
 #[tokio::test]
@@ -103,4 +168,33 @@ fn many_connections_share_one_process_bank_and_return_all_leases() {
     assert!(shared.try_reserve(MemoryClass::Snapshot, 128).is_ok());
     drop(seats);
     assert_eq!(shared.snapshot().reserved_bytes, 0);
+}
+
+#[tokio::test]
+async fn reply_conversion_keeps_both_owners_then_transfers_to_http_frame() {
+    let shared = bank(8 << 20);
+    let source = shared.try_reserve(MemoryClass::Native, 128 << 10).unwrap();
+    let original = vec![27u8; 128 << 10];
+    source.materialized();
+    let conversion = shared.try_reserve(MemoryClass::Transport, 256 << 10).unwrap();
+    let (message, conversion) = convert_preallocated(original, Some(source), Some(conversion), |original| {
+        let usage = shared.snapshot();
+        assert_eq!(usage.class_bytes[MemoryClass::Native as usize], 128 << 10);
+        assert_eq!(usage.pending_bytes, 256 << 10);
+        Blob { value: original.clone() }
+    });
+    assert_eq!(shared.snapshot().class_bytes[MemoryClass::Native as usize], 0);
+    assert_eq!(shared.snapshot().pending_bytes, 0);
+    let local = bank(4 << 20);
+    let queued = Outbound::with_preallocated(message, &local, conversion.unwrap(), Vec::new()).unwrap();
+    let actual = shared.snapshot().reserved_bytes;
+    assert!(actual < 256 << 10);
+    let mut codec = BudgetedProstCodec::<Blob, Blob>::default();
+    let mut body = EncodeBody::new_client(codec.encoder(), futures::stream::iter([Ok(queued)]), None, None);
+    let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
+    drop(body);
+    assert_eq!(shared.snapshot().reserved_bytes, actual);
+    drop(frame);
+    assert_eq!(shared.snapshot().reserved_bytes, 0);
+    assert_eq!(local.snapshot().reserved_bytes, 0);
 }

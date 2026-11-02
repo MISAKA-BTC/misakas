@@ -73,13 +73,15 @@ fn release_oversized_scratch(buf: &mut BytesMut, encoded_len: usize, settings: B
 struct EncodedBytes<T, U> {
     #[pin]
     source: Fuse<U>,
-    encoder: T,
     compression_encoding: Option<CompressionEncoding>,
     max_message_size: Option<usize>,
     buf: BytesMut,
     uncompression_buf: BytesMut,
     error: Option<Status>,
     resources: RetainedResources,
+    // Drop buffers before encoder-held tickets, including panic unwinding from
+    // a custom encoder which has not yet transferred its resources to a frame.
+    encoder: T,
 }
 
 impl<T: Encoder, U: Stream> EncodedBytes<T, U> {
