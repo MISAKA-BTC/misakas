@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    connection::Unchanged,
+    connection::{ChannelConnection, ChannelType, Unchanged},
     notification::test_helpers::{BlockAddedNotification, TestNotification},
     subscription::single::OverallSubscription,
 };
@@ -11,6 +11,60 @@ use tokio::time::timeout;
 struct ObservedConnection {
     sender: async_channel::Sender<TestNotification>,
     entered: Option<async_channel::Sender<()>>,
+}
+
+#[tokio::test]
+async fn pending_control_wake_and_closed_input_terminate_without_a_listener() {
+    let (incoming, receiver) = async_channel::unbounded();
+    let broadcaster = Arc::new(Broadcaster::new("control-close", 0, SubscriptionContext::new(), receiver, None));
+    let (sender, _) = async_channel::unbounded();
+    let connection = ObservedConnection { sender, entered: None };
+    let scope: DynSubscription = Arc::new(OverallSubscription::new(EventType::BlockAdded, true));
+    for _ in 0..100 {
+        broadcaster.register(scope.clone(), 7, connection.clone()).unwrap();
+        broadcaster.unregister(EventType::BlockAdded, 7).unwrap();
+    }
+    assert_eq!(broadcaster.ctl.receiver.len(), 1);
+    incoming.close();
+    broadcaster.start();
+    broadcaster.start(); // idempotent start must not leave an extra worker/join signal
+    timeout(Duration::from_secs(5), broadcaster.join()).await.unwrap().unwrap();
+    assert!(broadcaster.registrations.lock().snapshot().is_empty());
+    assert!(broadcaster.register(scope, 7, connection).is_err());
+    assert!(broadcaster.unregister(EventType::BlockAdded, 7).is_err());
+}
+
+#[tokio::test]
+async fn closed_input_waits_for_bounded_persistent_listener_to_drain() {
+    let (incoming, receiver) = async_channel::unbounded();
+    let (sync, synced) = async_channel::unbounded();
+    let broadcaster = Arc::new(Broadcaster::new("persistent-close", 0, SubscriptionContext::new(), receiver, Some(sync)));
+    let (sender, received) = async_channel::bounded(1);
+    sender.send(notification(0)).await.unwrap();
+    let connection = ChannelConnection::new("persistent", sender.clone(), ChannelType::Persistent);
+    let scope: DynSubscription = Arc::new(OverallSubscription::new(EventType::BlockAdded, true));
+    broadcaster.register(scope, 7, connection.clone()).unwrap();
+    broadcaster.start();
+    timeout(Duration::from_secs(5), synced.recv()).await.unwrap().unwrap();
+    incoming.send(notification(10)).await.unwrap();
+    timeout(Duration::from_secs(5), async {
+        while !incoming.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    incoming.close();
+    assert!(!connection.close(), "Persistent does not close a shared consumer channel");
+    assert!(!sender.is_closed());
+    assert!(timeout(Duration::from_millis(25), broadcaster.join()).await.is_err(), "input close must not cancel an owed data send");
+    // Resume the actual bounded consumer. Both queued data items survive and
+    // closing the source then completes shutdown without forcibly closing it.
+    assert_eq!(received.recv().await.unwrap(), notification(0));
+    assert_eq!(timeout(Duration::from_secs(5), received.recv()).await.unwrap().unwrap(), notification(10));
+    timeout(Duration::from_secs(5), broadcaster.join()).await.unwrap().unwrap();
+    assert!(!sender.is_closed());
+    assert!(broadcaster.registrations.lock().snapshot().is_empty());
 }
 impl Display for ObservedConnection {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
