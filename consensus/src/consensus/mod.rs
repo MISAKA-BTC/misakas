@@ -4930,6 +4930,16 @@ impl ConsensusApi for Consensus {
             .map_err(|e| ConsensusError::GeneralOwned(format!("past pruning points do not form a valid chain: {}", e)))
     }
 
+    fn pruning_proof_chain_contains_checkpoint(
+        &self,
+        point: BlockHash,
+        checkpoint: BlockHash,
+        daa_score: u64,
+    ) -> PruningImportResult<bool> {
+        let _guard = self.pruning_lock.blocking_read();
+        self.services.pruning_proof_manager.chain_contains_checkpoint(point, checkpoint, daa_score)
+    }
+
     fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         let _guard = self.pruning_lock.blocking_read();
         self.validate_block_exists(low)?;

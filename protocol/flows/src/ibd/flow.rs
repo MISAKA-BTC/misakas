@@ -2324,9 +2324,9 @@ impl IbdFlow {
                 .await?;
         }
 
-        // The proof is applied, so staging has reachability for it: every checkpoint the proof covers
+        // The proof is applied, so staging has level-0 GHOSTDAG data: every checkpoint the proof covers
         // (contained, per the pre-check) must be on the pruning point's selected chain.
-        self.check_chain_checkpoints(staging, proof_pruning_point, 0, "pruning-point proof").await?;
+        self.check_proof_chain_checkpoints(staging, proof_pruning_point).await?;
 
         // TODO (relaxed): add logs to staging commit process
 
@@ -2483,6 +2483,38 @@ impl IbdFlow {
         Ok(())
     }
 
+    /// Applied proof rows have no ordinary block statuses yet. Read their
+    /// authoritative level-0 GHOSTDAG chain, not the all-level reachability tree.
+    /// Typed local context failures leave before the peer-violation/ban path.
+    async fn check_proof_chain_checkpoints(&self, consensus: &ConsensusProxy, point: BlockHash) -> Result<(), ProtocolError> {
+        let checkpoints = &self.ctx.config.ibd_checkpoints;
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+        let top_daa_score = consensus
+            .async_get_header(point)
+            .await
+            .map_err(|error| {
+                kaspa_consensus_core::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+                    point,
+                    format!("checkpoint proof tip header: {error}"),
+                )
+            })?
+            .daa_score;
+        for checkpoint in ibd_checkpoint::covered_checkpoints(checkpoints, 0, top_daa_score) {
+            let on_chain = consensus
+                .clone()
+                .spawn_blocking(move |c| c.pruning_proof_chain_contains_checkpoint(point, checkpoint.block_hash, checkpoint.daa_score))
+                .await?;
+            if !on_chain {
+                return Err(self
+                    .refuse_checkpoint_violation("pruning-point proof", IbdCheckpointViolation { checkpoint, top_daa_score })
+                    .await);
+            }
+        }
+        Ok(())
+    }
+
     /// The checkpoints between `floor_daa_score` and `top`'s DAA score must each be a chain ancestor
     /// of `top` sitting at its own DAA score; otherwise the peer is banned and refused.
     async fn check_chain_checkpoints(
@@ -2496,11 +2528,24 @@ impl IbdFlow {
         if checkpoints.is_empty() {
             return Ok(());
         }
-        let top_daa_score = consensus.async_get_header(top).await?.daa_score;
+        let unavailable = |error| {
+            kaspa_consensus_core::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+                top,
+                format!("checkpoint chain context: {error}"),
+            )
+        };
+        let top_daa_score = consensus.async_get_header(top).await.map_err(unavailable)?.daa_score;
         let mut on_chain = Vec::new();
         for cp in ibd_checkpoint::covered_checkpoints(checkpoints, floor_daa_score, top_daa_score) {
-            let at_its_score = consensus.async_get_header(cp.block_hash).await.is_ok_and(|h| h.daa_score == cp.daa_score);
-            if at_its_score && consensus.async_is_chain_ancestor_of(cp.block_hash, top).await.unwrap_or(false) {
+            let header = consensus.async_get_header(cp.block_hash).await.map_err(unavailable)?;
+            if header.daa_score != cp.daa_score {
+                return Err(kaspa_consensus_core::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+                    top,
+                    "checkpoint header differs from its expected DAA score".into(),
+                )
+                .into());
+            }
+            if consensus.async_is_chain_ancestor_of(cp.block_hash, top).await.map_err(unavailable)? {
                 on_chain.push(cp);
             }
         }
