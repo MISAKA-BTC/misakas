@@ -1,3 +1,4 @@
+mod owned_input;
 use kaspa_consensus_core::{
     BlockHash, // PR-9.5e: DAG tips are block hashes (Hash64)
     BlockHashSet,
@@ -110,16 +111,22 @@ impl UtxoIndexProxy {
 
     pub async fn get_utxos_by_script_public_keys_reserved(
         self,
-        script_public_keys: ScriptPublicKeys,
+        input: (ScriptPublicKeys, kaspa_core::memory_budget::MemoryLease),
         max_entries: usize,
         per_entry_bytes: u64,
         base_bytes: u64,
-    ) -> StoreResult<(UtxoSetByScriptPublicKey, kaspa_core::memory_budget::MemoryLease)> {
-        spawn_blocking(move || {
-            self.inner.read().get_utxos_by_script_public_keys_reserved(script_public_keys, max_entries, per_entry_bytes, base_bytes)
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, kaspa_core::memory_budget::MemoryLease, kaspa_core::memory_budget::MemoryLease)> {
+        // The tuple carries input+ticket through both the async future and the
+        // detached blocking task. Returning a map also returns that input
+        // ticket, including when nobody polls the finished JoinHandle.
+        let (result, input_memory) = spawn_blocking(move || {
+            owned_input::run_with_input_memory(input, move |scripts| {
+                self.inner.read().get_utxos_by_script_public_keys_reserved(scripts, max_entries, per_entry_bytes, base_bytes)
+            })
         })
         .await
-        .unwrap()
+        .unwrap();
+        result.map(|(entries, generation)| (entries, generation, input_memory))
     }
 
     pub async fn get_utxos_by_script_public_key_chunk(
