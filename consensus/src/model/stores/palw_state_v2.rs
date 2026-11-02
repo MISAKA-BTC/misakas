@@ -49,7 +49,9 @@ use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_native_resource_v1::{
     NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_classified_v1,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2};
+use kaspa_consensus_core::palw_state_v2::{
+    PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
+};
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
@@ -904,17 +906,26 @@ impl DbPalwStateV2Store {
         }
         retain_native_carriage_decode_classified_v1(block, canonical, || {
             let carriage = borsh::from_slice::<PalwStateCarriageV2>(canonical)
-                .map_err(|why| format!("palw v2 {label} does not decode: {why}"))?;
+                .map_err(|why| PalwStateV2Error::CarriageInconsistent(format!("palw v2 {label} does not decode: {why}")))?;
             let armed = self.uncertified_weightless_at(&carriage);
-            carriage
-                .into_state_v3(params, Some(root), armed, self.canonical_work_daa)
-                .map_err(|why| format!("palw v2 {label} refused: {why}"))
+            // Consistency checks can perform nested classified row reads.
+            // Their resource/context faults must remain typed through this
+            // outer decode boundary, rather than becoming malformed state.
+            carriage.into_state_v3(params, Some(root), armed, self.canonical_work_daa)
         })
         .map_err(|why| match why {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
                 StoreError::LocalResourceUnavailable(e.to_string())
             }
-            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => StoreError::DataInconsistency(e),
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(PalwStateV2Error::NativeResource(e)) => {
+                StoreError::LocalResourceUnavailable(e.to_string())
+            }
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(
+                PalwStateV2Error::NativeContextUnavailable(e),
+            ) => StoreError::LocalResourceUnavailable(e.to_string()),
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => {
+                StoreError::DataInconsistency(format!("palw v2 {label} refused: {e}"))
+            }
         })
     }
 }
@@ -1093,6 +1104,109 @@ mod tests {
         let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
         assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
         assert_eq!(*state, grand);
+    }
+
+    #[test]
+    fn nested_native_pressure_child_preserves_local_resource_classification() {
+        if std::env::var_os("MISAKA_NATIVE_PRESSURE_CHILD").is_none() {
+            return;
+        }
+        use kaspa_consensus_core::palw_native_resource_v1::{preflight_native_carriage_v1, preflight_native_value_v1};
+        use kaspa_consensus_core::palw_reader_router_v2::{
+            PALW_READER_ROUTER_TABLE_V2, PalwReaderRouterDeclarationV2, PalwReaderRouterRowV2,
+        };
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        // The auxiliary declaration has valid Borsh shape. It intentionally has
+        // no owning class, so after pressure is released its distinct semantic
+        // error is also observable. No fixture bypasses root/consistency checks.
+        let class = Hash64::from_u64_word(500);
+        let row = PalwReaderRouterRowV2 {
+            declaration: PalwReaderRouterDeclarationV2 {
+                version: 2,
+                class_id: class,
+                artifact_root: Hash64::default(),
+                bindings: Vec::new(),
+            },
+            registrant: PalwBondKeyV2(Default::default()),
+            bound_from_daa: 0,
+        };
+        let row_bytes = borsh::to_vec(&row).unwrap();
+        let nested = preflight_native_value_v1::<PalwReaderRouterRowV2>(row_bytes.as_slice(), row_bytes.len() as u64)
+            .unwrap()
+            .logical_requests_v1();
+        assert!(nested > 1);
+        let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        let mut route = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
+            kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None,
+            None,
+            Default::default(),
+        );
+        route.aux.insert((PALW_READER_ROUTER_TABLE_V2, class.as_byte_slice().to_vec()), row_bytes);
+        carriage.kernel_route = Some(route);
+        let canonical = borsh::to_vec(&carriage).unwrap();
+        let outer = preflight_native_carriage_v1(canonical.as_slice(), canonical.len() as u64).unwrap().memory_requests_v1().unwrap();
+        let budget = global_memory_budget();
+        let total = budget.snapshot().limit_bytes;
+        let native_cap = total.saturating_sub((total / 8).min(128 << 20));
+        let occupied = native_cap.checked_sub(outer).unwrap().checked_sub(nested / 2).unwrap();
+        let pressure = budget.try_reserve_retained(MemoryClass::Native, occupied).unwrap();
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        let block = BlockHash::from_u64_word(501);
+        let mut batch = WriteBatch::default();
+        store
+            .set_tip_record_batch(
+                &mut batch,
+                PalwStateTipRecordV2 { block, state_root: Hash64::default(), carriage_borsh: canonical.clone() },
+            )
+            .unwrap();
+        db.write(batch).unwrap();
+        assert!(native_cap - occupied >= outer, "outer carriage fits before the nested row read");
+        match store.load_tip_cached(&params()) {
+            Err(StoreError::LocalResourceUnavailable(message)) => assert!(message.contains("byte budget"), "{message}"),
+            other => panic!("nested capacity must stay local, got {other:?}"),
+        }
+        // A small control message still fits while native admission is held.
+        let control = budget.try_reserve(MemoryClass::Transport, 1024).unwrap();
+        control.materialized();
+        drop(control);
+        drop(pressure);
+        assert!(
+            matches!(store.load_tip_cached(&params()), Err(StoreError::DataInconsistency(_))),
+            "the fixture's missing class remains a semantic consistency error after capacity returns"
+        );
+        let mut malformed = canonical;
+        malformed.truncate(2); // keep current version, corrupt payload
+        let mut batch = WriteBatch::default();
+        store
+            .set_tip_record_batch(&mut batch, PalwStateTipRecordV2 { block, state_root: Hash64::default(), carriage_borsh: malformed })
+            .unwrap();
+        db.write(batch).unwrap();
+        assert!(matches!(store.load_tip_cached(&params()), Err(StoreError::DataInconsistency(_))));
+        // A genuinely valid row can be loaded by the same store after repair.
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, block, &PalwChainStateV2::genesis()).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.load_tip_cached(&params()).unwrap().unwrap().0, block);
+    }
+
+    #[test]
+    fn nested_native_pressure_is_local_and_corrupt_frames_remain_data_errors() {
+        // Isolate the global bank and its optional capabilities from parallel
+        // tests. The child runs real storage, preflight and nested consistency.
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "model::stores::palw_state_v2::tests::nested_native_pressure_child_preserves_local_resource_classification",
+                "--nocapture",
+            ])
+            .env("MISAKA_NATIVE_PRESSURE_CHILD", "1")
+            .env("MISAKA_MEMORY_BUDGET_BYTES", (64u64 << 20).to_string())
+            .status()
+            .unwrap();
+        assert!(status.success());
     }
 
     #[test]

@@ -248,6 +248,7 @@ fn effective_capacity() -> Option<u64> {
         None
     }
 }
+#[cfg(any(target_os = "linux", test))]
 fn capacity_from(meminfo: &str, membership: &str, read: impl Fn(&std::path::Path) -> Option<String>) -> Option<u64> {
     use std::path::{Component, Path};
     let mut limit = meminfo
