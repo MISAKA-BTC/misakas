@@ -759,11 +759,11 @@ pub(super) struct Node {
     tick: Arc<TickService>,
     pub services: Vec<ServiceRun>,
     flows: Vec<Arc<FlowContext>>,
-    /// The socket P2P mesh between the services: the first service's flow listens on loopback, every later one connects to it
-    /// (`palw_service_network_e2e`'s transport) — so a seat's material pull, the producer's answer and every seat's receipt
-    /// travel as on a real network, relayed by the gossip's own rules.
+    /// Direct socket peers for every pair of services. Signed material pulls are intentionally
+    /// answered only by the requested peer, rather than relayed: a star through an outsider
+    /// without the original cannot deliver a seat's pull to the producer.
     adaptors: Vec<Arc<kaspa_p2p_lib::Adaptor>>,
-    listen: Option<std::net::SocketAddr>,
+    listeners: Vec<std::net::SocketAddr>,
     _meta: Vec<kaspa_database::utils::DbLifetime>,
 }
 
@@ -787,7 +787,16 @@ impl Node {
             kaspa_mining::mempool::config::palw_h1_carrier_priority_for(&config.params),
         )));
         let _ = &chain;
-        Node { manager, pool, tick, services: Vec::new(), flows: Vec::new(), adaptors: Vec::new(), listen: None, _meta: Vec::new() }
+        Node {
+            manager,
+            pool,
+            tick,
+            services: Vec::new(),
+            flows: Vec::new(),
+            adaptors: Vec::new(),
+            listeners: Vec::new(),
+            _meta: Vec::new(),
+        }
     }
 
     pub fn start(&mut self, chain: &Chain, config: PalwPanelConfig) {
@@ -822,41 +831,39 @@ impl Node {
         self._meta.push(meta_lifetime);
     }
 
-    /// **Connect the started services by actual socket P2P**: the first service's flow listens on a loopback port, every other
-    /// flow dials it (the handshake and the gossip flows are production's).
+    /// Connect each newly started service directly to every previous service through real
+    /// production handshakes. Repeated calls add peers without reconnecting existing pairs.
     pub async fn connect(&mut self) {
-        let address = match self.listen {
-            Some(address) => address,
-            None => {
-                let first = self.flows.first().expect("a started service");
-                let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-                let address = listener.local_addr().unwrap();
-                drop(listener);
-                let primary =
-                    kaspa_p2p_lib::Adaptor::bidirectional(address.into(), first.hub().clone(), first.clone(), Default::default())
-                        .unwrap();
-                self.adaptors.push(primary);
-                self.listen = Some(address);
-                address
-            }
-        };
-        // Every flow past the listener's and past those already dialled (each adaptor after the first is one dialled flow).
-        let dialled = self.adaptors.len();
-        for flow in self.flows[dialled..].to_vec() {
-            let client = kaspa_p2p_lib::Adaptor::client_only(flow.hub().clone(), flow.clone(), Default::default());
-            tokio::time::timeout(Duration::from_secs(15), async {
-                loop {
-                    match client.connect_peer(address.to_string()).await {
-                        Ok(peer) => break peer,
-                        Err(_) => tokio::time::sleep(Duration::from_millis(25)).await,
+        for index in self.listeners.len()..self.flows.len() {
+            let flow = self.flows[index].clone();
+            let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let address = listener.local_addr().unwrap();
+            drop(listener);
+            let adaptor =
+                kaspa_p2p_lib::Adaptor::bidirectional(address.into(), flow.hub().clone(), flow.clone(), Default::default()).unwrap();
+            for peer_address in &self.listeners {
+                tokio::time::timeout(Duration::from_secs(15), async {
+                    loop {
+                        match adaptor.connect_peer(peer_address.to_string()).await {
+                            Ok(peer) => break peer,
+                            Err(_) => tokio::time::sleep(Duration::from_millis(25)).await,
+                        }
                     }
-                }
-            })
-            .await
-            .expect("the loopback handshake completes");
-            self.adaptors.push(client);
+                })
+                .await
+                .expect("the loopback handshake completes");
+            }
+            self.listeners.push(address);
+            self.adaptors.push(adaptor);
         }
-        eprintln!("[service-tir-frame] {} services connected by socket P2P through {address}", self.flows.len());
+        tokio::time::timeout(Duration::from_secs(15), async {
+            while self.flows.iter().any(|flow| flow.hub().active_peers_len() != self.flows.len().saturating_sub(1)) {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("every service has a direct socket peer for every material supplier");
+        eprintln!("[service-tir-frame] {} services connected by direct socket P2P", self.flows.len());
     }
 
     /// One block of the production template over the mempool the services feed (two when carriers were pending), its clock held
@@ -1464,13 +1471,13 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
     let mut ready_at = chain.daa();
     let deadline = std::time::Instant::now() + Duration::from_secs(7_200);
     // The producer's first framed claim (lane FPSEL: or the rail's one claim).
-    let mut rail_reader = None;
+    let mut colluder_reader = None;
     let claim = if rail.is_some() {
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
         let (claim, original) = rail_tfp1_claim_v1(&mut chain, &fixture, &mut rail_float, &provider, forged.then_some(5)).await;
         if forged {
             let header = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap().header;
-            rail_reader = Some(
+            colluder_reader = Some(
                 fixture
                     .backend(&chain)
                     .open_tir_public_capture_v1(
@@ -1495,6 +1502,41 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
     };
     let provider_down = matches!(rail, Some((_, false)));
     let frame = chain.tc.palw_tir_public_frame_v1(claim).unwrap().unwrap();
+    if forged && rail.is_none() {
+        // These scripted seats lie about the computation, not availability. They
+        // signed the producer's actual forged original and must answer its
+        // authenticated custody requests too. The producer's real service still
+        // answers for card 0; the outside verifier remains entirely autonomous.
+        let original_path = crate::palw_producer::palw_retained_material_path(&dirs.path().join("producer/retention"), &claim);
+        let original_bytes = std::fs::read(&original_path).expect("the service retained its accepted forged FPC1 original");
+        let network_form = chain.config.params.palw_prompt_ids_form_v1();
+        let form = chain
+            .tc
+            .palw_registered_class_carriage_v1(fixture.class_id)
+            .map(|(profile, _)| kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(network_form, &profile))
+            .unwrap_or(network_form);
+        let original = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&original_bytes, form)
+            .expect("the actual retained original has its authenticated prompt material");
+        chain
+            .tc
+            .palw_tir_public_read_v1(&mut |state| {
+                let accepted = kaspa_consensus_core::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
+                    .expect("the accepted forged frame");
+                assert_eq!(original.material.job, accepted.original_v1().job, "colluders supply exactly the accepted job");
+                Ok(())
+            })
+            .unwrap();
+        colluder_reader = Some(
+            fixture
+                .backend(&chain)
+                .open_tir_public_capture_v1(
+                    &frame.header,
+                    std::sync::Arc::new(RailOriginal(original.capture)),
+                    &dirs.path().join("colluder-responses"),
+                )
+                .expect("colluders reopen the actual service's forged capture against its accepted header"),
+        );
+    }
     eprintln!("[service-tir-frame] piece 3: framed claim {claim} accepted at DAA {}: {frame:?}", chain.daa());
     if declared {
         let context = &frame.header.job_context;
@@ -1635,8 +1677,12 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
         );
         tokio::time::sleep(Duration::from_secs(pace)).await;
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-        if let Some(reader) = rail_reader.as_deref_mut() {
-            rail_colluders_answer(&mut chain, &mut floats, claim, reader).await;
+        if let Some(reader) = colluder_reader.as_deref_mut() {
+            // The node-less rail has no producer responder; its existing path
+            // supplies every signer. Service-forged supplies only the drawn
+            // colluders, leaving card 0 to the real producer service.
+            let scripted_cards = rail.is_none().then_some(colluders.as_slice());
+            rail_colluders_answer(&mut chain, &mut floats, claim, reader, scripted_cards).await;
         }
     }
     loop {
@@ -1647,8 +1693,12 @@ async fn tn1_node_with(forged: bool, declared: bool, producer_kind: Tn1ProducerV
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
         step_ready(&node, &mut chain, &mut floats, &fixture, &mut ready_at).await;
-        if let Some(reader) = rail_reader.as_deref_mut() {
-            rail_colluders_answer(&mut chain, &mut floats, claim, reader).await;
+        if let Some(reader) = colluder_reader.as_deref_mut() {
+            // The node-less rail has no producer responder; its existing path
+            // supplies every signer. Service-forged supplies only the drawn
+            // colluders, leaving card 0 to the real producer service.
+            let scripted_cards = rail.is_none().then_some(colluders.as_slice());
+            rail_colluders_answer(&mut chain, &mut floats, claim, reader, scripted_cards).await;
         }
         let view = chain.view(claim);
         match &view.phase {
@@ -1860,6 +1910,7 @@ async fn rail_colluders_answer(
     floats: &mut [Funding],
     claim: Hash64,
     reader: &mut dyn kaspa_consensus_core::palw_backend::PalwTirPublicCaptureReaderV1,
+    scripted_cards: Option<&[usize]>,
 ) {
     use kaspa_consensus_core::palw_tir_public_carriage_v1::{
         PALW_TIR_PUBLIC_CONTROL_CONTEXT_V1, PalwTirPublicControlActionV1, PalwTirPublicControlTargetV1, PalwTirPublicControlV1,
@@ -1900,6 +1951,9 @@ async fn rail_colluders_answer(
                 }
                 for signer in row.owned.response_custodians_v1() {
                     let card = chain.bonds.iter().position(|bond| bond == signer).unwrap();
+                    if scripted_cards.is_some_and(|cards| card == 0 || !cards.contains(&card)) {
+                        continue;
+                    }
                     let action = match p.slots.get(signer) {
                         None => A::Begin {
                             demand_id: p.demand_id,

@@ -11,11 +11,34 @@ use crate::config::params::{ForkActivation, Params};
 use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
 use crate::palw_panel_v2::PalwPanelDrawPolicyV1;
 use crate::palw_panel_v2::{PalwPanelParamsV2, PalwPanelV2Error};
-use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwPanelSeatV2};
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2, PalwPanelSeatV2, PalwStateParamsV2};
 
 /// A separate activation identity: the already-fired kernel-slice fence is not
 /// retroactively reinterpreted as a migration of every model.
 pub const PALW_MODEL_PANEL_ONE_RULE_DOMAIN_V1: &[u8] = b"misaka-palw/model-panel-one/v1";
+
+/// A delayed model execution must retain its evidence for the complete existing
+/// court/certification horizon after acceptance. The original envelope, raw
+/// signed deadline and lottery remain unchanged; this separate future rule
+/// derives the stored protocol obligation, never a producer-chosen extra draw.
+/// Old claims are not rewritten when the fence later activates.
+pub(crate) fn model_panel_one_effective_attempt_retention_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    accepted_daa: u64,
+    raw_signed_retention: u64,
+) -> u64 {
+    if !params.model_panel_one_retention_active_at(accepted_daa) {
+        return raw_signed_retention;
+    }
+    raw_signed_retention.max(accepted_daa.saturating_add(crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(
+        state,
+        params,
+        class_id,
+        accepted_daa,
+    )))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwModelClaimRouteV1 {

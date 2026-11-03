@@ -471,9 +471,14 @@ message RequestPruningPointPalwStateMessage{
   bool chunked = 2;
   bytes snapshotRoot = 3;
   uint32 chunkIndex = 4;
-  // Protocol >=107 only: codec 1 is one zlib stream; nonce is requester-chosen 32 bytes.
+  // Protocol >=107: codec1 is zlib. Protocol>=109: codec2 is the RFC0037 row generation,
+  // transferred in the existing <=4MiB chunks. Nonce is requester-chosen 32 bytes.
   uint32 snapshotCodec = 5;
   bytes snapshotNonce = 6;
+  // RFC-0037. Zero keeps the existing carriage request. 1 asks for the single current
+  // row-stream generation under codec2/protocol109. Any other value is refused.
+  // The total generation is <=384MiB; it is never sent as one P2P message.
+  uint64 rowStreamGeneration = 7;
 }
 
 message PruningPointPalwStateMessage{
@@ -539,6 +544,16 @@ message PalwPrefixHistoryRecordMessage {
   Hash contextId = 1;
   // One Borsh accepted-history record, at most 90,224 bytes. Never a capture.
   bytes record = 2;
+}
+
+// One authenticated PALW row-stream generation (RFC-0037). The bytes are the frame
+// `palw_accept_row_stream_generation_v1` already accepts. IBD decodes this message and
+// runs that verifier before the existing pruning-point import. It is not a history range.
+message PruningPointPalwRowStreamMessage {
+  Hash pruningPointHash = 1;
+  uint64 generation = 2;
+  uint64 byteLen = 3;
+  bytes generationBytes = 4;
 }
 
 message PalwMaterialRequestMessage{

@@ -3,6 +3,7 @@
 //! Quotes, local Ready files and signature validation alone never buy standing.
 use super::*;
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+use crate::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1;
 use crate::palw_tir_public_claim_v1::{PalwTirPublicClaimV1 as Frame, palw_tir_public_claim_v1};
 use crate::palw_tir_public_owned_v1::{
     PalwTirPublicContractV1, PalwTirPublicOwnedActionV1 as Action, PalwTirPublicOwnedEffectV1 as Effect, PalwTirPublicOwnedV1,
@@ -67,21 +68,41 @@ fn palw_funded_original_candidate_inner_v1(
     native_court: Option<(&crate::palw_mode_v2::PalwCourtParamsV2, u64)>,
     accounting: bool,
 ) -> PalwFundedOriginalCandidateV1 {
-    use crate::palw_tir_funded_original_envelope_v1::{PalwTirFundedOriginalEnvelopeV1, is_funded_original_carrier_v1};
+    use crate::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1;
     use PalwFundedOriginalCandidateV1::{Invalid, Missing};
     let tx = validated.tx;
+    let prefix = tx.payload.starts_with(b"FPR2");
+    let outer = if prefix {
+        if !native_params.is_some_and(|p| p.claim_local_settlement_active_at(daa)) {
+            return Invalid("FPR2 below source provenance fence");
+        }
+        match crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload) {
+            Ok(inner) => inner,
+            Err(_) => return Invalid("FPR2 carrier framing"),
+        }
+    } else {
+        tx.payload.as_slice()
+    };
+    let accounting = accounting || (prefix && outer.starts_with(b"FPA1"));
     let payload = if accounting {
-        let Some(view) = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize) else {
+        let Some(view) = crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(outer, u32::MAX as usize) else {
             return Invalid("accounting carrier framing");
         };
-        if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !view.inner.starts_with(b"TFO1") {
+        if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            || !(view.inner.starts_with(b"TFO1") || view.inner.starts_with(b"TFO2"))
+        {
             return Invalid("accounting carrier does not contain TFO1");
         }
         view.inner
     } else {
-        &tx.payload
+        outer
     };
-    if (!accounting && !is_funded_original_carrier_v1(tx)) || !tx.id_is_current() {
+    if (prefix
+        && (tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT
+            || !(payload.starts_with(b"TFO1") || payload.starts_with(b"TFO2"))))
+        || (!prefix && !accounting && !is_funded_original_carrier_v1(tx))
+        || !tx.id_is_current()
+    {
         return Invalid("carrier framing or stale actual transaction id");
     }
     if tx.inputs.len() != validated.entries.len() {
@@ -104,7 +125,7 @@ fn palw_funded_original_candidate_inner_v1(
     if input.checked_sub(output) != Some(validated.calculated_fee) {
         return Invalid("actual input/output fee differs from native validation");
     }
-    let Ok(envelope) = PalwTirFundedOriginalEnvelopeV1::decode_v1(payload) else {
+    let Ok(envelope) = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload) else {
         return Invalid("funded original bounded codec");
     };
     let terms = &envelope.funding.terms;
@@ -346,9 +367,15 @@ pub(super) fn prepare_paired_original_v1(
         return Err(refused("TFP1 cannot install a frame without this object's exact public job"));
     }
     let frame = prepare_original_v1(b, ctx, object, &original, &envelope.header, &envelope.pledge)?;
-    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
+    let archive_profile =
+        b.extras.tir_funded_originals.get(&frame.plan_v1().original_claim).is_some_and(|p| {
+            original_archive_reservation_proposal_v1::original_archive_terms_selected_v2(&p.envelope().funding.terms)
+        });
+    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi && !archive_profile {
         return Err(refused("TFP1 declared burn differs from the exact original native full-SUM rent"));
     }
+    // The complete signed archive budget/profile is checked before any write.
+
     // Capture native facts without new Source reconstruction/resource scope.
     // The ordinary old preparation and price/quote paths remain unchanged.
     let mut native = rules(b)?;
@@ -357,7 +384,9 @@ pub(super) fn prepare_paired_original_v1(
         .state
         .class(&original.job.class_id)
         .map(|c| (c.registered_daa, crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(b.params, c.registered_daa)));
+    let input_footprint_v12 = prepare_native_input_footprint_v12(b, ctx, &frame, object)?;
     Ok(Some(PreparedOriginalFrameV1 {
+        input_footprint_v12,
         frame,
         at: *ctx,
         native,
@@ -381,7 +410,7 @@ pub fn palw_tir_public_preclaim_quote_v1(
     object: &PalwConsensusObjectV2,
     envelope: &crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1,
 ) -> Result<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1, PalwStateV2Error> {
-    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     rules(&builder)?;
     extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
     let (_, original) = paired_claim(object)?;
@@ -391,9 +420,17 @@ pub fn palw_tir_public_preclaim_quote_v1(
         return Err(refused("TFP1 quote changes the actual original public job"));
     }
     let frame = prepare_original_v1(&builder, ctx, object, original, &envelope.header, &envelope.pledge)?;
-    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi {
+    let archive_profile = extras
+        .tir_funded_originals
+        .get(&frame.plan_v1().original_claim)
+        .is_some_and(|p| original_archive_reservation_proposal_v1::original_archive_terms_selected_v2(&p.envelope().funding.terms));
+    if envelope.declared_rent_sompi != frame.plan_v1().terms.plan.rent_sompi && !archive_profile {
         return Err(refused("TFP1 quote declaration differs from exact native full-SUM rent"));
     }
+    if archive_profile && envelope.declared_rent_sompi < frame.plan_v1().terms.plan.rent_sompi {
+        return Err(refused("archive literal rent below unchanged original base rent"));
+    }
+
     Ok(frame.plan_v1().clone())
 }
 
@@ -402,6 +439,44 @@ pub fn palw_tir_public_preclaim_quote_v1(
 /// No pledge and no narrowing: callers decide what they admit or sign. `resource_plan_id` and `source_id` do not depend on
 /// `now_daa`; `allocation_id` and the absolute clocks do (they are fixed again at the actual accepting block).
 #[allow(clippy::type_complexity)]
+fn original_family_table_inventory_v2(
+    b: &TransitionBuilder<'_>,
+    now: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+) -> Result<Option<crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>, PalwStateV2Error> {
+    if !b.params.family_supplier_active_at(now) || !b.extras.family_supplier_active {
+        return Ok(None);
+    }
+    let Some(sem) = b.state.class_semantics.get(&original.job.class_id) else { return Ok(None) };
+    if sem.token_table_root.is_none() {
+        return Ok(None);
+    }
+    let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
+    let vocab = b.state.tir_class_v1(&original.job.class_id).ok_or_else(|| refused("family table class absent"))?.logits_vocab;
+    let classify = |e| match e {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => PalwStateV2Error::NativeResource(e),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => refused(e),
+    };
+    if let Some(pairing) = b.extras.tir_funded_originals.get(&claim) {
+        if let Some(literal) = pairing.semantic_table_v2() {
+            return crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(literal, sem, vocab)
+                .map(Some)
+                .map_err(classify);
+        }
+        if !pairing.suppliers_v2().is_empty() {
+            return Err(refused("family allocation requires literal authenticated TFO2 table"));
+        }
+    }
+    if let Some(checked) = b.extras.family_original_table_inventories_v2.get(&claim) {
+        checked.exact_bytes_for_context_v2(sem, vocab).map_err(refused)?;
+        return Ok(Some(checked.clone()));
+    }
+    crate::palw_court_family_material_v1::read_family_table_inventory_v1(&b.state, claim, sem, vocab)
+        .map_err(classify)?
+        .map(Some)
+        .ok_or_else(|| refused("family allocation lacks native authenticated table witness"))
+}
+
 fn original_plan_v1(
     b: &TransitionBuilder<'_>,
     now_daa: u64,
@@ -416,7 +491,27 @@ fn original_plan_v1(
     ),
     PalwStateV2Error,
 > {
-    use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_native_v2};
+    original_plan_mode_v4(b, now_daa, original, header, false, None)
+}
+
+#[allow(clippy::type_complexity)]
+fn original_plan_mode_v4(
+    b: &TransitionBuilder<'_>,
+    now_daa: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    historical_clock3: bool,
+    diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
+) -> Result<
+    (
+        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
+        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1,
+        u64,
+        crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,
+    ),
+    PalwStateV2Error,
+> {
+    use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_native_mode_v3};
     let mut native = rules(b)?;
     native.maximum_leaves = b.state.class_step_ladder_v1(&original.job.class_id, native.maximum_leaves);
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
@@ -443,11 +538,53 @@ fn original_plan_v1(
         .ok_or_else(|| refused("TIR original layout is not registered"))?;
     let semantics = b.state.class_semantics.get(&geometry.class_id);
     let inventory = semantics.and_then(|s| b.state.staged_tokenizer_inventory_v1(s.tokenizer_id));
-    let plan = match derive_tir_public_allocation_native_v2(&geometry, original, header, record, layout, semantics, inventory, native)
-        .map_err(|why| match why {
-            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
-            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
-        })? {
+    let family = b.params.family_supplier_active_at(now_daa) && b.extras.family_supplier_active;
+    let table = original_family_table_inventory_v2(b, now_daa, original)?;
+    let quoted = if family {
+        native.clock.version = if !historical_clock3 && b.params.court_clock_v2_from_daa().is_some_and(|from| now_daa >= from) {
+            // This EXISTING profile's reorg term must already cover the actual
+            // disclosure obligation; do not invent/raise either native window.
+            let required_tail = palw_da_disclose_window_daa_v1(b.params)
+                .max(crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(b.extras.staged_public_court.as_ref()));
+            if native.config.reorg_retention_daa < required_tail {
+                return Err(refused("native family material profile does not cover adopted disclosure/reorg tail"));
+            }
+            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+        } else {
+            crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3
+        };
+        derive_tir_public_allocation_native_mode_v3(
+            &geometry,
+            original,
+            header,
+            record,
+            layout,
+            semantics,
+            inventory,
+            native,
+            table.as_ref(),
+            true,
+            diagnostics,
+        )
+    } else {
+        derive_tir_public_allocation_native_mode_v3(
+            &geometry,
+            original,
+            header,
+            record,
+            layout,
+            semantics,
+            inventory,
+            native,
+            None,
+            false,
+            diagnostics,
+        )
+    };
+    let plan = match quoted.map_err(|why| match why {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
+    })? {
         PalwTirPublicAllocationQuoteV1::Complete(plan) => *plan,
         PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => {
             return Err(refused(format!("TIR original full allocation remains incomplete: {missing:?}")));
@@ -470,11 +607,43 @@ pub fn palw_tir_public_original_quote_v1(
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
 ) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
-    if original.job.tail.is_some() {
+    palw_tir_public_original_quote_with_diagnostics_v1(base, params, extras, now_daa, original, header, None)
+}
+
+pub fn palw_tir_public_original_quote_with_diagnostics_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    mut diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
+) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
+    if let Some(out) = diagnostics.as_mut() {
+        **out = None;
+    }
+    if original.job.tail.is_some() && !params.family_supplier_active_at(now_daa) {
         return Ok(None);
     }
-    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
-    let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header)?;
+    let class = original.job.class_id;
+    if base.tir_class_v1(&class).is_some() {
+        if extras.tir_container_identity_active && crate::palw_tir_container_v1::palw_tir_bound_container_v1(base, class).is_none() {
+            return Err(PalwStateV2Error::ClassNotRewardable {
+                class,
+                code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
+                why: "the TIR class has no accepted PALWART3 container binding".into(),
+            });
+        }
+        let tokenizer_material =
+            base.class_semantics_v1(&class).is_some_and(|s| s.raw_tokenizer_bytes.is_some() && s.tokenizer_key_events.is_some());
+        if let Some((code, why)) =
+            crate::palw_g14_gates_v1::palw_g14_route_fp_refusal_v1(params, now_daa, Some(original), true, tokenizer_material)
+        {
+            return Err(PalwStateV2Error::ClassNotRewardable { class, code, why });
+        }
+    }
+    let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
+    let (plan, _, _, geometry) = original_plan_mode_v4(&builder, now_daa, original, header, false, diagnostics)?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
     let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
     // Mirrors `prepare_original_v1`: a semantic stage is framed only where its staged court can open (G-18).
@@ -580,7 +749,8 @@ pub fn palw_tir_public_conviction_preflight_v1(
     evidence: &crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1,
 ) -> Result<(), PalwStateV2Error> {
     evidence.check_v1().map_err(refused)?;
-    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let mut builder =
+        TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     rules(&builder)?;
     let frame =
         palw_tir_public_claim_v1(base, claim).cloned().ok_or_else(|| refused("TIR conviction preflight: no ORIGINAL frame"))?;
@@ -612,7 +782,8 @@ pub fn palw_tir_public_staged_conviction_preflight_v2(
     if length as u64 > frame.plan_v1().terminal.maximum_witness_bytes {
         return Err(refused("TIR staged preflight exceeds the ORIGINAL frame's prepaid witness ceiling"));
     }
-    let mut builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
+    let mut builder =
+        TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     rules(&builder)?;
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: next_daa, blue_score: 0, subsidy: 0 };
     apply_conviction_v1(&mut builder, &ctx, frame, filer, evidence)
@@ -629,7 +800,25 @@ pub(super) fn prepare_original_v1(
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     pledge: &crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
 ) -> Result<Frame, PalwStateV2Error> {
-    let (plan, native, upper, geometry) = original_plan_v1(b, ctx.daa_score, original, header)?;
+    let mut quoted = original_plan_v1(b, ctx.daa_score, original, header)?;
+    if quoted.0.resource_plan_id != pledge.resource_plan_id
+        && quoted.1.clock.version == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+    {
+        // Replay/compatible pending consent: only an EXACT native old3 quote
+        // that ALREADY covers adopted F07 may select old3. A carried horizon
+        // or signature alone never supplies derivation/material authority.
+        let historical = original_plan_mode_v4(b, ctx.daa_score, original, header, true, None)?;
+        let need = crate::palw_court_clock_v2::palw_court_clock_v2_required_retention_with(
+            ctx.daa_score,
+            palw_da_disclose_window_daa_v1(b.params),
+            crate::palw_court_clock_v2::palw_court_clock_v2_reorg_retention(b.extras.staged_public_court.as_ref()),
+        )
+        .map_err(|_| refused("clock-v2 original material horizon overflows"))?;
+        if historical.0.resource_plan_id == pledge.resource_plan_id && historical.0.terms.material_until_daa >= need {
+            quoted = historical;
+        }
+    }
+    let (plan, native, upper, geometry) = quoted;
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
     let record = b.state.tir_class_v1(&geometry.class_id).ok_or_else(|| refused("TIR original class is not registered"))?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, geometry.class_id)
@@ -643,8 +832,50 @@ pub(super) fn prepare_original_v1(
     // installs beside itself (`frame_semantic_bundle_v1`, checked below and written by `install_original_v1`). Still refused
     // rather than admitted with an unprosecutable layer: a job tail (evaluation/generation) and a FLAT-scheme class (its
     // decode-token pin carries whole rows, which no bounded control holds without split witness carriage, R7).
-    if original.job.tail.is_some() || !record.facts.tiled {
+    let bounded_family = b.params.family_supplier_active_at(ctx.daa_score)
+        && b.extras.family_supplier_active
+        && b.extras.staged_tir_route_active
+        && b.params.legacy_public_filer_active_at(ctx.daa_score)
+        && b.extras.staged_public_court.is_some();
+    let bounded_family_prefix = original.job.is_prefix_state()
+        && bounded_family
+        && plan.semantic.as_ref().is_some_and(|semantic| {
+            semantic.stages.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::PublicPrefix)
+        });
+    let bounded_family_constraint = original.job.is_constraint()
+        && bounded_family
+        && plan.semantic.as_ref().is_some_and(|semantic| {
+            semantic.stages.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Constraint)
+        });
+    if (original.job.tail.is_some() && !bounded_family_prefix && !bounded_family_constraint) || !record.facts.tiled {
         return Err(refused("TIR original carries a job tail or a flat logits scheme no bounded frame door judges yet"));
+    }
+    if bounded_family_constraint {
+        // Only the existing canonical constrained-job tail is covered by the
+        // derived Constraint stage. This is preparation, not a supplier/funding
+        // permit: admission still requires the complete authenticated TFO2
+        // contracts and reserves their material branches through the coordinator.
+        crate::palw_fp_constraint_job_v1::palw_fp_constraint_shape_v1(&original.job).map_err(|e| refused(e.to_string()))?;
+    }
+    if bounded_family_prefix {
+        // This plan was derived above from the registered native program,
+        // header, exact Prefix shape and bounded PublicPrefix stream geometry;
+        // it is not a caller-supplied promise that a court will exist. The
+        // ordinary native frame constructor and signed semantic history pledge
+        // are still checked below. Preparation also serves prospective quotes:
+        // it creates NO admission/reservation capability. admit_original_v1
+        // requires the actual TFO2 pairing, then the funded coordinator verifies
+        // all independent supplier signatures/targets and atomically reserves
+        // every branch before installing any new claim. TFP1-only/unsigned
+        // Prefix, Eval/Gen tails, flat schemes and missing semantic doors remain
+        // refused at their original admission gates.
+        let named = crate::palw_fp_prefix_v1::palw_fp_prefix_shape_v1(&original.job).map_err(|e| refused(e.to_string()))?;
+        if named.class_id != geometry.class_id
+            || named.prefix_tokens == 0
+            || named.prefix_tokens > header.job_context.declared_prefill_tokens
+        {
+            return Err(refused("TIR original Prefix differs from its bounded native semantic geometry"));
+        }
     }
     // A constrained job's selection is its constraint's mask: the staged Constraint court judges it, so the frame must carry
     // the semantic contract (its plan always has the Constraint family when the job is constrained).
@@ -691,7 +922,8 @@ pub(super) fn prepare_original_v1(
     )
     .map_err(refused)?;
     drop(original_source);
-    let frame = Frame::prepare_native_source_v2(
+    let table = original_family_table_inventory_v2(b, ctx.daa_score, original)?;
+    let frame = Frame::prepare_native_source_mode_v3(
         original.clone(),
         header.clone(),
         plan,
@@ -705,6 +937,8 @@ pub(super) fn prepare_original_v1(
         &panel,
         object,
         crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1,
+        table.as_ref(),
+        b.params.family_supplier_active_at(ctx.daa_score) && b.extras.family_supplier_active,
     )
     .map_err(|why| match why {
         crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
@@ -740,7 +974,7 @@ pub(super) fn install_original_v1(
     {
         return Err(refused("TIR original install lacks same-block native FP acceptance or repeats an allocation"));
     }
-    let room = b.gate_room(&producer, ctx.daa_score, PalwRcoreGateV1::Work);
+    let room = b.gate_room(&producer, ctx.daa_score, PalwRcoreGateV1::Work)?;
     if u128::from(p.terms.plan.deposit_sompi) > room {
         return Err(refused("TIR original full deposit exceeds producer native work room"));
     }
@@ -1654,7 +1888,7 @@ fn apply_conviction_v1(
     }
     // 1. Each credited Valid custodian: S4, lock first (consumed keys skip — once across every route).
     if !credited.is_empty() {
-        let conv = b.open_conviction_v1(&credited, ctx.daa_score);
+        let conv = b.open_conviction_v1(&credited, ctx.daa_score)?;
         let g = b.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
         b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
     }
@@ -1711,11 +1945,12 @@ fn apply_witness_part_v1(
     }
     let key = Key::TirWitness(claim_id, filer);
     let existing = match b.state.staged_court_row_v1(&key) {
-        Some(Row::TirWitness(row)) => Some(row.as_ref().clone()),
+        Some(Row::TirWitness(row)) => Some(row.as_ref()),
         Some(_) => return Err(refused("TIR staged witness key holds another row")),
         None => None,
     };
-    let mut row = match (existing.clone(), part.offset) {
+    let had_prefix = existing.is_some();
+    let mut row = match (existing, part.offset) {
         (None, 0) => Witness {
             claim: claim_id,
             filer,
@@ -1725,14 +1960,30 @@ fn apply_witness_part_v1(
             until_daa: terms.collect_until_daa,
             received: Vec::new(),
         },
-        (Some(row), offset) if offset != 0 => row,
+        (Some(prefix), offset) if offset != 0 => {
+            if (prefix.total_bytes, prefix.digest, prefix.allocation_id, prefix.received.len() as u64)
+                != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, offset)
+            {
+                return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
+            }
+            // Keep the old committed prefix available for rollback, and copy
+            // it once into the exact-sized candidate assembly.
+            let length =
+                prefix.received.len().checked_add(part.bytes.len()).ok_or_else(|| refused("TIR staged witness length overflow"))?;
+            let mut received = Vec::with_capacity(length);
+            received.extend_from_slice(&prefix.received);
+            Witness {
+                claim: prefix.claim,
+                filer: prefix.filer,
+                allocation_id: prefix.allocation_id,
+                total_bytes: prefix.total_bytes,
+                digest: prefix.digest,
+                until_daa: prefix.until_daa,
+                received,
+            }
+        }
         _ => return Err(refused("TIR staged witness part is out of order (a witness opens once, at offset 0)")),
     };
-    if (row.total_bytes, row.digest, row.allocation_id, row.received.len() as u64)
-        != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, part.offset)
-    {
-        return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
-    }
     row.received.extend_from_slice(&part.bytes);
     if (row.received.len() as u64) < row.total_bytes {
         row.check_structure_v1(claim_id, filer).map_err(refused)?;
@@ -1745,7 +1996,7 @@ fn apply_witness_part_v1(
     }
     let evidence =
         crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1(&row.received).map_err(refused)?;
-    if existing.is_some() && !b.state.court_service_holds_material_v1(&key) {
+    if had_prefix && !b.state.court_service_holds_material_v1(&key) {
         b.write_staged_row_v1(key, None)?;
     }
     // A recovery hold retains the existing partial row, without changing the
@@ -1934,6 +2185,7 @@ mod conviction_e2e_tests {
     include!("palw_court_shared_constraint_native_tests.rs");
     include!("palw_court_shared_tokenizer_native_tests.rs");
     include!("palw_court_shared_material_intake_native_tests.rs");
+    include!("palw_court_family_material_native_tests.rs");
     use super::*;
     use crate::palw_tir_public_carriage_v1::{
         PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T, PalwTirPublicControlV1 as Control,
@@ -9625,3 +9877,5 @@ mod conviction_e2e_tests {
         assert!(!still && !exit_held, "B-05 widened: a void-closed sibling session's archive is resolvable");
     }
 }
+
+include!("palw_tir_prepared_input_archive_v12.rs");

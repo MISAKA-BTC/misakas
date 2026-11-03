@@ -352,7 +352,7 @@ fn seat_or_retire(
                 live_claims: 0,
             };
             let free = (builder.state.bonds.get(signer).map(|b| b.collateral).unwrap_or(0) as u128)
-                .saturating_sub(builder.committed_at(signer, ctx.daa_score));
+                .saturating_sub(builder.committed_at(signer, ctx.daa_score)?);
             if free < s.stake as u128 {
                 return Err(bad("mining39 seat stake exceeds the bond's free collateral"));
             }
@@ -380,6 +380,15 @@ fn seat_or_retire(
             seats.push(*signer);
             m.seats = m.seats.saturating_add(1);
             write_seat(builder, &s)?;
+            super::palw_native_budget_binding_fold_v1::install_native_budget_binding_v1(
+                builder,
+                crate::palw_native_budget_binding_v1::NativeBudgetSourceV1::MiningSeat39,
+                Hash64::from_bytes(s.model),
+                Hash64::from_bytes(s.budget_id()),
+                s.bond,
+                s.since,
+                0,
+            )?;
             builder.write_kernel_row(TABLE, k(MINING_SEAT_LIST_KIND_V39, &w.model), Some(b(&seats)))?;
             write_model(builder, &m)?;
             builder.note_kernel_bond(signer)?;
@@ -394,6 +403,7 @@ fn seat_or_retire(
                 return Ok(());
             }
             builder.bond_budget_close_v1(&Hash64::from_bytes(s.budget_id()), ctx.daa_score)?;
+            builder.bond_budget_forget_v1(&Hash64::from_bytes(s.budget_id()))?;
             let mut seats = seats;
             seats.retain(|b| b != signer);
             m.seats = m.seats.saturating_sub(1);
@@ -555,6 +565,22 @@ fn commit(
     s.live_claims += 1;
     s.last_use = ctx.daa_score;
     write_claim(builder, &record)?;
+    if builder
+        .state
+        .bond_budget()
+        .and_then(|b| b.claim_row(&crate::palw_native_receipt_v39::native_mining_budget_id_v39(&id)))
+        .is_some()
+    {
+        super::palw_native_budget_binding_fold_v1::install_native_budget_binding_v1(
+            builder,
+            crate::palw_native_budget_binding_v1::NativeBudgetSourceV1::Mining39,
+            Hash64::from_bytes(id),
+            crate::palw_native_receipt_v39::native_mining_budget_id_v39(&id),
+            *signer,
+            ctx.daa_score,
+            0,
+        )?;
+    }
     write_model(builder, &m)?;
     write_seat(builder, &s)?;
     builder.write_kernel_row(TABLE, k(MINING_PRODUCER_SEQUENCE_KIND_V39, signer), Some(b(&(next + 1))))?;
@@ -632,7 +658,7 @@ fn issue(
     Ok(())
 }
 
-fn collect(
+pub(super) fn collect(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     signer: &PalwBondKeyV2,
@@ -655,6 +681,9 @@ fn collect(
             if ctx.daa_score <= rc.expires && rc.spent_quanta < rc.price.quanta {
                 return Err(bad("mining39 receipt still live"));
             }
+            if crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&builder.state, &c.claim_hash()) {
+                return Err(bad("mining39 collection cannot erase an unresolved native accusation"));
+            }
             // G-N2: a rewarded claim stays accusable (and its material held) through its liability horizon.
             let policy = policy(builder, ctx)?;
             let certification =
@@ -665,6 +694,9 @@ fn collect(
             (c.id, Some(rc))
         }
     };
+    if crate::palw_native_receipt_v39::native_mining_accusation_pending_v39(&builder.state, &Hash64::from_bytes(claim_id)) {
+        return Err(bad("mining39 collection cannot erase an unresolved native accusation"));
+    }
     if !prepay(builder, ctx, signer, p, 0, body.len())? {
         return Ok(());
     }
@@ -673,9 +705,15 @@ fn collect(
     let mut m = model(r, &c.model)?;
     if let Some(rc) = &receipt {
         m.live_receipts = m.live_receipts.saturating_sub(1);
-        builder.bond_budget_close_v1(&native_mining_budget_id_v39(&c.id), ctx.daa_score)?;
         builder.write_kernel_row(TABLE, k(MINING_RECEIPT_KIND_V39, &rc.id), None)?;
     }
+    // The exact native source has genuinely ended. Existing forget preserves
+    // its in-window period rights and any independent liability-view shadow,
+    // then removes the main row automatically when those clocks permit it.
+    // No generic FreePrompt scan or guessed native identity is involved.
+    let budget_id = native_mining_budget_id_v39(&c.id);
+    builder.bond_budget_close_v1(&budget_id, ctx.daa_score)?;
+    builder.bond_budget_forget_v1(&budget_id)?;
     // G-N2: the claim leaves its liability: its material holds and its attestors' locks are released uncharged.
     super::palw_native_job_fold_v39::release_mining_holds_v39(builder, &c)?;
     super::palw_security_certification_fold_v1::release_native_attestor_locks_v39(builder, &c.claim_hash())?;
@@ -686,6 +724,15 @@ fn collect(
     builder.write_kernel_row(TABLE, k(MINING_COLLECTED_KIND_V39, &c.id), Some(b(&(c.root(), c.closed, ctx.daa_score))))?;
     builder.write_kernel_row(TABLE, k(MINING_CLAIM_KIND_V39, &c.id), None)?;
     super::palw_security_certification_fold_v1::retire_native_mining_v39(builder, &c.claim_hash())?;
+    if crate::palw_native_receipt_v39::native_mining_convicted_v39(&builder.state, &c.claim_hash()) {
+        // Revoked work can never establish a floor. Once ordinary collection
+        // releases its source, release its supplementary anchor rows as well.
+        let anchors = crate::palw_native39_frontier_v1::native39_frontier_anchors_v1(&builder.state)?;
+        for (key, anchor) in anchors.iter().filter(|(_, a)| a.claim == c.claim_hash()) {
+            let _ = anchor;
+            builder.write_kernel_row(crate::palw_native39_frontier_v1::NATIVE39_FRONTIER_TABLE_V1, key.as_bytes().to_vec(), None)?;
+        }
+    }
     write_model(builder, &m)?;
     Ok(())
 }
@@ -785,6 +832,36 @@ pub(super) fn apply_native_receipt_block_v39(
     rc.spent[spend.quantum_index as usize / 8] |= 1 << (spend.quantum_index % 8);
     rc.spent_quanta += 1;
     write_receipt(builder, &rc)?;
+    // Retain the accepted quantum's actual carrying point. A nominal Final,
+    // budget weight or a matching local replay cannot enter this namespace.
+    if builder.params.settlement_once_active_at(ctx.daa_score) {
+        use crate::palw_native39_frontier_v1::{NATIVE39_FRONTIER_TABLE_V1, native39_frontier_identity_v1};
+        let maturity = builder.extras.native_fact_quantum_maturity_daa.unwrap_or_else(|| {
+            builder.extras.economic_safety.map_or_else(
+                || {
+                    crate::palw_economic_safety_v1::palw_exec_quantum_maturity_daa_v1(
+                        builder.params.window_challenge(),
+                        builder.params.window_court(),
+                    )
+                },
+                |e| e.maturity_daa,
+            )
+        });
+        let anchor = crate::palw_native39_frontier_v1::prepare_native39_frontier_anchor_v1(
+            builder.params,
+            ctx,
+            maturity,
+            &c,
+            &rc,
+            spend.quantum_index,
+            builder.params.worker_carve_at(ctx.subsidy, builder.extras.escrow_carve),
+        )?;
+        let key = native39_frontier_identity_v1(&anchor.work, anchor.quantum).as_bytes().to_vec();
+        if route(builder)?.aux.contains_key(&(NATIVE39_FRONTIER_TABLE_V1, key.clone())) {
+            return Err(bad("native39 work quantum already has a frontier anchor"));
+        }
+        builder.write_kernel_row_encoded_v1(NATIVE39_FRONTIER_TABLE_V1, &key, Some(&anchor))?;
+    }
     Ok(())
 }
 
@@ -822,4 +899,232 @@ mod r5_mining_receipt_leg_tests {
             PalwLegLiabilityV1::NativeClaim { .. } | PalwLegLiabilityV1::Unsourced(_)
         ));
     }
+}
+
+/// Recompute native work's part of the SAME rooted frontier used by fork choice
+/// and settlement. Every candidate is an accepted quantum, independently drawn
+/// and approved, past its complete liability clock; nominal safe_weight is never
+/// an eligibility predicate here.
+pub(super) fn tick_native39_frontier_v1(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+    resolved_through: u64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native39_frontier_v1::*;
+    use crate::palw_security_certification_v1::{
+        PALW_SECURITY_CERTIFICATION_TABLE_V1, PalwCertifiedFrontierFloorV1, certification_frontier_floor_key_v1,
+        palw_certified_frontier_floor_v1,
+    };
+    let rows = native39_frontier_anchors_v1(&builder.state)?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let retired_bytes = (rows.len() as u64)
+        .checked_mul(std::mem::size_of::<Hash64>() as u64)
+        .ok_or(PalwStateV2Error::Overflow("native39 frontier retirement list"))?;
+    let _retired_lease =
+        crate::palw_native_resource_v1::reserve_native_requests_v1(retired_bytes).map_err(PalwStateV2Error::NativeResource)?;
+    let mut frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
+    let mut floor = palw_certified_frontier_floor_v1(&builder.state)
+        .map(|f| (f.blue_score, Hash64::from_bytes(f.block)))
+        .unwrap_or((0, Hash64::default()));
+    let mut retired = Vec::with_capacity(rows.len());
+    for (key, row) in rows.iter() {
+        if !native39_frontier_anchor_ready_v1(&builder.state, builder.params, row, ctx)? {
+            continue;
+        }
+        let eligible = if builder.params.claim_local_settlement_active_at(ctx.daa_score) {
+            super::palw_claim_local_native39_frontier_eligible_v1(&builder.state, builder.params, ctx, row.claim, row)?
+        } else {
+            row.anchor_blue <= resolved_through
+        };
+        if !eligible {
+            continue;
+        }
+        if row.anchor_blue > frontier.0 {
+            frontier = (row.anchor_blue, row.anchor)
+        }
+        if native39_anchor_collected_v1(&builder.state, row)
+            && ctx.daa_score >= native39_frontier_retained_until_v1(builder.params, row)
+        {
+            if row.anchor_blue > floor.0 {
+                floor = (row.anchor_blue, row.anchor)
+            }
+            let parent_keeps_anchor = if builder.params.claim_local_settlement_active_at(ctx.daa_score) {
+                if parent.safe_frontier_blue_score < row.anchor_blue {
+                    false
+                } else if let Some(point) = parent.last_point() {
+                    super::palw_claim_local_native39_frontier_eligible_v1(parent, builder.params, point, row.claim, row)?
+                } else {
+                    false
+                }
+            } else {
+                true
+            };
+            // A finite GC never erases the last transferable certificate. The
+            // authenticated parent already contains the independently derived
+            // policy checkpoint written after its own claim-local closure.
+            let compact = crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(parent)?;
+            let compact_handoff = compact.iter().any(|(id, closed)| {
+                *id == *key
+                    && closed.fact.anchor == row.anchor
+                    && closed.fact.work == row.priced_work
+                    && closed.origin.work == row.work
+                    && closed.origin.quantum == Some(row.quantum)
+            });
+            let archived = crate::palw_native39_settlement_checkpoint_v1::read_native39_settlement_checkpoint_v1(parent)?;
+            let handed_off = compact_handoff
+                || archived.is_some_and(|checkpoint| {
+                    row.anchor_daa < checkpoint.effect.daa_score && row.anchor_blue < checkpoint.effect.blue_score
+                });
+            if parent_keeps_anchor && handed_off {
+                retired.push(*key);
+            }
+        }
+    }
+    if floor.0 > palw_certified_frontier_floor_v1(&builder.state).map_or(0, |f| f.blue_score) {
+        let row = PalwCertifiedFrontierFloorV1 { blue_score: floor.0, block: floor.1.as_bytes() };
+        builder.write_kernel_row_encoded_v1(
+            PALW_SECURITY_CERTIFICATION_TABLE_V1,
+            &certification_frontier_floor_key_v1(),
+            Some(&row),
+        )?;
+    }
+    for key in retired {
+        builder.write_kernel_row(NATIVE39_FRONTIER_TABLE_V1, key.as_bytes().to_vec(), None)?;
+    }
+    builder.state.safe_frontier_blue_score = frontier.0;
+    builder.state.safe_frontier = frontier.1;
+    Ok(())
+}
+
+/// Archive an exact certified prefix before the finite accepted-quantum rows
+/// retire. This never combines an old certificate's quantities with new work.
+pub(super) fn write_native39_settlement_checkpoint_v1(
+    builder: &mut TransitionBuilder<'_>,
+    parent: &PalwChainStateV2,
+    ctx: &PalwBlockContextV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_native_settlement_v1::*;
+    use crate::palw_native39_settlement_checkpoint_v1::*;
+    let Some(context) = builder.extras.native39_settlement_checkpoint else { return Ok(()) };
+    if !context.retirement.activation.is_active(ctx.daa_score) || ctx.daa_score < context.evm_activation_daa {
+        return Ok(());
+    }
+    let Some(parent_point) = parent.last_point().copied() else { return Ok(()) };
+    let rows = crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(&builder.state)?;
+    if rows.is_empty() {
+        return Ok(());
+    }
+    let n = rows.len() as u64;
+    let unit = (std::mem::size_of::<MatureUsefulWorkV1>()
+        + std::mem::size_of::<PalwBlockContextV2>()
+        + 4 * crate::palw_native_resource_v1::btree_node_envelope_bytes_v1::<Hash64, u128>()) as u64;
+    let workspace = n.checked_mul(unit).ok_or(PalwStateV2Error::Overflow("native39 checkpoint certificate workspace"))?;
+    let _lease = crate::palw_native_resource_v1::reserve_native_requests_v1(workspace).map_err(PalwStateV2Error::NativeResource)?;
+    let mut facts = Vec::with_capacity(rows.len());
+    let mut effects = Vec::with_capacity(rows.len());
+    let mut irreversible_support =
+        crate::palw_security_certification_v1::palw_certified_frontier_floor_v1(&builder.state).map_or(0, |floor| floor.blue_score);
+    for (_, closed) in rows.iter() {
+        let fact = closed.fact;
+        if closed.origin.family != crate::palw_native_closed_facts_v1::ClosedFactFamilyV1::LegacyFp {
+            irreversible_support = irreversible_support.max(fact.anchor_blue);
+        }
+        if fact.anchor_daa < context.evm_activation_daa || fact.anchor_blue > builder.state.safe_frontier_blue_score {
+            continue;
+        }
+        facts.push(fact);
+        effects.push(PalwBlockContextV2 { block: fact.anchor, daa_score: fact.anchor_daa, blue_score: fact.anchor_blue, subsidy: 0 });
+    }
+    effects.sort_unstable_by_key(|point| std::cmp::Reverse((point.blue_score, point.daa_score, point.block)));
+    effects.dedup_by_key(|point| point.block);
+    let old = read_native39_settlement_checkpoint_v1(&builder.state)?;
+    let claim_local = if builder.params.claim_local_settlement_active_at(ctx.daa_score) {
+        let previous = builder.state.last_point;
+        builder.state.last_point = Some(*ctx);
+        let view = super::palw_claim_local_owned_checkpoint_v1(&builder.state, builder.params, ctx);
+        builder.state.last_point = previous;
+        view?
+    } else {
+        None
+    };
+    let mut open_from = u64::MAX;
+    for (id, claim) in builder.state.claims_iter() {
+        let dependency = builder.state.exec_v2_liability_until_v1(builder.params, id)?;
+        let after = dependency
+            .map(|until| until.checked_add(1).ok_or(PalwStateV2Error::Overflow("native39 checkpoint dependency horizon")))
+            .transpose()?
+            .unwrap_or(0);
+        let retention = claim.trace_retention_daa.max(after);
+        if !(matches!(claim.phase, PalwClaimPhaseV2::Voided { .. })
+            || (matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) && retention <= ctx.daa_score))
+        {
+            open_from = open_from.min(claim.accepted_blue_score);
+        }
+    }
+    for claim in builder
+        .state
+        .da_sessions_iter()
+        .map(|((claim, _), _)| *claim)
+        .chain(builder.state.court_sessions_iter().map(|(_, session)| session.claim))
+    {
+        open_from = open_from.min(builder.state.claim(&claim).map_or(0, |c| c.accepted_blue_score));
+    }
+    for effect in effects {
+        if effect.blue_score > irreversible_support {
+            continue;
+        }
+        if old.as_ref().is_some_and(|prior| prior.effect.blue_score >= effect.blue_score) {
+            break;
+        }
+        let Ok(evidence) = certify_native_effect_v1(
+            context.retirement.settlement,
+            (effect.daa_score, effect.blue_score),
+            ctx.daa_score,
+            true,
+            true,
+            claim_local.as_ref().map_or(effect.blue_score < open_from, |view| view.lifecycle_preserved_through_v1(effect.blue_score)),
+            true,
+            &facts,
+        ) else {
+            continue;
+        };
+        let mut totals = crate::palw_native_settlement_v1::EvidenceAccumulatorV1::default();
+        for fact in facts.iter().filter(|fact| fact.accepted_daa >= effect.daa_score && fact.accepted_blue >= effect.blue_score) {
+            totals.add_fact(fact);
+        }
+        let checkpoint = Native39SettlementCheckpointV1 {
+            version: 1,
+            ruleset: context.ruleset,
+            policy_id: context.retirement.settlement.id(),
+            retirement_daa: context.retirement.activation.daa_score(),
+            depth_required: context.retirement.settlement.settled_anchor_depth,
+            work_required: context.retirement.settlement.unique_mature_work,
+            operator_permille: context.retirement.settlement.max_operator_permille,
+            class_permille: context.retirement.settlement.max_class_permille,
+            effect,
+            point: *ctx,
+            parent: parent_point,
+            parent_state_root: parent.state_root(),
+            parent_leaf: context
+                .fork_choice_commitment
+                .and_then(|_| crate::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1::of(parent)),
+            frontier: effect.block,
+            frontier_blue: effect.blue_score,
+            depth: evidence.depth,
+            work: evidence.work,
+            max_operator_work: totals.max_operator,
+            max_class_work: totals.max_class,
+        };
+        checkpoint.validate_shape_v1()?;
+        builder.write_kernel_row_encoded_v1(
+            NATIVE39_SETTLEMENT_CHECKPOINT_TABLE_V1,
+            &NATIVE39_SETTLEMENT_CHECKPOINT_KEY_V1,
+            Some(&checkpoint),
+        )?;
+        break;
+    }
+    Ok(())
 }

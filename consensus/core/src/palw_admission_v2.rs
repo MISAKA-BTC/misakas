@@ -180,6 +180,8 @@ impl PalwAdmissionParamsV2 {
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwAdmissionV2Error {
+    #[error("native collateral accounting failed: {0}")]
+    CollateralState(#[from] crate::palw_state_v2::PalwStateV2Error),
     #[error("invalid admission params: {0}")]
     InvalidParams(&'static str),
     #[error("stateless validation failed: {0}")]
@@ -476,6 +478,38 @@ fn palw_attempt_pwu_below_the_unit_v1(
     Ok(())
 }
 
+/// The non-bond checks a bond-free BASE recovery must still pass. The caller first checks
+/// the empty genesis/live registries, recovery clock, and ordinary stateless/signature/DA pins.
+/// `BondMissing` is returned before class/work admission in the ordinary path; accepting that
+/// error alone would otherwise bypass artifact identity, PWU pricing and the class lottery.
+pub fn check_palw_base_recovery_work_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    daa: u64,
+    execution_anchor: Hash64,
+    budget_fences: PalwEpochBudgetFencesV1,
+) -> Result<(), PalwAdmissionV2Error> {
+    let class = state.class(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassMissing(attempt.class_id))?;
+    if attempt.class_id != state_params.base_class_id() || !matches!(class.status, PalwClassStatusV2::Active) {
+        return Err(PalwAdmissionV2Error::ClassFrozen(attempt.class_id));
+    }
+    let roots_daa = state.last_point().map(|point| point.daa_score).unwrap_or(0);
+    if !state.class_roots_in_force(&attempt.class_id, roots_daa).contains(&attempt.artifact_root) {
+        return Err(PalwAdmissionV2Error::ArtifactRootMismatch);
+    }
+    if budget_fences.canonical_work_daa.is_some_and(|height| daa >= height) {
+        let derived = palw_attempt_canonical_pwu_v1(state, state_params, &attempt.class_id, daa, budget_fences)?;
+        if attempt.pwu != derived {
+            return Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: attempt.pwu, derived });
+        }
+    } else {
+        palw_attempt_pwu_below_the_unit_v1(state, state_params, class, attempt, budget_fences)?;
+    }
+    let floor = palw_work_lottery_floor_v1(state, budget_fences.work_target_floor, budget_fences.single_lottery);
+    check_palw_class_lottery_v4(state, state_params, attempt, execution_anchor, floor)
+}
+
 /// [`check_palw_attempt_admission_v2`] with ADR-0064's mergeset bond view. See
 /// [`check_palw_producer_entitlement_v2_with_bootstrap`] for what `bootstrap_bond` is and, more
 /// importantly, for what deliberately does NOT read it.
@@ -663,13 +697,13 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     // raw depth the processor resolved — the number the fold's `apply_attempt` and the producer's
     // facts (`palw_producer_facts_v4`) read.
     let reserved = if rcore {
-        crate::palw_state_v2::palw_bond_committed_raw_v1(
+        crate::palw_state_v2::palw_bond_committed_raw_checked_v2(
             state,
             state_params,
             &bond_key,
             ctx.daa_score,
             budget_fences.settled_anchor_depth,
-        )
+        )?
     } else {
         state
             .reserved_exposure(&bond_key)
@@ -1035,6 +1069,31 @@ pub fn check_palw_attempt_witness_pin_v1(
     Ok(())
 }
 
+/// Preserve one raw signed deadline per class when the separate acceptance-clock
+/// obligation is active. A derived stored obligation must not make the shorter
+/// stateless header shape another valid lottery draw for a fused model.
+pub(crate) fn check_palw_attempt_model_one_retention_pin_v1(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    header_daa: u64,
+    accepted_daa: u64,
+) -> Result<(), PalwAdmissionV2Error> {
+    if !state_params.model_panel_one_retention_active_at(accepted_daa) {
+        return Ok(());
+    }
+    let derived = header_daa.saturating_add(crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(
+        state,
+        state_params,
+        &attempt.class_id,
+        header_daa,
+    ));
+    if attempt.trace_retention_daa != derived {
+        return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
+    }
+    Ok(())
+}
+
 /// The composed admission a wiring layer should call: stateless shape → stateless signature →
 /// the DA pins → the stateful list → the class lottery, in that order, one entry point — so no
 /// pipeline can wire five layers and forget one. (The PoW itself is the finalizer's, upstream of
@@ -1101,6 +1160,7 @@ where
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
     check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, daa_score)?;
+    check_palw_attempt_model_one_retention_pin_v1(state, state_params, &envelope.attempt, daa_score, ctx.daa_score)?;
     check_palw_attempt_witness_pin_v1(state, state_params, &envelope.attempt, daa_score)?;
     let attempt_id =
         check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond, budget_fences)?;
@@ -1395,6 +1455,33 @@ mod tests {
         let (next, _d): (PalwChainStateV2, PalwStateDeltaV2) =
             apply_palw_transition_v2(state, &state_params(), c, &[], Some(env)).unwrap();
         next
+    }
+
+    #[test]
+    fn rfc0041_recovery_keeps_artifact_pwu_and_lottery_checks() {
+        let state = base_state();
+        let env = attempt(100, 0);
+        let check = |state: &PalwChainStateV2, env: &PalwAttemptEnvelopeV2| {
+            check_palw_base_recovery_work_v1(
+                state,
+                &state_params(),
+                &env.attempt,
+                100,
+                anchor_of(env),
+                PalwEpochBudgetFencesV1::default(),
+            )
+        };
+        assert!(check(&state, &env).is_ok());
+        let mut forged = env.clone();
+        forged.attempt.artifact_root = h64(123);
+        assert_eq!(check(&state, &forged), Err(PalwAdmissionV2Error::ArtifactRootMismatch));
+        forged = env.clone();
+        forged.attempt.pwu = 501;
+        assert!(matches!(check(&state, &forged), Err(PalwAdmissionV2Error::PwuExceedsClassRule { .. })));
+        let mut carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+        carriage.class_targets.get_mut(&h64(1)).unwrap().target = 1;
+        let hard = carriage.into_state(&state_params(), None).unwrap();
+        assert!(matches!(check(&hard, &env), Err(PalwAdmissionV2Error::ClassTicketAboveTarget { .. })));
     }
 
     #[test]

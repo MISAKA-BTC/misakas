@@ -15,9 +15,11 @@
 //!   registered opening width, the prompt's native form and the complete-ID
 //!   body). A declared size is never authority: it is checked against the
 //!   per-target native bound and against the submitter's per-claim budget.
-//! * Funding of storage belongs to the unadopted fee schedule. Production
-//!   resolution is always typed-missing ([`MaterialIntakeMissingV1::Schedule`]),
-//!   so no intake folds on any network. Tests inject a schedule.
+//! * Storage is priced by [`material_intake_schedule_v1`]: the pinned V5 estimate
+//!   while the material-intake fence (`palw_staged_tir_route_v1`) is active. The
+//!   fold debits that fee from the submitter bond before it records
+//!   `charged_sompi` or writes the draft. Below the fence the fold refuses and
+//!   charges nothing. A test may inject another schedule.
 //!
 //! Authentication is data identity only (existing Merkle commitments/openings),
 //! never a computation proof, a duty completion, a custody grant or a credit.
@@ -63,11 +65,13 @@ pub fn material_draft_id_v1(
 }
 
 // ---------------------------------------------------------------------------
-// The unadopted storage fee schedule (typed-missing in production).
+// Storage fee schedule. The pinned estimate is in force only while the
+// material-intake fence is active; below it the fold refuses (typed-missing).
 // ---------------------------------------------------------------------------
 
-/// Values the intake needs that are NOT adopted: storage price, draft TTL and
-/// the explicit exploration budget of the original's input cover.
+/// Storage price, draft TTL, and the explicit exploration budget of the
+/// original's input cover. The payer is the intake submitter (the bond that
+/// signed the step), debited by the fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaterialIntakeScheduleV1 {
     pub sompi_per_byte: u64,
@@ -83,14 +87,30 @@ pub enum MaterialIntakeMissingV1 {
 thread_local! {
     static TEST_SCHEDULE: std::cell::Cell<Option<MaterialIntakeScheduleV1>> = const { std::cell::Cell::new(None) };
 }
-/// TEST ONLY: per-thread injection; no non-test build can reach a value.
+/// TEST ONLY: per-thread injection. Absent from every non-test build.
 #[cfg(test)]
 pub(crate) fn set_material_intake_test_schedule_v1(schedule: Option<MaterialIntakeScheduleV1>) {
     TEST_SCHEDULE.with(|c| c.set(schedule));
 }
-/// Production: **V5 — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL [`crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1`].
-/// A test may still inject its own schedule per thread.
+/// Production schedule while the material-intake fence is active
+/// (`palw_staged_tir_route_v1` / `extras.staged_tir_route_active`).
+///
+/// **V5 — USER-APPROVED 2026-10-26 (estimate used as is; 「目安の値をそのまま使う」承認). Review condition: replace by measurement.** Basis: lane VAL [`crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1`] (payer = submitter). A test may still inject its own schedule per thread.
+///
+/// Called with the fence active, this is that pinned estimate (a test thread may
+/// inject another). [`material_intake_schedule_at_fence_v1`] returns
+/// [`MaterialIntakeMissingV1::Schedule`] below the fence, and the fold then
+/// refuses without debiting. Injection does not arm the fence.
 pub fn material_intake_schedule_v1() -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
+    material_intake_schedule_at_fence_v1(true)
+}
+
+/// [`material_intake_schedule_v1`] gated by the material-intake fence.
+/// Below the fence the schedule stays typed-missing ([`MaterialIntakeMissingV1::Schedule`]).
+pub fn material_intake_schedule_at_fence_v1(fence_active: bool) -> Result<MaterialIntakeScheduleV1, MaterialIntakeMissingV1> {
+    if !fence_active {
+        return Err(MaterialIntakeMissingV1::Schedule);
+    }
     #[cfg(test)]
     if let Some(schedule) = TEST_SCHEDULE.with(|c| c.get()) {
         return Ok(schedule);
@@ -350,7 +370,7 @@ fn prompt_form(state: &PalwChainStateV2, claim: Hash64) -> Result<PromptForm, St
     Ok(frame_of(state, claim)?.plan_v1().owner_work.rules.prompt_form)
 }
 /// Upper bound of the Borsh width of tile `tile` of a `count`-id Merkle prompt.
-fn prompt_tile_bound(count: u32, tile: u32) -> Result<u64, String> {
+pub(crate) fn prompt_tile_bound(count: u32, tile: u32) -> Result<u64, String> {
     let tiles = crate::palw_prompt_ids_v1::prompt_ids_tile_count_v1(u64::from(count)).ok_or("material prompt tile count")?;
     if u64::from(tile) >= tiles {
         return Err("material prompt tile outside original".into());
@@ -361,9 +381,8 @@ fn prompt_tile_bound(count: u32, tile: u32) -> Result<u64, String> {
     // count + tile_index + Vec len + ids + (leaf_index + leaf_hash + Vec len + siblings)
     Ok(4 + 4 + 4 + 4 * len + 8 + 64 + 4 + 64 * depth)
 }
-fn prompt_bound(state: &PalwChainStateV2, claim: Hash64, source: &Source) -> Result<u64, String> {
-    let count = source.header_v1().job_context.declared_prefill_tokens;
-    match prompt_form(state, claim)? {
+fn prompt_bound_for_form_v1(form: PromptForm, count: u32) -> Result<u64, String> {
+    match form {
         PromptForm::Flat => Ok(4 + 4 * u64::from(count)),
         PromptForm::MerkleV1 => {
             let tiles = crate::palw_prompt_ids_v1::prompt_ids_tile_count_v1(u64::from(count)).ok_or("material prompt tile count")?;
@@ -374,6 +393,63 @@ fn prompt_bound(state: &PalwChainStateV2, claim: Hash64, source: &Source) -> Res
             Ok(total)
         }
     }
+}
+
+/// Native input-supply demand, usable before a claim/context row exists. This
+/// describes bytes and targets; it grants no supplier duty or reserved service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputMaterialDemandV1 {
+    pub parameter_targets: u64,
+    pub parameter_bytes: u64,
+    pub prompt_targets: u64,
+    pub prompt_bytes: u64,
+}
+impl InputMaterialDemandV1 {
+    pub fn total_bytes_v1(&self) -> Result<u64, String> {
+        add(self.parameter_bytes, self.prompt_bytes)
+    }
+}
+/// The same exact opening-width and prompt grammar used by material intake.
+/// The caller supplies the native all-root union, never a declared byte size.
+pub(crate) fn input_material_demand_v1(
+    program: &misaka_palw_tir::program::TirProgramV1,
+    leaves: &[u32],
+    form: PromptForm,
+    count: u32,
+) -> Result<InputMaterialDemandV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as Error, TirNativeRequestsV1};
+    use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(crate::palw_tir_court_v1::TirInventoryOpeningVerifierV1::index_requests(program).map_err(Error::Resource)?)
+        .map_err(Error::Resource)?;
+    q.exact_v1::<u64>(leaves.len() as u64).map_err(Error::Resource)?;
+    let _scratch = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(Error::Resource)?;
+    let derive = || -> Result<InputMaterialDemandV1, String> {
+        if leaves.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("input material parameter union is not canonical".into());
+        }
+        let parameter_bytes = if leaves.is_empty() {
+            0
+        } else {
+            // Each target carries one opening, without the outer Vec length.
+            let total = palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, leaves)
+                .ok_or("material parameter union width not derivable")?;
+            total.checked_sub(4).ok_or("material parameter union width underflow")?
+        };
+        let prompt_targets = match form {
+            PromptForm::Flat => 1,
+            PromptForm::MerkleV1 => {
+                crate::palw_prompt_ids_v1::prompt_ids_tile_count_v1(u64::from(count)).ok_or("material prompt tile count")?
+            }
+        };
+        Ok(InputMaterialDemandV1 {
+            parameter_targets: leaves.len() as u64,
+            parameter_bytes,
+            prompt_targets,
+            prompt_bytes: prompt_bound_for_form_v1(form, count)?,
+        })
+    };
+    derive().map_err(Error::Decode)
 }
 /// The original's registered program, decoded under native admission.
 pub(crate) fn class_program_v1(
@@ -456,7 +532,6 @@ pub(crate) fn claim_budget_v1(
     program: &misaka_palw_tir::program::TirProgramV1,
     leaves: &[u32],
 ) -> Result<u64, String> {
-    use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, c.claim)?, source, c.profile_id)?;
     let mut total = 0u64;
     for ordinal in 0..set.len() {
@@ -469,14 +544,19 @@ pub(crate) fn claim_budget_v1(
     if let Ok((ids, _)) = crate::palw_tir_public_owned_v1::request_body_bound_v1(source, Query::Ids { offset: 0 }) {
         total = add(total, ids)?;
     }
-    if !leaves.is_empty() {
-        total = add(
-            total,
-            palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, leaves)
-                .ok_or("material parameter union width not derivable")?,
-        )?;
+    let input = input_material_demand_v1(
+        program,
+        leaves,
+        prompt_form(state, c.claim)?,
+        source.header_v1().job_context.declared_prefill_tokens,
+    )
+    .map_err(|e| e.to_string())?;
+    // Keep the existing claim-budget outer parameter Vec overhead. The demand
+    // separately counts only the actual per-target bodies.
+    if input.parameter_targets > 0 {
+        total = add(total, 4)?;
     }
-    add(total, prompt_bound(state, c.claim, source)?)
+    add(total, input.total_bytes_v1()?)
 }
 
 // ---------------------------------------------------------------------------
@@ -689,7 +769,10 @@ mod tests {
     #[test]
     fn material_schedule_is_the_approved_estimate_unless_injected() {
         set_material_intake_test_schedule_v1(None);
-        assert_eq!(material_intake_schedule_v1(), Ok(crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1));
+        let pinned = crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1;
+        assert_eq!(material_intake_schedule_v1(), Ok(pinned));
+        assert_eq!(material_intake_schedule_at_fence_v1(true), Ok(pinned));
+        assert_eq!(material_intake_schedule_at_fence_v1(false), Err(MaterialIntakeMissingV1::Schedule));
     }
     #[test]
     fn material_ids_bind_claim_target_and_literal_submitter() {

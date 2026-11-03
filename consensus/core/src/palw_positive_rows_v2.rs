@@ -10,8 +10,8 @@ use misaka_palw_positive_contract::{
     rows::*,
 };
 
-pub mod restore;
 pub mod assignment;
+pub mod restore;
 #[cfg(test)]
 pub(crate) mod tests;
 

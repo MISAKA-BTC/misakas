@@ -8,7 +8,8 @@ pub(super) struct PreparedOriginalFrameV1 {
     native: crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1,
     registered: Option<(u64, crate::palw_tir_fence2_v1::PalwTirDemandRulesV1)>,
     network: Option<Hash64>,
-    semantic_snapshot:Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    semantic_snapshot: Option<crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    input_footprint_v12: Option<NativePreparedInputArchiveFootprintV12>,
 }
 impl PreparedOriginalFrameV1 {
     pub(super) fn frame_v1(&self) -> &Frame {
@@ -23,14 +24,12 @@ impl PreparedOriginalFrameV1 {
     ) -> Result<PreparedOriginalGeometryV1, PreparedGeometryErrorV1> {
         self.check_preclaim_context_v1(b, ctx)?;
         let job = &self.frame.original_v1().job;
-        let record = b.state.tir_class_v1(&job.class_id).ok_or_else(|| {
-            PreparedGeometryErrorV1::State(refused("prepared geometry class disappeared"))
-        })?;
-        let layout =
-            crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, job.class_id)
-                .ok_or_else(|| {
-                    PreparedGeometryErrorV1::State(refused("prepared geometry layout disappeared"))
-                })?;
+        let record = b
+            .state
+            .tir_class_v1(&job.class_id)
+            .ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared geometry class disappeared")))?;
+        let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, job.class_id)
+            .ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared geometry layout disappeared")))?;
         let original = self.frame.original_v1();
         let source = crate::palw_tir_public_source_v1::PalwTirPublicSourceV1::new_native_v1(
             record,
@@ -44,54 +43,33 @@ impl PreparedOriginalFrameV1 {
         if source.source_id_v1() != self.frame.plan_v1().source_id
             || source.source_id_v1() != self.frame.custody_v1().pledge_v1().source_id
         {
-            return Err(PreparedGeometryErrorV1::State(refused(
-                "prepared geometry Source differs from actual native frame/pledge",
-            )));
+            return Err(PreparedGeometryErrorV1::State(refused("prepared geometry Source differs from actual native frame/pledge")));
         }
-        Ok(PreparedOriginalGeometryV1 {
-            prepared: self,
-            source,
-        })
+        Ok(PreparedOriginalGeometryV1 { prepared: self, source })
     }
-    fn check_preclaim_context_v1(
-        &self,
-        b: &TransitionBuilder<'_>,
-        ctx: &PalwBlockContextV2,
-    ) -> Result<(), PreparedGeometryErrorV1> {
+    fn check_preclaim_context_v1(&self, b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<(), PreparedGeometryErrorV1> {
         if self.registered.is_none() {
             return Err(PreparedGeometryErrorV1::MissingNativeRegistrationPolicy);
         }
         if *ctx != self.at || b.extras.tir_public_network_domain_v1 != self.network {
-            return Err(PreparedGeometryErrorV1::State(refused(
-                "prepared geometry changes native acceptance point/network",
-            )));
+            return Err(PreparedGeometryErrorV1::State(refused("prepared geometry changes native acceptance point/network")));
         }
         let class = self.frame.original_v1().job.class_id;
-        if b.state.class_semantics_v1(&class)!=self.semantic_snapshot.as_ref(){return Err(PreparedGeometryErrorV1::State(refused("prepared geometry immutable class semantics changed")));}
-        let class_row = b
-            .state
-            .class(&class)
-            .ok_or(PreparedGeometryErrorV1::MissingNativeRegistrationPolicy)?;
-        if class_row.registered_daa > ctx.daa_score
-            || class_row.artifact_root != self.frame.header_v1().artifact_root
-        {
-            return Err(PreparedGeometryErrorV1::State(refused(
-                "prepared geometry actual class time/artifact mismatch",
-            )));
+        if b.state.class_semantics_v1(&class) != self.semantic_snapshot.as_ref() {
+            return Err(PreparedGeometryErrorV1::State(refused("prepared geometry immutable class semantics changed")));
+        }
+        let class_row = b.state.class(&class).ok_or(PreparedGeometryErrorV1::MissingNativeRegistrationPolicy)?;
+        if class_row.registered_daa > ctx.daa_score || class_row.artifact_root != self.frame.header_v1().artifact_root {
+            return Err(PreparedGeometryErrorV1::State(refused("prepared geometry actual class time/artifact mismatch")));
         }
         let mut native = rules(b).map_err(PreparedGeometryErrorV1::State)?;
         native.maximum_leaves = b.state.class_step_ladder_v1(&class, native.maximum_leaves);
         if native != self.native
             || Some((
                 class_row.registered_daa,
-                crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(
-                    b.params,
-                    class_row.registered_daa,
-                ),
+                crate::palw_tir_fence2_v1::palw_tir_demand_rules_at_v1(b.params, class_row.registered_daa),
             )) != self.registered
-            || b.state
-                .claim(&self.frame.plan_v1().original_claim)
-                .is_some()
+            || b.state.claim(&self.frame.plan_v1().original_claim).is_some()
             || b.state.staged_court_row_v1(&self.frame.key_v1()).is_some()
         {
             return Err(PreparedGeometryErrorV1::State(refused(
@@ -114,9 +92,7 @@ pub(super) enum PreparedGeometryErrorV1 {
 /// Deserialize, caller-frame constructor or independent Complete/paid standing.
 pub(super) struct PreparedOriginalGeometryV1 {
     prepared: PreparedOriginalFrameV1,
-    source: crate::palw_native_resource_v1::NativeRetainedV1<
-        crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
-    >,
+    source: crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::PalwTirPublicSourceV1>,
 }
 impl PreparedOriginalGeometryV1 {
     pub(super) fn frame_v1(&self) -> &Frame {
@@ -139,16 +115,11 @@ impl PreparedOriginalGeometryV1 {
 
     pub(super) fn source_v1(
         &self,
-    ) -> &crate::palw_native_resource_v1::NativeRetainedV1<
-        crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
-    > {
+    ) -> &crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::PalwTirPublicSourceV1> {
         &self.source
     }
     pub(super) fn demand_v1(&self) -> crate::palw_tir_fence2_v1::PalwTirDemandRulesV1 {
-        self.prepared
-            .registered
-            .expect("enrichment checked actual registration")
-            .1
+        self.prepared.registered.expect("enrichment checked actual registration").1
     }
     /// Namespace from current native service state, not a caller-signed profile
     /// hash. This is NOT the missing authoritative fee/capital/retention bodies.
@@ -158,18 +129,11 @@ impl PreparedOriginalGeometryV1 {
         ctx: &PalwBlockContextV2,
         budget: crate::palw_court_source_material_graph_v3::SourceGraphBudgetV3,
     ) -> Result<
-        crate::palw_native_resource_v1::NativeRetainedV1<
-            crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,
-        >,
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3>,
         PreparedGeometryErrorV1,
     > {
         self.prepared.check_preclaim_context_v1(b, ctx)?;
-        let book = b
-            .state
-            .court_service_state_v1()
-            .ok_or(PreparedGeometryErrorV1::MissingSharedServiceNamespace)?;
-        let namespace =
-            crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(book.profile_id);
+        let namespace = crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(prepared_service_profile_v1(b, ctx)?);
         crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3::derive_native_v3(
             &self.prepared.frame,
             &self.source,
@@ -186,20 +150,15 @@ impl PreparedOriginalGeometryV1 {
         ctx: &PalwBlockContextV2,
         budget: crate::palw_court_numerical_geometry_v3::NumericalGeometryBudgetV3,
     ) -> Result<
-        crate::palw_native_resource_v1::NativeRetainedV1<
-            crate::palw_court_numerical_geometry_v3::NativeNumericalGeometryV3,
-        >,
+        crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_court_numerical_geometry_v3::NativeNumericalGeometryV3>,
         PreparedGeometryErrorV1,
     > {
         self.prepared.check_preclaim_context_v1(b, ctx)?;
         let class = self.prepared.frame.original_v1().job.class_id;
-        let record = b.state.tir_class_v1(&class).ok_or_else(|| {
-            PreparedGeometryErrorV1::State(refused("prepared numerical class absent"))
-        })?;
+        let record =
+            b.state.tir_class_v1(&class).ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared numerical class absent")))?;
         let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, class)
-            .ok_or_else(|| {
-                PreparedGeometryErrorV1::State(refused("prepared numerical layout absent"))
-            })?;
+            .ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared numerical layout absent")))?;
         crate::palw_court_numerical_geometry_v3::NativeNumericalGeometryV3::derive_native_v3(
             &self.source,
             record,
@@ -222,11 +181,23 @@ pub(super) fn install_prepared_original_v1(
     // ctx is unchanged within this object; ordinary reservation/claim write has
     // now occurred, so do not call the intentionally preclaim-only enrich guard.
     if prepared.at != *ctx {
-        return Err(refused(
-            "native prepared original install changes accepting point",
-        ));
+        return Err(refused("native prepared original install changes accepting point"));
     }
     install_original_v1(b, ctx, prepared.frame, prompt)
 }
 
 include!("palw_tir_prepared_original_requirements_v1.rs");
+
+/// A fresh new-contract original may open the already-pinned deterministic book.
+/// Its namespace is native policy, never peer metadata; no writes occur here.
+fn prepared_service_profile_v1(b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> Result<Hash64, PreparedGeometryErrorV1> {
+    if let Some(book) = b.state.court_service_state_v1() {
+        return Ok(book.profile_id);
+    }
+    if b.params.family_supplier_active_at(ctx.daa_score) && b.extras.family_supplier_active && b.extras.tir_public_conviction_active {
+        let profile = crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1
+            .ok_or(PreparedGeometryErrorV1::MissingSharedServiceNamespace)?;
+        return Ok(crate::palw_court_service_state_v2::court_service_profile_id_v2(profile.id()));
+    }
+    Err(PreparedGeometryErrorV1::MissingSharedServiceNamespace)
+}

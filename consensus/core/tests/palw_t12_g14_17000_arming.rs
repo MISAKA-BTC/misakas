@@ -78,7 +78,7 @@ fn list_every_refusal_at_17000() {
 /// list at 18,400 (what `PALW_T12_G14_17000_FLAG_DAY_DAA = Some(18_400)` assembles) must pass `validate_palw_v2()` — the check the
 /// preset assembly and `ConfigBuilder::build` run at node startup — with the binary's PINNED records: every gated fence of the list
 /// has its record (G14, kernel route, RFC-0018 / Gate C, model tier) and the TIR frame cost record names a real source commit.
-/// RED until the final evidence run is pinned; the flag day is not re-armed until it is green.
+/// Historical evidence was rebound by the explicit 2026-10-30 height decision. This startup test must still run on the latest candidate.
 fn t12_preset_rearmed_at_17400_validates_like_startup() {
     use kaspa_consensus_core::palw_g14_gates_v1::{PALW_G14_ARMING_RECORDS_V1, PalwG14GatedFenceV1};
     use kaspa_consensus_core::palw_kernel_route_arming_v1::{PALW_KERNEL_ROUTE_ARMING_RECORDS_V1, PalwKernelRouteGatedFenceV1};
@@ -399,10 +399,7 @@ fn unpublished_g14_moves_only_its_boundary_to_18400() {
 fn moving_existing_g14_does_not_pretend_unfinished_additional_fences_are_enabled() {
     let p = palw_t12_shipped_params();
     assert_eq!(kaspa_consensus_core::config::params::PALW_T12_FULL_ACTIVATION_DAA, None);
-    assert!(
-        p.palw_fences_v1().iter().all(|(name, at)| *name != "palw_court_family_supplier_v1" || at.is_none()),
-        "the isolated release adds no RFC42 fence or implementation"
-    );
+    assert!(p.palw_court_family_supplier_v1.is_none());
     assert!(p.palw_claim_local_settlement_v1.is_none());
     assert!(p.palw_unresolved_bound_v1.is_none());
     assert!(p.palw_native_execution_v39.is_none() && p.palw_native_mining_v39.is_none());

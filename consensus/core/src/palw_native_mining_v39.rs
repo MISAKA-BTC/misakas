@@ -802,6 +802,10 @@ pub struct NativeMiningPriceV39 {
     pub credited_mac: u128,
     pub quantum_mac: u64,
     pub quanta: u64,
+    /// PWU-priced minimum collectible exposure. This is not a ceiling on held
+    /// collateral: ADR-0176 whole native rewards can require a larger actual L.
+    /// Read the exact source's native budget binding and actual_held_v1 for the
+    /// current reservation; shared committed capital counts that actual amount.
     pub reserved_exposure: u128,
 }
 impl NativeMiningPriceV39 {

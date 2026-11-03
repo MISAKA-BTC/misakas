@@ -1,0 +1,15 @@
+working directory: /Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet
+
+CARGO_TARGET_DIR=/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates CARGO_BUILD_JOBS=2 CARGO_INCREMENTAL=0 CARGO_PROFILE_TEST_DEBUG=0 cargo test -p kaspa-consensus --lib --features evm --config profile.test.package.kaspa-consensus-core.opt-level=0 --config profile.test.package.kaspa-consensus-core.debug=0 pruning_snapshot_readiness_v1 -- --test-threads=1 --nocapture
+log: pruning-capture-short-anchor-test.log
+result: 9 passed, 0 failed; 1.93s
+
+/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus-6f2fca31543d3d7b startup_readiness_ --test-threads=1 --nocapture
+log: pruning-startup-readiness-test.log
+result: 1 passed, 0 failed; 0.01s
+
+/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspa_consensus-6f2fca31543d3d7b palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization --test-threads=1 --nocapture
+log: pruning-owned-state-caller-test.log
+result: 1 passed, 0 failed; 0.26s
+
+Binary/source hashes: pruning-validated-source-sha256.txt

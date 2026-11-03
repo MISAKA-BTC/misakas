@@ -173,6 +173,9 @@ impl PalwStateParamsV2 {
             reporter_income_from_daa: None,
             material_income_from_daa: None,
             settlement_once_from_daa: None,
+            family_supplier_from_daa: None,
+            verifier_watch_v1: None,
+            verifier_watch_maturity_v1: None,
             paid_claim_trap_from_daa: None,
             native_liability_horizon_from_daa: None,
             monetary_material: None,
@@ -196,6 +199,7 @@ impl PalwStateParamsV2 {
             court_outsider_lane_from_daa: None,
             kernel_route_panel_one_from_daa: None,
             model_panel_one_from_daa: None,
+            model_panel_one_retention_v1_from_daa: None,
             kernel_panel_one_test_only_external_gain_bound_v1: None,
             kernel_court_admission_test_only_v1: None,
             court_clock_v2_from_daa: None,
@@ -818,6 +822,20 @@ impl PalwStateParamsV2 {
             == crate::palw_model_panel_one_v1::PalwModelClaimRouteV1::G14PanelOne
     }
 
+    pub fn with_model_panel_one_retention_v1(mut self, from_daa: Option<u64>) -> Self {
+        self.model_panel_one_retention_v1_from_daa = from_daa;
+        self
+    }
+
+    pub fn model_panel_one_retention_v1_from_daa(&self) -> Option<u64> {
+        self.model_panel_one_retention_v1_from_daa
+    }
+
+    pub fn model_panel_one_retention_active_at(&self, accepted_daa: u64) -> bool {
+        self.model_panel_one_governs_v1(accepted_daa)
+            && self.model_panel_one_retention_v1_from_daa.is_some_and(|from| from != u64::MAX && accepted_daa >= from)
+    }
+
     /// `Params::sync_palw_g14_gates_v1` (and by fixtures).
     pub fn with_kernel_route_panel_one_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.kernel_route_panel_one_from_daa = from_daa;
@@ -1003,6 +1021,17 @@ impl PalwStateParamsV2 {
     }
     pub fn material_income_active_at(&self, daa: u64) -> bool {
         self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    pub fn with_family_supplier_from(mut self, from: Option<u64>) -> Self {
+        self.family_supplier_from_daa = from;
+        self
+    }
+    pub fn family_supplier_from(&self) -> Option<u64> {
+        self.family_supplier_from_daa
+    }
+    pub fn family_supplier_active_at(&self, daa: u64) -> bool {
+        self.family_supplier_from_daa.is_some_and(|from| daa >= from)
     }
 
     /// RFC-0008 once-only settlement registry mirror (`Params::palw_settlement_once_v1`).

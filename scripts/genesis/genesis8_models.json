@@ -75,7 +75,8 @@
    "converter": "a16",
    "convert_options": {
     "n_ctx": 32768,
-    "a16_file": "dolphin3.0-qwen25-1.5b-a16-32k.palwart"
+    "a16_file": "dolphin3.0-qwen25-1.5b-a16-32k-precise.palwart",
+    "precise_embedding": true
    },
    "history_artifact": {
     "repo": "Misakachain/Dolphin3.0-Qwen2.5-1.5B-PALW",

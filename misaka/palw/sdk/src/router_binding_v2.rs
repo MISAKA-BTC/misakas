@@ -14,6 +14,9 @@ use kaspa_consensus_core::{
 };
 use kaspa_pq_validator_core::ValidatorKey;
 
+#[path = "router_binding_v2/court_expectation.rs"]
+pub mod court_expectation;
+
 #[path = "router_binding_v2/cli.rs"]
 pub mod cli;
 

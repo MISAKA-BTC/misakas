@@ -131,7 +131,7 @@ fn bytes_of<T: BorshSerialize>(v: &T) -> Vec<u8> {
     borsh::to_vec(v).expect("in-memory borsh")
 }
 
-fn collection_domain(table: u8) -> Vec<u8> {
+pub fn collection_domain(table: u8) -> Vec<u8> {
     let name = match table {
         TABLE_BONDS_V1 => "bonds",
         TABLE_CLASSES_V1 => "classes",
@@ -595,7 +595,7 @@ fn pipeline_class_row_of(l: &KernelLedgerV1, r: &PipelineClassRecordV1) -> Resul
 /// The decoded sort key of a row: the ledger orders `BTreeMap<DemandKeyV1, _>` by `(claim, stage, position)` NUMERICALLY, which
 /// is not the order of the Borsh bytes (the position is little-endian). Every other table's key is a 64-byte digest, whose byte
 /// order is its order.
-fn sort_key(table: u8, key: &[u8]) -> (Vec<u8>, u8, u32) {
+pub fn sort_key(table: u8, key: &[u8]) -> (Vec<u8>, u8, u32) {
     // `(job, producer, sealed_daa)`: the DAA is little-endian in its Borsh bytes, so it is ordered by its big-endian bytes.
     if table == TABLE_FORFEITED_CLAIM_SEALS_V1 && key.len() == 64 + 64 + 8 {
         let mut daa = [0u8; 8];
@@ -642,6 +642,36 @@ pub fn root_of_rows(
         }
         finish(s)
     };
+    let table_roots = (0u8..32)
+        .map(|table| {
+            let count = by_table.get(&table).map_or(0, |rows| rows.len() as u64);
+            (table, (count, coll(table)))
+        })
+        .collect();
+    root_from_table_digests_v1(policy, config_root, scalars, opv, &table_roots)
+}
+
+/// Assemble the canonical ledger root from each table's independently hashed
+/// rows. Streaming import and the existing in-memory writer share this exact
+/// version/extension grammar. Counts decide whether optional tables exist.
+pub fn root_from_table_digests_v1(
+    policy: &LedgerPolicyV1,
+    config_root: Digest,
+    scalars: LedgerScalarsV1,
+    opv: Option<&OpvPolicyV1>,
+    table_roots: &BTreeMap<u8, (u64, Digest)>,
+) -> Digest {
+    let coll = |table: u8| {
+        table_roots.get(&table).map_or_else(
+            || {
+                let mut state = keyed(&collection_domain(table));
+                state.update(&0u64.to_le_bytes());
+                finish(state)
+            },
+            |(_, root)| *root,
+        )
+    };
+    let present = |table: u8| table_roots.get(&table).is_some_and(|(count, _)| *count > 0);
     let header =
         LedgerHeaderV1 { version: LEDGER_STATE_VERSION_V1, policy: *policy, config_root, daa: scalars.daa, burned: scalars.burned };
     let parts = StateRootPartsV1 {
@@ -665,8 +695,11 @@ pub fn root_of_rows(
     let _ = LEDGER_ROOT_DOMAIN_V1;
     let v1 = parts.root();
     // RFC-0004 Part II: the typed tables, each only when non-empty (an untyped ledger's root is unchanged).
-    let typed: Vec<(u8, Digest)> =
-        crate::rows::TYPED_TABLES_V1.iter().filter(|t| by_table.contains_key(*t)).map(|t| (*t, coll(*t))).collect();
+    let typed: Vec<(u8, Digest)> = crate::rows::TYPED_TABLES_V1
+        .iter()
+        .filter(|t| table_roots.get(*t).is_some_and(|(count, _)| *count > 0))
+        .map(|t| (*t, coll(*t)))
+        .collect();
     // RFC-0015: with no OPV policy the root is the historical one, byte for byte; with one it is the OPV root form.
     let base = match opv {
         None => v1,
@@ -682,14 +715,11 @@ pub fn root_of_rows(
     };
     // K2-TIR-v4: tables 20 and 21 extend the root only once either holds a row; then RFC-0004 Part II's typed tables, each only
     // when non-empty (an untyped ledger's root is unchanged).
-    let seg = by_table.contains_key(&TABLE_TILED_JOBS_V1) || by_table.contains_key(&TABLE_SEG_PROGRESS_V1);
+    let seg = present(TABLE_TILED_JOBS_V1) || present(TABLE_SEG_PROGRESS_V1);
     let base = if seg { seg_root_extension_v1(&base, &coll(TABLE_TILED_JOBS_V1), &coll(TABLE_SEG_PROGRESS_V1)) } else { base };
     let base = crate::spec::typed_root_v1(base, &typed);
     // OPV-BOOT GAP-B1a / C4R4 F-C4R4-08: tables 25, 26 and 18 extend the root only once any of them holds a row.
-    let base = if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1]
-        .iter()
-        .any(|t| by_table.contains_key(t))
-    {
+    let base = if [TABLE_CLAIM_BEACON_SALTS_V1, TABLE_FORFEITED_CLAIM_SEALS_V1, TABLE_JOB_POSTERS_V1].iter().any(|t| present(*t)) {
         beacon_seal_root_extension_v1(
             &base,
             &coll(TABLE_CLAIM_BEACON_SALTS_V1),
@@ -700,40 +730,29 @@ pub fn root_of_rows(
         base
     };
     // `palw_verifier_pay_v1`: table 27 extends the root only once it holds a row.
-    let base = if by_table.contains_key(&TABLE_VERIFIER_PAY_V1) {
-        verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1))
-    } else {
-        base
-    };
+    let base = if present(TABLE_VERIFIER_PAY_V1) { verifier_pay_root_extension_v1(&base, &coll(TABLE_VERIFIER_PAY_V1)) } else { base };
     // The court scope (`palw_provider_court_v1`, G14-S): table 28 extends the root only once it holds a row.
-    let base = if by_table.contains_key(&TABLE_COURT_SCOPE_V1) {
-        court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1))
-    } else {
-        base
-    };
+    let base = if present(TABLE_COURT_SCOPE_V1) { court_scope_root_extension_v1(&base, &coll(TABLE_COURT_SCOPE_V1)) } else { base };
     // Fixed order, each only once its table holds a row (an unarmed network roots as before): 27, 28, 29 (RFC-02's conformance
     // classes), 30 beacon sources, 31 EXEC reward holds, then codex's flat-v7 (table 0) and flat-v9 (table 19) registries.
-    let base = if by_table.contains_key(&TABLE_CONFORMANCE_CLASSES_V1) {
+    let base = if present(TABLE_CONFORMANCE_CLASSES_V1) {
         conformance_root_extension_v1(&base, &coll(TABLE_CONFORMANCE_CLASSES_V1))
     } else {
         base
     };
-    let base = if by_table.contains_key(&TABLE_BEACON_SOURCES_V1) {
-        beacon_source_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCES_V1))
-    } else {
-        base
-    };
-    let base = if by_table.contains_key(&TABLE_EXEC_REWARD_HOLDS_V1) {
+    let base =
+        if present(TABLE_BEACON_SOURCES_V1) { beacon_source_root_extension_v1(&base, &coll(TABLE_BEACON_SOURCES_V1)) } else { base };
+    let base = if present(TABLE_EXEC_REWARD_HOLDS_V1) {
         exec_reward_root_extension_v1(&base, &coll(TABLE_EXEC_REWARD_HOLDS_V1))
     } else {
         base
     };
-    let base = if by_table.contains_key(&TABLE_FLAT_CONFORMANCE_CLASSES_V7) {
+    let base = if present(TABLE_FLAT_CONFORMANCE_CLASSES_V7) {
         flat_conformance_root_extension_v7(&base, &coll(TABLE_FLAT_CONFORMANCE_CLASSES_V7))
     } else {
         base
     };
-    if by_table.contains_key(&TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
+    if present(TABLE_FLAT_CONFORMANCE_CLASSES_V9) {
         flat_conformance_root_extension_v9(&base, &coll(TABLE_FLAT_CONFORMANCE_CLASSES_V9))
     } else {
         base

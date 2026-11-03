@@ -1,0 +1,43 @@
+{
+  "observed_utc": "2026-10-26T12:12:51.620699+00:00",
+  "code_commit": "92b8bbb0125010340d56baa1398426493277acc2",
+  "status": "QUEUED",
+  "arming_evidence": false,
+  "wrapper_pid": 17009,
+  "exec_session": 43606,
+  "source_frozen": true,
+  "command": [
+    "/Users/wata/Downloads/MISAKA-wt-b/buildslot.sh",
+    "python3",
+    "/Users/wata/.codex/artifacts/g14-17000-measure/run_heartbeat_retry.py"
+  ],
+  "build_record": "/Users/wata/.codex/artifacts/g14-17000-measure/native-heartbeat-build-record.json",
+  "workflow_record": "/Users/wata/.codex/artifacts/g14-17000-measure/heartbeat-retry-workflow.json",
+  "files": [
+    {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/run_heartbeat_retry.py",
+      "sha256": "a7556f5424a254974f013359c5cda2e29cce04a983c1d548ef512a69ca2a1dc3"
+    },
+    {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/heartbeat-fullcap-tools/worker.py",
+      "sha256": "a0a828765b318f34d6b7cc3b7f994ca43d58f10e0ce108087ef9d820d1b5fb89"
+    },
+    {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/heartbeat-followups-tools/saturation_worker.py",
+      "sha256": "55ce634ceab3905c2a8fa5a10df9f10cd777b68094d52b610ceb53990227499b"
+    },
+    {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/heartbeat-followups-tools/run_legacy_shadow_measure.py",
+      "sha256": "f1b6d994c8daa95d90c4f0ea10daddc8c2ac5d24ba5eeb3bb251549329b3ef00"
+    }
+  ],
+  "scope": [
+    "rebuild native test binary",
+    "cap64 no-retention control",
+    "independent early-retention shadow, Gate C and exact-max-trace preflights; only passing conditions advance to repeated batch",
+    "actual legacy/kernel honest preflight",
+    "independent-carrier saturation preflights"
+  ],
+  "prior_terminal_build": "native-fullcap-build-record.json (FAILED, exit 101)",
+  "queue_policy": "fresh FIFO ticket; no earlier timestamp override"
+}

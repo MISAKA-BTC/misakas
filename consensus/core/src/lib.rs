@@ -39,10 +39,10 @@ pub mod palw_positive_common_replay_v2;
 pub mod palw_positive_common_source_replay_v2;
 pub mod palw_positive_contract_v2;
 pub mod palw_positive_court_v2;
+pub mod palw_positive_funding_relay_v2;
 pub mod palw_positive_journal_chain_v2;
 pub mod palw_positive_metadata_v2;
 pub mod palw_positive_relay_signature_v2;
-pub mod palw_positive_funding_relay_v2;
 pub mod palw_positive_rows_v2;
 pub mod palw_positive_source_geometry_v2;
 pub mod palw_positive_source_read_v2;
@@ -286,6 +286,8 @@ pub mod palw_chain_weight;
 /// ADR-0103 Decision 1 — a checkpoint's chunk is tried against the cache-write rows it claims to
 /// hold, in one move. A consensus object behind `Params::palw_held_context`, `None` everywhere.
 pub mod palw_checkpoint_court_v1;
+// Scoped historical-context storage is typechecked before production wiring.
+mod palw_claim_local_context_nodes_v2;
 pub mod palw_claim_local_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
@@ -837,6 +839,7 @@ pub mod palw_tir_v1;
 pub mod palw_tir_work_v1;
 pub mod palw_tokenizer_json_stream_v1;
 pub mod palw_tokenizer_rendering_v1;
+pub mod palw_tokenizer_rendering_v2;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
 /// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;
@@ -1022,6 +1025,7 @@ pub mod palw_json_key_set_v1;
 pub mod palw_prefix_state_stream_v1;
 
 pub mod palw_artifact_identity_v1;
+pub mod palw_batch_court_v1;
 pub mod palw_decode_view_v1;
 pub mod palw_flat_constraint_stream_v1;
 pub mod palw_float_constraint_source_v1;
@@ -1044,8 +1048,14 @@ pub mod palw_tir_container_v1;
 pub mod palw_tir_designated_answers_v1;
 pub mod palw_tir_frame_cost_v1;
 pub mod palw_tir_history_bisection_v1;
+/// Prospective per-frame owner scheduling, unconnected to live Court rules.
+pub mod palw_tir_owner_schedule_v2;
 pub mod palw_tir_prefix_owned_v1;
 pub mod palw_tir_prefix_state_v1;
+// Native prospective geometry only; paid source/court admission is supplied by its owner.
+#[cfg(test)]
+mod palw_tir_prefix_export_owned_v2;
+pub(crate) mod palw_tir_prefix_export_relation_v2;
 pub mod palw_tir_public_allocation_v1;
 pub mod palw_tir_public_owned_v1;
 pub mod palw_tir_public_source_v1;
@@ -1232,5 +1242,22 @@ pub mod palw_paid_bootstrap_source_v6;
 pub mod palw_paid_claim_observation_v6;
 
 pub mod palw_exec_origin_coverage_v1;
+
+// Full-candidate integration modules.
+pub mod palw_court_family_material_v1;
+pub mod palw_court_family_supplier_v1;
+pub mod palw_court_observation_v1;
+pub mod palw_court_rooted_numerical_material_v1;
+pub mod palw_court_rooted_semantic_v1;
+pub mod palw_direct_row_export_v1;
+pub mod palw_monetary_material_fee_v2;
+pub mod palw_native39_frontier_v1;
+pub mod palw_native39_settlement_checkpoint_v1;
+pub mod palw_native_budget_binding_v1;
+pub mod palw_native_closed_facts_v1;
+pub mod palw_nested_row_stream_v1;
+pub mod palw_tir_funded_original_envelope_v2;
+pub mod palw_verifier_fee_consent_v1;
+pub mod palw_verifier_watch_v1;
 
 pub mod palw_logits_q24_v2;

@@ -47,12 +47,12 @@ pub mod palw_memory_ledger;
 pub mod palw_native_custody_v3;
 mod palw_native_routing_work_v2;
 pub mod palw_panel;
+#[cfg(feature = "positive-miner-client")]
+mod palw_positive_miner_source_v2;
 /// int-10.2 A2: the prefill run width a replay runs at, chosen from the memory the ledger can grant
 /// (node policy).
 pub mod palw_prefill_run;
 pub mod palw_producer;
-#[cfg(feature = "positive-miner-client")]
-mod palw_positive_miner_source_v2;
 /// 2026-10-01 (F3): the producer holds its attempt lane while its own claims are not getting licensed
 /// (node policy).
 pub mod palw_producer_backpressure;

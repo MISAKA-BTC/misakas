@@ -536,6 +536,17 @@ pub fn convert_qwen25_a16(
     plan: &Qwen25ConvertPlan,
     stats: &crate::reference::CalibStatsV1,
 ) -> Result<Base0ArtifactV1, ConvertError> {
+    convert_qwen25_a16_precise_embedding(blob, plan, stats, false)
+}
+
+/// Opt-in embedding precision; the legacy entry point preserves existing roots.
+/// Both scales are baked into the same integer triples the existing engine uses.
+pub fn convert_qwen25_a16_precise_embedding(
+    blob: &[u8],
+    plan: &Qwen25ConvertPlan,
+    stats: &crate::reference::CalibStatsV1,
+    precise_embedding: bool,
+) -> Result<Base0ArtifactV1, ConvertError> {
     use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
     let index = parse_safetensors_header(blob)?;
     let s = plan.shape;
@@ -545,8 +556,13 @@ pub fn convert_qwen25_a16(
     let read = |name: &str, want: &[usize]| read_bf16_tensor(blob, &index, name, want);
 
     let embed_f = read("model.embed_tokens.weight", &[s.vocab, d])?;
-    let e_emb = pow2_exp(scale_of(&embed_f).ok_or(ConvertError::DegenerateTensor("embed".into()))? * 127.0);
-    let embed: Vec<i8> = embed_f.iter().map(|v| quantize(*v, 2f64.powi(e_emb))).collect();
+    // The weight scale need not be a power of two: both gather and tied head
+    // already carry arbitrary integer multiplier/shift triples. Rounding this
+    // scale upward discarded almost a bit of embedding precision on Dolphin.
+    let measured_scale = scale_of(&embed_f).ok_or(ConvertError::DegenerateTensor("embed".into()))?;
+    let e_emb = pow2_exp(measured_scale * 127.0);
+    let embed_scale = if precise_embedding { measured_scale } else { 2f64.powi(e_emb) };
+    let embed: Vec<i8> = embed_f.iter().map(|v| quantize(*v, embed_scale)).collect();
     // Tied for real: one set of codes serves the gather and the logits.
     let unembed = embed.clone();
     drop(embed_f);
@@ -562,7 +578,7 @@ pub fn convert_qwen25_a16(
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     // The stream enters at the lifted embedding scale (seven spare bits of the sixteen).
     let e_entry = e_emb - 7;
-    entries.push(("embed_lift.a16".into(), wire(&[triple(128.0, 0)])));
+    entries.push(("embed_lift.a16".into(), wire(&[triple(embed_scale / 2f64.powi(e_entry), 0)])));
 
     let mut layers = Vec::with_capacity(s.n_layers);
     let mut e_in = e_entry;
@@ -682,9 +698,9 @@ pub fn convert_qwen25_a16(
     let e_logit = e15(stats.final_logit_absmax);
     let final_row: Vec<A16QuantParams> = final_gain.iter().map(|g| triple(*g as f64 * 2f64.powi(-k_bits - e_fn), 0)).collect();
     entries.push(("final_norm.a16".into(), wire(&final_row)));
-    // The tied logits: embedding codes at 2^e_emb against final-norm codes at 2^e_fn, committed
+    // The tied logits: embedding codes at embed_scale against final-norm codes at 2^e_fn, committed
     // as i16 logit codes at 2^e_logit.
-    entries.push(("token_embd.weight.a16".into(), wire(&[triple(2f64.powi(e_emb + e_fn - e_logit), 0)])));
+    entries.push(("token_embd.weight.a16".into(), wire(&[triple(embed_scale * 2f64.powi(e_fn - e_logit), 0)])));
 
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -1045,6 +1061,49 @@ mod tests {
     use super::*;
 
     pub(crate) use super::convert_test_fixtures::{tiny_checkpoint, tiny_qwen_shape};
+
+    #[test]
+    fn precise_embedding_is_opt_in_reproducible_and_carries_both_scales() {
+        use crate::reference::{RefConfigV1, reference_forward_full};
+        let mut shape = tiny_qwen_shape();
+        shape.n_layers = 1;
+        let blob = tiny_checkpoint(&shape);
+        let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
+        let cfg = RefConfigV1 {
+            n_layers: shape.n_layers,
+            n_heads: shape.n_heads,
+            n_kv_heads: shape.n_kv_heads,
+            d_head: shape.d_head,
+            d_ff: shape.d_ff,
+            vocab: shape.vocab,
+            rms_eps: 1e-6,
+            rope_theta: 1e6,
+        };
+        let (_, _, stats) = reference_forward_full(&blob, &cfg, &[1, 5, 9]).unwrap();
+        let legacy = convert_qwen25_a16(&blob, &plan, &stats).unwrap();
+        let explicit_legacy = convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, false).unwrap();
+        assert_eq!(legacy.artifact_digest(), explicit_legacy.artifact_digest());
+        let precise = convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, true).unwrap();
+        assert_ne!(legacy.artifact_digest(), precise.artifact_digest());
+        assert_eq!(
+            precise.artifact_digest(),
+            convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, true).unwrap().artifact_digest()
+        );
+        assert_eq!(precise.embed, precise.unembed, "the tied table remains one set of codes");
+        // With a non-power-of-two weight scale, changing only one seam silently
+        // rescales the model. Verify the committed lift and tied head both move.
+        for name in ["embed_lift.a16", "token_embd.weight.a16"] {
+            assert_ne!(
+                legacy.a16_params.as_ref().unwrap().iter().find(|(n, _)| n == name),
+                precise.a16_params.as_ref().unwrap().iter().find(|(n, _)| n == name)
+            );
+        }
+        let engine = crate::engine_a16::A16Engine::new(&precise).unwrap();
+        let mut cache = crate::engine_a16::A16Cache::new(shape.n_layers);
+        for (pos, tok) in [1, 5, 9].into_iter().enumerate() {
+            assert_eq!(engine.forward_token(&mut cache, tok, pos).unwrap().len(), shape.vocab);
+        }
+    }
 
     /// **`the_court_recomputes_the_a16_engine_from_the_artifact_alone` is not on this branch.**
     ///

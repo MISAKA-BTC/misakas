@@ -436,8 +436,8 @@ fn fund(
         r.execution_nonce_counter_v11(&c.wire.requester_operator).map_err(bad)?.advance(&maximum.request().nonce).map_err(bad)?;
     let reward = c.wire.reward;
     let reserve = p.execution.execution.required_producer_reserve;
-    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < reward as u128
-        || (producer.collateral as u128).saturating_sub(builder.committed_at(&c.producer, ctx.daa_score)) < reserve as u128
+    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < reward as u128
+        || (producer.collateral as u128).saturating_sub(builder.committed_at(&c.producer, ctx.daa_score)?) < reserve as u128
     {
         return Err(bad("native39 actual escrow or collectible original producer reserve unavailable"));
     }
@@ -629,6 +629,18 @@ fn fund(
     )?;
     if let Some(invocation) = &invocation {
         super::palw_native_master_fold_v39::record_funded(builder, ctx, invocation, id)?;
+    }
+    let budget_id = super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&id);
+    if builder.state.bond_budget().and_then(|b| b.claim_row(&budget_id)).is_some() {
+        super::palw_native_budget_binding_fold_v1::install_native_budget_binding_v1(
+            builder,
+            crate::palw_native_budget_binding_v1::NativeBudgetSourceV1::Job39,
+            Hash64::from_bytes(id),
+            budget_id,
+            c.producer,
+            jh.original.admitted,
+            u128::from(jh.original.reserve),
+        )?;
     }
     builder.note_kernel_bond(&c.producer)?;
     Ok(())
@@ -1427,3 +1439,86 @@ pub(super) fn accepted_consent_wire(r: &PalwKernelRouteStateV1, producer: &PalwB
 #[cfg(test)]
 #[path = "palw_native_job_fold_v39_liability_tests.rs"]
 mod liability_tests;
+
+crate::palw_native_resource_v1::native_struct!(JobHeader;version,id,original,book,book_bytes,consent_bytes,class_bytes,source_bytes,post_bytes,plan,plan_root,terminal,requester_payout,producer_payout);
+crate::palw_native_resource_v1::wire::wire_struct!(JobHeader;u16,Digest,NativeJobOriginalV39,Digest,u32,u32,u32,u32,u32,QuotaPlanRecordV11,Digest,NativeJobTerminalV39,Hash64,Hash64);
+impl PalwChainStateV2 {
+    /// Exact per-source overlap with native_execution_reserved_v11. No aggregate
+    /// max, arbitrary origin inference, or substitution by another job's reserve.
+    pub(crate) fn native_job_source_baseline_v39(
+        &self,
+        job: Hash64,
+        producer: PalwBondKeyV2,
+        birth: u64,
+        original_reserve: u128,
+    ) -> Result<u128, PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1, retain_native_value_decode_classified_v1};
+        let classify = |e: NativeDecodeErrorV1<std::io::Error>| match e {
+            NativeDecodeErrorV1::Resource(r) => PalwStateV2Error::NativeResource(r),
+            NativeDecodeErrorV1::Decode(e) => bad(e.to_string()),
+        };
+        let route = self.kernel_route_state_v1().ok_or_else(|| bad("native job baseline route absent"))?;
+        let Some(bytes) = route.aux.get(&(TABLE, k(16, &job.as_bytes()))) else {
+            return if native_job_collected_v39(route, job.as_bytes())? {
+                Ok(0)
+            } else {
+                Err(bad("native binding lost original job header"))
+            };
+        };
+        if bytes.len() > 16384 {
+            return Err(bad("native baseline fixed header extent"));
+        }
+        let pair = retain_native_value_decode_classified_v1::<(Digest, JobHeader), std::io::Error>(bytes, || borsh::from_slice(bytes))
+            .map_err(classify)?;
+        let (root, h) = &*pair;
+        let _hash = crate::palw_native_resource_v1::reserve_native_requests_v1(
+            (bytes.len() as u64).checked_mul(2).ok_or(PalwStateV2Error::Overflow("native baseline hash"))?,
+        )
+        .map_err(PalwStateV2Error::NativeResource)?;
+        if h.version != 39
+            || h.id != job.as_bytes()
+            || h.original.job() != h.id
+            || h.root() != *root
+            || h.original.producer != producer
+            || h.original.admitted != birth
+            || u128::from(h.original.reserve) != original_reserve
+        {
+            return Err(bad("native baseline changes original source/producer/reserve"));
+        }
+        let counted = matches!(h.terminal, NativeJobTerminalV39::Funded | NativeJobTerminalV39::Challengeable)
+            || if h.terminal == NativeJobTerminalV39::Final {
+                if let Some(raw) = route
+                    .aux
+                    .get(&(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_JOB_V39, &h.id)))
+                {
+                    let held = retain_native_value_decode_classified_v1::<PalwNativeHeldFeeRowV1, std::io::Error>(raw, || {
+                        borsh::from_slice(raw)
+                    })
+                    .map_err(classify)?;
+                    held.version == PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1
+                        && held.family == PALW_NATIVE_FAMILY_JOB_V39
+                        && held.job == h.id
+                        && held.producer == producer
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+        let Some(catalog) = route.aux.get(&(TABLE, k(22, &producer))) else {
+            return if counted { Err(bad("live native source lost producer catalogue")) } else { Ok(0) };
+        };
+        if catalog.len() > 4 + 8 * 64 {
+            return Err(bad("native producer catalogue extent"));
+        }
+        let ids = retain_native_value_decode_classified_v1::<Vec<Digest>, std::io::Error>(catalog, || borsh::from_slice(catalog))
+            .map_err(classify)?;
+        if ids.len() > 8 || ids.iter().enumerate().any(|(i, id)| *id == [0; 64] || ids[..i].contains(id)) {
+            return Err(bad("native producer catalogue identity"));
+        }
+        if !ids.contains(&job.as_bytes()) {
+            return if counted { Err(bad("live native source lost producer catalogue entry")) } else { Ok(0) };
+        };
+        Ok(if counted { original_reserve } else { 0 })
+    }
+}

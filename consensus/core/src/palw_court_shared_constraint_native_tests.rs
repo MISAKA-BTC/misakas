@@ -110,6 +110,10 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
                 .unwrap(),
         );
     }
+    crate::palw_court_rooted_semantic_v1::install_material_for_consumer_test_v1(&mut b.state,claim,
+        crate::palw_court_family_supplier_v1::FamilySupplierRoleV1::SemanticTable,
+        crate::palw_court_family_material_v1::FamilyMaterialTargetV1::SemanticTable,
+        crate::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table));
     let store = Store::new(&b.state, claim, scope, &units, &[], Some(&ids)).unwrap();
     let rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 {
         network_domain: extras.tir_public_network_domain_v1.unwrap(),
@@ -137,6 +141,8 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
     let eog_encoded=borsh::to_vec(&eog).unwrap();
     let retained=store.retain_semantic_table_material_v1(&b.state,claim,&bodies,&eog_encoded).unwrap();
+    let rooted_retained=store.retain_semantic_table_material_v1(&b.state,claim,&[],&[]).unwrap();
+    assert_eq!(rooted_retained.counts_v1(),retained.counts_v1());
     assert_eq!(retained.counts_v1().vocabulary,table.vocab());
     assert_eq!(retained.counts_v1().raw_bytes,0); // no raw body in this owner
     assert!(store.retain_semantic_table_material_v1(&b.state,claim,&bodies[..bodies.len()-1],&eog_encoded).is_err());
@@ -192,6 +198,8 @@ fn shared_constraint_material_builder_reconstructs_real_native_original_and_rech
     assert!(matches!(family.project_native_v1(FamilyTarget::Token{position:0,beat:0,witness:None},0),Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
     let duty=family.project_native_v1(FamilyTarget::Token{position:intent.position,beat:intent.beat_lane,witness:intent.witness},visits).unwrap();
     let checked=store.build_constraint_token_with_duty_v1(&b.state,&params,&rules,&intent,&retained,budget,&duty).unwrap();
+    let rooted_checked=store.build_constraint_token_with_duty_v1(&b.state,&params,&rules,&intent,&rooted_retained,budget,&duty).unwrap();
+    assert_eq!(rooted_checked.recheck(&store,&b.state,&params,&rules,budget).unwrap(),checked.recheck(&store,&b.state,&params,&rules,budget).unwrap());
     let stop_duty=family.project_native_v1(FamilyTarget::Stop,visits).unwrap();
     assert!(stop_duty.row_dependencies_v1().is_empty());
     assert!(store.build_constraint_token_with_duty_v1(&b.state,&params,&rules,&intent,&retained,budget,&stop_duty).is_err());

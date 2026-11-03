@@ -462,6 +462,7 @@ impl Net {
     fn restart_with(self, open: impl FnOnce() -> std::sync::Arc<kaspa_database::prelude::DB>) -> Net {
         let Net { chain, config, bundle, premine, floats, funding, domain, rnd, _keep } = self;
         let (simulated_time, nonce) = (chain.ctx.simulated_time, chain.nonce_for_reopen());
+        let simulated_validation = chain.ctx.consensus.has_validation_time_for_test();
         drop(chain); // TestContext's Drop shuts the processors down and releases the node's handles on the database
         let db = open();
         let mut resumed = config.clone();
@@ -469,6 +470,9 @@ impl Net {
         let (sender, receiver) = async_channel::unbounded();
         let second = TestConsensus::with_db(db, &resumed, sender);
         let chain = t12_reopened_chain(second, &resumed, &bundle, simulated_time, nonce);
+        if simulated_validation {
+            chain.ctx.consensus.set_validation_time_for_test(simulated_time);
+        }
         let mut keep = _keep;
         keep.push(Box::new(receiver));
         Net { chain, config, bundle, premine, floats, funding, domain, rnd, _keep: keep }
@@ -3622,7 +3626,7 @@ mod conformance;
 // mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8): `g14_kernel_route_e2e/real_scale.rs`.
 mod artifact_tile;
 mod model_artifact;
-mod model_conformance;
+pub(crate) mod model_conformance;
 mod real_scale;
 // Lane RFC02-T: the RFC-0002 P0 residual on the kernel route's own FileProof (re-encoding theft; the sealed-bounty rule).
 mod rfc02t_sealed_bounty;
@@ -3669,6 +3673,7 @@ mod source_verifier_economics_v2;
 // RFC08: signed material generations and exact finalized GC intent binding.
 mod material_gc_v4;
 mod material_typed_ingress_v4;
+mod provider_fee_lifecycle_v2;
 // Lane ROLES: the slice root attested past the Panel=1 fence only: `g14_kernel_route_e2e/roles_slice_attest.rs`.
 mod roles_slice_attest;
 

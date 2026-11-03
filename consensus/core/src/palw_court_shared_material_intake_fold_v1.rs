@@ -2,11 +2,12 @@
 //! rows written through the ordinary staged writer, so block deltas, reorg undo,
 //! carriage restart and the material-horizon sweep apply unchanged.
 //!
-//! Dormant: refused unless `palw_staged_tir_route_v1` is in force at the block
-//! (`extras.staged_tir_route_active`, the dormant G-10 fence the shared TIR
-//! court lives under), the original has an installed shared context, and the
-//! storage fee schedule resolves — it is typed-missing in every non-test build.
-//! No lifecycle dispatcher/wire tag calls this yet (see lane notes).
+//! Refused unless `palw_staged_tir_route_v1` is in force at the block
+//! (`extras.staged_tir_route_active`, the material-intake fence). Below that
+//! fence the storage schedule stays typed-missing and nothing is debited. Past
+//! it the schedule is the pinned V5 estimate, and a positive fee is debited
+//! from the submitter bond in the same step that records `charged_sompi` and
+//! writes the draft. A zero fee debits nothing and records nothing owed.
 use super::*;
 use crate::palw_court_shared_material_intake_v1 as m;
 use crate::palw_court_shared_tir_state_v1 as shared;
@@ -15,6 +16,33 @@ use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART
 
 fn refused(s: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(s.into())
+}
+
+/// Burn `fee` sompi from the intake submitter. Zero records nothing and writes
+/// no bond delta. A positive fee must leave the bond in full; [`TransitionBuilder::slash_bond`]
+/// is the same debit the other court fees use, and a clamp or a shortfall refuses.
+fn debit_submitter_storage_fee_v1(
+    b: &mut TransitionBuilder<'_>,
+    submitter: PalwBondKeyV2,
+    fee: u64,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    if fee == 0 {
+        return Ok(());
+    }
+    let collateral = b.state.bond(&submitter).ok_or(PalwStateV2Error::MissingBond(submitter))?.collateral;
+    if collateral < fee {
+        return Err(refused("material storage fee exceeds the submitter bond"));
+    }
+    let held = super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(b, &submitter, now)?;
+    if u128::from(collateral).saturating_sub(held) < u128::from(fee) {
+        return Err(refused("material storage fee exceeds the submitter free principal"));
+    }
+    let debited = b.slash_bond(submitter, u128::from(fee))?;
+    if debited != fee {
+        return Err(refused("material storage fee was not debited in full from the submitter bond"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -49,10 +77,12 @@ fn material_intake_inner(
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    // The active intake fence resolves the adopted V5 storage schedule.
     if !b.extras.staged_tir_route_active {
         return Err(refused("material intake is dormant below palw_staged_tir_route_v1"));
     }
-    let schedule = m::material_intake_schedule_v1().map_err(|_| refused("material intake storage fee schedule is not adopted"))?;
+    let schedule = m::material_intake_schedule_at_fence_v1(b.extras.staged_tir_route_active)
+        .map_err(|_| refused("material intake storage fee schedule is not adopted"))?;
     let network = b.extras.tir_public_network_domain_v1.ok_or_else(|| refused("material intake native network domain missing"))?;
     let c = shared::context(&b.state, s.claim).map_err(refused)?.clone();
     if ctx.daa_score < c.original_accepted_daa || ctx.daa_score >= c.hard_daa {
@@ -113,7 +143,6 @@ fn material_intake_inner(
                 .filter(|r| *r <= ledger.budget_bytes)
                 .ok_or_else(|| refused("material declaration exceeds the submitter's per-claim native budget"))?;
             let fee = schedule.sompi_per_byte.checked_mul(*total_bytes).ok_or_else(|| refused("material fee overflow"))?;
-            ledger.charged_sompi = ledger.charged_sompi.checked_add(fee).ok_or_else(|| refused("material fee overflow"))?;
             let expires_daa = ctx
                 .daa_score
                 .checked_add(schedule.draft_ttl_daa)
@@ -123,6 +152,13 @@ fn material_intake_inner(
             if expires_daa <= ctx.daa_score {
                 return Err(refused("material draft would expire at once"));
             }
+            // The payer is the submitter already authenticated on this intake.
+            // A positive fee is debited in full (`slash_bond`) before `charged_sompi`
+            // moves and before the draft is written. A zero fee debits nothing and
+            // adds nothing owed. A short bond, or a debit that is not exactly `fee`,
+            // refuses: the checkpoint drops any partial slash, and nothing is recorded.
+            debit_submitter_storage_fee_v1(b, s.submitter, fee, ctx.daa_score)?;
+            ledger.charged_sompi = ledger.charged_sompi.checked_add(fee).ok_or_else(|| refused("material fee overflow"))?;
             let draft = m::MaterialDraftV1 {
                 version: 1,
                 claim: s.claim,
@@ -140,14 +176,6 @@ fn material_intake_inner(
                 expires_daa,
                 material_until_daa: c.material_until_daa,
             };
-            // audit B-09 (fix-b): a fee is never merely ACCOUNTED. Its payer is an unadopted part of the V5 storage schedule, and a
-            // debit here would also leave the intake's derived native read/write set, so a non-zero fee REFUSES the intake (nothing
-            // written) until V5 adopts the payer and its debit; a zero fee charges nothing and records nothing owed.
-            if fee > 0 {
-                return Err(refused(
-                    "material storage fee has no adopted payer (V5): intake refused rather than accounted and never debited",
-                ));
-            }
             b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
             b.write_staged_row_v1(key, Some(Row::CourtMaterialDraft(Box::new(draft))))?;
             Ok(MaterialIntakeEffectV1::Begun)
@@ -259,8 +287,9 @@ fn own_draft(
     Ok((**draft).clone())
 }
 
-/// Removes a draft and its parts and returns its reservation. The ledger's
-/// accounting of the charged schedule price is kept (always 0 since audit B-09 fix-b: a non-zero fee refuses the intake).
+/// Removes a draft and its parts and returns its byte reservation. The sompi
+/// already debited from the submitter, and `charged_sompi`, stay: expiry and a
+/// losing Finish do not refund the storage fee.
 pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDraftV1) -> Result<(), PalwStateV2Error> {
     let mut at = 0u64;
     while at < draft.accepted_bytes {

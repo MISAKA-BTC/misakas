@@ -1,0 +1,164 @@
+{
+  "source_commit": "648544c4628387a63e51824098b88cda5843dc2d",
+  "scope": "source review, not runtime evidence",
+  "files": [
+    {
+      "path": "consensus/core/src/config/params/full_activation_v1.rs",
+      "git_blob": "2c2459827dc09c3bed9870d9a376b990714e7b87",
+      "sha256": "c66d99143cc0c2e1201ef4ffbbb3a32e8cb05ae3910c945b04e8b85169042694",
+      "matches": [
+        {
+          "line": 100,
+          "text": "pub const PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY: PalwPostLaunchFenceV1 = PalwPostLaunchFenceV1 {"
+        },
+        {
+          "line": 109,
+          "text": "(Some(at), None) => Some(crate::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(at)),"
+        },
+        {
+          "line": 216,
+          "text": "PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,"
+        },
+        {
+          "line": 302,
+          "text": "pub const PALW_T12_KERNEL_SLICE_FENCES_V1: &[PalwPostLaunchFenceV1] = &["
+        },
+        {
+          "line": 309,
+          "text": "PALW_T12_FULL_CLAIM_HARD_DEADLINE_ENTRY,"
+        }
+      ]
+    },
+    {
+      "path": "consensus/core/src/palw_ruling_fences_v1.rs",
+      "git_blob": "3385f253cee0aca8bbf91554dae21a15b7b612a8",
+      "sha256": "ae781a3facff3e37035ba2e0b202ff52f30787020edd656f5b2ad172a1e7ae77",
+      "matches": [
+        {
+          "line": 322,
+          "text": "pub fn palw_x3_hard_deadline_at_v1(policy: &PalwClaimHardDeadlinePolicyV1, accepted_daa: u64) -> u64 {"
+        },
+        {
+          "line": 396,
+          "text": "pub fn palw_claim_deadlines_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2) -> Option<PalwClaimDeadlinesV1> {"
+        }
+      ]
+    },
+    {
+      "path": "consensus/core/src/palw_settlement_liability_fold_v1.rs",
+      "git_blob": "035f59c7f23ed0d3d2ad7d4fb59ff3c4917c63d1",
+      "sha256": "443a7224d96db934fba6fd21e5b0c40281e121b7f79bb5c24ca3b68cd384dfb6",
+      "matches": [
+        {
+          "line": 98,
+          "text": "pub(super) fn native_claim_signed_hard_deadline_v1(params: &PalwStateParamsV2, accepted_daa: u64) -> PalwSettlementTermV1<u64> {"
+        },
+        {
+          "line": 287,
+          "text": "let hard = native_claim_signed_hard_deadline_v1(self.params, accepted_daa);"
+        },
+        {
+          "line": 314,
+          "text": "PalwLegLiabilityV1::KernelClaim { claim, draw, paid_now, vest_until } => {"
+        },
+        {
+          "line": 327,
+          "text": ".paid_claim_signed_lifetime_v2(&claim)"
+        },
+        {
+          "line": 365,
+          "text": ".paid_claim_signed_lifetime_v2(&claim)"
+        },
+        {
+          "line": 479,
+          "text": "PalwAdmissionLiabilityV1::KernelClaim { claim } => {"
+        },
+        {
+          "line": 484,
+          "text": ".and_then(|r| r.paid_claim_signed_lifetime_v2(&claim))"
+        }
+      ]
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "git_blob": "6ba4622e5c17a20d04d2efd78d9dde674abb81bb",
+      "sha256": "60debd3dc314d74ca5d71a8920bcc1d2ade2c53ba9e80c795c7176dabd302bbd",
+      "matches": [
+        {
+          "line": 1240,
+          "text": "Some(row) => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::KernelClaim {"
+        },
+        {
+          "line": 1250,
+          "text": "None => super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::KernelClaim {"
+        },
+        {
+          "line": 2393,
+          "text": "super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::KernelClaim { claim: *claim },"
+        }
+      ]
+    },
+    {
+      "path": "consensus/core/src/palw_security_certification_fold_v1.rs",
+      "git_blob": "c4a4d2093e1f04b5f3fabb585e58baf19ad53dbd",
+      "sha256": "023ccc98304bbbdff405b9f70720fd3e58fcebc5a508af3fa54c841d00e0f5ac",
+      "matches": [
+        {
+          "line": 799,
+          "text": "&& network.draws < policy.draws_per_epoch"
+        },
+        {
+          "line": 809,
+          "text": "network.draws = network.draws.saturating_add(1);"
+        },
+        {
+          "line": 914,
+          "text": "&& network.draws < policy.draws_per_epoch"
+        },
+        {
+          "line": 924,
+          "text": "network.draws = network.draws.saturating_add(1);"
+        }
+      ]
+    },
+    {
+      "path": "consensus/core/src/palw_security_certification_v1.rs",
+      "git_blob": "fb631df39ced9fdb433e9fc984deaea429ba5aa3",
+      "sha256": "dc75c34464a31c2f9262dac9a39f4db30229b1a9f3d203749a7fb2ed2d6956a3",
+      "matches": [
+        {
+          "line": 116,
+          "text": "pub const PALW_CERT_DRAWS_PER_EPOCH_DESIGN_V1: u32 = 4_096;"
+        },
+        {
+          "line": 143,
+          "text": "pub const fn design_unapproved_v1(day_daa: u64) -> Self {"
+        },
+        {
+          "line": 154,
+          "text": "draws_per_epoch: PALW_CERT_DRAWS_PER_EPOCH_DESIGN_V1,"
+        },
+        {
+          "line": 160,
+          "text": "/// as an estimate under f = 0.25: false certification 3.99e-8 per claim, \u2264 54 certifications a day under the 4,096-position cap,"
+        },
+        {
+          "line": 163,
+          "text": "pub const fn approved_v1(day_daa: u64) -> Self {"
+        },
+        {
+          "line": 164,
+          "text": "Self::design_unapproved_v1(day_daa)"
+        },
+        {
+          "line": 169,
+          "text": "*self == Self::approved_v1(day_daa)"
+        },
+        {
+          "line": 712,
+          "text": "let cap = |m: u32| (PALW_CERT_DRAWS_PER_EPOCH_DESIGN_V1 / m) as f64;"
+        }
+      ]
+    }
+  ]
+}

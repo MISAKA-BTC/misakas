@@ -32,8 +32,7 @@ fn fpcp_list_covers_every_family_a_constraint_or_prefix_job_needs() {
     // `palw_fp_tokenizer_match` is already in force on testnet-12 from DAA 5,300. Re-listing it here would move that live fence.
     let release = palw_t12_release_v7_params();
     let already_live = |need: &str| {
-        need == "palw_fp_tokenizer_match"
-            && release.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(AT.saturating_sub(1)))
+        need == "palw_fp_tokenizer_match" && release.palw_fp_tokenizer_match.is_some_and(|fence| fence.is_active(AT.saturating_sub(1)))
     };
     for fam in [F::FpConstraint, F::FpPrefix, F::FpSelection, F::FpTokenizer] {
         for need in palw_g14_route_family_fences_v1(fam) {

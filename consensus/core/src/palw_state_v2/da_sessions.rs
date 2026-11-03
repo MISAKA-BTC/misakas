@@ -843,7 +843,7 @@ pub(super) fn open_dissection_at_named_leaf_v1(
     if builder.extras.offence_attribution_active && builder.params.rcore_plus_active_at(ctx.daa_score) {
         let floor = u128::from(builder.params.min_collateral_sompi());
         let charge = builder.held_dissection_charge_v1(&claim_id, claim).min(floor);
-        let room = builder.gate_room(&challenger_bond, ctx.daa_score, PalwRcoreGateV1::Accuser);
+        let room = builder.gate_room(&challenger_bond, ctx.daa_score, PalwRcoreGateV1::Accuser)?;
         if charge > room {
             let ceiling = u128::from(challenger_collateral);
             return Err(PalwStateV2Error::AccusationExposureCeiling {

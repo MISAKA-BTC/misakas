@@ -16,11 +16,24 @@ use kaspa_hashes::Hash64;
 #[error("{0}")]
 pub struct ProviderError(pub String);
 
+#[derive(Debug, thiserror::Error)]
+pub enum ChunkReadError {
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+    #[error("provider chunk is at least {0} bytes, larger than the expected length")]
+    TooLarge(usize),
+}
+
 /// One byte-serving provider. `Err` is a local failure (timeout, refusal, not found) and is NEVER evidence of anything beyond "this attempt
 /// failed".
 pub trait ChunkProvider {
     fn provider_id(&self) -> &str;
     fn fetch_chunk(&self, manifest_id: Hash64, index: u32) -> Result<Vec<u8>, ProviderError>;
+
+    /// The manifest supplies the expected length for transports that can preflight the object size.
+    fn fetch_chunk_expected(&self, manifest_id: Hash64, index: u32, _expected_len: u32) -> Result<Vec<u8>, ChunkReadError> {
+        Ok(self.fetch_chunk(manifest_id, index)?)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +91,11 @@ pub fn fetch_chunk_any(
     providers: &[&dyn ChunkProvider],
     order_seed: Hash64,
 ) -> Result<(Vec<u8>, String, Vec<ProviderFailure>), FetchFailure> {
+    let entry = manifest
+        .chunks
+        .get(index as usize)
+        .filter(|entry| entry.index == index)
+        .ok_or(FetchFailure::Manifest(EvidenceError::UnknownChunk { index }))?;
     let manifest_id = manifest_id_v1(manifest);
     let mut failures = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -86,7 +104,7 @@ pub fn fetch_chunk_any(
         if !seen.insert(provider.provider_id().to_string()) {
             continue;
         }
-        match provider.fetch_chunk(manifest_id, index) {
+        match provider.fetch_chunk_expected(manifest_id, index, entry.len) {
             Ok(bytes) => match manifest.verify_chunk(index, &bytes) {
                 Ok(()) => return Ok((bytes, provider.provider_id().to_string(), failures)),
                 Err(e) => failures.push(ProviderFailure {
@@ -95,7 +113,12 @@ pub fn fetch_chunk_any(
                     kind: FetchFailureKind::BadBytes(e),
                 }),
             },
-            Err(e) => failures.push(ProviderFailure {
+            Err(ChunkReadError::TooLarge(got)) => failures.push(ProviderFailure {
+                provider: provider.provider_id().to_string(),
+                index,
+                kind: FetchFailureKind::BadBytes(EvidenceError::ChunkLength { index, got, expected: entry.len }),
+            }),
+            Err(ChunkReadError::Provider(e)) => failures.push(ProviderFailure {
                 provider: provider.provider_id().to_string(),
                 index,
                 kind: FetchFailureKind::Unavailable(e.0),
@@ -137,7 +160,51 @@ pub fn fetch_material_any(
 
 pub mod fs {
     use super::*;
+    use std::fs::{File, OpenOptions};
+    use std::io::{self, Read, Write};
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[derive(Debug, thiserror::Error)]
+    pub(crate) enum BoundedFileError {
+        #[error(transparent)]
+        Io(#[from] io::Error),
+        #[error("provider file is at least {0} bytes, above the read limit")]
+        TooLarge(u64),
+    }
+
+    pub(crate) fn open_bounded_file(path: &Path, max: usize) -> Result<(File, u64), BoundedFileError> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let file = options.open(path)?;
+        let meta = file.metadata()?;
+        if !meta.is_file() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "provider path is not a regular file").into());
+        }
+        if meta.len() > max as u64 {
+            return Err(BoundedFileError::TooLarge(meta.len()));
+        }
+        Ok((file, meta.len()))
+    }
+
+    /// Check the opened file before allocating, and never read a growing file to EOF.
+    pub(crate) fn read_bounded_file(path: &Path, max: usize) -> Result<Vec<u8>, BoundedFileError> {
+        let (mut file, len) = open_bounded_file(path, max)?;
+        let mut bytes = vec![0; len as usize];
+        file.read_exact(&mut bytes)?;
+        if file.read(&mut [0])? != 0 {
+            if bytes.len() == max {
+                return Err(BoundedFileError::TooLarge(len.saturating_add(1)));
+            }
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "provider file grew during the read").into());
+        }
+        Ok(bytes)
+    }
 
     pub fn manifest_path(root: &Path, claim_hex: &str) -> PathBuf {
         root.join("claims").join(format!("{claim_hex}.manifest"))
@@ -156,23 +223,222 @@ pub mod fs {
         material.chunks(size).map(<[u8]>::to_vec).collect()
     }
 
-    /// Place a claim's material in a provider directory (the miner's last act before it may switch off). Write order is the safety:
-    /// chunks first, each `.partial` then renamed, the manifest last.
-    pub fn publish(root: &Path, claim_hex: &str, manifest: &EvidenceManifestV1, chunks: &[Vec<u8>]) -> std::io::Result<()> {
-        let id = manifest_id_v1(manifest);
-        let dir = root.join("chunks").join(id.to_string());
-        std::fs::create_dir_all(&dir)?;
-        std::fs::create_dir_all(root.join("claims"))?;
-        for (i, bytes) in chunks.iter().enumerate() {
-            let path = dir.join(format!("{i}.chunk"));
-            let tmp = path.with_extension("partial");
-            std::fs::write(&tmp, bytes)?;
-            std::fs::rename(&tmp, &path)?;
+    fn sync_directory(dir: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        File::open(dir)?.sync_all()?;
+        #[cfg(not(unix))]
+        let _ = dir;
+        Ok(())
+    }
+
+    fn sync_provider_directory(dir: &Path) -> io::Result<()> {
+        sync_directory(dir)?;
+        if let Some(parent) = dir.parent() {
+            let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
+            sync_directory(parent)?;
         }
+        Ok(())
+    }
+
+    /// Create and sync missing directory entries before publishing files in them.
+    fn ensure_provider_directory(dir: &Path) -> io::Result<()> {
+        if dir.is_dir() {
+            return Ok(());
+        }
+        let parent = dir.parent().ok_or_else(|| io::Error::other("provider directory has no parent"))?;
+        let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
+        ensure_provider_directory(parent)?;
+        match std::fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => {}
+            Err(error) => return Err(error),
+        }
+        sync_directory(parent)
+    }
+
+    /// Write a provider object without exposing partial bytes or sharing a temporary file with another writer.
+    pub(crate) fn write_provider_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = path.parent().ok_or_else(|| io::Error::other("provider file has no directory"))?;
+        ensure_provider_directory(dir)?;
+        let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!(".evidence-{}-{seq}.partial", std::process::id()));
+        let mut file = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
+        let result = (|| {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&tmp, path)?;
+            // A concurrent writer can observe a directory before its creator
+            // syncs the entry. Sync the provider layout before returning success.
+            sync_provider_directory(dir)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
+    }
+
+    // Never replace a verified alias on an identical chunk retry. Other
+    // writes still replace only this path by rename, not the shared inode.
+    pub(crate) fn write_provider_chunk(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == bytes.len() as u64)
+            && let Ok((mut file, len)) = open_bounded_file(path, bytes.len())
+            && len == bytes.len() as u64
+        {
+            let mut buf = [0; 16 * 1024];
+            if bytes.chunks(buf.len()).all(|part| file.read_exact(&mut buf[..part.len()]).is_ok() && &buf[..part.len()] == part)
+                && file.read(&mut [0])? == 0
+            {
+                file.sync_all()?;
+                return sync_provider_directory(path.parent().expect("provider chunk directory"));
+            }
+        }
+        write_provider_file(path, bytes)
+    }
+
+    /// A replay of the same verified chunk layout cannot shorten the provider's advertised horizon.
+    /// Different content is still replaceable so a publisher can repair a bad manifest.
+    pub(crate) fn write_provider_manifest(path: &Path, manifest: &EvidenceManifestV1, encoded: &[u8]) -> io::Result<()> {
+        with_manifest_writer(path, || {
+            if read_provider_manifest(path)?.is_some_and(|mut current| {
+                if current.retention_until_daa <= manifest.retention_until_daa {
+                    return false;
+                }
+                current.retention_until_daa = manifest.retention_until_daa;
+                current == *manifest
+            }) {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "provider holds the same material through a later DAA"));
+            }
+            write_provider_file(path, encoded)
+        })
+    }
+
+    fn with_manifest_writer<T>(path: &Path, write: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
+        let dir = path.parent().ok_or_else(|| io::Error::other("provider manifest has no directory"))?;
+        ensure_provider_directory(dir)?;
+        #[cfg(unix)]
+        let _lease = {
+            let dir = File::open(dir)?;
+            dir.lock()?;
+            dir
+        };
+        #[cfg(not(unix))]
+        let _lease = {
+            static MANIFEST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            MANIFEST_WRITE.lock().map_err(|_| io::Error::other("provider manifest writer lock poisoned"))?
+        };
+        write()
+    }
+
+    fn read_provider_manifest(path: &Path) -> io::Result<Option<EvidenceManifestV1>> {
+        match read_bounded_file(path, crate::transport::MANIFEST_MAX_BYTES) {
+            Ok(bytes) => Ok(borsh::from_slice(&bytes).ok()),
+            Err(BoundedFileError::Io(error)) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            Err(_) => Ok(None),
+        }
+    }
+
+    pub(crate) fn is_retention_extension(mut previous: EvidenceManifestV1, next: &EvidenceManifestV1) -> bool {
+        if next.retention_until_daa <= previous.retention_until_daa {
+            return false;
+        }
+        previous.retention_until_daa = next.retention_until_daa;
+        previous == *next
+    }
+
+    // The manifest ID includes its horizon. Preserve both namespaces by
+    // linking authenticated bytes before making the new manifest visible.
+    pub(crate) fn try_extend_provider_manifest(
+        root: &Path,
+        claim_hex: &str,
+        next: &EvidenceManifestV1,
+        limits: &ManifestLimits,
+        admit: impl FnOnce(u64) -> io::Result<()>,
+        check: impl Fn() -> io::Result<()>,
+    ) -> io::Result<bool> {
         let path = manifest_path(root, claim_hex);
-        let tmp = path.with_extension("partial");
-        std::fs::write(&tmp, borsh::to_vec(manifest).expect("borsh-serializable"))?;
-        std::fs::rename(&tmp, &path)
+        check()?;
+        let Some(previous) = read_provider_manifest(&path)? else { return Ok(false) };
+        let old_id = manifest_id_v1(&previous);
+        if !is_retention_extension(previous, next) || next.validate_shape(limits).is_err() {
+            return Ok(false);
+        }
+        let next_id = manifest_id_v1(next);
+        let chunks = root.join("chunks");
+        let old_dir = chunks.join(old_id.to_string());
+        let next_dir = chunks.join(next_id.to_string());
+        if [&chunks, &old_dir].iter().any(|dir| !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir())) {
+            return Ok(false);
+        }
+        // Serialize only alias staging, without making normal manifest
+        // publication wait for the potentially large old chunk reads.
+        let Ok(alias_lease) = File::open(&chunks) else { return Ok(false) };
+        if alias_lease.try_lock().is_err() {
+            return Ok(false);
+        }
+        if read_provider_manifest(&path)?.is_none_or(|current| manifest_id_v1(&current) != old_id) {
+            return Ok(false);
+        }
+        let mut additional = 0u64;
+        for entry in &next.chunks {
+            check()?;
+            match std::fs::symlink_metadata(chunk_path(root, next_id, entry.index)) {
+                Ok(meta) if meta.is_file() => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => additional = additional.saturating_add(u64::from(entry.len)),
+                _ => return Ok(false),
+            }
+        }
+        admit(additional)?;
+        ensure_provider_directory(&next_dir)?;
+        if !std::fs::symlink_metadata(&next_dir)?.is_dir() {
+            return Ok(false);
+        }
+        let verifies = |file: &Path, entry: &ChunkEntryV1| {
+            std::fs::symlink_metadata(file).is_ok_and(|meta| meta.is_file())
+                && read_bounded_file(file, entry.len as usize).is_ok_and(|bytes| next.verify_chunk(entry.index, &bytes).is_ok())
+        };
+        for entry in &next.chunks {
+            check()?;
+            let from = chunk_path(root, old_id, entry.index);
+            let to = chunk_path(root, next_id, entry.index);
+            if !to.exists() && (!verifies(&from, entry) || std::fs::hard_link(&from, &to).is_err()) {
+                return Ok(false);
+            }
+            if !verifies(&to, entry) {
+                return Ok(false);
+            }
+            File::open(to)?.sync_all()?;
+        }
+        sync_provider_directory(&next_dir)?;
+        with_manifest_writer(&path, || {
+            check()?;
+            if read_provider_manifest(&path)?.is_none_or(|current| manifest_id_v1(&current) != old_id) {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "provider manifest changed during retention extension"));
+            }
+            write_provider_file(&path, &borsh::to_vec(next)?)?;
+            Ok(true)
+        })
+    }
+
+    /// Place a claim's material in a provider directory (the miner's last act before it may switch off). Write order is the safety:
+    /// durably publish each chunk first, then publish the manifest.
+    pub fn publish(root: &Path, claim_hex: &str, manifest: &EvidenceManifestV1, chunks: &[Vec<u8>]) -> std::io::Result<()> {
+        if publish_chunks_match(manifest, chunks)
+            && try_extend_provider_manifest(root, claim_hex, manifest, &ManifestLimits::default(), |_| Ok(()), || Ok(()))?
+        {
+            return Ok(());
+        }
+        let id = manifest_id_v1(manifest);
+        for (i, bytes) in chunks.iter().enumerate() {
+            write_provider_chunk(&chunk_path(root, id, i as u32), bytes)?;
+        }
+        write_provider_manifest(&manifest_path(root, claim_hex), manifest, &borsh::to_vec(manifest)?)
+    }
+
+    pub(crate) fn publish_chunks_match(manifest: &EvidenceManifestV1, chunks: &[Vec<u8>]) -> bool {
+        manifest.chunks.len() == chunks.len()
+            && chunks.iter().enumerate().all(|(i, bytes)| manifest.verify_chunk(i as u32, bytes).is_ok())
     }
 
     /// **A free-prompt claim's material, placed with a provider directory** — the ONE manifest assembly the rail's `--evidence-out`
@@ -217,10 +483,7 @@ pub mod fs {
 
         /// The manifest this provider holds for a claim, if any. NOT trusted: the caller validates it against the claim.
         pub fn manifest_for(&self, claim_hex: &str) -> Option<EvidenceManifestV1> {
-            let bytes = std::fs::read(manifest_path(&self.root, claim_hex)).ok()?;
-            let mut slice = bytes.as_slice();
-            let manifest = <EvidenceManifestV1 as borsh::BorshDeserialize>::deserialize(&mut slice).ok()?;
-            slice.is_empty().then_some(manifest)
+            crate::transport::EvidenceProvider::manifest_for(self, claim_hex).ok().flatten()
         }
     }
 
@@ -229,7 +492,18 @@ pub mod fs {
             &self.id
         }
         fn fetch_chunk(&self, manifest_id: Hash64, index: u32) -> Result<Vec<u8>, ProviderError> {
-            std::fs::read(chunk_path(&self.root, manifest_id, index)).map_err(|e| ProviderError(e.to_string()))
+            // Without a manifest length, the library's default is the only available size limit.
+            self.fetch_chunk_expected(manifest_id, index, ManifestLimits::default().max_chunk_bytes).map_err(|error| match error {
+                ChunkReadError::Provider(error) => error,
+                ChunkReadError::TooLarge(_) => ProviderError(error.to_string()),
+            })
+        }
+
+        fn fetch_chunk_expected(&self, manifest_id: Hash64, index: u32, expected_len: u32) -> Result<Vec<u8>, ChunkReadError> {
+            read_bounded_file(&chunk_path(&self.root, manifest_id, index), expected_len as usize).map_err(|e| match e {
+                BoundedFileError::TooLarge(got) => ChunkReadError::TooLarge(usize::try_from(got).unwrap_or(usize::MAX)),
+                BoundedFileError::Io(e) => ProviderError(e.to_string()).into(),
+            })
         }
     }
 

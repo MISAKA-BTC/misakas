@@ -1,0 +1,48 @@
+{
+  "candidate": "C10",
+  "crate": "kaspa_consensus_core",
+  "source_build": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-latest/build1.jsonl",
+  "source_build_sha256": "1042ef5afb1e730c03627b73928b56dd58000f362ea3983582f3e1059a6fc726",
+  "binary": "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-latest/bin/kaspa_consensus_core",
+  "binary_sha256": "deb517687bd8cf535ffd64b70d90b451f283b0aad2dabf644ee0db81960ef7d9",
+  "features": [
+    "default",
+    "evm",
+    "pq-only"
+  ],
+  "filter": "rfc40",
+  "exact": false,
+  "matched": [
+    "palw_claim_local_v1::prefix_v1::tests::rfc40_envelope_preflight_rejects_lengths_truncation_trailing_and_nesting",
+    "palw_claim_local_v1::prefix_v1::tests::rfc40_prefix_contract_checks_real_source_identity_causality_and_finite_bounds",
+    "palw_claim_local_v1::prefix_v1::tests::rfc40_prefix_contract_real_signatures_bind_all_fields_without_acceptance_cycle",
+    "palw_offence_attribution_v1::tests::rfc40_source_export_conviction_does_not_create_old_verifier_liability",
+    "palw_state_v2::palw_claim_local_prefix_court_v1::financial::tests::rfc40_old_financial_basis_excludes_inherited_liability_and_missing_terminal",
+    "palw_state_v2::palw_claim_local_prefix_court_v1::financial::tests::rfc40_old_financial_basis_uses_frozen_terminal_liability_and_conviction_marker",
+    "palw_state_v2::palw_claim_local_prefix_court_v1::financial::tests::rfc40_old_financial_boundary_expiry_readmit_matches_live_journal_after_frame_persistence",
+    "palw_state_v2::palw_claim_local_prefix_court_v1::financial::tests::rfc40_old_financial_final_mint_survives_an_earlier_inherited_liability_extension",
+    "palw_state_v2::palw_claim_local_prefix_reservation_v1::prefix_collection_tests::rfc40_prefix_gc_refuses_cycle_or_future_source",
+    "palw_state_v2::palw_claim_local_prefix_reservation_v1::prefix_collection_tests::rfc40_prefix_gc_retains_only_exact_birth_transitive_ancestors",
+    "palw_state_v2::tests::bond_budget_fold_v1::rfc40_export_reservation_survives_source_terminal_and_releases_only_after_material"
+  ],
+  "minimum": 11,
+  "listing_exit": 0,
+  "command": [
+    "/Users/wata/Downloads/MISAKA-full-implementation-20261031/handoff/results/session-c-latest/bin/kaspa_consensus_core",
+    "rfc40",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "status": "PASS",
+  "exit_code": 0,
+  "elapsed_seconds": 0.34,
+  "summaries": [
+    [
+      "ok",
+      "11",
+      "0",
+      "0"
+    ]
+  ],
+  "log_sha256": "4b25fe2ddf1f5bf858953427980fbeb1d4833652c9b283fcc3ae4ba185163cfd"
+}

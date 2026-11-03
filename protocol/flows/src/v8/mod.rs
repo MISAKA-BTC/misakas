@@ -74,6 +74,8 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 // binary. The subscription stays unconditional: routing a type is free, and a
                 // subscription that tracked the ruleset would re-create this bug the other way.
                 KaspadMessagePayloadType::PruningPointPalwState,
+                // RFC-0037: one row-stream generation, same IBD route as the carriage reply.
+                KaspadMessagePayloadType::PruningPointPalwRowStream,
             ]),
             relay_receiver,
             body_only_ibd_permitted,

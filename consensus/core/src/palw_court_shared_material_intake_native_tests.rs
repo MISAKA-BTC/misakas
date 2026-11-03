@@ -1,6 +1,6 @@
 // RFC-0032 A / ADR-0199 material intake (lane material-intake, 2026-10-22).
 // Verified-half original/world fixture with an installed shared context; the
-// storage schedule is the test-only injection (production is typed-missing).
+// storage schedule is the pinned estimate once the fence is active; a test thread may inject another.
 
 fn material_intake_world(fx: &PalwTirPublicFrameFixtureV1)
     -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1, Hash64, Hash64) {
@@ -28,7 +28,7 @@ fn material_intake_world(fx: &PalwTirPublicFrameFixtureV1)
 
 fn material_test_schedule() -> crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1 {
     let s = crate::palw_court_shared_material_intake_v1::MaterialIntakeScheduleV1 {
-        // audit B-09 (fix-b): a non-zero storage fee refuses the intake until V5 adopts its payer; the lane fixtures run fee-free.
+        // Lane fixtures stay fee-free. A positive rate is the submitter debit covered below.
         sompi_per_byte: 0,
         draft_ttl_daa: 100,
         cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
@@ -93,6 +93,14 @@ fn material_intake_partial_bodies_coexist_first_complete_wins_and_reorg_reverts(
     let net = extras.tir_public_network_domain_v1.unwrap();
     let leaves = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap();
     let leaf = *leaves.first().expect("history original reads parameters");
+    let program = class_program_v1(&state, claim).unwrap();
+    let input_demand = input_material_demand_v1(&program, &leaves,
+        frame.plan_v1().owner_work.rules.prompt_form, frame.header_v1().job_context.declared_prefill_tokens).unwrap();
+    let parameter_bytes: u64 = leaves.iter().map(|leaf| borsh::to_vec(&fx.execution.param_opening(*leaf).unwrap()).unwrap().len() as u64).sum();
+    assert_eq!(input_demand.parameter_targets, leaves.len() as u64);
+    assert!(input_demand.parameter_bytes >= parameter_bytes, "native demand must cover every actual parameter body");
+    assert!(input_material_demand_v1(&program, &[leaf, leaf],
+        frame.plan_v1().owner_work.rules.prompt_form, frame.header_v1().job_context.declared_prefill_tokens).is_err());
     let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
     let target = MaterialTargetV1::Parameter { leaf };
     let before = state.state_root();
@@ -278,10 +286,13 @@ fn material_intake_refuses_corrupt_parts_overbudget_and_dormant_fence() {
     let begin = MaterialActionV1::Begin { total_bytes: body.len() as u64,
         body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) };
     assert!(material_intake(&mut d, &at(frame, 1), &sign(target, begin.clone())).is_err());
-    let mut s = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     set_material_intake_test_schedule_v1(None);
-    assert!(material_intake(&mut s, &at(frame, 1), &sign(target, begin.clone())).is_err(), "typed-missing schedule refuses");
-    assert_eq!(s.state.state_root(), before);
+    assert_eq!(
+        material_intake_schedule_at_fence_v1(true).unwrap(),
+        crate::palw_g14_values_v1::PALW_G14_MATERIAL_INTAKE_ESTIMATE_V1,
+        "an active fence uses the pinned estimate when the test injects nothing"
+    );
+    assert!(material_intake_schedule_at_fence_v1(false).is_err(), "below the fence the schedule stays missing");
     let schedule = material_test_schedule();
 
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
@@ -392,13 +403,13 @@ fn material_intake_incomplete_drafts_expire_and_release_reservation() {
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(None);
 }
 
-/// **fix-b B-09 regression**: a non-zero storage fee (no adopted payer) refuses the Begin and writes nothing — never a fee that is
-/// accounted in `charged_sompi` but never debited.
+/// A positive storage fee is taken from the authenticated submitter before the draft is recorded.
+/// A bond that cannot cover that fee refuses the Begin and writes nothing.
 #[test]
-fn fix_b09_a_nonzero_material_fee_refuses_the_intake() {
+fn a_positive_material_storage_fee_is_debited_from_the_submitter() {
     use crate::palw_court_shared_material_intake_v1::*;
-    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
     let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
     let frame = &fx.frame;
     let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
@@ -410,18 +421,191 @@ fn fix_b09_a_nonzero_material_fee_refuses_the_intake() {
     let leaf = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap()[0];
     let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
     let target = MaterialTargetV1::Parameter { leaf };
-    let begin = MaterialActionV1::Begin { total_bytes: body.len() as u64,
-        body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) };
+    let body_hash = crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body);
+    let begin = MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash };
     schedule.sompi_per_byte = 1;
     set_material_intake_test_schedule_v1(Some(schedule));
-    let before = state.state_root();
+    let fee = body.len() as u64;
+    let before = state.bond(&who).unwrap().collateral;
+    assert!(before >= fee);
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
-    let err = material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin.clone())).unwrap_err();
-    assert!(format!("{err:?}").contains("no adopted payer"), "{err:?}");
-    assert_eq!(b.state.state_root(), before);
-    // Fee-free: admitted, nothing owed.
-    set_material_intake_test_schedule_v1(Some(material_test_schedule()));
-    material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin)).unwrap();
+    material_intake(&mut b, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin.clone())).unwrap();
+    let bond = b.state.bond(&who).unwrap();
+    assert_eq!(bond.collateral, before - fee);
+    assert_eq!(bond.slashed, fee);
+    let Some(Row::CourtMaterialLedger(ledger)) = b.state.staged_court_row_v1(&Key::CourtMaterialLedger(claim, who)) else { panic!() };
+    assert_eq!(ledger.charged_sompi, fee);
+    let draft = material_draft_id_v1(claim, target, who, body.len() as u64, body_hash).unwrap();
+    assert!(b.state.staged_court_row_v1(&Key::CourtMaterialDraft(claim, draft)).is_some());
+    // Real signed retries/parts/Finish authenticate the material without
+    // collecting the storage fee a second time or treating it as supplier pay.
+    use super::super::palw_court_shared_material_intake_fold_v1::MaterialIntakeEffectV1 as E;
+    let sign = |action| material_signed(&kp, net, claim, scope, target, who, action);
+    let paid_root = b.state.state_root();
+    let paid_entries = b.entries.len();
+    assert_eq!(material_intake(&mut b, &at(frame, 1), &sign(begin.clone())).unwrap(), E::Retried);
+    assert_eq!(b.state.state_root(), paid_root);
+    assert_eq!(b.entries.len(), paid_entries);
+    let mut last = 1;
+    for (i, bytes) in body.chunks(crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+        last += 1;
+        let offset = (i * crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64;
+        let part = sign(MaterialActionV1::Part { draft_id: draft, offset, bytes: bytes.to_vec() });
+        assert_eq!(material_intake(&mut b, &at(frame, last), &part).unwrap(), E::Part);
+    }
+    last += 1;
+    assert_eq!(material_intake(&mut b, &at(frame, last), &sign(MaterialActionV1::Finish { draft_id: draft })).unwrap(), E::Completed);
+    assert!(target_complete_v1(&b.state, claim, target).unwrap());
+    let Some(Row::CourtMaterialLedger(ledger)) = b.state.staged_court_row_v1(&Key::CourtMaterialLedger(claim, who)) else { panic!() };
+    assert_eq!((ledger.reserved_bytes, ledger.charged_sompi), (0, fee));
+    assert_eq!(b.state.bond(&who).unwrap().collateral, before - fee);
+    assert_eq!(palw_bond_burn_obligation_v2(b.state.bond(&who).unwrap()), fee);
+    assert!(b.state.pending_payouts.is_empty(), "storage is an existing burn, not a synthetic provider payment");
+    let completed_root = b.state.state_root();
+    let mut replayed = b.state.clone();
+    for entry in b.entries.iter().rev() { apply_delta_entry(&mut replayed, entry, true).unwrap(); }
+    assert_eq!(replayed.state_root(), state.state_root(), "undo restores the principal and removes the burn obligation");
+    for entry in &b.entries { apply_delta_entry(&mut replayed, entry, false).unwrap(); }
+    assert_eq!(replayed.state_root(), completed_root);
+    replayed.set_last_point_for_tests(Some(at(frame, last)));
+    let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&replayed)).unwrap();
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&carriage).unwrap()
+        .into_state(&params, Some(replayed.state_root())).unwrap();
+    assert_eq!(restored.state_root(), replayed.state_root());
+    assert_eq!(palw_bond_burn_obligation_v2(restored.bond(&who).unwrap()), fee);
+    state.bonds.get_mut(&who).unwrap().collateral = fee - 1;
+    let root = state.state_root();
+    let mut short = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let err = material_intake(&mut short, &at(frame, 1), &material_signed(&kp, net, claim, scope, target, who, begin)).unwrap_err();
+    assert!(format!("{err:?}").contains("exceeds the submitter bond"), "{err:?}");
+    assert_eq!(short.state.state_root(), root);
+    assert_eq!(short.state.bond(&who).unwrap().collateral, fee - 1);
+    set_material_intake_test_schedule_v1(None);
+}
+
+/// A real native original's existing duties remain collateralized after the
+/// submitter pays storage. Refusal restores both the draft and financial journal.
+#[test]
+fn material_storage_fee_preserves_reserved_principal_and_refuses_atomically() {
+    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
+    use crate::palw_court_shared_material_intake_v1::*;
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
+    let who = fx.frame.custody_v1().pledge_v1().producer;
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([78; 32]);
+    state.bonds.get_mut(&who).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+    let mut schedule = material_test_schedule();
+    let leaf = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap()[0];
+    let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
+    let target = MaterialTargetV1::Parameter { leaf };
+    let fee = body.len() as u64;
+    let signed = material_signed(
+        &kp,
+        extras.tir_public_network_domain_v1.unwrap(),
+        claim,
+        scope,
+        target,
+        who,
+        MaterialActionV1::Begin { total_bytes: fee, body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) },
+    );
+    schedule.sompi_per_byte = 1;
+    set_material_intake_test_schedule_v1(Some(schedule));
+    let point = at(&fx.frame, 1);
+    let initial = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let a1 = initial.committed_at(&who, point.daa_score).unwrap();
+    let a6 = initial.read().accuser_ledger_v1(&who, point.daa_score);
+    let held = u64::try_from(super::super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(&initial, &who, point.daa_score).unwrap()).unwrap();
+    assert_eq!(u128::from(held), a1.checked_add(a6).unwrap());
+    assert!(held > 0, "the actual native original must already reserve producer principal");
+    drop(initial);
+    for free in [fee - 1, fee] {
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let available = b.state.bond(&who).unwrap().collateral;
+        let keep = held.checked_add(free).unwrap();
+        assert!(available >= keep);
+        b.slash_bond(who, u128::from(available - keep)).unwrap();
+        assert_eq!(b.committed_at(&who, point.daa_score).unwrap(), a1);
+        assert_eq!(b.read().accuser_ledger_v1(&who, point.daa_score), a6);
+        assert!(keep >= fee, "total collateral alone would allow this charge");
+        let before = b.state.state_root();
+        let journal = borsh::to_vec(&b.entries).unwrap();
+        let result = material_intake(&mut b, &point, &signed);
+        if free < fee {
+            let err = result.unwrap_err();
+            assert!(format!("{err:?}").contains("free principal"), "{err:?}");
+            assert_eq!(b.state.state_root(), before);
+            assert_eq!(borsh::to_vec(&b.entries).unwrap(), journal);
+            assert!(b.state.staged_court_row_v1(&Key::CourtMaterialLedger(claim, who)).is_none());
+        } else {
+            result.unwrap();
+            assert_eq!(b.state.bond(&who).unwrap().collateral, held);
+            assert_eq!(b.committed_at(&who, point.daa_score).unwrap(), a1);
+            assert_eq!(b.read().accuser_ledger_v1(&who, point.daa_score), a6);
+        }
+    }
+    set_material_intake_test_schedule_v1(None);
+}
+
+#[test]
+fn material_storage_fee_preserves_separate_accuser_principal() {
+    use super::super::palw_court_shared_material_intake_fold_v1::material_intake;
+    use crate::palw_court_shared_material_intake_v1::*;
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+    let (mut state, params, extras, claim, scope) = material_intake_world(&fx);
+    let who = outsider();
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([74; 32]);
+    state.bonds.get_mut(&who).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+    let mut schedule = material_test_schedule();
+    let leaf = required_parameter_leaves_v1(&state, claim, schedule.cover).unwrap()[0];
+    let body = borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
+    let fee = body.len() as u64;
+    let point = at(&fx.frame, 1);
+    let source_claim = state.claim(&claim).unwrap();
+    let ladder = crate::palw_bisect::PalwBisectLadderV1::open(
+        &claim, &source_claim.trace_root,
+        &crate::palw_court_v2::court_party_id_v2(&who),
+        &crate::palw_court_v2::court_party_id_v2(&source_claim.bond),
+        crate::palw_bisect::PalwBisectSpaceV1::StepLeaves, 8,
+        point.daa_score, point.daa_score + 8,
+    ).unwrap();
+    let mut setup = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    setup.write_court(ladder.session_id(), Some(PalwCourtSessionStateV2 {
+        claim, challenger_bond: who, opened_daa: point.daa_score,
+        deadline_daa: point.daa_score + 100, ladder, dissection: None,
+    })).unwrap();
+    state = setup.state.clone();
+    drop(setup);
+    let probe = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let a1 = probe.committed_at(&who, point.daa_score).unwrap();
+    let a6 = probe.read().accuser_ledger_v1(&who, point.daa_score);
+    assert!(a6 > 0, "a real indexed court row holds principal outside A-1");
+    let held = u64::try_from(a1.checked_add(a6).unwrap()).unwrap();
+    drop(probe);
+    schedule.sompi_per_byte = 1;
+    set_material_intake_test_schedule_v1(Some(schedule));
+    let signed = material_signed(&kp, extras.tir_public_network_domain_v1.unwrap(), claim, scope,
+        MaterialTargetV1::Parameter { leaf }, who, MaterialActionV1::Begin {
+            total_bytes: fee, body_hash: crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body),
+        });
+    for free in [fee - 1, fee] {
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let collateral = b.state.bond(&who).unwrap().collateral;
+        b.slash_bond(who, u128::from(collateral - held - free)).unwrap();
+        let root = b.state.state_root();
+        let journal = borsh::to_vec(&b.entries).unwrap();
+        let result = material_intake(&mut b, &point, &signed);
+        if free < fee {
+            assert!(format!("{:?}", result.unwrap_err()).contains("free principal"));
+            assert_eq!(b.state.state_root(), root);
+            assert_eq!(borsh::to_vec(&b.entries).unwrap(), journal);
+        } else {
+            result.unwrap();
+            assert_eq!(b.state.bond(&who).unwrap().collateral, held);
+            assert_eq!(b.read().accuser_ledger_v1(&who, point.daa_score), a6);
+        }
+    }
     set_material_intake_test_schedule_v1(None);
 }
 
@@ -552,4 +736,61 @@ fn material_intake_measure_wall_time_and_retained_bytes() {
             canonical_row_bytes={rows} delta_entries={entries} delta_bytes={deltas} sompi_per_byte_test={}", targets.len(), schedule.sompi_per_byte);
     }
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(None);
+}
+
+// Storage regression over the existing genuine signed material-intake fixture.
+// This does not claim the fixture mined genesis or approved computation credit.
+#[test]
+fn rfc23s2_persistent_descriptor_preserves_coordinate_logical_bytes_cold_and_reorg() {
+    use borsh::BorshDeserialize;
+    use crate::palw_claim_local_v1::{PalwClaimLocalCheckpointV1 as C,PalwClaimLocalRecordV1 as R,PalwClaimLocalWorkRefV1 as W,PALW_CLAIM_LOCAL_TABLE_V1 as TABLE,palw_liability_material_id_v1 as id};
+    use crate::palw_court_shared_material_intake_v1::{MaterialTargetV1 as T,required_parameter_leaves_v1};
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    use super::super::{palw_claim_local_checkpoint_descriptor_v3 as d3,palw_claim_local_material_projection_v2 as projection,palw_claim_local_context_store_v2 as context};
+    let fx=crate::palw_tir_public_claim_v1::palw_tir_public_material_frame_fixture_v1(false);let frame=&fx.frame;
+    let (mut state,params,mut extras,claim,scope)=material_intake_world(&fx);let schedule=material_test_schedule();
+    let producer=frame.custody_v1().pledge_v1().producer;let kp=libcrux_ml_dsa::ml_dsa_87::generate_key_pair([71;32]);
+    state.bonds.get_mut(&producer).unwrap().pubkey=kp.verification_key.as_ref().to_vec();
+    let net=extras.tir_public_network_domain_v1.unwrap();let leaves=required_parameter_leaves_v1(&state,claim,schedule.cover).unwrap();
+    let leaf=*leaves.first().unwrap();let parameter=borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap();
+    extras.kernel_route=Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1{network_domain:net,ruleset_digest:h(991),..Default::default()});
+    let mut native=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+    let(_,last)=material_upload(&mut native,frame,1,&kp,net,claim,scope,T::Parameter{leaf},producer,&parameter,None,true);
+    let p1=at(frame,last);
+    super::super::palw_kernel_route_fold_v1::ensure_route_header(&mut native,&p1).unwrap();
+    let state=native.state;let params=params.with_claim_local_settlement_from_daa(Some(0));
+    let mut b=TransitionBuilder::new(&state,&params,false,false,false,false,&extras);
+    let build=|s:&PalwChainStateV2,point:PalwBlockContextV2|{
+        let actual=s.claims.get(&claim).unwrap();let work=W::ChainClaim{claim};
+        let record=R{work,accepted_daa:actual.accepted_daa,accepted_blue_score:actual.accepted_blue_score,accepting_block:actual.accepted_block,anchors:false,inputs:BTreeSet::new(),execution_root:actual.execution_root,reservations:BTreeSet::new(),final_claim:false,certified:false,voided:false,liability_closed:false,material:BTreeSet::new()};
+        let mut records=BTreeMap::from([(work,record)]);let mut material=BTreeMap::new();
+        let raw=borsh::to_vec(actual).unwrap();let mid=id(&raw);records.get_mut(&work).unwrap().material.insert(mid);material.insert(mid,raw);
+        let courts:Vec<_>=s.court_sessions.iter().filter(|(_,c)|c.claim==claim).map(|(sid,c)|(*sid,c.clone())).collect();
+        for pair in &courts{let raw=borsh::to_vec(pair).unwrap();let mid=id(&raw);records.get_mut(&work).unwrap().material.insert(mid);material.insert(mid,raw);}
+        let mut birth=None;for (_,bytes) in super::super::palw_claim_local_rewards_v1::frames(s){let p=PalwBlockContextV2::deserialize_reader(&mut bytes.as_slice()).unwrap();if (p.daa_score,p.blue_score)==(actual.accepted_daa,actual.accepted_blue_score){birth=Some(p.block)}}
+        let birth_frames:Vec<_>=birth.into_iter().collect();let liability_state=borsh::to_vec(&(vec![(claim,actual.clone(),courts)],birth_frames)).unwrap();
+        projection::attach(s,&point,&mut records,&mut material).unwrap();
+        C{point,records,liability_state,material}
+    };
+    let cp1=build(&b.state,p1);d3::write(&mut b,&cp1).unwrap();
+    let old=b.state.last_point;b.state.last_point=Some(p1);b.entries.push(PalwDeltaEntryV2::LastPoint{old,new:Some(p1)});
+    assert_eq!(*d3::load(&b.state).unwrap().unwrap(),cp1);
+    d3::validate(&b.state).unwrap();let roots1=d3::record_roots_for_test_v3(&b.state,W::ChainClaim{claim}).unwrap();
+    let dk=super::super::palw_claim_descriptor_key_v2();let descriptor:d3::DescriptorV3=borsh::from_slice(&b.state.kernel_route().unwrap().aux[&(TABLE,dk.to_vec())]).unwrap();
+    let archive=context::ArchiveReferencesV2{version:2,components:vec![descriptor.records,descriptor.coordinates,descriptor.liability],literals:vec![]};let archive_bytes=borsh::to_vec(&archive).unwrap();let mut akey=[0;65];akey[0]=b'A';akey[1..].copy_from_slice(id(&archive_bytes).as_byte_slice());b.write_kernel_row_encoded_v1(TABLE,&akey,Some(&archive)).unwrap();
+    let snapshot=b.state.clone();let expected=snapshot.state_root();let journal=b.entries.len();
+    let prompt=borsh::to_vec(&fx.execution.prompt).unwrap();let(_,last)=material_upload(&mut b,frame,last+5,&kp,net,claim,scope,T::PromptFlat,producer,&prompt,None,true);let p2=at(frame,last);
+    let cp2=build(&b.state,p2);d3::write(&mut b,&cp2).unwrap();let old=b.state.last_point;b.state.last_point=Some(p2);b.entries.push(PalwDeltaEntryV2::LastPoint{old,new:Some(p2)});
+    assert_eq!(*d3::load(&b.state).unwrap().unwrap(),cp2);d3::validate(&b.state).unwrap();
+    let roots2=d3::record_roots_for_test_v3(&b.state,W::ChainClaim{claim}).unwrap();assert_eq!(roots1[0],roots2[0]);assert_eq!(roots1[1],roots2[1]);assert_ne!(roots1[2],roots2[2]);assert_ne!(roots1[3],roots2[3]);
+    for checkpoint in [&cp1,&cp2]{for bytes in checkpoint.material.values().filter(|v|v.starts_with(&2u16.to_le_bytes())&&v.get(2..66)==Some(claim.as_byte_slice())){let mut key=[0;65];key[0]=b'B';key[1..].copy_from_slice(id(bytes).as_byte_slice());assert!(!b.state.kernel_route().unwrap().aux.contains_key(&(TABLE,key.to_vec())),"logical coordinate I is never persisted as full B/M bytes");}}
+    for cp in [&cp1,&cp2]{let mut key=[0;65];key[0]=b'B';key[1..].copy_from_slice(id(&cp.liability_state).as_byte_slice());assert!(!b.state.kernel_route().unwrap().aux.contains_key(&(TABLE,key.to_vec())),"logical whole-world liability L is never persisted");}
+    let descriptor2:d3::DescriptorV3=borsh::from_slice(&b.state.kernel_route().unwrap().aux[&(TABLE,dk.to_vec())]).unwrap();assert_eq!(descriptor.liability,descriptor2.liability,"material-only event does not rewrite independent L");
+    context::validate_context_rows_v2(&b.state,&params).unwrap();
+    let route_wire=borsh::to_vec(b.state.kernel_route().unwrap()).unwrap();let mut cold=b.state.clone();cold.kernel_route=Some(borsh::from_slice(&route_wire).unwrap());assert_eq!(*d3::load(&cold).unwrap().unwrap(),cp2);d3::validate(&cold).unwrap();
+    let mut rewound=b.state.clone();for entry in b.entries[journal..].iter().rev(){super::super::apply_delta_entry(&mut rewound,entry,true).unwrap();}
+    assert_eq!(rewound.state_root(),expected);assert_eq!(*d3::load(&rewound).unwrap().unwrap(),cp1);d3::validate(&rewound).unwrap();
+    // Old archive root remains complete even though owned current coordinate
+    // pointers advanced; GC follows scalar-set and coordinate-ref child roots.
+    context::validate_context_rows_v2(&rewound,&params).unwrap();
 }

@@ -1,0 +1,321 @@
+{
+  "classification": "diagnostic_not_final_candidate_verification",
+  "note": "Sources changed during these build/test rounds. Failed, zero-match and partial outputs are retained; these logs do not establish the final same-source candidate.",
+  "files": [
+    {
+      "file": "misaka-adopted-connections-build1-20261030.log",
+      "sha256": "02f748cc67087735edc2474137378e48eb7924d8644dc16c4b2e9119f122b633",
+      "bytes": 703430
+    },
+    {
+      "file": "misaka-adopted-connections-build2-20261030.log",
+      "sha256": "256efbb30f7868218216643ecfd691ecff84f03d86ad2e127247f7f911cea2bd",
+      "bytes": 595797
+    },
+    {
+      "file": "misaka-adopted-connections-build3-20261030.log",
+      "sha256": "96a1e979ad939e1d95cec4528dc3f2a7abd367a9836838bfb6bac56d9bf1f05f",
+      "bytes": 725384
+    },
+    {
+      "file": "misaka-adopted-connections-build4-20261030.log",
+      "sha256": "c809639abbee578814864363541b1a65ed3cf9eb1ac80396a0c4d3bcfaba59a8",
+      "bytes": 695697
+    },
+    {
+      "file": "misaka-adopted-connections-check-20261030.log",
+      "sha256": "390907de70eaee24fc3e04ee5165545f787d91598a59d3bfe9827a9f71871a3a",
+      "bytes": 487911
+    },
+    {
+      "file": "misaka-adopted-connections-check10-20261030.log",
+      "sha256": "756477083e6f2e9a6fa8e9c603854472a866dcce1ff1255fb7e1dce38da572ed",
+      "bytes": 596200
+    },
+    {
+      "file": "misaka-adopted-connections-check2-20261030.log",
+      "sha256": "d64992e1be7d97ae2f9ce9156148aa2b4759a4c18ea65fdfd3d7ce5db84d4b99",
+      "bytes": 599895
+    },
+    {
+      "file": "misaka-adopted-connections-check3-20261030.log",
+      "sha256": "15dc8be450447a1287f42aab7e127cdece530a736476321262ca107fc2424959",
+      "bytes": 594422
+    },
+    {
+      "file": "misaka-adopted-connections-check4-20261030.log",
+      "sha256": "c0d3355f9ae896e0c07ce6654c33b5adb5347575c4f1ad1475e1f50cf5c5f075",
+      "bytes": 692573
+    },
+    {
+      "file": "misaka-adopted-connections-check5-20261030.log",
+      "sha256": "6762c047cbf417acf9546a8c8672996a9072ccaee3cdedbd72a877d8024014a6",
+      "bytes": 715280
+    },
+    {
+      "file": "misaka-adopted-connections-check6-20261030.log",
+      "sha256": "972d4fb1e53eb94f1480ab89634c0aec550a65caddf6251d7fbe16b2781a265e",
+      "bytes": 738402
+    },
+    {
+      "file": "misaka-adopted-connections-check7-20261030.log",
+      "sha256": "f20349ef770f9b02e4a186caf2ab96c820a76402493b0c7279d901910f4e65df",
+      "bytes": 720851
+    },
+    {
+      "file": "misaka-adopted-connections-check8-20261030.log",
+      "sha256": "2f03532619a9fee03d4fdb5da3d3fc0b73e416aef46c72424545deb606d221b4",
+      "bytes": 736725
+    },
+    {
+      "file": "misaka-adopted-connections-check9-20261030.log",
+      "sha256": "73468784865e3a24dd5b82e24e6070e172afff33d500bf6e5c7327589bd05eec",
+      "bytes": 734179
+    },
+    {
+      "file": "misaka-adopted-connections-docs-20261030.log",
+      "sha256": "f35c795540024cac696a2674619df234c6450ff1d5a71508f54ba8b1c3b764b2",
+      "bytes": 438
+    },
+    {
+      "file": "misaka-adopted-diagnostic-material-20261030.log",
+      "sha256": "5fefea6c9934be79952a1370833029d945f4e24205e6c1fe738211533f14e036",
+      "bytes": 1777
+    },
+    {
+      "file": "misaka-adopted-diagnostic-original-checkpoint-20261030.log",
+      "sha256": "f75cf8f64d6b0e621ba7654383e89244a0a874113e77476d5ecb89d1a0a03e80",
+      "bytes": 235
+    },
+    {
+      "file": "misaka-adopted-diagnostic-original-fee-20261030.log",
+      "sha256": "77c416520a6222652533b0ecac777f07230eaa143ea0ecd06b3e4388e2986bb5",
+      "bytes": 252
+    },
+    {
+      "file": "misaka-adopted-diagnostic-original-fee-zero-match-20261030.log",
+      "sha256": "32890289a569aca6010d5acf29665eaec0280fc1b88b3c47a9593b560fc1003a",
+      "bytes": 116
+    },
+    {
+      "file": "misaka-adopted-diagnostic-original-prefix-20261030.log",
+      "sha256": "c34c92815de2f535973896406b9cbbeb09f9b7b98f018679ea76d8ecd05b2c0d",
+      "bytes": 253
+    },
+    {
+      "file": "misaka-adopted-diagnostic-rfc37-node-20261030.log",
+      "sha256": "f8c83c09d7a2250b580d3ad27cabe16092e94557822430ca28bb4fce6adad30c",
+      "bytes": 1742
+    },
+    {
+      "file": "misaka-adopted-diagnostic-rfc37-peer-20261030.log",
+      "sha256": "c439fa0af3cd1a6be237480c8ed2cd60ab11d05367d65222e88d11fcf5b4905d",
+      "bytes": 501
+    },
+    {
+      "file": "misaka-adopted-diagnostic-sdk-20261030.log",
+      "sha256": "80e0982007be6f01543f8247653e585c1510860782e589ab3e9af323c7a45367",
+      "bytes": 319
+    },
+    {
+      "file": "misaka-adopted-diagnostic-supplier-20261030.log",
+      "sha256": "542902e1027904bf5b0e25dd3ca862876c4fdb5c1203485ad6a630006baebc27",
+      "bytes": 1518
+    },
+    {
+      "file": "misaka-adopted-core-fault-source-probe2-20261030.log",
+      "sha256": "ad6b50da3a485638cbfca0e76bf3fe7be2281cbeedc3a90e230730b723a5add6",
+      "bytes": 755
+    },
+    {
+      "file": "misaka-adopted-core-fault-source-probe3-20261030.log",
+      "sha256": "83939af74da5e763b694ba6a6a1756cb71fcf5e3979358642bf2ece435744644",
+      "bytes": 833
+    },
+    {
+      "file": "misaka-adopted-core-lifecycle-probe3-20261030.log",
+      "sha256": "f5b6509d44cc9b14d10fbbf54b2e5ccb78f6517c521554dbafb52c451cf6e683",
+      "bytes": 813
+    },
+    {
+      "file": "misaka-adopted-core-ordinary-probe2-20261030.log",
+      "sha256": "8bbda9c54076b372892fc4634073e3888b4f2c16a9e26d2e067894e55c09acd8",
+      "bytes": 755
+    },
+    {
+      "file": "misaka-adopted-core-ordinary-probe3-20261030.log",
+      "sha256": "451e6c6d4d1826c9bbf00012869504f092676179ed62139491870c14b6eda7bf",
+      "bytes": 833
+    },
+    {
+      "file": "misaka-adopted-core-prefix-probe2-20261030.log",
+      "sha256": "ba93807bb9fad4d67abb5826802ff592901e4286ba9007e78bd290d9b72011d0",
+      "bytes": 779
+    },
+    {
+      "file": "misaka-adopted-core-prefix-probe3-20261030.log",
+      "sha256": "9eb9b0050e2e735ccd1d0586e19c1e5bc3149759c4dbc71b325264eea548b383",
+      "bytes": 857
+    },
+    {
+      "file": "misaka-adopted-core-probe1-20261030.log",
+      "sha256": "2ceb2d5c542c2200dd6cc144635080dc6f5a1aaa2a851d51c9f680b8c60a8b1d",
+      "bytes": 614256
+    },
+    {
+      "file": "misaka-adopted-core-probe2-20261030.log",
+      "sha256": "c7098af80ef0012c30cedcf740350a7aea9b0da9c1001449998def58e703dd26",
+      "bytes": 607998
+    },
+    {
+      "file": "misaka-adopted-core-probe3-20261030.log",
+      "sha256": "4de4cfb737af5e49062ae3158c4435b02e5283b47b71a9097641c10005b0ce25",
+      "bytes": 607998
+    },
+    {
+      "file": "misaka-adopted-material-probe2-20261030.log",
+      "sha256": "7142a0ebe0eccd8e5503f6908d39315563226868f0c01ea01f53d155481e93e5",
+      "bytes": 1788
+    },
+    {
+      "file": "misaka-adopted-baseline-native-build7-20261030.log",
+      "sha256": "b2b2609c6b5919d3990de4eb011a26e7338062e6bfae416d93ec26aa6c52b021",
+      "bytes": 19112
+    },
+    {
+      "file": "misaka-adopted-build7-20261030.log",
+      "sha256": "8eb4d2275bd2c6241aee893652ac55e44e0357736c8e84e426a2e2df46e37609",
+      "bytes": 728166
+    },
+    {
+      "file": "misaka-adopted-build8-20261030.log",
+      "sha256": "8477113f0c0c971a082ecdd1cd62bef5bd26553b8d6ec7764dbdf6080b8df9d1",
+      "bytes": 699895
+    },
+    {
+      "file": "misaka-adopted-carrier-build7-20261030.log",
+      "sha256": "e936cb8d58bf72a12312a3b5dd924239284d0633294d93ace084a7e7d3010a2d",
+      "bytes": 818
+    },
+    {
+      "file": "misaka-adopted-closed_fact_-probe4-20261030.log",
+      "sha256": "c2e98a29df305d212cdd8236322679f8942f375d3139647e544a0c87b1f676de",
+      "bytes": 236
+    },
+    {
+      "file": "misaka-adopted-core-fault-source-build7-20261030.log",
+      "sha256": "510814acb6cd8f44faa4f34f07509ad199a076a7aaa81a639f5bb7f60c2862f8",
+      "bytes": 909
+    },
+    {
+      "file": "misaka-adopted-core-fault-source-probe4-20261030.log",
+      "sha256": "346bbc92fe22af1246acde4153ac5b5addb4bd1c90296947de03dfe4f1ae1ff1",
+      "bytes": 909
+    },
+    {
+      "file": "misaka-adopted-core-fault-source-probe5-20261030.log",
+      "sha256": "bc9737d592d66c326b521265ae5a91338ee83ec9ba42ef82b2485ef700718bbf",
+      "bytes": 768
+    },
+    {
+      "file": "misaka-adopted-core-lifecycle-probe4-20261030.log",
+      "sha256": "a300f71c9bca40e1c59f512b3efe81c043635b526657ec9afb999dc2543aa673",
+      "bytes": 1106
+    },
+    {
+      "file": "misaka-adopted-core-ordinary-build7-20261030.log",
+      "sha256": "bd20f22ee260374f5b5ec217409cf27ca6aeed3605567d080ac6d161858b9d46",
+      "bytes": 909
+    },
+    {
+      "file": "misaka-adopted-core-ordinary-probe4-20261030.log",
+      "sha256": "2cabfcb2e5939f08820d0e3c8508243541d8004cfafc39d1eaa5362458322ffd",
+      "bytes": 909
+    },
+    {
+      "file": "misaka-adopted-core-ordinary-probe5-20261030.log",
+      "sha256": "94191b1eb46b26716f0d1bcd73f5b8b4cd29a989e6ad2a3cacb1f5befecac954",
+      "bytes": 768
+    },
+    {
+      "file": "misaka-adopted-core-ordinary-probe6-20261030.log",
+      "sha256": "e7c1cd4c533a94397c4aa27a107ee04bf3f65aa36d275d527f80067d52219912",
+      "bytes": 998
+    },
+    {
+      "file": "misaka-adopted-core-prefix-build7-20261030.log",
+      "sha256": "6fa316f3115411c60e4a6549121530f8085e4f8f2a311bc18a6d646f3f282c89",
+      "bytes": 814
+    },
+    {
+      "file": "misaka-adopted-core-prefix-probe4-20261030.log",
+      "sha256": "d3fc6375038caaa976313cdaaf313128c87760bd8331b2bc652282d5e0c48805",
+      "bytes": 814
+    },
+    {
+      "file": "misaka-adopted-core-prefix-probe5-20261030.log",
+      "sha256": "300855365d2d3b988f67849669d0e7318c077bd586f75101ad00783d04b9219c",
+      "bytes": 792
+    },
+    {
+      "file": "misaka-adopted-core-probe4-20261030.log",
+      "sha256": "2ae32c9ac9bb48b9c770bebc484a0b18351bba32868aee6286c2d54536175150",
+      "bytes": 608292
+    },
+    {
+      "file": "misaka-adopted-core-probe5-20261030.log",
+      "sha256": "593d6f93b8241e6cb4c847f4d6bce8c579acf4a1c7ea2d9d02a4b56e08141d65",
+      "bytes": 608292
+    },
+    {
+      "file": "misaka-adopted-core-probe6-20261030.log",
+      "sha256": "d94f3f1d822c9aac08a7480c75314b2c4d708219bb22c90ffa9ed196e018bee2",
+      "bytes": 608582
+    },
+    {
+      "file": "misaka-adopted-evm-build7-20261030.log",
+      "sha256": "76420557d19b07a42567184088b61fdd7fe0fb3361ea998f2ea3b6a002e432cc",
+      "bytes": 1107
+    },
+    {
+      "file": "misaka-adopted-lifecycle-build7-20261030.log",
+      "sha256": "586af8361aaef2614a80a16ba1d35934922051b4faf213672c3b14e37e33e5f3",
+      "bytes": 265
+    },
+    {
+      "file": "misaka-adopted-native39_archival_-probe4-20261030.log",
+      "sha256": "1a0457a7df0b53b1be1e4e331a9806f38cd16c5b00447e14e596e4114ca53908",
+      "bytes": 388
+    },
+    {
+      "file": "misaka-adopted-p2p-build7-20261030.log",
+      "sha256": "fb4a5c91b930a034901dce7ca154dac12eec7a57cb8e01f6fba8b5adf64d0e8c",
+      "bytes": 501
+    },
+    {
+      "file": "misaka-adopted-rfc23s2_-probe4-20261030.log",
+      "sha256": "8b2c840dd60ae70578c1bccf31ffe3b628f354834003db58138a30a5cb90e1ba",
+      "bytes": 7884
+    },
+    {
+      "file": "misaka-adopted-rfc37-build7-20261030.log",
+      "sha256": "a32069d2f272481b91e498f34ece121b06468305784f924936332cd16a16c189",
+      "bytes": 1782
+    },
+    {
+      "file": "misaka-adopted-sdk-build7-20261030.log",
+      "sha256": "7825c4e92af33b1536cfecc89c55cdbb00d488e5c70dd3e406349334df460c70",
+      "bytes": 319
+    },
+    {
+      "file": "misaka-adopted-stage2-evm-build7-20261030.log",
+      "sha256": "4a31ac8d645f056307fff0e8f1ca216ae206c3e2bf1b06af459c31ae7e819847",
+      "bytes": 1101
+    },
+    {
+      "file": "misaka-adopted-startup-build7-20261030.log",
+      "sha256": "5478e6f2ed27144095d76916950f5e87b593a2029a6885ee177867b640e3582b",
+      "bytes": 634
+    }
+  ]
+}

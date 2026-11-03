@@ -101,7 +101,7 @@ fn owning_config_with(challenge: Option<u64>) -> (Config, PalwConsensusParamsV2,
     (cfg, b, p, fl)
 }
 
-mod master;
+pub(crate) mod master;
 
 fn stage(net: &mut Net, card: usize, action: u8, body: Vec<u8>) -> Obj {
     net.route(card, &K::StageExecutionV14 { action, body })

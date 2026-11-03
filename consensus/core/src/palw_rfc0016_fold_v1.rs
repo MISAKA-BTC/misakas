@@ -871,6 +871,48 @@ pub fn palw_rfc0016_quote_v1(
     Some(palw_admission_quote_v1(rights, capacity, queue_len, &mirror.values))
 }
 
+/// Read the report's current capacity from exactly the admission reader's
+/// authenticated attestations, readiness, load geometry and shared resource
+/// split. This is an attested bound, not a claim of measured execution success.
+/// Missing measurement/span/registry inputs remain UNKNOWN rather than zero.
+fn palw_rfc0016_report_capacity_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    classes: &[Hash64],
+    now_daa: u64,
+) -> Option<(u128, u128)> {
+    if !params.rfc0016_capacity_active_at(now_daa) || classes.is_empty() {
+        return None;
+    }
+    let mirror = params.rfc0016_v1()?;
+    let fold = extras.model_registry.as_ref()?;
+    if fold.span_daa == 0 || fold.globals.reference_work_per_span == 0 || fold.globals.seat_count == 0 {
+        return None;
+    }
+    let attestations = state.rfc0016_capacity_attestations_v1();
+    let read = PalwFoldReadV1::outside(state, params, extras);
+    let mut total_capacity = 0u128;
+    let mut total_shortfall = 0u128;
+    for class in classes {
+        let row = state.model_lifecycles.get(class)?;
+        if *class == params.base_class_id() || row.profile.verification_window_spans == 0 || row.work.economic_ccu_per_claim == 0 {
+            return None;
+        }
+        mirror.claim_load_of(class)?;
+        if !attestations.iter().any(|a| a.model == *class && palw_capacity_attestation_check_v1(a, now_daa).is_ok()) {
+            return None;
+        }
+        // No prospective attempt: the report describes the same state's actual
+        // current load. Class shares use one global verifier resource budget.
+        let (capacity, demand, _) = read.rfc0016_capacity_read_v1(class, fold, now_daa, None);
+        total_capacity = total_capacity.checked_add(capacity)?;
+        // Spare capacity in a different class cannot hide this class's deficit.
+        total_shortfall = total_shortfall.checked_add(demand.saturating_sub(capacity))?;
+    }
+    Some((total_capacity, total_shortfall))
+}
+
 /// **The per-model and per-miner report** at `now_daa` (RFC-0016 §11): consensus-derived where the state holds it (targets, physical
 /// blocks, rights, Finals, coinbase payout, per-miner revenue, escrow payout, queue wait, REAL gap, heartbeat-dependent DAA), node-local
 /// observations where it cannot (refusals, labelled as such), `None` only below the fences. It changes nothing.
@@ -935,6 +977,11 @@ pub fn palw_rfc0016_model_report_v1(
             miner.1 = miner.1.saturating_add(1);
         }
     }
+    // A registered model with authenticated capacity but no accepted block yet
+    // still needs a report row; otherwise the positive capacity path is hidden.
+    if params.rfc0016_capacity_active_at(now_daa) {
+        models.extend(classes_of.keys().filter(|model| **model != params.base_class_id()).copied());
+    }
     let armed = params.rfc0016_v1().is_some();
     let real_gap = match state.floor_state_v1().mode {
         crate::palw_real_share_v1::PalwFloorModeV1::Normal { last_blue } => Some(now_daa.saturating_sub(last_blue)),
@@ -966,6 +1013,7 @@ pub fn palw_rfc0016_model_report_v1(
                     ended.get(&model).map_or(&[][..], |v| v.as_slice()),
                 );
             let observed = |kind| classes.iter().map(|c| palw_rfc0016_observed_v1(c, kind)).sum::<u64>();
+            let capacity = palw_rfc0016_report_capacity_v1(state, params, extras, &classes, now_daa);
             PalwModelReportRowV1 {
                 model,
                 epoch_index: epoch.epoch_index,
@@ -985,8 +1033,8 @@ pub fn palw_rfc0016_model_report_v1(
                 heartbeat_dependent_daa: armed.then_some(heartbeat_dependent),
                 checked_share_permille,
                 completed_within_deadline_permille,
-                capacity_per_span: None,
-                capacity_shortfall_per_span: None,
+                capacity_per_span: capacity.map(|(capacity, _)| capacity),
+                capacity_shortfall_per_span: capacity.map(|(_, shortfall)| shortfall),
                 queue_len: classes.iter().map(|c| state.rfc0016_queue_v1(c).len() as u64).sum(),
             }
         })

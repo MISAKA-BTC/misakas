@@ -123,12 +123,7 @@ impl WidePanelWorkV2 {
     /// runner creation. This check/hash-free charge precedes its one borrowed
     /// program comparison, without exposing the private plan to the caller.
     #[cfg(feature = "positive-panel")]
-    pub(crate) fn admit_loaded_runner_v2(
-        &self,
-        external_floor: u64,
-        class: Hash64,
-        execution: Hash64,
-    ) -> Result<(), Error> {
+    pub(crate) fn admit_loaded_runner_v2(&self, external_floor: u64, class: Hash64, execution: Hash64) -> Result<(), Error> {
         if self.started.get() {
             return Err("wide attempt CPU run already started; spent work is retained".into());
         }
@@ -141,10 +136,7 @@ impl WidePanelWorkV2 {
         // The SAME existing capture metadata-visit currency, one additional
         // traversal for runner.new's structural equality. It is not RAM bytes
         // or CPU instructions. Refusals never refund earlier shared charges.
-        self.inner.charge(
-            Charge::Visit,
-            mul(add(misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64, 1024)?, 128)?,
-        )
+        self.inner.charge(Charge::Visit, mul(add(misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64, 1024)?, 128)?)
     }
 }
 struct Session {

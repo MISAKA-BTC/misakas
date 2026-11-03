@@ -17,9 +17,11 @@
 //!
 //! **Evidence.** REAL work comes from the `Final` transitions in each chain block's PALW delta, free-prompt
 //! work from the slice spends in them, and a conviction after `Final` retracts what it had counted
-//! ([`native_delta_evidence_v1`]). The sink's claims are consulted only for the lifecycle question (is every
+//! ([`native_delta_evidence_v1`]). A native39 receipt quantum is the same kind of evidence: its work is the
+//! receipt's `price.quantum_mac`, its anchor is the block that carried the spend, and a mining conviction
+//! retracts that receipt only. The sink's claims are consulted only for the lifecycle question (is every
 //! claim at or before the effect resolved) and for the operator behind a bond. A claim leaves PALW state at
-//! `terminal + claim_retirement`; its work stays counted.
+//! `terminal + claim_retirement`; its work stays counted. A native39 obligation never looks up a legacy claim.
 //!
 //! **Readiness (RFC-0012 D1).** [`VirtualStateProcessor::native_evaluate`] returns the snapshot AND the material it was weighed from
 //! (or the reason nothing was weighed); [`VirtualStateProcessor::native_safe_readiness`] turns that into the structured explanation
@@ -44,7 +46,7 @@ use kaspa_consensus_core::{
     palw_native_settlement_v1::{
         MatureUsefulWorkV1, NativeDeltaEvidenceV1, NativeEffectV1, NativeFactRulesV1, NativePrefixV1, NativeSettlementSnapshotV1,
         SettlementStopV1, SkippedEvidenceV1, certify_native_prefix_v1, native_delta_evidence_v1, native_effective_retention_v1,
-        native_facts_and_skips_v1, native_open_from_v1, native_open_sessions_v1,
+        native_facts_and_skips_with_native39_v1, native_open_from_v1, native_open_sessions_v1,
     },
     palw_state_v2::{PalwChainStateV2, PalwClaimPhaseV2},
 };
@@ -182,6 +184,7 @@ pub(super) struct NativeWeighed {
     frontier_on_branch: bool,
     skipped: SkippedEvidenceV1,
     _resource_lease: Option<NativeDemandLeaseV1>,
+    _claim_local_checkpoint: Option<kaspa_consensus_core::palw_claim_local_v1::PalwOwnedValidatedClaimCheckpointV1>,
 }
 
 pub(super) struct NativeEvaluation {
@@ -480,6 +483,33 @@ impl VirtualStateProcessor {
         let Some(params) = self.palw_state_params_v2.as_ref() else {
             return stopped(result, gap(HistoryGapV1::ParamsAbsent, None));
         };
+        // Positive archive reads use the immutable whole node ruleset, not a
+        // subset of StateParams that omits quantum and canonical-work clocks.
+        match kaspa_consensus_core::palw_native_closed_facts_v1::validate_fact_archives_context_v1(
+            &state,
+            &self.native_redemption_params_v33,
+        ) {
+            Ok(()) => {}
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)) => {
+                return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+            }
+            Err(_) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(sink))),
+        }
+        let mut claim_local_checkpoint = if params.claim_local_settlement_active_at(sink_daa) {
+            let Some(point) = state.last_point().filter(|p| p.block == sink && p.daa_score == sink_daa) else {
+                return stopped(result, gap(HistoryGapV1::StateUnavailable, Some(sink)));
+            };
+            match kaspa_consensus_core::palw_state_v2::palw_claim_local_owned_checkpoint_v1(&state, params, point) {
+                Ok(Some(view)) => Some(view),
+                Ok(None) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(sink))),
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)) => {
+                    return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+                }
+                Err(_) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(sink))),
+            }
+        } else {
+            None
+        };
         // RFC-0023 stage 2: past `palw_claim_local_settlement_v1` the fold itself raises this frontier to the claim-local checkpoint's
         // irreversible frontier (`palw_claim_local_checkpoint_fold_v1`), so an unrelated unresolved claim no longer holds it and this
         // read stays the one fork choice weighs — no second, divergent settlement read here. Below the fence: unchanged.
@@ -504,7 +534,29 @@ impl VirtualStateProcessor {
                 None => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
             };
         #[cfg(not(test))]
-        let extra_facts = 0;
+        let extra_facts: usize = 0;
+        let native39_anchors = match kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_anchors_v1(&state) {
+            Ok(rows) => rows,
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)) => {
+                return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+            }
+            Err(_) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(sink))),
+        };
+        let closed_facts = match kaspa_consensus_core::palw_native_closed_facts_v1::read_native_closed_facts_v1(&state) {
+            Ok(rows) => rows,
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)) => {
+                return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+            }
+            Err(_) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(sink))),
+        };
+        let additional = match native39_anchors.len().checked_add(closed_facts.len()) {
+            Some(n) => n,
+            None => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
+        };
+        let extra_facts = match extra_facts.checked_add(additional) {
+            Some(n) => n,
+            None => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
+        };
         let resource_lease = match reserve_native_settlement_sweep_v1::<NativeWeighed>(
             rows.iter().map(|row| row.evidence()),
             &state,
@@ -515,6 +567,7 @@ impl VirtualStateProcessor {
             Err(_) => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
         };
         let voided: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence().voided.iter().copied()).collect();
+        let native39_revoked: BTreeSet<Hash64> = rows.iter().flat_map(|r| r.evidence().native39_revoked.iter().copied()).collect();
         let open_sessions = native_open_sessions_v1(&state);
         let claims_with_open_disputes: BTreeSet<Hash64> = open_sessions.iter().map(|(claim, _)| *claim).collect();
         let rules = NativeFactRulesV1 {
@@ -527,7 +580,17 @@ impl VirtualStateProcessor {
         let mut facts: Vec<MatureUsefulWorkV1> = Vec::new();
         let mut skipped = SkippedEvidenceV1::default();
         for row in rows.iter().filter(|r| r.hash != pruning) {
-            let (block_facts, block_skipped) = native_facts_and_skips_v1(&rules, row.evidence(), &voided, (row.daa, row.blue));
+            let (mut block_facts, block_skipped) =
+                native_facts_and_skips_with_native39_v1(&rules, row.evidence(), &voided, &native39_revoked, (row.daa, row.blue));
+            if let Some(view) = claim_local_checkpoint.as_mut() {
+                match claim_local_fact_scopes_v1(view, &state, params, sink_daa, row.evidence(), &mut block_facts) {
+                    Ok(()) => {}
+                    Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)) => {
+                        return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+                    }
+                    Err(_) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(row.hash))),
+                }
+            }
             facts.extend(block_facts);
             skipped.add(&block_skipped);
         }
@@ -538,10 +601,102 @@ impl VirtualStateProcessor {
             }
         }
 
-        // 6. The lifecycle question, once: an effect at `blue` is closed iff every claim accepted at or before it is
-        // resolved (Voided, or Final with its trace retention lapsed) and no dispute session names a claim at or before it
-        // (a session whose claim is gone is open for every effect). Claims already retired are absent from state and
-        // therefore closed.
+        // Native193 is the actual rooted accepted-quantum journal, retained
+        // across a real pruning boundary. A missing delta is never fabricated.
+        // Conflicting descriptions of one canonical quantum fail closed.
+        if !native39_anchors.is_empty() || !closed_facts.is_empty() {
+            use kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_fact_v1;
+            let dedup_count = match facts.len().checked_add(additional) {
+                Some(n) => n,
+                None => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
+            };
+            let dedup_bytes =
+                match (dedup_count as u64).checked_mul(kaspa_consensus_core::palw_native_resource_v1::btree_node_envelope_bytes_v1::<
+                    Hash64,
+                    (MatureUsefulWorkV1, bool),
+                >() as u64)
+                {
+                    Some(n) => n,
+                    None => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
+                };
+            let _dedup_lease = match kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(dedup_bytes) {
+                Ok(lease) => lease,
+                Err(_) => return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink))),
+            };
+            let mut seen = std::collections::BTreeMap::<Hash64, (MatureUsefulWorkV1, bool)>::new();
+            for fact in &facts {
+                seen.entry(fact.identity).and_modify(|(old, conflict)| *conflict |= *old != *fact).or_insert((*fact, false));
+            }
+            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: sink,
+                daa_score: sink_daa,
+                blue_score: sink_blue,
+                subsidy: 0,
+            };
+            for (_, anchor) in native39_anchors.iter() {
+                if native39_revoked.contains(&anchor.receipt) {
+                    continue;
+                }
+                if claim_local_checkpoint.as_mut().is_some_and(|view| {
+                    !view.credit_eligible_v1(kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalWorkRefV1::NativeMining39 {
+                        claim: anchor.claim,
+                        work: anchor.work,
+                        quantum: anchor.quantum,
+                    })
+                }) {
+                    continue;
+                }
+                let fact = match native39_frontier_fact_v1(&state, params, anchor, &point) {
+                    Ok(Some(fact)) => fact,
+                    Ok(None) => continue,
+                    Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)) => {
+                        return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+                    }
+                    Err(_) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(sink))),
+                };
+                match seen.get(&fact.identity) {
+                    Some((old, conflict)) if *conflict || *old != fact => {
+                        return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(anchor.anchor)));
+                    }
+                    Some(_) => {}
+                    None => {
+                        seen.insert(fact.identity, (fact, false));
+                        facts.push(fact);
+                    }
+                }
+            }
+            for (_, closed) in closed_facts.iter() {
+                let fact = closed.fact;
+                let revoked = match closed.origin.family {
+                    kaspa_consensus_core::palw_native_closed_facts_v1::ClosedFactFamilyV1::NativeMining39 => {
+                        kaspa_consensus_core::palw_native_receipt_v39::native_mining_convicted_v39(&state, &closed.origin.subject)
+                    }
+                    _ => voided.contains(&closed.origin.subject),
+                };
+                if revoked {
+                    return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(closed.closed_at.block)));
+                }
+                // A sealed CLOSED decision already validated the whole source
+                // closure before material retired. A missing current raw claim
+                // is never an optimistic new approval.
+                match seen.get(&fact.identity) {
+                    Some((old, conflict)) if *conflict || *old != fact => {
+                        return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(fact.anchor)));
+                    }
+                    Some(_) => {}
+                    None => {
+                        seen.insert(fact.identity, (fact, false));
+                        facts.push(fact);
+                    }
+                }
+            }
+        }
+
+        // 6. Below the stage-2 fence, retain the original global lifecycle hold.
+        // Stage 2 instead requires the checked checkpoint to preserve every
+        // outstanding liability's actual material through this effect. Ordinary
+        // carrier settlement and claim-scoped computation credit stay separate;
+        // the latter was filtered above by its own dependency closure.
         let open_from = native_open_from_v1(
             state.claims_iter().map(|(id, c)| {
                 (c.accepted_blue_score, c.phase.clone(), native_effective_retention_v1(&state, params, id, c).unwrap_or(u64::MAX))
@@ -558,10 +713,91 @@ impl VirtualStateProcessor {
                 daa: row.daa,
                 blue: row.blue,
                 frontier_covers: frontier_on_branch && frontier_blue >= row.blue,
-                lifecycle_closed: row.blue < open_from,
+                lifecycle_closed: claim_local_checkpoint
+                    .as_ref()
+                    .map_or_else(|| row.blue < open_from, |view| view.lifecycle_preserved_through_v1(row.blue)),
             })
             .collect();
-        let prefix = certify_native_prefix_v1(retirement.settlement, &effects, sink_daa, &facts);
+        let mut prefix = certify_native_prefix_v1(retirement.settlement, &effects, sink_daa, &facts);
+        // A rooted exact-policy historical certificate supplies a closed prefix
+        // after finite native193 GC. It never supplies additive work to a newer
+        // effect, and an execution header must still be checked on this walk.
+        let archived =
+            match kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::read_native39_settlement_checkpoint_v1(&state) {
+                Ok(row) => row,
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_)) => {
+                    return stopped(result, gap(HistoryGapV1::NativeCapacityUnavailable, Some(sink)));
+                }
+                Err(_) => return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(sink))),
+            };
+        if let Some(archived) = archived.as_ref() {
+            if archived.ruleset != self.palw_native_ruleset_id
+                || archived.policy_id != retirement.settlement.id()
+                || archived.retirement_daa != retirement.activation.daa_score()
+            {
+                return stopped(result, gap(HistoryGapV1::PersistedSnapshotIncompatible, Some(archived.point.block)));
+            }
+            if let Some(index) = rows.iter().rev().position(|row| row.hash == archived.effect.block) {
+                let row = &rows[rows.len() - 1 - index];
+                let headers = || -> Option<bool> {
+                    let point = self.headers_store.get_header(archived.point.block).ok()?;
+                    let parent = self.headers_store.get_header(archived.parent.block).ok()?;
+                    Some(
+                        row.daa == archived.effect.daa_score
+                            && row.blue == archived.effect.blue_score
+                            && point.daa_score == archived.point.daa_score
+                            && point.blue_score == archived.point.blue_score
+                            && parent.daa_score == archived.parent.daa_score
+                            && parent.blue_score == archived.parent.blue_score
+                            && self.ghostdag_store.get_selected_parent(archived.point.block).ok()? == archived.parent.block
+                            && point.palw_state_root == archived.parent_committed_root_v1(self.palw_fork_choice_commitment_v1)
+                            && self.reachability_service.try_is_chain_ancestor_of(archived.effect.block, archived.point.block).ok()?
+                            && self.reachability_service.try_is_chain_ancestor_of(archived.point.block, sink).ok()?,
+                    )
+                };
+                if headers() != Some(true) {
+                    return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(archived.point.block)));
+                }
+                if archived.effect.daa_score < self.evm_activation_daa_score
+                    || frontier_blue < archived.frontier_blue
+                    || !effects[index].frontier_covers
+                {
+                    return stopped(result, gap(HistoryGapV1::RootChainBroken, Some(archived.effect.block)));
+                }
+                if prefix.safe.is_none_or(|current| current < index) {
+                    prefix.safe = Some(index);
+                    prefix.evidence = kaspa_consensus_core::palw_native_settlement_v1::SettlementEvidenceV1 {
+                        depth: archived.depth,
+                        work: archived.work,
+                    };
+                    prefix.stop = None;
+                    for (next, effect) in effects.iter().copied().enumerate().skip(index + 1) {
+                        match kaspa_consensus_core::palw_native_settlement_v1::certify_native_effect_v1(
+                            retirement.settlement,
+                            (effect.daa, effect.blue),
+                            sink_daa,
+                            true,
+                            effect.frontier_covers,
+                            effect.lifecycle_closed,
+                            true,
+                            &facts,
+                        ) {
+                            Ok(evidence) => {
+                                prefix.safe = Some(next);
+                                prefix.evidence = evidence;
+                            }
+                            Err(stop) => {
+                                prefix.stop = Some(stop);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            // An archived effect older than the actual pruning point cannot
+            // certify the newer checkpoint or create a fictitious EVM row.
+        }
+
         result.stop = prefix.stop;
         if let Some(index) = prefix.safe {
             result.safe = Some(rows[rows.len() - 1 - index].hash);
@@ -598,6 +834,7 @@ impl VirtualStateProcessor {
                 frontier_on_branch,
                 skipped,
                 _resource_lease: resource_lease,
+                _claim_local_checkpoint: claim_local_checkpoint,
             })),
         }
     }
@@ -859,4 +1096,85 @@ mod tests {
             _resource_lease: None,
         }
     }
+}
+
+/// Bind evidence to its actual claim/quantum namespace. A carrier's ordinary
+/// transaction may settle under a material-bearing checkpoint while dependent
+/// computation credit remains held. No second work or maturity is invented.
+fn claim_local_fact_scopes_v1(
+    view: &mut kaspa_consensus_core::palw_claim_local_v1::PalwOwnedValidatedClaimCheckpointV1,
+    state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+    params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+    now: u64,
+    evidence: &NativeDeltaEvidenceV1,
+    facts: &mut Vec<MatureUsefulWorkV1>,
+) -> Result<(), kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+    use kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalWorkRefV1 as W;
+    use kaspa_consensus_core::palw_native_settlement_v1::fp_slice_identity;
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimLocalSettlementV1 as Decision, palw_claim_local_recorded_settlement_v1};
+    let mut i = 0;
+    while i < facts.len() {
+        let mut allowed = true;
+        let mut found = false;
+        let mut until = 0;
+        let identity = facts[i].identity;
+        {
+            // End only the closure's mutable borrows before native39 fact checks;
+            // no owned native lease/material is dropped at this scope boundary.
+            let mut consider = |id: Hash64,
+                                claim: &kaspa_consensus_core::palw_state_v2::PalwClaimStateV2|
+             -> Result<(), kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+                found = true;
+                let same_live = state.claim(&id).is_some_and(|live| {
+                    live.accepted_daa == claim.accepted_daa && live.accepted_blue_score == claim.accepted_blue_score
+                });
+                if same_live
+                    && (!view.contains_v1(W::ChainClaim { claim: id }) || !view.credit_eligible_v1(W::ChainClaim { claim: id }))
+                {
+                    allowed = false;
+                    return Ok(());
+                }
+                match palw_claim_local_recorded_settlement_v1(state, params, id, claim, now)? {
+                    Decision::Settled => {}
+                    Decision::Held { until_daa } if until_daa > now && until_daa < u64::MAX => {
+                        until = until.max(until_daa.saturating_add(1))
+                    }
+                    _ => allowed = false,
+                }
+                Ok(())
+            };
+            for (id, claim) in &evidence.finalized_attempts {
+                if claim.work_id == Some(identity) {
+                    consider(*id, claim)?;
+                }
+            }
+            for id in &evidence.certified_claims {
+                if let Some(claim) = state.claim(id)
+                    && claim.work_id == Some(identity)
+                {
+                    consider(*id, claim)?;
+                }
+            }
+            for (id, claim, quanta) in &evidence.fp_spends {
+                if let Some(work) = claim.work_id
+                    && quanta.iter().any(|q| fp_slice_identity(&work, *q) == identity)
+                {
+                    consider(*id, claim)?;
+                }
+            }
+        }
+        for q in &evidence.native39_quanta {
+            if fp_slice_identity(&q.work_id, q.quantum) == identity {
+                found = true;
+                allowed &= view.credit_eligible_v1(W::NativeMining39 { claim: q.claim, work: q.work_id, quantum: q.quantum });
+            }
+        }
+        if found && allowed {
+            facts[i].matured_daa = facts[i].matured_daa.max(until);
+            i += 1
+        } else {
+            facts.swap_remove(i);
+        }
+    }
+    Ok(())
 }

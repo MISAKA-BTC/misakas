@@ -1,7 +1,7 @@
 //! Ordinary node fold, public op-211 replies and independent source replay9.
 //! Synthetic sparse graph evidence is not real checkpoint fidelity or full RFC.
 mod actual_outsider;
-mod funded11;
+pub(crate) mod funded11;
 mod real_checkpoint;
 mod stage14;
 use super::*;

@@ -15,6 +15,8 @@ use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+mod tx_id_projection;
+
 pub trait BlockTransactionsStoreReader {
     fn get(&self, hash: BlockHash) -> Result<kaspa_consensus_core::block::BlockTransactionsV3, StoreError>;
 }
@@ -30,18 +32,26 @@ struct BlockBody(kaspa_consensus_core::block::BlockTransactionsV3);
 
 impl MemSizeEstimator for BlockBody {
     fn estimate_mem_bytes(&self) -> usize {
-        const NORMAL_SIG_SIZE: usize = 66;
-        let (inputs, outputs) = self.0.iter().fold((0, 0), |(ins, outs), tx| (ins + tx.inputs.len(), outs + tx.outputs.len()));
-        // TODO: consider tracking transactions by bytes accurately (preferably by saving the size in a field)
-        // We avoid zooming in another level and counting exact bytes for sigs and scripts for performance reasons.
-        // Outliers with longer signatures are rare enough and their size is eventually bounded by mempool standards
-        // or in the worst case by max block mass.
-        // A similar argument holds for spk within outputs, but in this case the constant is already counted through the SmallVec used within.
-        inputs * (size_of::<TransactionInput>() + NORMAL_SIG_SIZE)
-            + outputs * size_of::<TransactionOutput>()
-            + self.0.len() * size_of::<Transaction>()
-            + size_of::<Vec<Transaction>>()
-            + size_of::<Self>()
+        // This is the immutable allocation retained by a cache entry, not a
+        // serialized-length estimate. PQ P2PKH witnesses are normally 7,226 B,
+        // and their 69 B output scripts spill the 35 B inline SmallVec.
+        let mut bytes = size_of::<Self>()
+            .saturating_add(size_of::<Vec<Transaction>>())
+            .saturating_add(2 * size_of::<usize>()) // Arc strong/weak counters
+            .saturating_add(self.0.capacity().saturating_mul(size_of::<Transaction>()));
+        for tx in self.0.iter() {
+            bytes = bytes
+                .saturating_add(tx.inputs.capacity().saturating_mul(size_of::<TransactionInput>()))
+                .saturating_add(tx.outputs.capacity().saturating_mul(size_of::<TransactionOutput>()))
+                .saturating_add(tx.payload.capacity());
+            for input in &tx.inputs {
+                bytes = bytes.saturating_add(input.signature_script.capacity());
+            }
+            for output in &tx.outputs {
+                bytes = bytes.saturating_add(output.script_public_key.heap_capacity_bytes());
+            }
+        }
+        bytes
     }
 }
 
@@ -59,6 +69,44 @@ impl DbBlockTransactionsStore {
 
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
         Self::new(Arc::clone(&self.db), cache_policy)
+    }
+
+    /// Read stored cached IDs without cold-decoding a transaction body. A warm
+    /// Arc cache hit is borrowed; a cold row remains pinned through both scans.
+    /// This ticket covers only the newly owned IDs, not RocksDB pin/cache memory.
+    pub fn rpc_transaction_ids_v1(
+        &self,
+        hash: BlockHash,
+    ) -> Result<kaspa_consensus_core::block::RetainedTransactionIdsV1, StoreError> {
+        use kaspa_consensus_core::block::RetainedTransactionIdsV1;
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        let reserve = |bytes| {
+            global_memory_budget()
+                .try_reserve(MemoryClass::Snapshot, bytes)
+                .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))
+        };
+        if let Some(body) = self.access.read_from_cache(hash) {
+            let bytes = tx_id_projection::id_reservation_bytes::<kaspa_consensus_core::tx::TransactionId>(body.0.len())
+                .ok_or_else(|| StoreError::LocalResourceUnavailable("transaction IDs allocation overflow".into()))?;
+            let mut ids = RetainedTransactionIdsV1 { ids: Vec::new(), memory: Some(reserve(bytes)?) };
+            ids.ids.try_reserve_exact(body.0.len()).map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))?;
+            ids.ids.extend(body.0.iter().map(Transaction::id));
+            ids.memory.as_ref().unwrap().materialized();
+            return Ok(ids);
+        }
+        let prefix: Vec<u8> = DatabaseStorePrefixes::BlockTransactions.into();
+        let key = kaspa_database::prelude::DbKey::new(&prefix, hash);
+        let bytes = self.db.get_pinned(&key)?.ok_or(StoreError::KeyNotFound(key))?;
+        let ids =
+            tx_id_projection::project_ids(&bytes, reserve, kaspa_consensus_core::tx::TransactionId::from_bytes).map_err(|why| {
+                match why {
+                    tx_id_projection::ProjectionError::Codec(error) => StoreError::DataInconsistency(error.to_string()),
+                    tx_id_projection::ProjectionError::Capacity(error) => error,
+                    tx_id_projection::ProjectionError::Allocation(error) => StoreError::LocalResourceUnavailable(error.to_string()),
+                }
+            })?;
+        ids.lease.materialized();
+        Ok(RetainedTransactionIdsV1 { ids: ids.ids, memory: Some(ids.lease) })
     }
 
     pub fn has(&self, hash: BlockHash) -> Result<bool, StoreError> {
@@ -250,3 +298,11 @@ mod archive_tests {
         assert!(archived_transaction_wire_v2(&bad, 0).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "block_transactions/capacity_weight_tests.rs"]
+mod capacity_weight_tests;
+
+#[cfg(test)]
+#[path = "block_transactions/tx_id_projection_tests.rs"]
+mod tx_id_projection_tests;

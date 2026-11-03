@@ -3,7 +3,8 @@
 //! Pure rules. The processor and the fold read them only past `palw_tir_public_conviction_v1` (the fence that owns the public
 //! original TFP1 route the funded TFO1 carrier wraps; `None` on every preset). No fence of its own is added: the funded original is
 //! a sub-route of that public original route. Rows are installed only by the funded-original coordinator (round 2,
-//! `palw_funded_original_coordinator_fold_v1.rs`), whose schedule is typed-missing in production, so no row exists on any network.
+//! `palw_funded_original_coordinator_fold_v1.rs`). A row is installed only after that coordinator resolves a schedule, which in
+//! production happens only while `tir_public_conviction_active` is set.
 //!
 //! What this module decides, and what it does not:
 //! * **The row** ([`PalwFundedEscrowRowV1`]) records the actual funding outpoint, its amount, the payer's key id and native return
@@ -17,9 +18,9 @@
 //!   spendable by the payer from the next block on.
 //! * **The qualified spend** checks natively — against the rooted row only — the exact escrow input, the payee/return outputs,
 //!   the amounts and the change. It never skips a script check and never writes a signature cache: the escrow output is the
-//!   payer's own P2PKH, so its ordinary signature check still runs. The ONLY path that works now is the payer return after the hard
-//!   deadline with no open liability. Every payee path needs the settlement fee schedule, which is a typed-missing parameter
-//!   ([`PalwEscrowFeeScheduleV1`] has no constructible value): amounts and fees are NOT adopted (ADR-0202 "承認の範囲").
+//!   payer's own P2PKH, so its ordinary signature check still runs. The payer return after the hard deadline with no open liability
+//!   needs no schedule. A payee path needs [`palw_escrow_fee_schedule_v1`], which is present only for a row whose admission, past
+//!   the conviction fence, recorded the schedule fee and the seat and relay payouts. Below that fence the resolver stays `None`.
 //!
 //! Never: a ZK/succinct proof, a caller-supplied `paid` flag, a caller DTO promoted to authority, a zero-filled missing term.
 
@@ -34,6 +35,9 @@ use std::collections::{BTreeMap, HashMap};
 pub const PALW_CARRIAGE_FUNDED_ESCROW_TAIL_V1: u8 = 0xFB;
 /// The row format's version.
 pub const PALW_FUNDED_ESCROW_ROW_VERSION_V1: u16 = 1;
+/// Same canonical row codec, exact native original-archive receipt required.
+/// Version1 meanings and settlement split are unchanged.
+pub const PALW_FUNDED_ESCROW_ORIGINAL_ARCHIVE_ROW_VERSION_V1: u16 = 2;
 
 /// Why a row, a transition or a spend is refused. Every value is a named refusal; none is a default.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +120,13 @@ pub struct PalwFundedEscrowRowV1 {
     pub settled_by: Option<TransactionId>,
     /// **G14 r5:** the accepting DAA of the settling spend (`0` while unsettled) — what the post-pruning retirement counts from.
     pub settled_daa: u64,
+    /// The admitting schedule's fee, sompi. `0` below `palw_tir_public_conviction_v1` and on every row that admission did not price.
+    /// Not a new tariff: it is the fee of the schedule that admitted the row.
+    pub fee_sompi: u64,
+    /// P2PKH-MLDSA87 payload of the seat the work due pays. `Hash64::default()` when admission did not record one.
+    pub seat_payee: Hash64,
+    /// P2PKH-MLDSA87 payload of the relay the relay due pays. `Hash64::default()` when admission did not record one.
+    pub relay_payee: Hash64,
 }
 
 impl PalwFundedEscrowRowV1 {
@@ -148,6 +159,9 @@ impl PalwFundedEscrowRowV1 {
             liability_open,
             settled_by: None,
             settled_daa: 0,
+            fee_sompi: 0,
+            seat_payee: Hash64::default(),
+            relay_payee: Hash64::default(),
         };
         row.check_v1()?;
         Ok(row)
@@ -174,10 +188,36 @@ impl PalwFundedEscrowRowV1 {
 
     /// The row's own invariants: shape, conservation and once-only.
     pub fn check_v1(&self) -> Result<(), PalwEscrowRefusalV1> {
-        if self.version != PALW_FUNDED_ESCROW_ROW_VERSION_V1 || self.amount_sompi == 0 || self.accepted_daa > self.hard_deadline_daa {
+        if !matches!(self.version, PALW_FUNDED_ESCROW_ROW_VERSION_V1 | PALW_FUNDED_ESCROW_ORIGINAL_ARCHIVE_ROW_VERSION_V1)
+            || self.amount_sompi == 0
+            || self.accepted_daa > self.hard_deadline_daa
+        {
             return Err(PalwEscrowRefusalV1::RowShape);
         }
         let unreleased = self.unreleased_v1()?;
+        // An admitted schedule is immutable rooted policy. Restore must not
+        // accept a fee without its payees or relabel an earlier payment as a
+        // burn just because the total consumed value is unchanged.
+        if self.fee_sompi == 0 {
+            if self.seat_payee != Hash64::default() || self.relay_payee != Hash64::default() {
+                return Err(PalwEscrowRefusalV1::RowShape);
+            }
+        } else {
+            if self.fee_sompi > self.amount_sompi {
+                return Err(PalwEscrowRefusalV1::Conservation);
+            }
+            if self.seat_payee == Hash64::default() || self.relay_payee == Hash64::default() {
+                return Err(PalwEscrowRefusalV1::SettlementScheduleMissing);
+            }
+            // The pinned production schedule is work, relay, burn. Inspect its
+            // fixed counters directly; row validation must not allocate a dues
+            // vector for every row in a carriage scan.
+            let [work, relay, burn] = crate::palw_g14_values_v1::palw_g14_escrow_split_v1(self.fee_sompi);
+            let payments = work.checked_add(relay).ok_or(PalwEscrowRefusalV1::Conservation)?;
+            if ![(0, 0), (work, 0), (payments, 0), (payments, burn)].contains(&(self.paid_sompi, self.burned_sompi)) {
+                return Err(PalwEscrowRefusalV1::SettlementRuleMismatch);
+            }
+        }
         match self.settled_by {
             // One spend ends the row: the whole value is accounted in it, nothing is owed after it, and it carries its DAA.
             Some(_) if unreleased != 0 || self.liability_open || self.settled_daa < self.accepted_daa => {
@@ -199,6 +239,9 @@ impl PalwFundedEscrowRowV1 {
             self.refund_payload,
             self.accepted_daa,
             self.hard_deadline_daa,
+            self.fee_sompi,
+            self.seat_payee,
+            self.relay_payee,
         ) == (
             other.version,
             other.contract_id,
@@ -208,6 +251,9 @@ impl PalwFundedEscrowRowV1 {
             other.refund_payload,
             other.accepted_daa,
             other.hard_deadline_daa,
+            other.fee_sompi,
+            other.seat_payee,
+            other.relay_payee,
         )
     }
 }
@@ -366,11 +412,10 @@ pub struct PalwEscrowDueV1 {
     pub amount_sompi: u64,
 }
 
-/// **The settlement fee schedule — TYPED-MISSING in production.** Amounts, fees, draw limits, payee shares and the derivation of
-/// dues from rooted receipts are not adopted (ADR-0202 承認の範囲; RFC-0035 §7.5 "数値未決なら受付拒否を維持する"). The fields are
-/// private and the only constructor is `#[cfg(test)]`, so no production value can exist: every path that needs it refuses with
-/// [`PalwEscrowRefusalV1::SettlementScheduleMissing`] ([`palw_escrow_fee_schedule_v1`] always returns `None`). A reviewed change
-/// that adopts the numbers adds the production derivation here.
+/// **The settlement fee schedule.** Private fields. [`palw_escrow_fee_schedule_v1`] builds one from the pinned split
+/// ([`crate::palw_g14_values_v1::palw_g14_escrow_schedule_estimate_v1`]) only for a row whose admission recorded a fee and both
+/// payees. That write happens only while `tir_public_conviction_active` is set. Below the fence, and for a row without those
+/// fields, the resolver stays `None` and every payee path refuses [`PalwEscrowRefusalV1::SettlementScheduleMissing`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwEscrowFeeScheduleV1 {
     contract_id: Hash64,
@@ -380,7 +425,8 @@ pub struct PalwEscrowFeeScheduleV1 {
 
 impl PalwEscrowFeeScheduleV1 {
     /// **Production constructor (lane VAL, 2026-10-26)**: refuses no dues, more than `max_dues`, a zero amount, a burn with a payee
-    /// or a payment without one, and an overflowing total. Not read by any preset (`palw_escrow_fee_schedule_v1` stays `None`).
+    /// or a payment without one, and an overflowing total. [`palw_escrow_fee_schedule_v1`] calls it through the pinned estimate
+    /// only for a row admitted past the conviction fence.
     pub fn new_v1(contract_id: Hash64, dues: Vec<PalwEscrowDueV1>, max_dues: usize) -> Result<Self, &'static str> {
         if dues.is_empty() || dues.len() > max_dues {
             return Err("escrow schedule: due count out of range");
@@ -404,17 +450,24 @@ impl PalwEscrowFeeScheduleV1 {
     }
 }
 
-/// **The production schedule source: none.** Always `None` until the numbers are adopted; the processor passes this to every
-/// qualified-spend check, so every payee/burn/partial path refuses on every network. Lane VAL estimate of the shares (not wired):
-/// [`crate::palw_g14_values_v1::palw_g14_escrow_split_v1`].
-pub fn palw_escrow_fee_schedule_v1(_row: &PalwFundedEscrowRowV1) -> Option<&'static PalwEscrowFeeScheduleV1> {
-    None
+/// **The production schedule for one adopted row.** `Some` only when admission, past `palw_tir_public_conviction_v1`, recorded this
+/// row's fee and both payees. The dues are [`crate::palw_g14_values_v1::palw_g14_escrow_schedule_estimate_v1`] for that contract,
+/// fee, seat payee and relay payee; a zero due is dropped there. There is no escrow-settlement fence accessor on this function:
+/// the conviction flag is the fence the coordinator already reads, and a row carries the fee and payees only when that flag was
+/// set. Below the fence, and while those fields are unset, this stays `None`. A missing payer, an overflow, a foreign payee and a
+/// partial spend are still refused by [`palw_escrow_qualified_spend_v1`].
+pub fn palw_escrow_fee_schedule_v1(row: &PalwFundedEscrowRowV1) -> Option<PalwEscrowFeeScheduleV1> {
+    if row.fee_sompi == 0 || row.seat_payee == Hash64::default() || row.relay_payee == Hash64::default() {
+        return None;
+    }
+    crate::palw_g14_values_v1::palw_g14_escrow_schedule_estimate_v1(row.contract_id, row.fee_sompi, row.seat_payee, row.relay_payee)
+        .ok()
 }
 
 /// Which settlement a qualified spend performs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalwEscrowSpendPathV1 {
-    /// The hard deadline has passed with no open liability: the whole unreleased value returns to the payer's rooted payload.
+    /// The hard deadline has passed with no open liability and all recorded fees discharged: the unreleased capital returns to the payer.
     PayerReturnAfterHardDeadline,
     /// **G14 r5:** the schedule's next dues are paid / burned; the rest either continues as escrow (change-back output, liability
     /// still open) or returns to the payer (liability resolved: the row settles).
@@ -445,14 +498,42 @@ fn payload_of(output: &crate::tx::TransactionOutput) -> Option<Hash64> {
     crate::mldsa87_primitives::p2pkh_mldsa87_payload(&output.script_public_key)
 }
 
+/// Recover the due cursor from both monetary counters. Equal aggregate values
+/// do not make a real payee transfer interchangeable with destruction.
+fn schedule_prefix_v1(row: &PalwFundedEscrowRowV1, schedule: &PalwEscrowFeeScheduleV1) -> Result<usize, PalwEscrowRefusalV1> {
+    if schedule.contract_id != row.contract_id {
+        return Err(PalwEscrowRefusalV1::SettlementRuleMismatch);
+    }
+    let (mut paid, mut burned) = (0u64, 0u64);
+    for (index, due) in schedule.dues.iter().enumerate() {
+        if (paid, burned) == (row.paid_sompi, row.burned_sompi) {
+            return Ok(index);
+        }
+        match (due.kind, due.payee) {
+            (PalwEscrowDueKindV1::Burn, None) => {
+                burned = burned.checked_add(due.amount_sompi).ok_or(PalwEscrowRefusalV1::Conservation)?;
+            }
+            (PalwEscrowDueKindV1::WorkPayment | PalwEscrowDueKindV1::CourtFee, Some(_)) => {
+                paid = paid.checked_add(due.amount_sompi).ok_or(PalwEscrowRefusalV1::Conservation)?;
+            }
+            _ => return Err(PalwEscrowRefusalV1::SettlementRuleMismatch),
+        }
+    }
+    if (paid, burned) == (row.paid_sompi, row.burned_sompi) {
+        Ok(schedule.dues.len())
+    } else {
+        Err(PalwEscrowRefusalV1::SettlementRuleMismatch)
+    }
+}
+
 /// **Is `tx`'s spend of `row`'s outpoint qualified at `daa`?** Native check against the rooted row (and, for a settlement, the
 /// schedule) only:
 /// * exactly one input spends the row's current outpoint, and it is input 0 (audit A-2: one escrow row per transaction), and its
 ///   populated entry (`input_amounts`, aligned to `tx.inputs`)
 ///   carries exactly the row's unreleased value;
-/// * after the hard deadline with no open liability: the **payer return** — output 0 pays exactly the unreleased value to the
-///   rooted return payload (no schedule needed);
-/// * otherwise a **settlement**, which needs `schedule` (typed-missing in production ⇒ `SettlementScheduleMissing`): the row's
+/// * after the hard deadline with no open liability and all recorded fees discharged: the **payer return** — output 0 pays
+///   exactly the unreleased capital to the rooted return payload (no remaining schedule needed);
+/// * otherwise a **settlement**, which needs `schedule` (`None` below the conviction fence ⇒ `SettlementScheduleMissing`): the row's
 ///   consumed value must be a prefix of the schedule's dues; every remaining due is discharged — a paying due by the next output
 ///   (exact payee payload and amount, in order), a burn by withholding — then, if value remains, the next output pays it to the
 ///   rooted payload: a **change-back** that continues the escrow while the liability is open, or the **return** that settles it
@@ -483,7 +564,13 @@ pub fn palw_escrow_qualified_spend_v1(
     if input_amounts.len() != tx.inputs.len() || input_amounts[input_index] != unreleased {
         return Err(PalwEscrowRefusalV1::EntryMismatch);
     }
-    let payer_return = !row.liability_open && daa >= row.hard_deadline_daa;
+    // Native fee dues recorded at admission remain payable after work/holding
+    // liability ends. A direct return may release only capital whose recorded
+    // dues were already paid/burned; otherwise the settlement path discharges
+    // those dues and returns the remainder in the same qualified spend. Legacy
+    // rows with no recorded native fee retain their direct return rule.
+    let recorded_fees_discharged = row.fee_sompi == 0 || row.consumed_v1()? == row.fee_sompi;
+    let payer_return = !row.liability_open && daa >= row.hard_deadline_daa && recorded_fees_discharged;
     let path = if payer_return { PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline } else { PalwEscrowSpendPathV1::Settlement };
     // Outputs the escrow funds come first; `next` walks them.
     let mut next = 0usize;
@@ -498,25 +585,8 @@ pub fn palw_escrow_qualified_spend_v1(
         returned_now = unreleased;
     } else {
         let schedule = schedule.ok_or(PalwEscrowRefusalV1::SettlementScheduleMissing)?;
-        if schedule.contract_id != row.contract_id {
-            return Err(PalwEscrowRefusalV1::SettlementRuleMismatch);
-        }
-        // Once-only: the consumed value must end exactly on a due boundary; the dues after it are the ones still owed.
-        let consumed = row.consumed_v1()?;
-        let mut prefix = 0u64;
-        let mut first_open = None;
-        for (i, due) in schedule.dues.iter().enumerate() {
-            if prefix == consumed {
-                first_open = Some(i);
-                break;
-            }
-            prefix = prefix.checked_add(due.amount_sompi).ok_or(PalwEscrowRefusalV1::Conservation)?;
-        }
-        let first_open = match first_open {
-            Some(i) => i,
-            None if prefix == consumed => schedule.dues.len(),
-            None => return Err(PalwEscrowRefusalV1::SettlementRuleMismatch),
-        };
+        // Once-only: both paid and burned must match the exact discharged prefix.
+        let first_open = schedule_prefix_v1(row, schedule)?;
         for due in &schedule.dues[first_open..] {
             if due.amount_sompi == 0 {
                 return Err(PalwEscrowRefusalV1::SettlementRuleMismatch);
@@ -634,11 +704,41 @@ pub fn palw_escrow_relay_template_payload_v1(
 /// outpoint the carrier did not itself create, so an unproven contract cannot lock someone else's coins. The lock lasts for the
 /// rest of the mergeset only; the next block reads the rooted rows.
 pub fn palw_tfo1_provisional_lock_v1(tx: &Transaction) -> Option<TransactionOutpoint> {
-    use crate::palw_tir_funded_original_envelope_v1::{PalwTirFundedOriginalEnvelopeV1, is_funded_original_carrier_v1};
+    use crate::palw_tir_funded_original_envelope_v1::is_funded_original_carrier_v1;
     if !is_funded_original_carrier_v1(tx) {
         return None;
     }
-    let envelope = PalwTirFundedOriginalEnvelopeV1::decode_v1(&tx.payload).ok()?;
+    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(&tx.payload).ok()?;
+    envelope.inspect_carrier_v1(tx).ok().map(|facts| facts.outpoint())
+}
+
+/// Native caller resolves both wrapper fences. Funding always inspects the
+/// literal outer transaction's signed input scope and output, never a view.
+pub fn palw_wrapped_tfo1_provisional_lock_v1(
+    tx: &Transaction,
+    prefix_active: bool,
+    answer_active: bool,
+) -> Option<TransactionOutpoint> {
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
+        return None;
+    }
+    let payload = if tx.payload.starts_with(b"FPR2") {
+        if !prefix_active {
+            return None;
+        }
+        crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(&tx.payload).ok()?
+    } else {
+        tx.payload.as_slice()
+    };
+    let payload = if payload.starts_with(b"FPA1") {
+        if !answer_active {
+            return None;
+        }
+        crate::palw_fp_answer_accounting_v1::palw_fp_answer_envelope_view_v1(payload, u32::MAX as usize)?.inner
+    } else {
+        payload
+    };
+    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload).ok()?;
     envelope.inspect_carrier_v1(tx).ok().map(|facts| facts.outpoint())
 }
 
@@ -968,6 +1068,101 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn funded_escrow_prefix_distinguishes_real_payment_from_burn() {
+        let mut continued = row(true);
+        continued.funding_outpoint = TransactionOutpoint::new(h(79), 0);
+        continued.burned_sompi = 300; // Same aggregate as the first work due, wrong actual effect.
+        let schedule = PalwEscrowFeeScheduleV1::test_only_v1(continued.contract_id, first_dues());
+        let tx = spend_of(continued.funding_outpoint, vec![pay(12, 100), TransactionOutput::new(550, payer_spk())], 0);
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&continued, &tx, &[700], 500, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::SettlementRuleMismatch)
+        );
+        continued.paid_sompi = 300;
+        continued.burned_sompi = 0;
+        let plan = palw_escrow_qualified_spend_v1(&continued, &tx, &[700], 500, Some(&schedule)).unwrap();
+        assert_eq!((plan.paid_now, plan.burned_now, plan.continued_now), (100, 50, 550));
+    }
+
+    #[test]
+    fn funded_escrow_native_fee_must_settle_before_hard_return() {
+        let mut native = row(false);
+        native.fee_sompi = 300;
+        native.seat_payee = party(11);
+        native.relay_payee = party(12);
+        native.check_v1().unwrap();
+        let [work, relay, burn] = crate::palw_g14_values_v1::palw_g14_escrow_split_v1(native.fee_sompi);
+        assert!(work > 0 && relay > 0 && burn > 0);
+        let schedule = palw_escrow_fee_schedule_v1(&native).unwrap();
+        let full_return = spend_of(native.funding_outpoint, vec![TransactionOutput::new(1_000, payer_spk())], 0);
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&native, &full_return, &[1_000], native.hard_deadline_daa, None),
+            Err(PalwEscrowRefusalV1::SettlementScheduleMissing)
+        );
+        assert_eq!(
+            palw_escrow_qualified_spend_v1(&native, &full_return, &[1_000], native.hard_deadline_daa, Some(&schedule)),
+            Err(PalwEscrowRefusalV1::PayeeOutputMismatch),
+            "hard and closed work liability cannot cancel a recorded fee"
+        );
+        let settle_and_return =
+            spend_of(native.funding_outpoint, vec![pay(11, work), pay(12, relay), TransactionOutput::new(700, payer_spk())], 0);
+        let plan =
+            palw_escrow_qualified_spend_v1(&native, &settle_and_return, &[1_000], native.hard_deadline_daa, Some(&schedule)).unwrap();
+        assert_eq!(plan.path, PalwEscrowSpendPathV1::Settlement);
+        assert_eq!((plan.paid_now, plan.burned_now, plan.returned_now, plan.continued_now), (work + relay, burn, 700, 0));
+        assert!(plan.new.settled_by.is_some());
+        assert_eq!(plan.new.paid_sompi + plan.new.burned_sompi + plan.new.returned_sompi, native.amount_sompi);
+        let mut partial = native;
+        partial.funding_outpoint = TransactionOutpoint::new(h(79), 0);
+        partial.paid_sompi = work;
+        partial.check_v1().unwrap();
+        let unpaid = partial.unreleased_v1().unwrap();
+        let partial_return = spend_of(partial.funding_outpoint, vec![TransactionOutput::new(unpaid, payer_spk())], 0);
+        assert!(
+            palw_escrow_qualified_spend_v1(&partial, &partial_return, &[unpaid], partial.hard_deadline_daa, Some(&schedule)).is_err()
+        );
+        let finish = spend_of(partial.funding_outpoint, vec![pay(12, relay), TransactionOutput::new(700, payer_spk())], 0);
+        let finish = palw_escrow_qualified_spend_v1(&partial, &finish, &[unpaid], partial.hard_deadline_daa, Some(&schedule)).unwrap();
+        assert_eq!((finish.paid_now, finish.burned_now, finish.returned_now), (relay, burn, 700));
+        let mut paid = native;
+        paid.funding_outpoint = TransactionOutpoint::new(h(80), 0);
+        paid.paid_sompi = work + relay;
+        paid.burned_sompi = burn;
+        paid.check_v1().unwrap();
+        let capital_return = spend_of(paid.funding_outpoint, vec![TransactionOutput::new(700, payer_spk())], 0);
+        let returned = palw_escrow_qualified_spend_v1(&paid, &capital_return, &[700], paid.hard_deadline_daa, None).unwrap();
+        assert_eq!(returned.path, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+        assert_eq!((returned.new.paid_sompi, returned.new.burned_sompi, returned.returned_now), (work + relay, burn, 700));
+        let legacy = row(false);
+        let legacy_return = spend_of(legacy.funding_outpoint, vec![TransactionOutput::new(1_000, payer_spk())], 0);
+        let legacy_plan = palw_escrow_qualified_spend_v1(&legacy, &legacy_return, &[1_000], legacy.hard_deadline_daa, None).unwrap();
+        assert_eq!(legacy_plan.path, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+        assert_eq!(legacy_plan.returned_now, 1_000, "fee-zero legacy policy remains literal");
+    }
+
+    #[test]
+    fn funded_escrow_adopted_schedule_rejects_corrupt_accounting_on_restore() {
+        let mut admitted = row(true);
+        admitted.fee_sompi = 1_000;
+        admitted.seat_payee = party(11);
+        admitted.relay_payee = party(12);
+        let [work, _, _] = crate::palw_g14_values_v1::palw_g14_escrow_split_v1(admitted.fee_sompi);
+        admitted.paid_sompi = work;
+        admitted.check_v1().unwrap();
+        let mut corrupt = admitted;
+        corrupt.paid_sompi = 0;
+        corrupt.burned_sompi = work;
+        assert_eq!(corrupt.unreleased_v1(), admitted.unreleased_v1());
+        assert_eq!(corrupt.check_v1(), Err(PalwEscrowRefusalV1::SettlementRuleMismatch));
+        corrupt = admitted;
+        corrupt.relay_payee = Hash64::default();
+        assert_eq!(corrupt.check_v1(), Err(PalwEscrowRefusalV1::SettlementScheduleMissing));
+        corrupt = admitted;
+        corrupt.fee_sompi = corrupt.amount_sompi + 1;
+        assert_eq!(corrupt.check_v1(), Err(PalwEscrowRefusalV1::Conservation));
+    }
+
     /// **Work payment + court fee + burn + change back to escrow (partial payment), then the final payment + return.** Each step is
     /// a qualified spend checked against the rooted row and the schedule, conserves `in = paid + burned + returned + continued`,
     /// and its transition is one the row rules admit; the continuation re-locks the escrow on the change-back output.
@@ -981,7 +1176,20 @@ mod tests {
             palw_escrow_qualified_spend_v1(&r, &tx1, &[1_000, 20], 500, None),
             Err(PalwEscrowRefusalV1::SettlementScheduleMissing)
         );
-        assert_eq!(palw_escrow_fee_schedule_v1(&r), None);
+        assert_eq!(palw_escrow_fee_schedule_v1(&r), None, "a row admitted below the fence records no fee or payee");
+        let mut adopted = r;
+        adopted.fee_sompi = 1_000;
+        adopted.seat_payee = party(11);
+        adopted.relay_payee = party(12);
+        let pinned = palw_escrow_fee_schedule_v1(&adopted).expect("an adopted row resolves the pinned split");
+        assert_eq!(pinned.contract_id, r.contract_id);
+        let [work, relay, burn] = crate::palw_g14_values_v1::palw_g14_escrow_split_v1(1_000);
+        assert_eq!(
+            pinned.dues.iter().map(|due| due.amount_sompi).collect::<Vec<_>>(),
+            [work, relay, burn].into_iter().filter(|amount| *amount > 0).collect::<Vec<_>>()
+        );
+        adopted.relay_payee = Hash64::default();
+        assert_eq!(palw_escrow_fee_schedule_v1(&adopted), None, "a missing payee stays unresolved");
         let plan = palw_escrow_qualified_spend_v1(&r, &tx1, &[1_000, 20], 500, Some(&schedule)).unwrap();
         assert_eq!(plan.path, PalwEscrowSpendPathV1::Settlement);
         assert_eq!((plan.paid_now, plan.burned_now, plan.returned_now, plan.continued_now), (400, 50, 0, 550));

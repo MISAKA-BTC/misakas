@@ -7,6 +7,23 @@ pub(super) fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
+    let Some(span) = palw_claim_local_object_spans_v2::prepare(builder, ctx, object)? else {
+        return apply_object_observed_v2(builder, ctx, object);
+    };
+    let previous = builder.claim_local_object_scope_active;
+    builder.claim_local_object_scope_active = true;
+    let result = apply_object_observed_v2(builder, ctx, object);
+    builder.claim_local_object_scope_active = previous;
+    if result.is_ok() {
+        palw_claim_local_object_spans_v2::complete(builder, span);
+    }
+    result
+}
+fn apply_object_observed_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
     if builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty()) {
         let saved = builder.try_checkpoint()?;
         let previous = builder.court_end_evidence.clone();
@@ -32,14 +49,16 @@ fn apply_object_with_pair_v1(
     palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
     let paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
         if builder.extras.tir_public_originals.contains_key(claim));
-    if !paired {
+    let prefix_paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
+        if builder.extras.prefix_dependencies_v1.contains_key(claim));
+    if !paired && !prefix_paired {
         return apply_object_inner(builder, ctx, object);
     }
     // A prospective original is ONE native object. Failure after the ordinary
     // FP reservation/budget writes cannot leave an accepted unprotected claim.
     // `checkpoint()` is test-only on the integration line; production rollback goes through the native resource reservation.
     let saved = builder.try_checkpoint()?;
-    let result = match palw_tir_public_fold_v1::check_paired_original_v1(builder, object) {
+    let result = match if paired { palw_tir_public_fold_v1::check_paired_original_v1(builder, object) } else { Ok(()) } {
         Ok(()) => apply_object_inner(builder, ctx, object),
         Err(why) => Err(why),
     };
@@ -171,6 +190,7 @@ fn apply_object_inner(
         PalwConsensusObjectV2::SeatReadinessDemandedV1 { .. } => apply_object_batch_01_v1,
         PalwConsensusObjectV2::SeatReadinessAnsweredV1 { .. } => apply_object_batch_01_v1,
         PalwConsensusObjectV2::MaterialIntakeV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { .. } => apply_object_batch_01_v1,
         PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { .. } => apply_object_batch_01_v1,
         PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { .. } => apply_object_batch_01_v1,
         PalwConsensusObjectV2::RoutedStepAccusedV2 { .. } => apply_object_batch_02_v1,
@@ -876,6 +896,7 @@ fn apply_object_batch_01_v1(
                 class_id: claim.class_id,
                 artifact_root,
             };
+            let court_started = crate::palw_court_observation_v1::start_v1(ctx.block);
             let verdict = crate::palw_gdn_court_v2::palw_gdn_court_verdict_v2(accusation, &actual, ladder).map_err(|e| match e {
                 crate::palw_step_refute::memory_v2::PalwGdnCourtErrorV2::Resource(cause) => PalwStateV2Error::NativeResource(cause),
                 other => PalwStateV2Error::ShardCourt(other.to_string()),
@@ -892,6 +913,17 @@ fn apply_object_batch_01_v1(
                     return Err(PalwStateV2Error::ShardCourt("GDN terminal must never invent an attention dissection".into()));
                 }
             }
+            crate::palw_court_observation_v1::record_v1(
+                ctx.block,
+                claim_id,
+                claim.class_id,
+                243,
+                "GdnStep",
+                accusation.leaf_index,
+                verdict,
+                accusation.as_ref(),
+                court_started,
+            );
         }
         // RFC-0006 consumer v2 (tag 244): the router binding and the checkpoint / routed accusations.
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => {
@@ -1040,6 +1072,12 @@ fn apply_object_batch_01_v1(
         // is an accepted object; a refusal is an error.
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
             super::palw_court_shared_material_intake_fold_v1::material_intake(builder, ctx, intake)?;
+        }
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { control } => {
+            if !builder.params.family_supplier_active_at(ctx.daa_score) || !builder.extras.family_supplier_active {
+                return Err(PalwStateV2Error::CarriageInconsistent("family material dedicated fence dormant".into()));
+            }
+            super::palw_court_family_material_fold_v1::apply_family_material_v1(builder, ctx, control)?;
         }
         // Lane g14-fam-panelda (tag 233, ADR-0206): below `palw_panel_da_disclosure_v1` the acceptance gate drops it unjudged (A-2);
         // the fold re-checks the fence.
@@ -1616,7 +1654,7 @@ fn apply_object_batch_03_v1(
                     // every lock on the claim, so the parts that landed first are carried too.
                     let door = PalwLicenceDoorV1::ShardPart { quorum_per_shard: params.quorum_per_shard };
                     if builder.extras.audit_2026_09_23_active
-                        && !builder.receipt_set_is_backed(claim_id, &claim, &part.receipts, ctx.daa_score, door)
+                        && !builder.receipt_set_is_backed(claim_id, &claim, &part.receipts, ctx.daa_score, door)?
                     {
                         return Ok(());
                     }
@@ -1745,7 +1783,7 @@ fn apply_object_batch_03_v1(
                 // declaration's 100% check extends to (capability exposure is non-slashable
                 // standing, priced against the whole collateral as before).
                 let already = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                    builder.committed_at(bond, ctx.daa_score).saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
+                    builder.committed_at(bond, ctx.daa_score)?.saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
                 } else {
                     builder
                         .state
@@ -2530,7 +2568,7 @@ fn apply_object_batch_05_v1(
                 // them is refuted by the record. It pays what it tried to take: the same `reserved`
                 // the producer would have lost.
                 if builder.extras.audit_2026_09_23_active
-                    && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)
+                    && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?
                 {
                     return Ok(());
                 }
@@ -3131,7 +3169,7 @@ fn apply_object_batch_07_v1(
             // Audit #6: the full-replay seat is the whole colluding set of this door, so it must be
             // able to post the whole gain; if it cannot, the set is inert and the other doors stay open.
             if builder.extras.audit_2026_09_23_active
-                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)
+                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)?
             {
                 return Ok(());
             }
@@ -3926,6 +3964,13 @@ fn apply_object_batch_10_v1(
             public_job,
             eval,
         } => {
+            crate::palw_claim_local_v1::prefix_v1::check_admission_v1(
+                &builder.state,
+                builder.params,
+                ctx,
+                object,
+                builder.extras.prefix_dependencies_v1.get(claim_id),
+            )?;
             if builder.state.claims.contains_key(claim_id) {
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
             }
@@ -4099,11 +4144,7 @@ fn apply_object_batch_10_v1(
             // ADR-0074 Decision 6): a class whose free-prompt path no drill has certified takes
             // no free-prompt claim, so nothing it could not be convicted over ever licenses a
             // block.
-            if let Some(certified) = &builder.params.fp_certified_classes
-                && !certified.contains(class_id)
-                && !builder.state.fp_certified_classes.contains_key(class_id)
-                && !tir_fp_lane_covered_v1(builder, class_id)
-            {
+            if !palw_fp_lane_available_v1(&builder.state, builder.params, class_id, builder.extras.tir_public_conviction_active) {
                 return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
             }
             // **ADR-0082 Decision 10: what this claim is CREDITED for.**
@@ -4267,7 +4308,7 @@ fn apply_object_batch_10_v1(
             // ADR-0152 SR-7: past `palw_rcore_plus` the one committed ledger, with capability
             // exposure kept as this lane's own gate term (inside `committed` it would pin exit).
             let own = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                builder.committed_at(bond, ctx.daa_score)
+                builder.committed_at(bond, ctx.daa_score)?
             } else {
                 builder
                     .state
@@ -4278,7 +4319,7 @@ fn apply_object_batch_10_v1(
             let backed = own.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
             // Past the fence the one invariant's room (review M1) holds the declared term too.
             let ceiling = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                own.saturating_add(builder.gate_room(bond, ctx.daa_score, PalwRcoreGateV1::Work))
+                own.saturating_add(builder.gate_room(bond, ctx.daa_score, PalwRcoreGateV1::Work)?)
             } else {
                 (bond_record.collateral as u128)
                     .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
@@ -4375,7 +4416,7 @@ fn apply_object_batch_10_v1(
                 claim.trace_retention_daa = claim.trace_retention_daa.max(frame.frame_v1().plan_v1().terms.material_until_daa);
                 None
             } else {
-                builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?
+                Some(builder.prepare_staged_claim_for_budget_v1(*claim_id, &mut claim, public_job.as_deref())?)
             };
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
@@ -4390,7 +4431,11 @@ fn apply_object_batch_10_v1(
                 &claim.bond,
                 crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(quanta as u64),
             )?;
-            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
+            let retirement = match staged_contract.as_ref() {
+                Some(prepared) => prepared.retirement_v1(),
+                None => builder.prospective_retirement_v1(*claim_id, &claim, tir_original.as_ref())?,
+            };
+            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, *claim_id, &claim, quanta, &retirement)?;
             let budget_plan = match (&probation_ticket, budget_plan) {
                 (Some(ticket), Some(plan)) if ticket.weightless() => Some(plan.without_final_weight_v1()),
                 (_, plan) => plan,
@@ -4412,13 +4457,16 @@ fn apply_object_batch_10_v1(
                     public_job.as_deref(),
                 )?;
             }
-            builder.stamp_staged_claim_v1(*claim_id, staged_contract)?;
+            if let Some(prepared) = staged_contract {
+                prepared.install_v1(builder, *claim_id)?;
+            }
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire))?;
             }
             if let Some(plan) = budget_plan {
                 builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
             }
+            super::palw_claim_local_prefix_reservation_v1::admit(builder, ctx, *claim_id)?;
             if let Some(ticket) = probation_ticket {
                 super::palw_model_eligibility_fold_v1::eligibility_probation_commit_v1(builder, ctx, claim_id, ticket)?;
             }
@@ -4456,6 +4504,9 @@ fn apply_object_batch_10_v1(
                         (*class_id, *bond, crate::palw_fp_answer_accounting_v1::palw_fp_answer_row_key_v1(claim_id)),
                         Some(answer_row),
                     )?;
+                    if let Some(carrier) = builder.extras.fp_winning_carriers.get(claim_id) {
+                        super::palw_claim_local_carrier_lineage_v9::write_actual_winner_v9(builder, ctx, *claim_id, *carrier)?;
+                    }
                 }
             }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
@@ -4484,24 +4535,6 @@ fn apply_object_batch_10_v1(
         _ => unreachable!("private object dispatcher selected another batch"),
     }
     Ok(())
-}
-
-/// **RFC-0002 Phase H: an IR class's free-prompt lane is authenticated by coverage** — past the TIR public frame's fence (the IR
-/// lane's), a registered IR class whose every reachable primitive one certified family covers (either lane: the generic interpreter
-/// court is the same court for an attempt and a free prompt; the free-prompt doors are the frame's, in consensus code). `false`
-/// below the fence and for every non-IR class, so the legacy gate is byte-identical there. No per-class drill, no model review.
-fn tir_fp_lane_covered_v1(builder: &TransitionBuilder<'_>, class_id: &Hash64) -> bool {
-    if !builder.extras.tir_public_conviction_active {
-        return false;
-    }
-    let Some(record) = builder.state.tir_class_v1(class_id) else { return false };
-    let families = builder
-        .state
-        .certified_family_records(PalwCertifiedLaneV1::Attempt)
-        .values()
-        .chain(builder.state.certified_family_records(PalwCertifiedLaneV1::FreePrompt).values())
-        .map(|record| &record.family);
-    crate::palw_tir_fp_lane_v1::palw_tir_fp_lane_covered_v1(record, families).is_ok()
 }
 
 /// **D2 on seat readiness (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: `SeatReadinessLeaves` publishes ~16 plaintext

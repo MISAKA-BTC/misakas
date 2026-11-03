@@ -1,0 +1,40 @@
+{
+  "observed_utc": "2026-10-26T11:52:07.724080+00:00",
+  "scope": "source_review_only",
+  "base_commit": "6539cdf4708365e4884fb148fe5f317678723495",
+  "candidate_commit": "ee96b7b9f1ec294d151fe4f969395ec3cb2f4806",
+  "measurement_head": "d0a000badd3a6daf8faa98419e33adb188cc28aa",
+  "arming_evidence": false,
+  "candidate_merged": false,
+  "files": [
+    {
+      "path": "consensus/core/src/config/params/full_activation_v1.rs",
+      "blob": "d6cf57d9c6b3f49be0ff64630884ea051c2163ab",
+      "sha256": "90e580c5f0c56267ee3ec0197ae22d15892399df22c98e73338b1843a9c4a7f8"
+    },
+    {
+      "path": "consensus/core/tests/palw_t12_full_activation_16000.rs",
+      "blob": "ba280caa2c136d60ddd41708e89310859aef872a",
+      "sha256": "58f2308ef9c9a4387edbab16139f3a094246aa67bb8a2d1f97c0d540d3a9f561"
+    },
+    {
+      "path": "docs/design/palw/integration/g14-17000/lane-clock-report.md",
+      "blob": "b4d8b23e17f0ac55225889beefa0d32444a7ca7e",
+      "sha256": "5a624b1e0dd022d0e5b7e3c24e0b163a350ca97ebaedcb384753d2b7509c8336"
+    }
+  ],
+  "diff_paths": [
+    "consensus/core/src/config/params/full_activation_v1.rs",
+    "consensus/core/tests/palw_t12_full_activation_16000.rs",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical.rs",
+    "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical/seed.rs",
+    "docs/design/palw/integration/g14-17000/lane-clock-report.md"
+  ],
+  "findings": [
+    "Adds bond-budget prerequisite and tests slice-installed policy values and a claim-clock floor; these do not measure B terms or retention price.",
+    "Lane report claims 9/9 core tests but records two native clock tests failing before seat assignment; newer commit adjusts fixture for post-commit seats. No successful native result was independently collected here.",
+    "No change in this delta to kernel claim-clock or proof admission implementation, so previously identified initial-notice and whole-horizon boundary questions remain unresolved.",
+    "Lane report lists actor/turn duty clocks, per-claim inclusion delay, actual slice plus Gate C harness and reward liability horizon fence as outstanding."
+  ]
+}

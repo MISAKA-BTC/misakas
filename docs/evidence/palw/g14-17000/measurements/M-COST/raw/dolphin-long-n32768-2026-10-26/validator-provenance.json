@@ -1,0 +1,8 @@
+{
+  "updated_at": "2026-10-26T19:30:51.458945+09:00",
+  "source_commit": "b487b78f4440de9cf27d531ded752cb1f295290a",
+  "previous_sha256": "78898880c476e4ae297b401162380902e97a49e6c098ccc55cc70bea226d9941",
+  "validator_sha256": "2720f9b8d729f24ec29f033535caf02837aea78f46e6d409df31509f9c91e6c0",
+  "reason": "stronger completion checks after eight validator tests; existing 8k summary unchanged",
+  "original_model_process_restarted": false
+}

@@ -388,7 +388,7 @@ fn native_attestor_lock_v39(
         .reserved_exposure;
     let amount = palw_kernel_signer_lock_amount_v1(u64::try_from(exposure).unwrap_or(u64::MAX), mirror.certification.k.min(255) as u8);
     let record = builder.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
-    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < amount as u128 {
+    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < amount as u128 {
         return Err(refuse("the attestor cannot back its lock on the native mining claim (G-N2)"));
     }
     let key = palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(signer), &claim.as_bytes());
@@ -419,7 +419,7 @@ fn attestor_lock_v1(
         return Ok(());
     }
     let record = builder.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
-    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < amount as u128 {
+    if (record.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < amount as u128 {
         return Err(refuse("the attestor cannot back its Gate C liability lock (GC-DUTY)"));
     }
     let key = palw_native_attestor_lock_key_v1(&palw_kernel_bond_id_v1(signer), claim);
@@ -1225,6 +1225,177 @@ mod gc_duty_tests {
         release_attestor_locks_of_row_v1(&mut tb, &key).unwrap();
         assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [10_000, 10_000]);
         assert_eq!(tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(4)), 0, "released");
+    }
+
+    #[test]
+    fn rfc40_prefix_export_final_reversal_preserves_attestors_while_computation_fraud_charges_them() {
+        use crate::palw_rfc0018_v1::{PalwRfc0018MirrorV1, palw_gate_c_governs_v1, palw_gate_c_weight_v1};
+        // This dispatch fixture seeds an already decided certification and real
+        // rooted locks. It does not claim to exercise the signed draw lifecycle.
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 0).unwrap().with_rfc0018_v1(Some(
+            PalwRfc0018MirrorV1 { gate_c_from_daa: Some(0), attestor_liability_from_daa: Some(0), ..Default::default() },
+        ));
+        let unrelated_weight = 7;
+        let (state, extras) = (state(), extras());
+        let claim_id = h(77);
+        for (reason, balance, lock) in [(PalwVoidReasonV2::PrefixExportFraud, 10_000, 600), (PalwVoidReasonV2::CourtFraud, 9_400, 0)] {
+            let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            let key = world(&mut tb, &claim_id);
+            let mut certification: PalwClaimCertificationRowV1 = row_of(&tb.state, &key).unwrap();
+            certification.attempt = false;
+            write_row(&mut tb, key.clone(), Some(&certification)).unwrap();
+            let claim = PalwClaimStateV2 {
+                source: PalwClaimSourceV2::FreePrompt { quanta: 1, spent: [0].into_iter().collect() },
+                class_id: h(8),
+                bond: bond(1),
+                pwu: 10,
+                accepted_daa: 5,
+                rebound_daa: None,
+                accepted_blue_score: 5,
+                accepted_block: h(205),
+                trace_root: h(31),
+                output_root: h(32),
+                execution_root: h(41),
+                trace_chunk_count: 1,
+                trace_retention_daa: 100,
+                reserved: 10,
+                immature_contribution: 0,
+                escrowed_reward: 0,
+                work_leaves: 10,
+                work_id: None,
+                phase: PalwClaimPhaseV2::Final { final_daa: 5 },
+                rights_reserved: 0,
+                job_identity: h(42),
+                rcore: PalwClaimRcoreV1::default(),
+            };
+            assert!(palw_gate_c_governs_v1(&params, &claim));
+            let ungated = palw_fp_spend_weight_v1(&tb.state, &claim, 1, &tb.fp_pricing());
+            assert_eq!(ungated, 10);
+            let mut undecided = certification.clone();
+            undecided.outcome = None;
+            write_row(&mut tb, key.clone(), Some(&undecided)).unwrap();
+            assert_eq!(
+                palw_gate_c_weight_v1(&params, &tb.state, &claim_id, &claim, ungated),
+                0,
+                "Final alone contributes no credit under this active Gate C fixture"
+            );
+            write_row(&mut tb, key, Some(&certification)).unwrap();
+            let credited = palw_gate_c_weight_v1(&params, &tb.state, &claim_id, &claim, ungated);
+            assert_eq!(credited, 10, "the retained decided row actually passes the production Gate C predicate");
+            tb.state.claims.insert(claim_id, claim);
+            tb.state.safe_weight = unrelated_weight + credited;
+            let at = PalwBlockContextV2 { block: h(220), daa_score: 20, blue_score: 20, subsidy: 0 };
+            // Exercise the actual Final reversal, including its signer-liability
+            // dispatch. An export promise was signed by the producer alone.
+            tb.reverse_convicted_final(&at, claim_id, reason).unwrap();
+            assert_eq!(tb.state.safe_weight, unrelated_weight, "remove exactly this source credit, preserving unrelated Final weight");
+            assert!(matches!(tb.state.claims[&claim_id].phase,
+                PalwClaimPhaseV2::Voided { reason: recorded, .. } if recorded == reason));
+            assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [balance, balance]);
+            assert_eq!([3u64, 4].map(|n| tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(n))), [lock, lock]);
+            assert_eq!(tb.state.bonds[&bond(2)].collateral, 10_000, "negative verifier has no positive approval liability");
+            assert_eq!(
+                palw_gate_c_weight_v1(&params, &tb.state, &claim_id, &tb.state.claims[&claim_id], ungated),
+                0,
+                "a preserved certification row cannot restore a voided source's credit"
+            );
+            let after_void = PalwBlockContextV2 { block: h(221), daa_score: 21, blue_score: 21, subsidy: 0 };
+            sweep_security_certification_v1(&mut tb, &after_void).unwrap();
+            assert_eq!(
+                [3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral),
+                [balance, balance],
+                "the later certification sweep must not turn export fraud into old-attestor blame"
+            );
+            assert_eq!([3u64, 4].map(|n| tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(n))), [lock, lock]);
+            assert_eq!(tb.state.safe_weight, unrelated_weight);
+            // Reversing an already voided row does not create a second debit.
+            tb.reverse_convicted_final(&at, claim_id, reason).unwrap();
+            assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [balance, balance]);
+            assert_eq!(tb.state.safe_weight, unrelated_weight);
+        }
+    }
+
+    #[test]
+    fn rfc40_prefix_export_void_does_not_hide_later_computation_attestor_liability() {
+        use crate::palw_rfc0018_v1::{PalwRfc0018MirrorV1, palw_gate_c_weight_v1};
+        // This is the already-authenticated conviction dispatch boundary. The
+        // manually seeded decided row/locks do not claim an ML-DSA draw or
+        // execution-evidence authentication lifecycle; those are separate tests.
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h(1), 4, 1000, 100, 1000, 0).unwrap().with_rfc0018_v1(Some(
+            PalwRfc0018MirrorV1 { gate_c_from_daa: Some(0), attestor_liability_from_daa: Some(0), ..Default::default() },
+        ));
+        let (state, extras) = (state(), extras());
+        let mut tb = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let claim_id = h(77);
+        let key = world(&mut tb, &claim_id);
+        let mut certification: PalwClaimCertificationRowV1 = row_of(&tb.state, &key).unwrap();
+        certification.attempt = false;
+        write_row(&mut tb, key, Some(&certification)).unwrap();
+        let claim = PalwClaimStateV2 {
+            source: PalwClaimSourceV2::FreePrompt { quanta: 1, spent: [0].into_iter().collect() },
+            class_id: h(8),
+            bond: bond(1),
+            pwu: 10,
+            accepted_daa: 5,
+            rebound_daa: None,
+            accepted_blue_score: 5,
+            accepted_block: h(205),
+            trace_root: h(31),
+            output_root: h(32),
+            execution_root: h(41),
+            trace_chunk_count: 1,
+            trace_retention_daa: 100,
+            reserved: 10,
+            immature_contribution: 0,
+            escrowed_reward: 0,
+            work_leaves: 10,
+            work_id: None,
+            phase: PalwClaimPhaseV2::Final { final_daa: 5 },
+            rights_reserved: 0,
+            job_identity: h(42),
+            rcore: PalwClaimRcoreV1::default(),
+        };
+        let weight = palw_gate_c_weight_v1(
+            &params,
+            &tb.state,
+            &claim_id,
+            &claim,
+            palw_fp_spend_weight_v1(&tb.state, &claim, 1, &tb.fp_pricing()),
+        );
+        assert_eq!(weight, 10);
+        tb.state.claims.insert(claim_id, claim);
+        let unrelated_weight = 7;
+        tb.state.safe_weight = unrelated_weight + weight;
+        let at = PalwBlockContextV2 { block: h(220), daa_score: 20, blue_score: 20, subsidy: 0 };
+        tb.act_on_convicted_claim_as_v1(&at, claim_id, None, PalwVoidReasonV2::PrefixExportFraud).unwrap();
+        assert_eq!(tb.state.safe_weight, unrelated_weight);
+        assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [10_000, 10_000]);
+        assert_eq!([3u64, 4].map(|n| tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(n))), [600, 600]);
+        // Repeated export-only dispatch cannot acquire base-execution blame.
+        tb.act_on_convicted_claim_as_v1(&at, claim_id, None, PalwVoidReasonV2::PrefixExportFraud).unwrap();
+        assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [10_000, 10_000]);
+        let later = PalwBlockContextV2 { block: h(221), daa_score: 21, blue_score: 21, subsidy: 0 };
+        tb.act_on_convicted_claim_v1(&later, claim_id, None).unwrap();
+        assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [9_400, 9_400]);
+        assert_eq!([3u64, 4].map(|n| tb.state.kernel_route.as_ref().unwrap().signer_locks_of_v1(&bond(n))), [0, 0]);
+        assert_eq!(tb.state.safe_weight, unrelated_weight, "the source's weight was already removed once");
+        assert!(
+            matches!(tb.state.claims[&claim_id].phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::PrefixExportFraud, .. }),
+            "the original void reason is not rewritten to manufacture old signer blame"
+        );
+        // The actual lock deletion is the once marker even though the retained
+        // claim still records its first export void reason.
+        tb.act_on_convicted_claim_v1(&later, claim_id, None).unwrap();
+        tb.act_on_convicted_claim_as_v1(&later, claim_id, None, PalwVoidReasonV2::PrefixExportFraud).unwrap();
+        sweep_security_certification_v1(&mut tb, &later).unwrap();
+        assert_eq!([3u64, 4].map(|n| tb.state.bonds[&bond(n)].collateral), [9_400, 9_400]);
+        assert_eq!(tb.state.bonds[&bond(2)].collateral, 10_000);
+        assert_eq!(
+            tb.state.bonds[&bond(1)].collateral,
+            10_000,
+            "the producer AG2 tier is a separate upstream conviction leg, not invented by this dispatcher"
+        );
+        assert_eq!(tb.state.safe_weight, unrelated_weight);
     }
 
     #[test]

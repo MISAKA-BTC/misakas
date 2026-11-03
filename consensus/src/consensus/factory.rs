@@ -515,7 +515,10 @@ impl ConsensusFactory for Factory {
 
         #[cfg(test)]
         self.register_retained_fixture_instance_v1(&consensus, false);
-        Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
+        Ok((
+            ConsensusInstance::new_initializing(session_lock, consensus.clone()),
+            Arc::new(Ctl::new(self.management_store.clone(), db, consensus)),
+        ))
     }
 
     fn new_staging_consensus(&self) -> ConsensusCreationResult<(ConsensusInstance, DynConsensusCtl)> {
@@ -565,10 +568,19 @@ impl ConsensusFactory for Factory {
             .unwrap();
         Self::register_low_space_flush(&db);
 
+        // A privately armed test fixture was fingerprinted before constructing
+        // this Factory. Preserve that exact prepared Config in its staging node;
+        // normal production factories still use the unchanged startup gate.
+        #[cfg(test)]
+        let staging_config = self
+            .retained_fixture_staging_config_v1()
+            .unwrap_or_else(|| Arc::new(self.config.to_builder().skip_adding_genesis().build()));
+        #[cfg(not(test))]
+        let staging_config = Arc::new(self.config.to_builder().skip_adding_genesis().build());
         let session_lock = SessionLock::new();
         let consensus = match Consensus::new(
             db.clone(),
-            Arc::new(self.config.to_builder().skip_adding_genesis().build()),
+            staging_config,
             session_lock.clone(),
             self.notification_root.clone(),
             self.counters.clone(),
@@ -593,7 +605,10 @@ impl ConsensusFactory for Factory {
 
         #[cfg(test)]
         self.register_retained_fixture_instance_v1(&consensus, true);
-        Ok((ConsensusInstance::new(session_lock, consensus.clone()), Arc::new(Ctl::new(self.management_store.clone(), db, consensus))))
+        Ok((
+            ConsensusInstance::new_initializing(session_lock, consensus.clone()),
+            Arc::new(Ctl::new(self.management_store.clone(), db, consensus)),
+        ))
     }
 
     fn close(&self) {

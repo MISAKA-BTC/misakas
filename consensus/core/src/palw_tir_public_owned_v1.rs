@@ -1111,6 +1111,23 @@ pub struct PalwTirPublicOwnedPlanV1 {
     pub envelope: PalwRenderingResourcePlanV1,
 }
 impl PalwTirPublicOwnedPlanV1 {
+    /// The signed native largest-request response span, including actual body
+    /// parts, custody concurrency and inclusion. It is not a material expiry.
+    pub fn owner_idle_grace_family_v3(&self) -> Result<u64, String> {
+        let slots = self.maximum_custodians.checked_add(1).ok_or("family owner slots overflow")?;
+        crate::palw_tir_frame_cost_v1::tir_public_turn_span_v1(self.maximum_unit_bytes, slots, &self.config, &self.clock)
+    }
+    /// A progressing admitted owner keeps its slot through a complete native
+    /// localization path and the final collection carrier. Conviction filing
+    /// is independently priced and does not require retaining an owner slot.
+    pub fn owner_tenure_family_v3(&self) -> Result<u64, String> {
+        let complete = self
+            .envelope
+            .inclusion_daa
+            .checked_add(self.config.prices.inclusion_margin_daa)
+            .ok_or("family owner completion tenure overflow")?;
+        Ok(self.owner_idle_grace_family_v3()?.max(complete))
+    }
     /// **The largest single answer body this plan prices** (the `atom` of [`Self::derive_v1`]): `maximum_unit_bytes` is that atom
     /// times `min(N, 256)`, so the division is exact for a plan `derive_v1` produced (refused otherwise).
     pub fn unit_bytes_v1(&self, source: &PalwTirPublicSourceV1) -> Result<u64, String> {
@@ -1231,7 +1248,7 @@ impl PalwTirPublicOwnedPlanV1 {
             resident_ram_bytes: sum(&[product(row, 8)?, product(maximum_unit_bytes, 16)?, 262_144])?,
         };
         envelope.rent_sompi.checked_add(envelope.deposit_sompi).ok_or("TIR acquisition capital overflow")?;
-        Ok(Self {
+        let plan = Self {
             source_id: source.source_id_v1(),
             maximum_custodians,
             maximum_fresh_logical_units: fresh,
@@ -1241,7 +1258,11 @@ impl PalwTirPublicOwnedPlanV1 {
             config,
             clock,
             envelope,
-        })
+        };
+        if crate::palw_tir_frame_cost_v1::is_family_clock_v3(clock.version) {
+            plan.owner_tenure_family_v3()?;
+        }
+        Ok(plan)
     }
 }
 
@@ -1878,7 +1899,7 @@ impl PalwTirPublicOwnedV1 {
         self.spent
     }
     /// An open demand the frame's literal custodians still owe an answer to, not yet collected as a default.
-    fn unpaid_v1(&self) -> bool {
+    pub(crate) fn unpaid_v1(&self) -> bool {
         self.active_v1().is_some_and(|p| {
             !p.collected && self.response_custodians_v1().iter().any(|s| p.slots.get(s).is_none_or(|slot| slot.finished.is_none()))
         })
@@ -1905,7 +1926,13 @@ impl PalwTirPublicOwnedV1 {
     /// move a reorg is still undoing. Derived from the native plan, not a new constant; whether it is long enough for a real node's
     /// owner loop is a measured value of the arming record (UNKNOWN until measured).
     pub fn owner_idle_grace_daa_v1(&self) -> u64 {
-        palw_tir_owner_idle_grace_v1(&self.contract.plan.config)
+        if crate::palw_tir_frame_cost_v1::is_family_clock_v3(self.contract.plan.clock.version) {
+            // Invalid native plans fail their structural check. Refuse to
+            // prematurely evict even if an unchecked hostile row is inspected.
+            self.contract.plan.owner_idle_grace_family_v3().unwrap_or(u64::MAX)
+        } else {
+            palw_tir_owner_idle_grace_v1(&self.contract.plan.config)
+        }
     }
     /// **G14 R1 / G-T1 (Lead default R1, idle-slot reclamation): an IDLE owner** — one still holding a slot that has made no
     /// progress for [`Self::owner_idle_grace_daa_v1`] since [`Self::idle_since_v1`]. An owner with an unpaid demand inside its

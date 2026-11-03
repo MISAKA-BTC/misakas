@@ -2467,6 +2467,10 @@ pub struct Params {
     pub palw_kernel_route_panel_one_v1: Option<ForkActivation>,
     /// All-model G14 single-seat migration; original claim acceptance selects its route.
     pub palw_model_panel_one_v1: Option<ForkActivation>,
+    /// New ModelOne Attempt claims retain the protocol-derived full obligation
+    /// from their original acceptance. Signed header pins/lotteries are unchanged.
+    /// None preserves every historical claim and network; future activation only.
+    pub palw_model_panel_one_retention_v1: Option<ForkActivation>,
     /// **G14 U06/U07 court clock v2 (DORMANT, lane g14p/court-clock; RFC-0026 §2-3, RFC-0014 2026-10-19 §B/§D, ADR-0198 A).** A claim
     /// whose ORIGINAL acceptance is at/after this height has every court clock derived from that acceptance (`a + 3,120` normal,
     /// `a + 10,000` once disputed — one rooted extension); older claims keep the old clock (T15). `None` on every shipped preset;
@@ -3088,6 +3092,8 @@ pub struct Params {
     /// default's demander share is held to the liability horizon. **Dormant**: `None` on every preset, Some-only hashed, collapsed from
     /// `Some(never())`, refused when armed ([`Self::validate_palw_verifier_pay_v1`]).
     pub palw_verifier_pay_v1: Option<ForkActivation>,
+    /// Explicit M*-49 watcher pool/draw policy; no shipped default values.
+    pub palw_verifier_watch_v1: Option<crate::palw_verifier_watch_v1::PalwVerifierWatchFenceV1>,
     /// **RFC-0002 P0: protected candidate refutations** ([`crate::palw_model_refutation_seal_v4`], lane RFC02-T): past this height
     /// a refutation of a candidate statement (model artifact binding v2, model vector v2, flat model vector v3) is admitted only as
     /// the reveal of the signer's own mature seal (kernel inner 36 / 37), and the frozen unsealed refutations (inner 23 / 27 / 32)
@@ -3238,6 +3244,8 @@ pub struct Params {
     /// fingerprints and the fork id, collapsed from `Some(never())`; refused when armed without `palw_fp_derived_work` and
     /// `palw_canonical_work` at or below it ([`crate::palw_fp_answer_accounting_v1`]).
     pub palw_fp_answer_accounting_v1: Option<ForkActivation>,
+    /// RFC-0042 new supplier contracts; separate version upgrade, dormant on every preset.
+    pub palw_court_family_supplier_v1: Option<ForkActivation>,
     /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
@@ -4344,8 +4352,8 @@ mod positive_court_v2;
 pub use positive_court_v2::{PositiveCourtFenceV2, PositiveCourtPolicyV2};
 mod positive_assignment_v2;
 mod positive_funding_relay_v2;
-pub use positive_funding_relay_v2::{AssignmentFundingRelayProfileV2, PositiveFundingRelayFenceV2, PositiveFundingRelayRuleScopeV2};
 pub use positive_assignment_v2::{AssignmentNativePreimagesV2, PositiveAssignmentFenceV2, PositiveAssignmentRuleScopeV2};
+pub use positive_funding_relay_v2::{AssignmentFundingRelayProfileV2, PositiveFundingRelayFenceV2, PositiveFundingRelayRuleScopeV2};
 mod mirror;
 mod validation;
 pub use full_activation_v1::*;
@@ -5146,6 +5154,40 @@ impl Params {
     /// Kernel route Panel=1 seat policy fence (dormant: `None` on every shipped preset; `never()` reads as `None`).
     pub fn palw_model_panel_one_v1_fence(&self) -> Option<ForkActivation> {
         self.palw_model_panel_one_v1.filter(|f| *f != ForkActivation::never())
+    }
+
+    pub fn palw_model_panel_one_retention_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_model_panel_one_retention_v1.filter(|f| *f != ForkActivation::never())
+    }
+
+    pub fn validate_palw_model_panel_one_retention_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        let Some(at) = self.palw_model_panel_one_retention_v1_fence() else {
+            if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+                && bundle.state.model_panel_one_retention_v1_from_daa().is_some()
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_panel_one_retention_v1 is absent but its ConsensusV2 mirror is armed",
+                ));
+            }
+            return Ok(());
+        };
+        let dependencies = [
+            self.palw_model_panel_one_v1_fence(),
+            self.palw_court_capacity_v1.map(|f| f.activation),
+            self.palw_independently_work_certified_v1,
+        ];
+        if dependencies.iter().any(|f| f.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score())) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_panel_one_retention_v1 requires ModelOne, court capacity and Gate C at or before its activation",
+            ));
+        }
+        match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) if bundle.state.model_panel_one_retention_v1_from_daa() == Some(at.daa_score()) => {
+                Ok(())
+            }
+            _ => Err(PalwModeV2Error::Invalid("palw_model_panel_one_retention_v1 requires its synchronized ConsensusV2 mirror")),
+        }
     }
 
     pub fn palw_kernel_route_panel_one_v1_fence(&self) -> Option<ForkActivation> {
@@ -6234,6 +6276,7 @@ impl Params {
             palw_state_row_map_v1: self.palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1: self.palw_kernel_route_panel_one_v1,
             palw_model_panel_one_v1: self.palw_model_panel_one_v1,
+            palw_model_panel_one_retention_v1: self.palw_model_panel_one_retention_v1,
             palw_court_clock_v2: self.palw_court_clock_v2,
             palw_panel_da_disclosure_v1: self.palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
@@ -6295,6 +6338,7 @@ impl Params {
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
+            palw_verifier_watch_v1: self.palw_verifier_watch_v1.clone(),
             palw_model_refutation_seal_v1: self.palw_model_refutation_seal_v1,
             palw_window_class_v37: self.palw_window_class_v37,
             palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
@@ -6327,6 +6371,7 @@ impl Params {
             palw_court_model_scope_v1: self.palw_court_model_scope_v1,
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
             palw_fp_answer_accounting_v1: self.palw_fp_answer_accounting_v1,
+            palw_court_family_supplier_v1: self.palw_court_family_supplier_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1: self.palw_g14_route_required_v1,
@@ -7421,6 +7466,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -7478,6 +7524,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -7510,6 +7557,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -7800,6 +7848,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -7857,6 +7906,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -7889,6 +7939,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -8161,6 +8212,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -8218,6 +8270,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -8250,6 +8303,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -11021,12 +11075,15 @@ pub fn palw_t12_shipped_params() -> Params {
 /// All-model producer migration, separately scheduled after the kernel slice.
 /// This height does not reinterpret claims accepted under the DAA-18,400 rules.
 pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_640;
+/// Separate future obligation rule: never reinterpret the old 18,400 activation.
+pub const PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1: u64 = 20_000;
 
 /// The live DAA-18,400 ruleset before the all-model migration, for historical
 /// replay identities and fixtures that deliberately disarm its prerequisites.
 pub fn palw_t12_pre_model_panel_one_params_v1() -> Params {
     let mut params = palw_t12_shipped_params();
     params.palw_model_panel_one_v1 = None;
+    params.palw_model_panel_one_retention_v1 = None;
     params.sync_palw_g14_gates_v1();
     params
 }
@@ -12237,6 +12294,7 @@ fn palw_t12_params_with_registry_v1(
     full_activation_v1::palw_t12_arm_full_activation_v1(&mut params);
     // RFC-0042 / ADR-0210: the all-model route is a separate future fork.
     params.palw_model_panel_one_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1));
+    params.palw_model_panel_one_retention_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1));
     params.sync_palw_g14_gates_v1();
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
@@ -13501,6 +13559,7 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_class_registration_origin_v1();
     // RFC-0008's once-only settlement registry and RFC-0007 §4.1's paid-claim trap, likewise.
     params.sync_palw_settlement_once_v1();
+    params.sync_palw_court_family_supplier_v1();
     params.sync_palw_paid_claim_trap_v1();
     params.sync_palw_native_liability_horizon_v1();
     // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
@@ -13745,6 +13804,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
     palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -13820,6 +13880,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -13852,6 +13913,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -13946,6 +14008,9 @@ pub const DEVNET_PARAMS: Params = Params {
 
 #[cfg(test)]
 mod consensus_params_id_tests;
+
+#[cfg(test)]
+mod model_panel_one_retention_config_tests;
 
 #[cfg(test)]
 mod fingerprint_probe {

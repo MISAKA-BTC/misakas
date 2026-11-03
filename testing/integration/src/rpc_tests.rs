@@ -1785,6 +1785,35 @@ async fn sanity_test() {
                     assert_eq!(response.producer_state, "off", "the sanity daemon runs no producer");
                 })
             }
+            KaspadPayloadOps::GetPalwMemoryRoutingOutcomeV1 => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Valid fixed-width identities with no committed observation
+                    // remain unavailable/UNKNOWN, never synthetic approval.
+                    let unknown = "0".repeat(128);
+                    let response = rpc_client
+                        .get_palw_memory_routing_outcome_v1_call(
+                            None,
+                            GetPalwMemoryRoutingOutcomeV1Request { block_hash: unknown.clone(), claim_id: unknown.clone() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available, "unobserved court outcome grants no availability");
+                    assert!(response.observation_json.is_empty(), "missing observation has no outcome payload");
+                    assert!(!response.reason.is_empty(), "unavailable observation explains its UNKNOWN status");
+                    // A malformed identity is an RPC error, distinct from a
+                    // well-formed unobserved request above.
+                    assert!(
+                        rpc_client
+                            .get_palw_memory_routing_outcome_v1_call(
+                                None,
+                                GetPalwMemoryRoutingOutcomeV1Request { block_hash: unknown, claim_id: "0".into() },
+                            )
+                            .await
+                            .is_err()
+                    );
+                })
+            }
             KaspadPayloadOps::GetPalwRegistrationTerms => {
                 let rpc_client = client.clone();
                 tst!(op, {

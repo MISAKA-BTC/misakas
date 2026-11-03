@@ -7,7 +7,7 @@ mod reorg;
 #[path = "signed_provider_challenge_v4.rs"]
 mod signed_provider;
 #[path = "material_typed_source_manifest_v4.rs"]
-mod source_manifest;
+pub(in crate::pipeline::virtual_processor::tests) mod source_manifest;
 #[path = "material_typed_terminal_v4.rs"]
 mod terminal;
 use kaspa_consensus_core::{
@@ -476,7 +476,7 @@ async fn typed_reader_child() {
             }
         }
     } else {
-        let ingress = native.palw_kernel_material_ingress_v4(input.request.intent.checkpoint, &input.request).unwrap();
+        let ingress = native.palw_kernel_material_ingress_checked_v4(input.request.intent.checkpoint, &input.request).unwrap();
         let Recovery::FundedEnroll { monetary, .. } = &*ingress.enrollment else { unreachable!() };
         assert!(
             monetary.terms.material_manifest.as_ref().unwrap().scopes.iter().all(|s| s.codec == PalwMaterialCodecV1::TypedKernelV4)
@@ -640,7 +640,7 @@ fn prepare_replacement_reader(
         providers,
         valid_until_daa: native.get_virtual_daa_score().checked_add(30).unwrap(),
     };
-    let grant = native.palw_kernel_material_replacement_v4(&original.context, &input.request.bundle, &intent).unwrap();
+    let grant = native.palw_kernel_material_replacement_checked_v4(&original.context, &input.request.bundle, &intent).unwrap();
     assert_eq!(grant.context_request(), original.context.request);
     let consent = grant.proposal.bounded_replacement_consent_v4().expect("real native bounded replacement grant");
     let mut stores = Vec::new();

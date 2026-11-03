@@ -1,7 +1,41 @@
 # 全モデル G14 Panel=1 — 2026-10-31 検証記録
 
-状態: 実装・ローカル検証済み。**配備・有効化は未実施**。t12 の移行 fence 候補は DAA **18,640**。mainnet 等は無効のまま。
+初回配布の状態（2026-10-31 12:39 UTC）: 実装・検証・Linuxバイナリ配布済み。95 relayとb0〜b7のunitを移行版へ更新し、復旧・同期を進めている。t12 の移行 fence は DAA **18,640**。**実モデルclaimのpanel=1・Finalは確認中**。mainnet 等は無効のまま。
 [RFC-0042](../../../rfc/0042-all-model-g14-panel-one.md) / [ADR-0210](../../../adr/0210-all-model-g14-panel-one.md)。
+
+
+## 将来 DAA 18,850 の保持 clock 修正
+
+[原因・新旧 identity・試験結果・未完事項](retention-18850.md)。新 core 9/9（config 4 件を含む）、既存 route 9/9、identity 1/1、node 3/3 が成功。新境界での実 claim 受理・panel=1・Final と新配布 SHA は pending。
+
+## 18,660再停止の修正（2026-10-31 UTC / 11月1日 JST）
+
+公開95のPALW pruning snapshotは46分24秒の再構成後に自然完了し、
+公開95/b6で18,660→18,677以上への継続前進を確認した。
+b0/b1では起動時の同期pruning復旧中に4つの処理workerが未起動なのに、
+同期済み・producer drawingが先行していた。詳細は
+[停止原因と復旧ログ](pruning-18660-stall.md)。
+
+共有PALW lockの範囲短縮、検証済checkpointが近い場合の短経路選択、
+キャンセル/import世代確認、worker起動前の参加holdを実装した。
+[Snapshot 9件](pruning-capture-short-anchor-test.log)、
+[起動readiness 1件](pruning-startup-readiness-test.log)、
+[owned-state guard 1件](pruning-owned-state-caller-test.log)が成功。
+新バイナリのビルド・配布と、実Qwen claimの公開受理・panel=1・Finalは継続確認中。
+以下の初回配布版のSHAを、新しい実行コードのSHAとして扱わない。
+
+## 現在の配布版
+
+- [最新Release](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-panel1-18640): GitHubのlatest APIで公開・latest指定と3 assetsのuploaded状態を確認。
+- 初回Release tag: `8b19b4a66fa0aa7ac3cd2ed0a41aa3cdbf47742e`。
+- バイナリのimmutable build source: `8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`。初回Release tagの実行コードとの差分なし（文書・release metadata・cfg(test) fixture/assertionのみ）。
+- 現行params: `edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189`。
+- 現行schedule: `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`。
+- Linux x86_64 GNU archive: 54,238,819 bytes、SHA-256 `0d0f53aa40e615e8412060e2a5b13acf1d575259a69ffe3c0a52f51a36cda7c9`。glibc 2.39以上・libstdc++が必要。
+- 展開後の`bin/kaspad`: 155,485,528 bytes、SHA-256 `e6d638a4f2a9fa32b6072c32ad5ce929f015efa189b721ceee2be5a9aa52e83e`。
+
+公開APIのasset digestはローカルarchive/manifest/checksumと一致。認証用秘密鍵・モデルartifact・DB・運用configは配布物に含まない。
+旧候補のrawログは以下に履歴として残す。Gate Cの認証・発行完了を今回の配布やlocal replayから主張しない。
 
 ## 配備候補の基点
 
@@ -102,3 +136,26 @@ node producerの追加点検で、authoritative producer factsとは別の`regis
 [18,640 node型検査](18640-node-check.log): `kaspad --features evm --all-targets`成功。
 [registry RPC回帰](registry-rpc-tests.log): 8 passed。
 Linux build対象sourceは`8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`で固定し、build中にsourceを変更しない。
+
+## Remote main integration and Linux artifact (2026-10-31)
+
+The remote main at `5ba94e47e` is merged without rewriting history. Its test-only
+TIR material-supplier fixes (`da97d6a4a`, `d5fbc11f0`) are retained. The unfenced
+operational collateral-release change in `6e31509bb` is deliberately deferred:
+it changes historical fold/reconstruction semantics and was never deployed to
+the public `2ca68baee` fleet. Its associated new semantic test is deferred with
+that change. This merge retains the already-tested G14 source behavior instead;
+a future collateral-release fix requires its own activation and historical-state
+compatibility verification. This is an explicit integration decision, not a
+claim that the underlying collateral-release issue is resolved.
+
+The production Linux x86_64 artifact was built from immutable source
+`8cac52ec4ed15fb4ea982d46235a5c3b5f78e4cc`, with the standard release profile
+and `pq-only,evm` features. It is 155,485,528 bytes; SHA-256:
+`e6d638a4f2a9fa32b6072c32ad5ce929f015efa189b721ceee2be5a9aa52e83e`.
+The 18,640 fence, `edf47229…` params and `4024a6e7…` schedule are the current
+release identities. Earlier 18,560/18,600 candidate metadata above is historical.
+The release manifest and SDK cache-key assertion are corrected to the 18,640
+identities. Test and release-metadata integration changes do not constitute a
+rebuild of that immutable binary. Fleet installation and actual model-claim Final
+must be recorded separately after observation.

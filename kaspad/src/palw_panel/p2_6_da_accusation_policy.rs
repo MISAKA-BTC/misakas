@@ -260,7 +260,7 @@ fn the_funder_asks_the_one_rule_of_every_candidate() {
     let funder = body_of(the_source(), "    async fn resolve_fee_funding(");
     assert!(funder.contains("let pov_daa = session.get_virtual_daa_score();"));
     assert!(funder.contains("let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();"));
-    assert!(funder.contains("session.palw_locked_bond_outpoints_v2()"));
+    assert!(funder.contains("session.palw_locked_bond_outpoints_checked_v3()"));
     let rule =
         funder.find("palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)").expect("one rule");
     let remembered =

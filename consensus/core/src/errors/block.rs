@@ -30,6 +30,10 @@ impl<T: Display + Clone> Display for TwoDimVecDisplay<T> {
 
 #[derive(Error, Debug, Clone)]
 pub enum RuleError {
+    /// This node is stopping between virtual transactions. No peer/block verdict.
+    #[error("local consensus is exiting; virtual resolution was not completed")]
+    ConsensusExiting,
+
     /// Local admission failed before native construction. This is retryable
     /// node capacity, never evidence that the submitted block violates a rule.
     #[error("local native capacity unavailable; virtual resolution was not completed: {0}")]

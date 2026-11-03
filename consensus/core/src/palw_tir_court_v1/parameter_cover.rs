@@ -110,15 +110,18 @@ impl PreparedParameterCoverV1 {
     /// materializer. Counts are checked local limits, never adopted network caps.
     pub(crate) fn native_all_roots_requests_v1(
         program: &TirProgramV1,
-        shape: &crate::palw_native_resource_v1::NativeTirProgramShapeV1,
+        canonical_program: &[u8],
         original_leaves: u64,
         budget: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
     ) -> Result<u64, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         use crate::palw_native_resource_v1::{
-            NativeCoverageV1, NativeDecodeErrorV1 as E, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
+            NativeCoverageV1, NativeDecodeErrorV1 as E, NativeHeapV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
+            source_tir_program_shape_v1,
         };
         use crate::palw_tir_public_source_v1::parameter_cover_v1::{NamedParameterCoverV1, OriginalParameterCoverV1};
+        use misaka_palw_tir::types::{Dim, TensorType};
         let mut q = TirNativeRequestsV1::new();
+        let (shape, normal_form_requests) = source_tir_program_shape_v1(canonical_program)?;
         let n = shape.structural_items_v1();
         let overflow = || E::Resource(NativeCoverageV1::overflow::<OriginalParameterCoverV1>("original parameter native allocation"));
         q.exact_v1::<PalwTirVerifiedBindingV1>(1).map_err(E::Resource)?;
@@ -141,9 +144,31 @@ impl PreparedParameterCoverV1 {
             q.vec_v1::<bool>(n).map_err(E::Resource)?;
         }
         q.vec_v1::<usize>(n.checked_add(1).ok_or_else(overflow)?).map_err(E::Resource)?;
-        // One cloned Node is bounded by the entire actual scanned program
-        // ownership. No peer-provided rank/count or sizeof(Node)-only estimate.
-        q.add_v1(shape.program_requests_v1()).map_err(E::Resource)?;
+        // The range prelude invokes normal-form validation again while the
+        // verified program is retained. Charge the existing linear Source
+        // profile for that validator, and the range analyzer's separate
+        // per-node operand vectors and largest temporary constant lane vector.
+        q.add_v1(normal_form_requests).map_err(E::Resource)?;
+        let maximum_inputs =
+            program.blocks.iter().flat_map(|block| &block.nodes).map(|node| node.inputs.len() as u64).max().unwrap_or(0);
+        q.vec_v1::<Interval>(maximum_inputs).map_err(E::Resource)?;
+        q.vec_v1::<TensorType>(maximum_inputs).map_err(E::Resource)?;
+        let mut dims = TirNativeRequestsV1::new();
+        dims.vec_v1::<Dim>(misaka_palw_tir::types::MAX_RANK as u64).map_err(E::Resource)?;
+        q.add_v1(maximum_inputs.checked_mul(dims.bytes_v1()).ok_or_else(overflow)?).map_err(E::Resource)?;
+        let maximum_const_lanes = program.consts.iter().map(|c| (c.data.len() / c.dtype.width()) as u64).max().unwrap_or(0);
+        q.vec_v1::<i128>(maximum_const_lanes).map_err(E::Resource)?;
+
+        // Walk::run clones exactly one Node per iteration. Its fetches enqueue
+        // coordinates and never recurse into run. The Node itself is on the
+        // stack; the generated heap visitor includes inputs, output dimensions
+        // and primitive-owned vectors such as a transpose permutation.
+        let mut node_clone = 0;
+        for node in program.blocks.iter().flat_map(|block| &block.nodes) {
+            let bound = node.native_heap_v1("parameter cover Node clone");
+            node_clone = node_clone.max(bound.bytes().ok_or(E::Resource(bound))?);
+        }
+        q.add_v1(node_clone).map_err(E::Resource)?;
         // Gather is the largest simultaneous rank workspace: run.shape/c,
         // d/x/xi/q, plus fetch's temporary shape (seven rank Vecs). Other
         // branches (including state replay node.shape) have no larger live set.

@@ -25,6 +25,10 @@ pub enum PalwMaterialPaymentV1 {
     UnprovenPhysicalPayment {
         until: u64,
     },
+    /// Already debited, exact native fee escrow; creates no budget quota.
+    HeldEscrow {
+        obligation: Hash64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -54,6 +58,7 @@ impl PalwMaterialIncomeV1 {
     pub fn valid(&self) -> bool {
         match self.payment {
             PalwMaterialPaymentV1::Pending { .. } => self.amount > 0,
+            PalwMaterialPaymentV1::HeldEscrow { .. } => self.root.is_some() && self.amount > 0,
             PalwMaterialPaymentV1::Queued { income, queue, queued_daa, paid_daa, release_daa } => {
                 self.amount > 0
                     && queued_daa >= self.accepted_daa
@@ -259,8 +264,8 @@ impl PalwBondBudgetStateV1 {
         Ok(plan)
     }
 
-    /// Old raw queues have no authenticated budget recipient/root. They keep only old claims,
-    /// and only until that exact queue physically drains + W. No later queue can extend them.
+    /// Exact raw-queue receipts (legacy or escrow) release only on physical drain + W.
+    /// A later coalesced queue never rebases an already confirmed receipt.
     pub fn confirm_legacy_material_queue_v1(
         &mut self,
         queue: Hash64,
@@ -269,7 +274,7 @@ impl PalwBondBudgetStateV1 {
         j: &mut Vec<PalwBudgetWriteV1>,
     ) -> Result<(), PalwBudgetRefusalV1> {
         let until = now.checked_add(w).ok_or(PalwBudgetRefusalV1::Overflow)?;
-        let ids: Vec<_> = self.material_roots.get(&None).into_iter().flatten().copied().collect();
+        let ids: Vec<_> = self.material_income.keys().copied().collect();
         let mut plan = Vec::new();
         for id in ids {
             let mut row = self.material_income[&id];
@@ -320,6 +325,11 @@ impl PalwBondBudgetStateV1 {
         for (id, row) in &self.material_income {
             if !row.valid() {
                 return Err("invalid material income provenance");
+            }
+            if let PalwMaterialPaymentV1::HeldEscrow { obligation } = row.payment
+                && *id != material_pending_id_v1(obligation)
+            {
+                return Err("held escrow material identity differs");
             }
             if let PalwMaterialPaymentV1::Pending { income } = row.payment {
                 let held = self
@@ -433,6 +443,7 @@ mod tests {
             assert!(params.palw_fences_v1().iter().any(|(name, at)| *name == "palw_material_income_v3" && at.is_none()));
             let mut future = params.clone();
             future.palw_material_income_v3 = Some(ForkActivation::new(9_000_002));
+            future.sync_palw_bond_budget_v1();
             assert_ne!(params.consensus_params_id(), future.consensus_params_id());
             assert_ne!(params.consensus_schedule_id(), future.consensus_schedule_id());
             assert_eq!(params.consensus_identity_id(), future.consensus_identity_id());
@@ -663,5 +674,23 @@ mod tests {
         assert_eq!(s.material_hold_until_v1(h(101), false), None);
         assert!(s.material_income.is_empty());
         assert_eq!(s.claim_row(&h(1)).unwrap().consumed.reward_sompi, 125);
+    }
+}
+
+impl PalwBondBudgetStateV1 {
+    pub(crate) fn material_root_count_v7(&self, root: Option<Hash64>) -> usize {
+        self.material_roots.get(&root).map_or(0, |ids| ids.len())
+    }
+    pub(crate) fn material_root_rows_v7(
+        &self,
+        root: Option<Hash64>,
+    ) -> impl Iterator<Item = Result<(Hash64, PalwMaterialIncomeV1), &'static str>> + '_ {
+        self.material_roots.get(&root).into_iter().flat_map(|ids| ids.iter()).map(move |id| {
+            let row = self.material_income.get(id).ok_or("native material root index missing row")?;
+            if row.root != root {
+                return Err("native material root index has wrong owner");
+            }
+            Ok((*id, *row))
+        })
     }
 }

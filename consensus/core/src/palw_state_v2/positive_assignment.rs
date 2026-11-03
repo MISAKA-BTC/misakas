@@ -1514,7 +1514,7 @@ impl TransitionBuilder<'_> {
     }
 
     #[inline(never)]
-    pub(super) fn install_initial_assignment_relay_v2(
+    pub(super) fn install_initial_funding_relay_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
         action: &PositiveAssignmentRawActionV2,
@@ -1791,7 +1791,7 @@ impl TransitionBuilder<'_> {
             let tx = action.transaction();
             let rules = action.rules();
             if tx.payload.get(7) == Some(&14) {
-                return self.install_initial_assignment_relay_v2(ctx, action, InitialRelayFeeStageV2::Observed).map(|_| ());
+                return self.install_initial_funding_relay_v2(ctx, action, InitialRelayFeeStageV2::Observed).map(|_| ());
             }
             if matches!(tx.payload.get(7), Some(0..=7)) {
                 let old_limits = crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {

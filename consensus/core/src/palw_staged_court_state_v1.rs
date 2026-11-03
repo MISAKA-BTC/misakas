@@ -108,6 +108,10 @@ pub enum PalwStagedCourtKeyV1 {
     CourtMaterial(Hash64, Hash64),
     /// (claim, submitter): derived per-claim storage reservation.
     CourtMaterialLedger(Hash64, PalwBondKeyV2),
+    /// Prospective TIR scheduling metadata, appended key 30.
+    TirOwnerSchedule(Hash64),
+    /// Immutable verified tokenizer for (class, exact prospective semantics), key 31.
+    VerifiedTokenizerRegistration(Hash64, Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -166,6 +170,10 @@ pub enum PalwStagedCourtRowV1 {
     /// resolved-binding release rule (released records + causal edges). Written only past `palw_tir_public_conviction_v1`; the
     /// legacy `CourtService` variant keeps its encoding and stays readable.
     CourtServiceV3(PalwSharedCourtV1<crate::palw_court_service_release_v1::CourtServiceRowV3>),
+    /// Prospective TIR scheduling metadata, appended row 37.
+    TirOwnerSchedule(Box<crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2>),
+    /// Immutable tokenizer registration, appended row 38.
+    VerifiedTokenizerRegistration(Box<crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -201,7 +209,9 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtMaterialPart(_)
             | Self::CourtMaterial(_)
             | Self::CourtMaterialLedger(_)
-            | Self::CourtServiceV3(_) => None,
+            | Self::CourtServiceV3(_)
+            | Self::TirOwnerSchedule(_)
+            | Self::VerifiedTokenizerRegistration(_) => None,
             _ => Some(self),
         }
     }
@@ -238,7 +248,9 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtMaterialPart(_)
             | Self::CourtMaterial(_)
             | Self::CourtMaterialLedger(_)
-            | Self::CourtServiceV3(_) => None,
+            | Self::CourtServiceV3(_)
+            | Self::TirOwnerSchedule(_)
+            | Self::VerifiedTokenizerRegistration(_) => None,
             _ => Some(self),
         }
     }
@@ -354,6 +366,15 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::TirPreparation(..), Self::TirPreparation(row)) => row.check_structure_v1(key),
             (PalwStagedCourtKeyV1::TirClaim(..), Self::TirClaim(frame)) => frame.check_structure_v1(key),
             (PalwStagedCourtKeyV1::TirWitness(claim, filer), Self::TirWitness(row)) => row.check_structure_v1(*claim, *filer),
+            // The container opening itself is checked at registration. The
+            // retained row must stay readable with its native fixed bounds.
+            (PalwStagedCourtKeyV1::TirContainer(_), Self::TirContainer(row))
+                if row.container_root != Hash64::default()
+                    && row.inner_leaf_count != 0
+                    && usize::from(row.weights_section) < crate::palw_tir_container_v1::PALWART_MAX_SECTIONS_V3 =>
+            {
+                Ok(())
+            }
             // The legacy variant carries only the version-2 state (a version-3 state rides `CourtServiceV3`, whose check sees the
             // released records).
             (PalwStagedCourtKeyV1::CourtService, Self::CourtService(row)) if row.version == 2 => row.check(),
@@ -375,6 +396,8 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::CourtMaterialPart(..), Self::CourtMaterialPart(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtMaterial(..), Self::CourtMaterial(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtMaterialLedger(..), Self::CourtMaterialLedger(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::TirOwnerSchedule(_), Self::TirOwnerSchedule(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(..), Self::VerifiedTokenizerRegistration(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

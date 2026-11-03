@@ -913,7 +913,16 @@ impl PalwTirStepSpaceV1 {
     /// leaves: the `Fixed` checkpoints at position `k − 1` and every `Hist` chunk of rows `0..k`.
     pub fn prefix_state_leaf_count_v1(&self, ctx: &PalwJobContextV2, k: u32) -> Option<u64> {
         let job = self.job_shape(ctx).ok()?;
-        if k == 0 || k >= job.prefill || !k.is_multiple_of(self.layout.checkpoint_interval) || !k.is_multiple_of(self.layout.h_tile) {
+        (k < job.prefill).then_some(())?;
+        self.export_prefix_state_leaf_count_v2(ctx, k)
+    }
+
+    /// Source-export boundary only: includes any aligned, actually executed state.
+    /// Generated-token positions are committed by the same step tree as prefill.
+    /// This new entry point does not relax the V1 consumed-prefix relation.
+    pub fn export_prefix_state_leaf_count_v2(&self, ctx: &PalwJobContextV2, k: u32) -> Option<u64> {
+        let job = self.job_shape(ctx).ok()?;
+        if k == 0 || k > job.positions || !k.is_multiple_of(self.layout.checkpoint_interval) || !k.is_multiple_of(self.layout.h_tile) {
             return None;
         }
         let chunks = u64::from(k / self.layout.h_tile);
@@ -925,7 +934,13 @@ impl PalwTirStepSpaceV1 {
     /// checkpoint leaves at `k − 1` placed before that position's `Hist` leaves (their order in
     /// the step tree).
     pub fn prefix_state_leaf_v1(&self, ctx: &PalwJobContextV2, k: u32, ordinal: u64) -> Option<PalwTirLeafV1> {
-        let total = self.prefix_state_leaf_count_v1(ctx, k)?;
+        self.prefix_state_leaf_count_v1(ctx, k)?;
+        self.export_prefix_state_leaf_v2(ctx, k, ordinal)
+    }
+
+    /// The same canonical state-leaf order, with source-export boundary rules.
+    pub fn export_prefix_state_leaf_v2(&self, ctx: &PalwJobContextV2, k: u32, ordinal: u64) -> Option<PalwTirLeafV1> {
+        let total = self.export_prefix_state_leaf_count_v2(ctx, k)?;
         if ordinal >= total {
             return None;
         }
@@ -1174,6 +1189,99 @@ pub fn verify_tir_binding_v1(
 #[cfg(test)]
 mod native_step_space_inventory_tests_v1 {
     use super::*;
+    #[test]
+    fn rfc40_source_export_generated_boundary_uses_actual_committed_positions() {
+        let (name, program, params, tokens) =
+            crate::palw_tir_corpus_fixture_v1::programs().into_iter().find(|(name, ..)| name == "dense-gqa-2layer").unwrap();
+        let fixture = crate::palw_tir_corpus_fixture_v1::fixture_tiled(name, program, params, tokens, 4, 3, 64);
+        let execution = fixture.honest();
+        let context = &execution.binding.job_context;
+        let space = PalwTirStepSpaceV1::new(&execution.binding.class).unwrap();
+        let job = space.job_shape(context).unwrap();
+        assert_eq!((job.prefill, job.positions), (4, 6));
+        let k = job.positions;
+        assert!(space.prefix_state_leaf_count_v1(context, k).is_none());
+        assert!(space.prefix_state_leaf_v1(context, k, 0).is_none());
+        let count = space.export_prefix_state_leaf_count_v2(context, k).unwrap();
+        let mut previous = None;
+        let mut generated = false;
+        for ordinal in 0..count {
+            let leaf = space.export_prefix_state_leaf_v2(context, k, ordinal).unwrap();
+            let actual = &execution.preimages[leaf.index as usize];
+            assert_eq!(actual.coord, leaf.coord);
+            assert_eq!(actual.value_count, leaf.value_count);
+            assert_eq!(actual.values_le.len(), leaf.value_count as usize * 4);
+            assert!(previous.is_none_or(|index| index < leaf.index));
+            previous = Some(leaf.index);
+            generated |= leaf.position >= job.prefill;
+            assert!(leaf.position < job.positions);
+        }
+        assert!(generated, "the boundary must authenticate generated-position state too");
+        // Authenticate the same generated boundary one leaf at a time against
+        // the actual execution tree, including serialized continuation recovery.
+        use crate::palw_tir_prefix_export_relation_v2::{TirExportPrefixStreamV2, TirExportTargetV2};
+        use crate::palw_tir_prefix_state_v1::{PALW_TIR_PREFIX_STATE_DIGEST_DOMAIN_V1, PalwTirPrefixStateVerdictV1, leaf_prelude_v1};
+        let mut digest = crate::palw_rendering_stream_v1::LeafHashContinuationV1::new(PALW_TIR_PREFIX_STATE_DIGEST_DOMAIN_V1);
+        digest.update(&k.to_le_bytes());
+        for ordinal in 0..count {
+            let leaf = space.export_prefix_state_leaf_v2(context, k, ordinal).unwrap();
+            digest.update(&leaf_prelude_v1(&leaf).unwrap());
+            digest.update(&execution.preimages[leaf.index as usize].values_le);
+        }
+        let honest = crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&context.shape_profile_id, k, &digest.finish());
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&execution.binding);
+        let other = Hash64::from_u64_word(9001);
+        assert_ne!(honest, other);
+        for declared in [honest, other] {
+            let target = TirExportTargetV2 {
+                version: 2,
+                source: crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1 {
+                    intent: Hash64::from_u64_word(1),
+                    source_claim: Hash64::from_u64_word(2),
+                    accepted_block: Hash64::from_u64_word(3),
+                    accepted_daa: 10,
+                    accepted_blue_score: 10,
+                },
+                export_ordinal: 0,
+                prefix: crate::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+                    class_id: context.shape_profile_id,
+                    prefix_tokens: k,
+                    state_root: declared,
+                },
+                source_execution_root: header.committed_execution_root,
+                liability_until: 30,
+                material_until: 40,
+            };
+            let mut stream = TirExportPrefixStreamV2::from_authenticated_v2(&space, &header, target, 1 << 26).unwrap();
+            for ordinal in 0..count {
+                let leaf = space.export_prefix_state_leaf_v2(context, k, ordinal).unwrap();
+                let opening =
+                    crate::palw_step_leg::step_opening_from_leaf_source_capped_v1(header.step_leaf_count, leaf.index, 1 << 26, |i| {
+                        execution.hashes[i as usize]
+                    })
+                    .unwrap();
+                let values = &execution.preimages[leaf.index as usize].values_le;
+                let saved = stream.clone();
+                assert!(stream.leaf(&space, context, &values[..values.len() - 1], &opening, 80_000).is_err());
+                assert_eq!(stream, saved);
+                stream.leaf(&space, context, values, &opening, 80_000).unwrap();
+                let encoded = borsh::to_vec(&stream).unwrap();
+                stream = borsh::from_slice(&encoded).unwrap();
+                stream.check().unwrap();
+            }
+            assert_eq!(
+                stream.verdict(),
+                Some(if declared == honest {
+                    PalwTirPrefixStateVerdictV1::Honest
+                } else {
+                    PalwTirPrefixStateVerdictV1::StateRootMismatch { derived: honest }
+                })
+            );
+        }
+
+        assert!(space.export_prefix_state_leaf_v2(context, k, count).is_none());
+        assert!(space.export_prefix_state_leaf_count_v2(context, k + 2).is_none());
+    }
     #[test]
     fn actual_scanned_nonempty_step_space_vectors_fit_additional_quote() {
         let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);

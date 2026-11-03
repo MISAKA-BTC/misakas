@@ -48,7 +48,7 @@ pub fn palw_fp_answer_envelope_view_v1(payload: &[u8], max_answer: usize) -> Opt
         crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1
     } else if inner.starts_with(b"HFP1") {
         crate::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1
-    } else if inner.starts_with(b"TFO1") {
+    } else if inner.starts_with(b"TFO1") || inner.starts_with(b"TFO2") {
         crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1
     } else {
         crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
@@ -64,6 +64,19 @@ pub fn palw_fp_answer_envelope_view_v1(payload: &[u8], max_answer: usize) -> Opt
     Some(PalwFpAnswerEnvelopeViewV1 { inner, answer: &tail[4..] })
 }
 
+/// Read accounting carriage from a literal accepted payload, including the one permitted
+/// outer provenance envelope. The view authenticates framing only; source signatures and
+/// original admission remain the native dispatcher's responsibility. The actual transaction
+/// (and thus its ID) is never rewritten to construct this view.
+pub fn palw_fp_accounting_carrier_view_v1(payload: &[u8], max_answer: usize) -> Option<PalwFpAnswerEnvelopeViewV1<'_>> {
+    let payload = if payload.starts_with(crate::palw_claim_local_v1::prefix_v1::PREFIX_DEPENDENCY_ENVELOPE_MAGIC_V1) {
+        crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1::inner_view_v1(payload).ok()?
+    } else {
+        payload
+    };
+    palw_fp_answer_envelope_view_v1(payload, max_answer)
+}
+
 /// A transaction-local answer collection. Each insertion retains both the answer ticket and its typed BTree membership.
 /// No implicit deep Clone: rehearsal and canonical extras obtain their own reservations before copying.
 #[derive(Default)]
@@ -72,6 +85,8 @@ pub struct PalwFpClaimAnswersV1 {
         crate::Hash64,
         (NativeRetainedV1<Vec<u32>>, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>),
     >,
+    /// First accepted carrier of each claim. A later identical answer does not replace it.
+    carriers: std::collections::BTreeMap<crate::Hash64, crate::Hash64>,
 }
 /// Scoped reservation for *only the answer overlay*. Existing extras fields keep their original admission contract;
 /// this is deliberately not a `NativeRetainedV1<Extras>`.
@@ -105,6 +120,10 @@ impl PalwFpClaimAnswersV1 {
         self.answers.insert(claim, (answer, lease));
         Ok(true)
     }
+    /// Record the transaction that carried this claim's accepted answer. The first id stays.
+    pub fn note_carrier_v1(&mut self, claim: crate::Hash64, carrier: crate::Hash64) {
+        self.carriers.entry(claim).or_insert(carrier);
+    }
     /// Move already constructed extras, then reserve the typed answer copies before insertion.
     /// The caller retains this owner across the full fold, rather than extracting a bare map.
     pub fn attach_v1(
@@ -121,10 +140,19 @@ impl PalwFpClaimAnswersV1 {
                 .ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 extras"))?;
             bytes = bytes.checked_add(row).ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 extras"))?;
         }
+        let carrier_row = crate::palw_native_resource_v1::btree_node_envelope_bytes_v1::<crate::Hash64, crate::Hash64>() as u64;
+        bytes = bytes
+            .checked_add(
+                carrier_row
+                    .checked_mul(self.carriers.len() as u64)
+                    .ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 carrier"))?,
+            )
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("FPA1 carrier"))?;
         let lease = reserve_native_requests_v1(bytes)?;
         for (claim, (ids, _)) in &self.answers {
             extras.fp_claim_answers.insert(*claim, ids.to_vec());
         }
+        extras.fp_winning_carriers.clone_from(&self.carriers);
         Ok(PalwFpAnswerExtrasV1 { extras, _answer_lease: lease })
     }
     pub fn compatible_v1(&self, other: &Self) -> bool {
@@ -137,6 +165,9 @@ impl PalwFpClaimAnswersV1 {
         }
         for (claim, (answer, _membership)) in other.answers {
             self.insert_v1(claim, answer)?;
+        }
+        for (claim, carrier) in other.carriers {
+            self.carriers.entry(claim).or_insert(carrier);
         }
         Ok(true)
     }
@@ -185,7 +216,7 @@ pub fn palw_fp_answer_for_carrier_v1(
     if tx.id() != carrier || tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
         return Err(NativeDecodeErrorV1::Decode("FPA1 answer is not this object's carrier"));
     }
-    let view = palw_fp_answer_envelope_view_v1(&tx.payload, decoded as usize)
+    let view = palw_fp_accounting_carrier_view_v1(&tx.payload, decoded as usize)
         .ok_or(NativeDecodeErrorV1::Decode("FPA1 framing or answer count"))?;
     if view.answer_len_v1() != decoded as usize {
         return Err(NativeDecodeErrorV1::Decode("FPA1 answer count differs from executed decode"));
@@ -232,6 +263,7 @@ mod tests {
             (b"TFP1", crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1),
             (b"HFP1", crate::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1),
             (b"TFO1", crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1),
+            (b"TFO2", crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1),
         ] {
             let mut inner = vec![0; cap];
             inner[..4].copy_from_slice(magic);
@@ -251,12 +283,16 @@ mod tests {
         let mut answers = PalwFpClaimAnswersV1::default();
         let claim = crate::Hash64::from_u64_word(1);
         answers.insert_v1(claim, answer).unwrap();
+        let carrier = crate::Hash64::from_u64_word(9);
+        answers.note_carrier_v1(claim, carrier);
+        answers.note_carrier_v1(claim, crate::Hash64::from_u64_word(8));
         let first = answers.attach_v1(Default::default()).unwrap();
         let second = answers.attach_v1(Default::default()).unwrap();
         assert_ne!(first.fp_claim_answers[&claim].as_ptr(), second.fp_claim_answers[&claim].as_ptr());
         drop(answers);
         assert_eq!(first.fp_claim_answers[&claim], vec![7, 8]);
         assert!(!first.fp_claim_answers.contains_key(&crate::Hash64::from_u64_word(2)));
+        assert_eq!(first.fp_winning_carriers.get(&claim), Some(&carrier));
     }
     #[test]
     fn local_capacity_refusal_precedes_copy_and_owner_handoff_keeps_the_ticket() {
@@ -292,6 +328,50 @@ mod tests {
         assert!(!rows.compatible_v1(&conflict));
         assert!(!rows.append_v1(conflict).unwrap());
         assert_eq!(rows.attach_v1(Default::default()).unwrap().fp_claim_answers[&claim], vec![7, 8]);
+    }
+    #[test]
+    fn accounting_accepted_append_keeps_first_carrier_and_rejected_answer_cannot_replace_it() {
+        let claim = crate::Hash64::from_u64_word(1);
+        let first = crate::Hash64::from_u64_word(2);
+        let second = crate::Hash64::from_u64_word(3);
+        let candidate = |carrier, ids: &[u32]| {
+            let mut rows = PalwFpClaimAnswersV1::default();
+            rows.insert_v1(claim, palw_fp_answer_retain_v1(&encode(&[3, 0, 1], ids), 2).unwrap()).unwrap();
+            rows.note_carrier_v1(claim, carrier);
+            rows
+        };
+        let mut accepted = PalwFpClaimAnswersV1::default();
+        assert!(accepted.append_v1(candidate(first, &[7, 8])).unwrap());
+        assert!(accepted.append_v1(candidate(second, &[7, 8])).unwrap());
+        assert!(!accepted.append_v1(candidate(second, &[7, 9])).unwrap());
+        let extras = accepted.attach_v1(Default::default()).unwrap();
+        assert_eq!(extras.fp_winning_carriers[&claim], first);
+        assert_eq!(extras.fp_claim_answers[&claim], vec![7, 8]);
+    }
+    #[test]
+    fn accounting_literal_provenance_view_preserves_outer_id_and_rejects_nested_or_trailing_wire() {
+        use crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1;
+        let wrap = |inner: &[u8]| {
+            let mut wire = b"FPR2".to_vec();
+            wire.extend(
+                borsh::to_vec(&PalwPrefixDependencyEnvelopeV1 { inner: inner.to_vec(), exports: vec![], consumed: None }).unwrap(),
+            );
+            wire
+        };
+        let plain = encode(&[3, 0, 1], &[7, 8]);
+        let wire = wrap(&plain);
+        let tx = crate::tx::Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT, 0, wire.clone());
+        let id = tx.id();
+        assert_eq!(palw_fp_answer_for_carrier_v1(&tx, id, 2).unwrap().as_slice(), &[7, 8]);
+        assert_eq!(tx.payload, wire);
+        assert_eq!(tx.id(), id);
+        assert!(palw_fp_accounting_carrier_view_v1(&wrap(&wire), 2).is_none());
+        for end in 0..wire.len() {
+            assert!(palw_fp_accounting_carrier_view_v1(&wire[..end], 2).is_none());
+        }
+        let mut trailing = wire;
+        trailing.push(0);
+        assert!(palw_fp_accounting_carrier_view_v1(&trailing, 2).is_none());
     }
     #[test]
     fn authenticated_extraction_carrier_and_decode_count_are_checked_before_answer_copy() {

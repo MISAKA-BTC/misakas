@@ -4003,8 +4003,12 @@ impl PalwPanelService {
                                     &job,
                                     initial,
                                     &own_ids,
-                                    crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
-                                        .ok_or("the public verifier does not hold the job's original public table")?,
+                                    crate::palw_public_token_table::public_table_for_claim_v1(
+                                        &tokenizer_session,
+                                        target.claim_id,
+                                        &root,
+                                        &job.tokenizer_id,
+                                    )?,
                                     &crate::palw_memory_ledger::host_ledger_v1(),
                                 )?
                             }
@@ -4966,8 +4970,7 @@ impl PalwPanelService {
                     case.arithmetic_matched || matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
                 let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
                     .ok_or("Flat Constraint loses immutable table root")?;
-                let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
-                    .ok_or("Flat exact public table is unavailable")?;
+                let table = crate::palw_public_token_table::public_table_for_claim_v1(session, claim, &root, &job.tokenizer_id)?;
                 // Streaming mask: bounded parts of the original table, never a resident vocabulary.
                 let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
                     target,
@@ -5121,8 +5124,7 @@ impl PalwPanelService {
                     case.arithmetic_matched || matches!(&case.verdict, PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
                 let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
                     .ok_or("Float32 Constraint loses immutable table root")?;
-                let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
-                    .ok_or("Float32 exact public table is unavailable")?;
+                let table = crate::palw_public_token_table::public_table_for_claim_v1(session, claim, &root, &job.tokenizer_id)?;
                 let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
                     target,
                     job,
@@ -5228,8 +5230,7 @@ impl PalwPanelService {
         let ladder = self.class_step_ladder(target.class_id);
         let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(job)
             .ok_or("TIR Constraint job loses its immutable table root")?;
-        let table = crate::palw_public_token_table::public_table_v1(&root, &job.tokenizer_id)
-            .ok_or("TIR Constraint exact public table is unavailable")?;
+        let table = crate::palw_public_token_table::public_table_for_claim_v1(session, claim, &root, &job.tokenizer_id)?;
         let mut pin = None;
         if progress.cursor.is_none() {
             let selected = session
@@ -5588,20 +5589,39 @@ impl PalwPanelService {
         let decision = tokio::task::spawn_blocking(move || -> Result<TokenizerScheduleV1, String> {
             let mut worker = worker.lock().map_err(|_| "TIR tokenizer worker lock poisoned")?;
             let build = || -> Result<TokenizerSchedulerV1, String> {
-                let path = backends
-                    .held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
-                        if chain_classes { held_session.palw_registered_class_carriage_v1(id) } else { None }
-                    })
-                    .ok_or("outside verifier does not hold registered tokenizer")?;
+                let path = backends.held_tokenizer_path_or_chain_v1(target.class_id, target.artifact_root, |id| {
+                    if chain_classes { held_session.palw_registered_class_carriage_v1(id) } else { None }
+                });
                 let original = tokenizer_scheduler::TokenizerOriginalV1::Tir { view: &view, header: &header };
-                let table = tokenizer_scheduler::registered_table_of_v1(&target, original, &job)?;
-                TokenizerSchedulerV1::open_native_v1(
-                    &path,
+                let table = tokenizer_scheduler::registered_table_of_v1(&target, original, &job);
+                if let (Some(path), Ok(table)) = (path, table) {
+                    return TokenizerSchedulerV1::open_native_v1(
+                        &path,
+                        &target,
+                        &view,
+                        &header,
+                        &job,
+                        table,
+                        &worker_progress,
+                        &crate::palw_memory_ledger::host_ledger_v1(),
+                        original_seed.as_ref(),
+                    );
+                }
+                let table = held_session
+                    .with_consensus_api_v1(|api| api.palw_rooted_family_table_v1(claim))
+                    .map_err(|e| e.to_string())?
+                    .ok_or("TIR tokenizer literal semantic table is unavailable")?;
+                let raw = held_session
+                    .with_consensus_api_v1(|api| api.palw_rooted_tokenizer_raw_v1(claim))
+                    .map_err(|e| e.to_string())?
+                    .ok_or("TIR tokenizer literal raw material is unavailable")?;
+                TokenizerSchedulerV1::open_native_rooted_v1(
+                    raw,
+                    table,
                     &target,
                     &view,
                     &header,
                     &job,
-                    table,
                     &worker_progress,
                     &crate::palw_memory_ledger::host_ledger_v1(),
                     original_seed.as_ref(),
@@ -5750,8 +5770,7 @@ impl PalwPanelService {
                 case.arithmetic_matched || matches!(&case.verdict,PalwFraudFilerVerdictV1::Mismatch(run) if run.fp_job.is_some());
             let root = kaspa_consensus_core::palw_fp_constraint_job_v1::palw_fp_constraint_table_root_v1(&context.job)
                 .ok_or("selected bootstrap loses immutable Constraint table")?;
-            let table = crate::palw_public_token_table::public_table_v1(&root, &context.job.tokenizer_id)
-                .ok_or("selected exact table unavailable")?;
+            let table = crate::palw_public_token_table::public_table_for_claim_v1(session, claim, &root, &context.job.tokenizer_id)?;
             let nominee = constraint_scheduler::nominate_authenticated_ids_v1(
                 target,
                 &context.job,

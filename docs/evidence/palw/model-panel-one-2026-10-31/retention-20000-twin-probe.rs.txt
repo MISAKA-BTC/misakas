@@ -1,0 +1,15 @@
+use kaspa_consensus_core::config::params::*;
+use kaspa_consensus_core::config::drill::*;
+fn ids(label:&str,p:&Params){println!("{label} params={} identity={} schedule={}",p.consensus_params_id(),p.consensus_identity_id(),p.consensus_schedule_id());}
+fn at20(mut p:Params)->Params{p.palw_model_panel_one_retention_v1=Some(ForkActivation::new(20_000));p.sync_palw_g14_gates_v1();p}
+fn without_attribution(p:&Params)->Params{let mut q=p.clone();q.palw_offence_attribution=None;q.palw_activation_pool=None;q.palw_readiness_v2_max_age_spans=None;q.sync_palw_readiness_v2_max_age_spans();q.palw_exec_quantum_maturity_daa=None;q}
+fn without_deadline(mut q:Params)->Params{q.palw_class_verify_deadline=None;q.sync_palw_class_verify_deadline();let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)=&q.palw_consensus_mode else{panic!()};q.blockrate.pruning_depth=palw_v2_pruning_depth_v1(&q.blockrate,bundle,q.palw_da_court,None);assert_eq!(q.blockrate.pruning_depth,12_002);q}
+fn ir_off(mut p:Params)->Params{palw_t12_arm_int11_flag_day_at_v1(&mut p,None);for f in PALW_T12_TIR_FENCE2_FENCES_V1.iter().chain(PALW_T12_MODEL_COURT_WINDOW_FENCES_V1).chain(PALW_T12_TIR_FLAG_DAY_FENCES_V1){(f.set)(&mut p,None);}p}
+fn main(){let p=at20(palw_t12_shipped_params());ids("shipped",&p);
+let mut q=p.clone();q.palw_clock_lead_cap=None;ids("T12_BEFORE_THE_CAP",&q);
+let mut q=p.clone();q.palw_exec_quantum_maturity_daa=None;ids("T12_WITHOUT_THE_MATURITY",&q);
+let mut q=p.clone();q.palw_readiness_v2_max_age_spans=None;q.sync_palw_readiness_v2_max_age_spans();ids("T12_BEFORE_THE_HORIZON",&q);
+let q=without_attribution(&p);ids("T12_BEFORE_THE_ATTRIBUTION",&q);ids("T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE",&without_deadline(q));
+let mut q=p.clone();q.evm_bridge_ledger_activation_daa_score=u64::MAX;ids("T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION",&without_attribution(&without_deadline(q)));
+let mut q=p.clone();q.palw_panel_exposure_floor=Some(PalwPanelExposureFloorV1{activation:ForkActivation::always(),reward_multiple_permille:2_000});q.timestamp_deviation_tolerance=132;q.max_block_level=250;q.palw_clock_lead_cap=None;q.palw_offence_attribution=None;q.palw_exec_quantum_maturity_daa=None;ids("PARENT_WITHOUT_THE_ATTRIBUTION",&q);
+ids("IR_OFF_SHIPPED",&ir_off(p));let mut b=[0u8;PALW_DRILL_SALT_LEN_V1];b[0]=0x7a;b[1]=0x1f;b[PALW_DRILL_SALT_LEN_V1-1]=0xa5;let s=PalwDrillSaltV1::from_bytes(b).unwrap();ids("IR_OFF_DRILL",&ir_off(at20(palw_t12_drill_params_v1(&s))));}

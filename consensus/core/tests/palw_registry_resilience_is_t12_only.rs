@@ -36,11 +36,11 @@ use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 /// release `0e8ec984e` was `b8564b88…` / `5de80e64…` / `93da24cc…`, which `palw_t12_launch_params_v1()`
 /// still hashes to): params, identity, schedule — the same pins `palw_clock_lead_cap_is_t12_only`'s
 /// `T12_WITH_THE_CAP` holds.
-// re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 3d33cad2…, f55a7039…)
+// re-pin 2026-11-01: future ModelOne retention fence at 20000 (unreleased 18850 withdrawn); derived for retention-20000; new-source regression evidence recorded separately
 const T12_RELEASE: (&str, &str, &str) = (
-    "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "253d22bbc32fbcf3f23e9333524435478a5a7b87ac9a360de6513dde4cdc5248",
     "5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5",
-    "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+    "ec5f56fa48cdeafb3a6fc953c02a2dcd53f0f54025fe7243a87972884a47eb5e",
 );
 
 /// Every other preset at the release, as `palw_clock_lead_cap_is_t12_only` pins them there.

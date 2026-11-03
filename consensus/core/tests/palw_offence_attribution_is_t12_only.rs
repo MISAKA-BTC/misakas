@@ -87,10 +87,11 @@ const BEFORE_THE_ATTRIBUTION: &[(&str, &str, &str, &str)] = &[
 /// `palw_clock_lead_cap_is_t12_only` pins that taking it away returns testnet-12's previous ids.
 /// Previous: `05173205…` / `df02039d…` / `beeaa0a8…`.
 // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 2592d935…, adb1d2f1…)
+// re-pin 2026-11-01: actual derived twin retaining the new 20000 retention fence; unreleased 18850 withdrawn.
 const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
-    "d0457fe48dfd13944527ac698259dd66ee1c6ef838d1f8e6dca68214d72f74ef",
+    "7fc34c6dbf17a337c20a16b7410f8c40024873427e9de50a2fa7617795a7c759",
     "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
-    "5258dd7a395a9ea7d5cd00b853a6dae424a83925253c183062bfce92817f34db",
+    "4050e781a9093275cfc21d7aaebd1cc835df6c80789243e53bd484ff9ef31270",
 );
 
 /// testnet-12 with this fence AND `palw_class_verify_deadline` taken away — the depth re-derived
@@ -106,10 +107,11 @@ const T12_BEFORE_THE_ATTRIBUTION: (&str, &str, &str) = (
 /// **Re-pinned 2026-09-25 with [`T12_BEFORE_THE_ATTRIBUTION`], for the lead cap**
 /// (`palw_clock_lead_cap`). Previous: `2343195d…` / `1e06025d…` / `b08b25bd…`.
 // re-pin 2026-10-31 @cc5a7dd0e096: undeployed model-one fence delayed to 18640 for verified fleet rollout (was 942a9be8…, 1b3a5dc4…)
+// re-pin 2026-11-01: actual derived twin retaining the new 20000 retention fence; unreleased 18850 withdrawn.
 const T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE: (&str, &str, &str) = (
-    "365aa673baa94e3332ec742893648532f34afcc0c228fe8b75b88e7c223474ae",
+    "488c0c510bebdddfde9810f20112d5920f0750a96155be4c1a4cc0ffd956e078",
     "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
-    "5901b120faf8e150b8734b1d34d54161db5875eba609933091591b18886be4de",
+    "ffcc2b4989da7e0f39ed83fa109d13ac0390dedcd9dd485197fbedc6ca57dbde",
 );
 
 fn shipped(name: &str) -> Params {

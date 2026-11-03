@@ -7,10 +7,10 @@ pub mod evm;
 pub mod ghostdag;
 // Historical standalone walker: it lacks the processor's complete extras.
 // Keep its transactional/reorg fixtures available without a production entrance.
+pub mod palw_positive_journal_v2;
 #[cfg(test)]
 pub mod palw_state_v2_sync;
 pub mod palw_state_walk;
-pub mod palw_positive_journal_v2;
 pub mod parents_builder;
 pub mod past_median_time;
 pub mod pruning;

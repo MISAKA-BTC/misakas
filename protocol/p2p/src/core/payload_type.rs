@@ -79,6 +79,8 @@ pub enum KaspadMessagePayloadType {
     IbdCandidateSummary,
     PalwPrefixHistoryRequest,
     PalwPrefixHistoryRecord,
+    // RFC-0037: one pruning-point row-stream generation, on the existing IBD route.
+    PruningPointPalwRowStream,
 }
 
 impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
@@ -160,6 +162,7 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::IbdCandidateSummary(_) => KaspadMessagePayloadType::IbdCandidateSummary,
             KaspadMessagePayload::PalwPrefixHistoryRequest(_) => KaspadMessagePayloadType::PalwPrefixHistoryRequest,
             KaspadMessagePayload::PalwPrefixHistoryRecord(_) => KaspadMessagePayloadType::PalwPrefixHistoryRecord,
+            KaspadMessagePayload::PruningPointPalwRowStream(_) => KaspadMessagePayloadType::PruningPointPalwRowStream,
         }
     }
 }

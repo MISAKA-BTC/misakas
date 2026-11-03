@@ -603,7 +603,8 @@ impl VirtualStateProcessor {
                     "an unambiguous bonded permit and validated transaction fees are required".into(),
                 ));
             }
-            let burned = self.palw_v2_bond_burn_obligations(&state, point.daa_score);
+            let burned =
+                self.palw_v2_bond_burn_obligations(&state, point.daa_score).map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
             let maximum_sompi = template
                 .block
                 .transactions

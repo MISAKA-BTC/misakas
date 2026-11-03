@@ -414,7 +414,7 @@ impl TransitionBuilder<'_> {
             return Err(refused("the paying bond is not Active"));
         }
         Ok((record.collateral as u128)
-            .saturating_sub(self.committed_at(bond, daa))
+            .saturating_sub(self.committed_at(bond, daa)?)
             .saturating_sub(self.read().accuser_ledger_v1(bond, daa)))
     }
 

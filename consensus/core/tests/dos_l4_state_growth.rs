@@ -189,6 +189,9 @@ fn expired_locks_and_liabilities_are_pruned_by_the_fold() {
     // The sweep runs past the G14 flag day. This lane measures pruning, so the G14 route
     // (which a direct fold does not supply extras for) stays off.
     let mut p = t12();
+    p.palw_model_panel_one_v1 = None;
+    p.palw_model_panel_one_retention_v1 = None;
+    p.sync_palw_g14_gates_v1();
     kaspa_consensus_core::config::params::palw_t12_arm_after_int13_at_v1(
         &mut p,
         kaspa_consensus_core::config::params::PALW_T12_G14_17000_FENCES_V1,

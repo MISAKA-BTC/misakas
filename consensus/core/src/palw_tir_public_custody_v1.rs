@@ -140,7 +140,15 @@ impl PalwTirPublicCustodyPledgeV1 {
         // Sign that longer promise here; changing reorg_retention_daa instead
         // would also lengthen owner idle grace and the allocation's queue bound.
         if crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1.is_some() {
-            let retention = t.material_until_daa.checked_sub(t.collect_until_daa).ok_or("quoted retention precedes collection")?;
+            let retention = if plan.acquisition.clock.version == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+            {
+                // The original material floor already includes the extended
+                // claim window; its surplus over the shorter collect door is
+                // NOT another reorg/disclosure policy term.
+                plan.acquisition.config.reorg_retention_daa
+            } else {
+                t.material_until_daa.checked_sub(t.collect_until_daa).ok_or("quoted retention precedes collection")?
+            };
             let service_span =
                 crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA.checked_add(retention).ok_or("service custody span overflows")?;
             material_span = material_span.max(service_span);
@@ -1045,3 +1053,79 @@ mod tests {
 // Exhaustive read-only native input allocation inventory; no consensus encoding change.
 #[path = "palw_native_resource_v1/private/palw_tir_public_custody_v1.rs"]
 mod native_resource_inventory_v1;
+
+// Read-only prospective archive geometry; never returns a duty/credit grant.
+impl PalwTirPublicCustodyContractV1 {
+    pub(crate) fn original_signer_count_v11(&self) -> Result<u64, &'static str> {
+        (self.grants.len() as u64).checked_add(1).ok_or("native original signer count overflow")
+    }
+}
+
+/// Physical codec envelope only. It neither constructs a panel/credit nor
+/// authenticates readiness, qualification, payment, source birth or settlement.
+pub(crate) struct OriginalCustodyPhysicalBoundV16 {
+    pub encoded_bytes_max: u64,
+    pub native_requests_max: u64,
+}
+impl PalwTirPublicOriginalCustodyV1 {
+    pub(crate) fn physical_codec_bound_v16(&self) -> Result<OriginalCustodyPhysicalBoundV16, &'static str> {
+        use crate::palw_native_resource_v1::{BTreeNodeEnvelopeV1, TirNativeRequestsV1};
+        let add = |a: u64, b: u64| a.checked_add(b).ok_or("original custody physical length sum overflow");
+        let mul = |a: u64, b: u64| a.checked_mul(b).ok_or("original custody physical length product overflow");
+        let len = |v: &dyn erased_length_v16::Length| v.length_v16();
+        let seats =
+            self.contract.pledge.maximum_custodians.checked_sub(1).ok_or("original custody physical bound has no producer slot")?;
+        // Native signed ceiling is finite and the actual old decoder rejects a
+        // panel/grant/credit count beyond it. Never use current Option::None as
+        // the future maximum and never manufacture a qualified credit value.
+        let pledge = len(&self.contract.pledge)?;
+        let terms = len(&self.contract.terms)?;
+        let signature = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+        let bond = 64 + 4;
+        let grant = add(2 + 64 + bond + 8 + 64 + 64 + 4, signature)?;
+        // Receipt verdict's largest current physical payload is Unavailable
+        // {u32,u64}; native qualification still independently requires Valid.
+        let receipt = add(64 + 13 + bond + 8 + 4, signature)?;
+        // Ready: prepared descriptor u16, seven Hash64, three u64, two u32;
+        // followed by accepted_daa:u64 and work_receipt:Hash64.
+        let ready = 2 + 7 * 64 + 3 * 8 + 2 * 4 + 8 + 64;
+        let contract = add(add(pledge, terms)?, add(add(4, mul(seats, bond)?)?, add(4, mul(seats, add(bond + 8, grant)?)?)?)?)?;
+        let panel = add(1 + 64 + 8 + 4, mul(seats, bond)?)?;
+        let credits = add(4, mul(seats, add(bond, add(receipt, ready)?)?)?)?;
+        let encoded = add(contract, add(panel, credits)?)?;
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<Self>(1).map_err(|_| "original custody native wrapper overflow")?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<PalwBondKeyV2, ()>>(mul(seats, 2)?).map_err(|_| "original custody native seats overflow")?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<PalwBondKeyV2, (u64, PalwTirPublicCustodyGrantV1)>>(seats)
+            .map_err(|_| "original custody native grants overflow")?;
+        q.exact_v1::<BTreeNodeEnvelopeV1<PalwBondKeyV2, PalwTirPublicOriginalCreditV1>>(seats)
+            .map_err(|_| "original custody native credits overflow")?;
+        q.exact_v1::<u8>(mul(add(mul(seats, 2)?, 1)?, signature)?).map_err(|_| "original custody native signatures overflow")?;
+        Ok(OriginalCustodyPhysicalBoundV16 { encoded_bytes_max: encoded, native_requests_max: q.bytes_v1() })
+    }
+}
+// Object-safe length bridge performs a counting serialization, no allocation.
+mod erased_length_v16 {
+    pub(super) trait Length {
+        fn length_v16(&self) -> Result<u64, &'static str>;
+    }
+    impl<T: borsh::BorshSerialize> Length for T {
+        fn length_v16(&self) -> Result<u64, &'static str> {
+            borsh::object_length(self).map(|n| n as u64).map_err(|_| "original custody physical codec length")
+        }
+    }
+}
+
+impl PalwTirPublicCustodyContractV1 {
+    /// Borrow only already-credited signed source grants. Drawn/potential slots
+    /// are NOT actual actors and are never synthesized by this observer.
+    pub(crate) fn visit_original_actor_grants_v11<E>(
+        &self,
+        mut visit: impl FnMut(PalwBondKeyV2, u64, &PalwTirPublicCustodyGrantV1) -> Result<(), E>,
+    ) -> Result<(), E> {
+        for (bond, (credited, grant)) in &self.grants {
+            visit(*bond, *credited, grant)?;
+        }
+        Ok(())
+    }
+}

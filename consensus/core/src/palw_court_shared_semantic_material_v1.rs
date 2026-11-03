@@ -233,6 +233,9 @@ impl Store<'_> {
         eog: &[u8],
         raw: &[u8],
     ) -> Result<NativeRetainedV1<SemanticMaterialInventoryV1>, E<String>> {
+        if renderings.is_empty() && eog.is_empty() && raw.is_empty() {
+            return self.retain_rooted_semantic_material_v1(state, claim);
+        }
         self.retain_semantic_reserved_v1(state, claim, renderings, eog, raw, reserve_native_requests_v1)
     }
     fn retain_semantic_reserved_v1<F>(
@@ -271,7 +274,7 @@ impl Store<'_> {
         };
         let additional = output_requests(scope, renderings, eog)?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(additional).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
         }
         let value = decode_material(scope, renderings, eog, raw)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
@@ -494,10 +497,13 @@ impl Store<'_> {
         renderings: &[&[u8]],
         eog: &[u8],
     ) -> Result<NativeRetainedV1<SemanticTableMaterialV1>, E<String>> {
+        if renderings.is_empty() && eog.is_empty() {
+            return self.retain_rooted_semantic_table_material_v1(state, claim);
+        }
         let (binding, mut lease) = self.semantic_table_context_reserved_v1(state, claim, reserve_native_requests_v1)?;
         let additional = table_requests::<SemanticTableMaterialV1>(binding, renderings, eog)?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(additional).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
         }
         let (renderings, eog, counts) = decode_table(binding, renderings, eog)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(SemanticTableMaterialV1 { binding, renderings, eog, counts }, lease))
@@ -542,5 +548,103 @@ impl Store<'_> {
             super::constraint_terminal::ConstraintMaterialV1 { eog: &material.eog, renderings: &material.renderings },
             budget,
         )
+    }
+}
+
+impl Store<'_> {
+    /// Resolve literal completed supplier material, retaining source authentication
+    /// and every decoded allocation through the existing terminal builders.
+    pub(crate) fn retain_rooted_semantic_table_material_v1(
+        &self,
+        state: &PalwChainStateV2,
+        claim: Hash64,
+    ) -> Result<NativeRetainedV1<SemanticTableMaterialV1>, E<String>> {
+        use crate::palw_public_token_table_v1::PalwPublicTokenTableSourceV1;
+        let (binding, mut lease) = self.semantic_table_context_reserved_v1(state, claim, reserve_native_requests_v1)?;
+        let rooted = crate::palw_court_rooted_semantic_v1::palw_retain_rooted_family_table_v1(state, claim)?
+            .ok_or_else(|| bad("rooted semantic table is not completed"))?;
+        let table = rooted.table_v1();
+        let leaves = u64::from(binding.vocab) + 1;
+        let depth = 64 - leaves.saturating_sub(1).leading_zeros() as u64;
+        let path_capacity = if depth == 0 { 0 } else { depth.max(4).next_power_of_two() };
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<SemanticTableMaterialV1>(1).map_err(E::Resource)?;
+        q.exact_v1::<Rendering>(u64::from(binding.vocab)).map_err(E::Resource)?;
+        let bytes = table
+            .entries
+            .iter()
+            .try_fold(0u64, |n, b| n.checked_add(b.as_ref().map_or(0, |b| b.len() as u64)))
+            .ok_or_else(|| resource("rooted rendering byte count"))?;
+        q.exact_v1::<u8>(bytes).map_err(E::Resource)?;
+        q.exact_v1::<u32>(table.eog_token_ids.len() as u64).map_err(E::Resource)?;
+        q.exact_v1::<Hash64>(
+            leaves
+                .checked_mul(path_capacity)
+                .and_then(|n| n.checked_add(path_capacity))
+                .ok_or_else(|| resource("rooted all-ID path count"))?,
+        )
+        .map_err(E::Resource)?;
+        if let Some(ticket) = lease.as_mut() {
+            ticket.grow_memory_v1(q.bytes_v1()).map_err(E::Resource)?;
+        }
+        let eog = Eog { ids: table.eog_token_ids.clone(), opening: rooted.opening_v1(binding.vocab).map_err(E::Decode)? };
+        let mut renderings = Vec::new();
+        renderings.try_reserve_exact(binding.vocab as usize).map_err(|_| resource("rooted renderings"))?;
+        let mut counts = SemanticMaterialCountsV1 {
+            vocabulary: binding.vocab,
+            present: 0,
+            absent: 0,
+            rendering_bytes: bytes,
+            eog_ids: eog.ids.len() as u64,
+            opening_siblings: eog.opening.siblings.len() as u64,
+            encoded_opening_bytes: borsh::object_length(&eog).map_err(wire_error)? as u64,
+            raw_bytes: 0,
+        };
+        for (id, body) in table.entries.iter().enumerate() {
+            let value =
+                Rendering { id: id as u32, rendering: body.clone(), opening: rooted.opening_v1(id as u32).map_err(E::Decode)? };
+            if body.is_some() {
+                counts.present += 1
+            } else {
+                counts.absent += 1
+            }
+            add(&mut counts.opening_siblings, value.opening.siblings.len() as u64)?;
+            add(&mut counts.encoded_opening_bytes, borsh::object_length(&value).map_err(wire_error)? as u64)?;
+            renderings.push(value);
+        }
+        Ok(NativeRetainedV1::from_owner_reserved_v1(SemanticTableMaterialV1 { binding, renderings, eog, counts }, lease))
+    }
+    pub(crate) fn retain_rooted_semantic_material_v1(
+        &self,
+        state: &PalwChainStateV2,
+        claim: Hash64,
+    ) -> Result<NativeRetainedV1<SemanticMaterialInventoryV1>, E<String>> {
+        let held = self.retain_rooted_semantic_table_material_v1(state, claim)?;
+        let raw = crate::palw_court_rooted_semantic_v1::palw_retain_rooted_tokenizer_raw_v1(state, claim)?
+            .ok_or_else(|| bad("rooted tokenizer raw is not completed"))?;
+        let sem = state.claim_semantics_v1(&claim).ok_or_else(|| bad("semantic snapshot missing"))?;
+        let eof = state.staged_tokenizer_inventory_v1(sem.tokenizer_id).ok_or_else(|| bad("actual EOF absent"))?;
+        let (table, mut lease) = held.into_parts_v1();
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<u8>(raw.len() as u64).map_err(E::Resource)?;
+        // The inventory owner's inline fields are larger than the table owner's.
+        q.exact_v1::<SemanticMaterialInventoryV1>(1).map_err(E::Resource)?;
+        if let Some(ticket) = lease.as_mut() {
+            ticket.grow_memory_v1(q.bytes_v1()).map_err(E::Resource)?;
+        }
+        let mut counts = table.counts;
+        counts.raw_bytes = raw.len() as u64;
+        let value = SemanticMaterialInventoryV1 {
+            source: table.binding.source,
+            claim,
+            scope: table.binding.scope,
+            semantics: table.binding.semantics,
+            inventory: eof.inventory_id,
+            renderings: table.renderings,
+            eog: table.eog,
+            raw: raw.to_vec(),
+            counts,
+        };
+        Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
     }
 }

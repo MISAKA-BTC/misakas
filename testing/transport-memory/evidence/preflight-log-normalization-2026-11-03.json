@@ -1,0 +1,13 @@
+{
+  "scope": "Committed presentation logs have trailing whitespace removed. Exact raw evidence remains at the referenced source commit. No test result content changed.",
+  "files": {
+    "preflight-merge-2026-11-03.log": {
+      "rawSha256": "d59f2bdf1b393bcf2868d688b7d0e4fa0a9b0cc70f147079565033c465bfdd22",
+      "rawGitCommit": "081dd86dee712d992449e2de2f0c09dd338c281a"
+    },
+    "preflight-merge-reproduction-2026-11-03.log": {
+      "rawSha256": "844735ebe16bd4044b48983e51a65e358379112043fcbe24de99b016e6701a6a",
+      "rawGitCommit": "081dd86dee712d992449e2de2f0c09dd338c281a"
+    }
+  }
+}

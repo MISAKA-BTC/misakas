@@ -81,6 +81,9 @@ use kaspa_muhash::MuHash;
 use libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair;
 use std::sync::Arc;
 
+#[path = "rfc0041_bond_free_bootstrap.rs"]
+mod bond_free_bootstrap;
+
 const T12_GENESIS_CARDS: usize = 8;
 
 #[path = "t12_real_attempt.rs"]
@@ -199,6 +202,7 @@ pub(super) fn t12_with_harness_cards_over(
         None,
     );
     params.palw_model_panel_one_v1 = None;
+    params.palw_model_panel_one_retention_v1 = None;
     params.sync_palw_g14_gates_v1();
 
     // The divergence is stated, not assumed: testnet-12 ships the lane at genesis.
@@ -230,6 +234,7 @@ pub(super) fn t12_with_harness_cards_over(
         None,
     );
     expected.palw_model_panel_one_v1 = None;
+    expected.palw_model_panel_one_retention_v1 = None;
     expected.sync_palw_g14_gates_v1();
     let PalwConsensusMode::ConsensusV2(shipped_bundle) = &expected.palw_consensus_mode else { unreachable!() };
     assert_eq!(bundle.state, shipped_bundle.state, "every window as shipped with the public-genesis G14 fences removed");
@@ -428,6 +433,9 @@ impl T12Chain {
         let (t, _) = self.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open on testnet-12");
         assert_eq!(t.block.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1);
         self.ctx.simulated_time = self.ctx.simulated_time.max(t.block.header.timestamp);
+        // The adapter can advance the final stamp. Keep the opted-in instance
+        // validation clock on that same simulated instant before insertion.
+        self.arm_clock();
         self.heartbeats += 1;
         self.insert_chain_block(t.block, "a heartbeat").await
     }

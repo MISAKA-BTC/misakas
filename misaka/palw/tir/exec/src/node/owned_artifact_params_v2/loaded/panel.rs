@@ -6,8 +6,7 @@ use super::{E, LoadedWideArtifactV2, Result, cap, plus};
 use crate::node::{
     memory::TirMemoryReserverV1,
     positive_wide_material_v2::{
-        CaptureExpectedV2, WidePanelCaptureV2, WidePanelDiskReserverV2, WidePanelLimitsV2,
-        WidePanelWorkV2, capture_one_pass_v2,
+        CaptureExpectedV2, WidePanelCaptureV2, WidePanelDiskReserverV2, WidePanelLimitsV2, WidePanelWorkV2, capture_one_pass_v2,
     },
     run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirWideRunLimitsV2},
 };
@@ -25,23 +24,11 @@ impl LoadedWideArtifactV2<'_> {
     /// and startup prior claims) is added internally with checked arithmetic.
     /// No supplied maximum is raised. Mandatory disk guard is still acquired by
     /// the existing Work producer; this is not a new disk/RAM policy or ledger.
-    pub fn wide_panel_work(
-        &self,
-        mut limits: WidePanelLimitsV2,
-        disk: &WidePanelDiskReserverV2,
-    ) -> Result<WidePanelWorkV2> {
-        limits.external_retained_bytes = plus(
-            self.quote.operation_retained_bytes,
-            limits.external_retained_bytes,
-        )?;
+    pub fn wide_panel_work(&self, mut limits: WidePanelLimitsV2, disk: &WidePanelDiskReserverV2) -> Result<WidePanelWorkV2> {
+        limits.external_retained_bytes = plus(self.quote.operation_retained_bytes, limits.external_retained_bytes)?;
         cap(limits.external_retained_bytes, limits.max_live_heap_bytes)?;
-        WidePanelWorkV2::new(
-            limits,
-            self.inputs.verified.class_id(),
-            self.inputs.verified.context_hash(),
-            disk,
-        )
-        .map_err(|_| E::Prepared)
+        WidePanelWorkV2::new(limits, self.inputs.verified.class_id(), self.inputs.verified.context_hash(), disk)
+            .map_err(|_| E::Prepared)
     }
 
     /// EXACTLY the existing Root one-pass capture on this private resident
@@ -90,7 +77,6 @@ impl LoadedWideArtifactV2<'_> {
             space: self.inputs.verified.space(),
             prompt,
         };
-        capture_one_pass_v2(expected, &runner, run_limits, work, tape, reserver)
-            .map_err(|_| E::Prepared)
+        capture_one_pass_v2(expected, &runner, run_limits, work, tape, reserver).map_err(|_| E::Prepared)
     }
 }

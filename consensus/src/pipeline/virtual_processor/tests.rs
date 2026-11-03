@@ -20,6 +20,8 @@ use kaspa_consensus_core::{
 use std::{collections::VecDeque, thread::JoinHandle};
 
 mod palw_mergeset_view;
+mod round_observer_snapshot_v1;
+mod template_parent_snapshot_v1;
 // RFC-0018 §10 T-1/T-2: three models × three miners from the same parents; arrival-order independence (unbuilt source).
 mod rfc0018_dag_siblings;
 mod rfc18_dag_width;
@@ -3253,7 +3255,7 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     // EVERY Active bond's collateral is locked at every score — the panel's seats included, since
     // a seat that could spend its stake out from under a claim is a seat with nothing at risk.
     for daa in [0, 1, 1_000_000, u64::MAX] {
-        let locked = vp.palw_v2_locked_bond_outpoints(&state, daa);
+        let locked = vp.palw_v2_locked_bond_outpoints(&state, daa).unwrap();
         for outpoint in &registered {
             assert!(locked.contains(outpoint), "an Active bond's collateral must be locked at daa {daa}");
         }
@@ -3265,7 +3267,7 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     let plain_consensus = TestConsensus::new(&plain);
     let _lt = plain_consensus.init();
     assert!(
-        plain_consensus.virtual_processor().palw_v2_locked_bond_outpoints(&state, 0).is_empty(),
+        plain_consensus.virtual_processor().palw_v2_locked_bond_outpoints(&state, 0).unwrap().is_empty(),
         "no bundle, no bond policy, nothing locked — every shipped preset is unchanged"
     );
 }
@@ -13359,7 +13361,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     let _ = vp.palw_adopt_class_carriage_v1_impl(class_id, &[]);
     let _ = vp.palw_seat_duties_v2_impl(&mine);
     let _ = vp.palw_producer_facts_v2_impl(class_id, Some(bond_key.0));
-    let _ = vp.palw_fp_spendable_v3_impl(bond_key.0);
+    let _ = vp.palw_fp_spendable_with_parent_v3_impl(bond_key.0);
     let _ = vp.palw_locked_bond_outpoints_v2_impl();
     let _ = vp.palw_v2_receipt_quorum_assemble_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1), &[]);
     // ADR-0152 P2-10: claim row v3 and `getPalwVesting` (op 199) — every query shape, each a read
@@ -13408,7 +13410,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
         // ownership): the template's exact-parent state, the EVM as-of post state, the checked pruning-point capture.
         "evm_template_parent_owned_v2",
         "palw_evm_post_state_owned_v2",
-        "capture_pruning_point_palw_state_checked_v1",
+        "capture_pruning_point_palw_state_while_v1",
     ];
     // Every file of the processor, not only the guard list's: the 10-13 split put callers in files the list does not name
     // (`processor/palw_evm_asof_v2.rs`, `processor/evm_market_owned_v2.rs`, `processor/palw_pruning_capture_v1.rs`, ...).
@@ -17683,6 +17685,7 @@ mod rfc12_reserve_settlement;
 
 mod carrier_bond_rent_conservation;
 
+mod family_supplier_node_candidate;
 mod funded_original_native_candidate;
 
 mod pruning_snapshot_readiness_v1;
@@ -17691,3 +17694,81 @@ mod evm_asof_owned_v2;
 
 #[cfg(feature = "evm")]
 mod evm_view_vertical_v2;
+
+#[path = "tests/native_bond_exit_capacity_v3.rs"]
+mod native_bond_exit_capacity_v3;
+
+/// Actual TestConsensus -> checked ConsensusApi -> selected-sink reader -> cold
+/// DbPalwStateV2Store. Reuse the existing accepted-block/private-class fixture;
+/// no synthetic state, native paid authority, claim, or reader Result is installed.
+#[tokio::test]
+async fn rfc0038_checked_winner_api_actual_cold_tip_corruption_and_missing_state_refuse() {
+    use kaspa_consensus_core::{palw_mode_v2::PalwConsensusMode, palw_native_resource_v1::NativeDecodeErrorV1};
+    use kaspa_database::{
+        create_temp_db,
+        prelude::{CachePolicy, ConnBuilder},
+        registry::DatabaseStorePrefixes,
+    };
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (tx, _rx) = async_channel::unbounded();
+    let mut ctx = TestContext::new(TestConsensus::with_db(db.clone(), &config, tx));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let claim = kaspa_hashes::Hash64::from_u64_word(0x38_0001);
+    let vp = ctx.consensus.virtual_processor();
+    let cold = || {
+        // Both caches are actual production caches. Reopen them rather than
+        // allowing a previously authenticated Arc to hide newly corrupted disk.
+        let reopened = vp.palw_state_v2_store.read().clone_with_new_cache(CachePolicy::Empty);
+        *vp.palw_state_v2_store.write() = reopened;
+        *vp.palw_reader_snapshot.lock() = None;
+    };
+    cold();
+    let (tip, state) = vp.palw_v2_reader_state(&bundle.state).unwrap().expect("real accepted state exists");
+    assert_eq!(tip, vp.lkg_virtual_state.load().ghostdag_data.selected_parent);
+    assert_eq!(state.last_point().unwrap().block, tip);
+    drop(state);
+    assert_eq!(
+        ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim).unwrap(),
+        None,
+        "successful materialized state without this index permits legacy unique fallback, not reader failure"
+    );
+    let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Tip.into();
+    let original = db.get(&prefix).unwrap().expect("actual native tip writer persisted its row");
+    assert!(original.len() > 1);
+
+    // Preserve the real identity row and corrupt ONLY the actual serialized tip.
+    // Its stored native root/accepted point are never fabricated or recomputed.
+    db.put(&prefix, [0xff]).unwrap();
+    cold();
+    assert!(matches!(vp.palw_v2_reader_state(&bundle.state), Err(_)), "cold native store must reject the actual corrupt row");
+    assert!(ctx.consensus.palw_kernel_route_v1().is_none(), "legacy Option reader loses this failure");
+    assert!(
+        matches!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim), Err(NativeDecodeErrorV1::Decode(_))),
+        "checked API must refuse, never return Ok(None) and enable unique fallback"
+    );
+
+    // Exact original bytes restore the original accepted state through a cold
+    // production read; no test-created state is substituted for the old root.
+    db.put(&prefix, original).unwrap();
+    cold();
+    assert_eq!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim).unwrap(), None);
+    vp.palw_state_v2_store.write().delete_tip_for_tests().unwrap();
+    cold();
+    assert!(matches!(vp.palw_v2_reader_state(&bundle.state), Ok(None)));
+    assert!(
+        matches!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim), Err(NativeDecodeErrorV1::Decode(_))),
+        "even genuine missing state must not become a successfully absent index"
+    );
+}

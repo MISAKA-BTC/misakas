@@ -1,0 +1,11 @@
+   Compiling kaspad v1.1.0 (/Users/wata/.codex/worktrees/g14-producer-panel-one/MISAKA-testnet/kaspad)
+    Finished `test` profile [unoptimized] target(s) in 35.74s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/kaspad_lib-916f8f66c9fabc37)
+
+running 3 tests
+test palw_producer::accepted_rider_tests::accepted_effective_obligation_pins_old_own_and_foreign_material ... ok
+test palw_producer::accepted_rider_tests::accepted_rider_inherits_stored_obligation_only_inside_exact_window ... ok
+test palw_producer::accepted_rider_tests::g14_floor_submission_cadence_uses_exact_network_millisecond_boundary ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1012 filtered out; finished in 0.05s
+

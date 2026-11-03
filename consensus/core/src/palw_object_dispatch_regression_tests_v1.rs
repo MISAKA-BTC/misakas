@@ -105,7 +105,7 @@ fn paired_fp_late_original_deposit_failure_restores_the_entire_checkpoint() {
     // At 1 permille this leaves exactly the ordinary commitment's room.
     let mut limited_ordinary = TransitionBuilder::try_new(&state, &params, false, false, false, false, &extras).unwrap();
     apply_object(&mut limited_ordinary, &ctx, &object).unwrap();
-    assert_eq!(limited_ordinary.gate_room(&producer, ctx.daa_score, PalwRcoreGateV1::Work), 0);
+    assert_eq!(limited_ordinary.gate_room(&producer, ctx.daa_score, PalwRcoreGateV1::Work).unwrap(), 0);
     assert!(limited_ordinary.state.claim(&claim).is_some());
     assert!(!limited_ordinary.entries.is_empty());
     assert!(plan.terms.plan.deposit_sompi > 0);

@@ -20,3 +20,13 @@ kaspa-hashes.workspace = true
 borsh.workspace = true
 serde_json.workspace = true
 libc.workspace = true
+
+# A separate measurement package avoids building BASE-0's unrelated conversion
+# binaries when running its real-artifact integration harness.
+[[test]]
+name = "g14_real_model_measure"
+path = "../../misaka/palw/base0/tests/g14_real_model_measure.rs"
+
+[dev-dependencies]
+misaka-palw-base0.workspace = true
+sha2.workspace = true

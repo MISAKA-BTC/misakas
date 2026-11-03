@@ -9,6 +9,7 @@ use crate::{
 use kaspa_consensus_core::BlockHash; // PR-9.5e: DAG tips are block hashes (Hash64)
 use kaspa_consensus_core::{
     BlockHashSet,
+    api::ConsensusApi,
     tx::{ScriptPublicKey, ScriptPublicKeys},
     utxo::utxo_diff::UtxoDiff,
 };
@@ -40,16 +41,110 @@ pub struct UtxoIndex {
 impl UtxoIndex {
     /// Creates a new [`UtxoIndex`] within a [`RwLock`]
     pub fn new(consensus_manager: Arc<ConsensusManager>, db: Arc<DB>) -> UtxoIndexResult<Arc<RwLock<Self>>> {
+        Self::new_with_session(consensus_manager, db, None)
+    }
+
+    /// Constructs the index during single-threaded daemon assembly, before any
+    /// consensus processor or notification service can start. These metadata
+    /// reads do not enqueue worker tasks. Waiting for processor readiness here
+    /// would prevent Core::start from ever starting those processors.
+    ///
+    /// Runtime construction and resync must use `new` and its guarded sessions.
+    pub fn new_before_processors(consensus_manager: Arc<ConsensusManager>, db: Arc<DB>) -> UtxoIndexResult<Arc<RwLock<Self>>> {
+        let instance = consensus_manager.consensus();
+        let session = instance.unguarded_session_blocking();
+        Self::new_with_session(consensus_manager, db, Some(&*session))
+    }
+
+    fn new_with_session(
+        consensus_manager: Arc<ConsensusManager>,
+        db: Arc<DB>,
+        bootstrap_session: Option<&dyn ConsensusApi>,
+    ) -> UtxoIndexResult<Arc<RwLock<Self>>> {
         let mut utxoindex =
             Self { consensus_manager: consensus_manager.clone(), store: Store::new(db), monotonic_circulating_supply: 0 };
-        if !utxoindex.is_synced()? {
-            utxoindex.resync()?;
+        let synced = match bootstrap_session {
+            Some(session) => utxoindex.is_synced_with_session(session)?,
+            None => utxoindex.is_synced()?,
+        };
+        if !synced {
+            match bootstrap_session {
+                Some(session) => utxoindex.resync_with_session(session)?,
+                None => utxoindex.resync()?,
+            }
         } else {
             utxoindex.monotonic_circulating_supply = utxoindex.store.get_circulating_supply()?;
         }
         let utxoindex = Arc::new(RwLock::new(utxoindex));
         consensus_manager.register_consensus_reset_handler(Arc::new(UtxoIndexConsensusResetHandler::new(Arc::downgrade(&utxoindex))));
         Ok(utxoindex)
+    }
+
+    fn is_synced_with_session(&self, session: &dyn ConsensusApi) -> UtxoIndexResult<bool> {
+        trace!("[{0}] checking sync status...", IDENT);
+
+        let utxoindex_tips = self.store.get_tips();
+        match utxoindex_tips {
+            Ok(utxoindex_tips) => {
+                let consensus_tips = session.get_virtual_parents();
+                let res = *utxoindex_tips == consensus_tips;
+                trace!("[{0}] sync status is {1}", IDENT, res);
+                Ok(res)
+            }
+            Err(error) => match error {
+                StoreError::KeyNotFound(_) => {
+                    //Means utxoindex tips database is empty i.e. not sync'd.
+                    trace!("[{0}] sync status is {1}", IDENT, false);
+                    Ok(false)
+                }
+                other_store_errors => Err(UtxoIndexError::StoreAccessError(other_store_errors)),
+            },
+        }
+    }
+    fn resync_with_session(&mut self, session: &dyn ConsensusApi) -> UtxoIndexResult<()> {
+        info!("Resyncing the utxoindex...");
+
+        self.store.delete_all()?;
+        let consensus_tips = session.get_virtual_parents();
+        let mut circulating_supply: CirculatingSupply = 0;
+
+        //Initial batch is without specified seek and none-skipping.
+        let mut virtual_utxo_batch = session.get_virtual_utxos(None, RESYNC_CHUNK_SIZE, false);
+        let mut current_chunk_size = virtual_utxo_batch.len();
+        trace!("[{0}] resyncing with batch of {1} utxos from consensus db", IDENT, current_chunk_size);
+        // While loop stops resync attempts from an empty utxo db, and unneeded processing when the utxo state size happens to be a multiple of [`RESYNC_CHUNK_SIZE`]
+        while current_chunk_size > 0 {
+            // Potential optimization TODO: iterating virtual utxos into an [UtxoIndexChanges] struct is a bit of overhead (i.e. a potentially unneeded loop),
+            // but some form of pre-iteration is done to extract and commit circulating supply separately.
+
+            let mut utxoindex_changes = UtxoIndexChanges::new(); //reset changes.
+
+            let next_outpoint_from = Some(virtual_utxo_batch.last().expect("expected a last outpoint").0);
+            utxoindex_changes.add_utxos_from_vector(virtual_utxo_batch);
+
+            circulating_supply += utxoindex_changes.supply_change as CirculatingSupply;
+
+            self.store.update_utxo_state(&utxoindex_changes.utxo_changes.added, &utxoindex_changes.utxo_changes.removed, true)?;
+
+            if current_chunk_size < RESYNC_CHUNK_SIZE {
+                break;
+            };
+
+            virtual_utxo_batch = session.get_virtual_utxos(next_outpoint_from, RESYNC_CHUNK_SIZE, true);
+            current_chunk_size = virtual_utxo_batch.len();
+            trace!("[{0}] resyncing with batch of {1} utxos from consensus db", IDENT, current_chunk_size);
+        }
+
+        // Commit to the remaining stores.
+
+        trace!("[{0}] committing circulating supply {1} from consensus db", IDENT, circulating_supply);
+        self.store.insert_circulating_supply(circulating_supply, true)?;
+        self.monotonic_circulating_supply = circulating_supply;
+
+        trace!("[{0}] committing consensus tips {consensus_tips:?} from consensus db", IDENT);
+        self.store.set_tips(consensus_tips, true)?;
+
+        Ok(())
     }
 }
 
@@ -66,6 +161,24 @@ impl UtxoIndexApi for UtxoIndex {
         trace!("[{0}] retrieving utxos from {1} script public keys", IDENT, script_public_keys.len());
 
         self.store.get_utxos_by_script_public_key(script_public_keys)
+    }
+
+    fn get_utxos_by_script_public_keys_bounded(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+    ) -> StoreResult<UtxoSetByScriptPublicKey> {
+        self.store.get_utxos_by_script_public_key_bounded(script_public_keys, max_entries)
+    }
+
+    fn get_utxos_by_script_public_keys_reserved(
+        &self,
+        script_public_keys: ScriptPublicKeys,
+        max_entries: usize,
+        per_entry_bytes: u64,
+        base_bytes: u64,
+    ) -> StoreResult<(UtxoSetByScriptPublicKey, kaspa_core::memory_budget::MemoryLease)> {
+        self.store.get_utxos_by_script_public_key_reserved(script_public_keys, max_entries, per_entry_bytes, base_bytes)
     }
 
     /// Retrieve a bounded page of utxos for a single script public key from the utxoindex db.
@@ -129,28 +242,9 @@ impl UtxoIndexApi for UtxoIndex {
     ///
     /// **Note:** Due to sync gaps between the utxoindex and consensus, this function is only reliable while consensus is not processing new blocks.
     fn is_synced(&self) -> UtxoIndexResult<bool> {
-        trace!("[{0}] checking sync status...", IDENT);
-
         let consensus = self.consensus_manager.consensus();
         let session = futures::executor::block_on(consensus.session_blocking());
-
-        let utxoindex_tips = self.store.get_tips();
-        match utxoindex_tips {
-            Ok(utxoindex_tips) => {
-                let consensus_tips = session.get_virtual_parents();
-                let res = *utxoindex_tips == consensus_tips;
-                trace!("[{0}] sync status is {1}", IDENT, res);
-                Ok(res)
-            }
-            Err(error) => match error {
-                StoreError::KeyNotFound(_) => {
-                    //Means utxoindex tips database is empty i.e. not sync'd.
-                    trace!("[{0}] sync status is {1}", IDENT, false);
-                    Ok(false)
-                }
-                other_store_errors => Err(UtxoIndexError::StoreAccessError(other_store_errors)),
-            },
-        }
+        self.is_synced_with_session(&*session)
     }
     /// Deletes and reinstates the utxoindex database, syncing it from scratch via the consensus database.
     ///
@@ -158,52 +252,9 @@ impl UtxoIndexApi for UtxoIndex {
     /// 1) There is an implicit expectation that the consensus store must have VirtualParent tips. i.e. consensus database must be initiated.
     /// 2) resyncing while consensus notifies of utxo differences, may result in a corrupted db.
     fn resync(&mut self) -> UtxoIndexResult<()> {
-        info!("Resyncing the utxoindex...");
-
-        self.store.delete_all()?;
         let consensus = self.consensus_manager.consensus();
         let session = futures::executor::block_on(consensus.session_blocking());
-
-        let consensus_tips = session.get_virtual_parents();
-        let mut circulating_supply: CirculatingSupply = 0;
-
-        //Initial batch is without specified seek and none-skipping.
-        let mut virtual_utxo_batch = session.get_virtual_utxos(None, RESYNC_CHUNK_SIZE, false);
-        let mut current_chunk_size = virtual_utxo_batch.len();
-        trace!("[{0}] resyncing with batch of {1} utxos from consensus db", IDENT, current_chunk_size);
-        // While loop stops resync attempts from an empty utxo db, and unneeded processing when the utxo state size happens to be a multiple of [`RESYNC_CHUNK_SIZE`]
-        while current_chunk_size > 0 {
-            // Potential optimization TODO: iterating virtual utxos into an [UtxoIndexChanges] struct is a bit of overhead (i.e. a potentially unneeded loop),
-            // but some form of pre-iteration is done to extract and commit circulating supply separately.
-
-            let mut utxoindex_changes = UtxoIndexChanges::new(); //reset changes.
-
-            let next_outpoint_from = Some(virtual_utxo_batch.last().expect("expected a last outpoint").0);
-            utxoindex_changes.add_utxos_from_vector(virtual_utxo_batch);
-
-            circulating_supply += utxoindex_changes.supply_change as CirculatingSupply;
-
-            self.store.update_utxo_state(&utxoindex_changes.utxo_changes.added, &utxoindex_changes.utxo_changes.removed, true)?;
-
-            if current_chunk_size < RESYNC_CHUNK_SIZE {
-                break;
-            };
-
-            virtual_utxo_batch = session.get_virtual_utxos(next_outpoint_from, RESYNC_CHUNK_SIZE, true);
-            current_chunk_size = virtual_utxo_batch.len();
-            trace!("[{0}] resyncing with batch of {1} utxos from consensus db", IDENT, current_chunk_size);
-        }
-
-        // Commit to the remaining stores.
-
-        trace!("[{0}] committing circulating supply {1} from consensus db", IDENT, circulating_supply);
-        self.store.insert_circulating_supply(circulating_supply, true)?;
-        self.monotonic_circulating_supply = circulating_supply;
-
-        trace!("[{0}] committing consensus tips {consensus_tips:?} from consensus db", IDENT);
-        self.store.set_tips(consensus_tips, true)?;
-
-        Ok(())
+        self.resync_with_session(&*session)
     }
 
     // This can have a big memory footprint, so it should be used only for tests.
@@ -407,3 +458,7 @@ mod tests {
         drop(tc);
     }
 }
+
+#[cfg(test)]
+#[path = "startup_tests.rs"]
+mod startup_tests;

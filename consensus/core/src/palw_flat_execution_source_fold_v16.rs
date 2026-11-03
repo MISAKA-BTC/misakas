@@ -259,7 +259,7 @@ pub(super) fn request(
             crate::palw_model_artifact_v2::model_artifact_work_v2(0, SOURCE_ANSWER_MAX_BYTES_V16 as usize).unwrap(),
         ));
     let payer = builder.state.bonds.get(signer).unwrap();
-    if (payer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if (payer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Err(refused("source original requester bond unavailable"));
     }
     let d = NativeSourceDemandV16 {

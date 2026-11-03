@@ -9,8 +9,10 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         // consumer operation, never inferred from their encoded row length here.
         sum = sum.merge(BTreeMap::<(u8, Vec<u8>), Vec<u8>>::scan_native_wire_v1(reader)?)?;
         let count = reader.word()? as u64;
-        // Canonical Borsh map ordering detects repeated Positive keys before
-        // BTreeMap decoding could collapse them. Previous-key memory is fixed.
+        let mut gc_content = 0u64;
+        let mut gc_rows = 0u64;
+        let mut gc_key_bytes = 0u64;
+        // Previous Positive key is fixed scratch; duplicates cannot collapse in BTreeMap decode.
         let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
         let mut previous_positive_len = 0usize;
         for _ in 0..count {
@@ -36,6 +38,13 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
                 previous_positive_len = n;
             }
             sum = sum.allocation(key_bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux key allocation overflow"))?, 1)?;
+            if table == 144 && key_bytes == 65 && matches!(key[0], b'N' | b'B') {
+                gc_content = gc_content.checked_add(1).ok_or_else(|| wire::wire_bad("GC wire row count"))?;
+            }
+            if table == 144 && matches!(key[0], b'N' | b'B' | b'I' | b'A') {
+                gc_rows = gc_rows.checked_add(1).ok_or_else(|| wire::wire_bad("GC key row count"))?;
+                gc_key_bytes = gc_key_bytes.checked_add(key_bytes).ok_or_else(|| wire::wire_bad("GC key byte sum"))?;
+            }
             let row_bytes = reader.word()? as u64;
             if row_bytes > reader.remaining() {
                 return Err(wire::wire_bad("native aux row exceeds frame"));
@@ -45,6 +54,14 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             if frame.remaining() != 0 {
                 return Err(wire::wire_bad("native aux row codec has trailing/mismatched bytes"));
             }
+            let shape = if table == 144 && key[0] == b'A' {
+                shape.allocation(
+                    shape.collection_entries.checked_add(2).ok_or_else(|| wire::wire_bad("GC archive plan pins"))?,
+                    crate::palw_state_v2::context_gc_change_unit_v3(),
+                )?
+            } else {
+                shape
+            };
             sum = sum.merge(
                 shape.allocation(row_bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux byte allocation overflow"))?, 1)?,
             )?;
@@ -60,6 +77,17 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             count.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux scratch count overflow"))?,
             size_of::<typed::BTreeNodeEnvelopeV1<[u8; 64], u32>>(),
         )?;
+        if gc_rows != 0 {
+            sum = sum.allocation(gc_rows, size_of::<Vec<u8>>())?.allocation(gc_key_bytes, 1)?;
+        }
+        if gc_content != 0 {
+            sum = sum.allocation(gc_content, crate::palw_state_v2::context_gc_resident_unit_v3())?;
+            sum = sum.allocation(
+                1,
+                usize::try_from(crate::palw_state_v2::context_gc_fixed_scratch_v3().map_err(|_| wire::wire_bad("GC scratch shape"))?)
+                    .map_err(|_| wire::wire_bad("GC scratch host width"))?,
+            )?;
+        }
         sum.outer_entries = count;
         sum.collection_entries =
             sum.collection_entries.checked_add(count).ok_or_else(|| wire::wire_bad("native aux count overflow"))?;
@@ -214,7 +242,30 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         161 if key_bytes == 64 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         161 => return Err(wire::wire_bad("unallocated rejected-response marker namespace")),
         // RFC-0018 (2026-10-15): SecurityCertified rows (aux 136, 65-byte keys: prefix ‖ 64-byte id).
+        144 if key_bytes == 65 && prefix == b'D' && k[1..].iter().all(|b| *b == 0) => {
+            crate::palw_state_v2::scan_checkpoint_descriptor_wire_v3(frame)?
+        }
+        144 if matches!(key_bytes, 66 | 70 | 130 | 134) && prefix == b'V' => {
+            crate::palw_state_v2::PalwClaimRecordRowV2::scan_native_wire_v1(frame)?
+        }
+        144 if key_bytes == 65 && prefix == b'Q' => crate::palw_state_v2::PalwClaimMaterialReferenceV2::scan_native_wire_v1(frame)?,
+        144 if key_bytes == 65 && prefix == b'M' => crate::palw_state_v2::PalwClaimMaterialBlobV2::scan_native_wire_v1(frame)?,
+        144 if key_bytes == 65 && prefix == b'K' => crate::palw_state_v2::PalwClosedKernelOriginV1::scan_native_wire_v1(frame)?,
+        144 if key_bytes == 65 && prefix == b'S' => crate::palw_state_v2::PalwClosedClaimSourceV1::scan_native_wire_v1(frame)?
+            .allocation(
+                1,
+                std::mem::size_of::<
+                    crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+                        (crate::Hash64, crate::palw_state_v2::PalwLegacyCarrierLocatorV9),
+                        (),
+                    >,
+                >(),
+            )?,
         144 if key_bytes == 65 && prefix == b'F' => crate::palw_claim_local_v1::PalwClaimLiabilityFrameV1::scan_native_wire_v1(frame)?,
+        144 if key_bytes == 65 && prefix == b'E' => {
+            crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1::scan_native_wire_v1(frame)?
+        }
+        144 if key_bytes == 73 && prefix == b'X' => <u8 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         144 if key_bytes == 65 && prefix == b'R' => {
             crate::palw_claim_local_v1::PalwClaimLocalRewardHoldV1::scan_native_wire_v1(frame)?
         }
@@ -253,6 +304,30 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         136 if key_bytes == 65 && prefix == crate::palw_security_certification_v1::CERTIFICATION_NETWORK_PREFIX_V1 => {
             crate::palw_security_certification_v1::PalwCertificationNetworkRowV1::scan_native_wire_v1(frame)?
         }
+        // Native39 canonical archives: FULL writer keys; these codecs confer no
+        // approval/computation authority. Owner semantic validation remains mandatory.
+        193 if key_bytes == 64 => {
+            let shape = crate::palw_native39_frontier_v1::Native39FrontierAnchorV1::scan_native_wire_v1(frame)?;
+            // Restore retains the typed anchor list and one additional nested frozen
+            // source copy. Size dynamic children by their actual typed scan, not n bytes.
+            shape
+                .allocation(shape.heap, 1)?
+                .allocation(1, size_of::<(crate::Hash64, crate::palw_native39_frontier_v1::Native39FrontierAnchorV1)>())?
+        }
+        193 => return Err(wire::wire_bad("unallocated native39 frontier anchor key")),
+        194 if k == crate::palw_native39_settlement_checkpoint_v1::NATIVE39_SETTLEMENT_CHECKPOINT_KEY_V1.as_slice() => {
+            crate::palw_native39_settlement_checkpoint_v1::Native39SettlementCheckpointV1::scan_native_wire_v1(frame)?
+        }
+        194 => return Err(wire::wire_bad("unallocated native39 settlement checkpoint key")),
+        195 if key_bytes == 64 => crate::palw_native_closed_facts_v1::NativeClosedFactRowV1::scan_native_wire_v1(frame)?
+            .allocation(1, size_of::<(crate::Hash64, crate::palw_native_closed_facts_v1::NativeClosedFactRowV1)>())?,
+        195 => return Err(wire::wire_bad("unallocated native closed fact key")),
+        // Exact native budget primary/index rows (same canonical body). The
+        // producer key is 0x02 || Borsh(TransactionOutpoint:64+4) || budget id64.
+        197 if (key_bytes == 65 && prefix == 1) || (key_bytes == 133 && prefix == 2) => {
+            crate::palw_native_budget_binding_v1::NativeBudgetBindingV1::scan_native_wire_v1(frame)?
+        }
+        197 => return Err(wire::wire_bad("unallocated native budget binding key")),
         121 => match (key_bytes, prefix) {
             (65, 0x41) => crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2::scan_native_wire_v1(frame)?,
             (65, 0x42) => crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2::scan_native_wire_v1(frame)?,
@@ -1104,6 +1179,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         105 => return Err(wire::wire_bad("unallocated aux table 105 row namespace")),
         106 => return Err(wire::wire_bad("unallocated aux table 106 row namespace")),
         112 => return Err(wire::wire_bad("unallocated aux table 112 row namespace")),
+        136 if key_bytes == 65 && prefix == b'P' => super::positive_certification::scan_positive_certification_row_v2(k, frame)?,
         115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136 => {
             return Err(wire::wire_bad("unallocated aux row namespace"));
         }
@@ -1120,6 +1196,17 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         142 if key_bytes == 65 && prefix == crate::palw_paid_claim_trap_v1::PALW_PAID_CLAIM_TRAP_COMMITMENT_PREFIX_V1 => {
             crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1::scan_native_wire_v1(frame)?
         }
+        142 if key_bytes == 137 && prefix == 4 => {
+            misaka_palw_kernel::verifier_fee_consent_v1::VerifierFeeConsentV1::scan_native_wire_v1(frame)?
+        }
+        142 if key_bytes == 137 && prefix == 5 => crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1::scan_native_wire_v1(frame)?,
+        142 if key_bytes == 65 && prefix == 6 => <u64 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        142 if key_bytes == 65 && prefix == 7 => crate::palw_verifier_watch_v1::PalwVerifierWatchRowV1::scan_native_wire_v1(frame)?,
+        142 if key_bytes == 73 && prefix == 8 => <u8 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        142 if key_bytes == 65 && prefix == 9 => crate::palw_verifier_watch_v1::PalwFrozenWatcherPoolV1::scan_native_wire_v1(frame)?,
+        142 if key_bytes == 65 && prefix == 10 => {
+            crate::palw_verifier_watch_v1::PalwWatcherClaimContextV1::scan_native_wire_v1(frame)?
+        }
         142 => return Err(wire::wire_bad("unallocated paid-claim trap row namespace")),
         143 if key_bytes == 129 && prefix == crate::palw_g14_lane_closure_v1::PALW_KERNEL_SIGNER_LOCK_PREFIX_V1 => {
             crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1::scan_native_wire_v1(frame)?
@@ -1131,6 +1218,25 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1::scan_native_wire_v1(frame)?
         }
         143 => return Err(wire::wire_bad("unallocated G14 lane-closure row namespace")),
+        167 if key_bytes == 64 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(frame)?.allocation(
+            1,
+            std::mem::size_of::<
+                crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+                    (crate::Hash64, crate::palw_state_v2::PalwLegacyCarrierLocatorV9),
+                    (),
+                >,
+            >(),
+        )?,
+        167 => return Err(wire::wire_bad("unallocated winning-carrier row namespace")),
+        // Scoped context rows: exact native writer key shapes; unknown keys stay refused.
+        144 if key_bytes == 65 && prefix == b'N' => {
+            crate::palw_claim_local_context_nodes_v2::ContextNodeV2::scan_native_wire_v1(frame)?
+        }
+        144 if key_bytes == 65 && prefix == b'B' => <Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
+        144 if prefix == b'I' && (key_bytes == 18 || (key_bytes == 84 && k[1..3] == 2u16.to_le_bytes())) => {
+            crate::palw_claim_local_context_nodes_v2::ComponentRootV2::scan_native_wire_v1(frame)?
+        }
+        144 if key_bytes == 65 && prefix == b'A' => crate::palw_state_v2::palw_scan_scoped_archive_wire_v2(frame)?,
         144 if key_bytes == 66 && prefix == crate::palw_native_liability_hold_v1::PALW_NATIVE_HELD_FEE_PREFIX_V1 => {
             crate::palw_native_liability_hold_v1::PalwNativeHeldFeeRowV1::scan_native_wire_v1(frame)?
         }
@@ -1148,6 +1254,42 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
             crate::palw_native_post_final_duty_row_v1::PalwNativePostFinalMaterialRowV1::scan_native_wire_v1(frame)?
         }
         144 => return Err(wire::wire_bad("unallocated native liability hold row namespace")),
+        // Adopted Court material/supplier rows: dispatch ONLY exact native writer key shapes.
+        169 if key_bytes == 65 && prefix == 1 => {
+            crate::palw_court_family_material_v1::FamilyMaterialDraftV1::scan_native_wire_v1(frame)?
+        }
+        169 if key_bytes == 73 && prefix == 2 => {
+            crate::palw_court_family_material_v1::FamilyMaterialPartV1::scan_native_wire_v1(frame)?
+        }
+        169 if key_bytes == 65 && prefix == 3 => {
+            crate::palw_court_family_material_v1::FamilyMaterialBodyV1::scan_native_wire_v1(frame)?
+        }
+        169 if key_bytes == 65 && prefix == 4 => {
+            crate::palw_court_family_material_v1::FamilyTableInventoryRowV1::scan_native_wire_v1(frame)?
+        }
+        169 if key_bytes == 65 && prefix == 5 => {
+            crate::palw_court_family_material_v1::FamilyDraftReservationV2::scan_native_wire_v1(frame)?
+        }
+        169 if key_bytes == 65 && prefix == 6 => {
+            crate::palw_court_family_material_v1::FamilyPrimaryDraftV2::scan_native_wire_v1(frame)?
+        }
+        169 => return Err(wire::wire_bad("unallocated Court family material row namespace")),
+        192 if key_bytes == 64 => crate::palw_court_family_supplier_v1::FamilySupplierRowV1::scan_native_wire_v1(frame)?,
+        192 if key_bytes == 65 && prefix == 1 => {
+            crate::palw_court_family_supplier_v1::FamilySupplierStatusV2::scan_native_wire_v1(frame)?
+        }
+        192 if key_bytes == 129 && prefix == 2 => {
+            crate::palw_court_family_supplier_v1::FamilySupplierCompletionV2::scan_native_wire_v1(frame)?
+        }
+        192 if key_bytes == 129 && prefix == 3 => {
+            crate::palw_court_family_supplier_v1::FamilyPrimaryWindowV2::scan_native_wire_v1(frame)?
+        }
+        192 if key_bytes == 65 && prefix == 4 => {
+            crate::palw_court_family_supplier_v1::FamilyCarrierProjectionRowV3::scan_native_wire_v1(frame)?
+        }
+        192 => return Err(wire::wire_bad("unallocated Court family supplier row namespace")),
+        196 if key_bytes == 128 => crate::palw_state_v2::LegacyPendingFactV1::scan_native_wire_v1(frame)?,
+        196 => return Err(wire::wire_bad("unallocated legacy pending source namespace")),
         145 if key_bytes == 65 && prefix == crate::palw_receipt_pause_v2::PALW_RECEIPT_PAUSE_PREFIX_V2 => {
             crate::palw_receipt_pause_v2::PalwReceiptPauseRowV2::scan_native_wire_v1(frame)?
         }
@@ -1208,6 +1350,8 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
                     size_of::<typed::BTreeNodeEnvelopeV1<(u8, u64, crate::Hash64), ()>>(),
                 )?
         }
+        191 if key_bytes == 132 => crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2::scan_native_wire_v1(frame)?,
+        191 => return Err(wire::wire_bad("unallocated finite provider fee V2 row namespace")),
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),
         _ => {
             return Err(std::io::Error::new(

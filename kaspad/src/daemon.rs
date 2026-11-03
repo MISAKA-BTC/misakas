@@ -164,6 +164,12 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     // `--palw-drill-genesis-salt`.
     crate::palw_drill::palw_drill_validate_args_v1(args)?;
 
+    if let Some(providers) = &args.palw_redemption_providers {
+        let parsed = misaka_palw_remote::transport::parse_provider_list_v1(providers).map_err(ConfigError::PalwRedemptionProviders)?;
+        if parsed.is_empty() {
+            return Err(ConfigError::PalwRedemptionProviders("at least one provider is required".into()));
+        }
+    }
     if !args.connect_peers.is_empty() && !args.add_peers.is_empty() {
         return Err(ConfigError::MixedConnectAndAddPeers);
     }
@@ -509,6 +515,14 @@ pub(crate) fn create_core_with_runtime_inner(
     if let Err(err) = validate_args(args) {
         println!("{}", err);
         exit(1);
+    }
+
+    let (evidence_provider_dirs, evidence_provider_http, rejected_evidence_providers) =
+        misaka_palw_remote::transport::split_verifier_evidence_sources_v1(args.palw_evidence_provider_dir.as_deref().unwrap_or(""));
+    if rejected_evidence_providers != 0 {
+        kaspa_core::warn!(
+            "{rejected_evidence_providers} evidence provider URL(s) ignored; use up to eight numeric http:// endpoints or local directories"
+        );
     }
 
     // Before any service constructs its holdings, because the check has to be the same for all of
@@ -1250,7 +1264,7 @@ Do you confirm? (y/n)";
                 }
             });
         }
-        let utxoindex = UtxoIndexProxy::new(UtxoIndex::new(consensus_manager.clone(), utxoindex_db).unwrap());
+        let utxoindex = UtxoIndexProxy::new(UtxoIndex::new_before_processors(consensus_manager.clone(), utxoindex_db).unwrap());
         let index_service = Arc::new(IndexService::new(&notify_service.notifier(), subscription_context.clone(), Some(utxoindex)));
         Some(index_service)
     } else {
@@ -1559,7 +1573,24 @@ Do you confirm? (y/n)";
         // produce" — was unreachable whenever the flag was present. The sibling panel wiring gates
         // on `palw_court.is_some()`, which is what makes this a lost invariant and not a style.
         let base_class_id = palw_configured_producer_class(args, &config).or(base_class_id);
-        match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &palw_producer_pay_address) {
+        // RFC-0041: with no genesis bond and no --palw-producer-bond, the base-class producer names
+        // a placeholder outpoint. It is not registered. The coinbase pays the pay address; the
+        // ordinary registration spends that matured output or an owned genesis UTXO.
+        let genesis_bond_free = palw_bundle
+            .as_ref()
+            .is_some_and(|bundle| kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&bundle.genesis_objects));
+        let producer_bond = args
+            .palw_producer_bond
+            .clone()
+            .or_else(|| genesis_bond_free.then(kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_label_v1));
+        if args.palw_producer_bond.is_none() && producer_bond.is_some() {
+            info!(
+                "PALW genesis registers no bond: the base-class producer mines the existing idle-floor coinbase. \
+                 Its attempt outpoint is not a bond and not a premine. --palw-register-bond spends a matured \
+                 coinbase or a genesis UTXO this key owns; PALW starts once that ordinary bond is active."
+            );
+        }
+        match (base_class_id, &args.palw_producer_key, &producer_bond, &palw_producer_pay_address) {
             (Some(class_id), Some(key_path), Some(bond), Some(pay_address)) => {
                 Some(Arc::new(crate::palw_producer::PalwProducerService::new(
                     crate::palw_producer::PalwProducerConfig {
@@ -1578,7 +1609,18 @@ Do you confirm? (y/n)";
                         attempt_retention: std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
                         riders: args.palw_riders,
                         // RFC-0009: builder mode's authorization directory (unread while `palw_receipt_spend_v4` is dormant).
-                        redemption_auth_dir: args.palw_redemption_auth_dir.clone().map(std::path::PathBuf::from),
+                        redemption_auth_dir: args.palw_redemption_auth_dir.clone().map(PathBuf::from).or_else(|| {
+                            args.palw_redemption_providers
+                                .as_ref()
+                                .map(|_| app_dir.join(network.to_prefixed()).join("palw-redemptions"))
+                        }),
+                        redemption_providers: args
+                            .palw_redemption_providers
+                            .as_deref()
+                            .map(misaka_palw_remote::transport::parse_provider_list_v1)
+                            .transpose()
+                            .expect("redemption providers validated at startup")
+                            .unwrap_or_default(),
                         // A fresh network's genesis is always "too old" for the sync rule; the
                         // operator's flag is the only thing that can say "start anyway".
                         enable_unsynced_mining: args.enable_unsynced_mining,
@@ -2190,14 +2232,9 @@ Do you confirm? (y/n)";
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
-                        // RFC-0009 stage B: the directories a material pull is also answered from (empty: as before).
-                        evidence_provider_dirs: args
-                            .palw_evidence_provider_dir
-                            .as_deref()
-                            .map(|dirs| {
-                                dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect()
-                            })
-                            .unwrap_or_default(),
+                        // RFC-0009 stage B: optional configured evidence sources.
+                        evidence_provider_dirs,
+                        evidence_provider_http,
                         // Lane G14-K: the kernel-route verifier's registered models (empty: it does nothing).
                         // Lane ROLES: the verifier is a duty — the files the flag names plus every *.palwkm the node holds in its
                         // default directory. Only loaded once the kernel route's fence is in force (palw_kernel_verifier).

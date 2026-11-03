@@ -69,6 +69,15 @@ struct Args {
     /// `LowerOpts::gdn_core_wide`: deliver a gated-delta core on the wide rail's finer grid (default off: the programs as before).
     #[arg(long)]
     gdn_core_wide: bool,
+    /// Main projection weight width; must match palw-tir-convert for a comparable program.
+    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u8).range(8..=16))]
+    linear_weight_bits: u8,
+    /// Attention projection weight precision (8 or 16); other main weights keep their selected width.
+    #[arg(long, default_value_t = 8)]
+    attention_weight_bits: u8,
+    /// Dense MLP output/down projection precision (8 or 16).
+    #[arg(long, default_value_t = 8)]
+    mlp_down_weight_bits: u8,
     /// Stop after calibration (with `--stats-out`, a statistics dump).
     #[arg(long)]
     calibrate_only: bool,
@@ -88,6 +97,10 @@ struct Args {
     /// reference evaluator and far faster) instead of the reference evaluator.
     #[arg(long)]
     exec: bool,
+    /// Retain at most this many MiB of float logits during short --exec checks,
+    /// releasing the float head before integer execution. Zero always streams.
+    #[arg(long, default_value_t = 256)]
+    reference_cache_mib: u64,
     /// With `--exec`: also run the first N positions of the first evaluation sequence on the
     /// reference evaluator and refuse unless every logit is equal.
     #[arg(long, default_value_t = 0)]
@@ -204,7 +217,14 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
             budget_bytes: a.spill_carries_budget_mib << 20,
         }));
     }
-    let opts = LowerOpts { max_window: a.max_window, gdn_core_wide: a.gdn_core_wide, ..LowerOpts::default() };
+    let opts = LowerOpts {
+        max_window: a.max_window,
+        gdn_core_wide: a.gdn_core_wide,
+        linear_weight_bits: a.linear_weight_bits,
+        attention_weight_bits: a.attention_weight_bits,
+        mlp_down_weight_bits: a.mlp_down_weight_bits,
+        ..LowerOpts::default()
+    };
     misaka_palw_tir_lower::detmath::set_mode(
         misaka_palw_tir_lower::detmath::MathMode::parse(&a.math).ok_or_else(|| format!("--math {}: libm-v1 or std", a.math))?,
     );
@@ -453,7 +473,14 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     misaka_palw_tir_lower::ram_account::stage("fidelity.float");
     // On the typed backend both sides are compared a position at a time: the float reference runs
     // to the post block's inputs and the post block (stateless) is evaluated per position.
-    let (fl, post_in) = if a.exec {
+    let cache_float_logits = a.exec && rows_bytes / 3 <= a.reference_cache_mib.saturating_mul(1 << 20);
+    if cache_float_logits {
+        log(format!(
+            "caching {} MiB of reference logits to release the float head before integer execution",
+            rows_bytes / 3 / (1 << 20)
+        ));
+    }
+    let (fl, post_in) = if a.exec && !cache_float_logits {
         let post_in = misaka_palw_tir_lower::float_ref::stream::run_to_post(&prep.hl, &loader, &eval, &progress("float"))
             .map_err(|e| e.to_string())?;
         (Vec::new(), post_in)
@@ -472,11 +499,15 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         }
         let mut first: Vec<Vec<f64>> = Vec::new();
         let mut dump: Option<(Vec<f32>, Vec<f32>)> = a.logits_out.as_ref().map(|_| (Vec::new(), Vec::new()));
-        let post_store = loader.load(prep.hl.post, None).map_err(|e| e.to_string())?;
+        let post_store = if cache_float_logits { None } else { Some(loader.load(prep.hl.post, None).map_err(|e| e.to_string())?) };
         let mut float_err: Option<String> = None;
         for (si, s) in eval.iter().enumerate() {
             fidelity::int_logits_exec_each(&prep.lowered.program, &mat.params, s, mat.logits_scale, &mut |p, row| {
-                let f = match misaka_palw_tir_lower::float_ref::stream::post_logits(&prep.hl, &post_store, &post_in[si][p], s[p], p) {
+                let reference_row = match &post_store {
+                    None => Ok(fl[si][p].clone()),
+                    Some(store) => misaka_palw_tir_lower::float_ref::stream::post_logits(&prep.hl, store, &post_in[si][p], s[p], p),
+                };
+                let f = match reference_row {
                     Ok(f) => f,
                     Err(e) => {
                         float_err.get_or_insert(e.to_string());
@@ -574,6 +605,7 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
         "program_digest": artifact::program_digest(&prep.lowered.program),
         "artifact_digest": digest,
         "artifact_bytes": mat.params.bytes(),
+        "weight_precision": { "linear_bits": a.linear_weight_bits, "attention_bits": a.attention_weight_bits, "mlp_down_bits": a.mlp_down_weight_bits },
         "calibration": { "source": calib_src, "sequences": calib.len(), "positions": calib.iter().map(Vec::len).sum::<usize>(), "length_rule": calibrated },
         "evaluation": { "source": eval_src, "sequences": eval.len(), "positions": eval.iter().map(Vec::len).sum::<usize>() },
         "metrics": m,

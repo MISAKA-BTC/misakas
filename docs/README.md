@@ -16,6 +16,7 @@
 | ノード・モデル・RPC を運用 | [運用](operations/README.md) |
 | PALW の claim・court・bond・fence を CLI で読む・object を出す | [PALW CLI ガイド](guides/palw-cli.md) |
 | 全体の構成を理解 | [アーキテクチャ](architecture/overview.md) |
+| 固定する構造・責務とモデル別DAG並列生成を確認 | [PALW Architecture Specification](architecture/palw-specification.md) |
 | 採用済み規則と適用条件を確認 | [仕様](spec/README.md) |
 | API・設定・manifest を参照 | [リファレンス](reference/README.md) |
 | 採用理由・技術設計・未決事項を読む | [ADR](adr/README.md) / [RFC](rfc/README.md) / [詳細設計](design/README.md) |

@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_native_closed_facts_v1::tests::closed_fact_codec_preserves_unsliced_identity_and_exact_liability_clocks ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5364 filtered out; finished in 0.00s
+

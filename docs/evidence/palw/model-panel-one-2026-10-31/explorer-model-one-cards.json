@@ -1,0 +1,82 @@
+{
+  "deployment": {
+    "deployedUtc": "2026-10-31T13:31:08.556866+00:00",
+    "beforeSha256": "3d3b15b582c59e027d5e870a640285080198b48c1bb30da7133e92aa4b8948b5",
+    "afterSha256": "e08a95eef65dab68c549177916352ef71d9b0a9c7b2018921ec4a9f13c5850c1",
+    "backup": "/root/misaka-incident-20261031/explorer-model-one-cards-backup",
+    "patchScope": "G14 explicit arming class cards and non-gating historical readiness labels only",
+    "claimCountsOrFiltersChanged": false,
+    "nodeOrDatabaseChanged": false,
+    "privateKeysIncluded": false
+  },
+  "publicRenderVerification": {
+    "verifiedUtc": "2026-10-31T13:33:42.495Z",
+    "publicSourceSha256": "e08a95eef65dab68c549177916352ef71d9b0a9c7b2018921ec4a9f13c5850c1",
+    "publicRpc": "wss://misakascan.com/kaspa",
+    "armingNowDaa": 18652,
+    "registryActive": false,
+    "qwenHistoricalRegistry": {
+      "state": "Held",
+      "readySeatsNow": 6,
+      "requiredReadySeats": 7
+    },
+    "qwenFacts": {
+      "available": true,
+      "daa": 18651,
+      "epochBudget": 1000,
+      "epochProduced": 119,
+      "bondKnown": false,
+      "notReadyReason": "no bond was named in this request \u2014 readiness is a property of a bond"
+    },
+    "allAssertionsPassed": true,
+    "browserPixelVerification": false,
+    "browserBlocker": "CUA browser inventory is empty in this follow-up; public JS plus actual live RPC rendering verified",
+    "newClaimSuccessNotClaimed": true
+  },
+  "classCardsText": "  PALW-BASE-0  floor  \n       deterministic integer floor \u2014 no model file \n        floor class available  \n       epoch:  0 / 998  blocks \u00b7 claims 21,657,728 pwu/block \n       issuance  40.0%  of epoch blocks \u00b7 weight  0.00%  \n       class f1c5635c    QWEN25-A16-8K  LLM  \n       Qwen/Qwen2.5-1.5B/graph-v7@8192 \u00b7 W8A16 static PTQ, 8k held context \n        G14 \u00b7 1 seat \u00b7 whole claim   class available  \n       epoch:  119 / 1,000  blocks \u00b7 claims 1,388,926,972,416 pwu/block \n       issuance  40.0%  of epoch blocks \u00b7 weight  0.08%  \u00b7 \u00d764,131 floor pwu \n       class ebf44d0a    QWEN25-A16-2M  LLM  \n       Qwen/Qwen2.5-1.5B/graph-v7@2097152 \u00b7 W8A16 static PTQ, 2M held context \n        G14 \u00b7 1 seat \u00b7 whole claim   class available  \n       epoch:  0 / 500  blocks \u00b7 claims 3,357,281,757,221,376 pwu/block \n       issuance  20.0%  of epoch blocks \u00b7 weight  99.9%  \u00b7 \u00d7155,015,418 floor pwu \n       class 74c67e63  ",
+  "classificationRegression": {
+    "observedUtc": "2026-10-31T13:21:35.521Z",
+    "liveSourceSha256": "3d3b15b582c59e027d5e870a640285080198b48c1bb30da7133e92aa4b8948b5",
+    "results": [
+      {
+        "name": "historicalQwen",
+        "headerDaa": 18389,
+        "blockHash": "102114f6f8ceeb7f118b54c1dc5abd6a13cb6d9081f20525972d966640542f693752bfe9993066b984e65af73a15152b03ee8f79ad826d08b5ca7273e11f862a",
+        "decodedClassId": "ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01",
+        "nodeKind": "REAL",
+        "kind": "REAL",
+        "homeCategory": "consensus",
+        "typePill": "<span class=\"pill blue\" title=\"a merged blue\">C-BLUE \u00b7 consensus</span>"
+      },
+      {
+        "name": "postFenceFloor",
+        "headerDaa": 18641,
+        "blockHash": "83f78e67018cce9d93959f93675dad6d384bf960cb5d1056ecb27fa16811345854d4aeb38d71b0c0b6411b41abd060886fb04ff31e7cbc51794d6bd1aa69590d",
+        "decodedClassId": "f1c5635c6e47e96e7af864789c94523335dc56584af297cb8cc19021c228b897bee1a50145597e45f8ca2727349bf4aa352a98cc05274b7f059a176642f623c8",
+        "nodeKind": "FALLBACK",
+        "kind": "FALLBACK",
+        "homeCategory": "consensus",
+        "typePill": "<span class=\"pill\" title=\"MISAKA-FALLBACK-V1: an idle-time liveness block\">FALLBACK</span>"
+      }
+    ],
+    "scope": "Codec/classification regression from real RPC blocks; historical Qwen is not new G14 runtime success",
+    "allAssertionsPassed": true
+  },
+  "localBackups": {
+    "clean": "/tmp/misaka-chain-20261031/clean-app-before-model-one-cards.js",
+    "originalMain": "/tmp/misaka-chain-20261031/original-main-app-before-model-one-cards.js"
+  },
+  "validation": {
+    "cleanSyntax": true,
+    "originalMainSyntax": true,
+    "publicSyntax": true,
+    "newTestsPassedPerSource": 4,
+    "sourceVariantsTested": [
+      "clean worktree",
+      "original main with user edits retained",
+      "public downloaded JavaScript"
+    ],
+    "existingOriginalRegistryTestsPassed": 5
+  },
+  "newG14ModelClaimObserved": false
+}

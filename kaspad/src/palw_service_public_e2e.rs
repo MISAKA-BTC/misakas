@@ -120,6 +120,9 @@ pub(super) fn fixture_config_with(
     tiled: bool,
 ) -> (Config, PalwConsensusParamsV2, Vec<Funding>, Vec<Funding>) {
     let mut params = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 12));
+    // This historical fixture deliberately disarms dependencies of the later all-model route.
+    params.palw_model_panel_one_v1 = None;
+    params.palw_model_panel_one_retention_v1 = None;
     let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else { unreachable!() };
     let mut row = 0;
     for object in &mut bundle.genesis_objects {
@@ -552,6 +555,7 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         improve_tamper: None,
         retention_dir: dir.join("empty-retention"),
         evidence_provider_dirs: vec![],
+        evidence_provider_http: vec![],
         kernel_models: vec![],
         kernel_roles: Default::default(),
         register_class: None,

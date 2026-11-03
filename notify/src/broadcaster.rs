@@ -13,6 +13,7 @@ use derive_more::Deref;
 use futures::{future::FutureExt, select_biased};
 use indexmap::IndexMap;
 use kaspa_core::{debug, trace};
+use parking_lot::Mutex;
 use std::{
     collections::HashMap,
     fmt::Display,
@@ -23,29 +24,32 @@ use std::{
 };
 use workflow_core::channel::Channel;
 
+#[path = "registration_state.rs"]
+mod registration_state;
+use registration_state::{RegistrationState, RegistrationToken};
+
 type ConnectionSet<T> = HashMap<ListenerId, T>;
 
 /// Broadcasting plan structured by subscription, encoding and connection
 #[derive(Deref)]
-struct Plan<C: Connection>(IndexMap<DynSubscription, HashMap<C::Encoding, ConnectionSet<C>>>);
+struct Plan<C: Connection>(IndexMap<DynSubscription, HashMap<C::Encoding, ConnectionSet<(RegistrationToken, C)>>>);
 
 impl<C> Plan<C>
 where
     C: Connection,
 {
-    fn insert(&mut self, subscription: DynSubscription, id: ListenerId, connection: C) -> Option<C> {
-        // Make sure only one instance of ìd` is registered in the whole object
-        let result = self.remove(&id);
+    fn insert_snapshot_entry(&mut self, subscription: DynSubscription, id: ListenerId, token: RegistrationToken, connection: C) {
+        // The authoritative snapshot has one entry per (event, listener), so
+        // rebuilding a plan does not need a linear scan to remove duplicates.
         let encoding = connection.encoding();
         self.0.entry(subscription.clone()).or_default().entry(encoding).or_default().entry(id).or_insert_with(|| {
             #[cfg(test)]
             trace!("Broadcasting plan: insert listener {} with {:?}", id, subscription);
-            connection
+            (token, connection)
         });
-        result
     }
 
-    fn remove(&mut self, id: &ListenerId) -> Option<C> {
+    fn remove(&mut self, id: &ListenerId) -> Option<(RegistrationToken, C)> {
         let mut result = None;
         let mut found_subscription: Option<DynSubscription> = None;
         let mut found_encoding: Option<C::Encoding> = None;
@@ -87,15 +91,6 @@ impl<C: Connection> Default for Plan<C> {
     }
 }
 
-#[derive(Clone, Debug)]
-enum Ctl<C>
-where
-    C: Connection,
-{
-    Register(DynSubscription, ListenerId, C),
-    Unregister(EventType, ListenerId),
-}
-
 #[derive(Debug)]
 pub(crate) struct Broadcaster<N, C>
 where
@@ -106,7 +101,11 @@ where
     index: usize,
     context: SubscriptionContext,
     started: Arc<AtomicBool>,
-    ctl: Channel<Ctl<C>>,
+    // Bounded wakeups carry no command history. The complete desired state is
+    // authoritative even while a slow downstream send prevents this worker
+    // from polling control. Memory follows active registrations, not churn.
+    ctl: Channel<()>,
+    registrations: Mutex<RegistrationState<(EventType, ListenerId), (DynSubscription, C)>>,
     incoming: Receiver<N>,
     shutdown: Channel<()>,
     /// Sync channel, for handling of messages in predictable sequence; exclusively intended for tests.
@@ -130,7 +129,8 @@ where
             index,
             context,
             started: Arc::new(AtomicBool::default()),
-            ctl: Channel::unbounded(),
+            ctl: Channel::bounded(1),
+            registrations: Mutex::new(RegistrationState::default()),
             incoming,
             _sync,
             shutdown: Channel::oneshot(),
@@ -152,21 +152,17 @@ where
             // Broadcasting plan by event type
             let mut plan = EventArray::<Plan<C>>::default();
             // Create a store for closed connections to be removed from the plan
-            let mut purge: Vec<ListenerId> = Vec::new();
+            let mut purge: Vec<(ListenerId, RegistrationToken)> = Vec::new();
             loop {
                 select_biased! {
                     ctl = self.ctl.recv().fuse() => {
-                        if let Ok(ctl) = ctl {
-                            match ctl {
-                                Ctl::Register(subscription, id, connection) => {
-                                    let event_type = subscription.event_type();
-                                    plan[event_type].insert(subscription.broadcasting(&context), id, connection);
-                                    debug!("[{}] insert {} subscription, count = {}, capacity = {}", self, event_type, plan[event_type].len(), plan[event_type].capacity());
-                                },
-                                Ctl::Unregister(event_type, id) => {
-                                    plan[event_type].remove(&id);
-                                    debug!("[{}] remove {} subscription, count = {}, capacity = {}", self, event_type, plan[event_type].len(), plan[event_type].capacity());
-                                },
+                        if ctl.is_ok() {
+                            // Read a finite snapshot, then release the local control
+                            // mutex before building plans or awaiting any connection.
+                            let registrations = self.registrations.lock().snapshot();
+                            plan = EventArray::<Plan<C>>::default();
+                            for ((event_type, id), token, (subscription, connection)) in registrations {
+                                plan[event_type].insert_snapshot_entry(subscription.broadcasting(&context), id, token, connection);
                             }
                         } else {
                             break;
@@ -183,7 +179,13 @@ where
                                     for (encoding, connection_set) in encoding_set.iter() {
                                         // ... by message encoding
                                         let message = C::into_message(&applied_notification, encoding);
-                                        for (id, connection) in connection_set.iter() {
+                                        for (id, (token, connection)) in connection_set.iter() {
+                                            // A stop/start can happen while an earlier listener's
+                                            // send awaits. Never route this old plan to a replacement.
+                                            // A send already in flight may finish on its old connection.
+                                            if !self.registrations.lock().matches(&(event, *id), token) {
+                                                continue;
+                                            }
                                             // ... to listeners connections
                                             match connection.send(message.clone()).await {
                                                 Ok(_) => {
@@ -192,7 +194,7 @@ where
                                                 Err(_) => {
                                                     if connection.is_closed() {
                                                         trace!("[{}] could not send a notification to listener {id} because its connection is closed - removing it", self);
-                                                        purge.push(*id);
+                                                        purge.push((*id, token.clone()));
                                                     }
                                                 }
                                             }
@@ -201,7 +203,10 @@ where
                                 }
                             }
                             // Remove closed connections
-                            purge.drain(..).for_each(|id| { plan[event].remove(&id); });
+                            for (id, token) in purge.drain(..) {
+                                plan[event].remove(&id);
+                                self.registrations.lock().remove_if_current(&(event, id), &token);
+                            }
 
                         } else {
                             break;
@@ -216,6 +221,8 @@ where
                 }
             }
             debug!("[{}] notification stream ended", self);
+            self.ctl.sender.close();
+            self.registrations.lock().clear();
             let _ = self.shutdown.drain();
             let _ = self.shutdown.try_send(());
         });
@@ -223,13 +230,28 @@ where
 
     pub fn register(&self, subscription: DynSubscription, id: ListenerId, connection: C) -> Result<()> {
         assert!(subscription.active());
-        self.ctl.try_send(Ctl::Register(subscription, id, connection))?;
-        Ok(())
+        let mut registrations = self.registrations.lock();
+        if self.ctl.sender.is_closed() {
+            return Err(crate::error::Error::AlreadyStoppedError);
+        }
+        registrations.insert((subscription.event_type(), id), (subscription, connection));
+        self.wake_control()
     }
 
     pub fn unregister(&self, event_type: EventType, id: ListenerId) -> Result<()> {
-        self.ctl.try_send(Ctl::Unregister(event_type, id))?;
-        Ok(())
+        let mut registrations = self.registrations.lock();
+        if self.ctl.sender.is_closed() {
+            return Err(crate::error::Error::AlreadyStoppedError);
+        }
+        registrations.remove(&(event_type, id));
+        self.wake_control()
+    }
+
+    fn wake_control(&self) -> Result<()> {
+        match self.ctl.try_send(()) {
+            Ok(()) | Err(async_channel::TrySendError::Full(())) => Ok(()),
+            Err(async_channel::TrySendError::Closed(())) => Err(crate::error::Error::AlreadyStoppedError),
+        }
     }
 
     async fn join_notification_broadcasting_task(&self) -> Result<()> {
@@ -277,7 +299,6 @@ mod tests {
         /// Listeners, vector index = ListenerId
         listeners: Vec<Listener<TestConnection>>,
         subscription_context: SubscriptionContext,
-        ctl_sender: Sender<Ctl<TestConnection>>,
         sync_receiver: Receiver<()>,
         notification_sender: Sender<TestNotification>,
         notification_receivers: Vec<Receiver<TestNotification>>,
@@ -306,7 +327,6 @@ mod tests {
                 broadcaster: broadcaster.clone(),
                 listeners,
                 subscription_context,
-                ctl_sender: broadcaster.ctl.sender.clone(),
                 sync_receiver,
                 notification_sender,
                 notification_receivers,
@@ -332,21 +352,15 @@ mod tests {
                                 "{} #{} - {}: - L{} has the new state {:?}",
                                 self.name, step_idx, step.name, idx, self.listeners[idx].subscriptions[event]
                             );
-                            let ctl = match mutation.active() {
-                                true => Ctl::Register(
+                            let result = match mutation.active() {
+                                true => self.broadcaster.register(
                                     self.listeners[idx].subscriptions[event].clone(),
                                     idx as u64,
                                     self.listeners[idx].connection(),
                                 ),
-                                false => Ctl::Unregister(event, idx as u64),
+                                false => self.broadcaster.unregister(event, idx as u64),
                             };
-                            assert!(
-                                self.ctl_sender.send(ctl).await.is_ok(),
-                                "{} #{} - {}: sending a registration message failed",
-                                self.name,
-                                step_idx,
-                                step.name
-                            );
+                            assert!(result.is_ok(), "{} #{} - {}: registration failed", self.name, step_idx, step.name);
                             assert!(
                                 timeout(SYNC_MAX_DELAY, self.sync_receiver.recv()).await.unwrap().is_ok(),
                                 "{} #{} - {}: receiving a sync message failed",
@@ -444,3 +458,7 @@ mod tests {
         test.run().await;
     }
 }
+
+#[cfg(test)]
+#[path = "broadcaster_control_tests.rs"]
+mod control_tests;

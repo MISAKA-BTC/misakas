@@ -19,6 +19,7 @@ fn palw_full_activation_sync_mirrors_v1(params: &mut Params) {
     params.sync_palw_2026_10_12_ruling_fences_v1();
     params.sync_palw_court_capacity_v1();
     params.sync_palw_settlement_once_v1();
+    params.sync_palw_court_family_supplier_v1();
     params.sync_palw_native_liability_horizon_v1();
     params.sync_palw_unresolved_bound_v1();
     params.sync_palw_claim_local_settlement_v1();
@@ -79,6 +80,7 @@ palw_full_activation_bare_entry_v1!(PALW_T12_FULL_PUBLIC_EVIDENCE_REWARD_ENTRY, 
 // Compute-claim audit CX-01/CX-02 (lane compute-exec, 2026-10-22): a decoded answer is not paid twice.
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_FP_ANSWER_ACCOUNTING_ENTRY, palw_fp_answer_accounting_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_SETTLEMENT_ONCE_ENTRY, palw_settlement_once_v1);
+palw_full_activation_bare_entry_v1!(PALW_T12_FULL_COURT_FAMILY_SUPPLIER_ENTRY, palw_court_family_supplier_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY, palw_native_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY, palw_reward_liability_horizon_v1);
 palw_full_activation_bare_entry_v1!(PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY, palw_unresolved_bound_v1);
@@ -245,40 +247,38 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY,
-    // `palw_claim_local_settlement_v1` (RFC-0023 stage 2) is NOT on this list (audit fix-cd): its validation refuses every armed
-    // height ("material retention / transition drills are unmeasured"), which no code change can supply, so with it the list could
-    // never validate as a whole. Rule E's side frontier now reads the claim-local irreversible anchors past that fence (audit D-1),
-    // but the measurements remain the user's; it rejoins (before Gate C) with its measured record behind the standard gate.
+    // RFC-0023 stage 2 stays outside this list while the fixed reviewed
+    // readiness registry is empty. Its standard gate requires genuine retained
+    // campaign/drill/resource records for the exact genesis, height and Params.
+    // Rule E reads claim-local irreversible anchors after that separate fence;
+    // this inventory does not manufacture a measurement or arm its height.
     PALW_T12_FULL_GATE_C_ENTRY,
     PALW_T12_FULL_DAG_SIBLING_ATTRIBUTION_ENTRY,
     PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_ENTRY,
     PALW_T12_FULL_MODEL_TIER_ENTRY,
     PALW_T12_FULL_MEMORY_ROUTING_COURT_V2_ENTRY,
     PALW_T12_FULL_MONETARY_MATERIAL_ENTRY,
+    // RFC-0042 has its own upgrade fence; the full list's None height arms nothing.
+    PALW_T12_FULL_COURT_FAMILY_SUPPLIER_ENTRY,
     PALW_T12_FULL_ELASTIC_FINAL_CAPACITY_ENTRY,
     PALW_T12_FULL_G14_ROUTE_REQUIRED_ENTRY,
 ];
 
-/// **The full-activation list's height — `None`.** Target: DAA 16,000 (a height no other list uses: not 750, 1,000, 1,300, 1,700,
-/// 2,000, 3,600, 5,300, 5,395, 5,490, 5,585 — the fork id names heights, not fences). It is set to `Some(PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1)` (17,000, user goal 2026-10-26) ONLY after every
-/// arming record each entry's validation asks for is pinned in the binary (G14 arm-readiness records, TIR frame-cost records, RFC-0608
-/// measured records, approved X3 / court-capacity / monetary-material / model-tier policies) AND the user approves; the same change
-/// updates `contrib/t12-deploy-kit/fleet.env.example` (pinned by `t12_deploy_kit_constants`) and re-pins the ids. One constant the preset,
-/// the drill flag `--palw-drill-full-activation-at` and the kit share.
-///
-/// 2026-10-22: the value pin is in the parameter register. This height stays `None`. No gated fence has one evidence digest per
-/// arming requirement (suite, node E2E, shipped-binary crossing drill). Those digests are not filled in from estimates.
-/// `docs/evidence/palw/studio-values-2026-10-22/fence-readiness-2026-10-22.md`.
+/// **The full-activation list's shipping height — `None`.** The current user target is DAA 18,400 (2026-10-30).
+/// This complete list requires its own arming/measurement records and dependency checks; the existing G14-only
+/// height decision does not satisfy those missing requirements. No validation guard is disabled here.
+/// `contrib/t12-deploy-kit/fleet.env.example` keeps FULL_ACTIVATION_FLAG_DAY_DAA empty, pinned by
+/// `t12_deploy_kit_constants`. New additional fences stay dormant until their own implementation and evidence are complete.
 pub const PALW_T12_FULL_ACTIVATION_DAA: Option<u64> = None;
 
 /// The intended height, for tests and the notes only — NEVER read by the preset.
-pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 18_400; // User target 2026-10-30; FULL remains None pending its own readiness gates.
+pub const PALW_T12_FULL_ACTIVATION_TARGET_DAA_V1: u64 = 18_400; // User target 2026-10-30; FULL remains None until its own readiness gates pass.
 
 /// **The full-activation flag day, armed** — the list at [`PALW_T12_FULL_ACTIVATION_DAA`] on the ASSEMBLED ruleset, after the int-13
 /// flag day; a no-op while the height is `None` (it leaves the list exactly as the earlier lists set it — in particular it does not clear
 /// the int-13 entries this list shares, should the int-13 list ever take a height of its own).
 pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
-    // **The G14 17,000 flag day (user decision 2026-10-27, drill skipped):** `PALW_T12_G14_17000_FENCES_V1` at
+    // **The existing G14 flag day, rebound to 18,400 by the user 2026-10-30:** `PALW_T12_G14_17000_FENCES_V1` at
     // `PALW_T12_G14_17000_FLAG_DAY_DAA`, the int-13 entries left at 15,500. The FULL list (which carries fences this release does not
     // arm, e.g. monetary material, settlement once) keeps `PALW_T12_FULL_ACTIVATION_DAA = None`.
     if let Some(at) = PALW_T12_G14_17000_FLAG_DAY_DAA {
@@ -290,8 +290,9 @@ pub(super) fn palw_t12_arm_full_activation_v1(params: &mut Params) {
 
 /// **The G14 17,000 flag day's height on the shipped testnet-12 preset — ARMED** (user decision 2026-10-27). One constant the preset
 /// and the kit (`G14_FLAG_DAY_DAA` in `contrib/t12-deploy-kit/fleet.env.example`, pinned by `t12_deploy_kit_constants`) share.
-// Height-only rebind to 18,400, user 2026-10-30. Historical passing suites remain bound to da46131a4.
-// Those historical digests are not latest-candidate PASS evidence; current validation is separate.
+// Height rebound to 18,400, user 2026-10-30; this predecessor G14 candidate was unpublished.
+// Historical 19-suite evidence remains bound to da46131a4 and its exact run digests.
+// It is not evidence that the latest 18,400 candidate passed; fresh validation remains mandatory.
 pub const PALW_T12_G14_17000_FLAG_DAY_DAA: Option<u64> = Some(PALW_T12_G14_17000_DAA_V1);
 
 /// Is `fence` one of the int-13 list's entries while that list has its own height ([`PALW_T12_INT13_DAA`], DAA 15,500 on the public
@@ -488,7 +489,8 @@ pub const PALW_T12_G14_COURT_CAPACITY_ESTIMATE_ENTRY: PalwPostLaunchFenceV1 = Pa
 
 /// The height [`PALW_T12_G14_17000_FENCES_V1`] is meant for — read by tests and the arming report only, NEVER by the preset.
 pub const PALW_T12_G14_18400_DAA_V1: u64 = 18_400;
-/// Historical public name retained; unpublished G14 moved to 18,400 by user decision 2026-10-30.
+/// Historical public name retained for source compatibility; this unpublished
+/// flag day moved from 17,400 to 18,400 by user decision 2026-10-30.
 pub const PALW_T12_G14_17000_DAA_V1: u64 = PALW_T12_G14_18400_DAA_V1;
 
 /// **One list at `at`** (`None`: dormant, set in reverse) — the body shared by the full list and the slice, for drills and tests.

@@ -210,7 +210,8 @@
 | ADR-0207 | [通常 verifier fee と有限 provider 契約の判断](0207-finite-fee-consent-and-provider-payment-bounds.md) | 原文と後続改定を参照 |
 | ADR-0208 | [再利用 prefix の生成元 identity を明示する案](0208-authenticated-prefix-work-dependencies.md) | 原文と後続改定を参照 |
 | ADR-0209 | [genesis bond を廃止し、BASE 回復と通常 bond 登録で起動する](0209-genesis-bond-free-bootstrap.md) | 原文と後続改定を参照 |
-| ADR-0210 | [全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md) | 原文と後続改定を参照 |
+| ADR-0210 | [(AllModelG14PanelOne) — 全モデルの新規 producer claim を G14 の 1 席経路へ移す](0210-all-model-g14-panel-one.md) | 原文と後続改定を参照 |
+| ADR-0210 | [(CourtSupplierConsent) — Court全分岐の供給者契約と原子的native予約](0210-court-family-supplier-consent-and-native-reservation.md) | 原文と後続改定を参照 |
 | ADR-0211 | [学習済みcheckpointのlogit範囲を損なわず扱う](0211-wide-q24-llm-output.md) | 原文と後続改定を参照 |
 | ADR-0212 | [Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する](0212-positive-court-without-model-prepossession.md) | 原文と後続改定を参照 |
 | ADR-0213 | [最初のPositive native TIR経路を合意Assignmentとposter原資で分離する](0213-positive-court-canonical-assignment.md) | 原文と後続改定を参照 |

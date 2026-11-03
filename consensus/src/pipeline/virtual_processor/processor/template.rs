@@ -2,12 +2,25 @@
 
 use super::*;
 
+fn template_parent_fault_v1(why: PalwWeighFaultV2) -> RuleError {
+    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+    RuleError::LocalNativeStateContextUnavailable(match why {
+        PalwWeighFaultV2::NoOpinion => F::HistoryUnavailable,
+        PalwWeighFaultV2::StoreUnreadable => F::StoreUnreadable,
+        PalwWeighFaultV2::NativeCapacityUnavailable => F::CapacityUnavailable,
+    })
+}
+
 impl VirtualStateProcessor {
     /// A template with no transactions still crosses the bootstrap boundary.
     /// Resolve its OWN selected-parent context before a selector can evict any
     /// carrier, and on the alternate prebuilt-transaction entry as well. Local
     /// history/store/capacity refusal is never a transaction or peer verdict.
-    fn palw_source_bootstrap_template_preflight_v1(&self, virtual_state: &VirtualState) -> Result<(), RuleError> {
+    pub(super) fn palw_source_bootstrap_template_preflight_v1(
+        &self,
+        virtual_state: &VirtualState,
+        prepared: &super::template_parent_snapshot_v1::PreparedTemplateParentV1,
+    ) -> Result<(), RuleError> {
         use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
         let Some(fence) = self.palw_selected_source_bootstrap_v1.as_ref().filter(|f| {
             f.at != kaspa_consensus_core::config::params::ForkActivation::never()
@@ -17,7 +30,7 @@ impl VirtualStateProcessor {
             return Ok(());
         };
         let parent = virtual_state.ghostdag_data.selected_parent;
-        let state = self.palw_candidate_state_v2_checked(parent).map_err(|why| {
+        prepared.checked.map_err(|why| {
             RuleError::LocalNativeStateContextUnavailable(match why {
                 // This legacy snapshot API retains the resource classification
                 // but has no exact Coverage to attach; do not fabricate one.
@@ -26,12 +39,14 @@ impl VirtualStateProcessor {
                 PalwWeighFaultV2::StoreUnreadable => Fault::StoreUnreadable,
             })
         })?;
-        let own = self.palw_source_bootstrap_own_context_v1(&state, parent, virtual_state.daa_score, &fence.policy).map_err(
-            |why| match why {
-                Fault::Capacity(coverage) => RuleError::LocalNativeCapacityUnavailable(coverage),
-                other => RuleError::LocalNativeStateContextUnavailable(other),
-            },
-        )?;
+        let state = &prepared.state.as_ref().ok_or(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable))?.1;
+        let own =
+            self.palw_source_bootstrap_own_context_v1(state, parent, virtual_state.daa_score, &fence.policy).map_err(
+                |why| match why {
+                    Fault::Capacity(coverage) => RuleError::LocalNativeCapacityUnavailable(coverage),
+                    other => RuleError::LocalNativeStateContextUnavailable(other),
+                },
+            )?;
         if own.is_none() {
             return Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable));
         }
@@ -41,6 +56,7 @@ impl VirtualStateProcessor {
     pub(super) fn native_carriage_for_template_snapshot_v22(
         &self,
         virtual_state: &VirtualState,
+        prepared: &super::template_parent_snapshot_v1::PreparedTemplateParentV1,
     ) -> Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
         let extras = self.palw_kernel_route_extras_at(virtual_state.daa_score)?;
         let mass = extras.native_carriage_mass?;
@@ -48,14 +64,14 @@ impl VirtualStateProcessor {
         let queue = extras.native_final.as_ref().map(|f| f.policy.queue_policy.clone());
         let parent = virtual_state.ghostdag_data.selected_parent;
         let parent_daa = self.headers_store.get_daa_score(parent).ok()?;
-        let (at, state) = self.palw_v2_state_at(parent)?;
-        if at != parent {
+        let (at, state) = prepared.state.as_ref()?;
+        if *at != parent {
             return None;
         }
         let snapshot = kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22::from_consumer_state(
             virtual_state.daa_score,
             parent_daa,
-            state,
+            Arc::clone(state),
             mass,
             service,
         )
@@ -69,9 +85,16 @@ impl VirtualStateProcessor {
     pub fn native_carriage_snapshot_v22(
         &self,
     ) -> Option<kaspa_consensus_core::palw_native_carrier_index_v22::NativeCarriageSnapshotV22> {
-        let virtual_read = self.virtual_stores.read();
-        let state = virtual_read.state.get().ok()?;
-        self.native_carriage_for_template_snapshot_v22(&state)
+        let state = self.virtual_stores.read().state.get().ok()?;
+        let extras = self.palw_kernel_route_extras_at(state.daa_score)?;
+        extras.native_carriage_mass?;
+        extras.native_carriage_service?;
+        let prepared = self.prepare_template_parent_v1(&state).ok()?;
+        let current = self.virtual_stores.read().state.get().ok()?;
+        if !Arc::ptr_eq(&state, &current) || self.check_prepared_template_parent_v1(&prepared).is_err() {
+            return None;
+        }
+        self.native_carriage_for_template_snapshot_v22(&state, &prepared)
     }
 
     pub(super) fn validate_block_template_transactions_in_parallel<V: UtxoView + Sync>(
@@ -350,10 +373,20 @@ impl VirtualStateProcessor {
         // TODO (relaxed): additional tests
         //
 
+        // Capture owned state, then warm WITHOUT a virtual/PALW store guard.
+        let warm_virtual = self.virtual_stores.read().state.get().unwrap();
+        let prepared = self.prepare_template_parent_v1(&warm_virtual).map_err(template_parent_fault_v1)?;
+        self.palw_source_bootstrap_template_preflight_v1(&warm_virtual, &prepared)?;
+        self.seed_template_sink_reader_v1(&warm_virtual, &prepared).map_err(template_parent_fault_v1)?;
         let virtual_read = self.virtual_stores.read();
         let virtual_state = virtual_read.state.get().unwrap();
+        if !Arc::ptr_eq(&warm_virtual, &virtual_state) {
+            return Err(template_parent_fault_v1(PalwWeighFaultV2::NoOpinion));
+        }
+        self.check_prepared_template_parent_v1(&prepared).map_err(template_parent_fault_v1)?;
+        // State and UTXOs/bonds remain one coherent generation throughout
+        // selection. No parent loader runs while this guard is held.
         let virtual_utxo_view = &virtual_read.utxo_set;
-        self.palw_source_bootstrap_template_preflight_v1(&virtual_state)?;
 
         // kaspa-pq DNS-finality (E3/§6.2): capture the template's as-of-selected-parent
         // bond view INSIDE the same read lock as `virtual_state`, BEFORE the selection
@@ -367,7 +400,7 @@ impl VirtualStateProcessor {
         // are byte-identical to before.
         let template_bond_view = self.initial_active_bond_view();
         let latest_ready_epoch = self.latest_ready_epoch_for_template_snapshot(&virtual_state);
-        let native = self.native_carriage_for_template_snapshot_v22(&virtual_state);
+        let native = self.native_carriage_for_template_snapshot_v22(&virtual_state, &prepared);
         let mut tx_selector = tx_selector_provider(latest_ready_epoch, native);
         let mut txs = tx_selector.select_transactions();
         let mut calculated_fees = Vec::with_capacity(txs.len());
@@ -607,8 +640,9 @@ impl VirtualStateProcessor {
         drop(virtual_read);
 
         // Build the template
-        self.build_block_template_from_virtual_state(
+        self.build_block_template_from_prepared_virtual_state_v1(
             virtual_state,
+            prepared,
             template_bond_view,
             prepared_claims,
             miner_data,
@@ -645,6 +679,42 @@ impl VirtualStateProcessor {
         template_bond_view: ActiveBondView,
         prepared_claims: crate::processes::evm::PreparedDepositClaims,
         miner_data: MinerData,
+        txs: Vec<Transaction>,
+        calculated_fees: Vec<u64>,
+        // kaspa-pq EVM Lane v0.4 (§15 step 6 / §16): own-payload inputs.
+        evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
+        // kaspa-pq DNS-finality (audit v24 H-5): shards the selection-loop classifier dropped,
+        // forwarded into the `BlockTemplate` so the mining manager can reconcile the mempool.
+        dropped_attestation_shards: Vec<kaspa_consensus_core::block::AttestationTemplateDrop>,
+    ) -> Result<BlockTemplate, RuleError> {
+        // Audited callers have dropped their virtual UTXO guard and already
+        // own the matching bond/claim snapshot. Alternate POVs remain legal.
+        let prepared = self.prepare_template_parent_v1(&virtual_state).map_err(template_parent_fault_v1)?;
+        self.palw_source_bootstrap_template_preflight_v1(&virtual_state, &prepared)?;
+        self.build_block_template_from_prepared_virtual_state_v1(
+            virtual_state,
+            prepared,
+            template_bond_view,
+            prepared_claims,
+            miner_data,
+            txs,
+            calculated_fees,
+            evm_template_data,
+            dropped_attestation_shards,
+        )
+    }
+
+    fn build_block_template_from_prepared_virtual_state_v1(
+        &self,
+        virtual_state: Arc<VirtualState>,
+        prepared: super::template_parent_snapshot_v1::PreparedTemplateParentV1,
+        // kaspa-pq narrow P0-1: the bond view + deposit-claim snapshot, both
+        // captured in the SAME virtual generation as `virtual_state` by the caller
+        // (under one read lock) — so the reward fan-out, the overlay commitment and
+        // the EVM claim payload all reference one coherent generation.
+        template_bond_view: ActiveBondView,
+        prepared_claims: crate::processes::evm::PreparedDepositClaims,
+        miner_data: MinerData,
         mut txs: Vec<Transaction>,
         calculated_fees: Vec<u64>,
         // kaspa-pq EVM Lane v0.4 (§15 step 6 / §16): own-payload inputs.
@@ -656,7 +726,8 @@ impl VirtualStateProcessor {
         // [`calc_block_parents`] can use deep blocks below the pruning point for this calculation, so we
         // need to hold the pruning lock.
         let _prune_guard = self.pruning_lock.blocking_read();
-        self.palw_source_bootstrap_template_preflight_v1(&virtual_state)?;
+        self.check_prepared_template_parent_v1(&prepared).map_err(template_parent_fault_v1)?;
+        self.palw_source_bootstrap_template_preflight_v1(&virtual_state, &prepared)?;
         // **The template's stamp, decided before anything is built on it** (`palw_template_stamp_v1`:
         // the median, H5's floor, and the lead cap's construction half). Past median time is the
         // exclusive lower bound for valid block time. **H5 (the clock floor): a template that steps the
@@ -719,7 +790,7 @@ impl VirtualStateProcessor {
         // reconstructs — virtual's selected parent — not the store tip. Walking from the tip is
         // empty when they agree (the common case, one cached materialization); when they do not,
         // stamping the tip would mine a block this node then disqualifies from virtual.
-        let palw_at_selected_parent = self.palw_v2_state_at(virtual_state.ghostdag_data.selected_parent);
+        let palw_at_selected_parent = prepared.state.as_ref();
         let palw_unentitled_blues = palw_at_selected_parent
             .as_ref()
             .map(|(_, state)| {
@@ -758,12 +829,14 @@ impl VirtualStateProcessor {
                 validator_pool,
             );
         let (newly_included_stake, expected_stake) = if self.dns_retired_at(virtual_state.daa_score) {
-            self.native_inclusion_ratio(
-                &virtual_state.ghostdag_data,
-                &virtual_state.mergeset_non_daa,
-                &self.palw_v2_template_point(&virtual_state),
-                &palw_unentitled_blues,
-            )
+            palw_at_selected_parent.as_ref().map_or((0, 0), |(_, state)| {
+                self.native_inclusion_ratio_with_state_v1(
+                    &virtual_state.ghostdag_data,
+                    &virtual_state.mergeset_non_daa,
+                    &palw_unentitled_blues,
+                    state,
+                )
+            })
         } else {
             (newly_included_stake, expected_stake)
         };

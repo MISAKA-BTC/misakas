@@ -23,27 +23,41 @@
 //! artifact. `--derive` uses the deterministic artifact at the row's exact shape instead (no file:
 //! the same function, synthetic weights). `--max-prefill` caps prompt lengths for a quick run.
 //!
+//! For the current T12 CoreV1 draw, use `--core-v1-anchor <hash> --core-v1-daa <score>`
+//! with the exact registered 8K artifact. This is an offline arithmetic comparison.
+//!
 //! Exit status: 0 equal everywhere, 2 a difference (the first ones printed), 1 usage or I/O.
 
 #![allow(warnings)]
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::config::class_manifest_const_v1::{QWEN25_A16_8K_MANIFEST_V1, artifact_digest_of};
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::NetworkId;
+use kaspa_consensus_core::palw_attempt_rules_v1::{
+    PalwAttemptRulesV1, palw_attempt_canonical_v1, palw_attempt_job_for_anchor_v1, palw_attempt_output_root_v1,
+    palw_attempt_rules_of_params_v1,
+};
+use kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1;
 use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use misaka_palw_base0::artifact::{Base0ArtifactV1, decode_artifact_file_mapped_v1};
 use misaka_palw_base0::classes::{A16_GRAPH_V7_8K_MODEL_ID, CanonicalClassV1, canonical_classes_v1};
 use misaka_palw_base0::engine_a16::derived_a16_store;
 use misaka_palw_base0::mmap::ReadOnlyMap;
+use misaka_palw_base0::qwen25_a16_backend::A16_PREFILL_RUN_POSITIONS;
 use misaka_palw_base0::rope::RopeTableV1;
-use misaka_palw_base0::tir_a16::{a16_mirror_program_with_rows, a16_tir_tensor_bytes};
-use misaka_palw_sdk::tir_equiv::{EquivReportV1, equiv_jobs_v1, run_equiv_v1};
-use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+use misaka_palw_base0::tir_a16::{A16MirrorRowsV1, a16_mirror_program_with_rows, a16_tir_tensor_bytes};
+use misaka_palw_sdk::tir_equiv::{
+    EquivJobV1, EquivReportV1, equiv_jobs_v1, run_core_v1_prefill_equiv_with_position_progress, run_equiv_v1,
+};
+use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, StateKind, TirProgramV1};
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const USAGE: &str = "usage: palw-tir-equiv --network <id> [--model-id <row>] (--artifact <file.palwart> [--respan] | --derive [--derive-seed N]) [--tir <file.palwtir>] [--prompts N] [--seed N] [--max-prefill N] [--json]";
+const USAGE: &str = "usage: palw-tir-equiv --network <id> [--model-id <row>] (--artifact <file.palwart> [--respan] | --derive [--derive-seed N]) [--tir <file.palwtir>] [--prompts N] [--seed N] [--max-prefill N] [--core-v1-anchor <hash> --core-v1-daa <score> [--position-progress <N>]] [--json]";
 
 fn die(message: String) -> ! {
     eprintln!("palw-tir-equiv: {message}");
@@ -61,6 +75,48 @@ fn number<T: std::str::FromStr>(args: &[String], name: &str, default: T) -> T {
     }
 }
 
+fn core_v1_draw(params: &Params, row: &CanonicalClassV1, anchor: Hash64, daa: u64) -> Option<(PalwJobContextV2, EquivJobV1)> {
+    let canonical = palw_attempt_canonical_v1(&row.profile, false)?;
+    if canonical != (1023, 2)
+        || canonical != row.canonical_job
+        || row.profile.n_ctx != 8192
+        || palw_attempt_rules_of_params_v1(params) != PalwAttemptRulesV1::CoreV1
+        || !params.palw_prefill_draw_active_at(daa)
+    {
+        return None;
+    }
+    let (job, prompt) = palw_attempt_job_for_anchor_v1(&row.profile, &anchor, canonical, params.palw_prompt_ids_form_at(daa))?;
+    let job = palw_attempt_job_v1(job, params.palw_prefill_draw_active_at(daa));
+    if job.exact_decode_tokens != 1 || prompt.len() != 1023 {
+        return None;
+    }
+    let equiv = EquivJobV1 { label: format!("CoreV1 draw at DAA {daa}, anchor {anchor}"), prompt, decode: 1 };
+    Some((job, equiv))
+}
+
+fn core_v1_mirror_program(row: &CanonicalClassV1, ctx: &PalwJobContextV2) -> Result<(TirProgramV1, A16MirrorRowsV1), String> {
+    let context = ctx.max_context_tokens;
+    let native_history = kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(&row.profile);
+    if context == 0
+        || context != row.profile.n_ctx
+        || context as usize != row.artifact_shape.max_position
+        || context as usize > native_history
+        || context > HISTORY_BOUND_V1_SMALL
+    {
+        return Err("the diagnostic history cannot cover the exact CoreV1 context".into());
+    }
+    // The native held cap is shared with much longer profiles. On this 8K profile
+    // no execution reaches that cap. Both backends see the entire prefix at each position.
+    let (mut program, rows) = a16_mirror_program_with_rows(&row.artifact_shape, HISTORY_BOUND_V1_SMALL)?;
+    for state in &mut program.states {
+        if let StateKind::Hist { window } = &mut state.kind {
+            *window = context;
+        }
+    }
+    misaka_palw_tir::validate::validate(&program).map_err(|error| format!("the CoreV1 mirror program: {error}"))?;
+    Ok((program, rows))
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let has = |f: &str| args.iter().any(|a| a == f);
@@ -69,6 +125,23 @@ fn main() {
     let prompts: usize = number(&args, "--prompts", 32);
     let seed: u64 = number(&args, "--seed", 0x5EED);
     let json = has("--json");
+    let exact = has("--core-v1-anchor") || has("--core-v1-daa");
+    let position_progress = has("--position-progress").then(|| {
+        if !exact {
+            die("--position-progress requires the exact CoreV1 comparison".into());
+        }
+        flag(&args, "--position-progress")
+            .and_then(|value| value.parse::<NonZeroU64>().ok())
+            .unwrap_or_else(|| die("--position-progress requires a positive interval".into()))
+    });
+    if exact
+        && (network != "testnet-12"
+            || model_id != A16_GRAPH_V7_8K_MODEL_ID
+            || !has("--artifact")
+            || ["--derive", "--derive-seed", "--respan", "--tir", "--prompts", "--seed", "--max-prefill"].iter().any(|arg| has(arg)))
+    {
+        die("CoreV1 comparison requires the original T12 8K artifact and a single unmodified draw".into());
+    }
 
     // The network: its court (the class table's input) and the roots it registered at genesis.
     let network_id: NetworkId = network.parse().unwrap_or_else(|e| die(format!("--network {network}: {e}")));
@@ -85,6 +158,19 @@ fn main() {
         _ => None,
     });
 
+    let exact_job = exact.then(|| {
+        let anchor = flag(&args, "--core-v1-anchor")
+            .and_then(|v| v.parse::<Hash64>().ok())
+            .unwrap_or_else(|| die("CoreV1 comparison requires --core-v1-anchor with 128 hex digits".into()));
+        let daa = flag(&args, "--core-v1-daa")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or_else(|| die("CoreV1 comparison requires --core-v1-daa with the attempt block's DAA".into()));
+        let (ctx, job) = core_v1_draw(&params, &row, anchor, daa)
+            .unwrap_or_else(|| die("the supplied DAA and class do not select the T12 1023/1 CoreV1 draw".into()));
+        (daa, ctx, job)
+    });
+
+    let observed_start = position_progress.map(|_| std::time::Instant::now());
     // The legacy artifact.
     let artifact: Base0ArtifactV1 = if has("--derive") {
         let s = row.artifact_shape;
@@ -113,6 +199,13 @@ fn main() {
         ));
     }
     let root = row.artifact_root(&artifact).unwrap_or_else(|e| die(format!("the row's inventory over this artifact: {e:?}")));
+    let exact_artifact_digest = exact.then(|| artifact.artifact_digest());
+    if exact && (registered != Some(root) || exact_artifact_digest != Some(artifact_digest_of(QWEN25_A16_8K_MANIFEST_V1))) {
+        die("the original T12 8K artifact digest or registered inventory root differs".into());
+    }
+    if let Some(start) = observed_start {
+        eprintln!("[{:.1}s] original artifact and registered inventory verified", start.elapsed().as_secs_f64());
+    }
     let pairing = match registered {
         Some(r) if r == root => format!("PAIRS with the root {network_id} registered for the row at genesis ({root})"),
         Some(r) => format!("does NOT pair: {network_id} registered {r}, this artifact gives {root}"),
@@ -120,7 +213,12 @@ fn main() {
     };
 
     // The IR program and its params.
-    let (program, rows) = a16_mirror_program_with_rows(&artifact.shape, HISTORY_BOUND_V1_SMALL).unwrap_or_else(|e| die(e));
+    let mirror = if let Some((_, ctx, _)) = &exact_job {
+        core_v1_mirror_program(&row, ctx)
+    } else {
+        a16_mirror_program_with_rows(&artifact.shape, HISTORY_BOUND_V1_SMALL)
+    };
+    let (program, rows) = mirror.unwrap_or_else(|e| die(e));
     let tensors: BTreeMap<(u16, Option<u16>), Vec<u8>> = match flag(&args, "--tir") {
         Some(p) => {
             let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(std::path::Path::new(p))
@@ -145,19 +243,29 @@ fn main() {
         None => a16_tir_tensor_bytes(&artifact, &program).unwrap_or_else(|e| die(format!("converting the artifact: {e}"))),
     };
 
-    let (prefill, decode) = (row.canonical_job.0 as usize, row.canonical_job.1 as usize);
-    let prefill = prefill.min(number(&args, "--max-prefill", usize::MAX)).max(1);
-    let jobs = equiv_jobs_v1(prefill, decode, artifact.shape.vocab, Hash64::default(), prompts, seed);
+    let (jobs, prefill, decode, positions) = if let Some((_, ctx, job)) = &exact_job {
+        let prefill = ctx.declared_prefill_tokens as usize;
+        (vec![job.clone()], prefill, 1, prefill)
+    } else {
+        let prefill = (row.canonical_job.0 as usize).min(number(&args, "--max-prefill", usize::MAX)).max(1);
+        let decode = row.canonical_job.1 as usize;
+        let jobs = equiv_jobs_v1(prefill, decode, artifact.shape.vocab, Hash64::default(), prompts, seed);
+        let positions = jobs.iter().map(|j| j.prompt.len() + j.decode).sum();
+        (jobs, prefill, decode, positions)
+    };
     eprintln!(
         "{model_id} on {network_id}: {} layers, vocab {}, n_ctx {}; {} jobs ({} positions); artifact {pairing}",
         artifact.shape.n_layers,
         artifact.shape.vocab,
         artifact.shape.max_position,
         jobs.len(),
-        jobs.iter().map(|j| j.prompt.len() + j.decode).sum::<usize>()
+        positions
     );
     let started = std::time::Instant::now();
-    let report = run_equiv_v1(&artifact, &row.profile, &program, &rows, &tensors, &jobs, &mut |ji, r: &EquivReportV1| {
+    if let Some(start) = observed_start {
+        eprintln!("[{:.1}s] mirror program and tensor bytes prepared", start.elapsed().as_secs_f64());
+    }
+    let mut progress = |ji: usize, r: &EquivReportV1| {
         eprintln!(
             "[{:7.1}s] job {}/{} {}: {} positions so far, logits {}/{}, rows {}/{}; legacy {:.1} ms/pos, IR {:.1} ms/pos",
             started.elapsed().as_secs_f64(),
@@ -172,11 +280,60 @@ fn main() {
             1e3 * r.legacy_seconds / r.positions.max(1) as f64,
             1e3 * r.ir_seconds / r.positions.max(1) as f64
         );
-    })
+    };
+    let report = if let Some((_, _, job)) = &exact_job {
+        let mut observe_position = |r: &EquivReportV1| {
+            eprintln!(
+                "[{:.1}s] exact positions {}/{}; native {:.1}s, IR {:.1}s; rows {}/{}, logits {}/{}",
+                observed_start.unwrap_or(started).elapsed().as_secs_f64(),
+                r.positions,
+                positions,
+                r.legacy_seconds,
+                r.ir_seconds,
+                r.node_rows_equal,
+                r.node_rows,
+                r.logit_rows_equal,
+                r.logit_rows,
+            );
+        };
+        run_core_v1_prefill_equiv_with_position_progress(
+            &artifact,
+            &row.profile,
+            &program,
+            &rows,
+            &tensors,
+            job,
+            A16_PREFILL_RUN_POSITIONS,
+            &mut progress,
+            position_progress.map(|every| (every, &mut observe_position as &mut dyn FnMut(&EquivReportV1))),
+        )
+    } else {
+        run_equiv_v1(&artifact, &row.profile, &program, &rows, &tensors, &jobs, &mut progress)
+    }
     .unwrap_or_else(|e| die(e));
+    let exact_evidence = exact_job.as_ref().map(|(daa, ctx, _)| {
+        let [native, mirror] = report.core_v1_selected_tokens.unwrap_or_else(|| die("the draw produced no token comparison".into()));
+        if report.positions != positions as u64 || report.logit_rows != 1 {
+            die("the CoreV1 comparison did not consume the exact draw schedule".into());
+        }
+        serde_json::json!({
+            "scope": "offline-core-v1-arithmetic-compatibility",
+            "attempt_block_daa": daa, "anchor": ctx.job_id.to_string(),
+            "context_hash": ctx.context_hash().to_string(), "prompt_root": ctx.prompt_token_ids_hash.to_string(),
+            "params_id": params.consensus_params_id().to_string(), "schedule_id": params.consensus_schedule_id().to_string(),
+            "artifact_digest": exact_artifact_digest.map(|h| h.to_string()),
+            "artifact_tokenizer": artifact.tokenizer_commitment.to_string(), "job_tokenizer": ctx.tokenizer_id.to_string(),
+            "mirror_program_root": kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&program.encode()).to_string(),
+            "max_context": ctx.max_context_tokens, "mirror_history_window": ctx.max_context_tokens,
+            "prefill_run_positions": A16_PREFILL_RUN_POSITIONS,
+            "selected_tokens": {"native": native, "mirror": mirror},
+            "native_output_root": palw_attempt_output_root_v1(ctx, &[native]).to_string(),
+            "mirror_ids_under_native_output_rule": palw_attempt_output_root_v1(ctx, &[mirror]).to_string(),
+        })
+    });
     let verdict = if report.is_equal() { "EQUAL" } else { "DIFFERENT" };
     if json {
-        let v = serde_json::json!({
+        let mut v = serde_json::json!({
             "network": network_id.to_string(), "row": model_id, "class_id": row.class_id().to_string(),
             "artifact_root": root.to_string(), "registered_root": registered.map(|r| r.to_string()),
             "pairs": registered == Some(root), "verdict": verdict, "jobs": report.jobs, "positions": report.positions,
@@ -187,6 +344,11 @@ fn main() {
             "ir_ms_per_position": 1e3 * report.ir_seconds / report.positions.max(1) as f64,
             "first_mismatches": report.first_mismatches, "seed": seed, "prompts": prompts, "prefill": prefill, "decode": decode,
         });
+        if let Some(evidence) = exact_evidence {
+            v["core_v1"] = evidence;
+            v["prompts"] = serde_json::json!(0);
+            v.as_object_mut().expect("JSON object").remove("seed");
+        }
         println!("{}", serde_json::to_string_pretty(&v).unwrap_or_default());
     } else {
         println!("{verdict}: {model_id} on {network_id} — {} jobs, {} positions", report.jobs, report.positions);
@@ -196,6 +358,9 @@ fn main() {
             report.node_rows_equal, report.node_rows, report.commits_without_row
         );
         println!("  artifact {pairing}");
+        if let Some(evidence) = exact_evidence {
+            println!("  CoreV1 comparison: {evidence}");
+        }
         println!(
             "  legacy {:.1} ms/position, IR (typed backend) {:.1} ms/position",
             1e3 * report.legacy_seconds / report.positions.max(1) as f64,
@@ -206,4 +371,51 @@ fn main() {
         }
     }
     std::process::exit(if report.is_equal() { 0 } else { 2 });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn exact_t12_selector_uses_the_chain_prompt_and_one_token_draw() {
+        let params: Params = "testnet-12".parse::<NetworkId>().unwrap().into();
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("T12 uses ConsensusV2");
+        };
+        let row = canonical_classes_v1(&bundle.court).into_iter().find(|row| row.model_id == A16_GRAPH_V7_8K_MODEL_ID).unwrap();
+        let anchor = Hash64::from_bytes([0x5A; 64]);
+        let (ctx, job) = core_v1_draw(&params, &row, anchor, 19_567).unwrap();
+        assert_eq!((ctx.declared_prefill_tokens, ctx.exact_decode_tokens, ctx.max_context_tokens), (1023, 1, 8192));
+        assert_eq!(ctx.job_id, anchor);
+        assert_eq!(ctx.execution_seed, [0x5A; 32]);
+        assert_eq!(
+            ctx.prompt_token_ids_hash,
+            kaspa_consensus_core::palw_attempt_rules_v1::palw_attempt_prompt_root_v1(
+                &row.profile,
+                &anchor,
+                1023,
+                params.palw_prompt_ids_form_at(19_567),
+            )
+            .unwrap()
+        );
+        let old = equiv_jobs_v1(1023, 2, row.artifact_shape.vocab, anchor, 0, 0);
+        assert_ne!(job.prompt, old[0].prompt);
+        assert_eq!((job.prompt.len(), job.decode), (1023, 1));
+        let native_history = kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(&row.profile);
+        assert!(a16_mirror_program_with_rows(&row.artifact_shape, native_history as u32).unwrap_err().contains("worst-case H"));
+        let (program, _) = core_v1_mirror_program(&row, &ctx).unwrap();
+        let windows: Vec<_> = program
+            .states
+            .iter()
+            .filter_map(|state| match state.kind {
+                StateKind::Hist { window } => Some(window),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(windows, [8192, 8192]);
+        let mut wrong_context = ctx;
+        wrong_context.max_context_tokens -= 1;
+        assert!(core_v1_mirror_program(&row, &wrong_context).is_err());
+    }
 }

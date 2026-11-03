@@ -133,3 +133,73 @@ fn a_held_final_keeps_the_signed_reserve_in_the_bounded_producer_index() {
     route.aux.remove(&(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, key));
     assert_eq!(reserved(&route, &h.original.producer), 0, "actual release/refund removes the reservation");
 }
+
+/// Reader arithmetic control: unrelated original reservations cannot hide the
+/// excess liability of this exact source. Production admission remains separate.
+#[test]
+fn native39_binding_exclusive_liability_subtracts_only_its_actual_source_reserve() {
+    use crate::palw_bond_budget_v1::*;
+    use crate::palw_native_budget_binding_v1::*;
+    let (mut route, h) = fixture();
+    let held_key = palw_native_held_fee_key_v1(PALW_NATIVE_FAMILY_JOB_V39, &h.id);
+    route.aux.insert((PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, held_key.clone()), b(&held(&h)));
+    let mut other = h.clone();
+    other.original.nonce = [0xA8; 64];
+    other.original.reserve = 700;
+    other.id = other.original.job();
+    other.terminal = NativeJobTerminalV39::Funded;
+    route.aux.insert((TABLE, k(16, &other.id)), b(&(other.root(), &other)));
+    route.aux.insert((TABLE, k(22, &h.original.producer)), b(&vec![h.id, other.id]));
+    let policy = crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
+    let id = super::super::palw_bond_budget_fold_v1::native_job_budget_id_v39(&h.id);
+    let mut budget = PalwBondBudgetStateV1::new(0, &policy);
+    budget
+        .reserve_liable(
+            &policy,
+            policy.capital_unit_sompi,
+            id,
+            h.original.producer,
+            None,
+            h.original.admitted,
+            PalwBudgetVectorV1::ZERO,
+            1000,
+            PalwBudgetOriginV1::KernelRoute,
+            false,
+            &mut Vec::new(),
+        )
+        .unwrap();
+    let binding = NativeBudgetBindingV1 {
+        version: 1,
+        source: NativeBudgetSourceV1::Job39,
+        source_id: Hash64::from_bytes(h.id),
+        budget_id: id,
+        producer: h.original.producer,
+        accepted_daa: h.original.admitted,
+        liability_sompi: 1000,
+        original_reserve_sompi: 400,
+        closed: false,
+    };
+    route.aux.insert((197, native_budget_binding_key_v1(id)), b(&binding));
+    route.aux.insert((197, native_budget_binding_producer_key_v1(&h.original.producer, id)), b(&binding));
+    let mut state = PalwChainStateV2::genesis();
+    state.kernel_route = Some(route);
+    state.bond_budget = Some(budget);
+    assert_eq!(reserved(state.kernel_route.as_ref().unwrap(), &h.original.producer), 1100);
+    assert_eq!(native_budget_excess_for_bond_v1(&state, &h.original.producer, 11).unwrap(), 600);
+    validate_native_budget_bindings_v1(&state, 11).unwrap();
+    state.kernel_route.as_mut().unwrap().aux.remove(&(PALW_NATIVE_LIABILITY_HOLD_TABLE_V1, held_key));
+    assert_eq!(reserved(state.kernel_route.as_ref().unwrap(), &h.original.producer), 700);
+    assert_eq!(
+        native_budget_excess_for_bond_v1(&state, &h.original.producer, 11).unwrap(),
+        1000,
+        "actual original release exposes the same source's full remaining budget hold"
+    );
+    let mut wrong = binding.clone();
+    wrong.original_reserve_sompi = 700;
+    assert!(wrong.exclusive_held_v1(&state, 11).is_err(), "another original's reserve cannot become this source's overlap");
+    let mut missing = state.clone();
+    missing.kernel_route.as_mut().unwrap().aux.insert((TABLE, k(22, &h.original.producer)), b(&vec![h.id]));
+    // The unrelated live source is independently checked by its own native
+    // reader. This binding never subtracts its reserve in either catalogue.
+    assert_eq!(native_budget_excess_for_bond_v1(&missing, &h.original.producer, 11).unwrap(), 1000);
+}

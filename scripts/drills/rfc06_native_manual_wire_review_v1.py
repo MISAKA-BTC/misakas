@@ -5,20 +5,34 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# Rooted v2 writes version, frame hashes and clocks, then the bounded roster.
+# The owner scanner restricts acquisition keys and quotes the complete roster.
+'crate::palw_tir_owner_schedule_rooted_v2::TirOwnerScheduleRowV2': ('adapter', 'd64b982f7b119a607b7c298bd09c89d7518bc720b7f1c2f6bf344a549922f55e'),
+# 2026-10-31 explicit owner review: u8 enum tags0..3 match derived serialize;
+# Part byteVec uses existing bounded decoder; BeginReserved appends literal V2quote.
+# Select the existing owner visitor, including its nested/predecode resource rules.
+# 2026-11-02 rustfmt-only re-pin, independently reviewed: existing tags0..3,
+# field order/types/bounds unchanged; BeginReserved still total_bytes/body_hash/quote.
+'crate::palw_court_family_material_v1::FamilyMaterialActionV1': ('adapter', '2d607b0ddd2fdde4912d0651c7785d6151c300f6efdac534a9682d9c886637da'),
 # A6 2026-10-31: owner-local wire_kernel_aux adapter preserves derived
 # header/rows/aux field order and skipped ledger_cache. The manual decoder caps
 # aux151 key/value before allocation and rejects duplicate aux keys. Both the
 # direct decoder and shape adapter reject descending Positive key order before
 # map collection; the shape adapter additionally checks literal VALUE identity.
-'crate::palw_kernel_route_v1::PalwKernelRouteStateV1': ('adapter','1b6dce017df079501e0d51637b898a6960f7799c416255500666591b24e68dd6'),
+'crate::palw_kernel_route_v1::PalwKernelRouteStateV1': ('adapter','43bd5d8077ef50e25f90fd5c4f3e155d03edc9fc02fe7fcad4ebeb8b0cef6154'),
 # Claude 2026-10-22: shared request intent: derived order; signature length exactly ML-DSA-87.
-'crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1': ('reviewed-field-layout','c76f9fe8b93578271a6c2f148f69f24fc02db910960bdb2afb99a2f312bd4703'),
+'crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1': ('reviewed-field-layout','71cf3dc5061b5f7d67717d6aa541b520a745f8183aa7e62af6585738e9afae8d'),
 # Claude 2026-10-22: tag 178 shared op: derived enum framing (u8 variant, fields in order, u32-length vecs); every bound checked before allocation.
 'crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1': ('reviewed-field-layout','0fafb0403000d4d65a42bf393e8b21512317a4b552e8143e622d15cedec98f8d'),
 # Claude 2026-10-22: numerical part: derived order; version!=1 and empty/oversize bytes refused.
-'crate::palw_court_numerical_transport_v1::NumericalPartV1': ('reviewed-field-layout','a09dcf897bfeba8adee0da6315f5ccb4c4ba054b7e22fbc2223f16dc312c580d'),
+# Reviewed: u16 version, Hash64, u64, bounded length-prefixed bytes. Scanner
+# preflights the identical shape conservatively; real decoder still enforces
+# version==1, nonempty bytes and NUMERICAL_PART_BYTES_V1 before allocation.
+'crate::palw_court_numerical_transport_v1::NumericalPartV1': ('reviewed-field-layout','e6eac5c12b2b860c7a1a2ced4f1306fc42e118dac552e69a620e1ea1c94b4c82'),
 # Claude 2026-10-22: numerical manifest: derived order; decoder rejects version!=1 only.
-'crate::palw_court_numerical_transport_v1::NumericalManifestV1': ('reviewed-field-layout','2f0c22e8f59e71fc823b26b9a23e724c32b9314637db8d19bf3440f3bf75e164'),
+# 2026-10-31 re-review: early version1 guard, unchanged fixed275-byte derived order;
+# actual decoder remains mandatory. NumericalPart dynamic bound is NOT covered.
+'crate::palw_court_numerical_transport_v1::NumericalManifestV1': ('reviewed-field-layout','9bc64e5873cf1327400c7ff2ac38d6f20452e0dfa848d6fc0e1d7f228c7baf1d'),
 # Claude 2026-10-22: D2 readiness path: derived order (u32, Hash64, Vec<Hash64>); decoder bounds sibling count to MAX_PATH.
 'crate::palw_court_model_scope_routes_v1::readiness_root::ReadinessDigestPathV1': ('reviewed-field-layout','defb98a6ba03ef7a581ec429f587ad00603ac97fda1cec1cdeabd19968624a05'),
 # Claude 2026-10-22: TFO1 derived order (version, bytes, consent, bytes); decoder bounds both byte fields, checks version/structure.
@@ -29,14 +43,16 @@ PINNED = {
 'crate::palw_court_original_escrow_v1::FundingConsentV1': ('reviewed-field-layout','f35702cb4cbba930432c475f4287c0d497d767561b9effe3961a7e47484917d5'),
 # G14 snapshot rows: decoder consumes derived field order; version, exact ML-DSA
 # key/signature and path bounds narrow acceptance without changing field framing.
-'crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1': ('reviewed-field-layout','54395a01de88dee1dc2ffbe105ba68a8621fd16cdedc2a827e79e3d8ff18a9de'),
-'crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1': ('reviewed-field-layout','908103e1fe58fe35610bf054fb7f5a93fbfc806bbcac006bccc7c35c580b31b4'),
+'crate::palw_court_shared_tir_root_v1::SharedTirRootRowV1': ('reviewed-field-layout','91c9cd0472433c2f48a8cbe6c35acd4af963eb1bfd2f2f5b1da21372fea050f0'),
+'crate::palw_court_shared_tir_round_v1::SharedTirRoundRowV1': ('reviewed-field-layout','f10d9d93e2fee442f1b2b16dcf56747f254854dea0b395548cdc22016d7aad7d'),
 # Claude 2026-10-22: v2 appends a bare position byte (handwritten); owner adapter in wire.rs.
-'crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1': ('adapter','484855024f6d81f407027bd59013bed932301726d5d05fd0c9113126393d9c38'),
+# Explicit adapter reviewed against inline bounded control decoder. Version 2
+# appends one bare position byte; retaining adapter avoids an Option tag.
+'crate::palw_court_shared_tir_bottom_v1::SharedTirBottomRowV1': ('adapter','3d1797fecad5affc24189a551b9c987020b7546693a75a4d39b1ffac865bdc3c'),
 # Claude 2026-10-26 (F03b2): v1 bytes unchanged; v2 appends a bare SharedServiceSlotV1 (handwritten); owner adapter in wire.rs.
-'crate::palw_court_shared_tir_state_v1::SharedTirQueryV1': ('adapter','88a9e6d42f7bcefa79dc6f7bcc5cd465425e30b25b7204ee623a9a1dae449f70'),
+'crate::palw_court_shared_tir_state_v1::SharedTirQueryV1': ('adapter','8aa86d1cb1b9cd206f331211934f147c65f9ce66cba9eea2445af947c04842b9'),
 # Same field order as derived serialize; only bytes Vec decode is narrowed to existing PART.
-'crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1': ('reviewed-field-layout','5252de7400c7c9e3ed9a231f3286f9429dea9d1f652e24aebff67a5026fd1dd8'),
+'crate::palw_court_shared_tir_stream_state_v1::SharedTirChunkV1': ('reviewed-field-layout','0597c4bac924a372d3636dc04f37eca6f403fa173634824c8cb389fc0753074c'),
 'crate::palw_bond_budget_v1::PalwBondBudgetStateV1': ('adapter','163e6501bd1b84fdf6f3ac7eff4cf62cee3495a3658c9047bcba633ac5d86abf'),
 'crate::palw_flat_constraint_stream_v1::PalwFlatConstraintActionV1': ('reviewed-field-layout','82eac4b65c1f7faae83e691c850e3e3cc5529e4c331f88bbc4d17797f3b89a33'),
 'crate::palw_float_constraint_source_v1::PalwFloatSourceActionV1': ('reviewed-field-layout','ef5bac2471e454620a0b6b70050b62ccfe2dbcca9139824197d04892588459af'),
@@ -57,7 +73,7 @@ PINNED = {
 'crate::palw_staged_bundle_v1::PalwStagedFamilyRowV1': ('reviewed-field-layout','b92b6935c58487df4bdf9f5e254db9a43e018a57463827d3cf49b1bc0c01270a'),
 # Claude 2026-10-22: + funded-escrow tail 0xFB (unique among 74 tails), written only when non-empty; empty == old bytes.
 # Claude 2026-10-22 (2): + D2 readiness tail 0xE5 (non-empty only; 75 tails unique).
-'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','4fa8919aca87101ee87384afd9c22eff05b63a1b27d0c86a65e05fff14f40de4'),  # re-reviewed 2026-10-27 (lane GC-DUTY): + PanelDa disclosures tail 0xE8 (optional, once, empty refused)
+'crate::palw_state_v2::PalwStateCarriageV2': ('adapter','b6fa1d79680739d01728670a41a3d14685df52e6a553abbc37688050f8b1cac0'),
 'crate::palw_tir_prefix_owned_v1::PalwTirPrefixLeafAnswerV1': ('reviewed-field-layout','1aa6332539dd6d430025fdd6d15e1737c9ccd0fad6ced34bc4798e4dcbfad422'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicChunkRecordV1': ('reviewed-field-layout','394604fa55e5ec254a05265c967a3604f9584f90505e54083bcd28b91b626d92'),
 'crate::palw_tir_public_owned_v1::PalwTirPublicContractV1': ('reviewed-field-layout','a37709c03faa51fcc923e9055aa29a280ab0b09ef3cfa086ef66997762cf745f'),

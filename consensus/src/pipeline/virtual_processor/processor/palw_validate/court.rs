@@ -849,6 +849,16 @@ impl VirtualStateProcessor {
                 row.admit_v1(prompt_token_ids, point.daa_score)
                     .map_err(|why| format!("claim {claim}: disclosure refused: {why:?}"))?;
             }
+            Obj::CourtFamilyMaterialV1 { control } => {
+                if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                    return Ok(());
+                }
+                let record = state.bond(&control.submitter).ok_or("family material submitter bond absent")?;
+                if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                    return Err("family material submitter inactive".into());
+                }
+                control.verify_v1(self.palw_network_domain_v2(), &record.pubkey)?;
+            }
             Obj::MaterialIntakeV1 { intake } => {
                 if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
                     return Ok(());

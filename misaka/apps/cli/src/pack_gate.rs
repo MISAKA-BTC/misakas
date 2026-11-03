@@ -29,6 +29,9 @@ pub(crate) struct PackGateFlags {
     /// pack as well. Without it those checks are skipped, and the report says so.
     #[arg(long, value_name = "PATH", requires = "pack")]
     pub(crate) pack_source: Option<PathBuf>,
+    /// Stream runtime-pack conformance to bound memory while verifying the same artifact and vectors.
+    #[arg(long, requires = "pack", conflicts_with = "skip_pack_verify")]
+    pub(crate) pack_stream: bool,
     /// An expert's override: register WITHOUT a verified runtime pack. A warning is printed that nothing the pack would have checked
     /// (the source, the frontend, the artifact's roots, conformance on three executors, the reference fit) was checked. The chain
     /// does not require a pack either way.
@@ -93,6 +96,7 @@ pub(crate) fn require_verified_pack(flags: &PackGateFlags, artifact: &Path) -> R
     let mut opts = VerifyOpts::new(pack);
     opts.artifact = Some(artifact.to_path_buf());
     opts.model = flags.pack_source.clone();
+    opts.streamed = flags.pack_stream.then_some(true);
     let report = verify_pack(&opts, &|m| eprintln!("{m}")).map_err(|e| CliError::new(exit::MODEL, format!("pack verify: {e}")))?;
     let rendered = report.render();
     if !report.ok() {
@@ -121,7 +125,7 @@ mod tests {
     use super::*;
 
     fn flags(pack: Option<&str>, skip: bool) -> PackGateFlags {
-        PackGateFlags { pack: pack.map(PathBuf::from), pack_source: None, skip_pack_verify: skip }
+        PackGateFlags { pack: pack.map(PathBuf::from), pack_source: None, pack_stream: false, skip_pack_verify: skip }
     }
 
     #[test]
@@ -157,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn the_flags_exclude_each_other_and_the_source_needs_a_pack() {
+    fn the_flags_exclude_each_other_and_source_and_stream_need_a_pack() {
         use clap::Parser;
         #[derive(Parser, Debug)]
         struct T {
@@ -172,5 +176,8 @@ mod tests {
         );
         assert!(T::try_parse_from(["t", "--pack-source", "m"]).is_err(), "a source with no pack is refused");
         assert!(T::try_parse_from(["t", "--pack", "p", "--pack-source", "m"]).is_ok());
+        assert!(T::try_parse_from(["t", "--pack-stream"]).is_err());
+        assert!(T::try_parse_from(["t", "--skip-pack-verify", "--pack-stream"]).is_err());
+        assert!(T::try_parse_from(["t", "--pack", "p", "--pack-stream"]).unwrap().g.pack_stream);
     }
 }

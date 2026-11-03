@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/tonic"]
 members = [
     "daemon",
     "cli",
@@ -628,3 +629,7 @@ doc_overindented_list_items = "allow"
 type_complexity = "allow"
 large_enum_variant = "allow"
 assertions_on_constants = "allow"
+
+# tonic 0.14.5: release oversized per-stream encode buffers after each frame.
+[patch.crates-io]
+tonic = { path = "vendor/tonic" }

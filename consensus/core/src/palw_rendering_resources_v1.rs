@@ -5,7 +5,8 @@
 //! existing reservations and their historic deadlines are never extended by this helper.
 use borsh::{BorshDeserialize, BorshSerialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PalwRenderingResourcePlanV1 {
     pub prefix_tokens: u32,
     pub vocab: u32,
@@ -51,7 +52,40 @@ impl PalwRenderingResourcePlanV1 {
     /// Conservative bound allows all-vocabulary work. The refutation court itself needs only
     /// nominated witness/beat lanes; this helper does not implement an all-vocabulary census.
     pub fn derive(prefix_tokens: u32, vocab: u32, p: PalwRenderingResourcePricesV1) -> Result<Self, String> {
-        use crate::palw_fp_constraint_job_v1::{PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1, PALW_TOKEN_TABLE_MAX_VOCAB_V1};
+        Self::derive_table_bytes_v1(
+            prefix_tokens,
+            vocab,
+            p,
+            crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u128,
+        )
+    }
+    /// Bound every repeated prefix rendering and the complete vocabulary by an
+    /// already authenticated canonical table, without trusting a declared size.
+    pub fn derive_with_authenticated_table_v2(
+        prefix_tokens: u32,
+        vocab: u32,
+        p: PalwRenderingResourcePricesV1,
+        semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        table: &crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1,
+    ) -> Result<Self, String> {
+        let mut plan =
+            Self::derive_table_bytes_v1(prefix_tokens, vocab, p, u128::from(table.exact_bytes_for_context_v2(semantics, vocab)?))?;
+        let count = u64::from(vocab) + 1; // all rendering leaves plus authenticated EOG
+        let depth = u64::from(u64::BITS - (count - 1).leading_zeros());
+        // A wrapped-index leaf (72 bytes) and every internal node (128 bytes)
+        // each need one keyed block plus one final payload block. Odd promotions
+        // reduce the actual path; ceil(log2(count)) bounds every existing path.
+        let openings = u128::from(plan.maximum_stream_leaves) + u128::from(p.reorg_replay_moves);
+        let path_blocks = openings * 2 * u128::from(depth + 1);
+        plan.maximum_blake_blocks = narrow(
+            u128::from(plan.maximum_blake_blocks)
+                + path_blocks
+                + u128::from(table.authentication_blake_blocks_bound_v2(semantics, vocab)?),
+        )?;
+        Ok(plan)
+    }
+    fn derive_table_bytes_v1(prefix_tokens: u32, vocab: u32, p: PalwRenderingResourcePricesV1, table: u128) -> Result<Self, String> {
+        use crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_VOCAB_V1;
         if prefix_tokens as usize >= crate::palw_v2::PALW_V2_MAX_TRACE_EVENTS
             || vocab == 0
             || vocab as usize >= PALW_TOKEN_TABLE_MAX_VOCAB_V1
@@ -59,7 +93,6 @@ impl PalwRenderingResourcePlanV1 {
         {
             return Err("resource terms need authenticated in-format prefix/vocabulary and positive inclusion margin".into());
         }
-        let table = PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u128;
         let prefix = u128::from(prefix_tokens);
         let vocab128 = u128::from(vocab);
         // Each prefix token can reuse the largest rendering at a different parser state.
@@ -425,7 +458,33 @@ impl PalwTokenizerResourcePlanV1 {
     /// Complete raw derivation plus one largest legal ORIGINAL table rendering. The declared
     /// table length is not trusted to reduce this envelope before its old flat leaf authenticates.
     pub fn court_envelope(self, vocab: u32, p: PalwRenderingResourcePricesV1) -> Result<PalwRenderingResourcePlanV1, String> {
-        let table = crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u128;
+        self.court_envelope_bytes_v1(vocab, p, crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u128)
+    }
+    /// Exact canonical table geometry authenticated against the immutable class
+    /// semantics before admission. Historical v1 retains its full-file cap.
+    pub fn court_envelope_with_authenticated_table_v2(
+        self,
+        vocab: u32,
+        p: PalwRenderingResourcePricesV1,
+        semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        table: &crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1,
+    ) -> Result<PalwRenderingResourcePlanV1, String> {
+        let bytes = table.exact_bytes_for_context_v2(semantics, vocab)?;
+        let mut envelope = self.court_envelope_bytes_v1(vocab, p, u128::from(bytes))?;
+        // Empty renderings still require their keyed leaf and Merkle-node
+        // hashes; canonical EOF bytes alone are not a bound on their count.
+        envelope.maximum_blake_blocks = self
+            .maximum_blake_blocks
+            .checked_add(table.authentication_blake_blocks_bound_v2(semantics, vocab)?)
+            .ok_or("authenticated table hash envelope overflow")?;
+        Ok(envelope)
+    }
+    fn court_envelope_bytes_v1(
+        self,
+        vocab: u32,
+        p: PalwRenderingResourcePricesV1,
+        table: u128,
+    ) -> Result<PalwRenderingResourcePlanV1, String> {
         let table_moves = table.div_ceil(65536) + 2;
         let moves = u128::from(self.maximum_moves) + table_moves;
         let row = 65536u128 + 2048;
@@ -501,6 +560,88 @@ impl PalwTokenizerResourcePlanV1 {
 #[cfg(test)]
 mod tokenizer_resource_tests {
     use super::*;
+    #[test]
+    fn tokenizer_authenticated_table_geometry_prices_exact_eof_and_preserves_legacy_cap() {
+        use crate::palw_class_semantics_v1::PalwClassSemanticsV1;
+        use crate::palw_fp_constraint_job_v1::{
+            PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1, PalwTokenTableV1, palw_token_table_file_encode_v1,
+        };
+        let h = |n| crate::Hash64::from_u64_word(n);
+        let table =
+            PalwTokenTableV1 { entries: vec![Some(b"a".to_vec()), Some(b"b".to_vec())], eog_token_ids: vec![1], tokenizer_id: h(1) };
+        let bytes = palw_token_table_file_encode_v1(&table);
+        let semantics = PalwClassSemanticsV1 {
+            version: 1,
+            class_id: h(2),
+            artifact_root: h(3),
+            bound_from_daa: 0,
+            model_profile_id: h(4),
+            runtime_manifest_hash: h(5),
+            runtime_class_id: h(6),
+            tokenizer_id: table.tokenizer_id,
+            cu_ruleset_id: h(7),
+            token_table_root: Some(table.root()),
+            rendering_rule: None,
+            raw_tokenizer_bytes: Some(100),
+            tokenizer_key_events: Some(8),
+            prefix_state_relation: None,
+        };
+        let checked = crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(&bytes, &semantics, 2).unwrap();
+        let prices = PalwStagedPublicCourtConfigV1::network_v1().prices;
+        let raw = PalwTokenizerResourcePlanV1::derive_with_key_bound(100, 8, prices).unwrap();
+        let legacy = raw.court_envelope(2, prices).unwrap();
+        let exact = raw.court_envelope_with_authenticated_table_v2(2, prices, &semantics, &checked).unwrap();
+        assert_eq!(legacy.maximum_stream_bytes, 100 + PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64);
+        assert_eq!(legacy.maximum_moves, raw.maximum_moves + (PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64).div_ceil(65536) + 2);
+        assert_eq!(exact.maximum_stream_bytes, 100 + bytes.len() as u64);
+        assert_eq!(exact.maximum_moves, raw.maximum_moves + (bytes.len() as u64).div_ceil(65536) + 2);
+        assert!(exact.inclusion_daa < legacy.inclusion_daa);
+        assert!(exact.rent_sompi < legacy.rent_sompi);
+        assert_eq!(exact.maximum_parser_steps, legacy.maximum_parser_steps, "raw parser proof routes remain fully reserved");
+        assert_eq!(exact.row_bytes, legacy.row_bytes);
+        let rendering = PalwRenderingResourcePlanV1::derive_with_authenticated_table_v2(7, 2, prices, &semantics, &checked).unwrap();
+        let legacy_rendering = PalwRenderingResourcePlanV1::derive(7, 2, prices).unwrap();
+        assert_eq!(rendering.maximum_stream_bytes, 8 * bytes.len() as u64);
+        assert_eq!(legacy_rendering.maximum_stream_bytes, 8 * PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64);
+        assert_eq!(rendering.maximum_stream_leaves, legacy_rendering.maximum_stream_leaves);
+        assert_eq!(rendering.maximum_eog_bytes, legacy_rendering.maximum_eog_bytes);
+        assert_eq!(rendering.row_bytes, legacy_rendering.row_bytes);
+        assert!(rendering.maximum_moves < legacy_rendering.maximum_moves);
+        let sparse = PalwTokenTableV1 { entries: vec![None; 128], eog_token_ids: vec![127], tokenizer_id: table.tokenizer_id };
+        let sparse_bytes = palw_token_table_file_encode_v1(&sparse);
+        let mut sparse_semantics = semantics.clone();
+        sparse_semantics.token_table_root = Some(sparse.root());
+        let sparse_checked =
+            crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(&sparse_bytes, &sparse_semantics, 128).unwrap();
+        let sparse_envelope = raw.court_envelope_with_authenticated_table_v2(128, prices, &sparse_semantics, &sparse_checked).unwrap();
+        let native_hashes = sparse_checked.authentication_blake_blocks_bound_v2(&sparse_semantics, 128).unwrap();
+        assert_eq!(sparse_envelope.maximum_blake_blocks, raw.maximum_blake_blocks + native_hashes);
+        assert!(native_hashes >= 8 * 128, "empty table entries still require native leaf/tree hashing");
+        let sparse_rendering =
+            PalwRenderingResourcePlanV1::derive_with_authenticated_table_v2(7, 128, prices, &sparse_semantics, &sparse_checked)
+                .unwrap();
+        let sparse_body = PalwRenderingResourcePlanV1::derive_table_bytes_v1(7, 128, prices, sparse_bytes.len() as u128).unwrap();
+        let opening_blocks = (sparse_rendering.maximum_stream_leaves + u64::from(prices.reorg_replay_moves)) * 2 * (8 + 1);
+        assert_eq!(sparse_rendering.maximum_blake_blocks, sparse_body.maximum_blake_blocks + opening_blocks + native_hashes);
+        assert_eq!(sparse_rendering.maximum_stream_leaves, 7 + 128 + 1);
+        assert_eq!(
+            legacy_rendering.maximum_blake_blocks,
+            (legacy_rendering.maximum_stream_bytes + legacy_rendering.maximum_eog_bytes).div_ceil(128)
+                + legacy_rendering.maximum_stream_leaves * 3,
+            "historical content-hash formula is unchanged"
+        );
+        assert!(
+            native_hashes > 2 * (sparse_bytes.len() as u64).div_ceil(128) + 8,
+            "EOF bytes alone cannot cover sparse vocabulary authentication"
+        );
+        let mut foreign = semantics.clone();
+        foreign.token_table_root = Some(h(99));
+        assert!(raw.court_envelope_with_authenticated_table_v2(2, prices, &foreign, &checked).is_err());
+        assert!(raw.court_envelope_with_authenticated_table_v2(3, prices, &semantics, &checked).is_err());
+        let mut damaged = bytes;
+        *damaged.last_mut().unwrap() ^= 1;
+        assert!(crate::palw_court_family_material_v1::prepare_family_table_inventory_v1(&damaged, &semantics, 2).is_err());
+    }
     #[test]
     fn signed_event_bound_prices_complete_honest_or_authenticated_overrun_route() {
         let prices = PalwStagedPublicCourtConfigV1::network_v1().prices;

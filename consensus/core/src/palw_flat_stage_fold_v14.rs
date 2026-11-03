@@ -474,7 +474,7 @@ fn fund(
     .map_err(refused)?;
     trace_shard.admit(&p.execution.quota, &epoch, &trace_plan, &trace_grant).map_err(refused)?;
     let free =
-        (builder.state.bonds.get(signer).unwrap().collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score));
+        (builder.state.bonds.get(signer).unwrap().collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?);
     if free < request.reward as u128 {
         return Err(refused("stage original requester escrow unavailable"));
     }
@@ -868,7 +868,7 @@ fn commit(
     if producer.operator_id.as_bytes() != h.producer_operator {
         return Err(refused("stage producer operator rotated from original job"));
     }
-    let free = (producer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score));
+    let free = (producer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?);
     let reserve = book
         .commit(
             &class,
@@ -1022,7 +1022,7 @@ fn bind(
         return Ok(());
     }
     let free = (builder.state.bonds.get(signer).ok_or_else(|| refused("stage binder absent"))?.collateral as u128)
-        .saturating_sub(builder.committed_at(signer, ctx.daa_score));
+        .saturating_sub(builder.committed_at(signer, ctx.daa_score)?);
     if free < p.source_reservation as u128 {
         return Err(refused("typed source original liability unavailable"));
     }

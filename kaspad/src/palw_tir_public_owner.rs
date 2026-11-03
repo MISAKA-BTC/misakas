@@ -168,6 +168,16 @@ fn owner_acquisition_door_open_v1(now: u64, open_until: u64, owns_here: bool) ->
     owns_here || now.saturating_add(1) < open_until
 }
 
+fn owner_move_can_land_v1(now: u64, due: u64) -> bool {
+    now.checked_add(1).is_some_and(|candidate| candidate <= due)
+}
+
+// The fold requires the full response span to end strictly before the stream door.
+fn owner_demand_due_v1(now: u64, stream_until: u64, response_span: u64) -> Option<u64> {
+    let due = stream_until.checked_sub(response_span)?.checked_sub(1)?;
+    owner_move_can_land_v1(now, due).then_some(due)
+}
+
 /// **Lane g14-court-capacity-r2: may this bond Open now as far as the K_owner cap goes** — always past `palw_court_capacity_v1`
 /// (`fair_start`: an Open at the cap waits in the owner queue instead of being refused), else only on a free or reclaimable slot.
 pub(crate) fn owner_slot_open_v1(fair_start: bool, slot_free_or_reclaimable: bool) -> bool {
@@ -210,7 +220,8 @@ struct OwnerCaseV1 {
     cone_needs_ids: bool,
     demands: u32,
     // The unsigned signing digest distinguishes a retry from the next accepted-state move.
-    last_move: Option<Hash64>,
+    // The due DAA also bounds a Demand retained when no carrier funding was available.
+    last_move: Option<(Hash64, u64)>,
     done: bool,
 }
 
@@ -492,7 +503,6 @@ impl PalwPanelService {
                         continue;
                     }
                     let maximum_leaves = frame.descriptor_v1().maximum_leaves;
-                    let queue_due = terms.collect_until_daa.saturating_sub(1);
                     // 1. Our acquisition row, or an Open.
                     if case.acquisition.is_none() {
                         case.acquisition = state
@@ -629,6 +639,7 @@ impl PalwPanelService {
                             }
                         }
                     }
+                    let mut cone = None;
                     let want = match case.suspicion {
                         // Still before the complete IDs, or waiting on a selection row's tile (the probe named it).
                         SuspicionV1::Selection => match case.ids.as_ref() {
@@ -672,13 +683,7 @@ impl PalwPanelService {
                                 else {
                                     return Ok(());
                                 };
-                                steps.push(OwnerStepV1::Cone {
-                                    claim: *claim,
-                                    source: context.into_source(),
-                                    inputs,
-                                    leaf,
-                                    maximum_leaves,
-                                });
+                                cone = Some((inputs, leaf));
                                 None
                             } else {
                                 let units = &case.units;
@@ -724,15 +729,13 @@ impl PalwPanelService {
                                 .iter()
                                 .any(|s| p.slots.get(s).is_none_or(|slot| slot.finished.is_none()))
                     });
-                    match (open, want) {
-                        (Some(p), _) if now >= p.respond_until_daa => {
-                            steps.push(OwnerStepV1::Move {
-                                claim: *claim,
-                                control: control(PalwTirPublicOwnedActionV1::Collect { demand_id: p.demand_id }, p.turn),
-                                due: queue_due,
-                            });
-                        }
-                        (Some(_), _) => {}
+                    let next_move = match (open, want) {
+                        (Some(p), _) if now >= p.respond_until_daa => Some(OwnerStepV1::Move {
+                            claim: *claim,
+                            control: control(PalwTirPublicOwnedActionV1::Collect { demand_id: p.demand_id }, p.turn),
+                            due: terms.collect_until_daa.saturating_sub(1),
+                        }),
+                        (Some(_), _) => None,
                         // Lane g14-court-capacity-r2: a WAITING row's Demand is refused unless the rotation it triggers admits it —
                         // ask the fold's own predicate first, so no refused carrier is signed.
                         (None, Some(_))
@@ -749,16 +752,24 @@ impl PalwPanelService {
                                         frame,
                                         row.owned.owner_idle_grace_daa_v1(),
                                     ),
-                                ) => {}
+                                ) =>
+                        {
+                            None
+                        }
                         (None, Some(request)) if active.is_none_or(|p| p.collected || p.request != request) => {
-                            steps.push(OwnerStepV1::Move {
+                            let response_span = row.owned.response_span_v1(source, request)?;
+                            owner_demand_due_v1(now, terms.stream_until_daa, response_span).map(|due| OwnerStepV1::Move {
                                 claim: *claim,
                                 control: control(PalwTirPublicOwnedActionV1::Demand { request }, row.owned.spent_v1().turns),
-                                due: queue_due,
-                            });
+                                due,
+                            })
                         }
-                        _ => {}
+                        _ => None,
+                    };
+                    if let Some((inputs, leaf)) = cone {
+                        steps.push(OwnerStepV1::Cone { claim: *claim, source: context.into_source(), inputs, leaf, maximum_leaves });
                     }
+                    steps.extend(next_move);
                 }
                 for claim in ended {
                     book.cases.remove(&claim);
@@ -786,7 +797,20 @@ impl PalwPanelService {
             }
             return;
         }
-        court_outbox.retain_pending(|(claim, round, responder, _)| !ours(*round, *responder) || book.cases.contains_key(claim));
+        court_outbox.retain_pending(|(claim, round, responder, object)| {
+            if !ours(*round, *responder) {
+                return true;
+            }
+            let Some(case) = book.cases.get_mut(claim) else { return false };
+            if matches!(object, PalwConsensusObjectV2::TirPublicControlV1 { control }
+                if matches!(&control.action, PalwTirPublicControlActionV1::Acquisition(PalwTirPublicOwnedActionV1::Demand { .. })))
+                && case.last_move.is_some_and(|(_, due)| !owner_move_can_land_v1(now, due))
+            {
+                case.last_move = None;
+                return false;
+            }
+            true
+        });
         for step in steps {
             let result: Result<(), String> = async {
                 match step {
@@ -868,7 +892,7 @@ impl PalwPanelService {
                     OwnerStepV1::Move { claim, mut control, due: due_daa } => {
                         let queue = (claim, PALW_TIR_PUBLIC_OWNER_ROUND_V1, false);
                         let digest = control.signing_message_v1(network_domain)?;
-                        let last = book.cases.get(&claim).and_then(|case| case.last_move);
+                        let last = book.cases.get(&claim).and_then(|case| case.last_move.map(|(digest, _)| digest));
                         if court_outbox.pending().iter().any(|(a, b, c, _)| (*a, *b, *c) == queue)
                             || owner_retry_waits_v1(last, digest, court_outbox.submitted_at(&queue).copied(), now)
                         {
@@ -885,7 +909,7 @@ impl PalwPanelService {
                             case.demands += 1;
                         }
                         if let Some(case) = book.cases.get_mut(&claim) {
-                            case.last_move = Some(digest);
+                            case.last_move = Some((digest, due_daa));
                         }
                         court_outbox.push_pending((queue.0, queue.1, queue.2, PalwConsensusObjectV2::TirPublicControlV1 { control }));
                         court_outbox.set_due(queue, due_daa);
@@ -987,6 +1011,57 @@ mod tests {
         assert!(!owner_acquisition_door_open_v1(101, 100, false));
         assert!(owner_acquisition_door_open_v1(101, 100, true));
         assert!(!owner_acquisition_door_open_v1(u64::MAX, u64::MAX, false));
+    }
+
+    #[test]
+    fn owner_demand_deadline_keeps_the_full_response_span() {
+        assert_eq!(owner_demand_due_v1(78, 100, 20), Some(79));
+        assert_eq!(owner_demand_due_v1(79, 100, 20), None);
+        assert_eq!(owner_demand_due_v1(0, 20, 20), None);
+        assert_eq!(owner_demand_due_v1(0, 19, 20), None);
+        assert_eq!(owner_demand_due_v1(u64::MAX, u64::MAX, 20), None);
+        for now in 0..16u64 {
+            for stream_until in 0..16 {
+                for response_span in 0..16 {
+                    let accepted_next = now + 1 + response_span < stream_until;
+                    assert_eq!(owner_demand_due_v1(now, stream_until, response_span).is_some(), accepted_next);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn owner_demand_takes_edf_priority_over_later_collect() {
+        let mut outbox = CourtOutboxV1::default();
+        let mut enqueue = |claim, action, due| {
+            let signer = bond(1);
+            let key = (claim, PALW_TIR_PUBLIC_OWNER_ROUND_V1, false);
+            let control = PalwTirPublicControlV1 {
+                version: 1,
+                claim,
+                allocation_id: h(3),
+                source_id: h(4),
+                target: PalwTirPublicControlTargetV1::Acquisition { owner: signer, reserved_daa: 60 },
+                expected_turn: 0,
+                declared_rent_sompi: 0,
+                signer,
+                action: PalwTirPublicControlActionV1::Acquisition(action),
+                signature: Vec::new(),
+            };
+            outbox.push_pending((key.0, key.1, key.2, PalwConsensusObjectV2::TirPublicControlV1 { control: Box::new(control) }));
+            outbox.set_due(key, due);
+        };
+        let collecting = h(1);
+        let demanding = h(2);
+        enqueue(collecting, PalwTirPublicOwnedActionV1::Collect { demand_id: h(5) }, 89);
+        enqueue(
+            demanding,
+            PalwTirPublicOwnedActionV1::Demand { request: PalwTirPublicRequestV1::StepLeaf { index: 0 } },
+            owner_demand_due_v1(78, 100, 20).unwrap(),
+        );
+        let ordered = outbox.try_take_priority().unwrap();
+        assert_eq!(ordered.len(), 2);
+        assert_eq!([ordered[0].0, ordered[1].0], [demanding, collecting]);
     }
 
     fn h(n: u64) -> Hash64 {

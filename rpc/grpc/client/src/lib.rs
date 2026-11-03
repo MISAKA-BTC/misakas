@@ -328,6 +328,7 @@ impl RpcApi for GrpcClient {
     route!(get_palw_reward_vesting_call, GetPalwRewardVesting);
     route!(get_palw_staged_preclaim_quote_call, GetPalwStagedPreclaimQuote);
     route!(get_palw_router_binding_v2_call, GetPalwRouterBindingV2);
+    route!(get_palw_memory_routing_outcome_v1_call, GetPalwMemoryRoutingOutcomeV1);
     route!(get_palw_paid_claim_call, GetPalwPaidClaim);
     route!(get_palw_acceptance_reads_call, GetPalwAcceptanceReads);
     route!(get_palw_rfc_0016_report_call, GetPalwRfc0016Report);
@@ -440,8 +441,8 @@ pub const REQUEST_TIMEOUT_DURATION: u64 = 5_000;
 pub const TIMEOUT_MONITORING_INTERVAL: u64 = 10_000;
 pub const RECONNECT_INTERVAL: u64 = 2_000;
 
-type KaspadRequestSender = async_channel::Sender<KaspadRequest>;
-type KaspadRequestReceiver = async_channel::Receiver<KaspadRequest>;
+type KaspadRequestSender = async_channel::Sender<kaspa_utils_tower::transport::Outbound<KaspadRequest>>;
+type KaspadRequestReceiver = async_channel::Receiver<kaspa_utils_tower::transport::Outbound<KaspadRequest>>;
 
 #[derive(Debug, Default)]
 struct ServerFeatures {
@@ -493,6 +494,7 @@ struct Inner {
 
     // Sending to server
     request_sender: KaspadRequestSender,
+    request_budget: Arc<kaspa_core::memory_budget::MemoryBudget>,
     request_receiver: KaspadRequestReceiver,
 
     // Receiving from server
@@ -544,6 +546,7 @@ impl Inner {
             server_features,
             notification_channel,
             request_sender,
+            request_budget: kaspa_utils_tower::transport::connection_budget(),
             request_receiver,
             resolver,
             receiver_is_running: AtomicBool::new(false),
@@ -570,7 +573,7 @@ impl Inner {
         counters: Arc<TowerConnectionCounters>,
     ) -> Result<Arc<Self>> {
         // Request channel
-        let (request_sender, request_receiver) = async_channel::unbounded();
+        let (request_sender, request_receiver) = async_channel::bounded(256);
 
         // Try to connect to the server
         let (stream, server_features) =
@@ -659,7 +662,10 @@ impl Inner {
 
         // Collect server capabilities as stated in GetInfoResponse
         let mut server_features = ServerFeatures::default();
-        request_sender.send(GetInfoRequestMessage {}.into()).await?;
+        request_sender.try_send(kaspa_utils_tower::transport::Outbound::try_new(
+            GetInfoRequestMessage {}.into(),
+            &kaspa_utils_tower::transport::connection_budget(),
+        )?)?;
         match stream.message().await? {
             Some(ref msg) => {
                 trace!("GRPC client: try_connect - GetInfo got a response");
@@ -768,8 +774,12 @@ impl Inner {
 
             trace!("GRPC client: resolver call: {:?}", request);
             if request.payload.is_some() {
-                let receiver = self.resolver().register_request(op, &request);
-                self.request_sender.send(request).await.map_err(|_| Error::ChannelRecvError)?;
+                let resolver = self.resolver();
+                let receiver = resolver.register_request(op, &request)?;
+                let mut pending = crate::resolver::PendingRequestGuard::new(resolver, id);
+                let request = kaspa_utils_tower::transport::Outbound::try_new(request, &self.request_budget)?;
+                self.request_sender.try_send(request).map_err(|_| Error::ChannelSendError)?;
+                pending.sent();
                 receiver.await?
             } else {
                 Err(Error::MissingRequestPayload)

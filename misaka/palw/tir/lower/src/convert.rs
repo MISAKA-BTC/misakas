@@ -163,6 +163,8 @@ pub struct ConvertRequest {
     /// Output storage profile only: 32 preserves the old Q24 recipe; 64 is
     /// explicit decoder-only i64 Q24. It grants no network admission.
     pub logits_bits: u8,
+    pub attention_weight_bits: u8,
+    pub mlp_down_weight_bits: u8,
     /// Explicit pins for a freshly converted full25 artifact; legacy conversion has none.
     pub full_court_source_pin: Option<crate::full_court_source25::SourcePinV25>,
     pub chunk_store: Option<std::path::PathBuf>,
@@ -213,6 +215,8 @@ impl ConvertRequest {
             gdn_core_wide: false,
             linear_weight_bits: 8,
             logits_bits: 32,
+            attention_weight_bits: 8,
+            mlp_down_weight_bits: 8,
             full_court_source_pin: None,
             chunk_store: None,
             keep_chunks: false,
@@ -275,6 +279,8 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         gdn_core_wide: req.gdn_core_wide,
         linear_weight_bits: req.linear_weight_bits,
         logits_bits: req.logits_bits,
+        attention_weight_bits: req.attention_weight_bits,
+        mlp_down_weight_bits: req.mlp_down_weight_bits,
         ..LowerOpts::default()
     };
     let reg = QuantRegistry::with_files(&req.quant_formats)?;
@@ -485,6 +491,12 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         }
         if req.logits_bits != 32 {
             meta["logits_bits"] = serde_json::json!(req.logits_bits);
+        }
+        if req.mlp_down_weight_bits == 16 {
+            meta["mlp_down_weight_bits"] = serde_json::json!(16);
+        }
+        if req.attention_weight_bits == 16 {
+            meta["attention_weight_bits"] = serde_json::json!(16);
         }
         if req.linear_weight_bits == 16 {
             meta["linear_weight_profile"] = serde_json::json!({"schema": "misaka.palw.decoder-linear-weights.v16", "main_bits": 16, "stored_quant_formats": "unchanged"});

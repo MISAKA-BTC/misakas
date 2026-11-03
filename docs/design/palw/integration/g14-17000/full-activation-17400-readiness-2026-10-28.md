@@ -1,5 +1,7 @@
 # 全機能 DAA 17,400 有効化の readiness — 2026-10-28
 
+**2026-10-31の現在のgoal:** 採択済み・初期mainnet対象の全機能を正常系まで実装し、同一候補で全体ビルドと対象試験を通す。公開配備と長時間キャンペーンは完了条件外。以下の17,400/17,100計画は履歴であり、既存G14の現行予定は18,400、FULLは`None`。最新の作業・検証状態は[実装完了計画](full-implementation-completion-2026-10-31.md)に記録する。
+
 **公開候補と開発中コードの区別:** この調査は全機能実装の作業記録であり、公開した G14-only バイナリ `655b6cf3a` の機能一覧ではない。RFC-0039 の通常 verifier fee と §6 provider fee-only 条件、RFC-0040 の prefix 参照はユーザー採択済みで、実装・統合検証は別ブランチで進行中。provider 役務を有限化する A/B 案は採択していない。以下の初回調査・案にある未決表記は履歴として読む。最新の判断は [ADR-0207](../../../../adr/0207-finite-fee-consent-and-provider-payment-bounds.md) と [ADR-0208](../../../../adr/0208-authenticated-prefix-work-dependencies.md) に記録する。
 
 **最新の完了範囲（2026-10-28、ユーザー指示）:** 全項目の実装完了まで。DAA 17,400 は fence 方針として維持する。公開配備と長時間の証拠キャンペーンは今回の完了条件から外す。実行可能な全経路の実装、整合したビルド、必要な focused tests は引き続き必須であり、未実行の検証を成功と扱わない。subset のみの実装や拒否だけを全項目完了の代用にしない。以下の旧配備計画・実行記録は履歴として保持する。
@@ -16,6 +18,27 @@
 
 従来候補 `655b6cf3a8f61ebdce920af867f6bedd87e717d6` の Linux ビルドと probe、証拠元 `da46131a41fe7c90ec263b0f26ab9b444e4c74a2` の19 suite、19件の re-arm 検証は、記録した範囲について有効である。新しい全体 scope と高さの source・policy・identity へ自動的に付け替えない。
 
+## 実装作業の現在地 — 2026-10-28 更新
+
+この節は `codex/g14-17400-release` の作業中ソースの状態であり、公開済み G14-only バイナリ `655b6cf3a` の機能表ではない。ユーザーが別途依頼した旧候補の公開は [公開記録](https://github.com/MISAKA-BTC/misakas/blob/main/docs/design/palw/integration/g14-17000/published-candidate-655b6cf3a.md) に従う。全機能実装の完了は引き続き未証明である。
+
+| 対象 | 実装・接続の状態 | まだ閉じる必要がある点 |
+| --- | --- | --- |
+| 通常 kernel X3 / beacon source fee | 元の受理点に固定した X3 と、実際の署名済み hold・prepaid promise・material covenant を読む typed adapter を実装 | 最終ソースでの対象試験の再確認 |
+| 通常 verifier fee consent（inner77） | 採択済み。正確な抽選枠への署名、受理時の満額保留、枠ごとの SourceFee R、期限内返金・期限後支払い、実支払い後の材料保持を接続 | 通常 OPV 抽選の上流、ゼロ回収・返却枠の R 解放、Clean と fate の履歴区別を最終試験で確認 |
+| paid native draw / paidtrap fee | 実際の Lock / LockV6 の席から draw と R を作り、誤って producer kind3 を消費する経路を枠ごとの verifier R に修正 | production draw から一回の実支払いまでの統合試験 |
+| 通常 watcher（inner78） | 有限 opt-in、署名・native ingress、stake 予約、共通資金拘束、明示 policy / Params / mirror / identity を接続。preset の数値は未承認のまま | epoch の pool 凍結、sealed-v3 claim context、実際の通常 draw、保存・復元の相互整合 |
+| provider fee-only V2（242/9,10・aux191） | RFC-0039 §6 / ADR-0207 を採択済み。両署名の atomic enrollment/replacement、H 以内の実 default 返金、H 後の支払い、旧 cohort 保護、実支払い・保持・復元と運用 CLI を実装 | 新しい境界・返金・破損・署名・CLI 試験の結果回収 |
+| material income V3 / consumer lifecycle | 実際の held escrow → queue → physical drain + W、既存 fee の移行、R・queue 上限、退役・再編の接続漏れを補修 | 通常 draw 上流を含む全 consumer の最終確認。値と測定記録の承認は別段階 |
+| RFC-0040 prefix source | 署名付き export/use、実際の birth identity、入力 envelope、独立担保予約と共通資金拘束、有限保持・期限解放を実装 | producer の export 不正裁定、検出・資料収集経路、依存先への terminal outcome、保持資料と予約の GC |
+| RFC-0023 stage 2 | checkpoint と reward が同じ retained provenance を読み、処理中 block と LastPoint の境界を修正 | native 入力 namespace / effect mapping、pruning・IBD を通した依存閉包と裁定資料の保持・復元 |
+
+検査記録はローカル診断ログを保存している。`APIcheck9` と `APIcheck10` は成功し、後者は `kaspad`、SDK、`palw-class`、運用 `misaka` CLI を含む。これはその時点のソースの型・接続検査であり、その後の追加差分を検証済みとする記録ではない。kernel の verifier-fee wire / deadline 限定試験は **2 PASS**。
+
+最初の core 対象実行は **133 PASS / 15 FAIL**。14 件は処理中 block を履歴読取り側が未来と判断する共通の境界不具合、1 件は不正な試験用 retirement 値だった。修正後の対象実行は **158 PASS / 3 FAIL**（ローカル `.codex-full-implementation-core-tests3.log`）。前の共通境界不具合は解消し、残りは新 provider と export 予約の試験準備 2 件、および checkpoint resource-owner の logical capacity 検査 1 件である。これらを修正中で、全合格とは扱わない。途中の追加 provider 試験の API 名誤り 3 件も修正済み。ordinary/paidtrap 会計・pool の後続差分と source court の追加はこの実行以後のため、別途再確認が必要である。
+
+以下の初期調査表・未採択案は経緯として残す。通常 verifier 条件と provider fee-only 条件の現在の採択状態は RFC-0039 / ADR-0207、および上表を優先する。provider の有限役務 A/B 案や未払い worker 権利取消しを採択した意味ではない。実装、focused tests、測定、武装、有効化、配備をそれぞれ区別し、未実行の証拠を作らない。
+
 ## SettlementOnce: 古い説明と実際の未実装を分ける
 
 `palw_rfc0608_measured_v1.rs` の open blocker は現在も validation を拒否する。その説明には修正済みの項目も残っている。
@@ -24,7 +47,7 @@
 - native39 mining receipt は `native_mining_receipt_leg_v39` で issuance と weight の `NoLiableClaim` と明示される。requester fee の責任条件を勝手に当てはめない既存の判断とテストがある。
 - audit1004 有効下では trap 前支払の経路と有効後の経路を区別する必要がある。古い説明の全項目をそのまま新しい阻害要因と数えない。
 
-一方、次の4系統は実コードに未解決の条件が残る。
+初期調査時点では、次の4系統に実コードの未解決条件が残っていた。後続の実装状況は上の更新表を参照する。
 
 | 支払系統 | 現在の拒否・不足 | 実装前に確定し、認証して保持する必要のある項目 |
 | --- | --- | --- |

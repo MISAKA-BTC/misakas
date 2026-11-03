@@ -394,7 +394,7 @@ impl NativeSourceMaterialGraphV3 {
         }
         let output = native_source_graph_output_v3(extent, set.len(), roles).map_err(E::Resource)?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(output).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(output).map_err(E::Resource)?;
         }
         // All shape/query maps and predecessor/check indices are now covered.
         // Stream/control hashes use fixed request descriptors and streaming sink.

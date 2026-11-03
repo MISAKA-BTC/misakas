@@ -12,7 +12,8 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     assignment::{
-        funding_relay_policy::FundingRelayPhysicalProfileV2, funding_relay_rows::FundingRelayCarrierFeesV2, policy::AssignmentPolicyV2,
+        AssignmentId, funding_relay_policy::FundingRelayPhysicalProfileV2, funding_relay_rows::FundingRelayCarrierFeesV2,
+        policy::AssignmentPolicyV2,
     },
     identity::Digest,
     rows::{AcceptedMaterial, AcceptedOrigin},
@@ -84,7 +85,7 @@ impl NativeAssignmentRulesV2 {
             gate_c: Some(material.certification_policy),
         })
     }
-    pub(super) fn original_material(&self) -> Option<AcceptedMaterial> {
+    pub fn original_material(&self) -> Option<AcceptedMaterial> {
         self.original_material.map(|(material, _)| material)
     }
     pub(super) fn original_history_storage_limit_v2(&self) -> Option<u64> {

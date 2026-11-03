@@ -1,3 +1,5 @@
+#[path = "../../../utils/tower/build_transport.rs"]
+mod build_transport;
 fn main() {
     // Build without a system `protoc`: point prost / tonic-prost-build at a vendored
     // protoc binary (protoc-bin-vendored ships one per host target — Windows/macOS/
@@ -21,6 +23,13 @@ fn main() {
 
         .compile_protos(&protowire_files[0..1], dirs)
         .unwrap_or_else(|e| panic!("protobuf compile error: {e}"));
+    build_transport::budget_generated_transport(
+        &std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("protowire.kaspapq.rs"),
+        "KaspadRequest",
+        "KaspadResponse",
+    );
+    println!("cargo:rerun-if-changed=../../../utils/tower/build_transport.rs");
+    println!("cargo:rerun-if-changed=../../../utils/tower/build_wire_preflight.rs");
 
     // recompile protobufs only if any of the proto files changes.
     for file in protowire_files {

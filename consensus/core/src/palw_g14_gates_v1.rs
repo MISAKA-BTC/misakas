@@ -830,6 +830,7 @@ impl Params {
         let outsider_lane = self.palw_court_outsider_lane_v1_fence().map(|f| f.daa_score());
         let panel_one = self.palw_kernel_route_panel_one_v1_fence().map(|f| f.daa_score());
         let model_one = self.palw_model_panel_one_v1_fence().map(|f| f.daa_score());
+        let model_one_retention = self.palw_model_panel_one_retention_v1_fence().map(|f| f.daa_score());
         let court_clock = self.palw_court_clock_v2_fence().map(|f| f.daa_score());
         let panel_da_disclosure = self.palw_panel_da_disclosure_v1_fence().map(|f| f.daa_score());
         if let PalwConsensusMode::ConsensusV2(bundle) = &mut self.palw_consensus_mode {
@@ -841,6 +842,7 @@ impl Params {
                 .with_court_outsider_lane_from_daa(outsider_lane)
                 .with_kernel_route_panel_one_from_daa(panel_one)
                 .with_model_panel_one_from_daa(model_one)
+                .with_model_panel_one_retention_v1(model_one_retention)
                 .with_court_clock_v2_from_daa(court_clock)
                 .with_panel_da_disclosure_from_daa(panel_da_disclosure);
         }

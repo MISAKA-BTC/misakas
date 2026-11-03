@@ -146,6 +146,10 @@ fn arm_objective_offence_at_or_below(params: &mut Params, at: ForkActivation) {
 fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
     for fence in PalwLifecycleKindFenceV1::ALL {
         match fence {
+            PalwLifecycleKindFenceV1::CourtFamilySupplierV1 => {
+                params.palw_court_family_supplier_v1 = Some(at);
+                params.sync_palw_court_family_supplier_v1();
+            }
             PalwLifecycleKindFenceV1::ExecPayloadV2 => {
                 params.palw_exec_payload_v2 = Some(at);
                 params.sync_palw_exec_payload_v2();
@@ -387,10 +391,12 @@ fn arm_every_owning_fence(params: &mut Params, at: ForkActivation) {
             PalwKernelInnerFenceV1::ModelEligibilityV1 => params.palw_model_eligibility_v1 = Some(at),
             // RFC-0016 V8 (inner 76): a bare height, mirrored below.
             PalwKernelInnerFenceV1::ElasticCapacityV1 => params.palw_elastic_final_capacity_v1 = Some(at),
+            PalwKernelInnerFenceV1::SettlementOnceV1 => params.palw_settlement_once_v1 = Some(at),
         }
     }
     params.sync_palw_model_eligibility_v1();
     params.sync_palw_rfc0016_v1();
+    params.sync_palw_settlement_once_v1();
     params.sync_palw_claim_challenge_v2();
     params.sync_palw_econ_contracts_v1();
     params.sync_palw_permissionless_panel_v1();

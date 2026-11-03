@@ -244,10 +244,11 @@ impl PruningProcessor {
         // we need to complete it
         #[allow(clippy::collapsible_if)]
         if retention_checkpoint != retention_period_root {
-            if let Err(why) = self
-                .virtual_processor
-                .with_pruning_snapshots_before_delete_v1(pruning_point, || self.prune(pruning_point, retention_period_root))
-            {
+            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_while_v1(
+                pruning_point,
+                || !self.is_consensus_exiting.load(Ordering::Relaxed),
+                || self.prune(pruning_point, retention_period_root),
+            ) {
                 warn!("Pruning recovery deferred before snapshot readiness at {pruning_point}: {why}");
                 return false;
             }
@@ -314,9 +315,11 @@ impl PruningProcessor {
 
             // Both normal advancement and cold recovery require exact servable
             // snapshots before the first below-point row may be removed.
-            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_v1(new_pruning_point, || {
-                self.prune(new_pruning_point, adjusted_retention_period_root)
-            }) {
+            if let Err(why) = self.virtual_processor.with_pruning_snapshots_before_delete_while_v1(
+                new_pruning_point,
+                || !self.is_consensus_exiting.load(Ordering::Relaxed),
+                || self.prune(new_pruning_point, adjusted_retention_period_root),
+            ) {
                 warn!("Pruning deferred before snapshot readiness at {new_pruning_point}: {why}");
                 return false;
             }
@@ -480,7 +483,13 @@ impl PruningProcessor {
 
         info!("Header and Block pruning: preparing proof and anticone data...");
 
-        let proof = self.pruning_proof_manager.get_pruning_point_proof();
+        let proof = match self.pruning_proof_manager.try_get_pruning_point_proof() {
+            Ok(proof) => proof,
+            Err(error) => {
+                warn!("Pruning paused before deletion: local proof unavailable: {error}");
+                return;
+            }
+        };
         let data = self
             .pruning_proof_manager
             .get_pruning_point_anticone_and_trusted_data()
@@ -838,7 +847,10 @@ impl PruningProcessor {
         );
 
         if self.config.enable_sanity_checks {
-            self.assert_proof_rebuilding(proof, new_pruning_point);
+            if let Err(error) = self.assert_proof_rebuilding(proof, new_pruning_point) {
+                warn!("Pruning checkpoint not advanced: local proof rebuild unavailable: {error}");
+                return;
+            }
             self.assert_data_rebuilding(data, new_pruning_point);
         }
 
@@ -931,9 +943,13 @@ impl PruningProcessor {
         virtual_state.ghostdag_data.blue_score >= pp_bs + self.config.params.pruning_depth()
     }
 
-    fn assert_proof_rebuilding(&self, ref_proof: Arc<PruningPointProof>, new_pruning_point: BlockHash) {
+    fn assert_proof_rebuilding(
+        &self,
+        ref_proof: Arc<PruningPointProof>,
+        new_pruning_point: BlockHash,
+    ) -> Result<(), crate::processes::pruning_proof::ProofInternalError> {
         info!("Rebuilding the pruning proof after pruning data (sanity test)");
-        let built_proof = self.pruning_proof_manager.build_pruning_point_proof(new_pruning_point);
+        let built_proof = self.pruning_proof_manager.try_build_pruning_point_proof(new_pruning_point)?;
         if ref_proof.len() != built_proof.len() {
             panic!("Rebuilt proof does not match the original one ({} ref vs. {} rebuilt levels)", ref_proof.len(), built_proof.len());
         }
@@ -943,6 +959,7 @@ impl PruningProcessor {
             }
         }
         info!("Proof was rebuilt successfully following pruning");
+        Ok(())
     }
 
     fn assert_data_rebuilding(&self, ref_data: Arc<PruningPointTrustedData>, new_pruning_point: BlockHash) {

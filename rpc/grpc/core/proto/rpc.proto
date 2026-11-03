@@ -3729,3 +3729,15 @@ message GetPalwTirOriginalQuoteResponseMessage {
   string planHex = 5;
   RPCError error = 1000;
 }
+
+// Node-local observations published only after the authoritative block commit.
+message GetPalwMemoryRoutingOutcomeV1RequestMessage {
+  string blockHash = 1;
+  string claimId = 2;
+}
+message GetPalwMemoryRoutingOutcomeV1ResponseMessage {
+  bool available = 1;
+  string observationJson = 2;
+  string reason = 3;
+  RPCError error = 1000;
+}

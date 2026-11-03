@@ -633,6 +633,14 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         }
         // RFC-0032 A material intake (tag 255): signed, and a Part inside the one-part bound. Authentication against the original,
         // the per-target bound and the per-submitter budget are the fold's (`material_intake`).
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { control } => {
+            if control.version!=1||control.signature.len()!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+                return Err("family material version/signature shape");
+            }
+            if let crate::palw_court_family_material_v1::FamilyMaterialActionV1::Part{bytes,..}=&control.action
+                &&(bytes.is_empty()||bytes.len()>crate::palw_court_family_material_v1::FAMILY_MATERIAL_PART_BYTES_V1){return Err("family material part bound");}
+            Ok(())
+        }
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
             if intake.signature.is_empty() {
                 return Err("a material intake step must carry its submitter's signature");
@@ -1144,8 +1152,9 @@ fn preflight_positive_lifecycle_payload_v2(
     }
     if matches!(payload.get(7), Some(8..=13)) {
         let limits = assignment_limits.ok_or(PalwLifecycleTxError::Undecodable)?;
-        return crate::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(&payload[3..],limits)
-            .map(|_|()).map_err(|_|PalwLifecycleTxError::Undecodable);
+        return crate::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(&payload[3..], limits)
+            .map(|_| ())
+            .map_err(|_| PalwLifecycleTxError::Undecodable);
     }
     if payload.get(7) == Some(&14) {
         let maximum = relay_frame_cap.ok_or(PalwLifecycleTxError::Undecodable)?;
@@ -1185,7 +1194,9 @@ fn extract_lifecycle_objects_v2(txs: &[Transaction], context: Option<(&PalwLifec
             &tx.payload,
             context.and_then(|(fences, daa)| fences.assignment_body_limits_v2_at(daa)),
             context.and_then(|(fences, daa)| fences.funding_relay_frame_cap_v2_at(daa)),
-        ).is_err() {
+        )
+        .is_err()
+        {
             out.skipped.push((id, "payload does not decode"));
             continue;
         }
@@ -1404,11 +1415,12 @@ pub enum PalwLifecycleKindFenceV1 {
     SelectedSourceBootstrapV1 = 21,
     /// `Params::palw_panel_da_disclosure_v1` — ADR-0206's PanelDa disclosure (tag 233). Local activation-table slot (not wire).
     PanelDaDisclosureV1 = 22,
+    CourtFamilySupplierV1 = 23,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1432,6 +1444,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::TirBoundedDoorV1,
         Self::SelectedSourceBootstrapV1,
         Self::PanelDaDisclosureV1,
+        Self::CourtFamilySupplierV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1453,6 +1466,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
             Self::SelectedSourceBootstrapV1 => "palw_selected_source_bootstrap_v1",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
+            Self::CourtFamilySupplierV1 => "palw_court_family_supplier_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
             Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
             Self::TirContainerIdentityV1 => "palw_tir_container_identity_v1",
@@ -1697,6 +1711,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
         // RFC-0032 A material intake (tag 255): the shared TIR court's own fence (G-10), no new fence.
         O::MaterialIntakeV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1),
+        O::CourtFamilyMaterialV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtFamilySupplierV1),
         // ADR-0206 (lane g14-fam-panelda): the PanelDa disclosure (tag 233), dormant behind its own fence.
         O::PanelDaPromptDisclosedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::PanelDaDisclosureV1),
         // RFC-0024 §4/§5 (lane r5-p2-terminal): the position terminal and the lookahead moves (tags 201-204).
@@ -1862,6 +1877,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (231, "SeatReadinessDemandedV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (232, "SeatReadinessAnsweredV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (255, "MaterialIntakeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    (250, "CourtFamilyMaterialV1", PalwLifecycleKindFenceV1::CourtFamilySupplierV1),
     (233, "PanelDaPromptDisclosedV1", PalwLifecycleKindFenceV1::PanelDaDisclosureV1),
     (201, "TirPositionDissectedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
     (202, "TirPositionClosedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
@@ -1890,8 +1906,10 @@ pub struct PalwLifecycleKindFencesV1 {
     // Reserved-only: tag176 has no live decoder/owner yet. Keep it OUT of ALL/NEW_KINDS until A4 lands the actual event.
     positive_court_reserved_v2: Option<crate::config::params::ForkActivation>,
     /// Separate finite codec routing for RFC-0045. This is never admission.
-    assignment_body_limits_v2: Option<(crate::config::params::ForkActivation,
-        crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2)>,
+    assignment_body_limits_v2: Option<(
+        crate::config::params::ForkActivation,
+        crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
+    )>,
     funding_relay_frame_cap_v2: Option<(crate::config::params::ForkActivation, u64)>,
 }
 
@@ -1902,13 +1920,23 @@ impl PalwLifecycleKindFencesV1 {
         self.positive_court_reserved_v2 = activation;
         self
     }
-    pub fn with_assignment_body_limits_v2(mut self, value:Option<(crate::config::params::ForkActivation,
-        crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2)>)->Self {
-        self.assignment_body_limits_v2=value;
+    pub fn with_assignment_body_limits_v2(
+        mut self,
+        value: Option<(
+            crate::config::params::ForkActivation,
+            crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
+        )>,
+    ) -> Self {
+        self.assignment_body_limits_v2 = value;
         self
     }
-    pub fn assignment_body_limits_v2_at(&self, daa:u64)->Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2> {
-        self.assignment_body_limits_v2.filter(|(at,_)|*at!=crate::config::params::ForkActivation::never() && at.is_active(daa)).map(|(_,limits)|limits)
+    pub fn assignment_body_limits_v2_at(
+        &self,
+        daa: u64,
+    ) -> Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2> {
+        self.assignment_body_limits_v2
+            .filter(|(at, _)| *at != crate::config::params::ForkActivation::never() && at.is_active(daa))
+            .map(|(_, limits)| limits)
     }
     fn funding_relay_frame_cap_v2_at(&self, daa: u64) -> Option<u64> {
         self.assignment_body_limits_v2_at(daa)?;
@@ -2001,6 +2029,7 @@ impl crate::config::params::Params {
                             self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
                         ),
                         // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
+                        PalwLifecycleKindFenceV1::CourtFamilySupplierV1 => self.palw_court_family_supplier_v1,
                         PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
                             Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
                         }
@@ -2019,10 +2048,14 @@ impl crate::config::params::Params {
             .with_positive_court_reserved_v2(
                 self.palw_positive_court_v2.as_ref().filter(|f| f.policy.validate_shape().is_ok()).map(|f| f.activation),
             )
-            .with_assignment_body_limits_v2(self.palw_positive_assignment_v2.as_ref().and_then(|fence|
+            .with_assignment_body_limits_v2(self.palw_positive_assignment_v2.as_ref().and_then(|fence| {
                 crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2::from_policy(&fence.policy)
-                    .ok().map(|limits|(fence.activation,limits))));
-        fences.funding_relay_frame_cap_v2 = self.palw_positive_funding_relay_v2.as_ref()
+                    .ok()
+                    .map(|limits| (fence.activation, limits))
+            }));
+        fences.funding_relay_frame_cap_v2 = self
+            .palw_positive_funding_relay_v2
+            .as_ref()
             .filter(|fence| fence.validate_preimages().is_ok())
             .map(|fence| (fence.activation, fence.physical.max_frame_bytes));
         fences
@@ -2151,11 +2184,13 @@ pub enum PalwKernelInnerFenceV1 {
     ModelEligibilityV1,
     /// `Params::palw_elastic_final_capacity_v1` (RFC-0016 V8): a verifier's capacity attestation (inner 76).
     ElasticCapacityV1,
+    /// ADR-0207 ordinary verifier fee consent (inner 77).
+    SettlementOnceV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -2173,6 +2208,7 @@ impl PalwKernelInnerFenceV1 {
         Self::BeaconBootstrapV1,
         Self::ModelEligibilityV1,
         Self::ElasticCapacityV1,
+        Self::SettlementOnceV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -2194,6 +2230,7 @@ impl PalwKernelInnerFenceV1 {
             Self::BeaconBootstrapV1 => "palw_beacon_bootstrap_v1",
             Self::ModelEligibilityV1 => "palw_model_eligibility_v1",
             Self::ElasticCapacityV1 => "palw_elastic_final_capacity_v1",
+            Self::SettlementOnceV1 => "palw_settlement_once_v1",
         }
     }
 }
@@ -2279,6 +2316,8 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::BootstrapExactV1 { .. } => Some(PalwKernelInnerFenceV1::BeaconBootstrapV1),
         K::CommitEligibilityExamV1 { .. } | K::AttestEligibilityExamV1 { .. } => Some(PalwKernelInnerFenceV1::ModelEligibilityV1),
         K::AttestCapacityV1 { .. } => Some(PalwKernelInnerFenceV1::ElasticCapacityV1),
+        K::ConsentVerifierFeeV1 { .. } => Some(PalwKernelInnerFenceV1::SettlementOnceV1),
+        K::WatchVerifierPoolV1 { .. } => Some(PalwKernelInnerFenceV1::VerifierPayV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -2364,6 +2403,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (75, "AttestEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
     // RFC-0016 V8 (2026-10-17, audit 16-A): a verifier's capacity attestation.
     (76, "AttestCapacityV1", Some(PalwKernelInnerFenceV1::ElasticCapacityV1)),
+    (77, "ConsentVerifierFeeV1", Some(PalwKernelInnerFenceV1::SettlementOnceV1)),
+    (78, "WatchVerifierPoolV1", Some(PalwKernelInnerFenceV1::VerifierPayV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2425,6 +2466,12 @@ pub const PALW_INT12_WIRE_CHANGES_V1: &[(&str, PalwInt12WireChangeV1)] = &[
     (
         "consensus/core/src/palw_state_v2.rs::PalwDeltaEntryV2",
         PalwInt12WireChangeV1::NotCarried("the fold's journal (stored deltas), never a block's carriage"),
+    ),
+    (
+        "consensus/core/src/palw_economic_safety_v1.rs::PalwLicenceDoorTagV1",
+        PalwInt12WireChangeV1::NotCarried(
+            "stored only in claim, liability and vesting rows; tags 0..3 retain their exact Borsh bytes, and G14PanelOne=4 is appended only for claims governed by palw_model_panel_one_v1 from acceptance DAA 18,640; no lifecycle payload carries this stored route tag",
+        ),
     ),
     (
         "consensus/core/src/palw_offence_v1.rs::PalwPanelContradictionV1",
@@ -2587,6 +2634,22 @@ pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
         "palw_positive_court_v2",
         "RFC-0044 Positive Court R2 reserved namespace; live event/owner pending A4",
         false,
+    ),
+    a2_row(
+        PalwA2SlotV1::KernelNested {
+            what: "MonetaryMaterialActionV1 EnrollFeeV2(9)/ReplaceFeeV2(10): dual signed finite fee only, V1 service unchanged",
+        },
+        "palw_settlement_once_v1",
+        "RFC0039 adopted provider fee horizon",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux191 key132 exact enrollment/provider fee consent and refund physical receipt",
+        },
+        "palw_settlement_once_v1",
+        "RFC0039 finite provider fee state",
+        true,
     ),
     a2_row(
         PalwA2SlotV1::KernelNested {

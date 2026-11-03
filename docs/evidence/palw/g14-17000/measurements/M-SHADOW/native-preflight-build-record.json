@@ -1,0 +1,37 @@
+{
+  "source_commit": "08a9cec0df7a21db792482bf21c0b9c8ec88c926",
+  "source_trees": "b91921321efe44e792d0631f72a31b62a7768aa78d43c9542bed6515491fa77c",
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "kaspa-consensus",
+    "--lib",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "shared_slot": true,
+  "stage": "BUILT",
+  "features": "default",
+  "minimum_hardware": false,
+  "load_before": [
+    13.23388671875,
+    18.6748046875,
+    19.14697265625
+  ],
+  "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+  "exit_code": 0,
+  "wall_seconds": 1.001657208,
+  "load_after": [
+    13.23388671875,
+    18.6748046875,
+    19.14697265625
+  ],
+  "binary": {
+    "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-verified-kaspa_consensus-d80b6d194a277fef",
+    "sha256": "1836a9060680d6938a72dc581a71c6e6b30cb686617b04f435a8eb70cfc956ea"
+  },
+  "source_unchanged": true
+}

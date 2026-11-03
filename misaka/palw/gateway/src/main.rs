@@ -2730,6 +2730,12 @@ fn main() {
     if identity.class_id == Hash64::default() {
         identity.class_id = worker.manifest().class_id;
         identity.class_id_hex = hex(identity.class_id);
+    } else if identity.class_id != worker.manifest().class_id {
+        die(format!(
+            "the worker serves class {}, but the configured identity names {}",
+            worker.manifest().class_id,
+            identity.class_id
+        ));
     }
 
     eprintln!(

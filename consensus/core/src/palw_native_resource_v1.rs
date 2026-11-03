@@ -10,12 +10,18 @@ mod restore;
 mod restore_workspace;
 mod retained;
 pub use restore::restore_native_carriage_v1;
-pub(crate) use retained::value_requests_v1 as native_value_requests_v1;
+/// Reserve the existing audited root serialization scratch for a trusted
+/// canonical frame length. This does not authorize unknown typed decoding.
+pub fn reserve_native_root_workspace_v1(canonical_bytes: u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
+    let requests = restore_workspace::native_restore_root_workspace_requests_v1(canonical_bytes)?;
+    reserve_native_requests_v1(requests)
+}
+pub(crate) use retained::{typed_value_requests_v1 as native_typed_value_requests_v1, value_requests_v1 as native_value_requests_v1};
 mod transition;
 pub use retained::{
     NativeDecodeErrorV1, NativeOwnerMutationErrorV1, NativeRetainedV1, NativeStateMutationErrorV1, native_delta_replay_requests_v1,
-    retain_native_carriage_decode_classified_v1, retain_native_carriage_decode_v1, retain_native_value_decode_classified_v1,
-    retain_native_value_decode_v1,
+    retain_native_carriage_decode_classified_v1, retain_native_carriage_decode_v1,
+    retain_native_carriage_decode_with_preflight_error_v1, retain_native_value_decode_classified_v1, retain_native_value_decode_v1,
 };
 pub(crate) use transition::NativeTransitionReservationV1;
 pub type NativeStateDeltaV1 = NativeRetainedV1<crate::palw_state_v2::PalwStateDeltaV2>;
@@ -42,7 +48,7 @@ mod kernel_ledger_mutation;
 pub use kernel_ledger_mutation::{PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1};
 mod source_local;
 mod tir;
-pub use demand::reserve_native_requests_v1;
+pub use demand::{reserve_native_pending_requests_v1, reserve_native_requests_v1};
 pub(crate) use ledger_expansion::source_tir_program_shape_v1;
 pub(crate) use ledger_expansion::{NativeTirProgramShapeV1, standalone_tir_program_shape_v1};
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};
@@ -126,6 +132,46 @@ pub fn admit_native_snapshot_with_limits_v1(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn scoped_context_aux_preflight_uses_exact_writer_keys_and_rejects_unknown_shapes() {
+        use crate::palw_claim_local_context_nodes_v2::{ComponentRootV2, ComponentSpecV2, ContextNodeV2, RowValueV2};
+        fn scan(key: &[u8], bytes: &[u8]) -> std::io::Result<NativeWireShapeV1> {
+            let mut reader = NativeWireReaderV1::new(bytes, bytes.len() as u64);
+            let shape = super::wire_kernel_aux::scan_native_aux_row_v1(144, key, &mut reader)?;
+            assert_eq!(reader.remaining(), 0);
+            Ok(shape)
+        }
+        let mut key = [0u8; 65];
+        let body = borsh::to_vec(&vec![7u8; 17]).unwrap();
+        key[0] = b'B';
+        assert_eq!(scan(&key, &body).unwrap().heap, 34);
+        assert!(scan(&key[..64], &body).is_err());
+        key[0] = b'N';
+        let node = ContextNodeV2::Leaf { key: vec![9; 8], value: RowValueV2 { data: crate::Hash64::default(), bytes: 17 } };
+        assert_eq!(scan(&key, &borsh::to_vec(&node).unwrap()).unwrap().heap, 8);
+        assert!(scan(&key, &[2]).is_err());
+        let spec = ComponentSpecV2 { owner: 8, table: 1, schema: 1, key_bytes: 8, value_bytes: 17 };
+        let root = ComponentRootV2::empty(spec).unwrap();
+        let root_wire = borsh::to_vec(&root).unwrap();
+        let mut ordinary = [0u8; 18];
+        ordinary[0] = b'I';
+        ordinary[1..].copy_from_slice(&borsh::to_vec(&spec).unwrap());
+        scan(&ordinary, &root_wire).unwrap();
+        let mut scoped = [0u8; 84];
+        scoped[0] = b'I';
+        scoped[1..3].copy_from_slice(&2u16.to_le_bytes());
+        scoped[67..].copy_from_slice(&ordinary[1..]);
+        scan(&scoped, &root_wire).unwrap();
+        scoped[1..3].copy_from_slice(&3u16.to_le_bytes());
+        assert!(scan(&scoped, &root_wire).is_err());
+        key[0] = b'A';
+        let archive = borsh::to_vec(&(2u16, vec![root], Vec::<RowValueV2>::new())).unwrap();
+        scan(&key, &archive).unwrap();
+        assert!(scan(&key, &9u16.to_le_bytes()).is_err());
+        key[0] = b'Z';
+        assert!(scan(&key, &body).is_err());
+    }
+
     #[test]
     fn explicit_unknown_bound_refusal_preserves_legacy_and_checks_point_and_both_axes() {
         let point = BlockHash::from_u64_word(1);

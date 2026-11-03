@@ -1658,9 +1658,13 @@ impl PalwPanelService {
                     palw_disclosure_queue_key_v1(duty)
                 };
                 disclosure_keys.insert((duty.claim_id, duty.unit), key);
-                if let Some(sent_daa) = court_outbox.submitted_at(&key)
-                    && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
-                {
+                if court_outbox.disclosure_waits_for_retry(&key, current_daa, || {
+                    self.pending_provider_http
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|ready| ready.matches_court(duty.claim_id, duty.accepted_block))
+                }) {
                     continue;
                 }
                 if court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
@@ -1674,32 +1678,39 @@ impl PalwPanelService {
             for (claim, duties) in by_claim {
                 let role = duties[0].role;
                 match self.rcore_da_answers_v1(session, network_domain, &duties, flat_queued.contains(&claim)).await {
-                    Ok(built) => {
+                    Ok((built, provider_roots)) => {
                         for (duty, built) in duties.iter().zip(built) {
                             let key = disclosure_keys[&(duty.claim_id, duty.unit)];
                             match built {
                                 // A `Flat` built for an earlier unit answers this one.
                                 Ok(None) => {}
-                                Ok(Some(object)) => {
+                                Ok(Some(super::court_outbox::ProviderDaBuiltAnswerV1 { object, manifest })) => {
+                                    let request_key = key;
                                     let key = da_answer_chunks::object_queue_key_v2(duty, &object);
                                     info!(
                                         "[{PALW_PANEL}] claim {claim}: answering {:?} of an open data-availability session as {role:?} \
                                          — deadline DAA {} (ADR-0152 DA-4, X7)",
                                         duty.unit, duty.deadline_daa
                                     );
-                                    if let PalwConsensusObjectV2::MaterialDisclosedV2 {
-                                        answer:
-                                            kaspa_consensus_core::palw_da_rcore_v1::PalwDaAnswerV1::Event(
-                                                kaspa_consensus_core::palw_step_refute::PalwTraceEventDisclosureV1::Flat { .. },
-                                            ),
-                                        ..
-                                    } = &object
-                                    {
-                                        flat_queued.insert(claim);
-                                        da_flat_sent.insert(claim, current_daa);
+                                    let flat = super::court_outbox::ProviderDaStampV1::is_flat(&object);
+                                    let due = palw_disclosure_answer_due_v1(duty);
+                                    if let Some(roots) = provider_roots {
+                                        let stamp = super::court_outbox::ProviderDaStampV1 { duty: (**duty).clone(), roots, manifest };
+                                        if let Err(why) = court_outbox.try_push_provider_da(key, object, due, stamp) {
+                                            debug!("[{PALW_PANEL}] provider DA answer queue admission deferred: {why}");
+                                            continue;
+                                        }
+                                        court_outbox.clear_provider_material_miss(&request_key);
+                                    } else {
+                                        court_outbox.set_due(key, due);
+                                        court_outbox.push_pending((key.0, key.1, key.2, object));
                                     }
-                                    court_outbox.set_due(key, palw_disclosure_answer_due_v1(duty));
-                                    court_outbox.push_pending((key.0, key.1, key.2, object));
+                                    if flat {
+                                        flat_queued.insert(claim);
+                                        if provider_roots.is_none() {
+                                            da_flat_sent.insert(claim, current_daa);
+                                        }
+                                    }
                                 }
                                 Err(why) => {
                                     warn!(
@@ -1731,8 +1742,19 @@ impl PalwPanelService {
                              {role:?}: {why}",
                             duties.len()
                         );
+                        let provider_requested = self
+                            .provider_court_request
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .is_some_and(|(requested, carrier, _)| *requested == claim && *carrier == duties[0].accepted_block);
                         for duty in &duties {
-                            court_outbox.mark_submitted(disclosure_keys[&(duty.claim_id, duty.unit)], current_daa);
+                            let key = disclosure_keys[&(duty.claim_id, duty.unit)];
+                            if provider_requested {
+                                court_outbox.mark_provider_material_miss(key, current_daa);
+                            } else {
+                                court_outbox.mark_submitted(key, current_daa);
+                            }
                         }
                         *court_stalls.entry("a data-availability unit cannot be answered from what this node holds").or_default() +=
                             duties.len();

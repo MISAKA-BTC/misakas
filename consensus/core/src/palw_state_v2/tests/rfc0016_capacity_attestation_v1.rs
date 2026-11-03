@@ -290,3 +290,63 @@ fn rfc16_v8_the_court_bucket_bound_is_derived_from_the_attested_court_units() {
     assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &p, &h64(MODEL_A), now, 300, 0), Some(0), "no span clock: fail closed");
     assert_eq!(palw_rfc0016_court_bucket_bound_v1(&s, &armed(&[]), &h64(MODEL_A), now, 300, 10), Some(0), "unmeasured class");
 }
+
+/// Reporting uses the same current-state, multi-resource capacity read as
+/// admission. The registry/readiness prestate is the existing V8 fixture; the
+/// attestation itself passes the real native carrier fold before the report.
+#[test]
+fn rfc16_report_capacity_uses_folded_attestation_and_keeps_missing_inputs_unknown() {
+    use crate::palw_model_registry_v1::{PALW_REGISTRY_GLOBALS_V1, PalwModelRegistryFoldV1, PalwSeatReadinessRowV1};
+    use crate::palw_state_v2::palw_rfc0016_fold_v1::palw_rfc0016_model_report_v1;
+    let p = armed(load());
+    let mut state = world(&p);
+    let now = FENCE + 10;
+    let mut globals = PALW_REGISTRY_GLOBALS_V1;
+    globals.reference_work_per_span = 1_000;
+    globals.safety_permille = 1_000;
+    globals.utilization_permille = 1_000;
+    let fold = PalwModelRegistryFoldV1 {
+        globals,
+        span_daa: 10,
+        genesis_works: BTreeMap::new(),
+        grace_until_daa: 0,
+        admission_audit_period_daa: None,
+        readiness_v2_active: false,
+        bond_maturity: None,
+    };
+    state.seat_readiness.insert(
+        (bond_key(1), h64(MODEL_A)),
+        PalwSeatReadinessRowV1 { proved_daa: now, proved_span: now / fold.span_daa, leaf_index: 0, proof_version: 1, chunks: 1 },
+    );
+    let mut e = extras();
+    e.model_registry = Some(fold.clone());
+    let report = |s: &PalwChainStateV2, p: &PalwStateParamsV2, e: &PalwTransitionExtrasV1, at: u64| {
+        palw_rfc0016_model_report_v1(s, p, e, at).0.into_iter().find(|row| row.model == h64(MODEL_A)).unwrap()
+    };
+    let empty = report(&state, &p, &e, now);
+    assert_eq!((empty.capacity_per_span, empty.capacity_shortfall_per_span), (None, None), "no authenticated measurement");
+    let rich = step(&state, &p, now, &[attest(1, attestation(1, MODEL_A, 100, 1 << 40, 1 << 40, 1_000))]).unwrap();
+    let current = PalwFoldReadV1::outside(&rich, &p, &e).rfc0016_capacity_read_v1(&h64(MODEL_A), &fold, now, None);
+    assert!(current.0 > 0 && current.2 == 1, "the rooted readiness and real attestation must count");
+    let row = report(&rich, &p, &e, now);
+    assert_eq!(row.capacity_per_span, Some(current.0));
+    assert_eq!(row.capacity_shortfall_per_span, Some(current.1.saturating_sub(current.0)));
+    assert_eq!(row.physical_blocks, 0, "capacity does not invent accepted work or improvement");
+    let unmeasured = report(&rich, &armed(&[]), &e, now);
+    assert_eq!((unmeasured.capacity_per_span, unmeasured.capacity_shortfall_per_span), (None, None));
+    let mut no_registry = e.clone();
+    no_registry.model_registry = None;
+    assert_eq!(report(&rich, &p, &no_registry, now).capacity_per_span, None);
+    let mut no_span = e.clone();
+    no_span.model_registry.as_mut().unwrap().span_daa = 0;
+    assert_eq!(report(&rich, &p, &no_span, now).capacity_per_span, None);
+    let mut unknown_window = rich.clone();
+    unknown_window.model_lifecycles.get_mut(&h64(MODEL_A)).unwrap().profile.verification_window_spans = 0;
+    assert_eq!(report(&unknown_window, &p, &e, now).capacity_per_span, None);
+    assert_eq!(report(&rich, &p, &e, 1_000).capacity_per_span, None, "expired measurement is unknown");
+    let mut unavailable = rich.clone();
+    unavailable.seat_readiness.clear();
+    let row = report(&unavailable, &p, &e, now);
+    assert_eq!(row.capacity_per_span, Some(0), "known attested machine without a ready verifier credits zero");
+    assert_eq!(row.capacity_shortfall_per_span, Some(0), "there is no current claim demand");
+}

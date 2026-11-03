@@ -1,8 +1,7 @@
 # ADR-0204 — IBD の有界 authenticated row stream と世代番号付き保存
 
-Status: **Proposed / Review Required** (2026-10-22)。[RFC-0037](../rfc/0037-ibd-bounded-row-stream-and-storage-generations.md)。
-設計: [ibd-generations.md](../design/palw/storage/ibd-generations.md)。設計所有者の明示的な採択まで、新 P2P message の
-登録・protocol version の割当・有効化・配備は行わない。
+Status: **Adopted / 実装・検証中、配備未承認** (2026-10-30、ユーザー明示採択。初稿 2026-10-22)。[RFC-0037](../rfc/0037-ibd-bounded-row-stream-and-storage-generations.md)。
+設計: [ibd-generations.md](../design/palw/storage/ibd-generations.md)。2026-10-30 にユーザーが採択し、新 P2P version の割当てと実装を明示承認した。公開配備・既定有効化は別判断とする。
 
 ## 問題
 
@@ -10,7 +9,7 @@ pruning point の PALW state は全量受信・全量 decode の後でしか hea
 state の大きさに比例する。G14 storage の上限(pruned node ≤ 30 GB、IBD spill 384 MiB × 2)の下では、受信を
 有界にし、偽の state を途中で止め、検証済みのものだけを原子的に昇格させる必要がある。
 
-## 決定(提案)
+## 決定
 
 1. **consensus は変えない。** state root(ADR-0043 §2 の flat commitment)をそのまま使い、preimage を先に照合し、
    collection ごとに逐次 hash して preimage の該当 64 byte と照合する row stream を P2P 転送形式として追加する。
@@ -45,3 +44,13 @@ bounded-memory 化)の採択は含まない。
 - 2026-10-22: 受信側 verifier(`consensus/core/src/palw_row_stream_v1.rs`)と node-local 世代保存
   (`database/src/storage_generations/`)を実装・テスト。wire 未接続。番号: ADR-0204 / RFC-0037
   (ADR-0203 / RFC-0036 は同日の state lane(authenticated state)用に空けた)。
+
+
+## 採択記録 — 2026-10-30
+
+ユーザーの明示採択により protocol **109** を割り当て、RFC-0037 の実装・検証を進める。
+`--palw-row-stream-ibd` は既定 off、通常の広告 version は 108 のまま。両端の opt-in と version 交渉後にのみ
+codec 2 / current generation 1 を既存の最大 4 MiB の chunk で運ぶ。総量 384 MiB と P2P 上限は変更しない。
+原 state root と既存 whole-state import を維持し、最終 import の前には保存世代を検証済みに昇格しない。
+実装の接続・帰責・phase 1 の suffix は [RFC-0037 の採択追補](../rfc/0037-ibd-bounded-row-stream-and-storage-generations.md) に記録する。
+採択は公開配備・有効化・受入試験の完了を意味しない。

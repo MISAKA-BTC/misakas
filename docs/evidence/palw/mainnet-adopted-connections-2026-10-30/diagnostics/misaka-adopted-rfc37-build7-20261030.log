@@ -1,0 +1,20 @@
+
+running 2 tests
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_actual_snapshot_bridge_inventory_validation_and_native_import_agree ... 
+thread 'pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_actual_snapshot_bridge_inventory_validation_and_native_import_agree' (652361) panicked at consensus/core/src/config/mod.rs:359:13:
+network mainnet declares a PALW V2 mode that does not validate: invalid V2 bundle: palw_legacy_public_filer_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_legacy_public_filer_v1 after the bundle is assembled. Refusing to start rather than run half a ruleset.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_store_bridge_pins_source_and_suffix_before_any_output ... 
+thread 'pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_store_bridge_pins_source_and_suffix_before_any_output' (652404) panicked at consensus/core/src/config/mod.rs:359:13:
+network mainnet declares a PALW V2 mode that does not validate: invalid V2 bundle: palw_legacy_public_filer_v1 disagrees with the V2 bundle's mirror: mirror it with Params::sync_palw_legacy_public_filer_v1 after the bundle is assembled. Refusing to start rather than run half a ruleset.
+FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_actual_snapshot_bridge_inventory_validation_and_native_import_agree
+    pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_store_bridge_pins_source_and_suffix_before_any_output
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1320 filtered out; finished in 0.12s
+

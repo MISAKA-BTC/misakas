@@ -1,8 +1,10 @@
 //! **`palw_state_v2`'s unit tests**, moved out of `palw_state_v2.rs` (2026-10-12, a behaviour-preserving split: the module path
 //! `crate::palw_state_v2::tests` and every test in it are unchanged; only the file moved).
 
+mod g14_model_panel_one_retention_v1;
 mod g14_model_panel_one_v1;
 mod kernel_route_locator_v1;
+mod owned_delta_replay_v1;
 // Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
 mod claim_local_rewards_v1;
 mod claim_local_v1;
@@ -685,6 +687,36 @@ fn bond_of_pubkey_v2_keeps_finding_a_bond_after_it_retires_and_reports_the_statu
 
     // Nothing else answers to this key, and an unknown key answers to nothing.
     assert!(retired.bond_of_pubkey_v2(&[8u8; 4]).is_none(), "an unregistered key holds no bond");
+}
+
+/// **RFC-0041:** a genesis with no bond recovers on the idle floor, then an ordinary
+/// `BondRegistered` is what may take work. The placeholder is not registered here.
+#[test]
+fn rfc0041_empty_genesis_recovers_until_an_ordinary_bond_may_take_work() {
+    use crate::config::params::{
+        palw_base_coinbase_recovery_due_v1, palw_base_coinbase_recovery_missing_bond_v1, palw_genesis_objects_have_no_bond_v1,
+    };
+    use crate::palw_state_v2::palw_bond_may_take_work_v2;
+
+    assert!(palw_genesis_objects_have_no_bond_v1(&[]));
+    let bare = PalwChainStateV2::genesis();
+    let admits = bare.floor_state_v1().admits_floor_at(1);
+    assert!(palw_base_coinbase_recovery_due_v1(true, bare.bonds_iter().next().is_none(), admits, true));
+    assert!(palw_base_coinbase_recovery_missing_bond_v1("the named executor bond abc does not exist at the candidate chain point"));
+    assert!(!palw_base_coinbase_recovery_missing_bond_v1("the lottery missed"));
+
+    let p = economy_params();
+    let (state, _) =
+        apply_palw_transition_v2(&bare, &p, &ctx(1, 10, 1), &[bond_registration_with_collateral(1, 7, 21, 1_000_000)], None)
+            .expect("an ordinary bond registers with no genesis bond ahead of it");
+    let (_, bond) = state.bonds_iter().next().expect("the registration is the live registry");
+    assert!(palw_bond_may_take_work_v2(bond, p.min_collateral_sompi()));
+    assert!(!palw_base_coinbase_recovery_due_v1(
+        true,
+        state.bonds_iter().next().is_none(),
+        state.floor_state_v1().admits_floor_at(1),
+        true
+    ));
 }
 
 /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
@@ -21237,6 +21269,104 @@ fn da3_a_valid_disclosure_charges_the_accuser_and_nobody_else() {
     );
 }
 
+#[test]
+fn provider_da_single_duty_agrees_with_batch_and_rejects_stale_answer() {
+    use crate::{
+        palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaClaimV1, PalwDaSessionV1, PalwDaStageV1, PalwDaUnitV1},
+        palw_evidence_v1::ClaimRoots,
+        palw_panel_var_v1::PalwSlashableLockV1,
+        palw_producer_v2::{
+            PalwDisclosureRoleV1, PalwProviderDaAnswerStageV1, palw_disclosure_duties_v1, palw_disclosure_duty_v1,
+            palw_provider_da_answer_matches_v1,
+        },
+        palw_verification_v2::PalwSegmentMaskV2,
+    };
+    let legacy_params = params();
+    let (mut state, claim_id, _, fx) = da_setup(&legacy_params, 999_999);
+    let params = legacy_params.with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+    let extras = PalwTransitionExtrasV1::default();
+    let unit = PalwDaUnitV1::Event { row: 0, tile: 0 };
+    for (accuser, deadline_daa) in [(bond_key(2), 109), (bond_key(3), 119)] {
+        state.da_deadlines.insert((deadline_daa, claim_id, accuser));
+        state.da_sessions.insert(
+            (claim_id, accuser),
+            PalwDaSessionV1 {
+                opened_daa: 103,
+                deadline_daa,
+                accuser_is_seat: true,
+                exposure: 1,
+                units: vec![unit],
+                stage: PalwDaStageV1::Live,
+            },
+        );
+    }
+    state.da_claims.insert(claim_id, PalwDaClaimV1::default());
+    for seat in [bond_key(2), bond_key(3)] {
+        state.slashable_locks.insert(
+            (seat, claim_id),
+            PalwSlashableLockV1 {
+                claim: claim_id,
+                amount: 1,
+                expiry_daa: 120,
+                settled_at_final: 0,
+                attested: PalwSegmentMaskV2::full(1),
+                segments: 1,
+            },
+        );
+    }
+    let producer = bond_key(1);
+    let signer = bond_key(3);
+    let get = |state: &PalwChainStateV2, bond, daa| {
+        palw_disclosure_duties_v1(state, &params, &extras, &[bond], daa)
+            .duties
+            .into_iter()
+            .find(|d| d.claim_id == claim_id && d.unit == unit)
+            .unwrap()
+    };
+    let producer_duty = get(&state, producer, 104);
+    let signer_duty = get(&state, signer, 104);
+    assert_eq!(producer_duty.role, PalwDisclosureRoleV1::Producer);
+    assert_eq!(signer_duty.role, PalwDisclosureRoleV1::CoveringSigner);
+    assert_eq!(signer_duty.signer_rank, 1);
+    for duty in [&producer_duty, &signer_duty] {
+        assert_eq!(palw_disclosure_duty_v1(&state, &params, &extras, duty, 104).as_ref(), Some(duty));
+        assert_eq!(duty.deadline_daa, 109);
+    }
+    let claim = state.claim(&claim_id).unwrap();
+    let roots = ClaimRoots {
+        network_domain: h64(88),
+        trace_root: claim.trace_root,
+        output_root: claim.output_root,
+        execution_root: claim.execution_root,
+        trace_chunk_count: claim.trace_chunk_count,
+        retention_deadline: claim.trace_retention_daa,
+    };
+    let PalwConsensusObjectV2::MaterialDisclosed { disclosure, .. } = da_disclose(claim_id, 0, &fx) else { panic!("fixture answer") };
+    let answer = PalwConsensusObjectV2::MaterialDisclosedV2 {
+        claim: claim_id,
+        unit,
+        discloser: signer,
+        answer: PalwDaAnswerV1::Event(disclosure),
+        signature: Vec::new(),
+    };
+    let stage = PalwProviderDaAnswerStageV1::from_object(&answer, None).unwrap();
+    let current = |state: &PalwChainStateV2, roots: &ClaimRoots, now| {
+        palw_provider_da_answer_matches_v1(state, &params, &extras, &signer_duty, roots, stage, now)
+    };
+    assert!(current(&state, &roots, 109));
+    assert!(!current(&state, &roots, 110), "an unexpired later duty has a different deadline");
+    assert!(!current(&state, &ClaimRoots { output_root: h64(90), ..roots }, 109));
+    let earlier = state.slashable_locks.remove(&(bond_key(2), claim_id)).unwrap();
+    assert!(!current(&state, &roots, 109), "covering rank changed");
+    assert_eq!(get(&state, signer, 109).signer_rank, 0);
+    state.slashable_locks.insert((bond_key(2), claim_id), earlier);
+    assert!(current(&state, &roots, 109));
+    state.claims.get_mut(&claim_id).unwrap().accepted_block = h64(91);
+    assert!(!palw_provider_da_answer_matches_v1(&state, &params, &extras, &signer_duty, &roots, stage, 109));
+    state.da_claims.get_mut(&claim_id).unwrap().answered.insert(unit);
+    assert!(palw_disclosure_duty_v1(&state, &params, &extras, &producer_duty, 109).is_none());
+}
+
 /// **DA-4: a disclosure carried by a block the producer did not mine is accepted.**
 ///
 /// SA-3's other half. The disclosure is signed by the producer's bond, so who CARRIED it is
@@ -28787,6 +28917,9 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            claim_local_legacy_retention_fixture_v50: false,
+            original_archive_data_observer_v16: false,
+            prefix_dependencies_v1: Default::default(),
             assignment_settlements: Default::default(),
             case_source_spends: Default::default(),
             positive_assignment_actions: Default::default(),
@@ -28809,7 +28942,14 @@ mod evm_market {
             kernel_court_admission_v1: None,
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
+            family_supplier_active: false,
+            native39_settlement_checkpoint: None,
+            native_fact_ruleset: None,
+            native_fact_quantum_maturity_daa: None,
+            family_original_table_inventories_v2: Default::default(),
             fp_claim_answers: Default::default(),
+            fp_winning_carriers: Default::default(),
+            carrier_input_spends: Default::default(),
             tir_designated_answers_active: false,
             tir_bounded_door_active: false,
             tir_bounded_door_from_daa: None,
@@ -29081,6 +29221,9 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            claim_local_legacy_retention_fixture_v50: false,
+            original_archive_data_observer_v16: false,
+            prefix_dependencies_v1: Default::default(),
             assignment_settlements: Default::default(),
             case_source_spends: Default::default(),
             positive_assignment_actions: Default::default(),
@@ -29103,7 +29246,14 @@ mod evm_market {
             kernel_court_admission_v1: None,
             tir_container_identity_active: false,
             fp_answer_accounting_active: false,
+            family_supplier_active: false,
+            native39_settlement_checkpoint: None,
+            native_fact_ruleset: None,
+            native_fact_quantum_maturity_daa: None,
+            family_original_table_inventories_v2: Default::default(),
             fp_claim_answers: Default::default(),
+            fp_winning_carriers: Default::default(),
+            carrier_input_spends: Default::default(),
             tir_designated_answers_active: false,
             tir_bounded_door_active: false,
             tir_bounded_door_from_daa: None,
@@ -32339,6 +32489,11 @@ mod rcore_s1_api {
                         let v5 =
                             palw_bond_collateral_is_locked_v5(&s, key, record, now, delay, escaped, duty_gate, dormant.window_court());
                         let v6 = palw_bond_collateral_is_locked_v6(&s, &dormant, key, record, now, delay, raw, duty_gate);
+                        assert_eq!(
+                            palw_bond_collateral_is_locked_checked_v7(&s, &dormant, key, record, now, delay, raw, duty_gate).unwrap(),
+                            v6,
+                            "checked exit preserves legacy without native197"
+                        );
                         assert_eq!(v6, v5, "below the fence: {key:?} now={now} raw={raw:?} gate={duty_gate}");
                         let v6_armed = palw_bond_collateral_is_locked_v6(&s, &armed, key, record, now, delay, raw, duty_gate);
                         assert_eq!(v6_armed, v5, "past it with no court and no row: {key:?}");
@@ -34067,7 +34222,7 @@ mod s4_conviction_funnel {
         let at = ctx(2, 200, 2);
         let extras = PalwTransitionExtrasV1::default();
         let mut b = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-        let conv = b.open_conviction_v1(&[producer], 200);
+        let conv = b.open_conviction_v1(&[producer], 200).unwrap();
         assert_eq!(conv.c0(&producer), 1_000_000);
         let fp_first = b.post_final_fp_g_v1(&fp);
         assert_eq!(fp_first, Some(50_000), "G_fp = g_res + escrowed_reward");
@@ -34830,7 +34985,17 @@ mod class_verify_deadline {
             let p = t12_like(armed);
             let s = state(d, PalwClaimPhaseV2::PanelBound { bound_daa: b }, b);
             let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l).unwrap();
+            builder
+                .lock_valid_seat_rcore(
+                    bond_key(2),
+                    id,
+                    s.claims.get(&id).unwrap(),
+                    5,
+                    crate::palw_verification_v2::PalwSegmentMaskV2::full(5),
+                    5,
+                    l,
+                )
+                .unwrap();
             assert_eq!(builder.state.slashable_locks[&(bond_key(2), id)].expiry_daa, anchor + 3_000, "D {d}, armed {armed}");
         }
     }

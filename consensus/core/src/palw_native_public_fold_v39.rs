@@ -193,7 +193,7 @@ fn request(
     }
     let bond = r.header.policy.demand_bond;
     let actor = builder.state.bonds.get(signer).unwrap();
-    if (actor.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if (actor.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Err(bad("native39 original actual demand bond unavailable"));
     }
     let until =

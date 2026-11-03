@@ -19,10 +19,32 @@ use crate::{Hash64, palw_state_v2::PalwChainStateV2};
 /// Prompt form is resolved from the retained original work rules, never chosen by input.
 pub(crate) struct SharedTirBuilderStoreV1<'a> {
     source: Source,
-    units: &'a [Unit],
+    units: UnitMaterialV1<'a>,
     params: ParameterMaterialV1<'a>,
     ids: Option<&'a Ids>,
     prompt: PromptMaterialV1<'a>,
+}
+#[derive(Clone, Copy)]
+enum UnitMaterialV1<'a> {
+    Borrowed(&'a [Unit]),
+    Retained(&'a [crate::palw_native_resource_v1::NativeRetainedV1<Unit>]),
+}
+impl UnitMaterialV1<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(v) => v.len(),
+            Self::Retained(v) => v.len(),
+        }
+    }
+    fn get(&self, i: usize) -> &Unit {
+        match self {
+            Self::Borrowed(v) => &v[i],
+            Self::Retained(v) => &v[i],
+        }
+    }
+    fn iter(&self) -> impl Iterator<Item = &Unit> {
+        (0..self.len()).map(|i| self.get(i))
+    }
 }
 /// A retained view borrows the actual decoded payload owners, never bare deep
 /// copies made from them. Borrowed compatibility inputs retain the old contract.
@@ -111,7 +133,15 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
         ids: Option<&'a Ids>,
         prompt: PromptMaterialV1<'a>,
     ) -> Result<Self, String> {
-        Self::new_with_parameter_material(state, claim, scope, units, ParameterMaterialV1::Borrowed(params), ids, prompt)
+        Self::new_with_parameter_material(
+            state,
+            claim,
+            scope,
+            UnitMaterialV1::Borrowed(units),
+            ParameterMaterialV1::Borrowed(params),
+            ids,
+            prompt,
+        )
     }
     /// Native parameter payload owners stay borrowed for this Store's lifetime.
     /// Raw carrier bytes and outer owner-array construction need their own admission.
@@ -124,13 +154,40 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
         ids: Option<&'a Ids>,
         prompt: PromptMaterialV1<'a>,
     ) -> Result<Self, String> {
-        Self::new_with_parameter_material(state, claim, scope, units, ParameterMaterialV1::Retained(params), ids, prompt)
+        Self::new_with_parameter_material(
+            state,
+            claim,
+            scope,
+            UnitMaterialV1::Borrowed(units),
+            ParameterMaterialV1::Retained(params),
+            ids,
+            prompt,
+        )
+    }
+    pub(crate) fn new_with_retained_material_v1(
+        state: &PalwChainStateV2,
+        claim: Hash64,
+        scope: Hash64,
+        units: &'a [crate::palw_native_resource_v1::NativeRetainedV1<Unit>],
+        params: &'a [crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>],
+        ids: Option<&'a Ids>,
+        prompt: PromptMaterialV1<'a>,
+    ) -> Result<Self, String> {
+        Self::new_with_parameter_material(
+            state,
+            claim,
+            scope,
+            UnitMaterialV1::Retained(units),
+            ParameterMaterialV1::Retained(params),
+            ids,
+            prompt,
+        )
     }
     fn new_with_parameter_material(
         state: &PalwChainStateV2,
         claim: Hash64,
         scope: Hash64,
-        units: &'a [Unit],
+        units: UnitMaterialV1<'a>,
         params: ParameterMaterialV1<'a>,
         ids: Option<&'a Ids>,
         prompt: PromptMaterialV1<'a>,
@@ -141,7 +198,7 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
         }
         let source = c.source(state)?;
         for (i, u) in units.iter().enumerate() {
-            if u.source_id_v1() != source.source_id_v1() || units[..i].iter().any(|p| p.request_v1() == u.request_v1()) {
+            if u.source_id_v1() != source.source_id_v1() || units.iter().take(i).any(|p| p.request_v1() == u.request_v1()) {
                 return Err("builder material wrong source or duplicate query".into());
             }
         }

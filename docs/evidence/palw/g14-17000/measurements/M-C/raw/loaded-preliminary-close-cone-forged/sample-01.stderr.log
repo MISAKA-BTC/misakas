@@ -1,0 +1,19 @@
+MEASURE fixture_only=true clock=wall_elapsed stats_exclude_warmup=true op=close_cone_forged_last_stage n=1000 distinct=984 exemplar_body_bytes=10753 warmup_wall_ns=223542 median_wall_ns=383708 p95_wall_ns=2137917 p99_wall_ns=3564292 max_wall_ns=15553792 total_wall_ns=673600428 observed_expected_outcomes=1000
+       44.70 real        43.47 user         0.10 sys
+            36110336  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                2397  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                   0  voluntary context switches
+               10773  involuntary context switches
+        522810749641  instructions retired
+        128874130629  cycles elapsed
+            29180312  peak memory footprint

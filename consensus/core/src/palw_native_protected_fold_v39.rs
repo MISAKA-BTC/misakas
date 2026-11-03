@@ -284,7 +284,7 @@ fn admit(
         .header
         .policy
         .dismissal_fee_v1(u64::try_from(cost).map_err(|_| bad("native39 owner tariff monetary range"))?);
-    if (actor.collateral as u128) < builder.committed_at(signer, ctx.daa_score).saturating_add(fee as u128) {
+    if (actor.collateral as u128) < builder.committed_at(signer, ctx.daa_score)?.saturating_add(fee as u128) {
         return Err(bad("native39 independent owner original actual payment unavailable"));
     }
     let paid = object_id(

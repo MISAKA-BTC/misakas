@@ -238,7 +238,12 @@ fn check_source(source: &T12Chain, manifest: &Manifest, point: Hash64, tip: Hash
     assert!(!vp.palw_state_v2_store.read().has_delta(release).unwrap());
 }
 
-async fn headers_after_point(source: &TestConsensus, target: &TestConsensus, point: Hash64, tip: Hash64) {
+pub(in crate::pipeline::virtual_processor::tests) async fn headers_after_point(
+    source: &TestConsensus,
+    target: &TestConsensus,
+    point: Hash64,
+    tip: Hash64,
+) {
     let page = usize::try_from(source.params().mergeset_size_limit_history().upper_bound()).unwrap().checked_add(1).unwrap().max(4096);
     let mut low = point;
     let mut processed = 0usize;
@@ -259,7 +264,12 @@ async fn headers_after_point(source: &TestConsensus, target: &TestConsensus, poi
     eprintln!("PRUNED_IMPORT_V1 phase=headers event=complete processed={processed} pp={point} tip={tip}");
 }
 
-fn import_snapshot(source: &TestConsensus, target: &TestConsensus, point: Hash64, cfg: &Config) {
+pub(in crate::pipeline::virtual_processor::tests) fn import_snapshot(
+    source: &TestConsensus,
+    target: &TestConsensus,
+    point: Hash64,
+    cfg: &Config,
+) {
     let tip = source.get_sink();
     eprintln!("PRUNED_IMPORT_V1 phase=snapshot_import event=start pp={point} tip={tip}");
     let snapshot = source.pruning_point_palw_state_shared_v1(point).expect("public exact-point snapshot");
@@ -371,4 +381,4 @@ fn assert_same_tip(
 }
 
 #[path = "material_typed_pruned_wire_v1.rs"]
-mod wire;
+pub(in crate::pipeline::virtual_processor::tests) mod wire;

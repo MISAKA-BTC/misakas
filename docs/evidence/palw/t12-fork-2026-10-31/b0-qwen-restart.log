@@ -1,0 +1,9 @@
+Oct 31 15:13:47 vmi3450148 b0.sh[3502051]: ^SIGTERM - shutting down...
+Oct 31 15:13:47 vmi3450148 b0.sh[3502051]: 2026-10-31 15:13:47.679+01:00 [INFO ] [palw-producer] stopping: the node is shutting down: block c684d65e9b9b773a6302d0f4fa70e5a1e1e84ed32977bd454debae710dad4ca1cf808e570ff56f8f5289038be1509d0537b7e8176f6c237cf636672c05ae6872 was not submitted
+Oct 31 15:13:47 vmi3450148 b0.sh[3502051]: 2026-10-31 15:13:47.679+01:00 [INFO ] [palw-producer] stopping (1 blocks this run)
+Oct 31 15:16:47 vmi3450148 systemd[1]: misaka-t12-node0.service: State 'stop-sigterm' timed out. Killing.
+Oct 31 15:16:47 vmi3450148 systemd[1]: misaka-t12-node0.service: Killing process 3502051 (kaspad) with signal SIGKILL.
+Oct 31 15:16:49 vmi3450148 systemd[1]: misaka-t12-node0.service: Main process exited, code=killed, status=9/KILL
+Oct 31 15:16:49 vmi3450148 systemd[1]: Started misaka-t12-node0.service - MISAKA testnet-12 bond 0 (regenesis, release 2ca68baee2c9).
+Oct 31 15:18:26 vmi3450148 b0.sh[3525795]: 2026-10-31 15:18:26.054+01:00 [INFO ] [palw-attempt] attempt cache constructed: positions 0 of 1023 (0.0/s, 0 s); kv cache 0.03 GiB (A16-KV-i16); capture 0.00 GiB (Fold, 0 of 105396200 leaves); checkpoint leg 0.00 GiB; process anon 0.63 file 6.91 swap 0.00 GiB; anon growth 0.04 GiB − engine terms = +0.01 GiB
+Oct 31 15:18:26 vmi3450148 b0.sh[3525795]: 2026-10-31 15:18:26.398+01:00 [INFO ] [palw-attempt] attempt cache constructed: positions 0 of 1023 (0.0/s, 0 s); kv cache 0.03 GiB (A16-KV-i16); capture 0.00 GiB (Fold, 0 of 105396200 leaves); checkpoint leg 0.00 GiB; process anon 0.63 file 6.91 swap 0.00 GiB; anon growth 0.00 GiB − engine terms = -0.03 GiB

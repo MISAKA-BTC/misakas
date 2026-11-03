@@ -1,0 +1,15 @@
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions ... 
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions' (643893) panicked at consensus/core/src/../tests/palw_tir_fixture_common.rs:173:58:
+still canonical under the tiled scheme: TirError { kind: NormalForm, msg: "history_bound must be 2^18 or 2^21" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_ordinary_native_original_and_financial_transitions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5362 filtered out; finished in 0.10s
+

@@ -679,7 +679,7 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     // The free-prompt arm's exposure ceiling, as it asks it.
     let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(&bond_record) } else { 0 };
     let own = if builder.params.rcore_plus_active_at(daa) {
-        builder.committed_at(c.bond, daa)
+        builder.committed_at(c.bond, daa)?
     } else {
         builder
             .state
@@ -689,7 +689,7 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     };
     let backed = own.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
     let ceiling = if builder.params.rcore_plus_active_at(daa) {
-        own.saturating_add(builder.gate_room(c.bond, daa, PalwRcoreGateV1::Work))
+        own.saturating_add(builder.gate_room(c.bond, daa, PalwRcoreGateV1::Work)?)
     } else {
         (bond_record.collateral as u128)
             .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)

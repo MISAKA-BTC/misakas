@@ -18,7 +18,7 @@
             // Lane r5: the (test) court service profile the all-branch reservation runs under; the book is opened under it.
             let service_profile = crate::palw_court_service_binding_v1::CourtServiceProfileV1 {
                 version: 1,
-                budget: crate::palw_court_service_v1::ServiceCost { bytes: 1 << 40, work: 1 << 40, io: 1 << 20, controls: 1 << 20 },
+                budget: crate::palw_court_service_v1::ServiceCost { bytes: 1 << 40, work: 1 << 40, io: 1 << 20, controls: if prefix {1} else {1 << 20} },
                 packet_cost: crate::palw_court_service_v1::ServiceCost { bytes: 1, work: 1, io: 0, controls: 1 },
                 packets_per_signer: 2,
                 service_span_daa: 100,
@@ -178,6 +178,67 @@
             assert_eq!(derivation.branch_count(), liable * service_profile.packets_per_signer + nodes + 1);
             assert_eq!(derivation.resources.heap_bytes, liable * service_profile.packets_per_signer + nodes);
             drop(plan);
+// Within existing genuine signed native funded-original fixture, before writes.
+{
+    let native=TransitionBuilder::try_new(&served,&params,false,false,false,false,&ok).unwrap();
+    let before=native.state.state_root();let entries=native.entries.len();
+    let make=|budget:PreparedRequirementBudgetsV1| -> Result<NativePreparedArchiveAdjunctQuoteV11,ArchiveErrorV11<String>> {
+        let prepared=prepare_paired_original_v1(&native,&ctx,&object,Some(&fp.commitment)).map_err(archive_state_error_v11)?.unwrap();
+        let requirements=prepared.enrich_native_geometry_v1(&native,&ctx).map_err(archive_geometry_error_v11)?.prepare_requirements_v1(&native,&ctx,budget).map_err(archive_requirements_error_v11)?;
+        // No install, funding receipt, Claim or service binding exists here.
+        assert!(native.state.claim(&claim).is_none());assert!(native.state.funded_escrows.is_empty());
+        // A real positive boundary prevents an unsupported typed inventory
+        // from masquerading as the intended zero-capacity reservation refusal.
+        let scratch=crate::palw_native_resource_v1::native_typed_value_requests_v1(&object).unwrap()
+            .checked_add(crate::palw_native_resource_v1::native_typed_value_requests_v1(&envelope).unwrap()).unwrap();
+        assert!(scratch>0);
+        let exact=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:scratch,database_bytes:0});
+        let exact_shape=requirements.quote_archive_object_shape_with_checker_v11(&envelope,&object,&exact).unwrap();
+        assert_eq!(exact.outstanding(),(0,0),"successful read-only quote releases its actual scratch ticket");
+        let short=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:scratch-1,database_bytes:0});
+        assert!(matches!(requirements.quote_archive_object_shape_with_checker_v11(&envelope,&object,&short),Err(ArchiveErrorV11::Resource(_))));
+        assert_eq!(short.outstanding(),(0,0));
+        let checker=crate::palw_native_resource_v1::NativeDemandCheckerV1::new(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1{memory_bytes:0,database_bytes:0});
+        assert!(matches!(requirements.quote_archive_object_shape_with_checker_v11(&envelope,&object,&checker),Err(ArchiveErrorV11::Resource(_))));
+        // Decoder would reject this malformed payload, but the SAME production
+        // inner path must report real zero-capacity refusal BEFORE decoding.
+        let mut unreadable=envelope.clone();unreadable.original_payload.clear();
+        assert!(matches!(requirements.quote_archive_object_shape_with_checker_v11(&unreadable,&object,&checker),Err(ArchiveErrorV11::Resource(_))));
+        assert_eq!(checker.outstanding(),(0,0));
+        let shape=requirements.quote_archive_object_shape_v11(&envelope,&object)?;
+        assert_eq!(exact_shape,shape,"explicit checker uses the same semantic production quote");
+        let (_,control_bytes,claim_bound,escrow_bound)=shape;
+        assert_eq!(control_bytes,borsh::object_length(&object).unwrap() as u64);
+        assert_eq!(claim_bound,652);assert_eq!(escrow_bound,borsh::object_length(&row).unwrap() as u64);
+        let result=requirements.quote_archive_adjuncts_v11(&native,&ctx,&object)?;
+        // An actual signed/prospective extractor with another class is no quote.
+        let mut changed=object.clone();if let PalwConsensusObjectV2::FreePromptCommitted{class_id,..}=&mut changed{*class_id=h(0xAB11);}
+        assert!(matches!(requirements.quote_archive_object_shape_v11(&envelope,&changed),Err(ArchiveErrorV11::Decode(_))));
+        let mut changed_ids=object.clone();if let PalwConsensusObjectV2::FreePromptCommitted{prompt_token_ids,..}=&mut changed_ids{prompt_token_ids.push(0);}
+        assert!(matches!(requirements.quote_archive_object_shape_v11(&envelope,&changed_ids),Err(ArchiveErrorV11::Decode(_))));
+        let mut other=ctx;other.daa_score+=1;
+        assert!(matches!(requirements.quote_archive_adjuncts_v11(&native,&other,&object),Err(ArchiveErrorV11::Decode(_))));
+        Ok(result)
+    };
+    let budget=PreparedRequirementBudgetsV1{numerical:budgets.0,input:budgets.1,source:budgets.2};
+    let quote=make(budget).unwrap();
+    assert_eq!((quote.claim(),quote.source(),quote.resource_plan()),(claim,envelope.pledge.source_id,envelope.pledge.resource_plan_id));
+    assert_eq!(quote.bodies().iter().map(|f|f.tag).collect::<Vec<_>>(),vec![3,8,9,13,14,15,16,17,19,11,12]);
+    assert!(quote.additional_body_bytes_vs_v10_r4().unwrap()>0);assert!(quote.native_requests_max()>0);
+    assert!(quote.metadata_work().hashed_canonical_bytes>0);assert_eq!(quote.metadata_work().pledge_signature_checks,0);
+    // Compare measured baseline to actual existing native complete derivation,
+    // not a supplied count or a fabricated future book.
+    let ProspectiveBaseServiceV11::Measured(service)=quote.base_service() else{panic!("real native fixture has adopted admission schedule")};
+    assert_eq!(service.packet_count,derivation.branch_count());
+    assert_eq!(service.packets_codec_bytes,4+service.packet_count*borsh::object_length(&derivation.retention_packet).unwrap() as u64);
+    assert!(quote.missing().any(|m|m==ArchiveAdjunctMissingV11::NativeFamilyServicePackets));
+    // Genuine native preparation quota refusal remains Resource, before any
+    // payment/claim mutation. No injected verdict or success flag is used.
+    let mut tiny=budget;tiny.input.max_original_leaves=0;
+    assert!(matches!(make(tiny),Err(ArchiveErrorV11::Resource(_))));
+    assert_eq!(native.state.state_root(),before);assert_eq!(native.entries.len(),entries);
+}
+
             // Lane r5: the all-branch candidate reserves every branch's packet in ONE book row (pure; the fold writes it at install).
             {
                 let b = TransitionBuilder::try_new(&served, &params, false, false, false, false, &ok).unwrap();

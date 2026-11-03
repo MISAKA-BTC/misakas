@@ -1,0 +1,29 @@
+{
+  "tag": "testnet12-g14-panel1-18640",
+  "url": "https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-panel1-18640",
+  "targetRevision": "8b19b4a66fa0aa7ac3cd2ed0a41aa3cdbf47742e",
+  "publishedAt": "2026-10-31T12:37:52Z",
+  "latestApiVerified": true,
+  "publicDownloadArchiveSha256Verified": true,
+  "embeddedBinarySha256Verified": true,
+  "assets": [
+    {
+      "name": "build-manifest.json",
+      "size": 961,
+      "sha256": "6c83016337587ec55431e650969ada9a4c387eb796625019b150a3da29bbd361",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-panel1-18640/build-manifest.json"
+    },
+    {
+      "name": "misaka-testnet12-g14-panel1-18640-linux-x86_64-gnu.tar.gz",
+      "size": 54238819,
+      "sha256": "0d0f53aa40e615e8412060e2a5b13acf1d575259a69ffe3c0a52f51a36cda7c9",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-panel1-18640/misaka-testnet12-g14-panel1-18640-linux-x86_64-gnu.tar.gz"
+    },
+    {
+      "name": "SHA256SUMS-deployed-linux.txt",
+      "size": 210,
+      "sha256": "97b17b2509996376122d29b953f77ab518ce0166be44e7481703de6b83a5517d",
+      "url": "https://github.com/MISAKA-BTC/misakas/releases/download/testnet12-g14-panel1-18640/SHA256SUMS-deployed-linux.txt"
+    }
+  ]
+}

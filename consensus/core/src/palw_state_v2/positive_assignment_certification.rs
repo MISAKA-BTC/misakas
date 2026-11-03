@@ -606,7 +606,7 @@ impl TransitionBuilder<'_> {
             check_session(self, ctx, row, session)?;
             let amount = crate::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(h.worker_gain, h.policy.k as u8);
             let free = u128::from(record.collateral)
-                .checked_sub(self.committed_at(signer, ctx.daa_score))
+                .checked_sub(self.committed_at(signer, ctx.daa_score)?)
                 .ok_or_else(|| refuse("verifier already overcommitted"))?;
             if u128::from(amount) > free {
                 return Err(refuse("verifier cannot back P liability"));

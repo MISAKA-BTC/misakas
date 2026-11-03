@@ -668,3 +668,6 @@ mod provider_reader_fixture;
 
 /// RFC-0006 offline immutable per-reader router declarations (tag 244).
 pub mod router_binding_v2;
+
+/// Explicit RFC-0042 independent service consents and material controls.
+pub mod court_family_supplier_v1;

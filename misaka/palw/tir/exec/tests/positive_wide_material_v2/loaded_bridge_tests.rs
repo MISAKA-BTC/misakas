@@ -3,27 +3,19 @@
 //! prompt/context BEFORE writing a candidate file. No context/hash repair.
 use super::*;
 use kaspa_consensus_core::{
-    palw_native_resource_v1::{
-        SourceProgramLocalLimitsV1, require_source_program_local_profile_v1,
-    },
-    palw_positive_check_v2::full_relation::wide_v2::stream::{
-        StreamRecordLimitsV2, StreamSubmitV2,
-    },
+    palw_native_resource_v1::{SourceProgramLocalLimitsV1, require_source_program_local_profile_v1},
+    palw_positive_check_v2::full_relation::wide_v2::stream::{StreamRecordLimitsV2, StreamSubmitV2},
     palw_prompt_ids_v1::prompt_token_ids_match_v1,
     palw_step_leg::{step_merkle_root_capped_v1, step_tile_leaf_hash_v1},
     palw_tir_step_v1::{
-        PalwTirLeafKindV1, PalwTirStepBindingV1, palw_tir_execution_root_v1,
-        palw_tir_leaf_preimage_v2, verify_tir_binding_v2,
+        PalwTirLeafKindV1, PalwTirStepBindingV1, palw_tir_execution_root_v1, palw_tir_leaf_preimage_v2, verify_tir_binding_v2,
     },
 };
 use misaka_palw_tir_artifact::bounded_v1::PalwTirHeaderLimitsV1;
 use misaka_palw_tir_exec::{
     node::owned_artifact_params_v2::{
         OwnedParamLimitsV2,
-        loaded::{
-            LoadedWideArtifactV2, LoadedWideInputsV2, LoadedWideLimitsV2,
-            LoadedWideStartupBudgetV2, load_wide_artifact_v2,
-        },
+        loaded::{LoadedWideArtifactV2, LoadedWideInputsV2, LoadedWideLimitsV2, LoadedWideStartupBudgetV2, load_wide_artifact_v2},
     },
     plan::TirPlanCompileLimitsV2,
 };
@@ -149,63 +141,35 @@ fn existing_binding(f: &Fixture<'_>) -> PalwTirStepBindingV1 {
     for index in 0..count {
         let leaf = space.leaf_at(&f.job, index).unwrap();
         let values = match leaf.kind {
-            PalwTirLeafKindV1::Commit {
-                occurrence,
-                node,
-                first_element,
-                ..
-            } => {
+            PalwTirLeafKindV1::Commit { occurrence, node, first_element, .. } => {
                 let value = &f
                     .nodes
                     .iter()
-                    .find(|n| {
-                        n.position == leaf.position && n.occurrence == occurrence && n.node == node
-                    })
+                    .find(|n| n.position == leaf.position && n.occurrence == occurrence && n.node == node)
                     .unwrap()
                     .value;
-                value.data
-                    [first_element as usize..first_element as usize + leaf.value_count as usize]
-                    .to_vec()
+                value.data[first_element as usize..first_element as usize + leaf.value_count as usize].to_vec()
             }
-            PalwTirLeafKindV1::State {
-                state,
-                layer,
-                first_element,
-                ..
-            } => {
+            PalwTirLeafKindV1::State { state, layer, first_element, .. } => {
                 let value = &f.steps[leaf.position as usize].state.fixed[&(state, layer)];
-                value.data
-                    [first_element as usize..first_element as usize + leaf.value_count as usize]
-                    .to_vec()
+                value.data[first_element as usize..first_element as usize + leaf.value_count as usize].to_vec()
             }
-            PalwTirLeafKindV1::HistTile {
-                first_lane,
-                row_lanes,
-                first_position,
-                ..
-            } => {
+            PalwTirLeafKindV1::HistTile { first_lane, row_lanes, first_position, .. } => {
                 // Literal appends remain known even for window1, whose after-step
                 // history state retains zero prior rows.
                 (first_position..=leaf.position)
                     .flat_map(|position| {
                         let token = run_wide_common::EXPECTED_TOKENS[position as usize] as usize;
                         let first = token * 4 + first_lane as usize;
-                        run_wide_common::EMBEDDING[first..first + row_lanes as usize]
-                            .iter()
-                            .copied()
+                        run_wide_common::EMBEDDING[first..first + row_lanes as usize].iter().copied()
                     })
                     .collect()
             }
         };
         let preimage = palw_tir_leaf_preimage_v2(&space, &f.job, &leaf, &values).unwrap();
-        hashes.push(step_tile_leaf_hash_v1(
-            &f.job.context_hash(),
-            &f.job.shape_profile_id,
-            &preimage,
-        ));
+        hashes.push(step_tile_leaf_hash_v1(&f.job.context_hash(), &f.job.shape_profile_id, &preimage));
     }
-    let trace =
-        kaspa_consensus_core::palw_logits_q24_v2::trace_root(&f.job, &f.rows, EXPECTED).unwrap();
+    let trace = kaspa_consensus_core::palw_logits_q24_v2::trace_root(&f.job, &f.rows, EXPECTED).unwrap();
     let step = step_merkle_root_capped_v1(&hashes, LEAF_CAP).unwrap();
     PalwTirStepBindingV1 {
         version: 1,
@@ -215,34 +179,14 @@ fn existing_binding(f: &Fixture<'_>) -> PalwTirStepBindingV1 {
         full_logits_trace_root: trace,
         step_leaf_count: count,
         step_merkle_root: step,
-        committed_execution_root: palw_tir_execution_root_v1(
-            &f.job.context_hash(),
-            &trace,
-            &f.job.shape_profile_id,
-            count,
-            &step,
-        ),
+        committed_execution_root: palw_tir_execution_root_v1(&f.job.context_hash(), &trace, &f.job.shape_profile_id, count, &step),
     }
 }
-fn with_loaded(
-    f: &Fixture<'_>,
-    reserve: &TirMemoryReserverV1,
-    test: impl FnOnce(&LoadedWideArtifactV2<'_>, &PalwTirStepBindingV1),
-) {
+fn with_loaded(f: &Fixture<'_>, reserve: &TirMemoryReserverV1, test: impl FnOnce(&LoadedWideArtifactV2<'_>, &PalwTirStepBindingV1)) {
     // Controlled test-only copies/provider buffers are pre-owned separately.
     // The actual production bridge performs no param re-encoding or plan copy.
-    let _exports = reserve(
-        "test-cold-metadata-and-provider",
-        f.job.shape_profile_id,
-        f.job.context_hash(),
-        EXTERNAL,
-    )
-    .unwrap();
-    assert!(prompt_token_ids_match_v1(
-        PalwPromptIdsFormV1::Flat,
-        PROMPT,
-        &f.job.prompt_token_ids_hash
-    ));
+    let _exports = reserve("test-cold-metadata-and-provider", f.job.shape_profile_id, f.job.context_hash(), EXTERNAL).unwrap();
+    assert!(prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, PROMPT, &f.job.prompt_token_ids_hash));
     assert_eq!(f.class.tokenizer_id, Hash64::from_u64_word(18));
     assert_eq!(f.job.tokenizer_id, Hash64::from_u64_word(0));
     let original_job = f.job.clone();
@@ -310,15 +254,8 @@ fn cold_original_file_loaded_private_source_reaches_wide_tape_and_independent_no
                 assert_eq!(counters.loaded.load(Ordering::SeqCst), 1);
                 let work = loaded.wide_panel_work(bounds(), &disk_reserve()).unwrap();
                 let shared = work.clone();
-                let capture = loaded
-                    .capture_wide_panel_one_pass(
-                        PROMPT,
-                        run_bounds(),
-                        &work,
-                        tempfile::tempfile().unwrap(),
-                        &reserve,
-                    )
-                    .unwrap();
+                let capture =
+                    loaded.capture_wide_panel_one_pass(PROMPT, run_bounds(), &work, tempfile::tempfile().unwrap(), &reserve).unwrap();
                 assert_eq!(capture.run().generated(), EXPECTED);
                 assert_eq!(capture.binding().unwrap(), *binding);
                 assert_eq!(counters.capture.load(Ordering::SeqCst), 1);
@@ -327,13 +264,7 @@ fn cold_original_file_loaded_private_source_reaches_wide_tape_and_independent_no
                 let spent = shared.meter();
                 assert!(
                     loaded
-                        .capture_wide_panel_one_pass(
-                            PROMPT,
-                            run_bounds(),
-                            &shared,
-                            tempfile::tempfile().unwrap(),
-                            &reserve
-                        )
+                        .capture_wide_panel_one_pass(PROMPT, run_bounds(), &shared, tempfile::tempfile().unwrap(), &reserve)
                         .is_err()
                 );
                 assert_eq!(shared.meter(), spent);
@@ -345,17 +276,9 @@ fn cold_original_file_loaded_private_source_reaches_wide_tape_and_independent_no
                 // extraction of Loaded params or a trusted producer verdict.
                 let src = TirParamsSourceV1(f.params);
                 let inventory = TirHeldInventoryV1::build(f.program, &src).unwrap();
-                let builder = WidePanelBuilderV2::prepare(
-                    &capture,
-                    &prep,
-                    &result,
-                    &signed.rooted,
-                    &inventory,
-                    provider(),
-                    owners(),
-                    &reserve,
-                )
-                .unwrap();
+                let builder =
+                    WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reserve)
+                        .unwrap();
                 let mut tape = builder.claims_tape(tempfile::tempfile().unwrap()).unwrap();
                 let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([97; 32]);
                 let record = tape
@@ -378,13 +301,8 @@ fn cold_original_file_loaded_private_source_reaches_wide_tape_and_independent_no
                 .as_ref();
                 tape.rewind();
                 let node_reserver = |bytes| {
-                    reserve(
-                        "test-cold-node",
-                        f.job.shape_profile_id,
-                        f.job.context_hash(),
-                        bytes,
-                    )
-                    .map_err(|_| FullRelationError::Budget)
+                    reserve("test-cold-node", f.job.shape_profile_id, f.job.context_hash(), bytes)
+                        .map_err(|_| FullRelationError::Budget)
                 };
                 let mut node = signed
                     .preparation(f)
@@ -406,18 +324,9 @@ fn cold_original_file_loaded_private_source_reaches_wide_tape_and_independent_no
                     let relation = prep.plan().relation_at(i).unwrap();
                     assert_eq!(relation.legacy_frontier, frontier);
                     let material = builder.material(i, frontier).unwrap();
-                    let step = node
-                        .submit(&material.as_borrowed(), material.target())
-                        .unwrap();
+                    let step = node.submit(&material.as_borrowed(), material.target()).unwrap();
                     assert_eq!(node.checked_relations(), i + 1);
-                    assert_eq!(
-                        step,
-                        if i + 1 == relations {
-                            StreamSubmitV2::NeedEof
-                        } else {
-                            StreamSubmitV2::Continue
-                        }
-                    );
+                    assert_eq!(step, if i + 1 == relations { StreamSubmitV2::NeedEof } else { StreamSubmitV2::Continue });
                     if matches!(relation.kind, ExpandedRelationKind::Legacy(_)) {
                         frontier += 1;
                     }
@@ -448,25 +357,9 @@ fn loaded_floor_refusal_and_failed_tape_preserve_shared_prefix_and_one_use() {
         with_loaded(f, &reserve, |loaded, _| {
             let mut low = bounds();
             low.external_retained_bytes = loaded.quote().operation_retained_bytes - 1;
-            let work = WidePanelWorkV2::new(
-                low,
-                f.job.shape_profile_id,
-                f.job.context_hash(),
-                &disk_reserve(),
-            )
-            .unwrap();
+            let work = WidePanelWorkV2::new(low, f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
             let before = work.meter();
-            assert!(
-                loaded
-                    .capture_wide_panel_one_pass(
-                        PROMPT,
-                        run_bounds(),
-                        &work,
-                        tempfile::tempfile().unwrap(),
-                        &reserve
-                    )
-                    .is_err()
-            );
+            assert!(loaded.capture_wide_panel_one_pass(PROMPT, run_bounds(), &work, tempfile::tempfile().unwrap(), &reserve).is_err());
             assert_eq!(work.meter(), before);
             assert_eq!(counters.capture_calls.load(Ordering::SeqCst), 0);
             assert_eq!(counters.run_calls.load(Ordering::SeqCst), 0);
@@ -475,11 +368,7 @@ fn loaded_floor_refusal_and_failed_tape_preserve_shared_prefix_and_one_use() {
             let before = shared.meter();
             let mut tape = tempfile::tempfile().unwrap();
             tape.write_all(b"not an empty capture tape").unwrap();
-            assert!(
-                loaded
-                    .capture_wide_panel_one_pass(PROMPT, run_bounds(), &work, tape, &reserve)
-                    .is_err()
-            );
+            assert!(loaded.capture_wide_panel_one_pass(PROMPT, run_bounds(), &work, tape, &reserve).is_err());
             let spent = shared.meter();
             assert!(spent.visits > before.visits);
             assert_eq!(counters.capture_calls.load(Ordering::SeqCst), 1);
@@ -487,15 +376,7 @@ fn loaded_floor_refusal_and_failed_tape_preserve_shared_prefix_and_one_use() {
             assert_eq!(counters.capture.load(Ordering::SeqCst), 0);
             assert_eq!(counters.loaded.load(Ordering::SeqCst), 1);
             assert!(
-                loaded
-                    .capture_wide_panel_one_pass(
-                        PROMPT,
-                        run_bounds(),
-                        &shared,
-                        tempfile::tempfile().unwrap(),
-                        &reserve
-                    )
-                    .is_err()
+                loaded.capture_wide_panel_one_pass(PROMPT, run_bounds(), &shared, tempfile::tempfile().unwrap(), &reserve).is_err()
             );
             assert_eq!(shared.meter(), spent);
             assert_eq!(counters.capture_calls.load(Ordering::SeqCst), 1);

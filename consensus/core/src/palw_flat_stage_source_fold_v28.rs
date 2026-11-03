@@ -497,7 +497,7 @@ pub(super) fn request(
     let ledger = super::super::super::palw_kernel_route_fold_v1::route_ledger_policy_v1(builder)?;
     let bond = ledger.demand_bond.max(1);
     let payer = builder.state.bonds.get(signer).unwrap();
-    if (payer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if (payer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Err(refused("stage28 actual original demand bond unavailable"));
     }
     let mut d = NativeStagePendingV28 {

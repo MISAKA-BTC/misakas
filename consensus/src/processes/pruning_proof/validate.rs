@@ -42,6 +42,15 @@ use crate::{
 
 use super::PruningProofManager;
 
+/// A child may inherit exactly its parent's work only when that parent contributes zero
+/// chain weight. This is the same lane classification used by GHOSTDAG, not a relaxation
+/// for heartbeat or attempt work. Shape/PoW gates still run first, and genesis-rooted
+/// level-0 proofs must still match the complete GHOSTDAG work AND score recomputation.
+fn proof_parent_work_is_inconsistent(parent: &Header, child_work: BlueWorkType) -> bool {
+    parent.blue_work > child_work
+        || (parent.blue_work == child_work && !kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(parent.pow_algo_id))
+}
+
 struct ProofContext {
     _headers_store: Arc<DbHeadersStore>,
     ghostdag_stores: Vec<Arc<DbGhostdagStore>>,
@@ -357,7 +366,7 @@ impl ProofContext {
                 }
 
                 for &parent in parents.iter() {
-                    if headers_store.get_header(parent).unwrap().blue_work >= header.blue_work {
+                    if proof_parent_work_is_inconsistent(&headers_store.get_header(parent).unwrap(), header.blue_work) {
                         return Err(PruningImportError::PruningProofInconsistentBlueWork(header.hash, level));
                     }
                 }
@@ -501,9 +510,14 @@ impl PruningProofManager {
 
         // Get the proof for the current consensus (the defender) and recreate the stores for it
         // This is expected to be fast because if a proof exists, it will be cached.
-        let defender_proof = self.get_pruning_point_proof();
+        let defender_proof = self.try_get_pruning_point_proof()?;
         let defender = ProofContext::from_proof(self, &defender_proof, false)
-            .expect("local")
+            .map_err(|error| {
+                PruningImportError::PruningPointImportContextUnavailable(
+                    self.genesis_hash,
+                    format!("local defender proof revalidation: {error}"),
+                )
+            })?
             .continue_value()
             .ok_or(PruningImportError::PruningValidationInterrupted)?;
 
@@ -1032,6 +1046,137 @@ mod pow_batch_tests {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod zero_contribution_parent_work_tests {
+    use super::*;
+    use kaspa_consensus_core::{
+        config::params::ForkActivation,
+        pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_RECEIPT_V3, POW_ALGO_ID_PALW_ROUND_V1},
+    };
+
+    type TestGhostdag = GhostdagManager<DbGhostdagStore, DbRelationsStore, MTReachabilityService<DbReachabilityStore>, DbHeadersStore>;
+
+    /// Uses the actual proof/header GHOSTDAG implementation and actual persistent stores.
+    /// These precomputed headers exercise work ordering only; they are not a fixture for
+    /// signature, receipt, or claim admission, whose existing gates remain before this check.
+    struct WorkDag {
+        manager: TestGhostdag,
+        headers: Arc<DbHeadersStore>,
+        ghostdag: Arc<DbGhostdagStore>,
+        relations: DbRelationsStore,
+        reachability: Arc<RwLock<DbReachabilityStore>>,
+        _lifetime: DbLifetime,
+    }
+
+    impl WorkDag {
+        fn new() -> Self {
+            let (lifetime, db) = kaspa_database::create_temp_db!(ConnBuilder::default().with_files_limit(10));
+            let cache = CachePolicy::Count(32);
+            let headers = Arc::new(DbHeadersStore::new(db.clone(), cache, cache));
+            let ghostdag = Arc::new(DbGhostdagStore::new(db.clone(), 0, cache, cache));
+            let mut relations = DbRelationsStore::new(db.clone(), 0, cache, cache);
+            let reachability = Arc::new(RwLock::new(DbReachabilityStore::with_block_level(db, cache, cache, 0)));
+            let manager = GhostdagManager::with_level(
+                BlockHash::from_bytes([1; 64]),
+                18,
+                ghostdag.clone(),
+                relations.clone(),
+                headers.clone(),
+                MTReachabilityService::new(reachability.clone()),
+                0,
+                225,
+                Some(ForkActivation::always()),
+                Some(ForkActivation::always()),
+                None,
+                Some(ForkActivation::always()),
+            );
+            reachability::init(reachability.write().deref_mut()).unwrap();
+            relations.insert(ORIGIN, BlockHashes::new(vec![])).unwrap();
+            ghostdag.insert(ORIGIN, manager.origin_ghostdag_data()).unwrap();
+            let mut dag = Self { manager, headers, ghostdag, relations, reachability, _lifetime: lifetime };
+            dag.add(1, POW_ALGO_ID_HEARTBEAT_V1, &[ORIGIN]);
+            dag
+        }
+
+        fn add(&mut self, id: u8, algo: u8, parents: &[BlockHash]) -> Arc<Header> {
+            let data = Arc::new(self.manager.ghostdag(parents));
+            let hash = BlockHash::from_bytes([id; 64]);
+            let mut header = Header::from_precomputed_hash(hash, parents.to_vec());
+            header.pow_algo_id = algo;
+            header.daa_score = 316;
+            header.bits = 0x207fffff;
+            header.blue_work = data.blue_work;
+            header.blue_score = data.blue_score;
+            let header = Arc::new(header);
+            self.headers.insert(hash, header.clone(), 0).unwrap();
+            self.relations.insert(hash, BlockHashes::new(parents.to_vec())).unwrap();
+            self.ghostdag.insert(hash, data.clone()).unwrap();
+            let mut mergeset = data.unordered_mergeset_without_selected_parent();
+            reachability::add_block(self.reachability.write().deref_mut(), hash, data.selected_parent, &mut mergeset).unwrap();
+            header
+        }
+    }
+
+    #[test]
+    fn pruning_parent_work_round_chain_matches_real_ghostdag_without_advancing_work_or_score() {
+        let mut dag = WorkDag::new();
+        let genesis = BlockHash::from_bytes([1; 64]);
+        let anchor = dag.add(2, POW_ALGO_ID_HEARTBEAT_V1, &[genesis]);
+        let first = dag.add(3, POW_ALGO_ID_PALW_ROUND_V1, &[anchor.hash]);
+        let second = dag.add(4, POW_ALGO_ID_PALW_ROUND_V1, &[first.hash]);
+        let third = dag.add(5, POW_ALGO_ID_PALW_ROUND_V1, &[second.hash]);
+        for (parent, child) in [(&first, &second), (&second, &third)] {
+            assert_eq!(parent.blue_work, child.blue_work);
+            assert_eq!(parent.blue_score, child.blue_score);
+            assert!(parent.blue_work >= child.blue_work, "the old proof precheck rejects this actual GHOSTDAG result");
+            assert!(!proof_parent_work_is_inconsistent(parent, child.blue_work));
+            let recomputed = dag.manager.ghostdag(&[parent.hash]);
+            assert_eq!((recomputed.blue_work, recomputed.blue_score), (child.blue_work, child.blue_score));
+            assert_eq!(recomputed.selected_parent, anchor.hash);
+        }
+    }
+
+    #[test]
+    fn pruning_parent_work_nonzero_parent_must_advance_even_when_child_is_round() {
+        let mut dag = WorkDag::new();
+        let parent = dag.add(2, POW_ALGO_ID_HEARTBEAT_V1, &[BlockHash::from_bytes([1; 64])]);
+        let child = dag.add(3, POW_ALGO_ID_PALW_ROUND_V1, &[parent.hash]);
+        assert!(child.blue_work > parent.blue_work, "the parent's lane, not the child's lane, supplies work");
+        assert!(!proof_parent_work_is_inconsistent(&parent, child.blue_work));
+        assert!(proof_parent_work_is_inconsistent(&parent, parent.blue_work), "a round child cannot waive positive parent work");
+    }
+
+    #[test]
+    fn pruning_parent_work_receipt_zero_weight_is_also_the_existing_ghostdag_rule() {
+        let mut dag = WorkDag::new();
+        let receipt = dag.add(2, POW_ALGO_ID_PALW_RECEIPT_V3, &[BlockHash::from_bytes([1; 64])]);
+        let child = dag.add(3, POW_ALGO_ID_HEARTBEAT_V1, &[receipt.hash]);
+        assert_eq!(child.blue_work, receipt.blue_work);
+        assert!(child.blue_score > receipt.blue_score, "zero work does not waive the exact blue-score check");
+        assert!(!proof_parent_work_is_inconsistent(&receipt, child.blue_work));
+        let recomputed = dag.manager.ghostdag(&[receipt.hash]);
+        assert_eq!((recomputed.blue_work, recomputed.blue_score), (child.blue_work, child.blue_score));
+    }
+
+    #[test]
+    fn pruning_parent_work_live_daa316_round_vector_and_all_other_lane_controls() {
+        // The header 6d70329a..f31c and direct parent 3ca853a7..443a1 fetched from
+        // both B6 and 95 share DAA 316, blue score 1242, and blue work 0x2ba00221.
+        let work = BlueWorkType::from(0x2ba00221u64);
+        let mut parent = Header::from_precomputed_hash(BlockHash::from_bytes([7; 64]), vec![]);
+        parent.daa_score = 316;
+        parent.blue_score = 1242;
+        parent.blue_work = work;
+        for algo in 0..=u8::MAX {
+            parent.pow_algo_id = algo;
+            let zero = matches!(algo, POW_ALGO_ID_PALW_RECEIPT_V3 | POW_ALGO_ID_PALW_ROUND_V1);
+            assert_eq!(proof_parent_work_is_inconsistent(&parent, work), !zero, "equality lane {algo}");
+            assert!(proof_parent_work_is_inconsistent(&parent, work - BlueWorkType::from(1u64)), "higher parent lane {algo}");
+            assert!(!proof_parent_work_is_inconsistent(&parent, work + BlueWorkType::from(1u64)), "lower parent lane {algo}");
         }
     }
 }

@@ -41,17 +41,52 @@ fn seed_config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     (Config::new(params), bundle, premine, floats)
 }
 
+/// Measurement-only early clock: public t12's anchor-retention fence is already
+/// active at DAA 17,000, but the tiny harness starts before its shipped DAA 5,300.
+/// Both parameter mirrors must carry the same explicit test activation.
+pub(super) fn measurement_anchor_window(
+    params: &mut kaspa_consensus_core::config::params::Params,
+    bundle: &mut PalwConsensusParamsV2,
+) -> bool {
+    let enabled = std::env::var("G14_MEASURE_EARLY_ANCHOR_WINDOW").as_deref() == Ok("1");
+    assert_eq!(bundle.state.kernel_panel_one_external_gain_bound_v1(), Some(500 * kaspa_consensus_core::constants::SOMPI_PER_KASPA));
+    if enabled {
+        params.palw_anchor_window_v1 = Some(ForkActivation::new(0));
+        params.sync_palw_anchor_window_v1();
+        bundle.state = bundle.state.clone().with_anchor_window_from_daa(Some(0));
+        assert!(bundle.state.anchor_window_active_at(0));
+        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &params.palw_consensus_mode {
+            assert!(b.state.anchor_window_active_at(0));
+        }
+    }
+    enabled
+}
+
 /// Attempt blocks (which record round seed anchors) until the claim's Panel=1 assignment exists. Returns the anchor the draw block's
 /// state held and the DAA it appeared at.
-async fn until_seated(
+pub(super) async fn until_seated(
     net: &mut Net,
     claim: &Digest,
     commit_daa: u64,
 ) -> (kaspa_consensus_core::palw_execution_lane_v1::PalwExecSeedAnchorV1, u64) {
     let ttpb = net.ttpb();
+    let mut diagnostic = Vec::new();
     for round in 0..32u64 {
+        // Only heartbeat blocks advance testnet-12 DAA after palw_anchor_clock.
+        // Attempts alone stay in the commit's span regardless of their timestamps.
+        // Keep the same attempt budget and strict post-commit draw predicate.
+        net.chain.heartbeat(ttpb, Vec::new()).await;
         let before = net.chain.tip_state().1.round_seed_anchor().copied();
-        net.chain.attempt(5 + (round % 3) as usize, ttpb, Vec::new(), &|_| true).await;
+        let (_, attempt) = net.chain.attempt(5 + (round % 3) as usize, ttpb, Vec::new(), &|_| true).await;
+        let state = net.chain.tip_state().1;
+        diagnostic.push(format!(
+            "round={round} daa={} commit={commit_daa} span={} anchor={:?} attempt_admitted={} claim={:?}",
+            net.daa(),
+            net.config.params.palw_execution_lane.unwrap().schedule_span_daa_at(net.daa()),
+            state.round_seed_anchor(),
+            state.claim(&attempt).is_some(),
+            net.claim_state(claim)
+        ));
         if let Some(a) = net.api().unwrap().assignment_of(claim) {
             // The closing tick drew from the anchor its state held: the one before this block's own attempt, or this block's.
             let after = *net.chain.tip_state().1.round_seed_anchor().expect("a drawn claim had an anchor");
@@ -67,7 +102,7 @@ async fn until_seated(
             return (used, net.daa());
         }
     }
-    panic!("no post-commit anchor seated the claim");
+    panic!("no post-commit anchor seated the claim: {}", diagnostic.join("\n"));
 }
 
 /// **(a) + (b)**: at the commit the claim has NO seat (so its id predicts nothing); the seat, challenge anchor and sample seed appear

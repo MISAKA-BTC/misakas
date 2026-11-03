@@ -518,6 +518,18 @@ impl PalwTirInventoryIndexV1 {
         (base == leaf_count as u64).then_some(Self { params, leaf_count })
     }
 
+    /// Build an independently reserved index for offline response sizing.
+    pub fn new_native_v1(
+        program: &TirProgramV1,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, reserve_native_requests_v1};
+        let requests = TirInventoryOpeningVerifierV1::index_requests(program).map_err(E::Resource)?;
+        let lease = reserve_native_requests_v1(requests).map_err(E::Resource)?;
+        let index = Self::new(program).ok_or_else(|| E::Decode("the original program has no usable inventory index".into()))?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(index, lease))
+    }
+
     /// Leaves of the inventory.
     pub fn leaf_count(&self) -> u32 {
         self.leaf_count
@@ -2611,7 +2623,8 @@ pub fn check_tir_decode_token_tiled_v1(
 /// [`crate::palw_freeprompt_v3::PalwFreePromptJobV3::decoder_v1`] (the decoder every engine, seat and replay drives). Both
 /// rules are an argmax of a per-lane key — no top-k/top-p reads the whole row — so ONE beating lane refutes a committed token.
 /// A constrained job's selection is its constraint's mask (the semantic court's door, never this one), and a job carrying a
-/// tail (an evaluation or generation job) has another meaning: [`Self::of_job_v1`] answers `None` for both.
+/// non-Prefix tail (an evaluation or generation job) has another meaning. Prefix carries the consumed
+/// state identity while preserving the same V4 decoder; its selection remains this native rule.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwTirSelectionRuleV1 {
     /// ADR-0082 Decision 11's key over the raw row (the V3 rule). `GREEDY` is the plain argmax, ties to the lower index.
@@ -2621,9 +2634,11 @@ pub enum PalwTirSelectionRuleV1 {
     V4 { config: crate::palw_decode_pipeline_v4::DecodeConfigV4, sampling: crate::palw_decode_select_v2::PalwDecodeSamplingV2 },
 }
 impl PalwTirSelectionRuleV1 {
-    /// The rule of `job`, exactly as `decoder_v1` picks it; `None` for a constrained job or a job with a tail.
+    /// The rule of `job`, exactly as `decoder_v1` picks it. Only the adopted Prefix tail
+    /// preserves this decoder; Constraint and other carried job families use their own doors.
     pub fn of_job_v1(job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3) -> Option<Self> {
-        if job.tail.is_some() || job.is_constraint() {
+        let prefix = job.is_prefix_state() && matches!(job.tail, Some(crate::palw_freeprompt_v3::PalwFpJobTailV1::Prefix(_)));
+        if (job.tail.is_some() || job.is_prefix_state()) && !prefix || job.is_constraint() {
             return None;
         }
         match (&job.decode, job.is_v4() || job.is_v5() || job.is_eval() || job.is_prefix_state()) {

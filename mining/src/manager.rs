@@ -644,7 +644,8 @@ impl MiningManager {
                     self.reconcile_attestation_template_drops(&dropped, latest_ready_epoch);
                     match *source {
                         BlockRuleError::InvalidTransactionsInNewBlock(invalid_transactions) => {
-                            self.remove_invalid_block_template_transactions(invalid_transactions);
+                            self.remove_invalid_block_template_transactions(invalid_transactions)
+                                .map_err(BuilderError::ConsensusError)?;
                         }
                         err => {
                             warn!("Building a new block template failed after attestation cleanup: {}", err);
@@ -653,7 +654,7 @@ impl MiningManager {
                     }
                 }
                 Err(BuilderError::ConsensusError(BlockRuleError::InvalidTransactionsInNewBlock(invalid_transactions))) => {
-                    self.remove_invalid_block_template_transactions(invalid_transactions);
+                    self.remove_invalid_block_template_transactions(invalid_transactions).map_err(BuilderError::ConsensusError)?;
                 }
                 Err(err) => {
                     warn!("Building a new block template failed: {}", err);
@@ -663,12 +664,33 @@ impl MiningManager {
         }
     }
 
-    fn remove_invalid_block_template_transactions(&self, invalid_transactions: HashMap<TransactionId, TxRuleError>) {
+    pub(crate) fn remove_invalid_block_template_transactions(
+        &self,
+        invalid_transactions: HashMap<TransactionId, TxRuleError>,
+    ) -> Result<(), BlockRuleError> {
+        // A local retry ends this build attempt. It must not enter the manager's
+        // remove-and-rebuild loop, evict the transaction, or spin on the same set.
+        for error in invalid_transactions.values() {
+            match error {
+                TxRuleError::LocalNativeCapacityUnavailable(why) => {
+                    return Err(BlockRuleError::LocalNativeCapacityUnavailable(why.clone()));
+                }
+                TxRuleError::LocalNativeStateContextUnavailable(why) => {
+                    return Err(BlockRuleError::LocalNativeStateContextUnavailable(why.clone()));
+                }
+                _ => {}
+            }
+        }
         let mut missing_outpoint: usize = 0;
         let mut invalid: usize = 0;
 
         let mut mempool_write = self.mempool.write();
         invalid_transactions.iter().for_each(|(x, err)| {
+            // A local collateral read has not judged the transaction. Keep it
+            // and its descendants for a later template with available capacity.
+            if err.is_local_native_retry_v1() {
+                return;
+            }
             // On missing outpoints, the most likely is that the tx was already in a block accepted by
             // the consensus but not yet processed by handle_new_block_transactions(). Another possibility
             // is a double spend. In both cases, we simply remove the transaction but keep its redeemers.
@@ -699,6 +721,7 @@ impl MiningManager {
         drop(mempool_write);
 
         debug!("Building a new block template failed for {} txs missing outpoint and {} invalid txs", missing_outpoint, invalid);
+        Ok(())
     }
 
     /// kaspa-pq DNS-finality (audit v24/v26): reconcile the mempool with shards the consensus
@@ -891,14 +914,33 @@ impl MiningManager {
         orphan: Orphan,
         rbf_policy: RbfPolicy,
     ) -> MiningManagerResult<TransactionInsertion> {
+        self.validate_and_insert_mutable_transaction_guarded(consensus, transaction, priority, orphan, rbf_policy, None)
+    }
+
+    fn validate_and_insert_mutable_transaction_guarded(
+        &self,
+        consensus: &dyn ConsensusApi,
+        transaction: MutableTransaction,
+        priority: Priority,
+        orphan: Orphan,
+        rbf_policy: RbfPolicy,
+        guard: Option<&LocalTransactionSubmissionGuard>,
+    ) -> MiningManagerResult<TransactionInsertion> {
+        let exact = || guard.map(|guard| guard(consensus)).transpose().map_err(MiningManagerError::LocalSubmissionWithheld);
+        drop(exact()?);
         // read lock on mempool
         let TransactionPreValidation { mut transaction, feerate_threshold } =
             self.mempool.read().pre_validate_and_populate_transaction(consensus, transaction, rbf_policy)?;
         let args = TransactionValidationArgs::new(feerate_threshold);
         // no lock on mempool
         let validation_result = validate_mempool_transaction(consensus, &mut transaction, &args);
-        // write lock on mempool
+        // Match the exact duty after contextual validation without holding the
+        // pool lock. Under the lock only compare the immutable authority pin.
+        let pin = exact()?;
         let mut mempool = self.mempool.write();
+        if let Some(pin) = &pin {
+            pin(consensus).map_err(MiningManagerError::LocalSubmissionWithheld)?;
+        }
         match mempool.post_validate_and_insert_transaction(consensus, validation_result, transaction, priority, orphan, rbf_policy)? {
             TransactionPostValidation { removed, accepted: Some(accepted_transaction) } => {
                 let unorphaned_transactions = mempool.get_unorphaned_transactions_after_accepted_transaction(&accepted_transaction);
@@ -1541,6 +1583,11 @@ impl MiningManager {
                             .inspect_err(|err| warn!("Failed to remove transaction {} from mempool: {}", transaction_id, err));
                         missing_outpoint += 1;
                     }
+                    Err(err) if err.is_local_native_retry_v1() => {
+                        // No validity decision was made: retain the pool entry
+                        // and its redeemers, and retry with the next local view.
+                        other += 1;
+                    }
                     Err(err) => {
                         // Rust rewrite note:
                         // The behavior changes here compared to the golang version.
@@ -1615,7 +1662,14 @@ impl MiningManager {
     }
 }
 
-/// Async proxy for the mining manager
+/// A fixed-size local authority pin checked with the pool write lock held.
+/// Its check must fail closed without taking a blocking consensus lock.
+pub type LocalTransactionSubmissionPin = Box<dyn Fn(&dyn ConsensusApi) -> Result<(), String> + Send>;
+
+/// Exact local-origin policy checked outside the pool lock by its worker.
+pub type LocalTransactionSubmissionGuard = Box<dyn Fn(&dyn ConsensusApi) -> Result<LocalTransactionSubmissionPin, String> + Send>;
+
+/// Async proxy for the mining manager.
 #[derive(Clone)]
 pub struct MiningManagerProxy {
     inner: Arc<MiningManager>,
@@ -1761,6 +1815,30 @@ impl MiningManagerProxy {
         consensus
             .clone()
             .spawn_blocking(move |c| self.inner.validate_and_insert_transaction(c, transaction, priority, orphan, rbf_policy))
+            .await
+    }
+
+    pub async fn validate_and_insert_transaction_guarded(
+        self,
+        consensus: &ConsensusProxy,
+        transaction: Transaction,
+        priority: Priority,
+        orphan: Orphan,
+        rbf_policy: RbfPolicy,
+        guard: LocalTransactionSubmissionGuard,
+    ) -> MiningManagerResult<TransactionInsertion> {
+        consensus
+            .clone()
+            .spawn_blocking(move |consensus| {
+                self.inner.validate_and_insert_mutable_transaction_guarded(
+                    consensus,
+                    MutableTransaction::from_tx(transaction),
+                    priority,
+                    orphan,
+                    rbf_policy,
+                    Some(&guard),
+                )
+            })
             .await
     }
 

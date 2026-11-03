@@ -1,0 +1,14 @@
+
+running 9 tests
+test palw_state_v2::tests::g14_model_panel_one_v1::a_bond_registered_after_the_commit_cannot_grind_into_its_draw ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::full_scope_signature_and_unique_seat_are_mandatory ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::historical_and_migrated_claims_keep_their_own_geometry_in_the_same_fold ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::model_ids_do_not_select_a_different_panel_route ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::no_independent_verifier_is_a_nonfraud_outcome_without_legacy_retry ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::post_commit_assignment_and_full_receipt_survive_restore_and_reorg ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::single_seat_final_does_not_replace_gate_c ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::the_only_false_valid_signer_pays_its_full_lock_before_and_after_final ... ok
+test palw_state_v2::tests::g14_model_panel_one_v1::the_single_scope_approval_authenticates_the_real_seat_signature_and_context ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 5307 filtered out; finished in 0.09s
+

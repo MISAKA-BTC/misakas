@@ -27,6 +27,7 @@ pub(super) struct CollectorRefsV1<'a> {
     pub(super) licence_idle: &'a mut HashMap<Hash64, (u64, u64)>,
     pub(super) court_outbox: &'a mut CourtOutboxV1,
     pub(super) challenged: &'a mut HashSet<Hash64>,
+    pub(super) da_flat_sent: &'a mut HashMap<Hash64, u64>,
     pub(super) carrier_chain: &'a mut CarrierChainV1,
     pub(super) registration: &'a mut registration::ClassRegistrationV1,
     pub(super) readiness_lane: &'a mut PalwReadinessLaneV1,
@@ -73,6 +74,7 @@ impl PalwPanelService {
             licence_idle,
             court_outbox,
             challenged,
+            da_flat_sent,
             carrier_chain,
             registration,
             readiness_lane,
@@ -384,6 +386,7 @@ impl PalwPanelService {
                     court_outbox,
                     &mut carrier_chain.book_with_funding(&mut funding),
                     challenged,
+                    da_flat_sent,
                 )
                 .await;
             }
@@ -891,6 +894,7 @@ impl PalwPanelService {
                     court_outbox,
                     &mut carrier_chain.book_with_funding(&mut funding),
                     challenged,
+                    da_flat_sent,
                 )
                 .await;
             }

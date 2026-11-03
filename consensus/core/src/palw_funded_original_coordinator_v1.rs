@@ -11,9 +11,10 @@
 //!   re-inspects the same transaction and re-verifies the payer's signature itself.
 //! * [`PalwFundedOriginalScheduleV1`] — the values the funded original needs that are NOT adopted (fee/capital/retention/settlement
 //!   profiles and amounts, the native requirement-derivation budgets, and the role contracts the actor catalog names as missing).
-//!   Its fields are private and its only constructor is `#[cfg(test)]`: no production build can hold a value, so every production
-//!   resolution is a typed [`PalwFundedOriginalMissingV1`] (RFC-0035 §4: no amount is adopted by structure). Once amounts are
-//!   adopted, only a production resolver for this struct needs to be written; the coordinator does not change.
+//!   Its fields are private. Production resolution returns the pinned estimate only while
+//!   [`crate::palw_state_v2::PalwTransitionExtrasV1::tir_public_conviction_active`] is set (the funded original has no fence of
+//!   its own; it is the sub-route of `palw_tir_public_conviction_v1`). Below that fence, and while it is unset, resolution stays
+//!   [`PalwFundedOriginalMissingV1::Schedule`]. No new amount is introduced.
 //!
 //! Never: a ZK/succinct proof, a caller-supplied `paid` flag, a profile hash promoted to policy, a zero-filled missing term.
 use crate::Hash64;
@@ -54,9 +55,9 @@ pub const PALW_FUNDED_ROLE_SERVICE_OPERATOR_V1: u8 = 2;
 pub const PALW_FUNDED_ROLE_FEE_CAPITAL_BODIES_V1: u8 = 4;
 pub const PALW_FUNDED_ROLE_SEMANTIC_PROVIDER_V1: u8 = 8;
 
-/// Lane VAL estimates (not wired): `crate::palw_g14_values_v1::PALW_G14_FUNDED_*`.
-/// **The unadopted values, as one parameter.** Private fields; the ONLY constructor is `#[cfg(test)]`, so a production build holds
-/// no value and [`palw_funded_original_schedule_v1`] always answers [`PalwFundedOriginalMissingV1::Schedule`].
+/// Lane VAL estimates, wired by [`palw_funded_original_schedule_v1`] only while the conviction fence is active:
+/// `crate::palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1`. Private fields. Below that fence the production
+/// resolver still answers [`PalwFundedOriginalMissingV1::Schedule`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwFundedOriginalScheduleV1 {
     fee_profile_id: Hash64,
@@ -116,8 +117,9 @@ impl PalwFundedOriginalScheduleV1 {
         }
     }
     /// **Production constructor (lane VAL, 2026-10-26)**: refuses unset profile ids, a zero or unbounded fee/capital, a budget
-    /// outside `1..=2^40` and an unknown role bit. Not read by any preset; the integrator wires the pinned value
-    /// (`palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1`).
+    /// outside `1..=2^40` and an unknown role bit. [`palw_funded_original_schedule_v1`] returns the value built by
+    /// `palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1` while the conviction fence is active. No preset sets
+    /// that fence, so below it the resolver still refuses `Schedule`.
     #[allow(clippy::too_many_arguments)]
     pub fn new_v1(
         profiles: [Hash64; 4],
@@ -222,8 +224,11 @@ impl PalwFundedOriginalScheduleV1 {
     }
 }
 
-/// **Resolve the schedule at this block.** Production: always `Err(Schedule)` (nothing adopted). A test build may inject a value
-/// through `PalwTransitionExtrasV1::funded_original_test_schedule_v1` (a `#[cfg(test)]` field).
+/// **Resolve the schedule at this block.** A test build may inject a value through
+/// `PalwTransitionExtrasV1::funded_original_test_schedule_v1` (a `#[cfg(test)]` field). Otherwise, while
+/// `tir_public_conviction_active` is set, the pinned estimate
+/// ([`crate::palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1`]) is the schedule. Below that fence, and while
+/// the fence is unset, the answer stays [`PalwFundedOriginalMissingV1::Schedule`].
 pub fn palw_funded_original_schedule_v1(
     extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
 ) -> Result<PalwFundedOriginalScheduleV1, PalwFundedOriginalMissingV1> {
@@ -231,7 +236,9 @@ pub fn palw_funded_original_schedule_v1(
     if let Some(schedule) = extras.funded_original_test_schedule_v1 {
         return Ok(schedule);
     }
-    let _ = extras;
+    if extras.tir_public_conviction_active {
+        return Ok(crate::palw_g14_values_v1::palw_g14_funded_original_schedule_estimate_v1());
+    }
     Err(PalwFundedOriginalMissingV1::Schedule)
 }
 
@@ -244,6 +251,8 @@ pub struct PalwFundedOriginalPairingV1 {
     envelope: PalwTirFundedOriginalEnvelopeV1,
     claim: Hash64,
     outpoint: TransactionOutpoint,
+    suppliers: Vec<crate::palw_court_family_supplier_v1::SignedFamilySupplierV1>,
+    semantic_table: Option<Vec<u8>>,
 }
 
 impl PalwFundedOriginalPairingV1 {
@@ -252,6 +261,15 @@ impl PalwFundedOriginalPairingV1 {
     }
     pub fn envelope(&self) -> &PalwTirFundedOriginalEnvelopeV1 {
         &self.envelope
+    }
+    pub fn suppliers_v2(&self) -> &[crate::palw_court_family_supplier_v1::SignedFamilySupplierV1] {
+        &self.suppliers
+    }
+    pub(crate) fn semantic_table_owned_v2(&self) -> Option<&Vec<u8>> {
+        self.semantic_table.as_ref()
+    }
+    pub fn semantic_table_v2(&self) -> Option<&[u8]> {
+        self.semantic_table.as_deref()
     }
     /// The literal original's claim the payer's terms bind.
     pub fn claim(&self) -> Hash64 {
@@ -280,13 +298,19 @@ pub fn palw_funded_original_answer_pairing_v1(tx: &Transaction) -> Result<PalwFu
         .ok_or("invalid FPA1 accounting envelope")?;
     palw_funded_original_pairing_payload_v1(tx, view.inner)
 }
-fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8]) -> Result<PalwFundedOriginalPairingV1, String> {
-    let envelope = PalwTirFundedOriginalEnvelopeV1::decode_v1(payload)?;
+pub fn palw_funded_original_pairing_payload_v1(tx: &Transaction, payload: &[u8]) -> Result<PalwFundedOriginalPairingV1, String> {
+    let (suppliers, semantic_table) = if payload.starts_with(crate::palw_tir_funded_original_envelope_v2::MAGIC) {
+        let decoded = crate::palw_tir_funded_original_envelope_v2::PalwTirFundedOriginalEnvelopeV2::decode_v2(payload)?;
+        (decoded.suppliers, decoded.semantic_table)
+    } else {
+        (Vec::new(), None)
+    };
+    let envelope = crate::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)?;
     let original = envelope.original_v1()?;
     let claim = original.original_fp_v1()?.claim_id();
     if claim != envelope.funding.terms.claim || original.pledge.claim != claim {
         return Err("TFO1 terms, pledge and literal original name different claims".into());
     }
     let outpoint = envelope.inspect_carrier_v1(tx)?.outpoint();
-    Ok(PalwFundedOriginalPairingV1 { carrier: tx.clone(), envelope, claim, outpoint })
+    Ok(PalwFundedOriginalPairingV1 { carrier: tx.clone(), envelope, claim, outpoint, suppliers, semantic_table })
 }

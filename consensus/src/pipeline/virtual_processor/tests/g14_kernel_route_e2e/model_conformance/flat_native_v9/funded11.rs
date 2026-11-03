@@ -2,7 +2,7 @@
 //! nodes. Small synthetic fixtures are not checkpoint/model coverage evidence.
 use super::*;
 mod chunks;
-mod owning39;
+pub(crate) mod owning39;
 mod public_filing;
 mod real_checkpoint;
 mod source16;

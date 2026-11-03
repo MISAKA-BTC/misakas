@@ -62,6 +62,12 @@ struct Args {
     /// Explicit wide Q24 output storage; does not activate any network output profile.
     #[arg(long, default_value_t = 32)]
     logits_bits: u8,
+    /// Attention projection weight precision (8 or 16); other main weights keep their selected width.
+    #[arg(long, default_value_t = 8)]
+    attention_weight_bits: u8,
+    /// Dense MLP output/down projection precision (8 or 16).
+    #[arg(long, default_value_t = 8)]
+    mlp_down_weight_bits: u8,
     /// Deliver every Gated DeltaNet core on the wide (32-bit) grid (`LowerOpts::gdn_core_wide`). The node graph is the
     /// same program; the constants and tensors differ, so the artifact is a different class. This is the fix of the
     /// Huihui-Qwen3.5-9B fit refusal (docs/evidence/hf-onboarding/20261010-huihui-qwen35-9b-fit-diagnosis, F7–F9:
@@ -309,6 +315,8 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     req.max_window = a.max_window;
     req.linear_weight_bits = a.linear_weight_bits;
     req.logits_bits = a.logits_bits;
+    req.attention_weight_bits = a.attention_weight_bits;
+    req.mlp_down_weight_bits = a.mlp_down_weight_bits;
     req.gdn_core_wide = a.gdn_core_wide;
     req.full_court_source_pin = a
         .full_court_source_pin

@@ -63,7 +63,7 @@ impl<'a> NativeSelectionUniverseV1<'a> {
         let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(frame_quote::<Self>(frame)?).map_err(E::Resource)?;
         graph.check_frame_binding_v3(frame, source, profile).map_err(E::Decode)?;
         if !source.supports_tiled_trace_v1() || Rule::of_job_v1(&frame.original_v1().job).is_none() {
-            return Err(resource("ordinary selection excludes Constraint, tails and Flat sources"));
+            return Err(resource("native selection excludes Constraint, non-Prefix tails and Flat sources"));
         }
         let targets = u64::from(source.decode_count_v1())
             .checked_mul(u64::from(source.vocab_v1()))
