@@ -427,3 +427,29 @@ signature contexts, joined accounts, and journal links. The new native
 close dispatch was typechecked. No accepted op8-to-op10/op11 block
 history was executed. The documentation check found zero new issues
 against 43 existing missing references.
+
+## Assignment concurrency at the native intake boundary
+
+The op8 preflight and final install checkpoint now price available
+global, poster, worker, prover and class slots against the current
+rooted Assignment keys. The census reads only the Assignment key range
+and performs at most one exact additional lookup for a matching joined
+prover per existing Assignment. It stops at the original finite work
+bound or the first cap that leaves no room for a new row. Independent
+terminal and retired states continue to occupy their retained slots.
+A clock or close event does not itself release capacity.
+
+This uses the existing canonical rows, so a later accepted Open takes
+its slot with its own state writes, and native rollback undoes the same
+occupancy. The authenticated slot-release and retention owner must
+still remove a fully released contract safely. This stage covers count
+caps. The all-branch service schedule, actual Gate C draw capacity,
+lifetime RAM/DB reservations, funds custody and native op8 execution
+remain open.
+
+Core and Consensus library Clippy passed with warnings denied. The 13
+contract policy/row regressions passed on the same source. They cover
+finite cap configuration and the joined-role/funding schema. The new
+native census was typechecked. No accepted native op8 history or
+resource release was exercised. No new documentation issues appeared
+against the 43 existing missing references.

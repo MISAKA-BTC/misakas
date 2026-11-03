@@ -790,5 +790,21 @@
     "stored_sha256": "11705d0733f1c71fe8f75aa09fb1e1893985b7697b03151ac2e8ef4b38554fec",
     "raw_bytes": 74777,
     "stored_bytes": 6979
+  },
+  {
+    "raw_name": "assignment-live-slots-clippy-first.log",
+    "stored_name": "assignment-live-slots-clippy-first.log.gz",
+    "raw_sha256": "efdaa44522246c5b038af61f248a7e17055df3d726c10b22c3773d0b51c72851",
+    "stored_sha256": "dc4ba107582900635c9902ac74f4a82ccf9e6d77fff3a59ecab7695aafe891f2",
+    "raw_bytes": 341727,
+    "stored_bytes": 23629
+  },
+  {
+    "raw_name": "assignment-live-slots-contract-first.log",
+    "stored_name": "assignment-live-slots-contract-first.log.gz",
+    "raw_sha256": "1ecac4370457e2e532ea89703e024ad0c2e767df96ab4b9c0111dfe0aa096bfa",
+    "stored_sha256": "adb008e05bd64bc1b7500045f132fb71d69e8c4b7c161016cf1233816ff97a9c",
+    "raw_bytes": 54566,
+    "stored_bytes": 4407
   }
 ]

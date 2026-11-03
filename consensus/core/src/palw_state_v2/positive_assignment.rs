@@ -229,6 +229,70 @@ impl TransitionBuilder<'_> {
         }
         Ok(())
     }
+    /// The canonical Assignment row holds a slot until the native retention
+    /// owner removes the released contract. A terminal status or clock alone
+    /// cannot make room while funded roles or recovery material still exist.
+    fn check_assignment_live_slots_v2(
+        &mut self,
+        terms: &misaka_palw_positive_contract::assignment::AssignmentTermsV2,
+        rules: &NativeAssignmentRulesV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let policy = rules.assignment_policy();
+        let native = rules.native_preimages().ok_or_else(missing_assignment_history)?;
+        let max_rows = policy
+            .max_replay_work
+            .checked_div(native.source_policy.work.per_control)
+            .ok_or_else(|| refusal("invalid Assignment live census work schedule"))?
+            / 2; // At most one Assignment row and one prover-role lookup per visit.
+        let mut quote = native_writers::NativeWriteQuoteV1::new("native Assignment live census key workspace");
+        // Two canonical prefix buffers and the concurrent exact role key pair.
+        quote.grown::<u8>(1024)?;
+        quote.grown::<u8>(1024)?;
+        quote.exact::<u8>(2 * misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES as u64)?;
+        self.admit_native_write_v1(quote)?;
+        let mut start = NativeRowKey::Assignment(terms.id()).encode();
+        start.truncate(start.len() - 64);
+        let start = (KERNEL_AUX_TABLE, start);
+        let route = self.state.kernel_route.as_ref().ok_or_else(missing_assignment_history)?;
+        let rows = PositiveRowsV2::new(&self.state);
+        let mut available =
+            [policy.live.global, policy.live.per_poster, policy.live.per_worker, policy.live.per_prover, policy.live.per_class];
+        for (ordinal, ((_, key), bytes)) in route
+            .aux
+            .range(start.clone()..)
+            .take_while(|((table, key), _)| *table == KERNEL_AUX_TABLE && key.starts_with(&start.1))
+            .enumerate()
+        {
+            if ordinal as u64 >= max_rows {
+                return Err(refusal("Assignment live census exceeds original finite work budget"));
+            }
+            let NativeRowBody::Assignment(existing) = NativeRowValue::decode(key, bytes).map_err(refusal)?.body else {
+                return Err(refusal("wrong native live Assignment row kind"));
+            };
+            let occupied = &existing.bundle.terms;
+            let prover = if occupied.prover == terms.prover {
+                true
+            } else {
+                let key =
+                    NativeRowKey::AssignmentRole { assignment: existing.id(), role: AssignmentRoleV2::Prover, bond: terms.prover };
+                rows.read(key).map_err(refusal)?.is_some()
+            };
+            let uses = [
+                true,
+                occupied.poster == terms.poster,
+                occupied.worker == terms.worker,
+                prover,
+                occupied.registered_class == terms.registered_class,
+            ];
+            for (slots, occupied) in available.iter_mut().zip(uses) {
+                if occupied {
+                    *slots = slots.checked_sub(1).filter(|n| *n != 0).ok_or_else(|| refusal("Assignment live cap exhausted"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn check_assignment_open_literal_v2(
         action: &PositiveAssignmentRawActionV2,
         row: &AssignmentRow,
@@ -327,6 +391,7 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial Assignment/funding/journal mismatch"));
         }
         self.require_absent_assignment_key_v2(NativeRowKey::Assignment(id))?;
+        self.check_assignment_live_slots_v2(&row.bundle.terms, rules)?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentFunding(id))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentUse(id))?;
         plan.funding.validate_shape().map_err(refusal)?;
@@ -820,6 +885,7 @@ impl TransitionBuilder<'_> {
                     // This reads the CURRENT prefix; later registration/nonce
                     // changes cannot authorize the earlier carrier.
                     self.require_absent_assignment_key_v2(NativeRowKey::Assignment(bundle.terms.id()))?;
+                    self.check_assignment_live_slots_v2(&bundle.terms, rules)?;
                     let class = Hash64::from_bytes(bundle.terms.registered_class.0);
                     if self.state.class(&class).is_none() || !self.state.tir_classes.contains_key(&class) {
                         return Err(refusal("actual registered TIR class missing at this accepted prefix"));
