@@ -805,3 +805,21 @@ the stored carrier ordinal using the production store method. The Full
 relay replay path was typechecked without a native relay history
 execution. Initial verification attempts and their setup failures are
 retained. Documentation checking found zero new issues against 43.
+
+## Assignment and Case archive parent commitment
+
+The shared archive reader now checks the reconstructed original selected-parent
+state against the accepting header's parent-state commitment, using the same
+root recipe as ordinary native block validation. The retained delta record's
+first field is the resulting state root. Comparing it with the selected-parent
+block hash previously rejected valid history before replaying the event prefix.
+The reader still checks the actual accepting delta's block and clock and
+requires the exact recorded prefix root after replay.
+
+The isolated production RocksDB store suite passed 36 tests, including a new
+test that stores distinct parent-block, parent-state and resulting-state
+values, recovers the expected prefix and rejects a substituted prefix root.
+Core and Consensus library Clippy passed with warnings denied. This is store
+and prefix verification. A live Assignment/Case continuation through the
+native VirtualStateProcessor still needs an end-to-end run. The test runner
+records, source maps and logs are retained as `assignment-parent-root-*`.

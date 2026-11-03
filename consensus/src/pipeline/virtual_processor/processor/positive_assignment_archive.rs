@@ -339,13 +339,15 @@ impl VirtualStateProcessor {
             return Err(E::Invalid("original actual Full fee differs"));
         }
         let (_, parent) = self.palw_v2_state_at(selected_parent).ok_or(E::Unavailable("original native selected-parent state"))?;
-        let params = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("native state parameters"))?;
-        let store = self.palw_state_v2_store.read();
-        let (delta_parent, delta) =
-            store.delta_of_retained_v1(accepting).map_err(|_| E::Unavailable("original native accepting delta"))?;
-        if delta_parent != selected_parent {
-            return Err(E::Invalid("actual native delta parent differs"));
+        if actual_header.palw_state_root != self.palw_committed_root_v1(&parent) {
+            return Err(E::Invalid("original accepting header commits a different parent state"));
         }
+        let params = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("native state parameters"))?;
+        let (_, delta) = self
+            .palw_state_v2_store
+            .read()
+            .delta_of_retained_v1(accepting)
+            .map_err(|_| E::Unavailable("original native accepting delta"))?;
         if delta.point.block != accepting
             || delta.point.daa_score != origin.accepted_daa
             || delta.point.blue_score != origin.accepted_blue_score

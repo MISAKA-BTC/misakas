@@ -1118,5 +1118,53 @@
     "stored_sha256": "9326e08b80fd41372760598564aa1351897574b68c9f2f83740ae4d0f222e92a",
     "raw_bytes": 322407,
     "stored_bytes": 23501
+  },
+  {
+    "raw_name": "assignment-parent-root-clippy-final.log",
+    "stored_name": "assignment-parent-root-clippy-final.log.gz",
+    "raw_sha256": "2a4b588d6f81875af381911c568a1539297953a8d25fa0cb3ca119f1e38467f8",
+    "stored_sha256": "2cfa6ffdfe5d5d803f1c2347e145b3c74a40e473954323ee21772e4933b5e0d7",
+    "raw_bytes": 340747,
+    "stored_bytes": 23528
+  },
+  {
+    "raw_name": "assignment-parent-root-clippy.log",
+    "stored_name": "assignment-parent-root-clippy.log.gz",
+    "raw_sha256": "e1a0c012a298944630ac4edb76e9e45ff49cd453bd8357a6b8bec353d9f313c8",
+    "stored_sha256": "3c75f6f10db65a5390c0eadefa328163ad85685d2e0208c5fd19248f66d9e183",
+    "raw_bytes": 340747,
+    "stored_bytes": 23523
+  },
+  {
+    "raw_name": "assignment-parent-root-runtime-second.log",
+    "stored_name": "assignment-parent-root-runtime-second.log.gz",
+    "raw_sha256": "71eaee75df3679147dbb21a6702f05d92d8fa8560dff57d30128456c1b586213",
+    "stored_sha256": "cdbcc6491a40eec87e9b41ef889f31c54e32a28a4c367f35c01d2fe50166c18c",
+    "raw_bytes": 3674,
+    "stored_bytes": 977
+  },
+  {
+    "raw_name": "assignment-parent-root-runtime-third.log",
+    "stored_name": "assignment-parent-root-runtime-third.log.gz",
+    "raw_sha256": "386cdef10bb319fa490f17bc2a6decf1d4ea341f306cbcbed6d2785efa7028d1",
+    "stored_sha256": "d59e22aa943cb4683827e88ca97c3abd1127bdc9de010a697de6f2f7297cf885",
+    "raw_bytes": 224,
+    "stored_bytes": 174
+  },
+  {
+    "raw_name": "assignment-parent-root-runtime.log",
+    "stored_name": "assignment-parent-root-runtime.log.gz",
+    "raw_sha256": "9faeefb61c3472e865b4a337ef625832191e4d3bbfa4e17f78cee98b60004971",
+    "stored_sha256": "1f5e93f4b90796f4ba1f31748d8451f256db208af72ad88562eb7856b5664cd4",
+    "raw_bytes": 3695,
+    "stored_bytes": 976
+  },
+  {
+    "raw_name": "assignment-parent-root-store-suite.log",
+    "stored_name": "assignment-parent-root-store-suite.log.gz",
+    "raw_sha256": "dd5cdfeffafd188ba2cb2e7a6ffa912d7f4f3dedee706ef02b5d0193dd45c5a1",
+    "stored_sha256": "451fee185268e1bed9cb52cc29bf7cc7784cad9e58942def005599f71714d6cb",
+    "raw_bytes": 4409,
+    "stored_bytes": 1427
   }
 ]

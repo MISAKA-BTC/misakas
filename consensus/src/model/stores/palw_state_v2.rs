@@ -445,6 +445,7 @@ impl DbPalwStateV2Store {
         delta.into_unreserved_legacy_v1().map(|delta| (root, delta)).map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))
     }
 
+    /// Return the block's post-transition state root and its delta.
     /// Decode directly from a pinned record view. No intermediate bincode
     /// Vec/cache/deep clone occurs before the typed Borsh preflight.
     pub fn delta_of_retained_v1(
@@ -1003,6 +1004,35 @@ mod tests {
                 signature: Vec::new(),
             },
         ]
+    }
+
+    #[test]
+    fn retained_delta_replays_original_prefix_from_distinct_parent_and_result_roots() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(8));
+        let params = params();
+        let parent_block = BlockHash::from_u64_word(31);
+        let parent = PalwChainStateV2::genesis();
+        let point = ctx(32, 100, 100);
+        let (child, delta) = apply_palw_transition_v2(&parent, &params, &point, &registrations(), None).unwrap();
+        let parent_root = parent.state_root();
+        let child_root = child.state_root();
+        assert_ne!(parent_root, child_root);
+        assert_ne!(parent_block, child_root);
+
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, parent_block, &parent).unwrap();
+        store.insert_delta_batch(&mut batch, point.block, child_root, &delta).unwrap();
+        db.write(batch).unwrap();
+
+        let (loaded_block, loaded_parent) = store.load_tip_retained_v1(&params).unwrap().unwrap();
+        let (recorded_root, retained_delta) = store.delta_of_retained_v1(point.block).unwrap();
+        assert_eq!(loaded_block, parent_block);
+        assert_eq!(loaded_parent.state_root(), parent_root);
+        assert_eq!(recorded_root, child_root);
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, parent_root, &params).is_ok());
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, recorded_root, &params).is_err());
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, retained_delta.entries.len(), recorded_root, &params).is_ok());
     }
 
     /// **A `palw_*` read costs one materialization per TIP, not one per request** (audit M-7),
