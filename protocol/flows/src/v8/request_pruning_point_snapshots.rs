@@ -16,7 +16,29 @@ use kaspa_p2p_lib::{
         RequestPruningPointPalwStateMessage, kaspad_message::Payload,
     },
 };
-use std::sync::Arc;
+use std::{
+    sync::{Arc, Mutex, OnceLock},
+    time::Instant,
+};
+
+#[path = "snapshot_serve_diagnostics.rs"]
+mod snapshot_serve_diagnostics;
+use snapshot_serve_diagnostics::{ReportLimiter, ServeFailure};
+
+fn report_palw_refusal(point: BlockHash, mode: &'static str, failure: ServeFailure) {
+    static LIMITER: OnceLock<Mutex<ReportLimiter>> = OnceLock::new();
+    let admitted =
+        LIMITER.get_or_init(Mutex::default).lock().unwrap_or_else(|error| error.into_inner()).admit(mode, failure, Instant::now());
+    if !admitted {
+        return;
+    }
+    kaspa_core::warn!(
+        "[palw-sidecar] serve refused point={point} mode={mode} stage={} reason={} io_kind={:?}; replying found=false",
+        failure.stage,
+        failure.reason,
+        failure.io_kind
+    );
+}
 
 /// Extract the requested pruning-point hash from a `Request*` message's `Hash` field.
 fn req_pruning_point(hash: Option<kaspa_p2p_lib::pb::Hash>) -> Result<BlockHash, ProtocolError> {
@@ -195,6 +217,7 @@ impl RequestPruningPointPalwStateFlow {
             let peer = self.router.key();
             if !self.ctx.palw_gossip().reserve_sidecar_serve(peer) {
                 debug!("[palw-sidecar] {peer} is out of serve allowance this window; answering not-found for {pp}");
+                report_palw_refusal(pp, "legacy", ServeFailure::new("admission", "serve_allowance"));
                 let refused =
                     PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() };
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
@@ -203,9 +226,15 @@ impl RequestPruningPointPalwStateFlow {
             // Legacy peers share the same node-wide materialization/session backstop.
             // The session/native lease follows the response through the final HTTP
             // Bytes owner, including a stalled peer after dequeue and compression.
-            let Ok(mut snapshot_lease) = crate::palw_snapshot_chunks::SnapshotSpill::new() else {
-                self.router.enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default())).await?;
-                continue;
+            let mut snapshot_lease = match crate::palw_snapshot_chunks::SnapshotSpill::new() {
+                Ok(lease) => lease,
+                Err(error) => {
+                    report_palw_refusal(pp, "legacy", ServeFailure::spill(&error));
+                    self.router
+                        .enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default()))
+                        .await?;
+                    continue;
+                }
             };
             // Admit the complete legacy serialization before creating its Vecs.
             // The native state itself has a separate native-resource reservation.
@@ -213,6 +242,7 @@ impl RequestPruningPointPalwStateFlow {
                 kaspa_core::memory_budget::MemoryClass::Snapshot,
                 crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64 + (1 << 20),
             ) else {
+                report_palw_refusal(pp, "legacy", ServeFailure::new("admission", "snapshot_byte_budget"));
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default())).await?;
                 continue;
             };
@@ -230,8 +260,8 @@ impl RequestPruningPointPalwStateFlow {
             let resource_lease = session.clone().spawn_blocking(move |c| c.palw_reserve_native_snapshot_v1(pp)).await;
             match resource_lease {
                 Ok(lease) => snapshot_lease.hold_native_resource_lease(lease),
-                Err(why) => {
-                    kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why:?}");
+                Err(_) => {
+                    report_palw_refusal(pp, "legacy", ServeFailure::new("admission", "native_capacity"));
                     self.router
                         .enqueue(make_message!(Payload::PruningPointPalwState, PruningPointPalwStateMessage::default()))
                         .await?;
@@ -244,28 +274,34 @@ impl RequestPruningPointPalwStateFlow {
                     // awaiting flow must not release them while this task runs.
                     let mut snapshot_bytes = snapshot_bytes;
                     let answer = (|| {
-                        let Some(state) = c.pruning_point_palw_state_shared_v1(pp) else {
-                            return Ok::<_, std::io::Error>(None);
-                        };
+                        let state = c
+                            .try_pruning_point_palw_state_shared_v1(pp)
+                            .map_err(|error| ServeFailure::new("snapshot_read", error.code()))?
+                            .ok_or(ServeFailure::new("snapshot_read", "not_available"))?;
                         let cap = crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES as u64;
-                        let state_bytes = crate::snapshot_memory::encoded_size(&*state, cap)?;
+                        let state_bytes = crate::snapshot_memory::encoded_size(&*state, cap)
+                            .map_err(|error| ServeFailure::io("canonical_size", &error))?;
                         let remaining = cap
                             .checked_sub(state_bytes)
                             .and_then(|n| n.checked_sub(14))
-                            .ok_or_else(|| std::io::Error::other("snapshot canonical envelope exceeds cap"))?;
+                            .ok_or_else(|| ServeFailure::new("canonical_size", "envelope_cap"))?;
                         snapshot_bytes
-                            .grow(crate::snapshot_memory::declaration_metadata_bytes(state.classes.len())?)
-                            .map_err(std::io::Error::other)?;
-                        let declarations =
-                            c.palw_class_carriages_for_snapshot_bounded_v1(&state, false, remaining).map_err(std::io::Error::other)?;
-                        let encoded = crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations)?;
-                        Ok(Some((encoded, declarations)))
+                            .grow(
+                                crate::snapshot_memory::declaration_metadata_bytes(state.classes.len())
+                                    .map_err(|error| ServeFailure::io("declaration_metadata", &error))?,
+                            )
+                            .map_err(|_| ServeFailure::new("declaration_metadata", "snapshot_byte_budget"))?;
+                        let declarations = c
+                            .palw_class_carriages_for_snapshot_bounded_v1(&state, false, remaining)
+                            .map_err(|error| ServeFailure::declaration(&error))?;
+                        let encoded = crate::palw_snapshot_chunks::encode_legacy_snapshot(&state, &declarations)
+                            .map_err(|error| ServeFailure::encoding(&error))?;
+                        Ok::<_, ServeFailure>((encoded, declarations))
                     })();
                     let (carriage, declarations) = match answer {
-                        Ok(Some((bytes, declarations))) => (Some(bytes), declarations),
-                        Ok(None) => (None, Vec::new()),
+                        Ok((bytes, declarations)) => (Some(bytes), declarations),
                         Err(error) => {
-                            kaspa_core::warn!("[palw-sidecar] cannot serve bounded PALW snapshot for {pp}: {error}");
+                            report_palw_refusal(pp, "legacy", error);
                             (None, Vec::new())
                         }
                     };
@@ -301,10 +337,7 @@ impl RequestPruningPointPalwStateFlow {
                 )
                 .ok();
                 if reply.found && bytes.is_none() {
-                    kaspa_core::warn!(
-                        "[palw-sidecar] the PALW snapshot for {pp} exceeds the {} byte transport cap (PALW_PRUNING_STATE_MAX_BYTES): answering not-found",
-                        crate::palw_gossip::PALW_PRUNING_STATE_MAX_BYTES
-                    );
+                    report_palw_refusal(pp, "legacy", ServeFailure::new("canonical_size", "envelope_cap"));
                     PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![], ..Default::default() }
                 } else {
                     if let Some(bytes) = bytes
@@ -336,7 +369,9 @@ impl RequestPruningPointPalwStateFlow {
         }
     }
     async fn serve_chunked(&mut self, msg: RequestPruningPointPalwStateMessage) -> Result<(), ProtocolError> {
-        use crate::palw_snapshot_chunks::{SNAPSHOT_CODEC_ZLIB_V1, SnapshotSender, SnapshotSpill, chunk_hash_profile};
+        use crate::palw_snapshot_chunks::{
+            SNAPSHOT_CODEC_ZLIB_V1, SnapshotChunkReadError, SnapshotSender, SnapshotSpill, chunk_hash_profile,
+        };
         if self.router.properties().protocol_version < crate::flow_context::PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS {
             return Err(ProtocolError::Other("PALW snapshot chunks require negotiated protocol 106"));
         }
@@ -355,6 +390,8 @@ impl RequestPruningPointPalwStateFlow {
             ))
         };
         if self.chunks.as_ref().is_some_and(|s| s.expired()) {
+            // This is not a refusal by itself: a fresh stream may be admitted.
+            kaspa_core::debug!("[palw-sidecar] expired chunk sender discarded point={pp}");
             self.chunks = None;
         }
         if self.chunks.is_none() {
@@ -364,37 +401,47 @@ impl RequestPruningPointPalwStateFlow {
             let peer = self.router.key();
             let refused = PruningPointPalwStateMessage { chunked: true, ..Default::default() };
             if !self.ctx.palw_gossip().reserve_sidecar_serve(peer) {
+                report_palw_refusal(pp, "chunked", ServeFailure::new("admission", "serve_allowance"));
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
                 return Ok(());
             }
             // Acquire the node-wide lease BEFORE the consensus snapshot clone or serialization.
-            let Ok(mut spill) = SnapshotSpill::new() else {
-                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
-                return Ok(());
+            let mut spill = match SnapshotSpill::new() {
+                Ok(spill) => spill,
+                Err(error) => {
+                    report_palw_refusal(pp, "chunked", ServeFailure::spill(&error));
+                    self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                    return Ok(());
+                }
             };
             let session = self.ctx.consensus().unguarded_session();
             let sender = session
                 .spawn_blocking(move |c| {
                     match c.palw_reserve_native_snapshot_v1(pp) {
                         Ok(lease) => spill.hold_native_resource_lease(lease),
-                        Err(why) => {
-                            kaspa_core::warn!("[palw-sidecar] native snapshot capacity refused: {why:?}");
-                            return None;
-                        }
+                        Err(_) => return Err(ServeFailure::new("admission", "native_capacity")),
                     }
-                    c.pruning_point_palw_state_shared_v1(pp).map(|carriage| {
-                        let declarations =
-                            c.palw_class_carriages_for_snapshot_v1(&carriage, nonce.is_some()).map_err(std::io::Error::other)?;
-                        match nonce {
-                            Some(nonce) => SnapshotSender::encode_snapshot_compressed(spill, pp, &carriage, &declarations, nonce),
-                            None => SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations),
-                        }
-                    })
+                    let carriage = c
+                        .try_pruning_point_palw_state_shared_v1(pp)
+                        .map_err(|error| ServeFailure::new("snapshot_read", error.code()))?
+                        .ok_or(ServeFailure::new("snapshot_read", "not_available"))?;
+                    let declarations = c
+                        .palw_class_carriages_for_snapshot_v1(&carriage, nonce.is_some())
+                        .map_err(|error| ServeFailure::declaration(&error))?;
+                    match nonce {
+                        Some(nonce) => SnapshotSender::encode_snapshot_compressed(spill, pp, &carriage, &declarations, nonce),
+                        None => SnapshotSender::encode_snapshot(spill, pp, &carriage, &declarations),
+                    }
+                    .map_err(|error| ServeFailure::encoding(&error))
                 })
                 .await;
-            let Some(Ok(mut sender)) = sender else {
-                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
-                return Ok(());
+            let mut sender = match sender {
+                Ok(sender) => sender,
+                Err(failure) => {
+                    report_palw_refusal(pp, "chunked", failure);
+                    self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                    return Ok(());
+                }
             };
             // Reserve/charge this ONE traversal exactly like the old whole-message response.
             // Continuations may spend that traversal, but cannot rewind or duplicate a chunk.
@@ -403,8 +450,9 @@ impl RequestPruningPointPalwStateFlow {
             let traversed = sender.total.max(sender.profile.map_or(0, |p| p.decoded));
             self.ctx.palw_gossip().charge_sidecar_serve(peer, traversed);
             if let Some(root) = root
-                && sender.resume(pp, root, msg.chunk_index).is_err()
+                && let Err(error) = sender.resume(pp, root, msg.chunk_index)
             {
+                report_palw_refusal(pp, "chunked", ServeFailure::io("resume", &error));
                 self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
                 return Ok(());
             }
@@ -414,9 +462,25 @@ impl RequestPruningPointPalwStateFlow {
         if sender.profile.map(|p| p.nonce) != nonce {
             return Err(ProtocolError::Other("PALW snapshot nonce/codec changed during stream"));
         }
-        let bytes = sender
-            .chunk(pp, root, msg.chunk_index)
-            .map_err(|_| ProtocolError::Other("invalid PALW snapshot point/root/order/expiry"))?;
+        let bytes = match sender.chunk(pp, root, msg.chunk_index) {
+            Ok(bytes) => bytes,
+            Err(SnapshotChunkReadError::RequestMismatch) => {
+                return Err(ProtocolError::Other("invalid PALW snapshot point/root/order"));
+            }
+            Err(error) => {
+                let failure = match error {
+                    SnapshotChunkReadError::Expired => ServeFailure::new("read_chunk", "lease_expired"),
+                    SnapshotChunkReadError::Storage(error) => ServeFailure::io("read_chunk", &error),
+                    SnapshotChunkReadError::RequestMismatch => unreachable!("handled above"),
+                };
+                // A local spill read or expiry has not judged the peer's request.
+                self.chunks = None;
+                report_palw_refusal(pp, "chunked", failure);
+                let refused = PruningPointPalwStateMessage { chunked: true, ..Default::default() };
+                self.router.enqueue(make_message!(Payload::PruningPointPalwState, refused)).await?;
+                return Ok(());
+            }
+        };
         let reply = PruningPointPalwStateMessage {
             found: true,
             chunked: true,
