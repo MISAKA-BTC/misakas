@@ -511,6 +511,14 @@ pub(crate) fn create_core_with_runtime_inner(
         exit(1);
     }
 
+    let (evidence_provider_dirs, evidence_provider_http, rejected_evidence_providers) =
+        misaka_palw_remote::transport::split_verifier_evidence_sources_v1(args.palw_evidence_provider_dir.as_deref().unwrap_or(""));
+    if rejected_evidence_providers != 0 {
+        kaspa_core::warn!(
+            "{rejected_evidence_providers} evidence provider URL(s) ignored; use up to eight numeric http:// endpoints or local directories"
+        );
+    }
+
     // Before any service constructs its holdings, because the check has to be the same for all of
     // them (see `arm_class_manifest_verification_v1`).
     crate::palw_backends::arm_class_manifest_verification_v1(args.palw_verify_class_manifest);
@@ -2190,14 +2198,9 @@ Do you confirm? (y/n)";
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
-                        // RFC-0009 stage B: the directories a material pull is also answered from (empty: as before).
-                        evidence_provider_dirs: args
-                            .palw_evidence_provider_dir
-                            .as_deref()
-                            .map(|dirs| {
-                                dirs.split(',').map(str::trim).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).collect()
-                            })
-                            .unwrap_or_default(),
+                        // RFC-0009 stage B: optional configured evidence sources.
+                        evidence_provider_dirs,
+                        evidence_provider_http,
                         // Lane G14-K: the kernel-route verifier's registered models (empty: it does nothing).
                         // Lane ROLES: the verifier is a duty — the files the flag names plus every *.palwkm the node holds in its
                         // default directory. Only loaded once the kernel route's fence is in force (palw_kernel_verifier).

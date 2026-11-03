@@ -303,7 +303,7 @@ pub struct Args {
     /// authorized claim into a receipt block of its OWN bond and keeps the authorization's builder fee; the miner leg is paid by the chain to
     /// the executor bond's registered payout. Inert (and the directory unread) while the fence is dormant — every shipped preset.
     pub palw_redemption_auth_dir: Option<String>,
-    /// **RFC-0009 stage B: evidence provider directories** (`--palw-evidence-provider-dir=<dir>[,<dir>...]`). The panel also answers a material pull from
+    /// **RFC-0009 stage B: evidence provider directories or numeric HTTP endpoints** (`--palw-evidence-provider-dir`). The panel also answers a material pull from
     /// these (a manifest that agrees with the claim's on-chain roots, every chunk checked against it); the producer pull stays the fallback.
     pub palw_evidence_provider_dir: Option<String>,
     /// **Register the class of this node's converted artifact on the running chain, once.**
@@ -3113,12 +3113,12 @@ pub fn cli() -> Command {
         .arg(
             Arg::new("palw-evidence-provider-dir")
                 .long("palw-evidence-provider-dir")
-                .value_name("dirs")
+                .value_name("sources")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
                 .help(
-                    "MISAKA PALW (RFC-0009 stage B): comma-separated evidence provider directories. A panel seat's material pull is also answered \
-                     from these: a manifest any directory holds for the claim that agrees with the claim's on-chain roots, every chunk checked against \
+                    "MISAKA PALW (RFC-0009 stage B): comma-separated directories and numeric http:// evidence endpoints. A panel seat reads a \
+                     manifest agreeing with the claim's on-chain roots and retention deadline, with every chunk checked against \
                      it, then handed to the same verification and re-execution a peer's copy goes through. The producer pull stays the fallback.",
                 ),
         )

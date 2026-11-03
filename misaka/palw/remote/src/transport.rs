@@ -244,6 +244,123 @@ impl HttpTransport for StdHttp {
     }
 }
 
+/// A verifier's operator-configured HTTP endpoint. Numeric addresses avoid an
+/// unbounded blocking DNS lookup; request paths stay inside this origin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NumericEvidenceEndpointV1 {
+    base: String,
+    address: SocketAddr,
+}
+
+impl NumericEvidenceEndpointV1 {
+    pub fn parse(base: &str) -> Result<Self, &'static str> {
+        if base.len() > 512 {
+            return Err("evidence provider URL is too long");
+        }
+        let base = base.trim_end_matches('/');
+        let rest = base.strip_prefix("http://").ok_or("evidence provider requires numeric http://")?;
+        let (authority, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+        if !prefix.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-._~".contains(&b)) {
+            return Err("invalid evidence provider URL path");
+        }
+        let address = authority
+            .parse::<SocketAddr>()
+            .or_else(|_| authority.parse::<std::net::Ipv4Addr>().map(|ip| SocketAddr::from((ip, 80))))
+            .or_else(|_| {
+                authority
+                    .strip_prefix('[')
+                    .and_then(|host| host.strip_suffix(']'))
+                    .unwrap_or("")
+                    .parse::<std::net::Ipv6Addr>()
+                    .map(|ip| SocketAddr::from((ip, 80)))
+            })
+            .map_err(|_| "evidence provider requires a numeric IP and optional port")?;
+        if address.port() == 0 {
+            return Err("invalid evidence provider port");
+        }
+        Ok(Self { base: base.to_owned(), address })
+    }
+
+    pub fn open(&self, deadline: std::time::Instant) -> HttpProvider {
+        HttpProvider::with_transport(self.base.clone(), Arc::new(NumericEvidenceGetV1 { endpoint: self.clone(), deadline }))
+    }
+}
+
+/// Split the historical comma-separated directory flag without interpreting
+/// '#' in directory names. Unsupported network entries do not disable FS.
+pub fn split_verifier_evidence_sources_v1(text: &str) -> (Vec<PathBuf>, Vec<NumericEvidenceEndpointV1>, usize) {
+    let (mut dirs, mut endpoints, mut rejected) = (Vec::new(), Vec::new(), 0);
+    for entry in text.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+        if !entry.contains("://") {
+            dirs.push(PathBuf::from(entry));
+        } else {
+            match NumericEvidenceEndpointV1::parse(entry) {
+                Ok(endpoint) if endpoints.contains(&endpoint) => {}
+                Ok(endpoint) if endpoints.len() < 8 => endpoints.push(endpoint),
+                _ => rejected += 1,
+            }
+        }
+    }
+    (dirs, endpoints, rejected)
+}
+
+/// Read from an explicitly configured numeric HTTP origin. The caller
+/// supplies the one claim-wide deadline and an evidence size limit.
+pub fn fetch_verifier_http_material_v1(
+    endpoints: &[NumericEvidenceEndpointV1],
+    claim_id: Hash64,
+    roots: &ClaimRoots,
+    limits: &ManifestLimits,
+    deadline: std::time::Instant,
+) -> Result<(Vec<u8>, FetchReport), ClaimFetchErrorV1> {
+    let providers: Vec<_> = endpoints.iter().map(|endpoint| endpoint.open(deadline)).collect();
+    let providers: Vec<&dyn EvidenceProvider> = providers.iter().map(|p| p as &dyn EvidenceProvider).collect();
+    fetch_claim_material_any(&providers, &claim_id.to_string(), roots, limits, claim_id)
+}
+
+struct NumericEvidenceGetV1 {
+    endpoint: NumericEvidenceEndpointV1,
+    deadline: std::time::Instant,
+}
+
+impl HttpTransport for NumericEvidenceGetV1 {
+    fn request(&self, method: &str, url: &str, body: Option<&[u8]>, max_response: usize) -> Result<HttpResponse, String> {
+        let path = url
+            .strip_prefix(&self.endpoint.base)
+            .filter(|path| path.starts_with('/'))
+            .filter(|path| path.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-._~".contains(&b)))
+            .ok_or("invalid verifier evidence request path")?;
+        if method != "GET" || body.is_some() {
+            return Err("verifier evidence transport is read-only".into());
+        }
+        let remaining = || {
+            let left = self.deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() { Err("verifier evidence fetch deadline reached".to_string()) } else { Ok(left) }
+        };
+        let host = self.endpoint.address;
+        let mut stream = TcpStream::connect_timeout(&host, remaining()?).map_err(|e| e.to_string())?;
+        stream.set_write_timeout(Some(remaining()?)).map_err(|e| e.to_string())?;
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").map_err(|e| e.to_string())?;
+        let cap = max_response.saturating_add(16 * 1024);
+        let mut raw = Vec::new();
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            stream.set_read_timeout(Some(remaining()?)).map_err(|e| e.to_string())?;
+            let read = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                break;
+            }
+            if read > cap.saturating_sub(raw.len()) {
+                return Err("evidence provider response exceeds the requested limit".into());
+            }
+            raw.extend_from_slice(&buffer[..read]);
+        }
+        // HttpProvider checks the status. A 3xx is a failed provider, never a
+        // second network request, and no environment proxy or curl is used.
+        parse_response(&raw, max_response)
+    }
+}
+
 fn parse_response(raw: &[u8], max_body: usize) -> Result<HttpResponse, String> {
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or("the response has no header end")?;
     let head = std::str::from_utf8(&raw[..split]).map_err(|_| "the response header is not text")?;
@@ -276,11 +393,12 @@ fn dechunk(mut raw: &[u8]) -> Result<Vec<u8>, String> {
         if size == 0 {
             return Ok(out);
         }
-        if raw.len() < size + 2 {
-            return Err("a chunked body is truncated".into());
+        let end = size.checked_add(2).ok_or("a chunked body declares an impossible length")?;
+        if raw.len() < end || &raw[size..end] != b"\r\n" {
+            return Err("a chunked body is truncated or has an invalid delimiter".into());
         }
         out.extend_from_slice(&raw[..size]);
-        raw = &raw[size + 2..];
+        raw = &raw[end..];
     }
 }
 
@@ -1399,6 +1517,106 @@ mod tests {
             Err(ClaimFetchErrorV1::NoAdmissibleManifest { .. })
         ));
         h1.stop();
+    }
+
+    #[test]
+    fn a_verifier_routes_numeric_http_and_preserves_directory_binding_and_retention() {
+        let (server, dir, writer) = up("verifier-route");
+        let claim = claim_hex().parse().unwrap();
+        let raw = manifest();
+        publish_to_providers_v1(&claim_hex(), &raw, &chunks(), &[&writer], 1).unwrap();
+
+        let configured =
+            format!(" {}, {}/, {}, https://127.0.0.1:443, http://localhost:8088", dir.display(), server.url(), server.url());
+        let (dirs, http, rejected) = split_verifier_evidence_sources_v1(&configured);
+        assert_eq!(dirs, [dir]);
+        assert_eq!(http.len(), 1);
+        assert_eq!(rejected, 2);
+        let (historical, _, _) = split_verifier_evidence_sources_v1("./dir#name, ./relative path");
+        assert_eq!(historical, [PathBuf::from("./dir#name"), PathBuf::from("./relative path")]);
+        let many = (1..=9).map(|port| format!("http://127.0.0.1:{port}")).collect::<Vec<_>>().join(",");
+        let (_, limited, rejected) = split_verifier_evidence_sources_v1(&many);
+        assert_eq!((limited.len(), rejected), (8, 1));
+        assert!(NumericEvidenceEndpointV1::parse("http://[::1]:8088/prefix").is_ok());
+        assert!(NumericEvidenceEndpointV1::parse("http://127.0.0.1:8088/\r\nInjected").is_err());
+        assert!(NumericEvidenceEndpointV1::parse("http://user@127.0.0.1:8088").is_err());
+        let deadline = || std::time::Instant::now() + Duration::from_secs(2);
+        let limits = ManifestLimits::default();
+        let (local, _) = crate::evidence::fs::fetch_claim_material(&dirs, &claim_hex(), &roots(), &limits, claim).unwrap();
+        assert_eq!(local, chunks().concat());
+        let (network, _) = fetch_verifier_http_material_v1(&http, claim, &roots(), &limits, deadline()).unwrap();
+        assert_eq!(network, local);
+        assert!(
+            fetch_verifier_http_material_v1(&http, claim, &roots(), &ManifestLimits { max_total_bytes: 1, ..limits }, deadline())
+                .is_err()
+        );
+
+        let extended_roots = ClaimRoots { retention_deadline: raw.retention_until_daa + 2, ..roots() };
+        let refusal = fetch_verifier_http_material_v1(&http, claim, &extended_roots, &limits, deadline()).unwrap_err();
+        assert!(matches!(refusal, ClaimFetchErrorV1::NoAdmissibleManifest { offered: 1, .. }));
+        assert!(crate::evidence::fs::fetch_claim_material(&dirs, &claim_hex(), &extended_roots, &limits, claim).is_err());
+
+        let mut extended = raw;
+        extended.retention_until_daa = extended_roots.retention_deadline;
+        publish_to_providers_v1(&claim_hex(), &extended, &chunks(), &[&writer], 1).unwrap();
+        assert_eq!(fetch_verifier_http_material_v1(&http, claim, &extended_roots, &limits, deadline()).unwrap().0, local);
+        assert!(
+            fetch_verifier_http_material_v1(&http, claim, &ClaimRoots { output_root: h(99), ..extended_roots }, &limits, deadline())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_verifier_http_origin_cannot_redirect_or_outlast_the_shared_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redirect = TcpListener::bind("127.0.0.1:0").unwrap();
+        redirect.set_nonblocking(true).unwrap();
+        let destination = redirect.local_addr().unwrap();
+        let endpoint = NumericEvidenceEndpointV1::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let serve = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = [0; 512];
+            let read = stream.read(&mut request).unwrap();
+            assert!(request[..read].starts_with(b"GET "));
+            write!(stream, "HTTP/1.1 302 Found\r\nLocation: http://{destination}/steal\r\nContent-Length: 0\r\n\r\n").unwrap();
+        });
+        let provider = endpoint.open(std::time::Instant::now() + Duration::from_secs(2));
+        assert!(provider.manifest_for(&claim_hex()).unwrap_err().0.contains("HTTP 302"));
+        serve.join().unwrap();
+        assert_eq!(redirect.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = NumericEvidenceEndpointV1::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let serve = std::thread::spawn(move || {
+            let expires = std::time::Instant::now() + Duration::from_secs(2);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < expires => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            };
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_millis(30));
+                if stream.write_all(b"x").is_err() {
+                    break;
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + Duration::from_millis(180);
+        let provider = endpoint.open(deadline);
+        assert!(provider.manifest_for(&claim_hex()).is_err());
+        // A second request shares the expired absolute deadline and cannot
+        // open another socket, even while a peer keeps writing small chunks.
+        std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+        assert!(provider.manifest_for(&claim_hex()).unwrap_err().0.contains("deadline"));
+        serve.join().unwrap();
+        let impossible = format!("{:x}\r\n", usize::MAX);
+        assert!(dechunk(impossible.as_bytes()).is_err());
     }
 
     fn mixed_all<'a>(a: &'a HttpProvider, b: &'a HttpProvider, c: &'a FsProvider) -> Vec<&'a dyn EvidenceProvider> {

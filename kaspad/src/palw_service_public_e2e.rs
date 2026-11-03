@@ -555,6 +555,7 @@ pub(super) fn panel_config(chain: &Chain, dir: &std::path::Path, bond: PalwBondK
         improve_tamper: None,
         retention_dir: dir.join("empty-retention"),
         evidence_provider_dirs: vec![],
+        evidence_provider_http: vec![],
         kernel_models: vec![],
         kernel_roles: Default::default(),
         register_class: None,
