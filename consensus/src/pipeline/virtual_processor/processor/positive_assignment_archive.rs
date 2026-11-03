@@ -404,7 +404,7 @@ impl VirtualStateProcessor {
             let accepted =
                 self.load_positive_assignment_carriage_v2(parent, state, record, payload, *remaining_heap, *remaining_work)?;
             charge_archive_work_v2(remaining_work, accepted.work)?;
-            let prefix = carriage.prefix_state().map_err(|_| E::Unavailable("Assignment control pre-event state"))?;
+            let prefix = accepted.carriage.prefix_state().map_err(|_| E::Unavailable("Assignment control pre-event state"))?;
             let prefix_rows = PositiveRowsV2::new(prefix);
             let Some(NativeRowBody::AssignmentJournalHead(actual_prior)) = prefix_rows
                 .read(NativeRowKey::AssignmentJournalHead(id))
@@ -734,7 +734,7 @@ impl VirtualStateProcessor {
             view.material.custody.heap_bytes.min(view.material.native_preimages.physical.max_heap_bytes),
             view.material.custody.replay_work,
         )?;
-        let prefix = carriage.prefix_state().map_err(|_| E::Unavailable("original Open pre-event state"))?;
+        let prefix = accepted.carriage.prefix_state().map_err(|_| E::Unavailable("original Open pre-event state"))?;
         if !matches!(PositiveRowsV2::new(prefix).read(NativeRowKey::Assignment(assignment)), Ok(None)) {
             return Err(E::Invalid("original Open did not start at an absent Assignment"));
         }
