@@ -17,6 +17,7 @@ use misaka_palw_positive_contract::{
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2,
         funding_relay::{FundingRelayRegistrationBodyV2, FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2},
         funding_relay_policy::{FundingRelayAuxScanBudgetV2, FundingRelayPolicyV2},
+        funding_relay_rows::FundingRelayAuthorizationRowV2,
         journal::{AssignmentJournalEventKindV2, assignment_frame_v2},
         open_material::AssignmentOpenLimitsV2,
         rows::*,
@@ -1032,8 +1033,9 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
-    fn check_initial_assignment_relay_v2(
-        &self,
+    #[inline(never)]
+    fn install_initial_assignment_relay_v2(
+        &mut self,
         ctx: &PalwBlockContextV2,
         action: &PositiveAssignmentRawActionV2,
     ) -> Result<(), PalwStateV2Error> {
@@ -1058,6 +1060,7 @@ impl TransitionBuilder<'_> {
                 })?;
         let body = reserved.body();
         let terms = &body.terms;
+        let observed = action.relay_carrier_fees_v2().ok_or_else(missing_assignment_history)?;
         let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
             return Err(refusal("relay target needs the original Case, join or continuation owner"));
         };
@@ -1096,8 +1099,7 @@ impl TransitionBuilder<'_> {
             if registration.usage.frame_bytes != reserved.quote().encoded_bytes {
                 return Err(refusal("initial relay frame differs from the registration quote"));
             }
-            let available = action.relay_carrier_fees_v2().ok_or_else(missing_assignment_history)?.before_relay();
-            if registration.fee > available {
+            if registration.fee > observed.before_relay() {
                 return Err(refusal("initial relay cannot fund the full registration fee after mandatory burns"));
             }
 
@@ -1108,7 +1110,7 @@ impl TransitionBuilder<'_> {
         if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
             return Err(refusal("initial relay poster cannot take new work"));
         }
-        let key: &[u8; PUBKEY_BYTES] = bond.pubkey.as_slice().try_into().map_err(refusal)?;
+        let key: [u8; PUBKEY_BYTES] = bond.pubkey.as_slice().try_into().map_err(refusal)?;
         let rows = PositiveRowsV2::new(&self.state);
         let nonce = match rows.read(NativeRowKey::AssignmentNonce(terms.payer_bond)).map_err(refusal)? {
             None => AssignmentNonceV2::default(),
@@ -1123,10 +1125,31 @@ impl TransitionBuilder<'_> {
             .max_heap_bytes
             .checked_sub(reserved.quote().logical_decode_requests)
             .ok_or_else(|| refusal("initial relay signature workspace overflow"))?;
-        verify_funding_relay_package_signatures_v2(body, key, signature_heap).map_err(|error| match error {
+        verify_funding_relay_package_signatures_v2(body, &key, signature_heap).map_err(|error| match error {
             FundingRelayBodyErrorV2::Contract(why) => refusal(why),
             FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
-        })
+        })?;
+
+        let mut requests = TirNativeRequestsV1::new();
+        requests.exact_v1::<NativeRowValue>(4).map_err(PalwStateV2Error::NativeResource)?;
+        requests.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
+        let row_workspace = requests.bytes_v1();
+        if row_workspace > signature_heap {
+            return Err(refusal("initial relay row construction exceeds the native heap cap"));
+        }
+        let _lease = reserve_native_requests_v1(row_workspace).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowValue>(
+                "initial relay row construction",
+                "native owner is not armed",
+            ))
+        })?;
+        let (auth, custody) =
+            FundingRelayAuthorizationRowV2::registration_rows(body, key, action.origin(), *policy, *fees, *physical, observed)
+                .map_err(refusal)?;
+        // The enclosing raw checkpoint owns both writes. Their adjacency is
+        // consumed by the actual material writer and historical replay.
+        self.write_assignment_aux_v2(NativeRowBody::FundingRelayAuthorization(auth))?;
+        self.write_assignment_aux_v2(NativeRowBody::FundingRelayCustody(custody))
     }
 }
 
@@ -1162,8 +1185,7 @@ impl TransitionBuilder<'_> {
             }
             let rules = action.rules();
             if tx.payload.get(7) == Some(&14) {
-                self.check_initial_assignment_relay_v2(ctx, action)?;
-                return Err(refusal("native relay fee allocation and custody owners are not yet connected"));
+                return self.install_initial_assignment_relay_v2(ctx, action);
             }
             if matches!(tx.payload.get(7), Some(0..=7)) {
                 let old_limits = crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {

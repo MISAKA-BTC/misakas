@@ -37,6 +37,7 @@ All identity hashes use canonical Borsh streamed into keyed BLAKE2b-512. The pur
 | `misaka/positive/funding-relay-fees/v2/r1` | complete finite fee schedule |
 | `misaka/positive/funding-relay-quote/v2/r1` | complete quoted identities, usage, retention and fee |
 | `misaka/positive/funding-relay-charge/v2/r1` | accepted literal material reference, original quote reference, observed gross fee, mandatory burn, pre-relay collectible fee and credited tip |
+| `misaka/positive/funding-relay-reservation/v2/r1` | accepted literal material, quote and charge references, plus the original custody retention clock |
 | `misaka/positive/funding-relay-ruleset/v2/r1` | zero-extended32-byte actual fired-Params ID and metadata policy ID |
 | `misaka/positive/funding-relay-template/v2/r1` | fixed native template recipe below |
 

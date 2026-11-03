@@ -159,7 +159,7 @@ fn structural_restore_requires_complete_same_material_and_one_purpose_per_outpoi
         terms: body.terms.id(),
         relay_signature: body.relay_signature,
         material,
-        reservation: AcceptedMaterial { origin, digest: d(60) },
+        reservation: auth.pending_reservation_material(500),
         retention_until_daa: 500,
         binding: None,
     };
@@ -335,7 +335,7 @@ fn native_fixed_row_scanner_matches_all_targets_and_optional_bound_package() {
             terms: body.terms.id(),
             relay_signature: body.relay_signature,
             material,
-            reservation: AcceptedMaterial { origin, digest: d(75) },
+            reservation: auth.pending_reservation_material(500),
             retention_until_daa: 500,
             binding: Some(FundingRelayBindingV2 {
                 origin: bound_origin,

@@ -280,27 +280,29 @@ fn relay_pair(mut terms: FundingRelayTermsV2) -> (FundingRelayAuthorizationRowV2
     body.purpose_signature = *sig.as_ref();
     let origin = row_origin(NativeHash64([45; 64]), 50);
     let material = AcceptedMaterial { origin, digest: body.material_id() };
+    let auth = FundingRelayAuthorizationRowV2 {
+        terms,
+        payer_key: key,
+        purpose_signature: body.purpose_signature,
+        origin,
+        material,
+        metadata_quote: AcceptedMaterial { origin, digest: quote.id() },
+        metadata_charge: AcceptedMaterial { origin, digest: d(47) },
+        policy,
+        fees,
+        physical,
+        quote,
+    };
+    let reservation = auth.pending_reservation_material(terms.custody_until_daa);
     (
-        FundingRelayAuthorizationRowV2 {
-            terms,
-            payer_key: key,
-            purpose_signature: body.purpose_signature,
-            origin,
-            material,
-            metadata_quote: AcceptedMaterial { origin, digest: quote.id() },
-            metadata_charge: AcceptedMaterial { origin, digest: d(47) },
-            policy,
-            fees,
-            physical,
-            quote,
-        },
+        auth,
         FundingRelayCustodyRowV2 {
             funding_outpoint: terms.funding_outpoint,
             purpose: terms.funding_purpose,
             terms: terms.id(),
             relay_signature: body.relay_signature,
             material,
-            reservation: AcceptedMaterial { origin, digest: d(48) },
+            reservation,
             retention_until_daa: terms.custody_until_daa,
             binding: None,
         },
@@ -339,6 +341,9 @@ fn two_fixed_rows_retain_literal_signature_package_without_future_binding() {
     }
     let mut changed = custody.clone();
     changed.relay_signature[0] ^= 1;
+    assert!(changed.check_pair(&auth).is_err());
+    let mut changed = custody.clone();
+    changed.reservation.digest = d(48);
     assert!(changed.check_pair(&auth).is_err());
     let mut changed = auth.clone();
     changed.purpose_signature[0] ^= 1;
@@ -559,6 +564,42 @@ fn metadata_charge_requires_exact_debit_from_the_observed_collectible_fee() {
 
     let different_prior_fee = FundingRelayCarrierFeesV2::new(gross, mandatory + 1, before_relay, 13).unwrap();
     assert_ne!(charged.digest, auth.carrier_charge_material(different_prior_fee).unwrap().digest);
+}
+
+#[test]
+fn initial_registration_pair_requires_full_debit_and_binds_the_original_slot() {
+    let (fixture, custody) = relay_pair(terms());
+    let mut literal = body(fixture.terms);
+    literal.purpose_signature = fixture.purpose_signature;
+    literal.relay_signature = custody.relay_signature;
+    let quote =
+        fixture.fees.registration_quote(&fixture.policy, &fixture.physical, &literal.terms, fixture.origin.accepted_daa).unwrap();
+    let available = quote.fee + 7;
+    let build = |origin, credited| {
+        FundingRelayAuthorizationRowV2::registration_rows(
+            &literal,
+            fixture.payer_key,
+            origin,
+            fixture.policy,
+            fixture.fees,
+            fixture.physical,
+            FundingRelayCarrierFeesV2::new(available + 13, 11, available, credited).unwrap(),
+        )
+    };
+    for incorrect_tip in [6, 8, available] {
+        assert!(build(fixture.origin, incorrect_tip).is_err());
+    }
+    let (auth, pending) = build(fixture.origin, 7).unwrap();
+    assert_eq!(auth.quote, quote);
+    assert_eq!(auth.material.digest, literal.material_id());
+    assert_eq!(pending.retention_until_daa, literal.terms.custody_until_daa);
+    assert!(pending.binding.is_none());
+    pending.check_pair(&auth).unwrap();
+    let other_branch = AcceptedOrigin { accepting_block: NativeHash64([91; 64]), ..fixture.origin };
+    let (other_auth, other_pending) = build(other_branch, 7).unwrap();
+    assert_ne!(other_pending.reservation, pending.reservation);
+    assert!(pending.check_pair(&other_auth).is_err());
+    assert!(build(AcceptedOrigin { event_ordinal: 1, ..fixture.origin }, 7).is_err());
 }
 
 #[test]

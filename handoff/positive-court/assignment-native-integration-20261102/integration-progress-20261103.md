@@ -873,3 +873,29 @@ an inconsistent reward or reserve, while charging merely for a decoded
 op14 would burn fees for refused registrations. The accepted-prefix decision
 and reward accounting must meet before the shared fee sink publishes a
 debit, on both the candidate and virtual/template paths.
+
+## Initial relay row writer conditional on the observed debit
+
+The native raw Assignment executor now has the initial op14 row-writing
+branch. It uses the current-prefix payer bond/key, nonce and occupancy checks,
+verifies both signatures, and requires the original full quote to match the
+observed debit. Under the raw checkpoint it writes the fresh authorization
+and unbound custody rows consecutively. The custody reference commits to the
+literal package, quote, actual charge and original retention clock. These
+rows occupy the same pending slots checked on later registrations. The
+existing UTXO commit must stage their material and measured quota in the
+same batch as the delta and acceptance record.
+
+The row construction is still conditional. The native fee sink currently
+records the pre-relay collectible amount as the entire credited tip, so no
+positive relay charge or live registration is produced. The shared fee
+allocator, exact-repeat/no-effect outcome, F and R2 binding, retirement,
+and durable current-slot recovery remain open. The contract test exercises
+the row pair with an exact fee partition and rejects zero, a one-sompi
+shortfall, an overcharge, and substituted origin/reservation material.
+
+The 11 contract tests passed. Contract, Core and Consensus library Clippy
+passed with warnings denied. The Core relay integration target passed strict
+Clippy. The native fold and the combined RocksDB/UTXO commit were not run
+with an actually debited carrier. The exact commands and log hashes are
+retained in the relay-pending-writer verification archive.

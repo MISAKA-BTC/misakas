@@ -73,17 +73,85 @@ pub struct FundingRelayAuthorizationRowV2 {
     pub quote: FundingRelayMoneyQuoteV2,
 }
 impl FundingRelayAuthorizationRowV2 {
+    /// Assemble the pending row pair for the canonical writer. The caller
+    /// supplies actual acceptance, eligibility and fee-allocation evidence.
+    pub fn registration_rows(
+        body: &FundingRelayRegistrationBodyV2,
+        payer_key: [u8; PUBKEY_BYTES],
+        origin: AcceptedOrigin,
+        policy: FundingRelayPolicyV2,
+        fees: FundingRelayFeeScheduleV2,
+        physical: FundingRelayPhysicalProfileV2,
+        observed: FundingRelayCarrierFeesV2,
+    ) -> Result<(Self, FundingRelayCustodyRowV2), ContractError> {
+        if origin.event_ordinal != 0 {
+            return Err(ContractError::NonCanonical);
+        }
+        let terms = body.terms;
+        let quote = fees.registration_quote(&policy, &physical, &terms, origin.accepted_daa)?;
+        let material = AcceptedMaterial { origin, digest: body.material_id() };
+        let metadata_quote = AcceptedMaterial { origin, digest: quote.id() };
+        let metadata_charge = Self::registration_charge(material, metadata_quote, quote.fee, observed)?;
+        let auth = Self {
+            terms,
+            payer_key,
+            purpose_signature: body.purpose_signature,
+            origin,
+            material,
+            metadata_quote,
+            metadata_charge,
+            policy,
+            fees,
+            physical,
+            quote,
+        };
+        let retention_until_daa = terms.custody_until_daa;
+        let custody = FundingRelayCustodyRowV2 {
+            funding_outpoint: terms.funding_outpoint,
+            purpose: terms.funding_purpose,
+            terms: terms.id(),
+            relay_signature: body.relay_signature,
+            material,
+            reservation: auth.pending_reservation_material(retention_until_daa),
+            retention_until_daa,
+            binding: None,
+        };
+        custody.check_pair(&auth)?;
+        Ok((auth, custody))
+    }
+
     /// Rebuild the charge reference from the actual fee partition. The
     /// material binds this charge to one accepting origin and one literal
     /// package; the original quote fixes the full registration debit.
     pub fn carrier_charge_material(&self, carrier_fees: FundingRelayCarrierFeesV2) -> Result<AcceptedMaterial, ContractError> {
-        if self.quote.fee == 0 || carrier_fees.relay_charge() != self.quote.fee {
+        Self::registration_charge(self.material, self.metadata_quote, self.quote.fee, carrier_fees)
+    }
+
+    fn registration_charge(
+        material: AcceptedMaterial,
+        quote: AcceptedMaterial,
+        fee: u64,
+        carrier_fees: FundingRelayCarrierFeesV2,
+    ) -> Result<AcceptedMaterial, ContractError> {
+        if fee == 0 || carrier_fees.relay_charge() != fee {
             return Err(ContractError::Budget);
         }
         Ok(AcceptedMaterial {
-            origin: self.origin,
-            digest: hash(b"misaka/positive/funding-relay-charge/v2/r1", &(self.material, self.metadata_quote, carrier_fees)),
+            origin: material.origin,
+            digest: hash(b"misaka/positive/funding-relay-charge/v2/r1", &(material, quote, carrier_fees)),
         })
+    }
+
+    /// Identity of the initial rooted slot and its fixed reservation. A later
+    /// account binding has an independent reservation reference.
+    pub fn pending_reservation_material(&self, retention_until_daa: u64) -> AcceptedMaterial {
+        AcceptedMaterial {
+            origin: self.origin,
+            digest: hash(
+                b"misaka/positive/funding-relay-reservation/v2/r1",
+                &(self.material, self.metadata_quote, self.metadata_charge, retention_until_daa),
+            ),
+        }
     }
 
     pub fn validate_shape(&self) -> Result<(), ContractError> {
@@ -155,6 +223,7 @@ impl FundingRelayCustodyRowV2 {
             || self.terms != auth.terms.id()
             || self.material != auth.material
             || self.retention_until_daa < auth.terms.custody_until_daa
+            || self.reservation != auth.pending_reservation_material(self.retention_until_daa)
         {
             return Err(ContractError::Identity);
         }

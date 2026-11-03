@@ -1206,5 +1206,29 @@
     "stored_sha256": "d7a60c88e1b248530460a445f73842cd73dc1839c31d4c95b53d9d451b83dd47",
     "raw_bytes": 53248,
     "stored_bytes": 4273
+  },
+  {
+    "raw_name": "relay-pending-writer-clippy.log",
+    "stored_name": "relay-pending-writer-clippy.log.gz",
+    "raw_sha256": "e081381a2e6224bf156f3ddb6a7f054f78dac29776674ff3577178996f43b2e9",
+    "stored_sha256": "1ed1b4b8590d2ea62b764f21e4174d684af20f616882adeb1c25c0460d96235e",
+    "raw_bytes": 341860,
+    "stored_bytes": 23675
+  },
+  {
+    "raw_name": "relay-pending-writer-contract.log",
+    "stored_name": "relay-pending-writer-contract.log.gz",
+    "raw_sha256": "81be8808c2e7339f0a6e5a1abc002c06d1afa8cca104154a12323b9c36632697",
+    "stored_sha256": "2634f811d19544479f81cf468e62451b2fb34ebb7f2df182c82c2a1bcc62df49",
+    "raw_bytes": 53334,
+    "stored_bytes": 4296
+  },
+  {
+    "raw_name": "relay-pending-writer-core-test-check.log",
+    "stored_name": "relay-pending-writer-core-test-check.log.gz",
+    "raw_sha256": "7ae447c09cb67d29ad12bb21f7cefccaba6b56d821078832a85fcafda821f0a5",
+    "stored_sha256": "e156c580d6fcb223201da94fba3d7e137f90c6d5b0409718c84714372080626f",
+    "raw_bytes": 341030,
+    "stored_bytes": 23630
   }
 ]
