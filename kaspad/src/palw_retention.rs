@@ -49,6 +49,9 @@ const PALW_RETENTION_PARTIAL_HORIZON: Duration = Duration::from_secs(3600);
 const PALW_RETENTION_PERIOD: Duration = Duration::from_secs(60);
 /// The free-prompt capture's envelope magic (`palw_fp_capture_encode_v1`).
 const FP_CAPTURE_MAGIC: &[u8; 4] = b"FPC1";
+const ATTEMPT_PRESSURE_GRACE_MAGIC: &[u8; 4] = b"APG1";
+const ATTEMPT_PRESSURE_GRACE_EXTENSION: &str = "attempt-pressure";
+pub(crate) const ATTEMPT_PRESSURE_GRACE_BYTES: usize = 4 + 64 + 64 + 40;
 
 // Lead and rider publications stay registered through their in-process handoff.
 // The guard can cross asynchronous submission without holding the mutex.
@@ -253,6 +256,91 @@ impl RetainedFileV1 {
     }
 }
 
+fn attempt_capture_identity(meta: &std::fs::Metadata) -> Option<[u8; 40]> {
+    #[cfg(unix)]
+    let (dev, ino, ctime, ctime_ns) = RetainedFileV1::version(meta)?;
+    #[cfg(unix)]
+    let identity = [meta.len(), dev, ino, ctime as u64, ctime_ns as u64];
+    #[cfg(not(unix))]
+    let identity = {
+        let (created, modified) = RetainedFileV1::version(meta)?;
+        let epoch = std::time::SystemTime::UNIX_EPOCH;
+        let created = created.duration_since(epoch).ok()?;
+        let modified = modified.duration_since(epoch).ok()?;
+        [meta.len(), created.as_secs(), u64::from(created.subsec_nanos()), modified.as_secs(), u64::from(modified.subsec_nanos())]
+    };
+    let mut bytes = [0u8; 40];
+    for (out, value) in bytes.chunks_exact_mut(8).zip(identity) {
+        out.copy_from_slice(&value.to_le_bytes());
+    }
+    Some(bytes)
+}
+
+pub(crate) fn stage_attempt_pressure_grace_v1(
+    material: &Path,
+    publication: &AttemptPublicationGuard,
+    carrier: Hash64,
+    material_bytes: u64,
+) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(material)?;
+    let claim = material.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.parse::<Hash64>().ok());
+    if !meta.is_file()
+        || meta.len() != material_bytes
+        || material_bytes == 0
+        || carrier == Hash64::default()
+        || material.extension().is_none_or(|ext| ext != "material")
+        || claim != Some(publication.claim())
+    {
+        return Err(std::io::Error::other("the model attempt capture or carrier is not ready for publication"));
+    }
+    let identity =
+        attempt_capture_identity(&meta).ok_or_else(|| std::io::Error::other("the attempt capture identity is unavailable"))?;
+    let mut frame = [0; ATTEMPT_PRESSURE_GRACE_BYTES];
+    frame[..4].copy_from_slice(ATTEMPT_PRESSURE_GRACE_MAGIC);
+    frame[4..68].copy_from_slice(&publication.claim().as_bytes());
+    frame[68..132].copy_from_slice(&carrier.as_bytes());
+    frame[132..].copy_from_slice(&identity);
+    publish_retained_file(&material.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION), &frame, RetainedPublication::DurableReplace)
+        .map(|_| ())
+}
+
+// This is a local pressure grace, never an acceptance witness. A missing or
+// damaged sidecar supplies no grace. The claim's native obligation is checked
+// separately, and the marker cannot refresh the material's original age.
+fn attempt_pressure_grace_v1(row: &RetainedClaimV1, now: std::time::SystemTime, horizon: Duration) -> bool {
+    use std::io::Read;
+    if row.kind != RetainedKindV1::Attempt || row.age.is_none_or(|age| age >= horizon) {
+        return false;
+    }
+    let Some(material) = row.files.iter().find(|file| file.path.extension().is_some_and(|ext| ext == "material")) else {
+        return false;
+    };
+    let path = material.path.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let Ok(mut file) = options.open(path) else { return false };
+    let mut frame = [0; ATTEMPT_PRESSURE_GRACE_BYTES];
+    if !file.metadata().is_ok_and(|meta| meta.is_file() && meta.len() == frame.len() as u64)
+        || file.read_exact(&mut frame).is_err()
+        || !file.read(&mut [0]).is_ok_and(|n| n == 0)
+        || &frame[..4] != ATTEMPT_PRESSURE_GRACE_MAGIC
+        || frame[4..68] != row.claim.as_bytes()
+        || frame[68..132].iter().all(|&byte| byte == 0)
+    {
+        return false;
+    }
+    std::fs::symlink_metadata(&material.path).is_ok_and(|meta| {
+        material.matches(&meta)
+            && attempt_capture_identity(&meta).is_some_and(|identity| frame[132..] == identity)
+            && meta.modified().ok().and_then(|at| now.duration_since(at).ok()).is_some_and(|age| age < horizon)
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RetainedKindV1 {
     /// This node's own attempt capture: re-made by replaying the block's job when a court asks.
@@ -299,7 +387,7 @@ pub(crate) fn retention_prune_plan_v1(
 fn retention_prune_plan_with_material_v1(
     claims: &[RetainedClaimV1],
     chain: impl Fn(&RetainedClaimV1) -> Option<RetainedChainViewV1>,
-    material_owed: impl Fn(&Hash64) -> Result<bool, String>,
+    material_owed: impl Fn(&RetainedClaimV1) -> Result<bool, String>,
     attempt_horizon: Duration,
     free: u64,
     reserve: u64,
@@ -308,7 +396,7 @@ fn retention_prune_plan_with_material_v1(
     let mut pressure_candidates = Vec::new();
     let mut freed = 0u64;
     for (i, c) in claims.iter().enumerate() {
-        if !matches!(material_owed(&c.claim), Ok(false)) {
+        if !matches!(material_owed(c), Ok(false)) {
             continue;
         }
         let view = chain(c);
@@ -359,7 +447,7 @@ fn retention_prune_plan_with_material_v1(
 fn prune_retained_claims_v1(
     claims: &[RetainedClaimV1],
     doomed: Vec<usize>,
-    material_owed: impl Fn(&Hash64) -> Result<bool, String>,
+    material_owed: impl Fn(&RetainedClaimV1) -> Result<bool, String>,
 ) -> (usize, u64) {
     let mut removed = 0usize;
     let mut bytes = 0u64;
@@ -368,7 +456,7 @@ fn prune_retained_claims_v1(
         let c = &claims[i];
         // Keep registration serialized with the final check and unlink.
         let active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
-        if active.contains_key(&c.claim) || !matches!(material_owed(&c.claim), Ok(false)) {
+        if active.contains_key(&c.claim) || !matches!(material_owed(c), Ok(false)) {
             continue;
         }
         // A publication can replace a file and release its guard between the
@@ -387,6 +475,15 @@ fn prune_retained_claims_v1(
                 Ok(()) => {
                     removed_file = true;
                     bytes = bytes.saturating_add(file.bytes);
+                    if c.kind != RetainedKindV1::Foreign && file.path.extension().is_some_and(|ext| ext == "material") {
+                        let marker = file.path.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+                        if let Ok(meta) = std::fs::symlink_metadata(&marker)
+                            && meta.is_file()
+                            && std::fs::remove_file(marker).is_ok()
+                        {
+                            bytes = bytes.saturating_add(meta.len());
+                        }
+                    }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                 Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", file.path.display()),
@@ -418,6 +515,16 @@ fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<RetainedCla
                 if age.is_none_or(|a| a >= PALW_RETENTION_PARTIAL_HORIZON) {
                     let claim = name.split_once('.').and_then(|(stem, _)| stem.parse().ok());
                     abandoned.push((claim, RetainedFileV1::new(path, &meta)));
+                }
+                continue;
+            }
+            if !foreign
+                && path.extension().is_some_and(|ext| ext == ATTEMPT_PRESSURE_GRACE_EXTENSION)
+                && let Some(claim) = path.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.parse::<Hash64>().ok())
+            {
+                let material = path.with_extension("material");
+                if std::fs::symlink_metadata(material).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+                    abandoned.push((Some(claim), RetainedFileV1::new(path, &meta)));
                 }
                 continue;
             }
@@ -583,20 +690,25 @@ impl PalwRetentionJanitor {
                 phase: state.phase,
             })
         };
-        let owed = |claim: &Hash64| {
-            if ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(claim) {
+        let owed = |row: &RetainedClaimV1| {
+            if ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(&row.claim)
+                || (free < reserve && attempt_pressure_grace_v1(row, now, self.attempt_horizon))
+            {
                 return Ok(true);
             }
-            session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
+            session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(row.claim))
         };
         let (doomed, _) = retention_prune_plan_with_material_v1(&claims, chain, owed, self.attempt_horizon, free, reserve);
-        let (removed, bytes) = prune_retained_claims_v1(&claims, doomed, |claim| {
+        let (removed, bytes) = prune_retained_claims_v1(&claims, doomed, |row| {
+            if free < reserve && attempt_pressure_grace_v1(row, std::time::SystemTime::now(), self.attempt_horizon) {
+                return Ok(true);
+            }
             // Planning can race a new income hold or DA obligation. The
             // resident oracle checks both rules at the current branch and DAA.
             self.consensus_manager
                 .consensus()
                 .unguarded_session()
-                .with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
+                .with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(row.claim))
         });
         (removed + removed_abandoned, bytes, reserve.saturating_sub(free.saturating_add(bytes)))
     }
@@ -706,11 +818,11 @@ mod tests {
             std::fs::write(&path, vec![0; claim.bytes as usize]).unwrap();
             claim.files.push(RetainedFileV1::new(path.clone(), &std::fs::metadata(path).unwrap()));
         }
-        let plan = |owed: fn(&Hash64) -> Result<bool, String>| {
+        let plan = |owed: fn(&RetainedClaimV1) -> Result<bool, String>| {
             retention_prune_plan_with_material_v1(&claims, |_| None, owed, 60 * MIN, 0, 100)
         };
-        let unavailable = |_: &Hash64| Err("accepted snapshot unavailable".into());
-        let unowed = |_: &Hash64| Ok(false);
+        let unavailable = |_: &RetainedClaimV1| Err("accepted snapshot unavailable".into());
+        let unowed = |_: &RetainedClaimV1| Ok(false);
         assert_eq!(plan(unavailable), (vec![], 100));
 
         let (doomed, short) = plan(unowed);
@@ -719,7 +831,7 @@ mod tests {
         assert!(claims.iter().all(|claim| claim.files[0].path.is_file()));
 
         let (doomed, _) = plan(unowed);
-        let newly_owed = |claim: &Hash64| Ok(*claim == claims[0].claim);
+        let newly_owed = |row: &RetainedClaimV1| Ok(row.claim == claims[0].claim);
         assert_eq!(prune_retained_claims_v1(&claims, doomed, newly_owed), (2, 50));
         assert!(claims[0].files[0].path.is_file());
         assert_eq!(prune_retained_claims_v1(&claims, vec![0], unowed), (1, 40));
@@ -745,11 +857,98 @@ mod tests {
     }
 
     #[test]
+    fn durable_attempt_pressure_grace_survives_rescan_but_never_extends_the_existing_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Hash64::from_u64_word(220);
+        let carrier = Hash64::from_u64_word(221);
+        let material = dir.path().join(format!("{id}.material"));
+        let marker = material.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+        publish_retained_file(&material, b"the exact capture", RetainedPublication::DurableReplace).unwrap();
+        let written = std::fs::metadata(&material).unwrap().modified().unwrap();
+        let horizon = 60 * MIN;
+        let early = written + 59 * MIN;
+        let plan = |rows: &[RetainedClaimV1], now, free, reserve| {
+            retention_prune_plan_with_material_v1(
+                rows,
+                |_| None,
+                |row| Ok(free < reserve && attempt_pressure_grace_v1(row, now, horizon)),
+                horizon,
+                free,
+                reserve,
+            )
+        };
+        let (before, _) = scan_retention_v1(dir.path(), early);
+        let (doomed, _) = plan(&before, early, 0, 1);
+        assert_eq!(doomed, vec![0], "legacy or unmarked captures keep their old pressure behavior");
+
+        let pin = pin_attempt_publication(id);
+        assert!(stage_attempt_pressure_grace_v1(&material, &pin, carrier, 1).is_err());
+        assert!(!marker.exists());
+        stage_attempt_pressure_grace_v1(&material, &pin, carrier, 17).unwrap();
+        drop(pin);
+        assert!(!attempt_publication_is_pinned(id));
+        assert_eq!(std::fs::metadata(&marker).unwrap().len(), ATTEMPT_PRESSURE_GRACE_BYTES as u64);
+        assert_eq!(
+            prune_retained_claims_v1(&before, doomed, |row| Ok(attempt_pressure_grace_v1(row, early, horizon))),
+            (0, 0),
+            "a pressure plan predating the marker cannot delete its capture"
+        );
+        let (reopened, _) = scan_retention_v1(dir.path(), early);
+        assert_eq!(plan(&reopened, early, 0, 1), (vec![], 1));
+
+        let expired = written + horizon;
+        let (aged, _) = scan_retention_v1(dir.path(), expired);
+        assert_eq!(plan(&aged, expired, 0, 0), (vec![0], 0), "the normal time rule is unchanged");
+        assert!(!attempt_pressure_grace_v1(&aged[0], expired, horizon));
+        let answer = material.with_extension("answer");
+        std::fs::write(&answer, b"fresh answer cache").unwrap();
+        std::fs::File::open(&answer).unwrap().set_times(std::fs::FileTimes::new().set_modified(early)).unwrap();
+        let (with_answer, _) = scan_retention_v1(dir.path(), expired);
+        assert_eq!(plan(&with_answer, expired, 0, 0), (vec![], 0), "the normal youngest-file age is unchanged");
+        let (doomed, _) = plan(&with_answer, expired, 0, 1);
+        assert_eq!(doomed, vec![0], "rewriting an answer does not restart the capture's pressure grace");
+        assert_eq!(prune_retained_claims_v1(&with_answer, doomed, |_| Ok(false)).0, 1);
+        assert!(!material.exists() && !marker.exists() && !answer.exists());
+    }
+
+    #[test]
+    fn invalid_or_unreadable_attempt_grace_does_not_pin_a_capture_and_orphans_are_reclaimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Hash64::from_u64_word(230);
+        let carrier = Hash64::from_u64_word(231);
+        let material = dir.path().join(format!("{id}.material"));
+        let marker = material.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+        std::fs::write(&material, b"old").unwrap();
+        let pin = pin_attempt_publication(id);
+        std::fs::create_dir(&marker).unwrap();
+        let now = std::time::SystemTime::now();
+        let (rows, _) = scan_retention_v1(dir.path(), now);
+        assert!(!attempt_pressure_grace_v1(&rows[0], now, MIN));
+        assert!(stage_attempt_pressure_grace_v1(&material, &pin, carrier, 3).is_err());
+        std::fs::remove_dir(&marker).unwrap();
+        std::fs::write(&marker, [0; ATTEMPT_PRESSURE_GRACE_BYTES]).unwrap();
+        assert!(!attempt_pressure_grace_v1(&rows[0], now, MIN));
+        stage_attempt_pressure_grace_v1(&material, &pin, carrier, 3).unwrap();
+        publish_retained_file(&material, b"new", RetainedPublication::DurableReplace).unwrap();
+        let later = std::time::SystemTime::now();
+        let (replaced, _) = scan_retention_v1(dir.path(), later);
+        assert!(!attempt_pressure_grace_v1(&replaced[0], later, MIN), "a replacement does not inherit the old marker");
+        std::fs::remove_file(&material).unwrap();
+        let (rows, orphans) = scan_retention_v1(dir.path(), later);
+        assert!(rows.is_empty());
+        assert_eq!(orphans.len(), 1);
+        assert!(!orphans[0].1.unlink_if_current(orphans[0].0), "an active publication owns its marker");
+        drop(pin);
+        assert!(orphans[0].1.unlink_if_current(orphans[0].0));
+        assert!(!marker.exists());
+    }
+
+    #[test]
     fn pressure_plan_can_reclaim_other_material_while_a_lead_is_publishing() {
         let active = claim(16, RetainedKindV1::Attempt, 40, 90);
         let other = claim(17, RetainedKindV1::Attempt, 50, 30);
         let _pin = pin_attempt_publication(active.claim);
-        let owed = |claim: &Hash64| Ok(ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(claim));
+        let owed = |row: &RetainedClaimV1| Ok(ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(&row.claim));
         assert_eq!(retention_prune_plan_with_material_v1(&[active, other], |_| None, owed, 60 * MIN, 0, 40), (vec![1], 0));
     }
 
@@ -770,7 +969,7 @@ mod tests {
             chain_reads.set(chain_reads.get() + 1);
             None
         };
-        let owed = |_: &Hash64| {
+        let owed = |_: &RetainedClaimV1| {
             obligation_reads.set(obligation_reads.get() + 1);
             Ok(false)
         };
@@ -826,7 +1025,7 @@ mod tests {
         let (claims, _) = scan_retention_v1(dir.path(), std::time::SystemTime::now());
         assert_eq!(claims.len(), 2);
         assert!(claims.iter().all(|row| row.claim == claim && row.kind == RetainedKindV1::Foreign));
-        let needed = |id: &Hash64| Ok(*id == claim);
+        let needed = |row: &RetainedClaimV1| Ok(row.claim == claim);
         assert_eq!(retention_prune_plan_with_material_v1(&claims, |_| None, needed, 60 * MIN, 0, 1), (vec![], 1));
         let (doomed, _) = retention_prune_plan_v1(&claims, |_| None, 60 * MIN, 0, u64::MAX);
         assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Ok(false)).0, 2);

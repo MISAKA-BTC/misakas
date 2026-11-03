@@ -1054,19 +1054,25 @@ impl PalwProducerService {
         // written — a refusal here means no block promising them is published, so no liability is
         // taken on that the node has no room to keep. The reservation covers the write; once the
         // file exists the scan counts it.
-        let storage = kaspa_utils::storage_budget::reserve_global(
-            kaspa_utils::storage_budget::StorageCategory::PalwRetained,
-            material.len() as u64,
-        )
-        .map_err(|refusal| format!("not retaining {}: {refusal}", path.display()))?;
+        let _storage = self.reserve_attempt_retention_write_v1(&path, material.len() as u64)?;
+        persist_attempt_material(&path, material).map_err(|e| format!("cannot retain {}: {e}", path.display()))
+    }
+
+    fn reserve_attempt_retention_write_v1(
+        &self,
+        path: &std::path::Path,
+        bytes: u64,
+    ) -> Result<Option<kaspa_utils::storage_budget::StorageReservation>, String> {
+        let storage = kaspa_utils::storage_budget::reserve_global(kaspa_utils::storage_budget::StorageCategory::PalwRetained, bytes)
+            .map_err(|refusal| format!("not retaining {}: {refusal}", path.display()))?;
         if storage.is_none() {
             let (free, total) = crate::palw_retention::volume_space_v1(&self.config.retention_dir)
                 .ok_or_else(|| format!("cannot measure the retention volume for {}", path.display()))?;
-            if !unbudgeted_attempt_storage_available(free, total, material.len() as u64) {
+            if !unbudgeted_attempt_storage_available(free, total, bytes) {
                 return Err(format!("not retaining {}: the capture would consume the retention volume reserve", path.display()));
             }
         }
-        persist_attempt_material(&path, material).map_err(|e| format!("cannot retain {}: {e}", path.display()))
+        Ok(storage)
     }
 
     fn verification_key(&self) -> Vec<u8> {
@@ -2523,6 +2529,21 @@ impl PalwProducerService {
             // block submitted into it waits forever on its validation result — the AsyncRuntime's
             // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
             // 97 s draw finished after SIGINT). So the submit and the announcement both yield to it.
+            if !facts.is_base_class
+                && !self.config.attempt_retention.is_zero()
+                && self.consensus_config.params.palw_model_panel_one_retention_v1_fence().is_some()
+            {
+                use crate::palw_retention::{ATTEMPT_PRESSURE_GRACE_BYTES, stage_attempt_pressure_grace_v1};
+                let carried = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&block.header.palw_commitment)
+                    .map_err(|e| format!("cannot identify the model attempt before publication: {e}"))?;
+                if carried.attempt != attempt || attempt_id_v2(&carried.attempt) != message {
+                    return Err("the model carrier does not bind its retained attempt".into());
+                }
+                let path = palw_retained_material_path(&self.config.retention_dir, &message);
+                let _storage = self.reserve_attempt_retention_write_v1(&path, ATTEMPT_PRESSURE_GRACE_BYTES as u64)?;
+                stage_attempt_pressure_grace_v1(&path, &_retention_pin, hash, material.len() as u64)
+                    .map_err(|e| format!("cannot retain the local pressure grace for model attempt {message}: {e}"))?;
+            }
             self.checked_producer_publish_v1(session, context_epoch).await?;
             require_fresh_routing_v2()?;
             if !facts.is_base_class {
