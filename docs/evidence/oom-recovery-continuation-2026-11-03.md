@@ -321,3 +321,16 @@ in the same keyless loopback test. Its receipt SHA256 is
 `a5da97d888794eb79efefd0e42449e2ecdf63ed91d2e3f63c746b75cb63d9bad`.
 The existing G14 rollout, independent arithmetic adjudication and mainnet
 load qualification are tracked as separate outcomes.
+
+The count-based foreign cache sweep now repeats the accepted-chain
+retention read immediately before unlink. An unavailable or changed read
+preserves the file. A healthy reclaimable file can still be collected.
+The regression against the previous code failed on a changed obligation;
+the updated function passed the three scoped retention tests. The fix is
+in the integration branch and has yet to run on a live verifier.
+
+The existing Positive Court A0 integration already carries the separate
+Panel and model-free Node checker. Its isolated three-process Pythia
+short job completed 213,298 relations with model access denied to the
+Node. Its native dispatch and the exact T12 Qwen A16 path remain open.
+That implementation is the reference for the remaining G3–G7 work.
