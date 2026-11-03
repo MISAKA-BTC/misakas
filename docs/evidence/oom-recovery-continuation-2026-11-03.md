@@ -628,3 +628,23 @@ The paired B0 and relay reads at DAA 19,597 still showed zero Panel
 assignments and receipts. The public REST and WebSocket matched the
 configured ready relay. The arithmetic comparison queue remained
 live below its local 12 GiB start floor.
+
+## Capture protection during lead submission — 04:56 UTC
+
+Commit `4de7e61a1` registers the lead claim before persisting its
+capture and keeps that registration through local submission and
+announcement. The retention janitor checks registration immediately
+before unlink, in the same critical section as deletion. Each
+publication guard releases its own registration on exit. A pressure
+prune with a plan made before publication deleted the test capture
+under the previous function. The updated scoped harness passed nine
+tests and kept the material until both guards were released.
+Log SHA256 is `5b1326f7cb8172b82244b0dcec79b1bd6cf047ad72e9ec6aee70c5e123f2b6e5`. Node default/EVM test
+metadata compiled on the updated source. Live deployment and
+the durable post-submit and rider retention lifecycles remain open.
+
+B0 and its relay matched at DAA 19,598, as did the separate RPC
+tunnel on 113 at the same sampling point. B1 remained unsynced at
+19,389 and the 113 primary remained unsynced at 19,224. The later
+public REST/WebSocket sample was available at DAA 19,598 with
+zero relay receipt blocks.
