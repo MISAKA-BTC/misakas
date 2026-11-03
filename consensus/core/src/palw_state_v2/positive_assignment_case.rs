@@ -1464,8 +1464,117 @@ impl NativeAssignedCourtV2 {
             state: CoverageState::Checking,
             last_event: origin,
         };
-        self.consume_witness_record_reserve_v2(material, &case, (prior_journal_bytes, prior_events), retained, record_len)?;
+        self.consume_court_transport_reserve_v2(material, &case, (prior_journal_bytes, prior_events), retained, record_len)?;
         Ok(AssignedWitnessOpeningV2 { case, witness: witness_row, coverage })
+    }
+}
+
+struct AssignedFrameEventV2 {
+    case: CaseRow,
+    coverage: misaka_palw_positive_contract::rows::CoverageRow,
+    receipt: Option<misaka_palw_positive_contract::rows::PacketReceiptRow>,
+}
+
+impl NativeAssignedCourtV2 {
+    fn project_exact_frame_v2(
+        &mut self,
+        state: &PalwChainStateV2,
+        material: &AssignmentAdmissionMaterialV2,
+        prior: &CaseRow,
+        replayed: &NativeAssignedCourtAdvanceV2,
+        (origin, frame_bytes): (AcceptedOrigin, &[u8]),
+        (prior_journal_bytes, prior_events, body_bytes): (u64, u64, u64),
+    ) -> Result<AssignedFrameEventV2, PalwStateV2Error> {
+        use crate::{
+            palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2,
+            palw_positive_common_replay_v2::{LocalCourtErrorV2, LocalCourtOutcomeV2},
+        };
+        use misaka_palw_positive_contract::{
+            messages::{ClaimStatus, WitnessStatus},
+            rows::{CoverageState, PacketReceiptRow},
+            wire::EvidenceFrame,
+        };
+
+        let frame = EvidenceFrame::decode(frame_bytes, material.positive_policy.max_frame_bytes).map_err(refuse)?;
+        let header = frame.header();
+        let before = replayed.before;
+        let after = replayed.after;
+        let successful = matches!(replayed.outcome, LocalCourtOutcomeV2::FrameChecked);
+        let Some(active) = before.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) else {
+            return Err(refuse("exact frame has no current checking attempt"));
+        };
+        let Some(attempt) = after.last_attempt else {
+            return Err(refuse("exact frame lost its current attempt"));
+        };
+        let advanced = if successful { before.cursor.checked_add(1) } else { Some(before.cursor) };
+        let signed = frame.signed_wire_bytes();
+        if (!successful && !matches!(replayed.outcome, LocalCourtOutcomeV2::SemanticError(LocalCourtErrorV2::Check(_))))
+            || prior.status != ClaimStatus::Pending
+            || before.status != after.status
+            || after.status != ClaimStatus::Pending
+            || before.attempts != after.attempts
+            || before.charged_elements != after.charged_elements
+            || before.charged_terms != after.charged_terms
+            || after.charged_wire_bytes.checked_sub(before.charged_wire_bytes) != Some(signed)
+            || advanced != Some(after.cursor)
+            || active.witness != attempt.witness
+            || active.ordinal != attempt.ordinal
+            || active.author != attempt.author
+            || header.witness != active.witness
+            || header.first_relation != before.cursor
+            || header.relation_count != 1
+            || (successful && attempt.status != WitnessStatus::Checking)
+            || (!successful && !matches!(attempt.status, WitnessStatus::Rejected | WitnessStatus::Incomplete))
+        {
+            return Err(refuse("exact frame differs from the authenticated checker transition"));
+        }
+
+        let NativeRowBody::Coverage(mut coverage) = required(state, NativeRowKey::Coverage(active.witness))? else {
+            return Err(refuse("exact frame has no current Coverage"));
+        };
+        if coverage.witness != active.witness
+            || coverage.case != prior.case
+            || coverage.result != prior.result
+            || coverage.plan != prior.coverage.plan
+            || coverage.mandatory_relations != prior.coverage.mandatory_relations
+            || coverage.state != CoverageState::Checking
+            || coverage.next_relation != before.cursor
+        {
+            return Err(refuse("exact frame differs from current Coverage"));
+        }
+        let work = material.native_preimages.source_policy.work.court_body_work(frame.wire_bytes()).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(source::capacity)?;
+        coverage.frame_bytes = coverage.frame_bytes.checked_add(frame.wire_bytes()).ok_or_else(source::capacity)?;
+        coverage.signatures = coverage.signatures.checked_add(1).ok_or_else(source::capacity)?;
+        // The native checker reserves the per-relation maximum before running
+        // the local arithmetic, including for a signed failed attempt.
+        coverage.elements = coverage.elements.checked_add(self.check_limits.max_elements_per_leaf).ok_or_else(source::capacity)?;
+        coverage.terms = coverage.terms.checked_add(self.check_limits.max_terms_per_leaf).ok_or_else(source::capacity)?;
+        if coverage.elements > prior.coverage.reserved_elements || coverage.terms > prior.coverage.reserved_terms {
+            return Err(refuse("exact frame exceeds original attempt reservation"));
+        }
+        coverage.next_relation = after.cursor;
+        coverage.last_event = origin;
+        if !successful {
+            coverage.state = CoverageState::EndedUnverified;
+        }
+
+        let retained = assigned_case_followup_journal_extent_v2(body_bytes).ok_or_else(source::capacity)?;
+        let mut case = *prior;
+        case.witness_status = attempt.status;
+        case.last_event = origin;
+        case.usage.transmitted_bytes = case.usage.transmitted_bytes.checked_add(signed).ok_or_else(source::capacity)?;
+        case.usage.retained_bytes = case.usage.retained_bytes.checked_add(retained).ok_or_else(source::capacity)?;
+        self.consume_court_transport_reserve_v2(material, &case, (prior_journal_bytes, prior_events), retained, signed)?;
+        let receipt = successful.then(|| PacketReceiptRow {
+            witness: active.witness,
+            first_relation: header.first_relation,
+            frame: frame.id(),
+            author: active.author,
+            signed_bytes: signed,
+            origin,
+        });
+        Ok(AssignedFrameEventV2 { case, coverage, receipt })
     }
 }
 
@@ -1837,6 +1946,39 @@ fn replay_assigned_court_history_v2(
                     }
                 }
             }
+            if let Op::ExactFrame { frame, .. } = &body.operation {
+                let expected = machine.project_exact_frame_v2(
+                    prefix,
+                    material,
+                    &prior,
+                    &replayed,
+                    (carriage.origin(), frame),
+                    (prior_journal, index as u64, body_bytes.len() as u64),
+                )?;
+                let after = match backing.records().get(index + 1) {
+                    Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                    None => state,
+                };
+                let case = NativeRowBody::Case(expected.case);
+                let coverage = NativeRowBody::Coverage(expected.coverage);
+                if required(after, case.key())? != case || required(after, coverage.key())? != coverage {
+                    return Err(refuse("archived exact frame state differs from checker replay"));
+                }
+                if let Some(receipt) = expected.receipt {
+                    let row = NativeRowBody::PacketReceipt(receipt);
+                    if required(after, row.key())? != row {
+                        return Err(refuse("archived packet receipt differs from checker replay"));
+                    }
+                } else {
+                    let key = NativeRowKey::PacketReceipt {
+                        witness: expected.coverage.witness,
+                        first_relation: expected.coverage.next_relation,
+                    };
+                    if PositiveRowsV2::new(after).read(key).map_err(refuse)?.is_some() {
+                        return Err(refuse("failed exact frame cannot create a packet receipt"));
+                    }
+                }
+            }
             if matches!(&body.operation, Op::Expire { .. }) {
                 let (expected_case, expected_coverage) =
                     project_assigned_case_expiry_v2(prefix, &prior, &replayed, carriage.origin())?;
@@ -1936,7 +2078,11 @@ impl TransitionBuilder<'_> {
             Op::WitnessCommit { witness, .. } => Some(witness.case),
             _ => None,
         };
-        if let Some(case) = source_case.or(expiry_case).or(witness_case) {
+        let frame_case = match &body.operation {
+            Op::ExactFrame { .. } => body.operation.case_target_v2().map_err(refuse)?.map(|(case, _)| case),
+            _ => None,
+        };
+        if let Some(case) = source_case.or(expiry_case).or(witness_case).or(frame_case) {
             let row = PositiveRowsV2::new(&self.state).read(NativeRowKey::Case(case)).map_err(refuse)?;
             match row.map(|row| row.body) {
                 Some(NativeRowBody::Case(row)) if row.last_event.accepting_block.0 != ctx.block.as_bytes() => {}
@@ -1961,7 +2107,7 @@ impl TransitionBuilder<'_> {
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
         machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
         let expires = expiry_case.is_some();
-        if source_case.is_some() || expires || witness_case.is_some() {
+        if source_case.is_some() || expires || witness_case.is_some() || frame_case.is_some() {
             let controls = self.extras.positive_assignment_actions.len() as u64;
             let work = material.native_preimages.source_policy.work.court_operation_work(0, controls, 0, 0).map_err(refuse)?;
             machine.remaining_work = machine.remaining_work.checked_sub(work).ok_or_else(source::capacity)?;
@@ -2022,6 +2168,28 @@ impl TransitionBuilder<'_> {
                 self.write_assignment_aux_v2(row)?;
             }
             self.write_assignment_aux_v2(NativeRowBody::Case(opened.case))?;
+            return self.write_assigned_case_followup_journal_v2(backing);
+        }
+        if let Op::ExactFrame { frame, .. } = &body.operation {
+            let prior_bytes =
+                backing.records().iter().map(|r| r.raw().len() as u64).try_fold(0, u64::checked_add).ok_or_else(source::capacity)?;
+            let checked = machine.project_exact_frame_v2(
+                &self.state,
+                material,
+                &prior,
+                &replayed,
+                (origin, frame),
+                (prior_bytes, backing.records().len() as u64, raw.len() as u64),
+            )?;
+            if let Some(receipt) = checked.receipt {
+                let row = NativeRowBody::PacketReceipt(receipt);
+                if PositiveRowsV2::new(&self.state).read(row.key()).map_err(refuse)?.is_some() {
+                    return Err(refuse("exact frame receipt already exists"));
+                }
+                self.write_assignment_aux_v2(row)?;
+            }
+            self.write_assignment_aux_v2(NativeRowBody::Coverage(checked.coverage))?;
+            self.write_assignment_aux_v2(NativeRowBody::Case(checked.case))?;
             return self.write_assigned_case_followup_journal_v2(backing);
         }
         if expires {
