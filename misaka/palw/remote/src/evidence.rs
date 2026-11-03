@@ -231,6 +231,15 @@ pub mod fs {
         Ok(())
     }
 
+    fn sync_provider_directory(dir: &Path) -> io::Result<()> {
+        sync_directory(dir)?;
+        if let Some(parent) = dir.parent() {
+            let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
+            sync_directory(parent)?;
+        }
+        Ok(())
+    }
+
     /// Create and sync missing directory entries before publishing files in them.
     fn ensure_provider_directory(dir: &Path) -> io::Result<()> {
         if dir.is_dir() {
@@ -260,14 +269,9 @@ pub mod fs {
             file.sync_all()?;
             drop(file);
             std::fs::rename(&tmp, path)?;
-            sync_directory(dir)?;
             // A concurrent writer can observe a directory before its creator
             // syncs the entry. Sync the provider layout before returning success.
-            if let Some(parent) = dir.parent() {
-                let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
-                sync_directory(parent)?;
-            }
-            Ok(())
+            sync_provider_directory(dir)
         })();
         if result.is_err() {
             let _ = std::fs::remove_file(&tmp);
@@ -275,9 +279,42 @@ pub mod fs {
         result
     }
 
+    // Never replace a verified alias on an identical chunk retry. Other
+    // writes still replace only this path by rename, not the shared inode.
+    pub(crate) fn write_provider_chunk(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_file() && meta.len() == bytes.len() as u64)
+            && let Ok((mut file, len)) = open_bounded_file(path, bytes.len())
+            && len == bytes.len() as u64
+        {
+            let mut buf = [0; 16 * 1024];
+            if bytes.chunks(buf.len()).all(|part| file.read_exact(&mut buf[..part.len()]).is_ok() && &buf[..part.len()] == part)
+                && file.read(&mut [0])? == 0
+            {
+                file.sync_all()?;
+                return sync_provider_directory(path.parent().expect("provider chunk directory"));
+            }
+        }
+        write_provider_file(path, bytes)
+    }
+
     /// A replay of the same verified chunk layout cannot shorten the provider's advertised horizon.
     /// Different content is still replaceable so a publisher can repair a bad manifest.
     pub(crate) fn write_provider_manifest(path: &Path, manifest: &EvidenceManifestV1, encoded: &[u8]) -> io::Result<()> {
+        with_manifest_writer(path, || {
+            if read_provider_manifest(path)?.is_some_and(|mut current| {
+                if current.retention_until_daa <= manifest.retention_until_daa {
+                    return false;
+                }
+                current.retention_until_daa = manifest.retention_until_daa;
+                current == *manifest
+            }) {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "provider holds the same material through a later DAA"));
+            }
+            write_provider_file(path, encoded)
+        })
+    }
+
+    fn with_manifest_writer<T>(path: &Path, write: impl FnOnce() -> io::Result<T>) -> io::Result<T> {
         let dir = path.parent().ok_or_else(|| io::Error::other("provider manifest has no directory"))?;
         ensure_provider_directory(dir)?;
         #[cfg(unix)]
@@ -291,34 +328,117 @@ pub mod fs {
             static MANIFEST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
             MANIFEST_WRITE.lock().map_err(|_| io::Error::other("provider manifest writer lock poisoned"))?
         };
+        write()
+    }
+
+    fn read_provider_manifest(path: &Path) -> io::Result<Option<EvidenceManifestV1>> {
         match read_bounded_file(path, crate::transport::MANIFEST_MAX_BYTES) {
-            Ok(bytes) => {
-                if let Ok(mut current) = borsh::from_slice::<EvidenceManifestV1>(&bytes)
-                    && current.retention_until_daa > manifest.retention_until_daa
-                {
-                    current.retention_until_daa = manifest.retention_until_daa;
-                    if current == *manifest {
-                        return Err(io::Error::new(
-                            io::ErrorKind::AlreadyExists,
-                            "provider holds the same material through a later DAA",
-                        ));
-                    }
-                }
-            }
-            Err(BoundedFileError::Io(error)) if error.kind() != io::ErrorKind::NotFound => return Err(error),
-            Err(_) => {}
+            Ok(bytes) => Ok(borsh::from_slice(&bytes).ok()),
+            Err(BoundedFileError::Io(error)) if error.kind() != io::ErrorKind::NotFound => Err(error),
+            Err(_) => Ok(None),
         }
-        write_provider_file(path, encoded)
+    }
+
+    pub(crate) fn is_retention_extension(mut previous: EvidenceManifestV1, next: &EvidenceManifestV1) -> bool {
+        if next.retention_until_daa <= previous.retention_until_daa {
+            return false;
+        }
+        previous.retention_until_daa = next.retention_until_daa;
+        previous == *next
+    }
+
+    // The manifest ID includes its horizon. Preserve both namespaces by
+    // linking authenticated bytes before making the new manifest visible.
+    pub(crate) fn try_extend_provider_manifest(
+        root: &Path,
+        claim_hex: &str,
+        next: &EvidenceManifestV1,
+        limits: &ManifestLimits,
+        admit: impl FnOnce(u64) -> io::Result<()>,
+        check: impl Fn() -> io::Result<()>,
+    ) -> io::Result<bool> {
+        let path = manifest_path(root, claim_hex);
+        check()?;
+        let Some(previous) = read_provider_manifest(&path)? else { return Ok(false) };
+        let old_id = manifest_id_v1(&previous);
+        if !is_retention_extension(previous, next) || next.validate_shape(limits).is_err() {
+            return Ok(false);
+        }
+        let next_id = manifest_id_v1(next);
+        let chunks = root.join("chunks");
+        let old_dir = chunks.join(old_id.to_string());
+        let next_dir = chunks.join(next_id.to_string());
+        if [&chunks, &old_dir].iter().any(|dir| !std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir())) {
+            return Ok(false);
+        }
+        // Serialize only alias staging, without making normal manifest
+        // publication wait for the potentially large old chunk reads.
+        let Ok(alias_lease) = File::open(&chunks) else { return Ok(false) };
+        if alias_lease.try_lock().is_err() {
+            return Ok(false);
+        }
+        if read_provider_manifest(&path)?.is_none_or(|current| manifest_id_v1(&current) != old_id) {
+            return Ok(false);
+        }
+        let mut additional = 0u64;
+        for entry in &next.chunks {
+            check()?;
+            match std::fs::symlink_metadata(chunk_path(root, next_id, entry.index)) {
+                Ok(meta) if meta.is_file() => {}
+                Err(e) if e.kind() == io::ErrorKind::NotFound => additional = additional.saturating_add(u64::from(entry.len)),
+                _ => return Ok(false),
+            }
+        }
+        admit(additional)?;
+        ensure_provider_directory(&next_dir)?;
+        if !std::fs::symlink_metadata(&next_dir)?.is_dir() {
+            return Ok(false);
+        }
+        let verifies = |file: &Path, entry: &ChunkEntryV1| {
+            std::fs::symlink_metadata(file).is_ok_and(|meta| meta.is_file())
+                && read_bounded_file(file, entry.len as usize).is_ok_and(|bytes| next.verify_chunk(entry.index, &bytes).is_ok())
+        };
+        for entry in &next.chunks {
+            check()?;
+            let from = chunk_path(root, old_id, entry.index);
+            let to = chunk_path(root, next_id, entry.index);
+            if !to.exists() && (!verifies(&from, entry) || std::fs::hard_link(&from, &to).is_err()) {
+                return Ok(false);
+            }
+            if !verifies(&to, entry) {
+                return Ok(false);
+            }
+            File::open(to)?.sync_all()?;
+        }
+        sync_provider_directory(&next_dir)?;
+        with_manifest_writer(&path, || {
+            check()?;
+            if read_provider_manifest(&path)?.is_none_or(|current| manifest_id_v1(&current) != old_id) {
+                return Err(io::Error::new(io::ErrorKind::AlreadyExists, "provider manifest changed during retention extension"));
+            }
+            write_provider_file(&path, &borsh::to_vec(next)?)?;
+            Ok(true)
+        })
     }
 
     /// Place a claim's material in a provider directory (the miner's last act before it may switch off). Write order is the safety:
     /// durably publish each chunk first, then publish the manifest.
     pub fn publish(root: &Path, claim_hex: &str, manifest: &EvidenceManifestV1, chunks: &[Vec<u8>]) -> std::io::Result<()> {
+        if publish_chunks_match(manifest, chunks)
+            && try_extend_provider_manifest(root, claim_hex, manifest, &ManifestLimits::default(), |_| Ok(()), || Ok(()))?
+        {
+            return Ok(());
+        }
         let id = manifest_id_v1(manifest);
         for (i, bytes) in chunks.iter().enumerate() {
-            write_provider_file(&chunk_path(root, id, i as u32), bytes)?;
+            write_provider_chunk(&chunk_path(root, id, i as u32), bytes)?;
         }
         write_provider_manifest(&manifest_path(root, claim_hex), manifest, &borsh::to_vec(manifest)?)
+    }
+
+    pub(crate) fn publish_chunks_match(manifest: &EvidenceManifestV1, chunks: &[Vec<u8>]) -> bool {
+        manifest.chunks.len() == chunks.len()
+            && chunks.iter().enumerate().all(|(i, bytes)| manifest.verify_chunk(i as u32, bytes).is_ok())
     }
 
     /// **A free-prompt claim's material, placed with a provider directory** — the ONE manifest assembly the rail's `--evidence-out`
