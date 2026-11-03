@@ -25,7 +25,8 @@ use kaspa_consensus_core::{
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
     palw_state_v2::{
         AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignmentRulesV2,
-        NativeCommittedCaseRecordV2, PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
+        NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2, PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2,
+        PalwDeltaEntryV2, palw_bond_may_take_work_v2,
     },
     tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
@@ -39,7 +40,7 @@ use misaka_palw_positive_contract::{
         funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2},
         journal::{ASSIGNMENT_JOURNAL_HEADER_BYTES_V2, AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
         open_material::AssignmentOpenLimitsV2,
-        rows::AssignmentNonceRow,
+        rows::{AssignmentJournalFrameRow, AssignmentJournalHeadRow, AssignmentNonceRow},
     },
     identity::Digest,
     journal::CaseJournalRecordView,
@@ -98,6 +99,14 @@ struct NativeCaseJournalBytesV2 {
 
 pub(in crate::pipeline::virtual_processor) struct NativeCaseJournalCarriagesV2 {
     pub records: Vec<NativeCommittedCaseRecordV2>,
+    pub work: u64,
+    pub heap: u64,
+    pub lease: NativeDemandLeaseV1,
+}
+
+pub(in crate::pipeline::virtual_processor) struct NativeAssignmentJournalCarriagesV2 {
+    pub open: NativeCommittedAssignmentRecordV2,
+    pub records: Vec<NativeCommittedAssignmentRecordV2>,
     pub work: u64,
     pub heap: u64,
     pub lease: NativeDemandLeaseV1,
@@ -236,6 +245,35 @@ fn exact_case_boundary_v2(record: CaseJournalRecordView<'_>) -> Result<Assignmen
     found.ok_or(E::Invalid("missing actual Case boundary"))
 }
 
+fn assignment_archive_row_fault_v2(error: PositiveRowErrorV2) -> NativeAssignmentArchiveErrorV2 {
+    use NativeAssignmentArchiveErrorV2 as E;
+    match error {
+        PositiveRowErrorV2::MissingKernelRoute | PositiveRowErrorV2::MissingRequiredRow => {
+            E::Unavailable("required rooted Assignment archive row")
+        }
+        PositiveRowErrorV2::Contract(misaka_palw_positive_contract::ContractError::Budget) => {
+            E::Unavailable("rooted Assignment archive exceeds original caps")
+        }
+        _ => E::Invalid("rooted Assignment archive rows or links"),
+    }
+}
+
+fn check_assignment_predecessor_v2(
+    prefix: &PalwChainStateV2,
+    assignment: AssignmentId,
+    expected: Option<AssignmentJournalHeadRow>,
+) -> Result<(), NativeAssignmentArchiveErrorV2> {
+    use NativeAssignmentArchiveErrorV2 as E;
+    let rows = PositiveRowsV2::new(prefix);
+    let actual =
+        rows.read(NativeRowKey::AssignmentJournalHead(assignment)).map_err(assignment_archive_row_fault_v2)?.map(|row| row.body);
+    match (actual, expected) {
+        (Some(NativeRowBody::AssignmentJournalHead(head)), Some(expected)) if head == expected => Ok(()),
+        (None, None) if rows.read(NativeRowKey::Assignment(assignment)).map_err(assignment_archive_row_fault_v2)?.is_none() => Ok(()),
+        _ => Err(E::Invalid("Assignment original prefix does not have the expected predecessor")),
+    }
+}
+
 impl VirtualStateProcessor {
     /// Walk a rooted Case head backwards and copy its verified raw records in
     /// execution order. Both reads are budgeted before hashing. Release the
@@ -367,6 +405,169 @@ impl VirtualStateProcessor {
         })
     }
 
+    /// Load the complete control history selected by the actual native parent.
+    /// Each transaction also has to see the exact previous control head at
+    /// its own executed prefix. A raw row copied from another branch cannot
+    /// supply the missing acceptance or predecessor.
+    pub(in crate::pipeline::virtual_processor) fn load_rooted_assignment_journal_carriages_v2(
+        &self,
+        parent: BlockHash,
+        state: &PalwChainStateV2,
+        material: &AssignmentAdmissionMaterialV2,
+    ) -> Result<NativeAssignmentJournalCarriagesV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let id = material.assignment;
+        let policy = &material.assignment_policy;
+        let physical = &material.native_preimages.physical;
+        let custody = &material.custody;
+        let maximum_heap = custody.heap_bytes.min(physical.max_heap_bytes).min(policy.max_heap_bytes);
+        let maximum_work = custody.replay_work.min(policy.max_replay_work);
+        let maximum_raw = custody
+            .retained_bytes
+            .min(custody.replay_bytes / 2)
+            .min(material.money.usage.retained_bytes)
+            .min(material.money.usage.replay_bytes / 2)
+            .min(policy.max_history_bytes);
+        let maximum_frame = policy
+            .max_frame_bytes
+            .checked_add(ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64)
+            .ok_or(E::Invalid("Assignment journal frame cap overflow"))?;
+        let scratch = (8 * size_of::<NativeRowValue>()
+            + 2 * size_of::<NativeRowKey>()
+            + 2 * size_of::<AssignmentAdmissionMaterialV2>()
+            + 2 * MAX_NATIVE_KEY_BYTES) as u64;
+        let mut remaining_heap = maximum_heap.checked_sub(scratch).ok_or(E::Unavailable("Assignment archive workspace cap"))?;
+        let _scratch =
+            reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("Assignment archive workspace lease"))?;
+        if state.last_point().map(|point| point.block) != Some(parent) {
+            return Err(E::Invalid("Assignment archive state is not the selected parent"));
+        }
+        let rows = PositiveRowsV2::new(state);
+        let rooted = rows.assignment(id).map_err(assignment_archive_row_fault_v2)?;
+        material.check_row(&rooted.assignment).map_err(|_| E::Invalid("Assignment archive material differs from rooted row"))?;
+        let count = rooted.journal.next_ordinal;
+        if count == 0 || count > u64::from(policy.max_history_frames) {
+            return Err(E::Unavailable("Assignment archive frame count outside original cap"));
+        }
+        // Two exact rooted frame reads per event. Price them before walking
+        // the rooted headers to determine the exact retained DB byte extent.
+        let frame_work = count
+            .checked_mul(2 * (MAX_NATIVE_KEY_BYTES as u64 + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64 + 64))
+            .ok_or(E::Invalid("Assignment archive frame work overflow"))?;
+        let mut remaining_work = maximum_work;
+        charge_archive_work_v2(&mut remaining_work, frame_work)?;
+        let extent = rows
+            .assignment_journal_extent_v2(
+                &rooted.journal,
+                rooted.assignment.origin,
+                count,
+                maximum_frame,
+                maximum_raw.min(remaining_work / 6),
+            )
+            .map_err(assignment_archive_row_fault_v2)?;
+        // Literal read, copy, codec/hash and native body comparison are
+        // covered separately from actual carrier reconstruction below.
+        charge_archive_work_v2(&mut remaining_work, extent.record_bytes * 6)?;
+        let retained = (count - 1)
+            .checked_mul(size_of::<NativeCommittedAssignmentRecordV2>() as u64)
+            .and_then(|n| n.checked_add(extent.record_bytes))
+            .and_then(|n| n.checked_add(size_of::<NativeAssignmentJournalCarriagesV2>() as u64))
+            .ok_or(E::Invalid("Assignment archive retained heap overflow"))?;
+        remaining_heap = remaining_heap.checked_sub(retained).ok_or(E::Unavailable("Assignment archive retained heap cap"))?;
+        let lease =
+            reserve_native_requests_v1(retained).map_err(E::Resource)?.ok_or(E::Unavailable("Assignment archive retained lease"))?;
+        let slots = usize::try_from(count - 1).map_err(|_| E::Invalid("Assignment archive address space"))?;
+        let mut records = Vec::new();
+        records.try_reserve_exact(slots).map_err(|_| E::Unavailable("Assignment archive record allocation"))?;
+        if records.capacity() > slots {
+            return Err(E::Unavailable("Assignment archive records exceeded lease"));
+        }
+        let mut open = None;
+        let mut previous = None;
+        for ordinal in 0..count {
+            let frame = match rows
+                .read(NativeRowKey::AssignmentJournalFrame { assignment: id, ordinal })
+                .map_err(assignment_archive_row_fault_v2)?
+                .map(|row| row.body)
+            {
+                Some(NativeRowBody::AssignmentJournalFrame(frame)) => frame,
+                _ => return Err(E::Invalid("rooted Assignment frame disappeared")),
+            };
+            let raw = self.copy_rooted_assignment_frame_v2(frame)?;
+            let view = AssignmentJournalRecordViewV2::decode(&raw, extent.largest_record_bytes)
+                .map_err(|_| E::Invalid("rooted Assignment frame codec"))?;
+            if view.frame() != frame {
+                return Err(E::Invalid("literal Assignment frame differs from rooted frame"));
+            }
+            let maximum_payload = u64::from(frame.header.payload_bytes);
+            let accepted =
+                self.load_positive_assignment_carriage_v2(parent, state, &view, maximum_payload, remaining_heap, remaining_work)?;
+            let prefix = accepted.carriage.prefix_state().map_err(|_| E::Unavailable("Assignment historical executed prefix"))?;
+            check_assignment_predecessor_v2(prefix, id, previous)?;
+            if ordinal == 0 {
+                let envelope = AssignmentControlViewV2::decode(view.payload(), maximum_payload)
+                    .map_err(|_| E::Invalid("original Assignment Open envelope"))?;
+                let literal_body = &accepted.carriage.transaction().payload[3..];
+                let original = AssignmentAdmissionMaterialViewV2::decode(
+                    &rooted.assignment,
+                    envelope.inner(),
+                    literal_body,
+                    AssignmentOpenLimitsV2::within_payload(maximum_payload),
+                )
+                .map_err(|_| E::Invalid("original Assignment Open material"))?;
+                if original.material != *material {
+                    return Err(E::Invalid("original Assignment Open material differs"));
+                }
+            }
+            previous = Some(
+                frame
+                    .append_to(previous.as_ref(), rooted.journal.retention_until_daa)
+                    .map_err(|_| E::Invalid("Assignment archive predecessor sequence"))?,
+            );
+            charge_archive_work_v2(&mut remaining_work, accepted.work)?;
+            remaining_heap =
+                remaining_heap.checked_sub(accepted.heap).ok_or(E::Unavailable("Assignment archive cumulative heap cap"))?;
+            let record = NativeCommittedAssignmentRecordV2::from_native_history_v2(raw, accepted.carriage);
+            if ordinal == 0 {
+                open = Some(record);
+            } else {
+                records.push(record);
+            }
+        }
+        if previous != Some(rooted.journal) {
+            return Err(E::Invalid("Assignment archive did not reach the rooted head"));
+        }
+        Ok(NativeAssignmentJournalCarriagesV2 {
+            open: open.ok_or(E::Invalid("Assignment archive omitted the original Open"))?,
+            records,
+            work: maximum_work - remaining_work,
+            heap: maximum_heap - remaining_heap - scratch,
+            lease,
+        })
+    }
+
+    /// Caller has already reserved this frame's exact raw extent. Release the
+    /// store guard before opening its original native acceptance and delta.
+    fn copy_rooted_assignment_frame_v2(&self, frame: AssignmentJournalFrameRow) -> Result<Vec<u8>, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let record_bytes = u64::from(frame.header.payload_bytes) + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+        self.palw_state_v2_store
+            .read()
+            .with_positive_assignment_journal_record_v2(frame.header.id(), record_bytes, |raw| {
+                if raw.len() as u64 != record_bytes {
+                    return Err(E::Invalid("literal Assignment record extent differs"));
+                }
+                let mut copy = Vec::new();
+                copy.try_reserve_exact(raw.len()).map_err(|_| E::Unavailable("Assignment record allocation"))?;
+                if copy.capacity() > raw.len() {
+                    return Err(E::Unavailable("Assignment record exceeded lease"));
+                }
+                copy.extend_from_slice(raw);
+                Ok(copy)
+            })
+            .map_err(|error| archive_store_fault_v2(error, "rooted Assignment record bytes"))?
+    }
+
     /// Read original decode rules for a continuation against the actual walk's
     /// selected-parent state. Absence of an Assignment row can be a later
     /// same-block intake. Missing history for an existing row is unavailable.
@@ -406,20 +607,7 @@ impl VirtualStateProcessor {
         let record_bytes = max_payload + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
         let _raw_lease =
             reserve_native_requests_v1(record_bytes).map_err(E::Resource)?.ok_or(E::Unavailable("original Open bytes lease"))?;
-        // Drop the store guard before loading the original state and delta.
-        let raw = self
-            .palw_state_v2_store
-            .read()
-            .with_positive_assignment_journal_record_v2(frame.header.id(), record_bytes, |raw| {
-                let mut copy = Vec::new();
-                copy.try_reserve_exact(raw.len()).map_err(|_| E::Unavailable("original Open allocation"))?;
-                if copy.capacity() as u64 > record_bytes {
-                    return Err(E::Unavailable("original Open allocation exceeded lease"));
-                }
-                copy.extend_from_slice(raw);
-                Ok(copy)
-            })
-            .map_err(|error| archive_store_fault_v2(error, "rooted original Open bytes"))??;
+        let raw = self.copy_rooted_assignment_frame_v2(frame)?;
         let record =
             AssignmentJournalRecordViewV2::decode(&raw, record_bytes).map_err(|_| E::Invalid("original Open journal codec"))?;
         if record.frame() != frame {
@@ -444,14 +632,15 @@ impl VirtualStateProcessor {
         let limits = rules.body_limits().map_err(|_| E::Invalid("original Assignment body limits"))?;
         kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(continuation_body, limits)
             .map_err(|_| E::InvalidContinuation)?;
-        let (carriage, work) = self.load_positive_assignment_carriage_v2(
+        let accepted = self.load_positive_assignment_carriage_v2(
             parent,
             state,
-            record,
+            &record,
             max_payload,
             view.material.custody.heap_bytes.min(view.material.native_preimages.physical.max_heap_bytes),
             view.material.custody.replay_work,
         )?;
+        let NativeArchiveCarriageV2 { carriage, work, .. } = accepted;
         let prefix = carriage.prefix_state().map_err(|_| E::Unavailable("original Open pre-event state"))?;
         if !matches!(PositiveRowsV2::new(prefix).read(NativeRowKey::Assignment(assignment)), Ok(None)) {
             return Err(E::Invalid("original Open did not start at an absent Assignment"));
@@ -572,16 +761,16 @@ impl VirtualStateProcessor {
         &self,
         current_selected_parent: BlockHash,
         current_state: &PalwChainStateV2,
-        record: AssignmentJournalRecordViewV2<'_>,
+        record: &AssignmentJournalRecordViewV2<'_>,
         maximum_payload: u64,
         maximum_heap: u64,
         maximum_work: u64,
-    ) -> Result<(NativeAcceptedCaseCarriageV2, u64), NativeAssignmentArchiveErrorV2> {
+    ) -> Result<NativeArchiveCarriageV2, NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
         if record.header().kind == AssignmentJournalEventKindV2::MetadataReceipt {
             return Err(E::Unavailable("actual metadata receipt carriage owner is not connected"));
         }
-        let (boundary, native_body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, maximum_payload)
+        let (boundary, native_body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, maximum_payload)
             .map_err(|_| E::Invalid("invalid original Assignment control carriage framing"))?;
         let accepted = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
@@ -597,7 +786,7 @@ impl VirtualStateProcessor {
         {
             return Err(E::Invalid("original actual Assignment carrier differs from journal"));
         }
-        Ok((accepted.carriage, accepted.work))
+        Ok(accepted)
     }
 
     fn load_positive_accepted_carriage_v2(
