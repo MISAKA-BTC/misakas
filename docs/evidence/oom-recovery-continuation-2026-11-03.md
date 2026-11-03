@@ -1613,3 +1613,46 @@ each carrier checkpoint. A bounded one-claim, one-unit
 resident read with the same deadline, signer and multipart
 rules is required before adoption. No full carrier process
 test or live signature was produced.
+
+## Retention boundary, pre-fold pressure protection and fused attention — 07:17 UTC
+
+B0 and relay reported the same future retention fence at DAA 20,000,
+still unarmed at DAA 19,640. Public REST and WebSocket agreed at that
+DAA. B0 and relay subsequently agreed at virtual DAA 19,641. Qwen
+#61 and #62 folded with only 20,607 and 20,606 of the 20,608 required
+DAA remaining. B0 logged both refusals and the exact claim rows were
+absent from both nodes. The read-only check still found #61 material
+and answer on B0.
+
+The native transition regression now covers acceptance at 19,999,
+20,000 and 20,001 with merge delays of 0, 1, 2 and 10 DAA, plus a
+21-DAA delay at 20,011. The focused harness linked the cached native
+Core library and ran the expanded signed matrix. Before the fence,
+the no-delay fixture accepted and delayed fixtures were refused.
+At and beyond the fence, accepted rows used the effective deadline,
+retained the signed identity and passed cold carriage and rollback.
+Seven prior native retention tests also passed when rerun with
+their original compiled executable. The focused matrix is an
+isolated fixture, without a public post-fence acceptance.
+
+Before publishing an ordinary local model lead, the producer now
+reserves storage and writes a 172-byte durable marker bound to the
+exact finalized carrier and capture. This protects a young marked
+capture from pressure-only pruning after restart and before first
+fold. The marker is checked again under the final unlink guard.
+The age ceiling is the existing capture horizon, and the original
+native DA and income checks remain in force. A failed marker
+publication withholds the lead. A claim that is still unaccepted
+beyond the existing horizon has no protection from this marker.
+Two focused production-extract tests and Kaspad test-crate metadata
+passed. The changes are source-only.
+
+A third independent offline relation was checked on signed Qwen
+#58. At position zero, fused attention authenticated Q, K and V
+and four registered parameter openings, then recomputed eight
+output lanes. The model-denied verifier rejected each removed or
+altered input row, each removed or altered parameter, and a changed
+output. The existing query and RMS diagnostics remained valid.
+The bound on-chain one-move verifier still requires dissection.
+The 27,100-byte packet SHA-256 is
+`3023def6983a7bd83cd73ecd106aacff384a404151600bbc56fdc36f4194b2e2`.
