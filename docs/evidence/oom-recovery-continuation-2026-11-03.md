@@ -1000,3 +1000,24 @@ A paired selected-chain scan advanced from DAA 19,608 to virtual DAA
 19,610 with no additional Qwen candidate. Public REST returned 503
 with checkpoint virtual-context lag while WebSocket remained synced,
 then returned HTTP 200 with the relay cursor current on recheck.
+
+## Next Qwen carrier and independent IBD check — 05:34 UTC
+
+The next paired scan found the Qwen REAL carrier with header DAA
+19,608 in the selected fold at DAA 19,610. B0 and the relay had no
+accepted claim row for the exact derived attempt ID. The B0 journal
+confirmed submission. Both node headers independently re-derived
+the carrier hash, attempt ID and input anchor. The public WebSocket
+returned the same carrier as a merged blue and REST was current.
+
+The read-only B0 custody check found 2,409,135 bytes of material and
+4,172 bytes of answer for the exact claim. A local material copy
+matched the digest from the stable custody read. Provider delivery
+and the effective retention deadline remain unverified for this
+claim.
+
+B1 was still unsynced at DAA 19,389 with one outbound peer, no IBD
+and no connection to B0. The unsigned trial on host 5 had already
+stopped and had no synced database or active trial ports. The
+available filesystem capacity on 5 is below the existing floor for
+a fresh trial and below the space needed for an independent B0 seed.
