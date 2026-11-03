@@ -1490,3 +1490,22 @@ The independent Case archive branch's initial op9 journal store change
 changes (`3d65fa756` and `9c61c087b`) need reconciliation with A0's
 native resource and historical Case relay readers. A0 has not applied
 that series at this checkpoint.
+
+### Assigned Case archive reconciliation
+
+The [reconciled archive candidate](assigned-case-archive-a0-candidate-20261103.tar.gz)
+brings the three Case archive branch changes onto the exact A0 source. It
+persists sequence-one op9 transactions in the existing Case journal,
+checks the complete literal carrier and revalidates original populated
+inputs. It reconstructs the original selected parent by undoing actual
+ancestor deltas, then replays the accepted prefix to its pinned root.
+The A0 adaptation uses its typed retained-size computation for the new
+history bound even when the global checker is dormant. It preserves
+A0's original Case relay profile reader and receipt replay.
+
+The merged Core library and focused Assignment funds target typechecked
+in isolation. The candidate includes the journal DB reopen/append
+regression and the one-byte-under heap-cap checks, but they have yet to
+run on A0. Full Consensus verification, cold archive I/O accounting and
+connection of the Case reader to accepted op9 remain open. The candidate
+is separate from the source pinned by the custody/index run.
