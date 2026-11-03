@@ -3392,3 +3392,23 @@ and archive horizons before activating original admission.
 B0 and relay agreed at virtual DAA 19,717 with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-preclaim-budget-live.LFkTrt/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-preclaim-budget.S3FmZc/tests.log`.
+
+## Funded admission checks the complete journal row
+
+The funded original coordinator now constructs and validates the
+service journal row, including its causal edges, during the reservation
+precheck before checking payer consent. Install compares the current
+rooted row with the prechecked row and allows only the expected signer
+prefix from the ordinary frame install. Existing resolved records and
+causal edges remain in the checked candidate. The native Batch fixture
+extends this same row and asserts that the source edges survive the
+extension. A v2-to-v3 test conversion no longer drops those edges.
+
+Rust parsing and diff checks passed. The native fixture was not run.
+The build guard still observed low physical disk and available memory
+on the Mac. The production funded schedule and complete Batch graph
+are still unconnected to original admission.
+
+B0 and relay agreed at virtual DAA 19,717 on a newer selected tip with
+no new Qwen carrier in the scan. See
+`/private/tmp/misaka-t12-oom-20261102/g14-funded-seam-live.y5Wjsu/page.json`.

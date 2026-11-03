@@ -68,6 +68,8 @@ fn requirements_refusal(e: PreparedRequirementsErrorV1) -> FundedOriginalRefusal
 pub(super) struct FundedOriginalPlanV1 {
     requirements: PreparedOriginalRequirementsV1,
     row: crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1,
+    /// The row that the reservation and payer checks read.
+    service_before: Option<Row>,
     /// G14 item 1 (lane r5): every legal branch, its packets, resources and capital, derived from the native preparation.
     derivation: crate::palw_funded_original_admission_v1::FundedAdmissionDerivationV1,
     admission: crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1,
@@ -115,6 +117,38 @@ fn funded_book_candidate_v1(
         admission,
     )
     .map_err(admission_refusal)
+}
+
+/// Complete the exact journal row before payer consent is checked. Batch
+/// reservations extend this row, including its existing causal edges.
+fn funded_journal_row_candidate_v1(
+    b: &TransitionBuilder<'_>,
+    requirements: &PreparedOriginalRequirementsV1,
+    derivation: &crate::palw_funded_original_admission_v1::FundedAdmissionDerivationV1,
+    mut full: crate::palw_court_service_state_v2::CourtServiceStateV2,
+) -> Result<Row, FundedOriginalRefusalV1> {
+    use crate::palw_court_service_release_v1::{COURT_SERVICE_ROW_VERSION_V3, CourtServiceRowV3};
+    let edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
+        requirements.source_graph_v1().map_err(requirements_refusal)?, derivation,
+    ).map_err(admission_refusal)?;
+    let previous = b.state.court_service_row_v3_v1();
+    if edges.is_empty() && previous.is_none() {
+        return Ok(Row::CourtService(Box::new(full).into()));
+    }
+    full.version = COURT_SERVICE_ROW_VERSION_V3;
+    let mut row = CourtServiceRowV3 {
+        version: COURT_SERVICE_ROW_VERSION_V3,
+        state: full,
+        resolved: previous.map(|row| row.resolved.clone()).unwrap_or_default(),
+        causal: previous.map(|row| row.causal.clone()).unwrap_or_default(),
+    };
+    for (packet, predecessors) in edges {
+        if row.causal.insert(packet, predecessors).is_some() {
+            return Err(FundedOriginalRefusalV1::Invalid("new court reservation replaces an existing causal edge"));
+        }
+    }
+    row.check().map_err(|why| FundedOriginalRefusalV1::State(refused(why)))?;
+    Ok(Row::CourtServiceV3(Box::new(row).into()))
 }
 
 /// What the FP arm carries from the seam to the install: the ordinary TFP1 preparation, or the coordinated funded original.
@@ -245,7 +279,8 @@ pub(super) fn coordinate_funded_original_v1(
         &admission,
     )
     .map_err(admission_refusal)?;
-    funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers)?;
+    let (_, full) = funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers)?;
+    funded_journal_row_candidate_v1(b, &requirements, &derivation, full)?;
     // Capital (RFC-0035 §7.1): Σ branch capital (≥ the schedule floor), less the producer deposit the native work room already
     // holds, plus the fee once.
     let required_amount = crate::palw_funded_original_admission_v1::funded_required_amount_v1(
@@ -312,7 +347,8 @@ pub(super) fn coordinate_funded_original_v1(
     }
     #[allow(clippy::drop_non_drop)]
     drop(funding);
-    Ok(FundedOriginalPlanV1 { requirements, row, derivation, admission, signers })
+    let service_before = b.state.staged_court_row_v1(&Key::CourtService).cloned();
+    Ok(FundedOriginalPlanV1 { requirements, row, service_before, derivation, admission, signers })
 }
 
 /// **Install** at the existing original install point (after `reserve_for_claim` / `write_claim`), inside the same checkpoint.
@@ -325,43 +361,34 @@ pub(super) fn install_original_admission_v1(
     match admission {
         OriginalAdmissionV1::Plain(prepared) => install_prepared_original_v1(b, ctx, prepared, prompt),
         OriginalAdmissionV1::Funded(plan) => {
-            let FundedOriginalPlanV1 { requirements, row, derivation, admission, signers } = *plan;
+            let FundedOriginalPlanV1 { requirements, row, service_before, derivation, admission, signers } = *plan;
             if row.accepted_daa != ctx.daa_score || b.state.claim(&row.claim).is_none() || !row.liability_open {
                 return Err(refused("RFC-0035 A funded install lacks this block's native FP acceptance"));
             }
             // Lane r5: re-derive the all-branch book candidate against the book as it stands NOW (before the frame install).
-            let before = b.state.court_service_state_v1().cloned();
+            if b.state.staged_court_row_v1(&Key::CourtService) != service_before.as_ref() {
+                return Err(refused("RFC-0035 A funded install: the rooted service row differs from the payer precheck"));
+            }
             let (after_signer, full) =
                 funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers).map_err(FundedOriginalRefusalV1::into_state_v1)?;
-            // G14 lane r6-d1-release: the source branches' causal edges, recorded with the book (recovery keeps causal order).
-            let edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
-                requirements.source_graph_v1().map_err(requirements_refusal).map_err(FundedOriginalRefusalV1::into_state_v1)?,
-                &derivation,
-            )
-            .map_err(admission_refusal)
-            .map_err(FundedOriginalRefusalV1::into_state_v1)?;
+            let journal_row = funded_journal_row_candidate_v1(b, &requirements, &derivation, full)
+                .map_err(FundedOriginalRefusalV1::into_state_v1)?;
             requirements.into_geometry_v1().install_native_v1(b, ctx, prompt)?;
             // The ordinary install may have written court-f02's per-signer binding (only with a pinned F02 profile): it must be
             // exactly the signer prefix of this candidate; anything else is refused (the checkpoint restores every write).
-            let now = b.state.court_service_state_v1();
-            if now != before.as_ref() && now != Some(&after_signer) {
+            let now = b.state.staged_court_row_v1(&Key::CourtService);
+            let signer_prefix = match (service_before.as_ref(), now) {
+                (Some(Row::CourtServiceV3(before)), Some(Row::CourtServiceV3(after))) => {
+                    after.state == after_signer && before.causal == after.causal && before.resolved == after.resolved
+                }
+                (Some(Row::CourtService(_)), Some(Row::CourtService(after))) => **after == after_signer,
+                _ => false,
+            };
+            if now != service_before.as_ref() && !signer_prefix {
                 return Err(refused("RFC-0035 A funded install: the court service book moved under the all-branch reservation"));
             }
-            // Packets, court capacity, resources (in the retention packet) — all branches, one rooted write. G14 lane r6-d1-release:
-            // with causal source edges the book is written in its V3 form carrying them (past the conviction fence, where every
-            // funded admission is); without edges, in the form it already has.
-            if edges.is_empty() {
-                b.write_court_service_state_v1(full)?;
-            } else {
-                let mut next = match b.state.court_service_row_v3_v1() {
-                    Some(released) => released.clone(),
-                    None => crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&full),
-                };
-                next.state = full;
-                next.state.version = crate::palw_court_service_release_v1::COURT_SERVICE_ROW_VERSION_V3;
-                next.causal.extend(edges);
-                b.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(next).into())))?;
-            }
+            // Write the same row shape validated before payer consent.
+            b.write_staged_row_v1(Key::CourtService, Some(journal_row))?;
             let claim_id = row.claim;
             // G14 lane F03b (ADR-0192 A/A): the shared frontier rides the same all-branch book (idempotent with the plain hook).
             super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, claim_id)?;

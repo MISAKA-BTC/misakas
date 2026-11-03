@@ -243,10 +243,21 @@
                     predecessors: vec![],
                 }).collect();
                 let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 100, cover: budgets.1 };
+                let journal = funded_journal_row_candidate_v1(&b, &req, &derivation, full.clone()).unwrap();
+                let expected_edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
+                    req.source_graph_v1().unwrap(), &derivation,
+                ).unwrap();
+                let journal = match journal {
+                    Row::CourtServiceV3(row) => (*row).clone(),
+                    Row::CourtService(row) => crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&row),
+                    _ => unreachable!("funded book journal row"),
+                };
+                assert_eq!(journal.causal, expected_edges);
                 let (quote, batch) = plan.reserve_for_original_v1(
-                    crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&full), graph, storage, |bytes| Ok(cost(bytes)),
+                    journal, graph, storage, |bytes| Ok(cost(bytes)),
                 ).unwrap();
                 assert!(quote.required_daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
+                assert!(expected_edges.iter().all(|(id, parents)| batch.causal.get(id) == Some(parents)));
                 assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
                 assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
                 // The served book itself is untouched by the dry run.
