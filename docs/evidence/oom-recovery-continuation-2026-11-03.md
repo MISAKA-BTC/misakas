@@ -548,3 +548,21 @@ failed before staging. Harness receipt SHA256 is `f229b2c67a3e48317e784ee95248e7
 The fixture validates staging and refusal. The first live post-fence
 acceptance, ordinary producer export, and automatic provider
 retention across reorg still require verification.
+
+## Stale provider deadline protection — 04:49 UTC
+
+Commit `a4acffaab` serializes ordinary manifest updates in the provider
+directory. A retry with the same manifest fields and chunk layout
+cannot replace a longer published deadline with an earlier one.
+A different content layout can still be published to repair an
+incorrect manifest. The guard applies to directory publication and
+the reference HTTP provider. A macOS directory-lock check confirmed
+exclusion between separately opened handles and release on close.
+The full loopback regression, including concurrent stale publication
+and provider restart, is queued behind local memory pressure.
+
+The original Qwen #37 carrier was visible on B0 and the relay. The
+producer's journal matched it to a refusal at 20,606 remaining DAA
+against 20,608 required. At the paired read's DAA 19,597 the claim
+row, assignment and exportable provider roots were absent. The
+public Explorer REST and WebSocket were available at DAA 19,597.
