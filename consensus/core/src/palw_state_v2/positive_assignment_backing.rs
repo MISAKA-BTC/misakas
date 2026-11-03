@@ -190,12 +190,12 @@ pub enum NativeAssignedCaseBackingV2 {
     },
     /// Bounded authenticated predecessor for a committed Case operation.
     /// Full replay still consumes all earlier records before authorizing a write.
-    CommittedHead {
+    CommittedHistory {
         parent: BlockHash,
         assignment: misaka_palw_positive_contract::assignment::AssignmentId,
         pin: CaseJournalPinV2,
-        record: NativeCommittedCaseRecordV2,
-        _raw_lease: NativeDemandLeaseV1,
+        records: Vec<NativeCommittedCaseRecordV2>,
+        _records_lease: NativeDemandLeaseV1,
     },
     Committed(NativeCommittedAssignedCaseV2),
 }
@@ -250,7 +250,7 @@ impl NativeHeapV1 for NativeAssignedCaseBackingV2 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         match self {
             Self::AbsentAtParent { case: _, parent: _, parent_state_root: _ } => NativeCoverageV1::zero(),
-            Self::CommittedHead { record, .. } => record.native_heap_v1(path),
+            Self::CommittedHistory { records, .. } => records.native_heap_v1(path),
             Self::Committed(value) => value.native_heap_v1(path),
         }
     }

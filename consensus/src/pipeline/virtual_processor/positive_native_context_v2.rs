@@ -842,6 +842,7 @@ impl PositiveCarrierPhaseTwoV2 {
         current_view: &impl UtxoView,
         selected_parent_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>, NativeCoverageV1> {
+        use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
         use kaspa_consensus_core::palw_positive_court_v2::coordinator::{
             assignment_body::{
                 PositiveAssignmentNativeOperationV2 as A, decode_assignment_body_v2, scan_assignment_body_v2,
@@ -888,11 +889,10 @@ impl PositiveCarrierPhaseTwoV2 {
                 continue;
             }
             let original = if (9..=13).contains(&kind) {
-                use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
                 let body = &tx.payload[3..];
                 let Ok(id) = scan_assignment_continuation_id_v2(body) else { continue };
                 if let Some(state) = selected_parent_state {
-                    match processor.original_assignment_rules_v2(carrier.prefix.selected_parent, state, id, body) {
+                    match processor.original_assignment_rules_v2(carrier.prefix.selected_parent, state, id, Some(body)) {
                         Ok(rules) => rules,
                         Err(E::InvalidContinuation) => continue,
                         Err(E::Resource(why)) => return Err(why),
@@ -1014,12 +1014,11 @@ impl PositiveCarrierPhaseTwoV2 {
                 };
                 let Ok(subject) = body.operation.case_target_v2() else { continue };
                 if let (Some(subject), Some(state)) = (subject, selected_parent_state) {
-                    case_backing =
-                        processor.prepare_committed_case_head_v2(carrier.prefix.selected_parent, state, subject).map_err(|why| {
-                            match why {
-                                E::Resource(why) => why,
-                                _ => NativeCoverageV1::unsupported::<Self>("committed Case predecessor", &format!("{why:?}")),
-                            }
+                    case_backing = processor
+                        .prepare_committed_case_history_v2(carrier.prefix.selected_parent, state, subject)
+                        .map_err(|why| match why {
+                            E::Resource(why) => why,
+                            _ => NativeCoverageV1::unsupported::<Self>("committed Case predecessor", &format!("{why:?}")),
                         })?;
                 }
                 None

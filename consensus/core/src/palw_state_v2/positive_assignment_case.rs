@@ -823,7 +823,11 @@ impl TransitionBuilder<'_> {
     ) -> Result<(), PalwStateV2Error> {
         let backing = action.case_backing().map_err(|_| missing())?;
         let (parent, assignment, pin) = match backing {
-            NativeAssignedCaseBackingV2::CommittedHead { parent, assignment, pin, record, .. } => {
+            NativeAssignedCaseBackingV2::CommittedHistory { parent, assignment, pin, records, .. } => {
+                let record = records.last().ok_or_else(missing)?;
+                if records.len() as u64 != pin.head.sequence {
+                    return Err(refuse("Case predecessor archive extent differs from rooted journal"));
+                }
                 if record.carriage().origin() != pin.head.history.origin {
                     return Err(refuse("Case predecessor origin differs from its rooted journal head"));
                 }
