@@ -702,7 +702,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     use crate::palw_batch_court_v1::carriage::{
         BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1,
     };
-    use crate::palw_batch_court_v1::rooted::{batch_case_id_v1, batch_open_packet_v1};
+    use crate::palw_batch_court_v1::rooted::batch_case_id_v1;
+    use crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
     use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1};
     use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations, causal::CausalServicePacketV1};
     use crate::palw_court_shared_material_intake_v1::*;
@@ -726,10 +727,10 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let notice_id = set.request_id(0).unwrap();
     let mut notice = SignedSharedRequestV1 { version: 1, scope: scope_id, ordinal: 0, request_id: notice_id, signer: who, signature: vec![] };
     notice.signature = sign(notice.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
-    let notice_at = at(frame, 1);
-    let open_at = at(frame, 2);
-    let begin_at = at(frame, 3);
-    let response_deadline = at(frame, 7).daa_score;
+    let notice_at = at(frame, NOTICE_WINDOW_DAA);
+    let open_at = at(frame, NOTICE_WINDOW_DAA + 1);
+    let begin_at = at(frame, NOTICE_WINDOW_DAA + 2);
+    let response_deadline = at(frame, NOTICE_WINDOW_DAA + 5).daa_score;
     let target = MaterialTargetV1::PromptFlat;
     let body = borsh::to_vec(&fx.execution.prompt).unwrap();
     assert!(body.len() <= PART);
@@ -759,26 +760,27 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     };
     let begin = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
     let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
-    let open_id = batch_open_packet_v1(claim, scope_id, ordinal).unwrap().as_bytes();
-    let position = batch::BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: 0 };
-    let mut graph = position.reservation_graph_v1(claim, scope_id, PART as u64, begin_at.daa_score..response_deadline,
-        |bytes| Ok(cost(bytes))).unwrap();
-    graph[0].predecessors.push(open_id);
-    graph.push(CausalServicePacketV1 {
-        packet: ServicePacket { id: open_id, release_daa: open_at.daa_score, service_before: begin_at.daa_score,
-            cost: cost(borsh::object_length(&open).unwrap() as u64
-                + crate::palw_batch_court_v1::carriage::BATCH_OPEN_WIRE_OVERHEAD_V1) },
+    use batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1};
+    let window = open.demand.case_window;
+    let terminal = Hash64::from_u64_word(997).as_bytes();
+    let storage = material_test_schedule();
+    let mut service = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(state.court_service_state_v1().unwrap());
+    service.state.book = ServiceReservations::new(cost(64 * 1024)).unwrap();
+    service.state.claims.get_mut(&claim).unwrap().packet_ids.clear();
+    let plan = BatchAdmissionV1 {
+        claim, scope: scope_id, window,
+        demands: &[MaximumBatchDemandV1 { ordinal, range_maximums: &[PART as u64], predecessors: &[] }],
+        terminal, recovery_daa: 1, maximum_packets: 5,
+    };
+    let graph = vec![CausalServicePacketV1 {
+        packet: ServicePacket { id: terminal, release_daa: open_at.daa_score, service_before: context.hard_daa - 1,
+            cost: cost(1) },
         predecessors: vec![],
-    });
-    // Inject the candidate reservation in the fixture before its accepting
-    // fold. The Batch opening and response are verified by the real adapters.
-    let mut service = state.court_service_state_v1().unwrap().clone();
-    service.book = ServiceReservations::new(cost(64 * 1024)).unwrap();
-    service.book.reserve_causal_v1(&graph, context.hard_daa).unwrap();
-    service.claims.get_mut(&claim).unwrap().packet_ids = graph.iter().map(|n| n.packet.id).collect();
-    state.staged_courts.insert(Key::CourtService, Row::CourtService(Box::new(service).into()));
+    }];
+    let (required, service) = plan.reserve_for_original_v1(service, graph, storage, |bytes| Ok(cost(bytes))).unwrap();
+    assert!(required <= 10_000);
+    state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
 
-    material_test_schedule();
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     super::super::palw_court_shared_tir_fold_v1::request(&mut b, &notice_at, claim, &notice).unwrap();
     let opening = BatchCourtWireV1::Open(open);
@@ -793,8 +795,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(b.apply_batch_court_wire_v1(&begin_at, &conflicting, None).is_err());
     assert_eq!(b.state.state_root(), after_begin);
     let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
-    b.apply_batch_court_wire_v1(&at(frame, 4), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), None).unwrap();
-    b.apply_batch_court_wire_v1(&at(frame, 5), &respond(MaterialActionV1::Finish { draft_id }), None).unwrap();
+    b.apply_batch_court_wire_v1(&at(frame, NOTICE_WINDOW_DAA + 3), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), None).unwrap();
+    b.apply_batch_court_wire_v1(&at(frame, NOTICE_WINDOW_DAA + 4), &respond(MaterialActionV1::Finish { draft_id }), None).unwrap();
     let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
     let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
     assert_eq!(material.bytes, body);

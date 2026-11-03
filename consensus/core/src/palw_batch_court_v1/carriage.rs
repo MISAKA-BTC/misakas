@@ -135,6 +135,43 @@ pub const BATCH_COURT_CARRIER_MAGIC_V1: &[u8; 4] = b"BCT1";
 pub(crate) const BATCH_OPEN_WIRE_OVERHEAD_V1: u64 = BATCH_COURT_CARRIER_MAGIC_V1.len() as u64 + 1;
 pub(crate) const BATCH_RESPONSE_WIRE_OVERHEAD_V1: u64 = BATCH_OPEN_WIRE_OVERHEAD_V1 + 8;
 
+/// Canonical BCT1 opening size from its range count. Every field besides the
+/// signature and ranges is fixed-width, and the native signature width is fixed.
+pub(crate) fn batch_open_wire_bytes_v1(ranges: usize) -> Result<u64, String> {
+    use super::{BatchCourtWindowV1, BatchRangeAuthenticationV1, BatchRangeV1, MAX_BATCH_RANGES_V1};
+    if !(1..=MAX_BATCH_RANGES_V1).contains(&ranges) {
+        return Err("Batch opening range count".into());
+    }
+    let zero = Hash64::default();
+    let template = SignedBatchDemandV1 {
+        version: 1,
+        claim: zero,
+        scope_id: zero,
+        ordinal: 0,
+        notice_id: zero,
+        signer: PalwBondKeyV2(crate::tx::TransactionOutpoint::new(zero, 0)),
+        demand: BatchDemandV1 {
+            case_id: zero,
+            case_window: BatchCourtWindowV1 {
+                claim_accepted_daa: 0,
+                challenge_opened_daa: 0,
+                collect_until_daa: 0,
+                material_until_daa: 0,
+            },
+            opened_daa: 0,
+            response_deadline_daa: 0,
+            maximum_bytes: 0,
+            part_bytes: 0,
+            ranges: Vec::new(),
+        },
+        signature: Vec::new(),
+    };
+    let range = BatchRangeV1 { id: zero, bytes: 0, authentication: BatchRangeAuthenticationV1::WholeRange };
+    let fixed = borsh::object_length(&template).map_err(|e| e.to_string())? as u64;
+    let range = borsh::object_length(&range).map_err(|e| e.to_string())? as u64;
+    Ok(fixed + BATCH_OPEN_WIRE_OVERHEAD_V1 + SIG as u64 + ranges as u64 * range)
+}
+
 pub fn decode_batch_court_carrier_v1(carrier: &crate::tx::Transaction) -> Result<Option<BatchCourtWireV1>, String> {
     if carrier.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return Ok(None);
@@ -190,6 +227,10 @@ mod tests {
         .to_vec();
         let wire = BatchCourtWireV1::Open(open.clone());
         assert_eq!(borsh::from_slice::<BatchCourtWireV1>(&borsh::to_vec(&wire).unwrap()).unwrap(), wire);
+        assert_eq!(
+            batch_open_wire_bytes_v1(open.demand.ranges.len()).unwrap(),
+            borsh::object_length(&wire).unwrap() as u64 + BATCH_COURT_CARRIER_MAGIC_V1.len() as u64
+        );
         let vk = keys.verification_key.as_ref();
         assert!(open.verify_v1(h(8), vk).is_ok());
         assert!(open.verify_v1(h(9), vk).is_err());

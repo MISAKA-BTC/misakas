@@ -14,6 +14,8 @@ use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
 use borsh::BorshSerialize;
 use std::collections::BTreeMap;
 
+pub(crate) mod admission;
+
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]

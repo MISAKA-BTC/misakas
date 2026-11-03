@@ -2498,3 +2498,32 @@ work. See `/private/tmp/misaka-t12-oom-20261102/tfp1-prebooked-response.DLUAmD/t
 B0 and relay agreed at DAA 19,687. The selected interval from the last
 cursor had no new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-dispatch-live.KOtYNh/page.json`.
+
+## Maximum Batch reservation at the latest notice
+
+The candidate prepares a single causal reservation for each bounded
+maximum demand, its signed Open, parallel response parts, native
+verification/control nodes and terminal. It quotes exact BCT1 opening
+size from range count. Each response Begin depends on its reserved
+Open; an alternative demand can depend on the prior response opportunity.
+It verifies every draft's exclusive finish bound before committing the
+book. The rooted candidate returns one row with the original's packet
+ownership and canonical recovery edges.
+
+The extracted suite passed 28 checks. A synthetic maximum-demand
+schedule reaches 10,000 DAA with the latest 3,120 DAA notice and an
+explicit recovery allowance, with two parts assigned the same DAA.
+Adding one DAA of recovery, shortening the draft to expire at Finish,
+or lowering the packet cap refuses the reservation without changing the
+book. The test also checks a later alternative and rejects double
+booking. The native fixture uses the rooted candidate before a signed
+notice-to-Finish sequence. The extracted suite does not run that
+fixture or prove an actual model profile fits. The native profile still
+has to derive every legal demand and the semantic/control graph from
+the authenticated original before publishing the book. The public
+transaction route remains disabled.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-latest-notice-plan.Klmg3H/tests.log`.
+
+B0 and relay agreed at DAA 19,689 and the selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-plan-live.gLbK4c/page.json`.
