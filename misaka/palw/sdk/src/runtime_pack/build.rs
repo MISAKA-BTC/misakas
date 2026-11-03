@@ -197,6 +197,9 @@ fn pack_file(dir: &Path, rel: &str) -> Result<PackFile, String> {
 
 /// **Build a pack.**
 pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String> {
+    if opts.request.attention_weight_bits != 8 || opts.request.mlp_down_weight_bits != 8 {
+        return Err("selective weight precision is not represented by this runtime-pack profile; use the PALWART3 converter".into());
+    }
     let dir = &opts.pack_dir;
     if dir.join(PACK_FILE).exists() {
         return Err(format!("{} holds a pack already", dir.display()));

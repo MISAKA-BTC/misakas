@@ -556,7 +556,9 @@ def calibration_record(m: dict, opts: dict, texts: dict | None, measured: dict |
         "calibrated_context": c["len"] if c["kind"] == "recurrent" else None,
         "length_rule": "freeze-v1 §5.2: a recurrent program is calibrated on one sequence at least as long as the context it is "
                        "served at" if c["kind"] == "recurrent" else "not recurrent: the rule does not apply",
-        "policy": {"headroom16": 2.0, "headroom32": 4.0, "headroom_resid": 4.0, "linear_weight_bits": 8,
+        "policy": {"headroom16": 2.0, "headroom32": 4.0, "headroom_resid": 4.0, "linear_weight_bits": opts.get("linear_weight_bits", 8),
+                   "attention_weight_bits": opts.get("attention_weight_bits", 8),
+                   "mlp_down_weight_bits": opts.get("mlp_down_weight_bits", 8),
                    "gdn_core_wide": bool(opts.get("gdn_core_wide"))},
         "float_reference": "layer-major (every position through one layer before the next), f64 sums in index order; the threaded "
                            "kernels are bit-identical to the one-thread kernels, so the statistics do not depend on the core count",
@@ -607,7 +609,8 @@ def manifest_for(m: dict, variant: str | None, context: int | None = None, calib
     if m.get("history_artifact") and not is_a16(m):
         conv["history_artifact"] = dict(m["history_artifact"])
     if is_a16(m):
-        conv["a16"] = {"tool": f"qwen25-convert <source> --a16 --n-ctx {opts['n_ctx']} --out {opts['a16_file']}",
+        conv["a16"] = {"tool": f"qwen25-convert <source> --a16 --n-ctx {opts['n_ctx']} --out {opts['a16_file']}"
+                               + (" --a16-precise-embedding" if opts.get("precise_embedding") else ""),
                        "calibration": "the converter's own 57-token prompt (misaka/palw/base0/src/bin/qwen25-convert.rs), fixed in source",
                        **(calib or {})}
         if m.get("history_artifact"):
@@ -1201,6 +1204,12 @@ class Pipeline:
                     "--palwart-source-dir", str(d["src"]), "--palwart-calibration-file", str(calib), "--palwart-calibration-file", str(stats)]
             if o.get("gdn_core_wide"):
                 argv.append("--gdn-core-wide")
+            if o.get("mlp_down_weight_bits", 8) != 8:
+                argv += ["--mlp-down-weight-bits", str(o["mlp_down_weight_bits"])]
+            if o.get("attention_weight_bits", 8) != 8:
+                argv += ["--attention-weight-bits", str(o["attention_weight_bits"])]
+            if o.get("linear_weight_bits", 8) != 8:
+                argv += ["--linear-weight-bits", str(o["linear_weight_bits"])]
             argv += self.ram_args(d, "convert")
             if m["converter"] == "tir-gguf":
                 argv += ["--tokenizer", str(d["src"] / "tokenizer.json")]
@@ -1331,11 +1340,14 @@ class Pipeline:
         calibration_report = d["base"] / "a16-calibration-report.json"
         if not self.a.dry_run and out.exists() and prev.get("sha256") and prev.get("n_ctx") == opts["n_ctx"] \
                 and sha256_file(out) == prev["sha256"] and calibration_report.exists() \
-                and sha256_file(calibration_report) == prev.get("calibration_report_sha256"):
+                and sha256_file(calibration_report) == prev.get("calibration_report_sha256") \
+                and prev.get("precise_embedding", False) == opts.get("precise_embedding", False):
             log(f"#{m['id']} A16 file {out.name} reused ({prev['sha256'][:16]}…)")
             return prev
         argv = [self.tool("qwen25-convert"), str(d["src"]), "--a16", "--n-ctx", str(opts["n_ctx"]), "--out", str(out),
                 "--calibration-report", str(calibration_report)]
+        if opts.get("precise_embedding"):
+            argv.append("--a16-precise-embedding")
         if self.a.dry_run:
             self.r.run(argv)
             return {}
@@ -1356,6 +1368,7 @@ class Pipeline:
         if not calibration_report.exists():
             raise SystemExit("qwen25-convert did not produce its artifact-bound calibration report")
         info["calibration_report_sha256"] = sha256_file(calibration_report)
+        info["precise_embedding"] = bool(opts.get("precise_embedding"))
         st.data["a16"] = info
         st.save()
         return info
@@ -1517,6 +1530,12 @@ class Pipeline:
                 "--stats-in", str(d["calib"] / "calib-stats.json"), "--eval", str(d["calib"] / "eval-tokens.json"), "--exec", "--json"]
         if opts.get("gdn_core_wide"):
             argv.append("--gdn-core-wide")
+        if opts.get("mlp_down_weight_bits", 8) != 8:
+            argv += ["--mlp-down-weight-bits", str(opts["mlp_down_weight_bits"])]
+        if opts.get("attention_weight_bits", 8) != 8:
+            argv += ["--attention-weight-bits", str(opts["attention_weight_bits"])]
+        if opts.get("linear_weight_bits", 8) != 8:
+            argv += ["--linear-weight-bits", str(opts["linear_weight_bits"])]
         argv += self.ram_args(d, "fit")
         if self.a.dry_run:
             self.r.run(argv)
@@ -1765,6 +1784,12 @@ class Pipeline:
                 "--drift-windows", str(spec["drift_windows"]), "--json"]
         if opts.get("gdn_core_wide"):
             argv.append("--gdn-core-wide")
+        if opts.get("mlp_down_weight_bits", 8) != 8:
+            argv += ["--mlp-down-weight-bits", str(opts["mlp_down_weight_bits"])]
+        if opts.get("attention_weight_bits", 8) != 8:
+            argv += ["--attention-weight-bits", str(opts["attention_weight_bits"])]
+        if opts.get("linear_weight_bits", 8) != 8:
+            argv += ["--linear-weight-bits", str(opts["linear_weight_bits"])]
         argv += self.ram_args(d, "fit-long")
         if self.a.dry_run:
             self.r.run(argv)
@@ -1806,6 +1831,10 @@ class Pipeline:
         (stage / "README.md").write_text(model_card(m, self.a.gguf_variant, rec, man))
         shutil.copyfile(man_path, stage / "manifest.json")
         (stage / "palwart-record.json").write_text(json.dumps(rec, indent=1) + "\n")
+        for name in ("fit-report.json", "fit-long-report.json", "fit-a16-window-report.json", "a16-calibration-report.json"):
+            report = d["base"] / name
+            if report.exists():
+                shutil.copyfile(report, stage / name)
         if m["license"] == "apache-2.0":
             src_lic = d["src"] / "LICENSE"
             shutil.copyfile(src_lic if src_lic.exists() else APACHE, stage / "LICENSE")
@@ -1893,13 +1922,17 @@ class Pipeline:
         if not same(ri, rec["index_sha256"], rec["index_blob"]):
             problems.append(f"{rec['index_file']}: remote {ri}")
         stage = model_dirs(self.work, m)["stage"]
-        for n in ("README.md", "manifest.json", "LICENSE"):
+        # Cleanup follows this check, so verify the fit evidence and complete
+        # record as well as the container and its metadata before removing disk data.
+        names = {"README.md", "manifest.json", "LICENSE", "palwart-record.json"}
+        names.update(p.name for p in stage.iterdir() if p.is_file() and p.name != rec["index_file"])
+        for n in sorted(names):
             r = remote.get(repo_path(m, n))
             if not same(r, sha256_file(stage / n), git_blob_sha1(stage / n)):
                 problems.append(f"{n}: remote {r}")
         if problems:
             raise SystemExit(f"#{m['id']}: remote verification failed: {problems}")
-        st.mark("verify", {"files": len(rec["segments"]) + 4})
+        st.mark("verify", {"files": len(rec["segments"]) + 1 + len(names)})
         log(f"#{m['id']}: remote hashes equal the record")
 
     # -- cleanup -----------------------------------------------------------------------------------

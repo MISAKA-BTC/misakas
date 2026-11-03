@@ -188,7 +188,8 @@ fn main() {
         // The W8A16 path: measure fidelity and stop — this is the activation width the
         // quantization-regime ladder said the architecture needs.
         let started = std::time::Instant::now();
-        let artifact = misaka_palw_base0::convert::convert_qwen25_a16(&blob, &plan, &stats)
+        let precise_embedding = args.iter().any(|a| a == "--a16-precise-embedding");
+        let artifact = misaka_palw_base0::convert::convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, precise_embedding)
             .unwrap_or_else(|e| die(format!("a16 conversion failed: {e}")));
         // **The tokenizer, bound here.** It was computed above and applied only on the float lane
         // below — past this arm's `return` — so every artifact this lane has ever written carries
