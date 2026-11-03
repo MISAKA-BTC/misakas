@@ -126,14 +126,72 @@ pub(crate) fn publish_retained_file(path: &Path, bytes: &[u8], mode: RetainedPub
         };
     }
     pending.persist(path).map_err(|e| e.error)?;
-    #[cfg(unix)]
     if matches!(mode, RetainedPublication::DurableReplace) {
+        sync_retained_directory(dir)?;
+    }
+    Ok(true)
+}
+
+fn sync_retained_directory(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
         std::fs::File::open(dir)?.sync_all()?;
         if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
             std::fs::File::open(parent)?.sync_all()?;
         }
     }
-    Ok(true)
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
+/// Reuse an exact replay without staging a second copy under storage pressure.
+/// Re-sync the file and directory in case an earlier publication failed there.
+pub(crate) fn ensure_retained_replay<T>(
+    path: &Path,
+    bytes: &[u8],
+    reserve: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<bool> {
+    use std::io::{ErrorKind, Read};
+
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() && meta.len() == bytes.len() as u64 => {
+            let snapshot = RetainedFileV1::new(path.to_path_buf(), &meta);
+            let mut file = std::fs::File::open(path)?;
+            if snapshot.matches(&file.metadata()?) {
+                let mut buf = [0; 16 * 1024];
+                let mut identical = true;
+                for expected in bytes.chunks(buf.len()) {
+                    match file.read_exact(&mut buf[..expected.len()]) {
+                        Ok(()) if &buf[..expected.len()] == expected => {}
+                        Ok(()) => {
+                            identical = false;
+                            break;
+                        }
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                            identical = false;
+                            break;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                if identical && snapshot.matches(&file.metadata()?) {
+                    file.sync_all()?;
+                    let dir = path.parent().ok_or_else(|| std::io::Error::other("replay directory absent"))?;
+                    sync_retained_directory(dir)?;
+                    if std::fs::symlink_metadata(path).is_ok_and(|meta| snapshot.matches(&meta)) {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(meta) if !meta.is_file() => return Err(std::io::Error::other("replay path is not a regular file")),
+        Ok(_) => {}
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let _storage = reserve()?;
+    publish_retained_file(path, bytes, RetainedPublication::DurableReplace)
 }
 
 /// **The free space the space rule keeps**: `max(8 GiB, 5 % of the volume)`.
@@ -722,6 +780,39 @@ mod tests {
         };
         assert_eq!(retention_prune_plan_with_material_v1(&claims, chain, owed, 60 * MIN, 0, 40), (vec![3, 1, 2, 4], 0));
         assert_eq!((chain_reads.get(), obligation_reads.get()), (claims.len(), claims.len()));
+    }
+
+    #[test]
+    fn replay_retry_reuses_exact_durable_bytes_without_reserving_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claim.replay");
+        let bytes = vec![7; 32 * 1024 + 1];
+        let refuse = || Err::<(), _>(std::io::Error::other("storage budget exhausted"));
+        assert!(ensure_retained_replay(&path, &bytes, refuse).is_err());
+        assert!(!path.exists());
+        assert!(ensure_retained_replay(&path, &bytes, || Ok(())).unwrap());
+        assert!(!ensure_retained_replay(&path, &bytes, refuse).unwrap());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+        let mut different = bytes.clone();
+        *different.last_mut().unwrap() ^= 1;
+        assert!(ensure_retained_replay(&path, &different, refuse).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(ensure_retained_replay(&path, &different, || Ok(())).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), different);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replay_retry_rejects_symlinks_even_with_matching_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("existing");
+        let replay = dir.path().join("claim.replay");
+        std::fs::write(&existing, b"matching").unwrap();
+        std::os::unix::fs::symlink(&existing, &replay).unwrap();
+        assert!(ensure_retained_replay(&replay, b"matching", || Ok(())).is_err());
+        assert_eq!(std::fs::read(existing).unwrap(), b"matching");
+        assert!(std::fs::symlink_metadata(replay).unwrap().is_symlink());
     }
 
     #[test]

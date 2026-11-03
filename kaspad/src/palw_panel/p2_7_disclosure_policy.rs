@@ -504,7 +504,7 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     assert!(
         gate.contains_code("bytes.is_some_and(|bytes| {")
             && gate.contains_code("let path = self.fp_retained_replay_path(claim);")
-            && gate.contains_code("publish_retained_file(&path, &bytes, RetainedPublication::DurableReplace)")
+            && gate.contains_code("crate::palw_retention::ensure_retained_replay(&path, &bytes, || {")
             && gate.contains_code("if !kept {"),
         "the job is kept, or past the fence the licence is not signed"
     );

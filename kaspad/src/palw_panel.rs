@@ -7823,17 +7823,19 @@ impl PalwPanelService {
         let kept = bytes.is_some_and(|bytes| {
             let _publication = crate::palw_retention::pin_attempt_publication(*claim);
             let path = self.fp_retained_replay_path(claim);
-            let result = kaspa_utils::storage_budget::reserve_global(
-                kaspa_utils::storage_budget::StorageCategory::PalwRetained,
-                bytes.len() as u64,
-            )
-            .map_err(|e| e.to_string())
-            .and_then(|_storage| publish_retained_file(&path, &bytes, RetainedPublication::DurableReplace).map_err(|e| e.to_string()));
+            let result = crate::palw_retention::ensure_retained_replay(&path, &bytes, || {
+                kaspa_utils::storage_budget::reserve_global(
+                    kaspa_utils::storage_budget::StorageCategory::PalwRetained,
+                    bytes.len() as u64,
+                )
+                .map_err(|e| std::io::Error::other(e.to_string()))
+            });
             match result {
-                Ok(_) => {
+                Ok(true) => {
                     self.prune_foreign_retention(path.parent().expect("foreign retention directory"));
                     true
                 }
+                Ok(false) => true,
                 Err(e) => {
                     warn!("[{PALW_PANEL}] cannot retain the verified replay for claim {claim}: {e}");
                     false
