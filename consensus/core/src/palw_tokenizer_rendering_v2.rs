@@ -7,7 +7,7 @@ use crate::{
     palw_class_semantics_v1::PalwClassSemanticsV1,
     palw_fp_constraint_job_v1::{
         PALW_TOKEN_TABLE_MAX_LEAVES_V1, PalwTokenTableEogOpeningV1, PalwTokenTableOpeningV1, palw_fp_constraint_table_root_v1,
-        table_leaf_hash_v1,
+        table_eog_leaf_hash_v1, table_leaf_hash_v1,
     },
     palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
@@ -15,7 +15,7 @@ use crate::{
     palw_state_v2::{
         PalwChainStateV2, PalwStateParamsV2, PalwStateV2Error, PalwTransitionExtrasV1, palw_tir_public_original_quote_v1,
     },
-    palw_step_leg::PalwStepPrefixStreamV1,
+    palw_step_leg::{PalwStepPrefixStreamV1, step_opening_from_leaf_source_capped_v1},
     palw_tir_container_v1::{PalwTirContainerRowV1, palw_tir_bound_container_v1},
     palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
     palw_tir_public_source_v1::{PalwTirPublicAuthenticatedIdsV1, PalwTirPublicSourceV1},
@@ -71,28 +71,13 @@ pub fn derive_tokenizer_rendering_v2(
     eog: &PalwTokenTableEogOpeningV1,
     budget: PalwTokenizerRenderingBudgetV2,
 ) -> Result<PalwDerivedTokenizerRenderingV2, String> {
-    check_operands(statement, raw, eog, budget)?;
+    check_operands(statement, raw, eog.ids.len(), budget)?;
     let leaf_count = u64::from(statement.vocab) + 1;
     let lowest_eog_id = eog.lowest().ok_or("tokenizer table has no EOG")?;
     if eog.ids.iter().any(|id| *id >= statement.vocab) || !eog.verifies(&statement.table_root, statement.vocab) {
         return Err("tokenizer EOG does not open the registered table".into());
     }
-    if palw_tokenizer_raw_commitment_v1(raw) != statement.tokenizer_id {
-        return Err("tokenizer does not open the exact raw commitment".into());
-    }
-
-    let json = palw_unique_json_v1(raw)?;
-    let key_events = tokenizer_key_events_from_unique_json(&json)?;
-    if key_events > budget.key_events {
-        return Err("tokenizer exceeds its key event limit".into());
-    }
-    let rendering = match statement.rule {
-        PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1 => PalwQwenRenderingMapV1::from_unique_json(&json)?,
-    };
-    drop(json);
-    if rendering.highest_id() >= statement.vocab {
-        return Err("tokenizer names a token outside the registered vocabulary".into());
-    }
+    let (rendering, key_events) = checked_rendering_map_v2(statement, raw, budget.key_events)?;
 
     let mut tree = PalwStepPrefixStreamV1::new_capped_v1(leaf_count, &eog.opening, &[], PALW_TOKEN_TABLE_MAX_LEAVES_V1)
         .map_err(|err| err.to_string())?;
@@ -126,10 +111,76 @@ pub fn derive_tokenizer_rendering_v2(
     })
 }
 
+/// Construct the last-leaf opening from the original tokenizer and EOG IDs.
+/// This is an operator-side build. The registered root authenticates the EOG
+/// list, which is supplied separately from the tokenizer JSON.
+pub fn build_registered_tokenizer_eog_opening_v1(
+    statement: PalwTokenizerRenderingStatementV2,
+    raw: &[u8],
+    mut ids: Vec<u32>,
+) -> Result<PalwTokenTableEogOpeningV1, String> {
+    let budget = ROOTED_TOKENIZER_LIMITS_V1;
+    check_operands(statement, raw, ids.len(), budget)?;
+    if ids.is_empty() || ids.iter().any(|&id| id >= statement.vocab) {
+        return Err("tokenizer EOG IDs are empty or outside the registered vocabulary".into());
+    }
+    ids.sort_unstable();
+    if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("tokenizer EOG IDs contain a duplicate".into());
+    }
+    let scratch = tokenizer_scratch_bytes_v2(statement, ids.len()).ok_or("tokenizer scratch estimate overflow")?;
+    let _lease = global_memory_budget().try_reserve(MemoryClass::Native, scratch).map_err(|why| why.to_string())?;
+    let (rendering, _) = checked_rendering_map_v2(statement, raw, budget.key_events)?;
+    let eog_leaf = table_eog_leaf_hash_v1(&ids);
+    let vocab = u64::from(statement.vocab);
+    let rendered_bytes = std::cell::Cell::new(0u64);
+    let opening = step_opening_from_leaf_source_capped_v1(vocab + 1, vocab, PALW_TOKEN_TABLE_MAX_LEAVES_V1, |id| {
+        if id == vocab {
+            eog_leaf
+        } else {
+            let id = id as u32;
+            let entry = rendering.rendering(id);
+            rendered_bytes.set(rendered_bytes.get().saturating_add(entry.as_ref().map_or(0, |bytes| bytes.len() as u64)));
+            table_leaf_hash_v1(id, entry.as_deref())
+        }
+    })
+    .map_err(|why| why.to_string())?;
+    if rendered_bytes.get() > budget.total_rendering_bytes {
+        return Err("tokenizer exceeds its total rendering byte limit".into());
+    }
+    let eog = PalwTokenTableEogOpeningV1 { ids, opening };
+    if !eog.verifies(&statement.table_root, statement.vocab) {
+        return Err("derived tokenizer EOG does not open the registered table".into());
+    }
+    Ok(eog)
+}
+
+fn checked_rendering_map_v2(
+    statement: PalwTokenizerRenderingStatementV2,
+    raw: &[u8],
+    key_limit: u64,
+) -> Result<(PalwQwenRenderingMapV1, u64), String> {
+    if palw_tokenizer_raw_commitment_v1(raw) != statement.tokenizer_id {
+        return Err("tokenizer does not open the exact raw commitment".into());
+    }
+    let json = palw_unique_json_v1(raw)?;
+    let key_events = tokenizer_key_events_from_unique_json(&json)?;
+    if key_events > key_limit {
+        return Err("tokenizer exceeds its key event limit".into());
+    }
+    let rendering = match statement.rule {
+        PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1 => PalwQwenRenderingMapV1::from_unique_json(&json)?,
+    };
+    if rendering.highest_id() >= statement.vocab {
+        return Err("tokenizer names a token outside the registered vocabulary".into());
+    }
+    Ok((rendering, key_events))
+}
+
 fn check_operands(
     statement: PalwTokenizerRenderingStatementV2,
     raw: &[u8],
-    eog: &PalwTokenTableEogOpeningV1,
+    eog_count: usize,
     budget: PalwTokenizerRenderingBudgetV2,
 ) -> Result<(), String> {
     let leaf_count = u64::from(statement.vocab) + 1;
@@ -139,12 +190,16 @@ fn check_operands(
         || statement.vocab == 0
         || statement.vocab > budget.vocab
         || leaf_count > PALW_TOKEN_TABLE_MAX_LEAVES_V1
-        || eog.ids.len() > budget.eog_ids as usize
-        || eog.ids.len() > statement.vocab as usize
+        || eog_count > budget.eog_ids as usize
+        || eog_count > statement.vocab as usize
     {
         return Err("tokenizer rendering operands exceed their exact length or work limits".into());
     }
     Ok(())
+}
+
+fn tokenizer_scratch_bytes_v2(statement: PalwTokenizerRenderingStatementV2, eog_count: usize) -> Option<u64> {
+    statement.exact_raw_bytes.checked_mul(128)?.checked_add(4 * eog_count as u64 + 16_384)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
@@ -330,13 +385,10 @@ fn derive_with_native_scratch(
     use PalwVerifiedTokenizerRegistrationErrorV1::Evidence;
     let statement = identity.statement;
     budget.key_events = budget.key_events.min(identity.declared_key_events);
-    check_operands(statement, raw, eog, budget).map_err(Evidence)?;
+    check_operands(statement, raw, eog.ids.len(), budget).map_err(Evidence)?;
     // Same conservative parser multiplier as the existing Node tokenizer
     // check. Includes separate EOG-sort scratch and bounded tree overhead.
-    let scratch = statement
-        .exact_raw_bytes
-        .checked_mul(128)
-        .and_then(|bytes| bytes.checked_add(4 * eog.ids.len() as u64 + 16_384))
+    let scratch = tokenizer_scratch_bytes_v2(statement, eog.ids.len())
         .ok_or_else(|| Evidence("tokenizer scratch estimate overflow".into()))?;
     let _lease = memory.try_reserve(MemoryClass::Native, scratch)?;
     derive_tokenizer_rendering_v2(statement, raw, eog, budget).map_err(Evidence)
@@ -596,6 +648,21 @@ mod tests {
             rule: PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1,
         };
         (statement, table)
+    }
+
+    #[test]
+    fn builds_the_registered_eog_opening_and_rejects_substitution() {
+        let (mut statement, mut table) = fixture();
+        table.eog_token_ids = vec![0, 2];
+        statement.table_root = table.root();
+        let opening = build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![2, 0]).unwrap();
+        assert_eq!(opening, table.eog_opening().unwrap());
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![2, 2]).is_err());
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![1, 2]).is_err());
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![0, 4]).is_err());
+        let mut modified = RAW.to_vec();
+        modified[2] ^= 1;
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, &modified, vec![0, 2]).is_err());
     }
 
     #[test]
@@ -871,8 +938,10 @@ mod tests {
 
 // Fixed limits for the private native adapter. They are part of the record
 // identity and may only change under a new registration ruleset/version.
+pub const MAX_REGISTERED_TOKENIZER_RAW_BYTES_V1: u64 = 8 * 1024 * 1024;
+
 pub(crate) const ROOTED_TOKENIZER_LIMITS_V1: PalwTokenizerRenderingBudgetV2 = PalwTokenizerRenderingBudgetV2 {
-    raw_bytes: 8 * 1024 * 1024,
+    raw_bytes: MAX_REGISTERED_TOKENIZER_RAW_BYTES_V1,
     vocab: 262_144,
     key_events: 4 * 1024 * 1024,
     eog_ids: 4096,

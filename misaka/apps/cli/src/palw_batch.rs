@@ -16,6 +16,10 @@ use kaspa_consensus_core::{
         SignedMaterialIntakeV1, batch_stop_full_ids_range_v1, material_batch_carrier_fee_v1, material_batch_draft_id_v1,
     },
     palw_state_v2::PalwBondKeyV2,
+    palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1,
+    palw_tokenizer_rendering_v2::{
+        MAX_REGISTERED_TOKENIZER_RAW_BYTES_V1, PalwTokenizerRenderingStatementV2, build_registered_tokenizer_eog_opening_v1,
+    },
 };
 use kaspa_rpc_core::{GetPalwCourtStateRequest, api::rpc::RpcApi};
 use serde::Deserialize;
@@ -442,8 +446,66 @@ struct StopQuote {
     stop_reason: String,
     table_root: String,
     vocab: u32,
+    tokenizer: Option<StopTokenizerQuote>,
     eog_opening_bytes: u64,
     carrier_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StopTokenizerQuote {
+    id: String,
+    raw_bytes: u64,
+    rendering_rule: u8,
+    eog_count: u32,
+}
+
+pub(crate) enum StopEogSource<'a> {
+    Opening(&'a Path),
+    Tokenizer { path: &'a Path, eog_ids: Vec<u32> },
+}
+
+fn read_exact_stop_file(path: &Path, expected_bytes: u64) -> Result<Vec<u8>, CliError> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|file| file.take(expected_bytes + 1).read_to_end(&mut bytes))
+        .map_err(|why| refused(format!("{}: {why}", path.display())))?;
+    if bytes.len() as u64 != expected_bytes {
+        return Err(refused(format!("{}: file length differs from the Batch Stop quote", path.display())));
+    }
+    Ok(bytes)
+}
+
+impl StopQuote {
+    fn load_eog(&self, source: StopEogSource<'_>, table_root: Hash64) -> Result<Vec<u8>, CliError> {
+        if !(1..=MAX_BATCH_STOP_EOG_OPENING_BYTES_V1 as u64).contains(&self.eog_opening_bytes) {
+            return Err(refused("the quoted EOG opening exceeds the Batch Stop bound"));
+        }
+        match source {
+            StopEogSource::Opening(path) => read_exact_stop_file(path, self.eog_opening_bytes),
+            StopEogSource::Tokenizer { path, eog_ids } => {
+                let tokenizer = self.tokenizer.as_ref().ok_or_else(|| refused("the node did not quote the tokenizer registration"))?;
+                let rule = PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1;
+                if tokenizer.rendering_rule != rule as u8
+                    || !(1..=MAX_REGISTERED_TOKENIZER_RAW_BYTES_V1).contains(&tokenizer.raw_bytes)
+                    || eog_ids.len() != tokenizer.eog_count as usize
+                {
+                    return Err(refused("the tokenizer rule, file length or EOG count differs from the supported registration"));
+                }
+                let statement = PalwTokenizerRenderingStatementV2 {
+                    tokenizer_id: crate::palw_user::parse_hash("tokenizer", &tokenizer.id)?,
+                    exact_raw_bytes: tokenizer.raw_bytes, table_root, vocab: self.vocab, rule,
+                };
+                let raw = read_exact_stop_file(path, tokenizer.raw_bytes)?;
+                let eog = build_registered_tokenizer_eog_opening_v1(statement, &raw, eog_ids).map_err(refused)?;
+                let bytes = borsh::to_vec(&eog).map_err(|why| refused(why.to_string()))?;
+                if bytes.len() as u64 != self.eog_opening_bytes {
+                    return Err(refused("the derived EOG opening differs from its reserved size"));
+                }
+                Ok(bytes)
+            }
+        }
+    }
 }
 
 pub(crate) async fn stop(
@@ -451,7 +513,7 @@ pub(crate) async fn stop(
     key_source: &KeySource,
     bond: &str,
     claim: &str,
-    eog_path: &Path,
+    eog_source: StopEogSource<'_>,
     submit: bool,
     maximum_fee: Option<u64>,
 ) -> CliResult {
@@ -478,16 +540,8 @@ pub(crate) async fn stop(
     if now > assigned_daa || submit && now != assigned_daa {
         return Err(refused(format!("Batch Stop is booked at DAA {assigned_daa}, current fold DAA is {now}")));
     }
-    if !(1..=MAX_BATCH_STOP_EOG_OPENING_BYTES_V1 as u64).contains(&quote.eog_opening_bytes) {
-        return Err(refused("the quoted EOG opening exceeds the Batch Stop bound"));
-    }
-    let mut eog = Vec::new();
-    std::fs::File::open(eog_path)
-        .and_then(|file| file.take(quote.eog_opening_bytes + 1).read_to_end(&mut eog))
-        .map_err(|why| refused(format!("{}: {why}", eog_path.display())))?;
-    if eog.len() as u64 != quote.eog_opening_bytes {
-        return Err(refused("local EOG opening length differs from the original's reservation"));
-    }
+    let table_root = parse_hash("table root", &quote.table_root)?;
+    let eog = quote.load_eog(eog_source, table_root)?;
     let signing = BatchStopSigningV1 {
         claim, filer, scope_id: parse_hash("scope", &quote.scope_id)?, policy_id: parse_hash("policy", &quote.policy_id)?,
         semantics_id: parse_hash("semantics", &quote.semantics_id)?, position: quote.position,
@@ -496,7 +550,7 @@ pub(crate) async fn stop(
             "end-of-generation" => PalwFpStopReasonV3::EndOfGeneration,
             _ => return Err(refused("unknown native stop reason")),
         },
-        table_root: parse_hash("table root", &quote.table_root)?, vocab: quote.vocab,
+        table_root, vocab: quote.vocab,
     };
     let wire = signing.build_v1(network, &eog, |message, context| key.sign_with_context(message.as_byte_slice(), context).to_vec())
         .map_err(refused)?;

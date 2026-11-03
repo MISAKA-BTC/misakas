@@ -109,6 +109,10 @@ pub(crate) fn quote_batch_stop_v1(
             PalwFpStopReasonV3::EndOfGeneration => "end-of-generation",
         },
         "tableRoot": facts.statement.table_root.to_string(), "vocab": facts.statement.vocab,
+        "tokenizer": {
+            "id": facts.statement.tokenizer_id.to_string(), "rawBytes": facts.statement.exact_raw_bytes,
+            "renderingRule": facts.statement.rule as u8, "eogCount": facts.eog_count,
+        },
         "eogOpeningBytes": registration.opening_bounds_for_generated_ids_v1(plan.generated_ids).eog_opening_bytes,
         "carrierBytes": plan.carrier_bytes_v1(),
     }))

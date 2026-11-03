@@ -3558,3 +3558,30 @@ in the scanned page. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-filing-live.8Lq7Zo/page.json`,
 `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-signing.TyGvQf/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-quote-selector.iQo28j/tests.log`.
+
+## Build the Batch Stop EOG opening from the original tokenizer
+
+The booked Stop quote now exposes the original tokenizer commitment,
+exact raw length, rendering rule and EOG count. The operator command
+`misaka palw batch-stop --tokenizer-json FILE --eog-id ID` builds the
+opening locally with the native rendering rules. Repeat `--eog-id` for
+the EOG set from the model configuration. The builder bounds its input
+and scratch, checks the exact JSON commitment and authenticates the
+result against the quoted table root before signing. The existing
+`--eog-opening` input still accepts a prepared opening.
+
+The extracted tokenizer tests passed for altered input, incorrect IDs
+and a byte-identical opening against the full-table builder. The real
+local Qwen 8K tokenizer matched the recorded T12 tokenizer commitment.
+With the Qwen test geometry of 151,936 entries and two EOG IDs, the
+opening was 408 bytes and local derivation plus verification took
+1,837 ms. The reference table root for that comparison was computed
+locally. The CLI argument extraction passed one test for both input
+modes and their conflicts. Whole-node/CLI filing and Panel automation
+under the funded profile remain unverified.
+
+B0 and relay agreed at virtual DAA 19,724, with no new Qwen carrier in
+the scanned page. See
+`/private/tmp/misaka-t12-oom-20261102/g14-eog-derive-live.osM9DH/page.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-eog-derive.E67SXc/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-eog-cli.a45ROE/tests.log`.

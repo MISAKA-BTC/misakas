@@ -1755,7 +1755,7 @@ enum PalwCmd {
         #[arg(long)]
         maximum_fee_sompi: Option<u64>,
     },
-    /// Sign and fund the booked Batch Stop with a local Borsh EOG opening.
+    /// Sign and fund the booked Batch Stop with a local tokenizer or EOG opening.
     BatchStop {
         #[command(flatten)]
         key: KeyArgs,
@@ -1763,8 +1763,14 @@ enum PalwCmd {
         bond: String,
         #[arg(long)]
         claim: String,
-        #[arg(long)]
-        eog_opening: std::path::PathBuf,
+        #[arg(long, required_unless_present = "tokenizer_json", conflicts_with = "tokenizer_json")]
+        eog_opening: Option<std::path::PathBuf>,
+        /// Original tokenizer JSON, authenticated against the accepted registration.
+        #[arg(long, requires = "eog_ids")]
+        tokenizer_json: Option<std::path::PathBuf>,
+        /// EOG ID from the model configuration. Repeat for each ID.
+        #[arg(long = "eog-id", requires = "tokenizer_json", conflicts_with = "eog_opening")]
+        eog_ids: Vec<u32>,
         /// Broadcast at the reserved DAA. Otherwise preview.
         #[arg(long)]
         submit: bool,
@@ -3758,8 +3764,15 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
                 submit, maximum_fee_sompi).await })
         }
-        Command::Palw(PalwCmd::BatchStop { key, bond, claim, eog_opening, submit, maximum_fee_sompi }) => {
-            Box::pin(async move { palw_batch::stop(ctx, &key.source(), &bond, &claim, &eog_opening, submit, maximum_fee_sompi).await })
+        Command::Palw(PalwCmd::BatchStop { key, bond, claim, eog_opening, tokenizer_json, eog_ids, submit, maximum_fee_sompi }) => {
+            Box::pin(async move {
+                let source = match (eog_opening.as_deref(), tokenizer_json.as_deref()) {
+                    (Some(path), None) => palw_batch::StopEogSource::Opening(path),
+                    (None, Some(path)) => palw_batch::StopEogSource::Tokenizer { path, eog_ids },
+                    _ => return Err(CliError::new(exit::GENERIC, "provide an EOG opening or a tokenizer and EOG IDs")),
+                };
+                palw_batch::stop(ctx, &key.source(), &bond, &claim, source, submit, maximum_fee_sompi).await
+            })
         }
         Command::Palw(PalwCmd::TirRegistration {
             key,
