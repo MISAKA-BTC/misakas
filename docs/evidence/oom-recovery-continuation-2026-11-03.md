@@ -1133,3 +1133,10 @@ available memory fell below the 10 GiB guard. The isolated
 Darwin run then started with the existing corrected, hash-checked
 binary and registered artifact, network disabled and a 5 GiB
 RSS guard. The original signed output remains the expected result.
+
+At DAA 19,615, B0 and the relay both reported the class semantics
+and registration-origin fences as unscheduled. The retained
+checkpoint contains an active registrant bond for the DAA 508
+class. A prospective signed declaration would require an active
+rule and a later checkpoint that actually carries the declaration.
+Current signer authority was not inferred from the old snapshot.
