@@ -8,9 +8,9 @@ use kaspa_consensus_core::{
 #[test]
 fn active_round_fee_budget_defers_when_local_capacity_is_unavailable() {
     // This integration test owns its process-global resource admission.
-    // With no allocation policy the budget writer quotes the widest u16
-    // assignment row per journal write. This lease reserves logical bytes.
-    let limit = 128 << 30;
+    // The fixed-row Round preview fits this logical cap even without a model
+    // allocation policy. Hold all of it to force the retry path.
+    let limit = 16 << 20;
     arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: limit }));
     let state = PalwChainStateV2::genesis();
     let params =

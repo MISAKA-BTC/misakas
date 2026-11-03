@@ -1155,3 +1155,17 @@ Strict Core/Consensus library Clippy and Consensus test-target checks with
 and without the EVM feature passed on the same source as both successful
 runtime checks. The compressed verification record retains both failed
 fixture runs separately.
+
+## Fixed-row Round budget journal quote
+
+The budget writer now charges its fixed-row operations for the pinned
+1,024-byte Borsh encoding buffers. The two capital-allocation operations
+that can write assignment rows still use the variable-length estimate.
+The journal checks the fixed-row bound and rejects unexpected assignment
+writes before adding the journal to the native delta.
+
+This removes the u16-wide capital-assignment quote from the Round fee
+preview with no allocation policy. The regression restores its 16 MiB
+logical cap and holds that entire cap before retrying. Strict Core and
+Consensus library Clippy passed. The guarded runtime command was compiling
+the default optimized Core library at this checkpoint.

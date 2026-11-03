@@ -1534,5 +1534,13 @@
     "stored_sha256": "de381d3065a22ce1c3bfc3de48fdeab814416072a9f4c17d6b40f0efb7c805af",
     "raw_bytes": 587000,
     "stored_bytes": 40321
+  },
+  {
+    "raw_name": "round-budget-quote-clippy.log",
+    "stored_name": "round-budget-quote-clippy.log.gz",
+    "raw_sha256": "a36810dcc37cb086ee12184d4b249ee1fe6d1986cbd58f9ab9f4736217dee897",
+    "stored_sha256": "a2628e229da3a8de283b49bc97898fd6ef4ba23d2719236e05018d8a6d5897a8",
+    "raw_bytes": 341715,
+    "stored_bytes": 23633
   }
 ]

@@ -52,6 +52,9 @@ pub(super) const PALW_BUDGET_WRITES_PER_ROW_V1: u64 = 16;
 /// count, and the material root/source/due indexes touched by one income row (at most four of them for one write).
 pub(super) const PALW_BUDGET_INDEX_NODES_PER_WRITE_V1: u64 = 4;
 
+/// Borsh's initial buffer covers every fixed-size budget key and row.
+const PALW_BUDGET_FIXED_ENCODING_BYTES_V1: u64 = 1024;
+
 /// RFC-0006 (RFC06-1): the rows a material sweep may touch — every material income row of the engine.
 fn material_rows_v1(builder: &TransitionBuilder<'_>) -> usize {
     builder.state.bond_budget.as_ref().map_or(0, |b| b.material_income.len())
@@ -844,24 +847,28 @@ impl TransitionBuilder<'_> {
 
     /// **RFC-0006 (RFC06-1): admit an engine op's growth before it runs** — `growth.writes` journal entries, each at most one new
     /// membership of the widest engine table, [`PALW_BUDGET_INDEX_NODES_PER_WRITE_V1`] derived-index nodes and three canonical
-    /// encodings (pinned Borsh: at least 1,024 bytes each, at most twice the widest row — an assignment row of
-    /// `max_models_per_bond` entries), its delta slot and the op's own journal Vec; plus `growth.rows` rows of op scratch (the
-    /// collected due/credit lists) and the assignment heap the op names. A no-op with tracking off (every preset).
+    /// encodings, its delta slot and the op's own journal Vec. Only allocation operations that can write a capital
+    /// assignment quote the variable-length row encoding. Also covers `growth.rows` rows of scratch and the assignment
+    /// heap the op names. A no-op with tracking off (every preset).
     fn admit_bond_budget_growth_v1(&mut self, growth: PalwBudgetGrowthV1) -> Result<(), PalwStateV2Error> {
         use crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1 as Node;
         use std::mem::size_of;
         if !self.native_writers_tracking_v1() {
             return Ok(());
         }
-        // An assignment row's width is the ALLOCATION policy's (ADR-0177); without that fence the widest a u16 count admits.
-        let max_models = self
-            .params
-            .bond_budget()
-            .and_then(|mirror| mirror.allocation.as_ref())
-            .map_or(u64::from(u16::MAX), |(_, policy)| u64::from(policy.max_models_per_bond));
-        let entry = size_of::<(Hash64, u64)>() as u64;
-        let assignment_row = max_models.saturating_mul(2).saturating_mul(entry).saturating_add(64);
-        let encoding = assignment_row.saturating_mul(2).max(1024);
+        let assignment_row = if growth.assignment_rows == 0 {
+            0
+        } else {
+            // Allocation operations retain the bound for both effective and pending assignments.
+            let max_models = self
+                .params
+                .bond_budget()
+                .and_then(|mirror| mirror.allocation.as_ref())
+                .map_or(u64::from(u16::MAX), |(_, policy)| u64::from(policy.max_models_per_bond));
+            let entry = size_of::<(Hash64, u64)>() as u64;
+            max_models.saturating_mul(2).saturating_mul(entry).saturating_add(64)
+        };
+        let encoding = assignment_row.saturating_mul(2).max(PALW_BUDGET_FIXED_ENCODING_BYTES_V1);
         let widest_row = [
             size_of::<Node<Hash64, PalwBudgetClaimRowV1>>(),
             size_of::<Node<PalwBondKeyV2, PalwBudgetBondRowV1>>(),
@@ -918,13 +925,30 @@ impl TransitionBuilder<'_> {
         let mut journal = Vec::new();
         let out = f(&mut budget, &self.state, &mut journal);
         self.state.bond_budget = Some(budget);
-        if self.native_writers_tracking_v1() && journal.len() as u64 > growth.writes {
-            return Err(super::native_writers::native_err_v1(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
-                PalwBudgetWriteV1,
-            >(
-                "bond budget engine op",
-                "the op journaled more writes than its admitted bound",
-            )));
+        if self.native_writers_tracking_v1() {
+            let fault =
+                |reason| {
+                    super::native_writers::native_err_v1(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                        PalwBudgetWriteV1,
+                    >("bond budget engine op", reason))
+                };
+            if journal.len() as u64 > growth.writes {
+                return Err(fault("the op journaled more writes than its admitted bound"));
+            }
+            if growth.assignment_rows == 0
+                && journal.iter().any(|write| match write {
+                    PalwBudgetWriteV1::Header { .. } => false,
+                    PalwBudgetWriteV1::Row { table, key, old, new } => {
+                        *table == PALW_BUDGET_TABLE_ASSIGNMENTS_V1
+                            || std::iter::once(key)
+                                .chain(old)
+                                .chain(new)
+                                .any(|buf| buf.capacity() as u64 > PALW_BUDGET_FIXED_ENCODING_BYTES_V1)
+                    }
+                })
+            {
+                return Err(fault("the op journaled an encoding outside its fixed-size bound"));
+            }
         }
         self.journal_bond_budget(journal);
         Ok(Some(out))
