@@ -1652,3 +1652,19 @@ funding-relay test metadata compiled in isolation. The added full Core
 regression has yet to run. Independent job aliases and staged legacy writers
 still need prospective protection. This candidate supplies no op9 acceptance
 or terminal settlement result.
+
+### Staged legacy ingress and integrated Clippy
+
+The [reconciled candidate](reconciled-legacy-ingress-candidate-20261103.tar.gz)
+adds the same pre-write claim ownership check at the central staged court
+writer. The exact extracted mapper and existing ordered reader agreed on all
+26 subject namespaces and the four unrelated namespaces in the isolated
+probe. The scratch Core and focused test metadata compiled. The complete
+guard, both alias index candidates and the typed archive errors reconcile in
+one patch against A0. The reconciled Core library and focused funding-relay
+test metadata compiled in isolation. Runtime remains outstanding.
+
+The [integrated Clippy result](archive-custody-clippy-20261103.json.gz) exits
+zero on the existing A0 source map with unchanged inputs and warnings denied
+for Contract, Core and Consensus. The test-target and runtime stages use the
+same source pin and have not reported a verdict at this checkpoint.
