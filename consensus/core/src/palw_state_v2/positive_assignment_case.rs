@@ -1530,24 +1530,34 @@ impl TransitionBuilder<'_> {
         let NativeAssignedCaseBackingV2::Committed(backing) = backing else {
             return Err(missing());
         };
-        let assignment = backing.assignment().id();
-        let pin = *backing.pin();
-        let record = backing.records().last().ok_or_else(missing)?;
-        if backing.records().len() as u64 != pin.head.sequence || record.carriage().origin() != pin.head.history.origin {
-            return Err(refuse("Case archive differs from its rooted journal extent or latest origin"));
-        }
-        if backing.parent() != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
-            return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
-        }
-        let (_, bundle, current) = rooted_bundle(&self.state, assignment)?;
-        if current != pin {
-            // A preceding operation in this block can advance the head. Its
-            // unpublished material must be replayed before this operation.
-            return Err(missing());
-        }
-        let machine = replay_assigned_court_history_v2(&self.state, backing, &bundle)?;
-        Ok((backing, machine, bundle.case))
+        let (machine, row) = recover_case_subject_v2(&self.state, backing, action.selected_parent(), case, expected_result)?;
+        Ok((backing, machine, row))
     }
+}
+
+fn recover_case_subject_v2(
+    state: &PalwChainStateV2,
+    backing: &NativeCommittedAssignedCaseV2,
+    parent: BlockHash,
+    case: CaseId,
+    expected_result: Option<ResultId>,
+) -> Result<(NativeAssignedCourtV2, CaseRow), PalwStateV2Error> {
+    let pin = *backing.pin();
+    let record = backing.records().last().ok_or_else(missing)?;
+    if backing.records().len() as u64 != pin.head.sequence || record.carriage().origin() != pin.head.history.origin {
+        return Err(refuse("Case archive differs from its rooted journal extent or latest origin"));
+    }
+    if backing.parent() != parent || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
+        return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
+    }
+    let (_, bundle, current) = rooted_bundle(state, backing.assignment().id())?;
+    if current != pin {
+        // An earlier operation in the block may have advanced the head.
+        // Its unpublished material must be replayed before using that head.
+        return Err(missing());
+    }
+    let machine = replay_assigned_court_history_v2(state, backing, &bundle)?;
+    Ok((machine, bundle.case))
 }
 
 // The concrete archive/Remaining/service factory is still required. These raw
