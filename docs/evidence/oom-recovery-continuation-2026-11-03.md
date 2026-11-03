@@ -1094,3 +1094,42 @@ source-only.
 The isolated Qwen #21 Linux job was still compiling. Its reported
 memory peak was 2.58 GB with zero cgroup OOM events and about
 15.68 GB of free production root capacity.
+
+## Retention recheck and exact codec 1 refusal — 05:48 UTC
+
+Qwen #47 was visible in the selected merge scan and on the public
+WebSocket. Both B0 and the relay lacked the exact claim row. B0's
+journal recorded the retention refusal at 20,606 DAA remaining
+against 20,608 required. Public REST and the relay agreed on the
+selected tip at virtual DAA 19,614.
+
+The retention janitor now uses the current resident obligation
+oracle during planning and again at deletion for both income and
+DA holds. Previously the deletion recheck could bypass a newly
+observed income hold below R-core. Two extracted production-path
+fixtures reproduced deletion on the old source and passed on the
+new source, including an unavailable resident state. Kaspad
+metadata also passed against cached dependencies. The change is
+source-only.
+
+B0 served the same historical codec 0 stream for pruning point
+`4dc9…1ab9e`. All 12 chunks, 47,050,528 bytes, matched the saved
+stream root, first-chunk SHA and independent keyed hash replay.
+The temporary non-permanent peer and tunnel were closed. B0
+retained the same process and public relay peer.
+
+The old Rust decoder and declaration validators were rerun against
+the captured bytes under the pinned T12 genesis, params and
+schedule. Legacy validation passed. Strict validation failed for
+Qwen class `7d7e…922fc`, registered at DAA 508. Its valid
+9,362-byte declaration is present, but the checkpoint has neither
+an authenticated canonical semantics row nor a registration-origin
+row. The strict sender checks that identity before zlib, so the
+captured checkpoint fails prior to compression. The capture is
+evidence for the refusal and has not been installed as a sync seed.
+
+The Linux Qwen #21 job stopped before arithmetic when host
+available memory fell below the 10 GiB guard. The isolated
+Darwin run then started with the existing corrected, hash-checked
+binary and registered artifact, network disabled and a 5 GiB
+RSS guard. The original signed output remains the expected result.
