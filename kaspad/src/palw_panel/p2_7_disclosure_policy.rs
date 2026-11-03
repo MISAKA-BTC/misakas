@@ -460,6 +460,55 @@ fn an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block() {
     facts.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: None };
     let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec()], &event, false);
     assert!(built.is_err() && kept.is_none(), "no block in this store: nothing to re-make from");
+
+    // A provider's matching manifest is insufficient: the original bytes
+    // must also reproduce the current carrier's job and signed output root.
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &facts, Hash64::default(), &run.material));
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &facts, run.output_root, b"garbage"));
+    let mut no_anchor = facts.clone();
+    no_anchor.lane = PalwDaLaneV1::Attempt { anchor: Hash64::default(), attempt_draw: Some(true), job: None };
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &no_anchor, run.output_root, &run.material));
+    let mut no_draw = facts.clone();
+    no_draw.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: None, job: None };
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &no_draw, run.output_root, &run.material));
+    assert!(palw_da_verify_provider_attempt_v1(&backend, &facts, run.output_root, &run.material));
+    let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec(), run.material], &event, false);
+    let built = built.expect("provider material answers even when the local replay cannot run");
+    assert!(matches!(built.answers.as_slice(), [Some(Ok(_))]) && !built.remade && kept.is_none());
+}
+
+#[test]
+fn provider_court_slot_is_carrier_scoped_and_expires_after_one_full_pass() {
+    let claim = Hash64::from_u64_word(1);
+    let carrier = Hash64::from_u64_word(2);
+    let other = Hash64::from_u64_word(3);
+    let tick = std::time::Instant::now();
+    let mut ready = PendingProviderMaterialV1 {
+        claim,
+        roots: misaka_palw_remote::evidence::ClaimRoots {
+            network_domain: other,
+            trace_root: other,
+            output_root: other,
+            execution_root: other,
+            trace_chunk_count: 1,
+            retention_deadline: 20_100,
+        },
+        material: FetchedProviderMaterialV1 {
+            bytes: vec![1],
+            report: misaka_palw_remote::evidence::FetchReport { served_by: vec![], failures: vec![] },
+            http_admission: None,
+        },
+        court_carrier: Some(carrier),
+        ready_at: tick + std::time::Duration::from_secs(1),
+    };
+    assert!(ready.matches_court(claim, carrier));
+    assert!(!ready.matches_court(other, carrier));
+    assert!(!ready.matches_court(claim, other));
+    assert!(!ready.unused_after_court_pass(tick), "a late fetch gets the next Court pass");
+    assert!(ready.unused_after_court_pass(ready.ready_at), "no matching duty relinquishes the slot");
+    ready.court_carrier = None;
+    assert!(!ready.matches_court(claim, carrier));
+    assert!(!ready.unused_after_court_pass(ready.ready_at), "seat fetches keep their own admission path");
 }
 
 /// **The tick runs R-core's loop, and it runs before the seat's duties** (the P2-7 review's
