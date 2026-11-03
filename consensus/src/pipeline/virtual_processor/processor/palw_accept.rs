@@ -122,6 +122,12 @@ impl VirtualStateProcessor {
             blue_score: 0,
             subsidy: 0,
         });
+        facts.fp_certified = kaspa_consensus_core::palw_state_v2::palw_fp_lane_available_v1(
+            &state,
+            state_params,
+            &class_id,
+            extras.tir_public_conviction_active,
+        );
         facts.class_admission_refusal =
             kaspa_consensus_core::palw_state_v2::palw_class_admits_claim_v1(&state, state_params, &extras, &class_id, candidate_daa)
                 .err()

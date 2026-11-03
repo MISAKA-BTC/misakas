@@ -19573,6 +19573,31 @@ pub fn palw_v2_origin_rehearsal_v1(
     }
 }
 
+/// Whether the free-prompt lane admits this class under the legacy gate or the active
+/// TIR court's certified primitive-family coverage. Shared by admission and producer reads.
+pub fn palw_fp_lane_available_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    class_id: &Hash64,
+    tir_public_conviction_active: bool,
+) -> bool {
+    if params.fp_certified_classes().is_none_or(|classes| classes.contains(class_id))
+        || state.fp_lane_certification(class_id).is_some()
+    {
+        return true;
+    }
+    if !tir_public_conviction_active {
+        return false;
+    }
+    let Some(record) = state.tir_class_v1(class_id) else { return false };
+    let families = state
+        .certified_family_records(PalwCertifiedLaneV1::Attempt)
+        .values()
+        .chain(state.certified_family_records(PalwCertifiedLaneV1::FreePrompt).values())
+        .map(|record| &record.family);
+    crate::palw_tir_fp_lane_v1::palw_tir_fp_lane_covered_v1(record, families).is_ok()
+}
+
 mod objects;
 use objects::apply_object;
 

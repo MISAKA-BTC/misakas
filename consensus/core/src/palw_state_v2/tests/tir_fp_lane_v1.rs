@@ -372,6 +372,12 @@ fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3
     // Past it: the unbound class's original is refused at the door.
     let mut past = l.extras.clone();
     past.tir_container_identity_active = true;
+    let PalwConsensusObjectV2::FreePromptCommitted { public_job: Some(original), .. } = &l.object else { unreachable!() };
+    let quote = |state| palw_tir_public_original_quote_v1(state, &l.p, &past, AT_DAA, original, &l.envelope.header);
+    assert!(matches!(
+        quote(&l.state).unwrap_err(),
+        PalwStateV2Error::ClassNotRewardable { code, .. } if code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1
+    ));
     assert!(matches!(
         apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &past).unwrap_err(),
         PalwStateV2Error::ClassNotRewardable { code, .. } if code == PALW_TIR_UNBOUND_CONTAINER_CODE_V1
@@ -379,6 +385,7 @@ fn tir_fp_lane_past_the_container_fence_takes_only_a_class_bound_to_its_palwart3
     // The registrant binds the class; again is nothing; another container is refused.
     let (bound_state, bound_delta) =
         apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&bound), &past).expect("the binding folds");
+    assert!(quote(&bound_state).expect("the bound class quotes").is_some());
     // Restart / IBD: the stored delta replayed on the parent rebuilds the same row and root; reorg: reverting it removes the row.
     let replayed = apply_delta_v2(&l.state, &bound_delta, &l.p).expect("the stored delta replays");
     assert_eq!(replayed.state_root(), bound_state.state_root(), "replaying the stored delta restores the bound container");
@@ -537,6 +544,8 @@ fn tir_fp_lane_is_authenticated_by_one_covering_family_on_a_gated_network() {
     for certify in [false, true] {
         let mut l = lane(certify);
         l.p = l.p.with_fp_certified_classes(Default::default());
+        assert!(!palw_fp_lane_available_v1(&l.state, &l.p, &l.class_id, false));
+        assert_eq!(palw_fp_lane_available_v1(&l.state, &l.p, &l.class_id, true), certify);
         let folded = apply_derived(&l.state, &l.p, &at(), std::slice::from_ref(&l.object), &l.extras);
         if certify {
             assert!(folded.is_ok(), "a covered IR class takes its framed claim: {:?}", folded.err());
