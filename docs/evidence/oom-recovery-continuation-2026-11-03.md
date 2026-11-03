@@ -2911,3 +2911,26 @@ remain unverified. See
 B0 and relay agreed at DAA 19,701 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-carrier-live.sEHazw/page.json`.
+
+## Rooted prerequisites for the Batch Stop slot
+
+The candidate slot check derives the same packet IDs as the planner.
+It requires the original's accepted one-range FullIds demand, a
+rooted FullIds row with the matching scope, retention and count,
+and live ownership of the Finish, verification and Stop packets.
+The rooted causal book must link the three in order and reserve the
+exact Stop DAA and enough bytes. FullIds may have been accepted
+earlier on the same branch, but must be available by the reserved
+Finish DAA. The verifier slot is a capacity reservation. The actual
+Stop verifier and verdict fold still need to consume these checks.
+
+The extracted suite passed 37 checks. The slot fixture accepts
+timely FullIds and rejects late material, the wrong Stop DAA, a
+different carrier length, missing packet ownership and a missing
+causal edge. This uses the actual scheduler with synthetic costs.
+The rooted-state adapter and integrated Node build remain unrun.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-rooted-slot.OYy2TC/tests.log`.
+
+B0 and relay agreed at DAA 19,702 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-rooted-slot-live.tJLf8Y/page.json`.
