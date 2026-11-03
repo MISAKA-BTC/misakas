@@ -134,6 +134,9 @@ pub struct ValidatedBatchCarrierV1 {
     at: PalwBlockContextV2,
 }
 
+crate::palw_native_resource_v1::native_struct!(PreparedBatchCarrierV1; carrier, wire, storage_rent);
+crate::palw_native_resource_v1::native_struct!(ValidatedBatchCarrierV1; batch, budget, at);
+
 /// Clones of the accepting-block handoff share the decoded bytes and lease.
 pub type SharedValidatedBatchCarrierV1 = Arc<NativeRetainedV1<ValidatedBatchCarrierV1>>;
 
@@ -417,6 +420,13 @@ mod tests {
         assert_eq!(metered.fee_v1(), full_split);
         assert_eq!(requests.len(), 2);
         assert!(requests[0] > crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64 && requests[1] > 0);
+        {
+            use crate::palw_native_resource_v1::NativeHeapV1;
+            let heap = metered.native_heap_v1("accepted Batch handoff").bytes().unwrap();
+            let fee_node = btree_node_envelope_bytes_v1::<[u8; 64], u64>() as u64;
+            assert!(heap >= fee_node + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64);
+            assert!(requests[0] >= heap, "the handoff ticket covers its retained heap");
+        }
         let mut malformed = tx.clone();
         malformed.payload[BATCH_COURT_CARRIER_MAGIC_V1.len()] = u8::MAX;
         malformed.finalize();

@@ -29,6 +29,8 @@ pub struct CarrierFeeBudgetV1 {
     allocations: BTreeMap<[u8; 64], u64>,
 }
 
+crate::palw_native_resource_v1::native_struct!(CarrierFeeBudgetV1; carrier, actual_fee, remaining, allocations);
+
 impl CarrierFeeBudgetV1 {
     pub fn from_populated_v1(tx: &PopulatedTransaction<'_>) -> Result<Self, CarrierFeeRefusalV1> {
         Self::from_entries(tx.tx, &tx.entries)

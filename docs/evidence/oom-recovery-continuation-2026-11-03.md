@@ -3007,3 +3007,26 @@ retention threshold at 20,000 was still ahead.
 Evidence is in
 `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-filer.uGanGJ/tests.log` and
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-filer-live.et1i0S/page.json`.
+
+## Native inventory for accepted Batch handoffs
+
+The exhaustive `PalwTransitionExtrasV1` visitor was missing both BCT1
+fields. Its struct destructure could not cover the accepting fold as
+written. The inventory now covers all 99 fields in source order. The
+typed visitor also includes the Open ranges and signature, the Respond
+intake, the Stop bytes, the decoded carrier, and the fee-allocation map.
+The extras scanner describes both fields and uses the existing refusal
+for runtime-owned handoffs. This is a transient handoff, with no change
+to the persisted formats or fee policy.
+
+The extracted Rust 1.93 suite passed 38 checks, including the accepted
+Respond handoff's allocation ticket covering the typed heap of the
+retained carrier and its fee map. The harness uses cached Core and
+cannot invoke the crate-private lease test helper. Whole-Core metadata
+and native replay remain unrun here. Local memory reported 67% free
+and disk had 428 MiB free, below the existing guarded build floors.
+
+The paired read agreed at DAA 19,706 and found no Qwen carrier in the
+newly scanned selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-native-handoff-inventory.dfyZTI/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-handoff-live.ysomEA/page.json`.
