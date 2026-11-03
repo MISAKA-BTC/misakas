@@ -1737,3 +1737,39 @@ A read-only fingerprint closure resolved 38 metadata units, including
 both Core feature sets and Kaspad default+EVM, with every unchanged
 direct artifact present. The bounded runner is prepared. A separate A0
 compiler was active, so this compile slot remained unused.
+
+## Isolated Linux type check and strict IBD recheck — 07:32 UTC
+
+B0, relay and public Explorer agreed at virtual DAA 19,647. Qwen #66's
+carrier at 19,644 appeared in the selected fold at 19,646. Both nodes
+lacked the exact claim and B0 reported 20,606 DAA of remaining retention
+against 20,608 required. The DAA 20,000 rule remained unarmed on both.
+The Qwen readiness inventory had nine independently eligible bonds,
+zero independently ready and zero assigned.
+
+The original #58 now has a prepared held-dissection fixture at
+zero-based prefill position 16. Its 17 history positions make two
+tiles, one full and one ragged, and require a real disclosure and
+choice. The negative case compensates the two child accumulators
+while preserving the root aggregate and signed output. This fixture
+has not been compiled or executed. The separate A0 compiler remained
+live on Darwin.
+
+The isolated Linux mining-worker type check for `f8b39718a` is active
+on Seat5 under `misaka-t12-g1-mining-check-20261103t0731z.service`,
+invocation `5afe92616cd94d49875bf55d6a51f34c`. The verified Git
+archive and source pins are in a private RAM stage. Cargo is offline
+in a separate network namespace with a private target tmpfs, one CPU,
+a 6 GiB memory cap, no swap and monitored host disk and RAM reserves.
+The observed process was compiling dependencies after 72 seconds.
+Its cgroup reported zero OOM and zero kills. The scope is mining
+worker test metadata, and no test verdict has been recorded yet.
+
+A byte-identical native replay of the archived registration and
+checkpoint confirmed why the strict IBD source still fails. Both
+current B0 and relay advertised the same affected pruning point
+at 19,647. The archived DAA 508 declaration and signature verify,
+while the committed checkpoint lacks both the canonical semantics
+and native registration-origin rows. The release's current strict
+rules refuse that checkpoint. The old checkpoint and archives were
+preserved.
