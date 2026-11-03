@@ -19,7 +19,7 @@ use kaspa_consensus_core::{
     tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry, ValidatedTransaction},
     utxo::utxo_view::UtxoView,
 };
-use misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2;
+use misaka_palw_positive_contract::assignment::funding_relay_rows::{FUNDING_RELAY_CHARGE_BYTES_V2, FundingRelayCarrierFeesV2};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -424,6 +424,103 @@ pub(in crate::pipeline::virtual_processor) enum AssignmentIngressPrerequisiteV2 
     PendingFraudReservationOwner,
     NativeAssignmentCheckpointOwner,
 }
+impl VirtualStateProcessor {
+    /// Check the archived registration behind an exact repeat against the
+    /// actual selected-parent state and its persisted acceptance index.
+    /// The final fold still owns the original custody/replay decision.
+    fn check_exact_relay_archive_v2(
+        &self,
+        parent: BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        body: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayRegistrationBodyV2,
+        payload: &[u8],
+    ) -> Result<(), NativeCoverageV1> {
+        use kaspa_consensus_core::palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2};
+        use misaka_palw_positive_contract::{
+            native::NativeRowKey,
+            rows::{NativeRowBody, NativeRowValue},
+        };
+
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("rooted relay archive", why);
+        let workspace = (4 * size_of::<NativeRowValue>() + 2 * size_of_val(body) + 2 * 1024 + 2 * 74) as u64;
+        let _lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(workspace)?)?;
+        let funding = body.terms.funding_outpoint;
+        let purpose = body.terms.funding_purpose;
+        let rows = PositiveRowsV2::new(state);
+        let row = match rows.read(NativeRowKey::FundingRelayAuthorization { funding, purpose }) {
+            Ok(Some(row)) => row,
+            Ok(None) | Err(PositiveRowErrorV2::MissingKernelRoute) => return Ok(()),
+            Err(_) => return Err(fault("malformed rooted relay authorization")),
+        };
+        let NativeRowBody::FundingRelayAuthorization(auth) = row.body else {
+            return Err(fault("unexpected rooted relay authorization kind"));
+        };
+        if auth.terms != body.terms || auth.purpose_signature != body.purpose_signature {
+            return Ok(()); // Core deterministically refuses the different package.
+        }
+        let Some(NativeRowBody::FundingRelayCustody(custody)) = rows
+            .read(NativeRowKey::FundingRelayCustody { funding, purpose })
+            .map_err(|_| fault("malformed rooted relay custody"))?
+            .map(|row| row.body)
+        else {
+            return Err(fault("missing rooted relay custody"));
+        };
+        if custody.relay_signature != body.relay_signature {
+            return Ok(()); // A different literal package cannot use the archive.
+        }
+        custody.check_pair(&auth).map_err(|_| fault("rooted relay rows disagree"))?;
+        // Two rooted rows, reachability, header, acceptance index and both
+        // material keys. Reserve the bytes for all four fixed records before
+        // assigning the remaining work to the variable acceptance record.
+        if auth.quote.usage.replay_reads < 7 || auth.quote.usage.heap_bytes < workspace {
+            return Err(fault("original relay replay limits do not cover archive lookup"));
+        }
+        let auth_bytes = borsh::object_length(&auth).map_err(|_| fault("original relay authorization extent"))? as u64;
+        let custody_bytes = borsh::object_length(&custody).map_err(|_| fault("original relay custody extent"))? as u64;
+        // Both Borsh row envelopes (version, revision, kind) and aux keys.
+        let fixed_work = auth_bytes
+            .checked_add(custody_bytes)
+            .and_then(|n| n.checked_add((payload.len() + FUNDING_RELAY_CHARGE_BYTES_V2 + 2 * (74 + 5)) as u64))
+            .ok_or_else(|| fault("original relay fixed replay extent overflow"))?;
+        let maximum_bytes = auth
+            .quote
+            .usage
+            .replay_work
+            .checked_sub(fixed_work)
+            .ok_or_else(|| fault("original relay replay budget cannot cover literal records"))?;
+
+        let origin = auth.origin;
+        let accepting = BlockHash::from_bytes(origin.accepting_block.0);
+        if origin.event_ordinal != 0
+            || !self
+                .reachability_service
+                .try_is_chain_ancestor_of(accepting, parent)
+                .map_err(|_| fault("original relay reachability unavailable"))?
+        {
+            return Err(fault("original relay origin is outside selected-parent lineage"));
+        }
+        let header = self.headers_store.get_header(accepting).map_err(|_| fault("original relay accepting header unavailable"))?;
+        if header.daa_score != origin.accepted_daa || header.blue_score != origin.accepted_blue_score {
+            return Err(fault("original relay accepting header clock differs"));
+        }
+        let (carrier_block, accepted) = self
+            .acceptance_data_store
+            .accepted_origin_at_bounded_v2(accepting, origin.accepted_tx_ordinal, maximum_bytes)
+            .map_err(|_| fault("bounded original relay acceptance unavailable"))?
+            .ok_or_else(|| fault("original relay acceptance ordinal missing"))?;
+        if accepted.index_within_block == 0
+            || carrier_block.as_bytes() != origin.carrier_block.0
+            || accepted.transaction_id.as_bytes() != origin.carrier_transaction.0
+        {
+            return Err(fault("original relay accepted carrier differs"));
+        }
+        self.palw_state_v2_store
+            .read()
+            .check_funding_relay_archive_v2(&auth, payload)
+            .map_err(|_| fault("rooted relay payload or charge unavailable"))
+    }
+}
+
 impl PositiveCarrierPhaseTwoV2 {
     /// The old0--7 codec is not widened. New operations use their own native
     /// finite policy, scan before any inner allocation, acquire a real lease,
@@ -646,6 +743,9 @@ impl PositiveCarrierPhaseTwoV2 {
                 let daa = processor.headers_store.get_daa_score(anchor).map_err(|_| {
                     NativeCoverageV1::unsupported::<Self>("funding relay signed ancestor", "verified ancestor header unavailable")
                 })?;
+                if let Some(state) = selected_parent_state {
+                    processor.check_exact_relay_archive_v2(carrier.prefix.selected_parent, state, &body, &tx.payload)?;
+                }
                 signed_anchor = Some((anchor, daa));
                 None
             } else if kind <= 7 {

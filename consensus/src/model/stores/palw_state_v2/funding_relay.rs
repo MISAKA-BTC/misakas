@@ -78,6 +78,23 @@ impl DbPalwStateV2Store {
         Ok(Some(fees))
     }
 
+    /// Read the exact payload and charge selected by one rooted row. A
+    /// separate native caller checks that the original acceptance is on its
+    /// selected chain. Presence here cannot grant custody or fee credit.
+    pub(crate) fn check_funding_relay_archive_v2(
+        &self,
+        auth: &FundingRelayAuthorizationRowV2,
+        expected_payload: &[u8],
+    ) -> StoreResult<()> {
+        let payload =
+            self.db.get_pinned(key(auth.material.digest))?.ok_or_else(|| capacity("rooted literal relay payload unavailable"))?;
+        if payload.as_ref() != expected_payload {
+            return Err(invalid("archived literal relay payload differs"));
+        }
+        self.read_funding_relay_charge_v2(auth)?.ok_or_else(|| capacity("rooted relay charge unavailable"))?;
+        Ok(())
+    }
+
     /// The caller holds the PALW archive lock and the admitted carrier owner
     /// through the enclosing batch commit. Reads and checks precede all puts.
     pub(crate) fn stage_funding_relay_material_v2(

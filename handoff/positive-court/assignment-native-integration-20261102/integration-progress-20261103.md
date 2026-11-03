@@ -720,3 +720,31 @@ first Clippy run found an unnecessary reference in the fixed-buffer
 encoder and was rerun after correction. The native archive path
 was typechecked. Documentation checking reported zero new issues
 against the existing 43.
+
+## Rooted relay archive check at the accepted carrier handoff
+
+An exact op14 repeat now checks the two rows selected by the actual
+selected-parent state. It rechecks the original accepting block's
+selected-chain ancestry, header clocks, non-coinbase carrier identity
+and exact acceptance ordinal. The archive must contain the identical
+literal payload and a valid fee partition matching the original quote
+and charge reference. A different signed package stays on the existing
+Core refusal path.
+
+The acceptance index reader pins the existing bincode record, applies
+the original replay byte bound and walks its fixed-width entries
+without decoding its nested vectors. The standalone Rust regression
+uses the original store module and repository bincode encoding to
+check cross-block ordinals, empty blocks, truncation and invalid
+transaction hash framing.
+
+The archive check is a local integrity and lineage check. It still
+requires a native custody decision in the final fold before an exact
+repeat can become an idempotent success. The current implementation
+does not restore the original populated transaction and signature
+execution or create a live registration/fee debit.
+
+Final-source Core and Consensus library Clippy passed with warnings
+denied. The isolated acceptance ordinal regression passed using the
+actual store module and matching cached dependencies. Documentation
+checking reported zero new issues against the existing 43.
