@@ -979,6 +979,11 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let store = material.store_v1(&b.state, claim, scope_id).unwrap();
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
     assert_eq!(store.prompt_token_ids().unwrap(), fx.execution.prompt);
+    set_material_intake_test_schedule_v1(Some(storage));
+    assert!(matches!(
+        batch::native_ranges::prepare_numerical_batch_material_v1(&b.state, claim, verify_daa),
+        Err(NativeDecodeErrorV1::Decode(why)) if why == "selected Batch material is missing" || why == "selected Batch FullIds are missing",
+    ));
     let completed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
     assert!(completed.material_available);
     assert!(completed.retained_submitter.is_none());

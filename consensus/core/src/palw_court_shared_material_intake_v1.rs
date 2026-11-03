@@ -1033,6 +1033,28 @@ fn batch_material_precedes_verification_v1(original: u64, accepted: u64, verify:
     original <= accepted && accepted < verify && verify < material_until
 }
 
+fn check_selected_batch_delivery_v1(
+    state: &PalwChainStateV2,
+    context: &shared::SharedTirContextV1,
+    target: MaterialTargetV1,
+    declared_bytes: u32,
+    finish_daa: u64,
+) -> Result<(), String> {
+    let before = finish_daa.checked_add(1).ok_or("selected Batch Finish clock overflow")?;
+    let bytes = if target == MaterialTargetV1::FullIds {
+        let row = selected_batch_ids_v1(state, context, before)?;
+        let count = u32::try_from(row.ids.len()).map_err(|_| "selected Batch FullIds count overflow")?;
+        crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(count)
+    } else {
+        let row = selected_batch_row_v1(state, context, target, target.id_v1(context.claim)?, before)?;
+        row.bytes.len() as u64
+    };
+    if bytes != u64::from(declared_bytes) {
+        return Err("selected Batch material length differs from the accepted Open".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

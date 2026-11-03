@@ -196,6 +196,33 @@ pub(crate) fn numerical_demand_from_source_v1(
     maximum_ranges: usize,
 ) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
     let claim = context.claim;
+    with_numerical_source_v1(state, claim, |frame, source, record, layout, program, streaming| {
+        if context.batch_notice_only_v1() {
+            let ranges = booked_root_ranges_v1(context, frame, source, record, layout, program, streaming, leaf, maximum_ranges)?;
+            let span = booked_range_span_v1(ranges.len(), demand_index, |ordinal, index| {
+                owned_begin_v1(claim, context.scope_id, owned, ordinal, index)
+            }).map_err(E::Decode)?;
+            retain_root_demand_v1(claim, context.scope_id, &ranges, demand_index, span)
+        } else {
+            numerical_batch_streaming_demand_v1(
+                frame, source, record, layout, program, context.profile_id, streaming, maximum_ranges, leaf, demand_index,
+            )
+        }
+    })
+}
+
+fn with_numerical_source_v1<T>(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    use_source: impl FnOnce(
+        &PalwTirPublicClaimV1,
+        &NativeRetainedV1<PalwTirPublicSourceV1>,
+        &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        &TirProgramV1,
+        StreamingParameterCoverBudgetV1,
+    ) -> Result<T, E>,
+) -> Result<T, E> {
     let frame = super::super::frame_of(state, claim).map_err(E::Decode)?;
     let class = frame.original_v1().job.class_id;
     let record = state.tir_class_v1(&class).ok_or_else(|| E::Decode("numerical Batch class is absent".into()))?;
@@ -227,24 +254,150 @@ pub(crate) fn numerical_demand_from_source_v1(
             NativeDecodeErrorV1::Decode(why) => E::Decode(why.to_string()),
             NativeDecodeErrorV1::Resource(why) => E::Resource(why),
         })?;
-    if context.batch_notice_only_v1() {
-        let set = TirSharedRequestSetV1::new(frame, &source, context.profile_id).map_err(E::Decode)?;
-        if set.scope_id().map_err(E::Decode)? != context.scope_id {
-            return Err(E::Decode("numerical Batch source differs from its reserved scope".into()));
-        }
-        let maximum_ranges = maximum_ranges.min(MAX_BOOKED_NUMERICAL_RANGES_V1);
-        let ranges = selected_root_ranges_v1(frame, &source, &set, record, layout, &program, streaming, leaf, maximum_ranges)?;
-        let span = booked_range_span_v1(ranges.len(), demand_index, |ordinal, index| {
-            let position = super::BatchResponsePositionV1 { demand_ordinal: ordinal as u64, range_index: index as u32 };
-            Ok(owned.contains(&position.packet_id(claim, context.scope_id, super::Stage::Begin)?))
-        })
-        .map_err(E::Decode)?;
-        retain_root_demand_v1(claim, context.scope_id, &ranges, demand_index, span)
-    } else {
-        numerical_batch_streaming_demand_v1(
-            frame, &source, record, layout, &program, context.profile_id, streaming, maximum_ranges, leaf, demand_index,
-        )
+    use_source(frame, &source, record, layout, &program, streaming)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn booked_root_ranges_v1(
+    context: &crate::palw_court_shared_tir_state_v1::SharedTirContextV1,
+    frame: &PalwTirPublicClaimV1,
+    source: &NativeRetainedV1<PalwTirPublicSourceV1>,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    program: &TirProgramV1,
+    streaming: StreamingParameterCoverBudgetV1,
+    leaf: u64,
+    maximum_ranges: usize,
+) -> Result<RootRanges, E> {
+    let set = TirSharedRequestSetV1::new(frame, source, context.profile_id).map_err(E::Decode)?;
+    if set.scope_id().map_err(E::Decode)? != context.scope_id {
+        return Err(E::Decode("numerical Batch source differs from its reserved scope".into()));
     }
+    let maximum_ranges = maximum_ranges.min(MAX_BOOKED_NUMERICAL_RANGES_V1);
+    selected_root_ranges_v1(frame, source, &set, record, layout, program, streaming, leaf, maximum_ranges)
+}
+
+fn owned_begin_v1(claim: Hash64, scope: Hash64, owned: &BTreeSet<[u8; 64]>, ordinal: usize, index: usize) -> Result<bool, String> {
+    let position = super::BatchResponsePositionV1 { demand_ordinal: ordinal as u64, range_index: index as u32 };
+    Ok(owned.contains(&position.packet_id(claim, scope, super::Stage::Begin)?))
+}
+
+/// Complete authenticated input for the numerical verification stage.
+/// Preparing it does not execute the leaf or grant Court credit.
+pub(crate) struct PreparedNumericalBatchMaterialV1 {
+    pub leaf: u64,
+    pub scope: Hash64,
+    pub notice: Hash64,
+    pub material: NativeRetainedV1<super::super::RootedMaterialV1>,
+}
+
+pub(crate) fn prepare_numerical_batch_material_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    verify_daa: u64,
+) -> Result<PreparedNumericalBatchMaterialV1, E> {
+    use super::{BatchResponsePositionV1, Stage, admission::batch_numerical_service_ids_v1};
+    use crate::palw_batch_court_v1::rooted::{batch_open_packet_v1, checked_initial_notice_target_v1};
+    use crate::palw_court_shared_tir_state_v1::{self as shared, BatchNoticeTargetV1};
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let invalid = |why: &str| E::Decode(why.into());
+    let context = shared::context(state, claim).map_err(E::Decode)?;
+    let scope = context.scope_id;
+    let Some((_, key)) = state.court_shared_initial_notice_v1(claim) else {
+        return Err(invalid("numerical verification has no accepted notice"));
+    };
+    let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(key) else {
+        return Err(invalid("numerical verification lost its accepted notice"));
+    };
+    let notice_id = notice.request_id;
+    let Some(BatchNoticeTargetV1::Numerical { leaf }) =
+        checked_initial_notice_target_v1(state, context, notice, notice_id).map_err(E::Decode)?
+    else {
+        return Err(invalid("Batch notice does not select numerical verification"));
+    };
+    let service = state.court_service_row_v3_v1().ok_or_else(|| invalid("numerical verification has no causal service row"))?;
+    context.check_binding(&service.state).map_err(E::Decode)?;
+    let owned = &service.state.claims.get(&claim).ok_or_else(|| invalid("numerical verification has no original booking"))?.packet_ids;
+    let book = &service.state.book;
+    let (verification, terminal) = batch_numerical_service_ids_v1(claim, scope)
+        .map_err(|_| invalid("numerical verification packet identities are invalid"))?;
+    let predecessors = service.causal.get(&verification).ok_or_else(|| invalid("numerical verification has no reserved inputs"))?;
+    if !owned.contains(&verification) || !owned.contains(&terminal)
+        || book.assigned_daa(&verification) != Some(verify_daa)
+        || verify_daa >= context.hard_daa
+        || book.assigned_daa(&terminal).is_none_or(|daa| daa <= verify_daa || daa >= context.hard_daa)
+        || !service.causal.get(&terminal).is_some_and(|ids| ids.binary_search(&verification).is_ok())
+    {
+        return Err(invalid("numerical verification differs from its reserved stage"));
+    }
+    let ranges = with_numerical_source_v1(state, claim, |frame, source, record, layout, program, streaming| {
+        booked_root_ranges_v1(context, frame, source, record, layout, program, streaming, leaf, MAX_BOOKED_NUMERICAL_RANGES_V1)
+    })?;
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<MaterialTargetV1>(ranges.len() as u64).map_err(E::Resource)?;
+    let _targets = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let mut targets = Vec::with_capacity(ranges.len());
+    let mut expected = ranges.iter();
+    visit_booked_range_groups_v1(ranges.len(), |ordinal, index| owned_begin_v1(claim, scope, owned, ordinal, index), |ordinal, count| {
+        let ordinal = ordinal as u64;
+        let key = Key::CourtBatchDemand(claim, ordinal);
+        let Some(Row::CourtBatchDemand(open)) = state.staged_court_row_v1(&key) else {
+            return Err("numerical verification is missing a required Open".into());
+        };
+        open.check(&key)?;
+        let open_packet = batch_open_packet_v1(claim, scope, ordinal)?.as_bytes();
+        if open.scope_id != scope || open.notice_id != notice_id || !owned.contains(&open_packet)
+            || book.assigned_daa(&open_packet) != Some(open.demand.opened_daa)
+        {
+            return Err("numerical verification Open changes its original reservation or notice".into());
+        }
+        let group = expected.clone().take(count);
+        check_declared_ranges_v1(group.map(|(id, (_, maximum))| Ok((*id, *maximum))), &open.demand.ranges)?;
+        for (index, ((_, (target, _)), declared)) in expected.by_ref().take(count).zip(&open.demand.ranges).enumerate() {
+            let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: index as u32 };
+            let finish = position.packet_id(claim, scope, Stage::Finish)?;
+            let daa = book.assigned_daa(&finish).ok_or("numerical verification has an unbooked Finish")?;
+            if !owned.contains(&finish) || predecessors.binary_search(&finish).is_err() || daa >= verify_daa
+                || daa >= open.demand.response_deadline_daa
+            {
+                return Err("numerical verification Finish falls outside its causal reservation".into());
+            }
+            super::super::check_selected_batch_delivery_v1(state, context, *target, declared.bytes, daa)?;
+            targets.push(*target);
+        }
+        Ok(())
+    }).map_err(E::Decode)?;
+    let material = super::super::RootedMaterialV1::load_selected_batch_v1(state, claim, &targets, verify_daa)?;
+    Ok(PreparedNumericalBatchMaterialV1 { leaf, scope, notice: notice_id, material })
+}
+
+fn visit_booked_range_groups_v1(
+    mut remaining: usize,
+    mut has_begin: impl FnMut(usize, usize) -> Result<bool, String>,
+    mut visit: impl FnMut(usize, usize) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut ordinal = 0;
+    while remaining != 0 {
+        let count = booked_group_capacity_v1(ordinal, &mut has_begin)?.min(remaining);
+        if count == 0 {
+            return Err("numerical verification has unbooked material targets".into());
+        }
+        visit(ordinal, count)?;
+        remaining -= count;
+        ordinal += 1;
+    }
+    Ok(())
+}
+
+fn booked_group_capacity_v1(
+    ordinal: usize,
+    has_begin: &mut impl FnMut(usize, usize) -> Result<bool, String>,
+) -> Result<usize, String> {
+    let mut count = 0;
+    while count < MAX_BATCH_RANGES_V1 && has_begin(ordinal, count)? {
+        count += 1;
+    }
+    Ok(count)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -281,10 +434,7 @@ fn booked_range_span_v1(
     }
     let mut start = 0;
     for ordinal in 0..=demand_index {
-        let mut capacity = 0;
-        while capacity < MAX_BATCH_RANGES_V1 && has_begin(ordinal, capacity)? {
-            capacity += 1;
-        }
+        let capacity = booked_group_capacity_v1(ordinal, &mut has_begin)?;
         if capacity == 0 || start >= count {
             break;
         }
@@ -734,6 +884,21 @@ mod tests {
             }
         }
         assert!(booked_range_span_v1(3, 1, |ordinal, _| Ok(ordinal == 1)).is_err());
+    }
+
+    #[test]
+    fn verification_visits_every_required_group_and_ignores_the_reserved_tail() {
+        use super::visit_booked_range_groups_v1;
+        let mut visited = Vec::new();
+        visit_booked_range_groups_v1(5, |ordinal, index| Ok(index < [2, 4, 8][ordinal]), |ordinal, count| {
+            visited.push((ordinal, count));
+            Ok(())
+        }).unwrap();
+        assert_eq!(visited, [(0, 2), (1, 3)]);
+        assert!(visit_booked_range_groups_v1(5, |ordinal, index| Ok(ordinal == 0 && index < 2), |_, _| Ok(())).is_err());
+        assert_eq!(visit_booked_range_groups_v1(5, |_, index| Ok(index < 2), |ordinal, _| {
+            if ordinal == 1 { Err("required Open missing".into()) } else { Ok(()) }
+        }), Err("required Open missing".into()));
     }
 
     #[test]

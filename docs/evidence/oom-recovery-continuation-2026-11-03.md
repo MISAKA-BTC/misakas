@@ -3985,3 +3985,26 @@ B0 and relay agreed at virtual DAA 19,735. The one additional
 selected block contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-selected-material.ojxsDg/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-selected-material-live.8lMql9/page.json`.
+
+## Prepare the complete numerical leaf at its reserved verification point
+
+The preparation API derives the leaf from the accepted initial
+notice and walks it once. It reads the same booked range partition
+used by Open admission, requires every necessary accepted Open,
+and checks that each Finish is owned, precedes verification and is
+recorded as a causal dependency. Its material must already be
+canonical by that Finish and match the signed length. Only after
+the complete set is present does the preparation API load and
+authenticate it for the numerical verifier. Unused reserved groups
+do not become required inputs.
+
+The extracted group traversal test passed on Linux with a 1 GiB
+virtual-memory limit and single-threaded linking after the local
+disk was unable to create compiler scratch. The native fixture
+adds a refusal for an incomplete accepted group. The integrated
+fixture and the terminal arithmetic/verdict wiring remain open.
+
+B0 and relay agreed at virtual DAA 19,736. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-material-closure.oKThNp/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-material-closure-live.hTO9Qs/page.json`.
