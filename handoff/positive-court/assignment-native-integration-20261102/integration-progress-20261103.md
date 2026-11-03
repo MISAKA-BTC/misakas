@@ -1802,3 +1802,22 @@ funding-relay test metadata passed. The patch reconciles with the prior
 provenance, expiry and scoped-prover patches. The A0 runtime build still
 pins the earlier source. An all-branch capacity owner, actual Case
 acceptance and the Linux heartbeat refusal remain unresolved.
+
+### Rooted Case journal retrieval
+
+The [Case journal reader candidate](rooted-case-journal-reader-candidate-20261103.tar.gz)
+connects the shared bounded link verifier to the native RocksDB store.
+It walks back from the rooted head, rechecks the same sequence oldest
+first, and retains exact bytes in execution order. The original caps
+cover both reads, both identity domains on both passes, the raw copy
+and the retained index and record buffers. The store lock leaves scope
+before native carriage reconstruction. Missing history, malformed links
+and local capacity errors are kept separate.
+
+Seven isolated journal/quote cases passed, including cycle refusal,
+limits before reads, altered reread refusal, a native first carrier
+and checked work arithmetic. The Consensus test target typechecked.
+The reader supplies raw history data for the native Case factory. It
+still needs connection to that factory, authentic original carriage
+replay and a real integrated RocksDB run. The preceding macOS build
+continued on its separate source pin.
