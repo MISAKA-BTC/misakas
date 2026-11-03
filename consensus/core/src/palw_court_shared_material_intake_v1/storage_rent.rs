@@ -22,7 +22,12 @@ use crate::{
 };
 use std::sync::Arc;
 
-/// Quote the existing per-byte storage rate for a V3 declaration only.
+fn storage_rent_for_bytes_v1(bytes: u64) -> Result<u64, String> {
+    let schedule = material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?;
+    schedule.sompi_per_byte.checked_mul(bytes).ok_or_else(|| "Batch storage rent overflow".into())
+}
+
+/// Quote the existing per-byte storage rate for a V3 material declaration.
 pub fn material_batch_storage_rent_v1(intake: &SignedMaterialIntakeV1) -> Result<Option<u64>, String> {
     let MaterialActionV1::Begin { total_bytes, .. } = intake.action else { return Ok(None) };
     if intake.version != MATERIAL_BATCH_VERSION {
@@ -31,8 +36,7 @@ pub fn material_batch_storage_rent_v1(intake: &SignedMaterialIntakeV1) -> Result
     if !(1..=MATERIAL_PIPELINED_MAX_BYTES).contains(&total_bytes) {
         return Err("Batch storage rent declaration exceeds its part cap".into());
     }
-    let schedule = material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?;
-    Ok(Some(schedule.sompi_per_byte.checked_mul(total_bytes).ok_or("Batch storage rent overflow")?))
+    storage_rent_for_bytes_v1(total_bytes).map(Some)
 }
 
 /// The storage rent comes after the existing obligations. An underpaid
@@ -84,7 +88,8 @@ impl PreparedBatchCarrierV1 {
         }
         let storage_rent = match &wire {
             BatchCourtWireV1::Respond(control) => material_batch_storage_rent_v1(&control.intake).map_err(Decode)?,
-            BatchCourtWireV1::Open(_) | BatchCourtWireV1::Stop(_) => None,
+            BatchCourtWireV1::Stop(stop) => Some(storage_rent_for_bytes_v1(stop.operands.len() as u64).map_err(Decode)?),
+            BatchCourtWireV1::Open(_) => None,
         };
         Ok(Some(Self { carrier: carrier.id(), wire, storage_rent }))
     }
@@ -223,6 +228,14 @@ impl ValidatedBatchCarrierV1 {
     /// Rehearsal and the final fold use an independent debit projection over
     /// the same immutable UTXO fact. The full payload is never cloned here.
     pub(crate) fn storage_debit_v1(&self, request_root: Option<Hash64>) -> Result<Option<MaterialBatchStorageDebitV1>, String> {
+        if matches!(&self.batch.wire, BatchCourtWireV1::Stop(_)) {
+            if request_root.is_some() || !self.fee_v1().pays_storage_rent_v1() {
+                return Err("Batch Stop carrier has insufficient storage rent or an unexpected Begin request root".into());
+            }
+            // Stop stores exactly one immutable receipt. The UTXO handoff already
+            // withholds this rent from the native fee; there is no Begin ledger.
+            return Ok(None);
+        }
         if self.batch.storage_rent.is_some() != request_root.is_some() {
             return Err("Batch storage rent handoff requires the accepted request root for Begin".into());
         }
@@ -233,7 +246,7 @@ impl ValidatedBatchCarrierV1 {
     }
 }
 
-/// Shared fee accounting for an enabled V3 route. Callers supply the fee
+/// Shared fee accounting for an enabled Batch route. Callers supply the fee
 /// remaining after mandatory bond burn and all preceding fee allocations.
 pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) -> Result<MaterialBatchCarrierFeeV1, String> {
     if carrier.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
@@ -242,7 +255,8 @@ pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) 
         if !carrier.id_is_current() {
             return Err("Batch carrier transaction identity is stale".into());
         }
-        return Ok(MaterialBatchCarrierFeeV1::split(0, available_fee));
+        let operands_bytes = carrier.payload.len() as u64 - BATCH_STOP_WIRE_OVERHEAD_V1;
+        return Ok(MaterialBatchCarrierFeeV1::split(storage_rent_for_bytes_v1(operands_bytes)?, available_fee));
     }
     Ok(match PreparedBatchCarrierV1::decode_v1(carrier).map_err(|error| error.to_string())? {
         Some(batch) => batch.split_v1(available_fee),

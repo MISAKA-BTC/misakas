@@ -170,11 +170,41 @@ mod tests {
         assert!(batch_stop_wire_shape_v1(&carrier).unwrap());
         assert_eq!(decode_batch_court_payload_v1(&carrier).unwrap(), Some(stop));
         assert!(batch_stop_wire_shape_v1(&carrier[..carrier.len() - 1]).is_err());
-        let tx = crate::tx::Transaction::new(
-            0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, carrier,
-        );
-        let fee = crate::palw_court_shared_material_intake_v1::material_batch_carrier_fee_v1(&tx, 17).unwrap();
-        assert_eq!((fee.withheld_storage_rent, fee.collectible_fee), (0, 17));
+        {
+            use crate::palw_court_shared_material_intake_v1::{
+                ValidatedBatchCarrierV1, material_batch_carrier_fee_v1, material_intake_schedule_v1,
+            };
+            use crate::palw_state_v2::PalwBlockContextV2;
+            use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, UtxoEntry, ValidatedTransaction};
+
+            let tx = Transaction::new(
+                0,
+                vec![TransactionInput::new(TransactionOutpoint::new(h(11), 0), vec![], 0, 0)],
+                vec![],
+                0,
+                crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+                0,
+                carrier,
+            );
+            let amount = material_intake_schedule_v1().unwrap().sompi_per_byte * bytes.len() as u64;
+            assert!(amount > 0);
+            let point = PalwBlockContextV2 { block: h(12), daa_score: 12, blue_score: 13, subsidy: 0 };
+            let preceding = 7;
+            for (remaining, collectible) in [(amount - 1, 0), (amount, 0), (amount + 17, 17)] {
+                let fee = remaining + preceding;
+                let validated = ValidatedTransaction::new(
+                    PopulatedTransaction::new(&tx, vec![UtxoEntry::new(fee, ScriptPublicKey::default(), 1, false)]),
+                    fee,
+                );
+                let handoff = ValidatedBatchCarrierV1::prepare_v1(&validated, preceding, point).unwrap().unwrap();
+                let split = material_batch_carrier_fee_v1(&tx, remaining).unwrap();
+                assert_eq!(handoff.fee_v1(), split);
+                assert_eq!((split.required_storage_rent, split.withheld_storage_rent, split.collectible_fee),
+                    (amount, remaining.min(amount), collectible));
+                assert_eq!(handoff.storage_debit_v1(None).is_ok(), remaining >= amount);
+                assert!(handoff.storage_debit_v1(Some(h(13))).is_err());
+            }
+        }
         let decoded = BatchStopPayloadV1::decode_with_v1(&bytes, eog_bytes, |heap| {
             assert_eq!(heap, sig as u64 + 8 + 64);
             Ok(None)

@@ -3081,3 +3081,25 @@ B0 and relay agreed on an advanced selected tip at DAA 19,707 and the
 newly scanned interval contained no Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-accounting.TKCQk2/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-stop-accounting-live.LRx9zg/page.json`.
+
+## Batch Stop signed material storage fee
+
+The Stop carrier now prices the exact signed operand bytes saved in the
+version 2 receipt at the existing Batch material rate. The shape-only
+coinbase projection and the decoded UTXO handoff use the same function
+and take the charge from the fee remaining after preceding allocations.
+The native Court fold refuses an underpaid Stop before adjudication or
+retention. The fee projection can still withhold only what the UTXO
+transaction actually paid. Respond Begin continues to use its separate
+request-bound debit and storage ledger.
+
+The extracted Rust suite passed 39 checks. The Stop case compared both
+projections and the handoff at one sompi short, exact fee, and excess
+fee, with a preceding allocation in every case. The complete original
+profile still needs worst-case Court storage and archive exposure,
+capacity reservation, native integration and live measurements.
+
+B0 and relay agreed at DAA 19,708. The newly scanned interval contained
+no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-rent.AI2wG9/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-stop-rent-live.70CIzK/page.json`.
