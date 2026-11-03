@@ -371,3 +371,27 @@ the prior comparison mode and a changed-weight case. The real 8K
 artifact has not yet been executed in this comparison. A model-free
 Node verdict and native accounting still require the separate Positive
 Court route.
+
+## Original Qwen material and provider replay — 04:27 UTC
+
+The producer and relay returned byte-identical public headers for Qwen
+attempt 32 at DAA 19,585. The recomputed block, claim and anchor matched
+the retained 2,409,135-byte capture. The native ML-DSA signature checked,
+and the signed key matched the same bond's public registration on both
+nodes. The verifier recovered the exact canonical 1,023-input, one-output
+job and checked its prompt, output, trace, step and checkpoint commitments.
+Changed capture and claim identities were refused. The capture SHA256 is
+`9eeab9f8cbe88706a8308faa2740f576243102ddc835720d07a923e2855c7f5c`.
+
+The actual merge logged `COURT_RETENTION_BELOW_GUARANTEE` for this
+attempt, with 20,606 DAA remaining and 20,608 DAA required. At DAA
+19,589 B0 and the public relay were synced and reported zero Panel
+assignments and valid receipts. B1 remained unsynced.
+
+An isolated filesystem and loopback HTTP test re-served the exact
+capture. A provider manifest promising the raw signed deadline of
+40,193 was rejected against a test-only effective deadline of 40,195.
+A provider manifest covering 40,195 returned byte-identical material.
+Wrong roots and a corrupted chunk were rejected. The original signed
+envelope and capture were retained byte for byte. The provider test
+does not establish real chain acceptance or an arithmetic verdict.
