@@ -798,3 +798,27 @@ additional load cohort.
 The later paired class inventory still showed zero ready independent
 seats and zero assignments. Node default/EVM test metadata compiled on
 `aa339851f`. Neither patch has been deployed.
+
+## Unique staging for retained copies — 05:11 UTC
+
+Commit `895b93785` shares the producer's atomic publication path
+with Panel material and answer writers. Every attempt to write uses a
+unique same-directory stage. Write-once foreign copies retain their
+first complete publication, while replacement paths atomically install
+the complete new file. The producer's existing file and directory
+sync steps remain in the durable mode. The stage name preserves the
+claim prefix for the abandoned-stage guard.
+
+Eighteen scoped tests passed, using the actual tempfile dependency,
+including eight simultaneous writers targeting one write-once path
+and the producer's existing publication failure/retry and Unix mode
+checks. Log SHA256 is
+`880d1a8b00063d52a9bd0d67c936d4378fd2b967a3039c0ef702fccdc0511c2a`.
+Node default/EVM test metadata compiled. This is a source change;
+older cache contents, durable post-submit ownership and live
+qualification are separate.
+
+At virtual DAA 19,604, B0, the Explorer relay, public REST/WebSocket
+and the 113 RPC tunnel agreed on the selected tip. B1 and the 113
+primary were still unsynced at 19,389 and 19,224. B0 reported 41 real
+producer blocks, zero receipts and zero kernel Finals.
