@@ -1222,7 +1222,9 @@ async fn merge_the_round_block(
         let virtual_state = vp.virtual_stores.read().state.get().unwrap();
         assert!(virtual_state.ghostdag_data.mergeset_reds.contains(&round_hash), "virtual merges the round block as a red");
         let (_, parent_state) = at.chain.tip_state();
-        vp.palw_round_verdicts_v1(&parent_state, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("the lane is open")
+        vp.palw_round_verdicts_v1(&parent_state, &virtual_state.ghostdag_data, virtual_state.daa_score)
+            .expect("Round fee budget preparation succeeds")
+            .expect("the lane is open")
     };
     assert!(verdicts.round_blocks.contains(&round_hash));
     let (merging, _) = at.chain.attempt(2, 1_000, Vec::new(), &|_| true).await;

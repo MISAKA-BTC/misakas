@@ -542,6 +542,15 @@ impl Params {
         if self.palw_native_mining_v39.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_mining_v39 = None;
         }
+        if self.palw_positive_court_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_positive_court_v2 = None;
+        }
+        if self.palw_positive_assignment_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_positive_assignment_v2 = None;
+        }
+        if self.palw_positive_funding_relay_v2.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_positive_funding_relay_v2 = None;
+        }
         if self.palw_native_final_v27.as_ref().is_some_and(|f| f.activation == ForkActivation::never()) {
             self.palw_native_final_v27 = None;
         }
@@ -1239,6 +1248,9 @@ impl Params {
             palw_stage_execution_v28,
             palw_native_execution_v39,
             palw_native_mining_v39,
+            palw_positive_court_v2,
+            palw_positive_assignment_v2,
+            palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -1588,6 +1600,9 @@ impl Params {
             ("palw_stage_execution_v28", palw_stage_execution_v28.as_ref().map(|f| f.activation)),
             ("palw_native_execution_v39", palw_native_execution_v39.as_ref().map(|f| f.activation)),
             ("palw_native_mining_v39", palw_native_mining_v39.as_ref().map(|f| f.activation)),
+            ("palw_positive_court_v2", palw_positive_court_v2.as_ref().map(|f| f.activation)),
+            ("palw_positive_assignment_v2", palw_positive_assignment_v2.as_ref().map(|f| f.activation)),
+            ("palw_positive_funding_relay_v2", palw_positive_funding_relay_v2.as_ref().map(|f| f.activation)),
             ("palw_fork_choice_rule_e_v1", *palw_fork_choice_rule_e_v1),
             ("palw_typed_roots_v1", *palw_typed_roots_v1),
             ("palw_fork_choice_commitment_v1", *palw_fork_choice_commitment_v1),
@@ -1961,6 +1976,28 @@ impl Params {
             h.write(b"palw_native_mining_v39");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.root());
+        }
+        if let Some(fence) = &self.palw_positive_court_v2 {
+            h.write(b"palw_positive_court_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root().as_byte_slice());
+        }
+        if let Some(fence) = &self.palw_positive_assignment_v2 {
+            h.write(b"palw_positive_assignment_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().0);
+            if let Some(preimages) = &fence.native_preimages {
+                h.write(b"assignment-native-preimages-v2");
+                h.write(preimages.root().as_byte_slice());
+            }
+        }
+        if let Some(fence) = &self.palw_positive_funding_relay_v2 {
+            h.write(b"palw_positive_funding_relay_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(crate::palw_positive_relay_signature_v2::funding_relay_template_id_v2().0);
+            h.write(fence.policy.id().0);
+            h.write(fence.fees.id().0);
+            h.write(fence.physical.id().0);
         }
         if let Some(fence) = &self.palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");
@@ -3060,6 +3097,9 @@ impl Params {
             palw_stage_execution_v28,
             palw_native_execution_v39,
             palw_native_mining_v39,
+            palw_positive_court_v2,
+            palw_positive_assignment_v2,
+            palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -3925,6 +3965,15 @@ impl Params {
         if let Some(fence) = palw_native_mining_v39.as_mut() {
             fork(&mut fence.activation, visit);
         }
+        if let Some(fence) = palw_positive_court_v2.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_positive_assignment_v2.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
+        if let Some(fence) = palw_positive_funding_relay_v2.as_mut() {
+            fork(&mut fence.activation, visit);
+        }
         if let Some(fence) = palw_funded_execution_v11.as_mut() {
             fork(&mut fence.activation, visit);
         }
@@ -4681,6 +4730,9 @@ impl Params {
             palw_stage_execution_v28,
             palw_native_execution_v39,
             palw_native_mining_v39,
+            palw_positive_court_v2,
+            palw_positive_assignment_v2,
+            palw_positive_funding_relay_v2,
             palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1,
             palw_fork_choice_commitment_v1,
@@ -5663,6 +5715,28 @@ impl Params {
             h.write(b"palw_native_mining_v39");
             h.write(fence.activation.daa_score().to_le_bytes());
             h.write(fence.policy.root());
+        }
+        if let Some(fence) = palw_positive_court_v2 {
+            h.write(b"palw_positive_court_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.root().as_byte_slice());
+        }
+        if let Some(fence) = palw_positive_assignment_v2 {
+            h.write(b"palw_positive_assignment_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(fence.policy.id().0);
+            if let Some(preimages) = &fence.native_preimages {
+                h.write(b"assignment-native-preimages-v2");
+                h.write(preimages.root().as_byte_slice());
+            }
+        }
+        if let Some(fence) = palw_positive_funding_relay_v2 {
+            h.write(b"palw_positive_funding_relay_v2");
+            h.write(fence.activation.daa_score().to_le_bytes());
+            h.write(crate::palw_positive_relay_signature_v2::funding_relay_template_id_v2().0);
+            h.write(fence.policy.id().0);
+            h.write(fence.fees.id().0);
+            h.write(fence.physical.id().0);
         }
         if let Some(fence) = palw_funded_execution_v11 {
             h.write(b"palw_funded_execution_v11");

@@ -1,0 +1,46 @@
+{
+  "status": "STYLE_EQUIVALENCE_PASS",
+  "scope": "Readonly source/hash review only; no Cargo/rustc/model/newtests/source/index edits",
+  "source_before": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+  "style_commit": "bf3e523445a6de3b70278c5ad5e1a7609419f416",
+  "style_tree": "f20e9de22033577be89ca55ed38d3633677cb898",
+  "snapshot_sha256": "99cbca89bb994894f732d870f136f94cc2d17195088c9e64d1ca0b132ab380de",
+  "snapshot_source_count": 4956,
+  "only_source_changed": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+  "before_blob_sha256": "2478c4f76676d6ed8e13593627225bad69ea1e1fbb41843a0f765d4980460a78",
+  "after_blob_sha256": "7294b7bdc8e7f6deb730acea9d3f5a519cd684f1a6f72e8b353fa9081e9397fb",
+  "unchanged_other_source_sha256_count": 4955,
+  "current_worktree_matches_style_blob": true,
+  "exact_replacement_and_all_other_bytes_equal": true,
+  "predicate_boolean_combinations_checked": 8,
+  "source_reason": [
+    "Option<&Layout> is Copy and binding l is a plain sharedreference with no destructor/effects. Pattern/expression evaluated once in both versions.",
+    "Both versions skip length reads for None; Some evaluates same commit-tile length predicate then same state-tile predicate via unchanged || shortcircuit. Parentheses preserve OR grouping inside let-chain.",
+    "Same early M::Limit on either overflow and same Ok otherwise; previous contextPin guard and all subsequent operations remain in exactorder. No mutation/IO/hash/reservation/new profile/authority change."
+  ],
+  "runtime_attribution": {
+    "actual_runtime_manifest": {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/ordinary-trained3-a867-functional-v4-20261102.json",
+      "sha256": "f452db631aac4b0b60ef447a3cb389ad4eebaab4e5e42cbdd5e21c3b5cd44796"
+    },
+    "caller_binary_record": {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/ordinary_trained_forward_guarded_v2-acb577a6f1f54949",
+      "bytes": 25455384,
+      "sha256": "463ecdc3803862291c58e6aeb6b2a2c00c57f42f646871fa9e0396528bb095b7",
+      "profile": {
+        "opt_level": "0",
+        "debuginfo": 2,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      },
+      "target_kind": [
+        "test"
+      ],
+      "fresh": false
+    },
+    "attribute_runtime_to": "a867 source and recorded463ecdc3... binary only",
+    "bf3_runtime_status": "NOT_REEXECUTED_NO_FRESH_MODEL_PASS_CLAIM",
+    "test_repeat": "Broad/model retest not required by this pure equivalent let-chain source change; Root final strict metadataClippy check remains separate"
+  }
+}

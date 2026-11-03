@@ -1,0 +1,232 @@
+    Finished `test` profile [unoptimized] target(s) in 0.28s
+     Running tests/capture_codec.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/capture_codec-3aaa65e22925c2a1)
+
+running 4 tests
+test every_capture_vector_refuses_a_truncated_hostile_length_before_allocation ... ok
+test framed_capture_preserves_dense_fold_and_false_value_wire_bytes ... ok
+test framed_capture_keeps_strict_eof_and_refuses_truncated_frames ... ok
+test nested_empty_rows_cannot_amplify_beyond_the_real_consumer_reservation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/court.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/court-5d027367372d8d09)
+
+running 7 tests
+test one_position_replay_does_not_allocate_for_a_100k_position_job ... ok
+test replay_work_is_shared_across_all_source_requests_until_the_next_builder_move ... ok
+test replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_model_leaf ... ok
+test bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary ... ok
+test the_step_tree_opens_as_the_consensus_tree ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 177.96s
+
+     Running tests/node_leg.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/node_leg-3f1f1be9cbb099b3)
+
+running 3 tests
+test a_mapped_container_runs_like_the_params_it_holds ... ok
+test the_node_leg_equals_the_reference_through_the_consensus_builder ... ok
+test a_run_resumed_at_any_checkpoint_continues_leaf_for_leaf ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.39s
+
+     Running tests/positive_check.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_check-c457d5e0d942d40e)
+
+running 13 tests
+test stochastic_selection_is_unsupported_instead_of_a_miner_refutation ... ok
+test budgets_overflow_heap_caps_and_malformed_vectors_fail_closed ... ok
+test sparse_legacy_commitments_do_not_authorize_full_coverage ... ok
+test missing_logits_bridge_and_forged_losing_lane_are_rejected ... ok
+test omitted_final_leaf_duplicate_and_reordering_cannot_complete ... ok
+test merkle_authenticated_arithmetic_lie_rejects_only_the_panel_candidate ... ok
+test output_mismatch_is_reported_only_after_complete_arithmetic ... ok
+test unauthenticated_model_material_cannot_replace_the_registered_inventory ... ok
+test wrong_model_input_count_and_empty_schedule_are_rejected ... ok
+test cold_node_checks_all_leaves_history_and_every_output_row ... ok
+test later_logits_tile_cannot_reuse_another_tile_or_rows_trace_opening ... ok
+test valid_alternative_model_and_input_openings_cannot_be_spliced_into_the_admitted_job ... ok
+test ragged_second_logits_tile_is_required_and_global_ties_choose_the_first_lane ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/positive_check_hardening.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_check_hardening-6b44e909405cf610)
+
+running 2 tests
+test plan_derivation_refuses_inherited_and_malformed_contexts_before_reservation ... ok
+test honest_material_over_the_evaluation_allowance_ends_unverified_without_panel_blame ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_contract.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_contract-775969684eaea0db)
+
+running 13 tests
+test a_signed_alternate_selector_cannot_replace_the_rooted_greedy_rule ... ok
+test foreign_frame_identity_does_not_poison_the_target_candidates_progress ... ok
+test signed_false_generated_ids_cannot_become_a_miner_output_mismatch ... ok
+test an_omitted_terminal_part_remains_incomplete_through_the_shared_port ... ok
+test bounded_outer_frames_do_not_authorize_malformed_inner_length_prefixes ... ok
+test author_signed_malformed_material_charges_the_panel_packet_and_rejects_only_its_witness ... ok
+test signed_transport_reservation_includes_every_signature_and_refuses_aggregate_overflow ... ok
+test identical_public_ids_do_not_allow_progress_to_switch_local_resource_limits ... ok
+test admission_reserves_every_outer_header_and_both_payload_length_prefixes ... ok
+test signed_role_commits_and_framed_parts_reach_only_a_checked_terminal_fact ... ok
+test bad_actor_signatures_and_signed_false_witness_metadata_are_rejected ... ok
+test author_authenticated_frames_can_be_relayed_and_charge_all_packet_signatures ... ok
+test unauthenticated_or_foreign_packets_cannot_poison_an_honest_panel_candidate ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.47s
+
+     Running tests/positive_court_a4_admission.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_court_a4_admission-ea7f5074774dfdb3)
+
+running 11 tests
+test tests::checked_store_transition_and_undo_preserve_source_of_authority ... ok
+test tests::native_unassigned_store_error_is_preserved_instead_of_successful_admission ... ok
+test tests::changed_real_store_funding_terms_fail_atomically_without_a_court_row ... ok
+test tests::prepare_is_not_admission_and_identical_retries_take_exactly_one_hold ... ok
+test tests::same_case_different_signed_output_cannot_create_another_admission_or_budget ... ok
+test tests::forged_signature_wrong_root_and_foreign_prepare_never_reach_an_admitted_case ... ok
+test tests::committed_recovery::completed_case_recovers_after_intake_and_service_expiry_without_readmission_or_epoch_change ... ok
+test tests::stale_checked_transition_cannot_cross_undo_and_restore_in_same_branch ... ok
+test tests::funding_or_resource_rejection_never_publishes_separate_a4_state ... ok
+test tests::root_generation_branch_clock_and_changed_obligations_are_revalidated_before_commit ... ok
+test tests::committed_recovery::recovery_rejects_forgery_foreign_scope_different_result_intent_missing_case_and_root_races ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/positive_court_a4_integration.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_court_a4_integration-966bd2217b23305f)
+
+running 29 tests
+test a6_journal_replay::bounded_budget_refusal_precedes_native_authentication_and_external_callbacks ... ok
+test a6_journal_replay::pinned_tail_and_exact_native_material_references_cannot_be_shortened ... ok
+test accepted_packet_receipts_require_the_full_plan_capacity_before_spending_an_attempt ... ok
+test a6_journal_replay::current_historical_frame_role_is_rechecked_under_the_step_guard ... ok
+test a6_journal_replay::unsupported_source_and_native_settlement_ports_refuse_without_any_live_commit ... ok
+test a6_journal_replay::actual_checker_panel_failure_keeps_charged_wire_without_miner_refutation ... ok
+test a6_journal_replay::current_clock_expiry_and_final_generation_or_clock_changes_are_rechecked ... ok
+test a6_journal_replay::omitted_record_or_relation_and_future_or_idempotent_court_deliveries_are_not_journal_events ... ok
+test a_context_for_another_signed_witness_cannot_be_opened_under_the_same_result_and_plan ... ok
+test accepted_packet_replays_are_receipt_bound_and_never_spend_budget_or_mint_coverage ... ok
+test admitted_fact_bridge::real_checked_terminal_binds_real_private_admission_and_closes_its_hold_once ... ok
+test a6_journal_replay::actual_tir_journal_replay_recomputes_pass_and_genuine_miner_mismatch ... ok
+test authenticated_bad_panel_material_does_not_refute_miner_or_reset_attempt_and_wire_budgets ... ok
+test actual_checker_finishes_signed_result_only_after_all_required_relations ... ok
+test authenticated_noncanonical_relation_count_is_refused_before_case_charging ... ok
+test admitted_fact_bridge::first_binding_after_funding_cutoff_uses_independent_current_court_deadline ... ok
+test candidate_authority_requires_a_finite_usable_signed_packet_limit ... ok
+test admitted_fact_bridge::real_a1_fact_binds_recovered_actual_book_after_restart_and_funding_cutoff ... ok
+test exclusive_deadline_rejects_final_frame_before_any_success_fact ... ok
+test honest_material_with_insufficient_inner_evaluation_allowance_stays_unverified ... ok
+test signed_result_cannot_replace_rooted_input_even_with_its_own_valid_signature ... ok
+test admitted_fact_bridge::timely_bound_fact_can_close_after_normal_generation_advance_and_service_expiry ... ok
+test repeated_authenticated_future_relation_cannot_exhaust_the_case_and_is_usable_later ... ok
+test self_signed_unassigned_prover_cannot_spend_attempts_or_replace_the_active_candidate ... ok
+test unauthenticated_self_consistent_bad_material_cannot_poison_or_charge_an_honest_candidate ... ok
+test fresh_common_court_replays_actual_authenticated_history_and_reconstructs_all_counters ... ok
+test replay_on_another_branch_or_after_the_current_cutoff_cannot_reuse_the_old_success ... ok
+test admitted_fact_bridge::bound_transition_checks_current_scope_resolution_and_store_epoch_after_undo ... ok
+test admitted_fact_bridge::foreign_receipt_case_result_branch_reverse_generation_or_missing_case_cannot_bind_fact ... ok
+
+test result: ok. 29 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.64s
+
+     Running tests/positive_court_a4_native.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_court_a4_native-7a83e094375c4523)
+
+running 18 tests
+test body_preflight_refuses_unknown_version_kind_truncation_and_trailing_bytes ... ok
+test all_local_body_operations_roundtrip_without_becoming_native_admission ... ok
+test admission_expiry_is_exclusive_but_does_not_turn_into_a_payer_authorized_refund ... ok
+test atomic_funding_tests::native_result_body_uses_rooted_keys_and_rejects_other_kinds_or_versions ... ok
+test atomic_funding_tests::funding_atomic_rejects_foreign_capability_and_preserves_native_unassigned_error ... ok
+test atomic_funding_tests::native_body_preflight_prepares_the_same_atomic_store_and_rechecks_actual_output ... ok
+test atomic_funding_tests::funding_atomic_prepare_is_read_only_and_actual_store_idempotence_preserves_one_fee_hold ... ok
+test result_signature_count_and_exact_relation_count_are_independently_bounded ... ok
+test literal_payer_and_miner_signatures_bind_acyclic_final_links_without_a_lock_claim ... ok
+test nested_opaque_length_prefixes_cannot_allocate_or_bypass_body_and_heap_caps ... ok
+test atomic_funding_tests::funding_atomic_rejects_different_root_quote_or_consent_intent_before_admission ... ok
+test p_subject_attestation_body_is_bounded_and_its_literal_signature_is_not_draw_approval ... ok
+test atomic_funding_tests::native_body_peer_basis_must_equal_every_independently_derived_field ... ok
+test funding_prepare_is_bound_to_current_root_quote_output_and_coordinator_owner ... ok
+test fully_resigned_peer_policy_quote_or_schedule_cannot_replace_the_rooted_basis ... ok
+test atomic_funding_tests::funding_atomic_rechecks_generation_quote_actual_output_expiry_and_real_store_terms ... ok
+test payer_authorization_cannot_be_forged_repurposed_or_detached_from_the_final_result ... ok
+test source_fee_court_fee_capital_actual_output_and_checked_add_are_separate_bounds ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.99s
+
+     Running tests/positive_expanded_plan.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_expanded_plan-12066fd3974897ed)
+
+running 5 tests
+test original_matmul_and_reduction_work_is_counted_at_every_executed_position ... ok
+test canonical_zero_job_tokenizer_preserves_registered_class_identity_and_stale_ids_still_fail ... ok
+test original_sparse_i64_i128_and_output_unused_lanes_are_all_enumerated ... ok
+test expanded_geometry_rejects_wrong_identity_zero_jobs_and_every_finite_reservation_cap ... ok
+test dynamic_history_reused_layers_and_fixed_history_leaves_preserve_all_geometry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_full_relation.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_full_relation-e7a518d5bca743ab)
+
+running 11 tests
+test separately_signed_miner_output_is_compared_only_after_the_final_full_relation ... ok
+test a_signed_lie_in_an_output_unused_i128_lane_is_rejected_without_rewriting_legacy_roots ... ok
+test canonical_zero_job_tokenizer_capture_and_full_check_preserve_nonzero_registration_metadata ... ok
+test canonical_tokenizer_support_does_not_allow_class_job_or_panel_binding_substitution ... ok
+test original_sparse_wide_program_checks_every_relation_and_only_then_completes ... ok
+test repeated_unsigned_delivery_failure_spends_geometry_budget_without_advancing_coverage ... ok
+test exact_signed_rounding_and_lowest_lane_greedy_rules_cannot_be_replaced_by_floor_rounding ... ok
+test record_memory_and_evaluation_budgets_never_become_arithmetic_faults ... ok
+test original_fixed_replay_history_and_signed_checkpoint_claims_are_all_checked ... ok
+test unsigned_missing_tampered_unused_and_future_sources_remain_retryable_deliveries ... ok
+test the_frozen_manifest_authenticates_exact_claims_actor_policy_and_verifier_local_context ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.63s
+
+     Running tests/positive_panel_r1.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_panel_r1-e920f88cef0955ef)
+
+running 7 tests
+test malicious_panel_part_and_missing_terminal_cannot_match_honest_miner ... ok
+test zero_job_tokenizer_and_nonzero_registered_tokenizer_preserve_actual_r1_context ... ok
+test shortened_plan_foreign_cursor_and_wrong_frame_identity_are_rejected ... ok
+test recorded_capture_takeover_keeps_witness_and_resumes_from_rechecked_prefix ... ok
+test tokenizer_fix_preserves_independent_rooted_class_and_job_rejection ... ok
+test a0_panel_builder_emits_canonical_r1_frames_checked_by_cold_a1_core ... ok
+test rooted_registration_and_input_reject_self_consistent_candidate_substitution ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/positive_production_port.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_production_port-f9e8776c6390f25a)
+
+running 3 tests
+test record_cap_and_error_values_cross_compatibility_paths_without_conversion ... ok
+test both_public_paths_implement_the_same_nodechecker_port_with_identical_opaque_types ... ok
+test pure_plan_and_diagnostic_types_are_identical_across_the_production_boundary ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_record.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_record-e7482d1e637a5a1f)
+
+running 4 tests
+test primitive_only_record_reconstructs_trusted_binding_then_signed_parts_are_checked ... ok
+test generated_storage_and_encoded_record_caps_are_checked_without_consuming_prepared_state ... ok
+test failed_panel_authentication_during_delivery_does_not_poison_a_valid_retry ... ok
+test corrupt_record_delivery_does_not_consume_the_prepared_witness_or_touch_prior_progress ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+
+     Running tests/positive_typed_capture.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_typed_capture-46ee2b8528e6a716)
+
+running 9 tests
+test fallible_node_observer_stops_before_any_state_or_output_callback ... ok
+test observed_late_node_failure_rolls_back_pending_fixed_and_history_effects ... ok
+test canonical_zero_job_tokenizer_is_independent_of_registration_and_expected_context_stays_fixed ... ok
+test independent_quote_refuses_each_capture_dimension_below_required_bound ... ok
+test copied_capture_omission_reorder_coordinate_and_type_truncation_are_rejected ... ok
+test panel_source_replay_uses_ordinary_settings_without_inherited_selector_or_drill ... ok
+test original_context_and_flat_prompt_binding_refuse_corrupted_source_metadata ... ok
+test borrowed_observation_matches_reference_wide_nodes_states_and_original_step_roots ... ok
+test typed_prototype_preserves_sparse_registration_and_all_native_payloads_including_window_one ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

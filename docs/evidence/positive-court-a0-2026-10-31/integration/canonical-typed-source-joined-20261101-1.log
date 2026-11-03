@@ -1,0 +1,10 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 2m 01s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 5438 filtered out; finished in 0.00s
+

@@ -1,0 +1,873 @@
+diff --git a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs
+--- a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs
++++ b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs
+@@ -114,6 +114,11 @@
+     pub fn artifact(&self) -> Hash64 {
+         self.artifact
+     }
++    /// Immutable per-material Node limits. Producer/authentication-local caps
++    /// may be stricter; session-wide work is never a replacement for these.
++    pub fn source_limits(&self) -> TirSourceOnlyLimitsV1 {
++        self.limits.source
++    }
+     pub fn prompt_form(&self) -> PalwPromptIdsFormV1 {
+         self.form
+     }
+diff --git a/misaka/palw/tir/core/src/admit.rs b/misaka/palw/tir/core/src/admit.rs
+--- a/misaka/palw/tir/core/src/admit.rs
++++ b/misaka/palw/tir/core/src/admit.rs
+@@ -345,26 +345,75 @@
+ // §8: the cost of a node
+ // ---------------------------------------------------------------------------------------------
+ 
+-/// A node's §8 cost at `H = h`.
++/// Borrowed operand shape used ONLY by node_cost. Param/Const/State shapes
++/// stay in their original [u32] slice; no temporary TensorType/Dim Vec is made.
++/// Other admission/cone paths retain ref_type and their existing owner bounds.
++#[derive(Clone, Copy)]
++enum CostType<'a> {
++    Tensor(&'a TensorType),
++    Fixed(DType, &'a [u32]),
++    IndexScalar,
++}
++impl CostType<'_> {
++    fn dtype(self) -> DType {
++        match self {
++            Self::Tensor(t) => t.dtype,
++            Self::Fixed(d, _) => d,
++            Self::IndexScalar => DType::Idx,
++        }
++    }
++    fn elements(self, h: u64) -> u64 {
++        match self {
++            Self::Tensor(t) => t.elements_at(h),
++            Self::Fixed(_, shape) => shape.iter().fold(1u64, |n, d| n.saturating_mul(u64::from(*d))),
++            Self::IndexScalar => 1,
++        }
++    }
++    fn bytes(self, h: u64) -> u64 {
++        self.elements(h).saturating_mul(self.dtype().width() as u64)
++    }
++    fn last_extent(self, h: u64) -> u64 {
++        match self {
++            Self::Tensor(t) => dim_at(*t.shape.last().expect("validated MatMul rank"), h),
++            Self::Fixed(_, shape) => u64::from(*shape.last().expect("validated MatMul rank")),
++            Self::IndexScalar => panic!("validated MatMul rank"),
++        }
++    }
++}
++fn cost_type(p: &TirProgramV1, block: usize, r: Ref) -> CostType<'_> {
++    let b = &p.blocks[block];
++    match r {
++        Ref::Node(j) => CostType::Tensor(&b.nodes[j as usize].out),
++        Ref::CarryIn(k) => CostType::Tensor(&b.carry_in[k as usize]),
++        Ref::Param(j) => CostType::Fixed(p.params[j as usize].dtype, &p.params[j as usize].shape),
++        Ref::Const(j) => CostType::Fixed(p.consts[j as usize].dtype, &p.consts[j as usize].shape),
++        Ref::State(j) => CostType::Fixed(p.states[j as usize].dtype, &p.states[j as usize].shape),
++        Ref::Input(_) => CostType::IndexScalar,
++    }
++}
++
++/// A validated node's §8 cost at `H = h`, with no heap allocation. Cost
++/// arithmetic and operand-order saturation are unchanged; this permits a host
++/// to compute a run request BEFORE acquiring that run's actual RAM guard.
+ pub fn node_cost(p: &TirProgramV1, block: usize, node: usize, h: u64) -> CostV1 {
+     let n = &p.blocks[block].nodes[node];
+     let out_e = elems(&n.out, h);
+     let out_b = bytes(&n.out, h);
+-    let ins: Vec<Cow<'_, TensorType>> = n.inputs.iter().map(|r| ref_type(p, block, *r)).collect();
+-    let in_b: u64 = ins.iter().map(|t| bytes(t, h)).fold(0u64, u64::saturating_add);
++    let input = |i: usize| cost_type(p, block, n.inputs[i]);
++    let in_b = n.inputs.iter().fold(0u64, |sum, r| sum.saturating_add(cost_type(p, block, *r).bytes(h)));
+     let mut c = CostV1 { bytes_written: out_b, ..Default::default() };
+     match &n.prim {
+         Prim::Iota { .. } => c.elementwise = out_e,
+         Prim::Gather { .. } => {
+             c.elementwise = out_e;
+-            c.bytes_read = out_e.saturating_mul(ins[0].dtype.width() as u64).saturating_add(bytes(&ins[1], h));
++            c.bytes_read = out_e.saturating_mul(input(0).dtype().width() as u64).saturating_add(input(1).bytes(h));
+         }
+         Prim::MatMul => {
+-            c.macs = out_e.saturating_mul(contraction(p, block, node, h));
++            c.macs = out_e.saturating_mul(input(0).last_extent(h));
+             c.bytes_read = in_b;
+         }
+         Prim::ReduceSum { .. } | Prim::ReduceMax { .. } => {
+-            c.elementwise = elems(&ins[0], h);
++            c.elementwise = input(0).elements(h);
+             c.bytes_read = in_b;
+         }
+         Prim::IntExp | Prim::IntRsqrt | Prim::IntLn => {
+@@ -372,13 +421,13 @@
+             c.bytes_read = in_b;
+         }
+         Prim::TopK { k, .. } => {
+-            c.elementwise = elems(&ins[0], h).saturating_mul(*k as u64);
++            c.elementwise = input(0).elements(h).saturating_mul(*k as u64);
+             c.bytes_read = in_b;
+         }
+         Prim::HistAppend { .. } => {
+             c.elementwise = out_e;
+             c.bytes_read = out_b;
+-            c.bytes_written = bytes(&ins[0], h);
++            c.bytes_written = input(0).bytes(h);
+         }
+         _ => {
+             c.elementwise = out_e;
+diff --git a/misaka/palw/tir/core/tests/node_cost_noalloc.rs b/misaka/palw/tir/core/tests/node_cost_noalloc.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/core/tests/node_cost_noalloc.rs
+@@ -0,0 +1,202 @@
++//! Frozen node-cost parity, including the old allocating reference, with
++//! borrowed traversal allocation measurement. No admission/credit is asserted.
++use misaka_palw_tir::{
++    DType, Dim, Prim, Ref, TensorType, TirProgramV1,
++    admit::{CostV1, node_cost},
++};
++use std::{
++    alloc::{GlobalAlloc, Layout, System},
++    cell::Cell,
++};
++use std::{borrow::Cow, path::PathBuf};
++struct AllocationProbe;
++thread_local! {static PROBE_ACTIVE:Cell<bool>=const{Cell::new(false)};static PROBE_CALLS:Cell<usize>=const{Cell::new(0)};}
++fn record_allocation() {
++    let _ = PROBE_ACTIVE.try_with(|active| {
++        if active.get() {
++            let _ = PROBE_CALLS.try_with(|n| n.set(n.get() + 1));
++        }
++    });
++}
++// SAFETY: every operation forwards the original pointers/layout unchanged to
++// System. Thread-local integer counters do not allocate and never affect them.
++unsafe impl GlobalAlloc for AllocationProbe {
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++        record_allocation();
++        // SAFETY: forward the unchanged valid allocation layout to System.
++        unsafe { System.alloc(layout) }
++    }
++    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++        record_allocation();
++        // SAFETY: forward the unchanged valid zeroed allocation layout.
++        unsafe { System.alloc_zeroed(layout) }
++    }
++    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++        // SAFETY: forward the original allocated pointer and matching layout.
++        unsafe { System.dealloc(ptr, layout) }
++    }
++    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
++        record_allocation();
++        // SAFETY: forward the original pointer/layout and requested new size.
++        unsafe { System.realloc(ptr, layout, size) }
++    }
++}
++#[global_allocator]
++static ALLOCATOR: AllocationProbe = AllocationProbe;
++fn allocations<T>(run: impl FnOnce() -> T) -> (T, usize) {
++    PROBE_ACTIVE.with(|a| assert!(!a.get()));
++    PROBE_CALLS.with(|n| n.set(0));
++    struct Stop;
++    impl Drop for Stop {
++        fn drop(&mut self) {
++            PROBE_ACTIVE.with(|a| a.set(false));
++        }
++    }
++    PROBE_ACTIVE.with(|a| a.set(true));
++    let stop = Stop;
++    let out = run();
++    let count = PROBE_CALLS.with(Cell::get);
++    drop(stop);
++    (out, count)
++}
++
++// Frozen pre-refactor reference: copied from the cc22 source, not a new recipe.
++fn ref_type(p: &TirProgramV1, block: usize, r: Ref) -> Cow<'_, TensorType> {
++    let b = &p.blocks[block];
++    match r {
++        Ref::Node(j) => Cow::Borrowed(&b.nodes[j as usize].out),
++        Ref::CarryIn(k) => Cow::Borrowed(&b.carry_in[k as usize]),
++        Ref::Param(j) => Cow::Owned(TensorType::fixed(p.params[j as usize].dtype, &p.params[j as usize].shape)),
++        Ref::Const(j) => Cow::Owned(TensorType::fixed(p.consts[j as usize].dtype, &p.consts[j as usize].shape)),
++        Ref::State(j) => Cow::Owned(TensorType::fixed(p.states[j as usize].dtype, &p.states[j as usize].shape)),
++        Ref::Input(_) => Cow::Owned(TensorType::scalar(DType::Idx)),
++    }
++}
++
++fn elems(t: &TensorType, h: u64) -> u64 {
++    t.elements_at(h)
++}
++
++fn bytes(t: &TensorType, h: u64) -> u64 {
++    t.elements_at(h).saturating_mul(t.dtype.width() as u64)
++}
++
++fn dim_at(d: Dim, h: u64) -> u64 {
++    match d {
++        Dim::Fixed(n) => n as u64,
++        Dim::H => h,
++    }
++}
++
++/// The contraction extent of a `MatMul` node: `a.shape[−1]`.
++fn contraction(p: &TirProgramV1, block: usize, node: usize, h: u64) -> u64 {
++    let n = &p.blocks[block].nodes[node];
++    let a = ref_type(p, block, n.inputs[0]);
++    dim_at(a.shape[a.rank() - 1], h)
++}
++
++// ---------------------------------------------------------------------------------------------
++// §8: the cost of a node
++// ---------------------------------------------------------------------------------------------
++
++/// A node's §8 cost at `H = h`.
++fn legacy_node_cost(p: &TirProgramV1, block: usize, node: usize, h: u64) -> CostV1 {
++    let n = &p.blocks[block].nodes[node];
++    let out_e = elems(&n.out, h);
++    let out_b = bytes(&n.out, h);
++    let ins: Vec<Cow<'_, TensorType>> = n.inputs.iter().map(|r| ref_type(p, block, *r)).collect();
++    let in_b: u64 = ins.iter().map(|t| bytes(t, h)).fold(0u64, u64::saturating_add);
++    let mut c = CostV1 { bytes_written: out_b, ..Default::default() };
++    match &n.prim {
++        Prim::Iota { .. } => c.elementwise = out_e,
++        Prim::Gather { .. } => {
++            c.elementwise = out_e;
++            c.bytes_read = out_e.saturating_mul(ins[0].dtype.width() as u64).saturating_add(bytes(&ins[1], h));
++        }
++        Prim::MatMul => {
++            c.macs = out_e.saturating_mul(contraction(p, block, node, h));
++            c.bytes_read = in_b;
++        }
++        Prim::ReduceSum { .. } | Prim::ReduceMax { .. } => {
++            c.elementwise = elems(&ins[0], h);
++            c.bytes_read = in_b;
++        }
++        Prim::IntExp | Prim::IntRsqrt | Prim::IntLn => {
++            c.transcendentals = out_e;
++            c.bytes_read = in_b;
++        }
++        Prim::TopK { k, .. } => {
++            c.elementwise = elems(&ins[0], h).saturating_mul(*k as u64);
++            c.bytes_read = in_b;
++        }
++        Prim::HistAppend { .. } => {
++            c.elementwise = out_e;
++            c.bytes_read = out_b;
++            c.bytes_written = bytes(&ins[0], h);
++        }
++        _ => {
++            c.elementwise = out_e;
++            c.bytes_read = in_b;
++        }
++    }
++    c
++}
++
++fn programs() -> Vec<TirProgramV1> {
++    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../../consensus-vectors/tir-v1/programs");
++    let mut files = std::fs::read_dir(dir)
++        .unwrap()
++        .map(|p| p.unwrap().path())
++        .filter(|p| p.extension().is_some_and(|e| e == "json"))
++        .collect::<Vec<_>>();
++    files.sort();
++    assert!(files.len() >= 7);
++    files
++        .iter()
++        .map(|path| {
++            let json: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
++            let text = json["program_borsh_hex"].as_str().unwrap();
++            let bytes = (0..text.len()).step_by(2).map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap()).collect::<Vec<_>>();
++            TirProgramV1::decode_canonical(&bytes).unwrap()
++        })
++        .collect()
++}
++#[test]
++fn frozen_cost_vectors_match_all_corpus_nodes_refs_and_symbolic_saturation_without_allocating() {
++    let (sentinel, count) = allocations(|| std::hint::black_box(vec![0u8; 128]));
++    assert!(count > 0);
++    drop(sentinel);
++    let programs = programs();
++    let mut refs = 0u8;
++    let mut saturated = false;
++    let mut nodes = 0usize;
++    for p in &programs {
++        for (block, b) in p.blocks.iter().enumerate() {
++            for (index, n) in b.nodes.iter().enumerate() {
++                for r in &n.inputs {
++                    refs |= 1
++                        << match r {
++                            Ref::Node(_) => 0,
++                            Ref::CarryIn(_) => 1,
++                            Ref::Param(_) => 2,
++                            Ref::Const(_) => 3,
++                            Ref::State(_) => 4,
++                            Ref::Input(_) => 5,
++                        };
++                }
++                for h in [0, 1, 2, 17, u64::from(u32::MAX), u64::MAX] {
++                    let expected = legacy_node_cost(p, block, index, h);
++                    let (actual, allocs) = allocations(|| node_cost(std::hint::black_box(p), block, index, h));
++                    assert_eq!(actual, expected, "block {block} node {index} H {h}");
++                    assert_eq!(allocs, 0, "block {block} node {index} H {h}");
++                    saturated |= [actual.macs, actual.elementwise, actual.transcendentals, actual.bytes_read, actual.bytes_written]
++                        .contains(&u64::MAX);
++                    nodes += 1;
++                }
++            }
++        }
++    }
++    assert_eq!(refs, 0b11_1111, "corpus must exercise every Ref kind");
++    assert!(saturated);
++    assert!(nodes > 100);
++}
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs
+--- a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs
+@@ -11,6 +11,27 @@
+ };
+ use misaka_palw_tir::{Prim, demand::history_length_v1};
+ use std::{cell::Cell, rc::Rc};
++/// Compare canonical original program bytes without allocating an encoded Vec.
++/// A foreign expected class may be much smaller than the independently held
++/// space; its claimed length must never size a clone of that other program.
++fn program_matches(program: &misaka_palw_tir::TirProgramV1, expected: &[u8]) -> bool {
++    use borsh::BorshSerialize;
++    struct Match<'a>(&'a [u8]);
++    impl std::io::Write for Match<'_> {
++        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
++            if !self.0.starts_with(b) {
++                return Err(std::io::ErrorKind::InvalidData.into());
++            }
++            self.0 = &self.0[b.len()..];
++            Ok(b.len())
++        }
++        fn flush(&mut self) -> std::io::Result<()> {
++            Ok(())
++        }
++    }
++    let mut out = Match(expected);
++    program.serialize(&mut out).is_ok() && out.0.is_empty()
++}
+ /// Metadata comes from the actual registry/job owner, not a peer capture. This
+ /// borrowed DTO is no native authorization and does not invent an assignment.
+ pub struct CaptureExpectedV2<'a> {
+@@ -46,6 +67,10 @@
+     pub fn run(&self) -> &TirJobRunWideQ24V2 {
+         &self.run
+     }
++    /// Owned metadata export. The caller MUST acquire an independent export
++    /// guard before this call, additive to all earlier copies, and retain it
++    /// until the returned binding/copies are dropped, even after capture Drop.
++    /// The capture lease and copy-work counter do not own that returned lifetime.
+     pub fn binding(&self) -> Result<PalwTirStepBindingV1, Error> {
+         let c = self.expected.class;
+         let bytes = add(
+@@ -437,48 +462,58 @@
+     if work.started.replace(true) {
+         return Err("wide attempt CPU run already started; spent work is retained".into());
+     }
+-    // 1024 covers all fixed job fields/Borsh prefixes; network bytes are explicit.
+-    session.charge(Charge::Hash, add(1024, count(expected.job.network_id.len())?)?)?;
++    // Only immutable lengths/checked arithmetic and the runner's pure quote
++    // occur before this mandatory capture lease. The ledger key is the owner's
++    // pre-existing fixed expectation, not a freshly hashed delivered DTO.
++    // The opaque actual space was independently decoded under the format cap;
++    // bound metadata quote/equality work even when the foreign expected bytes
++    // are tiny. No numerical execution or program Vec allocation occurs here.
++    session.charge(Charge::Visit, mul(add(misaka_palw_tir::program::MAX_PROGRAM_BYTES as u64, 1024)?, 128)?)?;
++    let run_quote = runner.quote(expected.job, run_limits)?;
++    let records_cap = usize::try_from(limits.max_records).map_err(|_| "wide records index")?;
++    let leaves_cap = usize::try_from(limits.max_step_leaves).map_err(|_| "wide leaves index")?;
++    let layout_bytes = add(32, mul(count(expected.class.layout.commit_tiles.len() + expected.class.layout.state_tiles.len())?, 4)?)?;
++    let context_bytes = add(1024, count(expected.job.network_id.len())?)?;
++    // Metadata request envelope: original program re-encoding, layout Borsh
++    // hashing and context Borsh hashing, allowing Vec growth/coexisting writers.
++    // Include FOREIGN layout length explicitly, even before layout equality.
++    let metadata_scratch = mul(add(add(count(expected.class.program.len())?, layout_bytes)?, context_bytes)?, 4)?;
++    // A callback first decodes one mixed-width leaf to i128 (<=4x its bytes),
++    // DROPS that Vec, then hashes/writes the borrowed preimage. Runner-owned
++    // native tile/preimage/hash buffers are separately in run_quote.
++    let callback_scratch = mul(limits.max_material_bytes, 4)?;
++    // Fixed local rank/scalar/hash/4096-byte IO/control request envelope. This
++    // is not process RSS; original stack/allocator/OS owners remain external.
++    let control_scratch = 65536u64;
++    let heap = [
++        limits.external_retained_bytes,
++        mul(limits.max_records, size_of::<Record>() as u64)?,
++        mul(limits.max_step_leaves, size_of::<Leaf>() as u64)?,
++        metadata_scratch,
++        callback_scratch,
++        control_scratch,
++    ]
++    .into_iter()
++    .try_fold(0, add)?;
++    if add(heap, run_quote.requested_bytes)? > limits.max_live_heap_bytes {
++        return Err("wide collector simultaneous heap cap".into());
++    }
++    let lease = reserver("positive-wide-panel-capture-v2", work.class, work.execution, heap)?;
++    // Hash work accounting is additive to the RAM guards, never a substitute.
++    session.charge(Charge::Hash, context_bytes)?;
+     let execution = expected.job.context_hash();
+     if work.class != expected.job.shape_profile_id || work.execution != execution {
+         return Err("wide work belongs to another original job/class".into());
+     }
+     session.charge(
+         Charge::Hash,
+-        add(
+-            mul(
+-                add(
+-                    count(expected.class.program.len())?,
+-                    mul(count(expected.class.layout.commit_tiles.len() + expected.class.layout.state_tiles.len())?, 4)?,
+-                )?,
+-                8,
+-            )?,
+-            mul(count(expected.prompt.len())?, 4)?,
+-        )?,
++        add(mul(add(count(expected.class.program.len())?, layout_bytes)?, 8)?, mul(count(expected.prompt.len())?, 4)?)?,
+     )?;
+-    session.charge(Charge::Visit, mul(add(count(expected.class.program.len())?, 1024)?, 128)?)?;
+     let class_id = expected.class.class_id(&expected.artifact);
+-    let run_quote = runner.quote(expected.job, run_limits)?;
+-    let records_cap = usize::try_from(limits.max_records).map_err(|_| "wide records index")?;
+-    let leaves_cap = usize::try_from(limits.max_step_leaves).map_err(|_| "wide leaves index")?;
+-    let heap = add(
+-        limits.external_retained_bytes,
+-        add(
+-            mul(limits.max_records, size_of::<Record>() as u64)?,
+-            add(
+-                mul(limits.max_step_leaves, size_of::<Leaf>() as u64)?,
+-                add(mul(count(expected.class.program.len())?, 4)?, add(mul(limits.max_material_bytes, 4)?, 65536)?)?,
+-            )?,
+-        )?,
+-    )?;
+-    if add(heap, run_quote.requested_bytes)? > limits.max_live_heap_bytes {
+-        return Err("wide collector simultaneous heap cap".into());
+-    }
+-    let lease = reserver("positive-wide-panel-capture-v2", class_id, execution, heap)?;
+     if expected.class.program.len() > misaka_palw_tir::program::MAX_PROGRAM_BYTES
+         || class_id != expected.job.shape_profile_id
+         || expected.class.layout != *expected.space.layout()
+-        || expected.class.program != expected.space.program().encode()
++        || !program_matches(expected.space.program(), &expected.class.program)
+         || runner.original_space().program() != expected.space.program()
+         || runner.original_space().layout() != expected.space.layout()
+         || !prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, expected.prompt, &expected.job.prompt_token_ids_hash)
+@@ -506,7 +541,7 @@
+         let b = shared.borrow();
+         (b.e.job, b.e.prompt, b.context)
+     };
+-    let run = runner.run_observed_fallible(job, prompt, execution, run_limits, &mut leaves, &mut observer)?;
++    let run = runner.run_observed_fallible(job, prompt, execution, run_limits, &mut leaves, &mut observer, reserver)?;
+     drop(leaves);
+     drop(observer);
+     let mut b = Rc::try_unwrap(shared).map_err(|_| "wide collector leaked callback")?.into_inner();
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
+--- a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
+@@ -3,6 +3,9 @@
+ //! No new domain/ID, generic deserializer, signature or arithmetic certificate.
+ //! The current Node PrototypePanelRecord still owns Vec<Vec<i128>>: stream-backed
+ //! record signing/checking is a required next integration, not completed here.
++//! Existing Core record.hash already uses HashWriter streaming: the missing
++//! part is replacing its retained Vec<Vec<i128>> owner/reader, not inventing a
++//! new hash/domain or an extra full encoded-record allocation.
+ use super::proof::WidePanelBuilderV2;
+ use super::*;
+ /// Owns one empty local file. Not reopenable from a saved "complete" bit.
+@@ -14,6 +17,11 @@
+     max_tile_lanes: u64,
+ }
+ impl WidePanelBuilderV2<'_, '_> {
++    /// Per-tile temporaries stay under the live builder request. If callers
++    /// materialize all claims (e.g. compatibility freeze_record), they MUST
++    /// separately quote/acquire/retain the complete Vec capacities, binding,
++    /// generated IDs, frozen record, signing/hash and Node-checker owners.
++    /// retained_record_bytes!=0 is only a declared cap, never such a receipt.
+     pub fn claims_tape<'s>(&'s self, file: File) -> Result<WideClaimsTapeV2<'s>, Error> {
+         let count = self.plan().summary().relations;
+         let relations = u32::try_from(count).map_err(|_| "wide claims Borsh count")?;
+@@ -62,6 +70,9 @@
+     }
+     /// Sequential bounded access for a future stream-record checker. This emits
+     /// raw Panel claims, never trusted operands or a stored checker result.
++    /// The callback MUST acquire its own guard before retaining/copying values
++    /// and keep it through that independent lifetime. A visit into Vec<Vec<_>>
++    /// is the explicit RAM compatibility path, not stream-record completion.
+     pub fn visit(&self, visit: &mut dyn FnMut(u32, &[i128]) -> Result<(), Error>) -> Result<(), Error> {
+         let mut at = 0;
+         let mut n = [0; 4];
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs
+--- a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs
+@@ -38,10 +38,18 @@
+ }
+ #[derive(Clone, Copy)]
+ pub struct WidePanelOwnersV2 {
++    /// Explicit PER-MATERIAL authentication/source caps. These must be finite,
++    /// no larger than the immutable Node preparation caps, and fit the actual
++    /// source/metadata owner bytes below. Cumulative max_visits is separate.
++    pub material_limits: TirSourceOnlyLimitsV1,
+     pub metadata_auth_bytes: u64,
+     pub metadata_auth_work: u64,
+     pub source_auth_bytes: u64,
+     pub signature_bytes: u64,
++    /// Caller-declared ceiling for the independent record owner, not a receipt
++    /// that Vec<Vec<i128>>, signatures or arbitrary later exports are reserved.
++    /// Actual record allocation/signing/hash/Node owners acquire their guards
++    /// BEFORE materializing and retain them until every owned value is dropped.
+     pub retained_record_bytes: u64,
+ }
+ type BuiltMaterialV2 = (PalwStepInputRowV1, PalwTirParamOpeningV1, Vec<u32>, Option<WideGeneratedIdsPinV2>, Option<WidePanelTargetV2>);
+@@ -128,6 +136,33 @@
+             add(mul(count(e.class.program.len())?, 128)?, mul(mul(count(p.params.len() + p.states.len())?, layers)?, 64)?)?;
+         if owners.metadata_auth_bytes < metadata_floor || owners.metadata_auth_work < work_floor {
+             return Err("wide metadata owner below derived original-program request floor".into());
++        }
++        let local = owners.material_limits;
++        let node = prep.source_limits();
++        let local_words = [
++            local.max_source_reads,
++            local.max_target_lanes,
++            local.max_target_bytes,
++            local.max_material_bytes,
++            local.max_material_units,
++            local.max_auth_storage_bytes,
++            local.max_workspace_bytes,
++        ];
++        let node_words = [
++            node.max_source_reads,
++            node.max_target_lanes,
++            node.max_target_bytes,
++            node.max_material_bytes,
++            node.max_material_units,
++            node.max_auth_storage_bytes,
++            node.max_workspace_bytes,
++        ];
++        if local_words.iter().zip(node_words).any(|(a, b)| *a == 0 || *a > b)
++            || local.max_material_bytes > l.max_material_bytes
++            || local.max_auth_storage_bytes > owners.source_auth_bytes
++            || local.max_workspace_bytes > owners.metadata_auth_bytes
++        {
++            return Err("wide per-material source limits exceed Node or local owner caps".into());
+         }
+         let trees =
+             capture.run.logits_rows().iter().try_fold(tir_full_tree_storage_need_v1(capture.run.leaf_count())?, |a, row| {
+@@ -335,19 +370,16 @@
+         }
+     }
+     fn source_limits(&self) -> TirSourceOnlyLimitsV1 {
+-        let l = self.capture.session.limits;
+-        TirSourceOnlyLimitsV1 {
+-            max_source_reads: l.max_visits,
+-            max_target_lanes: l.max_trace_frames,
+-            max_target_bytes: l.max_material_bytes,
+-            max_material_bytes: l.max_material_bytes,
+-            max_material_units: l.max_trace_frames,
+-            max_auth_storage_bytes: self.owners.source_auth_bytes,
+-            max_workspace_bytes: self.owners.metadata_auth_bytes,
+-        }
++        self.owners.material_limits
+     }
+     /// Extract only comparison claims from the same run, preserving original i128
+     /// integers. These values never become Node source operands or computation credit.
++    /// The returned Vec is CALLER-OWNED: before calling, acquire its own export
++    /// guard (max_claim_bytes plus Vec header), additive to all earlier retained
++    /// exports, and keep it until that Vec/any copies are dropped. Builder Drop
++    /// cannot release or certify those allocations. Prefer claims_tape for a
++    /// bounded streaming producer; legacy freeze_record still needs its actual
++    /// full claims/record/signature owner, not merely retained_record_bytes!=0.
+     pub fn claim(&self, index: u64) -> Result<Vec<i128>, Error> {
+         self.capture.session.charge(Charge::Visit, self.prep.plan().summary().geometry_visit_bound)?;
+         let r = self.prep.plan().relation_at(index).ok_or("wide claim index")?;
+diff --git a/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs b/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
+--- a/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
++++ b/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
+@@ -21,7 +21,7 @@
+ use misaka_palw_tir::{StateKind, TirError, TirErrorKind, admit::node_cost};
+ 
+ use super::{
+-    memory::{self, TirMemoryLeaseV1},
++    memory::{self, TirMemoryLeaseV1, TirMemoryReserverV1},
+     run::{ObservedSink, TirRunObserverV1},
+ };
+ use crate::{
+@@ -164,7 +164,12 @@
+     pub fn original_space(&self) -> &PalwTirStepSpaceV2 {
+         self.space
+     }
+-    /// Pure closed-form preflight. No position/leaf list or encoded program is allocated.
++    /// Structural request preflight over an already validated, borrowed plan.
++    /// The successful path makes no heap input-type/shape Vec, position/leaf list
++    /// or encoded program. node_cost folds borrowed operand views. Error Strings
++    /// remain caller-owned control/error allocations, not a RAM admission token.
++    /// Both the capture preflight and direct required-run API use this same path;
++    /// their actual data/executor allocations still require the following guard.
+     pub fn quote(&self, ctx: &PalwJobContextV2, limits: TirWideRunLimitsV2) -> Result<TirWideRunQuoteV2, String> {
+         if ctx.shape_profile_id != self.class_id {
+             return Err("wide job names another class".into());
+@@ -272,7 +277,7 @@
+             on_leaf(leaf);
+             Ok(())
+         };
+-        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None)
++        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, None)
+     }
+ 
+     /// Every-node/state/native-output observation within this same single run.
+@@ -291,12 +296,18 @@
+             on_leaf(leaf);
+             Ok(())
+         };
+-        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer))
++        self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer), None)
+     }
+ 
+     /// Fallible local custody callback. A failed tape write aborts this same
+     /// run immediately; partial values cannot become a completed capture.
+-    /// Original run/run_observed callback APIs and all output bytes are retained.
++    /// Requires the actual caller's RAM ledger; its run guard is retained by
++    /// the returned TirJobRunWideQ24V2. No optional-global fallback or double
++    /// reservation occurs here. Its validated success quote is a borrowed,
++    /// heap-allocation-free structural traversal before acquisition; malformed
++    /// request/error Strings remain under the caller's control/error owner.
++    /// Original run/run_observed APIs remain optional and all successful output
++    /// bytes are retained.
+     #[allow(clippy::too_many_arguments)]
+     pub fn run_observed_fallible(
+         &self,
+@@ -306,8 +317,9 @@
+         limits: TirWideRunLimitsV2,
+         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
+         observer: &mut dyn TirRunObserverV1,
++        required_reserver: &TirMemoryReserverV1,
+     ) -> Result<TirJobRunWideQ24V2, String> {
+-        self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer))
++        self.drive(ctx, prompt, expected_execution, limits, on_leaf, Some(observer), Some(required_reserver))
+     }
+ 
+     #[allow(clippy::too_many_arguments)]
+@@ -319,6 +331,7 @@
+         limits: TirWideRunLimitsV2,
+         on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>) -> Result<(), String>,
+         mut observer: Option<&mut dyn TirRunObserverV1>,
++        required_reserver: Option<&TirMemoryReserverV1>,
+     ) -> Result<TirJobRunWideQ24V2, String> {
+         let q = self.quote(ctx, limits)?;
+         if prompt.len() != ctx.declared_prefill_tokens as usize {
+@@ -329,7 +342,13 @@
+         }
+         // Bounded hashing follows simultaneous request admission; caller pins the
+         // independently resolved expected execution, never a delivered replacement.
+-        let lease = memory::reserve_v1(&memory::memory_reserver_v1(), "tir-wide-q24-v2", self.class_id, ctx, q.requested_bytes)?;
++        // Required Panel route uses this SAME ledger and the independently
++        // supplied fixed execution ID before any allocating context hash. Never
++        // also acquire the optional global lease. Successful run owns the guard.
++        let lease = match required_reserver {
++            Some(reserver) => Some(reserver("tir-wide-q24-v2-required", self.class_id, expected_execution, q.requested_bytes)?),
++            None => memory::reserve_v1(&memory::memory_reserver_v1(), "tir-wide-q24-v2", self.class_id, ctx, q.requested_bytes)?,
++        };
+         let context = ctx.context_hash();
+         if context != expected_execution {
+             return Err("wide original execution pin differs".into());
+diff --git a/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs b/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
+--- a/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
++++ b/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
+@@ -207,6 +207,15 @@
+ }
+ fn owners() -> WidePanelOwnersV2 {
+     WidePanelOwnersV2 {
++        material_limits: TirSourceOnlyLimitsV1 {
++            max_source_reads: 256,
++            max_target_lanes: 1 << 16,
++            max_target_bytes: 1 << 20,
++            max_material_bytes: 1 << 20,
++            max_material_units: 1 << 16,
++            max_auth_storage_bytes: 1 << 24,
++            max_workspace_bytes: 1 << 29,
++        },
+         metadata_auth_bytes: 1 << 29,
+         metadata_auth_work: 1 << 24,
+         source_auth_bytes: 1 << 24,
+@@ -492,3 +501,91 @@
+         assert_eq!(work.meter(), before);
+     });
+ }
++#[test]
++fn required_same_ledger_capture_and_run_guards_survive_until_owned_capture_drop() {
++    use std::sync::{
++        Mutex,
++        atomic::{AtomicUsize, Ordering},
++    };
++    struct Guard(Arc<AtomicUsize>);
++    impl Drop for Guard {
++        fn drop(&mut self) {
++            self.0.fetch_sub(1, Ordering::SeqCst);
++        }
++    }
++    run_wide_common::with_fixture(1, |f, _| {
++        let live = Arc::new(AtomicUsize::new(0));
++        let calls = Arc::new(Mutex::new(vec![]));
++        let (counter, requests) = (live.clone(), calls.clone());
++        let expected_class = f.job.shape_profile_id;
++        let expected_execution = f.job.context_hash();
++        let ledger: TirMemoryReserverV1 = Arc::new(move |role, class, execution, bytes| {
++            assert_eq!((class, execution), (expected_class, expected_execution));
++            assert!(bytes > 0);
++            requests.lock().unwrap().push((role, bytes));
++            counter.fetch_add(1, Ordering::SeqCst);
++            Ok(Box::new(Guard(counter.clone())) as Box<dyn Send + Sync>)
++        });
++        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
++        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, expected_class).unwrap();
++        let work = WidePanelWorkV2::new(bounds(), expected_class, expected_execution, &disk_reserve()).unwrap();
++        let capture = capture_one_pass_v2(
++            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
++            &runner,
++            run_bounds(),
++            &work,
++            tempfile::tempfile().unwrap(),
++            &ledger,
++        )
++        .unwrap();
++        let requests = calls.lock().unwrap();
++        assert_eq!(requests.len(), 2);
++        assert_eq!(requests[0].0, "positive-wide-panel-capture-v2");
++        assert_eq!(requests[1].0, "tir-wide-q24-v2-required");
++        assert_eq!(requests[1].1, capture.run().reserved_bytes());
++        drop(requests);
++        assert_eq!(live.load(Ordering::SeqCst), 2);
++        drop(capture);
++        assert_eq!(live.load(Ordering::SeqCst), 0);
++    });
++}
++#[test]
++fn denied_capture_ram_reservation_precedes_all_allocating_identity_hashes() {
++    run_wide_common::with_fixture(1, |f, _| {
++        let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
++        let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.job.shape_profile_id).unwrap();
++        let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
++        let deny: TirMemoryReserverV1 = Arc::new(|role, _, _, _| {
++            assert_eq!(role, "positive-wide-panel-capture-v2");
++            Err("capture RAM denied".into())
++        });
++        let error = match capture_one_pass_v2(
++            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
++            &runner,
++            run_bounds(),
++            &work,
++            tempfile::tempfile().unwrap(),
++            &deny,
++        ) {
++            Ok(_) => panic!("unreserved capture accepted"),
++            Err(e) => e,
++        };
++        assert!(error.contains("RAM denied"));
++        let spent = work.meter();
++        assert_eq!(spent.hash_work, 0);
++        assert!(spent.visits > 0);
++        let second = match capture_one_pass_v2(
++            CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
++            &runner,
++            run_bounds(),
++            &work,
++            tempfile::tempfile().unwrap(),
++            &deny,
++        ) {
++            Ok(_) => panic!("failed attempt restarted"),
++            Err(e) => e,
++        };
++        assert!(second.contains("already started"));
++        assert_eq!(work.meter(), spent);
++    });
++}
+diff --git a/misaka/palw/tir/exec/tests/wide_quote_noalloc.rs b/misaka/palw/tir/exec/tests/wide_quote_noalloc.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/tests/wide_quote_noalloc.rs
+@@ -0,0 +1,85 @@
++#![cfg(feature = "node")]
++//! Success quote allocation boundary for BOTH Panel capture and the direct
++//! required runner: they call the same borrowed structural quote. Model/plan/
++//! source setup and error/control storage are outside this measurement.
++mod run_wide_common;
++use kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV2;
++use misaka_palw_tir_exec::node::run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirWideRunLimitsV2};
++use std::{
++    alloc::{GlobalAlloc, Layout, System},
++    cell::Cell,
++};
++struct AllocationProbe;
++thread_local! {static PROBE_ACTIVE:Cell<bool>=const{Cell::new(false)};static PROBE_CALLS:Cell<usize>=const{Cell::new(0)};}
++fn record_allocation() {
++    let _ = PROBE_ACTIVE.try_with(|active| {
++        if active.get() {
++            let _ = PROBE_CALLS.try_with(|n| n.set(n.get() + 1));
++        }
++    });
++}
++// SAFETY: every operation forwards the original pointers/layout unchanged to
++// System. Thread-local integer counters do not allocate and never affect them.
++unsafe impl GlobalAlloc for AllocationProbe {
++    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
++        record_allocation();
++        // SAFETY: forward the unchanged valid allocation layout to System.
++        unsafe { System.alloc(layout) }
++    }
++    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
++        record_allocation();
++        // SAFETY: forward the unchanged valid zeroed allocation layout.
++        unsafe { System.alloc_zeroed(layout) }
++    }
++    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
++        // SAFETY: forward the original allocated pointer and matching layout.
++        unsafe { System.dealloc(ptr, layout) }
++    }
++    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
++        record_allocation();
++        // SAFETY: forward the original pointer/layout and requested new size.
++        unsafe { System.realloc(ptr, layout, size) }
++    }
++}
++#[global_allocator]
++static ALLOCATOR: AllocationProbe = AllocationProbe;
++fn allocations<T>(run: impl FnOnce() -> T) -> (T, usize) {
++    PROBE_ACTIVE.with(|a| assert!(!a.get()));
++    PROBE_CALLS.with(|n| n.set(0));
++    struct Stop;
++    impl Drop for Stop {
++        fn drop(&mut self) {
++            PROBE_ACTIVE.with(|a| a.set(false));
++        }
++    }
++    PROBE_ACTIVE.with(|a| a.set(true));
++    let stop = Stop;
++    let out = run();
++    let count = PROBE_CALLS.with(Cell::get);
++    drop(stop);
++    (out, count)
++}
++
++#[test]
++fn successful_wide_quote_needs_no_local_shape_scratch_allocation_before_required_ram_guard() {
++    let (sentinel, count) = allocations(|| std::hint::black_box(vec![0u8; 128]));
++    assert!(count > 0);
++    drop(sentinel);
++    for window in [1, 3] {
++        run_wide_common::with_fixture(window, |f, _| {
++            let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
++            let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.job.shape_profile_id).unwrap();
++            let limits = TirWideRunLimitsV2 {
++                max_positions: run_wide_common::MAX_CONTEXT,
++                max_step_leaves: run_wide_common::LEAF_CAP,
++                max_row_lanes: 16,
++                max_work: 1 << 40,
++                max_requested_bytes: 1 << 30,
++            };
++            let expected = runner.quote(&f.job, limits).unwrap();
++            let (actual, count) = allocations(|| runner.quote(std::hint::black_box(&f.job), limits));
++            assert_eq!(count, 0);
++            assert_eq!(actual.unwrap(), expected);
++        });
++    }
++}

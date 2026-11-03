@@ -49,6 +49,7 @@ async fn evm_round_gas_actual_permitted_merge_with_market_inactive_matches_produ
         assert_eq!(parent, virtual_state.ghostdag_data.selected_parent);
         let verdicts = vp
             .palw_round_verdicts_v1(&state, &virtual_state.ghostdag_data, virtual_state.daa_score)
+            .expect("Round fee budget preparation succeeds")
             .expect("actual execution lane is open");
         assert!(verdicts.round_blocks.contains(&round_block.header.hash));
         let count = evm_distinct_permitted_rounds_v1(&verdicts.uses);

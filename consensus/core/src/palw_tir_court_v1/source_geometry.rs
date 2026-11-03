@@ -8,18 +8,12 @@ pub(crate) enum SupplyGeometryV1 {
     Step { coord: PalwStepCoordinateV1, dtype: DType, lane: usize },
     Node { ctx: DemandContext, node: u16, index: usize },
 }
-pub(crate) fn reserved(
-    space: &PalwTirStepSpaceV1,
-    job: PalwTirJobShapeV1,
-    pos: u32,
-    reserved: u32,
-    tile: u64,
-) -> PalwStepCoordinateV1 {
+pub(crate) fn reserved(space: &dyn ExactGeometry, job: PalwTirJobShapeV1, pos: u32, reserved: u32, tile: u64) -> PalwStepCoordinateV1 {
     let (call_index, position) = job.call_position(pos);
     PalwStepCoordinateV1 { call_index, node_slot: space.program_slots() + reserved, position, tile_index: tile as u32 }
 }
 pub(crate) fn commit(
-    space: &PalwTirStepSpaceV1,
+    space: &dyn ExactGeometry,
     job: PalwTirJobShapeV1,
     ctx: DemandContext,
     node: u16,
@@ -33,7 +27,7 @@ pub(crate) fn commit(
     Ok(PalwStepCoordinateV1 { call_index, node_slot: slot, position, tile_index: tile as u32 })
 }
 pub(crate) fn fixed(
-    space: &PalwTirStepSpaceV1,
+    space: &dyn ExactGeometry,
     job: PalwTirJobShapeV1,
     pos: u32,
     state: u16,
@@ -43,7 +37,7 @@ pub(crate) fn fixed(
     if pos == 0 {
         return Ok(SupplyGeometryV1::Zero);
     }
-    if !pos.is_multiple_of(space.layout.checkpoint_interval) {
+    if !pos.is_multiple_of(space.layout().checkpoint_interval) {
         return Ok(SupplyGeometryV1::Replay);
     }
     let Some(k) = space.fixed_instance_index(state, layer) else {
@@ -58,7 +52,7 @@ pub(crate) fn fixed(
     })
 }
 pub(crate) fn history(
-    space: &PalwTirStepSpaceV1,
+    space: &dyn ExactGeometry,
     job: PalwTirJobShapeV1,
     pos: u32,
     state: u16,
@@ -66,7 +60,7 @@ pub(crate) fn history(
     row_pos: u32,
     index: usize,
 ) -> TirResult<SupplyGeometryV1> {
-    let h_tile = space.layout.h_tile;
+    let h_tile = space.layout().h_tile;
     let tile_start = row_pos - row_pos % h_tile;
     let tile_end = tile_start + (h_tile - 1);
     if tile_end < pos {
@@ -81,7 +75,7 @@ pub(crate) fn history(
         let lane = (row_pos - tile_start) as u64 * row_lanes + (index as u64 - first_lane);
         Ok(SupplyGeometryV1::Step { coord, dtype: inst.dtype, lane: lane as usize })
     } else {
-        let Some((ctx, node)) = hist_row_node_v1(&space.program, state, layer, row_pos) else {
+        let Some((ctx, node)) = hist_row_node_v1(space.program(), state, layer, row_pos) else {
             return tir_err(TirErrorKind::Malformed, format!("history {state} layer {layer:?} appends nothing"));
         };
         Ok(SupplyGeometryV1::Node { ctx, node, index })

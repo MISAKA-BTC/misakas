@@ -89,6 +89,17 @@ impl Default for TirLayoutChoiceV1 {
 /// **`program` under the logits scheme `choice` names** — re-encoded canonically; the params and so
 /// the inventory root are untouched (the root covers the declarations' bytes, never the scheme).
 pub fn tir_program_with_scheme_v1(program: &TirProgramV1, choice: Option<TirLogitsSchemeV1>) -> Result<TirProgramV1, String> {
+    let i64_output = program
+        .blocks
+        .get(usize::from(program.schedule.post))
+        .and_then(|b| b.nodes.get(usize::from(program.logits)))
+        .is_some_and(|n| n.out.dtype == misaka_palw_tir::DType::I64);
+    if program.wide_logits_q24() || i64_output {
+        if !program.wide_logits_q24() || choice.is_some() {
+            return Err("the I64 Q24 program requires its explicit wide scheme; a V1 scheme override is unsupported".into());
+        }
+        return TirProgramV1::decode_canonical(&program.encode()).map_err(|e| e.to_string());
+    }
     let named = Hash64::from_bytes(program.logits_scheme_id);
     let scheme = match choice {
         Some(s) => s.id(),
@@ -237,6 +248,9 @@ fn tir_declare_search_v1(
 /// **The layout's tiles, its history chunk and its context** — everything but the checkpoint
 /// interval, which is left at [`TIR_DECLARED_MAX_CHECKPOINT_INTERVAL_V1`] for the caller to size.
 pub fn tir_layout_tiles_v1(params: &Params, program: &TirProgramV1, choice: &TirLayoutChoiceV1) -> Result<PalwTirLayoutV1, String> {
+    if program.wide_logits_q24() {
+        return Err("wide Q24 layout requires explicit V2 StepSpace/Court admission, unsupported by this V1 path".into());
+    }
     let (ceilings, _, _) = tir_ceilings_v1(params);
     let widest = program.history_bound.min(ceilings.max_context);
     let max_context = choice.max_context.unwrap_or(widest);
@@ -432,12 +446,15 @@ pub fn tir_canonical_job_answerable_v1(params: &Params, class: &PalwTirClassV1) 
 
 /// [`tir_canonical_job_answerable_v1`] under the rules at `daa` (the preflight's judged height).
 pub fn tir_canonical_job_answerable_at_v1(params: &Params, class: &PalwTirClassV1, daa: u64) -> Result<(), String> {
+    let program = class.decode_program().map_err(|e| format!("the program does not decode: {e}"))?;
+    if program.wide_logits_q24() {
+        return Err("wide Q24 answerability requires explicit V2 StepSpace/Court admission".into());
+    }
     let cap = (!params.palw_tir_fence2_active_at(daa)).then_some(kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES);
     let Some(cap) = cap else { return Ok(()) };
     let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class)
         .ok_or_else(|| format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context))?;
     let class_id = class.class_id(&Hash64::from_bytes([0; 64]));
-    let program = class.decode_program().map_err(|e| format!("the program does not decode: {e}"))?;
     let facts = kaspa_consensus_core::palw_tir_attempt_v1::PalwTirJobFactsV1::of(class, &program, class_id);
     let job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&facts, canonical);
     let space = kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1::new(class).map_err(|e| e.to_string())?;
@@ -512,6 +529,9 @@ pub fn tir_class_admission_offline_v1(
     let (params, at) = (&gate.params, gate.daa);
     let class_id = class.class_id(&artifact_root);
     let program = class.decode_program().map_err(|e| format!("the program does not decode: {e}"))?;
+    if program.wide_logits_q24() {
+        return Err("wide Q24 registration requires explicit V2 StepSpace/Court admission".into());
+    }
     let canonical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class)
         .ok_or_else(|| format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context))?;
     let facts = kaspa_consensus_core::palw_tir_attempt_v1::PalwTirJobFactsV1::of(class, &program, class_id);

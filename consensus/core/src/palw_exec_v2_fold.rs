@@ -57,6 +57,7 @@ impl PalwChainStateV2 {
         job: &Hash64,
     ) -> Result<(misaka_palw_tir::TirProgramV1, crate::palw_exec_work_plan_v1::PalwExecWorkCostV1, u32, u32, u32), String> {
         let tir = self.tir_class_v1(class).ok_or("the REAL job cannot be derived from registered IR")?;
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(tir).map_err(str::to_string)?;
         let registered = self.classes.get(class).ok_or("the registered class is missing")?;
         let program = misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).map_err(|e| e.to_string())?;
         let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(tir.facts.max_context)
@@ -853,6 +854,9 @@ pub(super) fn apply_root_declared_v2(
     {
         return Err(no(R::ClaimNotOpenable));
     }
+    if let Some(tir) = builder.state.tir_class_v1(&claim.class_id) {
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(tir).map_err(refused)?;
+    }
     if builder.state.exec_v2.roots.contains_key(&claim_id) {
         return Err(no(R::RootExists));
     }
@@ -895,6 +899,7 @@ pub(super) fn apply_root_declared_v2(
         Some(kernel) => {
             let binding = kernel.kernel_binding_v1(&claim.class_id).ok_or_else(|| no(R::ClassNotKernelBound))?;
             let tir = builder.state.tir_class_v1(&claim.class_id).ok_or_else(|| no(R::PrefixNotDerivable))?;
+            crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(tir).map_err(refused)?;
             let (prompt, context) = palw_exec_v2_real_job_v1(&tir.facts, &claim.job_identity, builder.extras.prompt_ids_form_v1())
                 .ok_or_else(|| no(R::PrefixNotDerivable))?;
             if declaration.input_root != crate::palw_exec_v2_verify::palw_exec_v2_token_state_root_v1(&[&prompt]) {

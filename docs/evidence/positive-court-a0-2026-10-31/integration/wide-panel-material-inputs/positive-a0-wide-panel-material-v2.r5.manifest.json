@@ -1,0 +1,138 @@
+{
+  "artifact": "/tmp/positive-a0-wide-panel-material-v2.r5.patch",
+  "sha256": "558c78c9eb4f72a232d307089ed9eae7315a482ae32687b6312b731979be2ccf",
+  "source_tree": "/tmp/positive-wide-panel-v5-frozen",
+  "base_commit": "cc22b0da13784eb03a023cbd1781969577883d9e",
+  "requires": "Root cc22b0da1; cumulative r4 + r5 patch, not a delta on applied r4",
+  "files": [
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs",
+      "before_sha256": "3c0ede7b36f94031f493a48cd842bcf8a88cd99578b5c6bd0323de9fdf956c68",
+      "after_sha256": "a0b449e48c41226905c662e565eed683e88b83a4776e1980c666729e8be747bd",
+      "status": "modified"
+    },
+    {
+      "path": "misaka/palw/tir/core/src/admit.rs",
+      "before_sha256": "223a8a1dff68716f2fb04d3c50572446b4571fc50196bcea7e3955453e0d4fef",
+      "after_sha256": "4c9c453d32696d199c9ea94c50c684d5f3ad4e86a122c7e36f7ebfd7f8739f76",
+      "status": "modified"
+    },
+    {
+      "path": "misaka/palw/tir/core/tests/node_cost_noalloc.rs",
+      "before_sha256": null,
+      "after_sha256": "69d0e918f68222da32e070c22d00ba6027377a97437393b094cccb522c8ecd79",
+      "status": "new"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs",
+      "before_sha256": "00d936f14bfd8e93004d17a00a7b17d214e2ffb06491c27d649226e83e3bb069",
+      "after_sha256": "0626efeb769bb281cbd1e93aae923c1f237f7f771835871f7bbcedffd894bc84",
+      "status": "modified"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs",
+      "before_sha256": "3f2cf3a94b9b3d0d4188fa6ae73477775ab0143b6d559fe8afd4222002cc24cc",
+      "after_sha256": "35c363b97c352d92c273049f4c94e3d242c4bb55de6a740c93a5afc388007108",
+      "status": "modified"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs",
+      "before_sha256": "0ad7c89eefb022ff4f525ae84bf32d72959c035cf652f252deea1ad98d9d0ce7",
+      "after_sha256": "628fbdd743ba16e9030adf081bd84b0152b6809a2ab5d2be9477ace1f996f64c",
+      "status": "modified"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs",
+      "before_sha256": "c046784b97f1f706f0d51090fc7be80042414dea7fc8ec5963c43eed294db1ff",
+      "after_sha256": "82db7d6382bff3773cb6e8299b21d5897429f9752ad89743141a691592aa54e7",
+      "status": "modified"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+      "before_sha256": "0a73750f34593f4608f2b0004eee680d6645e6347ed14426100a784447131024",
+      "after_sha256": "d9cadae593b410f7c184924dcc516c09d00689364e30813d17c5e24072b1b0ce",
+      "status": "modified"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/wide_quote_noalloc.rs",
+      "before_sha256": null,
+      "after_sha256": "3bdb1a45dcc7173cfd654e9b510cb889703252cfae91f1585a2143482cb0ded1",
+      "status": "new"
+    }
+  ],
+  "test_names": [
+    "frozen_cost_vectors_match_all_corpus_nodes_refs_and_symbolic_saturation_without_allocating",
+    "one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three",
+    "wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations",
+    "unknown_provider_scratch_is_refused_without_resetting_session_costs",
+    "captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation",
+    "failed_capture_keeps_shared_spent_work_and_cannot_start_a_second_cpu_run",
+    "oversized_typed_network_is_dropped_before_hashing_or_starting_the_cpu_run",
+    "required_same_ledger_capture_and_run_guards_survive_until_owned_capture_drop",
+    "denied_capture_ram_reservation_precedes_all_allocating_identity_hashes",
+    "successful_wide_quote_needs_no_local_shape_scratch_allocation_before_required_ram_guard"
+  ],
+  "test_status": "ALL_TEN_WRITTEN_NOT_COMPILED_OR_EXECUTED_FOR_R5",
+  "freeze_status": "IMMUTABLE_R5_STATIC_REVIEW_READY_NOT_BUILT",
+  "checks": {
+    "rustfmt_parse_and_format": "PASS",
+    "git_apply_check": "PASS",
+    "before_sha_matches_current_root": "PASS",
+    "root_source_writes": false,
+    "index_or_commit_changes": false,
+    "cargo_or_rust_build": false,
+    "independent_review": "PENDING"
+  },
+  "fixes": [
+    "separate explicit per-material read/unit/target/auth caps from cumulative visits and bound them by unchanged Node caps",
+    "mandatory same-ledger run lease on the new fallible route, stored in owned returned run, no optional-global double reservation",
+    "mandatory capture lease before allocating context/class/layout hashing or encoding; include foreign layout bytes in metadata envelope",
+    "compare opaque original program serialization without a new encoded Vec or expected-length allocation assumption",
+    "explicit caller ownership/lifetime conditions for exports, tape callbacks, frozen record and signing/hash/Node allocations"
+  ],
+  "api_ownership_note": {
+    "path": "/tmp/positive-wide-panel-v5-frozen/API-OWNERSHIP.txt",
+    "sha256": "23f7803ee770344a4b5c2e34099a7705a196ef241ca2c636ff3d4de2a679585e"
+  },
+  "preserved_inputs": [
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.initial.patch",
+      "sha256": "16b2de79f1c0597253ea9b8680f69bef87a03d305f41ca126b2bc4b4631da165"
+    },
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.r2.patch",
+      "sha256": "bb6c9687dcce2e40e5e4f70d610756a686e91d46ce333daa7c82c17635f9f52e"
+    },
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.r3.patch",
+      "sha256": "2b6a434f19d1a48f348383d2484db2b01cc621e47339944a498dd380fa8da8c6"
+    },
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.r3.manifest.json",
+      "sha256": "c26a981b0f359e185928ddbc768af89ed232fc08553e8a7f301872ec883104b4"
+    },
+    {
+      "path": "/tmp/positive-a0-wide-panel-material-v2.r4.patch",
+      "sha256": "93fc6a4985efd4f2892d42250a25adcdcfb74344d4f19dff3f302e6ab3fcbf20"
+    }
+  ],
+  "remaining": [
+    "stream/tape-backed full record/signing and actual Node claim reader",
+    "RAM run/Merkle spill/residency feasibility for actual LLMs",
+    "held/Merkle prompt producer adapter",
+    "actual native service/catalog/lease/funding/role owner integration",
+    "real trained Hugging Face model maximum-context registration/runtime feasibility; no completion claim",
+    "no native wire/domain/tag/rate/activation change"
+  ],
+  "r4_independent_review": {
+    "path": "/tmp/positive-a0-wide-panel-material-r4-review.json",
+    "sha256": "bc0d80af9476e68106853448192c5f745f2c574dbdf2d01bac4554adada81758",
+    "target": "original immutable r4; not validation of r5"
+  },
+  "r5_fix": {
+    "production_change": "node_cost borrowed input-type view + saturating cost fold, no local Cow/TensorType/shape Vec",
+    "compatibility": "all previous cost equations / widths / operand-order saturation unchanged; old ref_type and other admission/cone paths untouched",
+    "quote_boundary": "both capture and direct required runner invoke corrected successful structural quote; error/control Strings explicitly caller-owned",
+    "new_tests": "frozen reference/corpus cost and allocator measurement; whole wide success quote allocation probe"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "code_commit": "723cfd79d5934a6e250babdfe0d9fab808cd2ecf",
+  "source_sha256": {
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs": "33debb1245192ead1c7bb708bab741c5dce0e0179516a9318c2fea204f6b5b05",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2/trained_roles.rs": "59e72cfaf677f6df8d287908aaf75f8cfaa12097f2907a2a4007c09fbdd1d3a7",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2/trained_roles/isolated_process.rs": "d09e4e36d3d5f8897c68e1682cabc36cc63593120fe87b7e38806b5ec3b368fb"
+  },
+  "runtime": "runtime-r3.json",
+  "clippy": "clippy-first.json",
+  "selected_outer_passes": 39,
+  "nested_child_scenarios": 3,
+  "gated_ignored_tests": 8,
+  "same_source_map": true,
+  "native_authority": false,
+  "production_code_changed": false
+}

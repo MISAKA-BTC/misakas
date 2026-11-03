@@ -1,0 +1,19 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 8.24s
+     Running tests/run_wide_q24_v2.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_q24_v2-b7b0acdbdd74363d)
+
+running 7 tests
+
+thread 'legacy_v1_cpu_process_and_ipc_entry_points_refuse_wide_before_execution_or_serialization' (3511596) panicked at misaka/palw/tir/exec/src/cellstep.rs:75:9:
+V1 cell logits cannot read wide Q24; an explicit V2 cell API is required
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test malformed_mixed_profiles_and_unpinned_inputs_fail_closed_without_execution ... ok
+test legacy_v1_cpu_process_and_ipc_entry_points_refuse_wide_before_execution_or_serialization ... ok
+test exact_quote_limits_fit_and_each_one_below_refuses_before_callbacks ... ok
+test observer_refusal_stops_before_its_leaf_and_any_later_state_or_output ... ok
+test borrowed_wide_observer_reports_each_executed_node_state_and_output_once ... ok
+test paired_legacy_nodes_fixed_and_history_keep_exact_four_byte_preimages ... ok
+test explicit_wide_run_preserves_original_context_and_exact_extreme_rows_with_canonical_roots ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

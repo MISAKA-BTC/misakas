@@ -506,6 +506,13 @@ fn a_registrant_can_choose_i16_conv_weight_codes() {
     let narrow = cnn::lower_cnn(&hl, &spec).expect("narrow");
     let wide_lw = cnn::lower_cnn_opts(&hl, &spec, &wide).expect("wide");
     assert_eq!(conv_weight_bytes(&wide_lw.program), 2 * conv_weight_bytes(&narrow.program));
+    // This non-decoder API must not silently ignore the decoder-only output profile.
+    for logits_bits in [64, 0] {
+        let bad = cnn::lower_cnn_opts(&hl, &spec, &LowerOpts { logits_bits, ..LowerOpts::default() });
+        assert!(bad.is_err_and(|e| e.to_string().contains(&format!("logits_bits = {logits_bits}"))));
+    }
+    let explicit32 = cnn::lower_cnn_opts(&hl, &spec, &LowerOpts { logits_bits: 32, ..LowerOpts::default() }).expect("32-bit");
+    assert_eq!(explicit32.program.encode(), narrow.program.encode());
     // Any other width is refused by name.
     let bad = cnn::lower_cnn_opts(&hl, &spec, &LowerOpts { conv_weight_bits: 12, ..LowerOpts::default() });
     assert!(bad.is_err_and(|e| e.to_string().contains("conv_weight_bits = 12")));

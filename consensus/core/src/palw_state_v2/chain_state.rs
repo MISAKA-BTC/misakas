@@ -3805,6 +3805,10 @@ impl PalwChainStateV2 {
             }
         }
         self.assert_reader_router_consistency_v2()?;
+        if let Some(route) = self.kernel_route_state_v1() {
+            crate::palw_positive_rows_v2::restore::validate_positive_aux_restore_v2(&route.aux)
+                .map_err(|error| PalwStateV2Error::CarriageInconsistent(format!("inconsistent Positive aux rows: {error:?}")))?;
+        }
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;

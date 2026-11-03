@@ -1,0 +1,62 @@
+{
+  "checks": [
+    {
+      "check": "manifest",
+      "detail": "checkpoint (8a67ca9a379a4e09), schema misaka.palw.runtime-pack.v1",
+      "status": "PASS"
+    },
+    {
+      "check": "sidecars",
+      "detail": "4 file(s) match their hashes",
+      "status": "PASS"
+    },
+    {
+      "check": "adapter",
+      "detail": "built-in `gpt-neox` 75a05ac8c56150c2",
+      "status": "PASS"
+    },
+    {
+      "check": "descriptors",
+      "detail": "none (a float checkpoint)",
+      "status": "PASS"
+    },
+    {
+      "check": "converter",
+      "detail": "built by palw-tir-convert 1.1.0 (misaka.palw.lowering.v1); this build 1.1.0 (misaka.palw.lowering.v1) — the same converter; math libm-v1: the same bytes on every platform",
+      "status": "PASS"
+    },
+    {
+      "check": "source",
+      "detail": "3 file(s) match their SHA-256",
+      "status": "PASS"
+    },
+    {
+      "check": "frontend",
+      "detail": "level B, spec 444158d103aa9301, 10 feature uses, scope: text-generation: token ids → next-token logits; nothing left out",
+      "status": "PASS"
+    },
+    {
+      "check": "artifact",
+      "detail": "file 2d14e6384908b54c · inventory root 427a912e722f173d · graph root e57d5fb6da1d416e",
+      "status": "PASS"
+    },
+    {
+      "check": "declared",
+      "detail": "private-wide-q24: exact class 356fbf891ef8ff98 (context 2048, interval 65536); identity verification, not live admission",
+      "status": "PASS"
+    },
+    {
+      "check": "conformance",
+      "detail": "streamed: 1 vector(s), 5 positions, equal on reference, typed-backend, independent (largest decoded parameter: reference 393.0 MiB, independent 393.0 MiB; not process RSS)",
+      "status": "PASS"
+    },
+    {
+      "check": "hf-reference",
+      "detail": "streamed: slope 1.0000, corr 0.99999, top-1 0.896, KL 0.01561 over 48 positions",
+      "status": "PASS"
+    }
+  ],
+  "ok": true,
+  "pack": "8a67ca9a379a4e099ce4645ce3a8d8f1313dbc6e58a054104da1e731fc487c62",
+  "verified": true
+}

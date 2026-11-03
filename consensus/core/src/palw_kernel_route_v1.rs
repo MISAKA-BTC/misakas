@@ -406,7 +406,7 @@ pub struct PalwKernelRouteHeaderV1 {
 }
 
 /// **The kernel route state** (module doc). `rows` are the ledger's tables; `aux` the consensus tables.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct PalwKernelRouteStateV1 {
     pub header: PalwKernelRouteHeaderV1,
     pub rows: LedgerRowsV1,
@@ -417,6 +417,96 @@ pub struct PalwKernelRouteStateV1 {
     /// reverted, a row the fold writes outside its flush). A state decoded from a store, a snapshot or a carriage starts without it.
     #[borsh(skip)]
     pub ledger_cache: KernelLedgerCacheV1,
+}
+
+/// Keep the canonical field layout, but reject duplicate aux keys before a
+/// BTreeMap could silently collapse them. Positive rows have fixed codec caps
+/// even when a caller invokes Borsh directly (native preflight remains required
+/// for aggregate reservation before untrusted intake).
+fn positive_p_restore_key_v2<R: std::io::Read>(reader: &mut R) -> std::io::Result<(Vec<u8>, bool)> {
+    let length = u32::deserialize_reader(reader)? as usize;
+    if length == 0 {
+        return Ok((Vec::new(), false));
+    }
+    let mut first = [0u8; 1];
+    reader.read_exact(&mut first)?;
+    let positive = first[0] == b'P';
+    if positive && length != 65 {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid native P key length"));
+    }
+    let mut key = Vec::new();
+    key.try_reserve_exact(length).map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "aux key allocation"))?;
+    key.resize(length, 0);
+    key[0] = first[0];
+    reader.read_exact(&mut key[1..])?;
+    Ok((key, positive))
+}
+
+impl BorshDeserialize for PalwKernelRouteStateV1 {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        fn positive_blob<R: std::io::Read>(reader: &mut R, cap: usize) -> std::io::Result<Vec<u8>> {
+            let length = u32::deserialize_reader(reader)? as usize;
+            if length > cap {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux frame exceeds codec ceiling"));
+            }
+            let mut bytes = Vec::new();
+            bytes
+                .try_reserve_exact(length)
+                .map_err(|_| std::io::Error::new(std::io::ErrorKind::OutOfMemory, "Positive aux allocation"))?;
+            bytes.resize(length, 0);
+            reader.read_exact(&mut bytes)?;
+            Ok(bytes)
+        }
+        let header = PalwKernelRouteHeaderV1::deserialize_reader(reader)?;
+        let rows = LedgerRowsV1::deserialize_reader(reader)?;
+        let count = u32::deserialize_reader(reader)?;
+        let mut aux = BTreeMap::new();
+        // Positive keys must be canonical BEFORE BTreeMap can sort/collapse
+        // them. Other aux tables retain their legacy ordering semantics.
+        let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
+        let mut previous_positive_len = 0usize;
+        for _ in 0..count {
+            let table = u8::deserialize_reader(reader)?;
+            let (key, value) = if table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
+                let key = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES)?;
+                if previous_positive_len != 0 && key.as_slice() <= &previous_positive[..previous_positive_len] {
+                    return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "noncanonical Positive aux key order"));
+                }
+                previous_positive[..key.len()].copy_from_slice(&key);
+                previous_positive_len = key.len();
+                let value = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_ROW_BYTES)?;
+                misaka_palw_positive_contract::rows::NativeRowValue::decode(&key, &value)
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux key/value mismatch"))?;
+                (key, value)
+            } else if table == crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2 {
+                // Preserve every old136 key/value byte. Only reserved prefix P
+                // gets the new strict key/length/preflight contract.
+                let (key, positive) = positive_p_restore_key_v2(reader)?;
+                let value = if positive {
+                    let value = positive_blob(reader, crate::palw_positive_certification_v2::MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2)?;
+                    crate::palw_native_resource_v1::preflight_native_value_v1::<
+                        crate::palw_positive_certification_v2::PositiveCertificationRowV2,
+                    >(value.as_slice(), value.len() as u64)
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid native P frame"))?;
+                    let mut fixed_bytes = value.as_slice();
+                    let fixed = crate::palw_positive_certification_v2::PositiveCertificationFixedV2::deserialize(&mut fixed_bytes)?;
+                    if key[1..] != fixed.header.subject.0 {
+                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "P key/subject mismatch"));
+                    }
+                    value
+                } else {
+                    Vec::<u8>::deserialize_reader(reader)?
+                };
+                (key, value)
+            } else {
+                (Vec::<u8>::deserialize_reader(reader)?, Vec::<u8>::deserialize_reader(reader)?)
+            };
+            if aux.insert((table, key), value).is_some() {
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "duplicate kernel aux key"));
+            }
+        }
+        Ok(Self { header, rows, aux, ledger_cache: KernelLedgerCacheV1::default() })
+    }
 }
 
 /// How many kernel ledger loads were served from the cache in this process (a diagnostic: the fold of a block loads the ledger once
@@ -1154,6 +1244,8 @@ impl PalwKernelRouteStateV1 {
         if route.aux_root() != *aux_root {
             return Err("the served rows do not root to the served aux root".into());
         }
+        crate::palw_positive_rows_v2::restore::validate_positive_aux_restore_v2(&route.aux)
+            .map_err(|error| format!("inconsistent Positive aux rows: {error:?}"))?;
         Ok(route)
     }
 
@@ -2157,3 +2249,41 @@ mod projection_capacity_tests;
 #[cfg(test)]
 #[path = "palw_kernel_route_selected_approval_tests.rs"]
 mod selected_approval_tests;
+
+#[cfg(test)]
+mod positive_p_restore_caps_v2 {
+    use super::*;
+    #[test]
+    fn p_key_cap_is_checked_before_reading_or_allocating_the_remainder() {
+        let mut bytes = u32::MAX.to_le_bytes().to_vec();
+        bytes.push(b'P');
+        let mut input = bytes.as_slice();
+        assert!(positive_p_restore_key_v2(&mut input).is_err());
+        assert!(input.is_empty());
+        let mut legacy = Vec::new();
+        3u32.serialize(&mut legacy).unwrap();
+        legacy.extend_from_slice(b"Sxy");
+        assert_eq!(positive_p_restore_key_v2(&mut legacy.as_slice()).unwrap(), (b"Sxy".to_vec(), false));
+    }
+    #[test]
+    fn p_value_cap_precedes_body_read_and_old136_bytes_roundtrip() {
+        let mut route = PalwKernelRouteStateV1::new_typed(
+            palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None,
+            None,
+            LedgerScalarsV1 { daa: 0, burned: 0 },
+        );
+        route.aux.insert((136, b"Slegacy".to_vec()), b"opaque-old-value".to_vec());
+        let bytes = borsh::to_vec(&route).unwrap();
+        assert_eq!(borsh::from_slice::<PalwKernelRouteStateV1>(&bytes).unwrap(), route);
+        let mut bytes = borsh::to_vec(&(&route.header, &route.rows)).unwrap();
+        1u32.serialize(&mut bytes).unwrap();
+        136u8.serialize(&mut bytes).unwrap();
+        let mut key = vec![b'P'];
+        key.extend_from_slice(&[0; 64]);
+        key.serialize(&mut bytes).unwrap();
+        u32::MAX.serialize(&mut bytes).unwrap();
+        let error = borsh::from_slice::<PalwKernelRouteStateV1>(&bytes).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+}

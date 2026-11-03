@@ -1,0 +1,14 @@
+{
+  "source_commit": "b699358dede05638f03a054145b7e1d379247c54",
+  "evidence_commit": "84d95e372",
+  "manifest_sha256": "54ee24645ae3cbbc9ab11db64080c5fc7051e31c0bc07f4cd2e9b9e2d3324c07",
+  "a1_dependencies": [
+    "ef8e4e87d",
+    "b3a61454c"
+  ],
+  "tests_passed": 75,
+  "tests_failed": 0,
+  "log_hashes_verified": true,
+  "native_completion_claimed": false,
+  "scope": "A3 candidate with A1 ef8e4e87d/b3a61454c, not final A1 729d513ec; not a native network acceptance result"
+}

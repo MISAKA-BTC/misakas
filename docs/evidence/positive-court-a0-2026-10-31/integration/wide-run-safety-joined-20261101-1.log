@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized] target(s) in 0.41s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 4 tests
+test palw_decode_view_v1::tests::tir_view_recomputes_its_execution_root_and_never_borrows_another_class ... ok
+test palw_decode_view_v1::tests::v1_decode_rejects_wide_program_even_with_a_coherent_lying_old_header ... ok
+test palw_decode_view_v1::tests::v1_narrow_decode_is_unchanged_and_rejects_a_wide_header_scheme ... ok
+test palw_decode_view_v1::tests::deny_only_program_suffix_tracks_the_actual_canonical_schema_field ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 5459 filtered out; finished in 0.00s
+

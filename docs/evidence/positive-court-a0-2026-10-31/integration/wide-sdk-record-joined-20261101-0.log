@@ -1,0 +1,34 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/math)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/database)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 1m 57s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 6 tests
+test palw_tir_class_record_v2::tests::caps_precede_copy_or_decode_and_no_unknown_scheme_falls_back ... ok
+test palw_tir_class_record_v2::tests::original_held_prompt_form_survives_schema1_record_reconstruction ... ok
+test palw_tir_class_record_v2::tests::stored_row_artifact_key_layout_and_derived_fact_substitutions_are_rejected ... ok
+test palw_tir_class_record_v2::tests::narrow_schema1_record_rooted_bytes_and_jobs_are_identical ... ok
+test palw_tir_class_record_v2::tests::wide_schema1_payload_resolves_explicit_profile_without_redefining_tiled_bit ... ok
+test palw_tir_class_record_v2::tests::dissection_sites_remain_graph_metadata_with_narrow_history_and_wide_final ... FAILED
+
+failures:
+
+---- palw_tir_class_record_v2::tests::dissection_sites_remain_graph_metadata_with_narrow_history_and_wide_final stdout ----
+
+thread 'palw_tir_class_record_v2::tests::dissection_sites_remain_graph_metadata_with_narrow_history_and_wide_final' (3514691) panicked at consensus/core/src/palw_tir_class_record_v2.rs:370:80:
+called `Result::unwrap()` on an `Err` value: Resolve(Program(TirError { kind: NormalForm, msg: "block 1: carry-out is not the carry signature" }))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    palw_tir_class_record_v2::tests::dissection_sites_remain_graph_metadata_with_narrow_history_and_wide_final
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 5451 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `-p kaspa-consensus-core --lib`

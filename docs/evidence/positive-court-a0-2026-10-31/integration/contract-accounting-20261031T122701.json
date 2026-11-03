@@ -1,0 +1,137 @@
+{
+  "timestamp_utc": "20261031T122701",
+  "candidate_commit": "6aeb4c42cd69db9599470c9edc59d112aad055e4",
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "-p",
+        "misaka-palw-positive-contract",
+        "-p",
+        "misaka-palw-positive-accounting"
+      ],
+      "exit_code": 0,
+      "log": "docs/evidence/positive-court-a0-2026-10-31/integration/contract-accounting-20261031T122701.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--offline",
+        "-p",
+        "misaka-palw-positive-contract",
+        "-p",
+        "misaka-palw-positive-accounting",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "log": "docs/evidence/positive-court-a0-2026-10-31/integration/clippy-20261031T122701.log"
+    }
+  ],
+  "scope": "Shared contract and A5 leaf/accounting tests only; not native acceptance or all roles",
+  "sources": [
+    {
+      "path": "Cargo.toml",
+      "sha256": "5b1cf91b2106e81e3c4046c125ec062d33dae86e7b5d8361ec4a2ce187e51efc"
+    },
+    {
+      "path": "Cargo.lock",
+      "sha256": "ea490eec8f5e01ccf6d83e6ee51e1f5a40446e174c3181f3d640fc31eaf52d99"
+    },
+    {
+      "path": "consensus/core/src/palw_lifecycle_objects_v2.rs",
+      "sha256": "a10c7ce318290434ef8f00c5e8dbbe769d4d3cc7abd8fcb904039e3c6b1857d0"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/funding.rs",
+      "sha256": "dc546c3c871db0c7706c7a9d0b4078c424a6ba75eb9472d4f08c382996f210fd"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/identity.rs",
+      "sha256": "a4e5b7d7f88fd4e6fbf183105e732121903aae017b49a78c8edbf5a7363331cc"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/lib.rs",
+      "sha256": "f201033b8d1909757918477e0e4e6d171837e31f774acc91120a86d9401cd4bf"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/messages.rs",
+      "sha256": "68b06aa73de26da938333697cf02b4cf832046369598ae83c94a4cf18a3f840b"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/native.rs",
+      "sha256": "1bab234dce4bb6b0bad63b91cac9f097c9c24d87c961fff19f5627b34302a7e8"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/ports.rs",
+      "sha256": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/tir.rs",
+      "sha256": "d43d1d1d051997a5f2bdb760313cb3c670f867dc138e84c2e6a7ed72b0ab59b0"
+    },
+    {
+      "path": "misaka/palw/positive-contract/src/wire.rs",
+      "sha256": "c8737515c35305facb5d12ba6866b09a7a94a1efb6c2500f0d46b8b42ee82b79"
+    },
+    {
+      "path": "misaka/palw/positive-contract/tests/contracts.rs",
+      "sha256": "6d1f0ef78607f6d5b53f91d5de67bfac9380bbd0ee126f4c1152f5c56cf42f90"
+    },
+    {
+      "path": "misaka/palw/positive-contract/tests/funding.rs",
+      "sha256": "c50de7cde1b166604ebf81b808616962b4872ec1ab7fd86b38f1456cb47948c8"
+    },
+    {
+      "path": "misaka/palw/positive-contract/tests/native_namespace.rs",
+      "sha256": "8619bb32ebbd914e0fa57b91477219ed5b2e40c4371af74adef1686485b4be5d"
+    },
+    {
+      "path": "misaka/palw/positive-contract/tests/tir_contract.rs",
+      "sha256": "8067c6059c059adf8f97a3e5a1ca9452e078a45b0a9ec5567321065684b9766d"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/src/credit/consumers.rs",
+      "sha256": "a29f5cf1ac627cb1df45b89f2b9170ae576d30cbc9b192b1107def83a3f1e8b9"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/src/credit/tests.rs",
+      "sha256": "10b6e425933aa5c74dfc247e211297b602db9e9104f48bd6272282e0a9d64cc6"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/src/credit.rs",
+      "sha256": "de904d21a462130d8d07bf5aa37dad421c3daa7cbf4d25e5901b3693026f42d3"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/src/fees/tests.rs",
+      "sha256": "0700ba1064ac9d90c29a9997168dcc07c3125fd86d9f08276d45f9aaecccc468"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/src/fees.rs",
+      "sha256": "b13054017c69ef039ae3d3a73cbe52cafd17017165336d9e3af2c06b56ff2f77"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/src/lib.rs",
+      "sha256": "5e9de0d6b3211b4129e24fc5c81f25214ed30ba7caf81a5dc55df72c26e23cb3"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs",
+      "sha256": "b8f523fb4d133fc11ab13ee359794966e86965854be4ad42590e17d61872b4a7"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/tests/independent_credit_graph.rs",
+      "sha256": "f19f5060af28cb1144912b031371c07ba13695f6cd9593e8160bb8a47bfb5e5e"
+    },
+    {
+      "path": "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs",
+      "sha256": "d12221758134ada0cd64b4ffe74921a2d47f996202adee14ecc58644190fef84"
+    }
+  ]
+}

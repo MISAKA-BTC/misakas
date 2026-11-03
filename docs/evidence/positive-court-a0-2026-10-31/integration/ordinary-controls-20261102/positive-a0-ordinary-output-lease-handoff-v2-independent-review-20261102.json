@@ -1,0 +1,47 @@
+{
+  "status": "SOURCE_GO_NO_BLOCKERS_FOUND",
+  "scope": "Independent readonly source/hash/type-contract review and private/tmp applycheck; no Cargo/rustc/CPP/models/stat/runtime/checkout/index modifications",
+  "patch_sha256": "c655d7df70d4b68109d98f6c91308bb2beef7ef31d93ff90deeab3853e231cc2",
+  "manifest_sha256": "82b9a68e257a7f5bf4369b0720688c2c919a9e2c8eae0d3e1a7321b4d7521594",
+  "base_commit": "f7a7d2897b09a9ab889e4667e0ad4888111c2566",
+  "applied_candidate": "08a92823a4c8025423018ad223fe53145d4b62c4",
+  "independent_mechanical_record": "/tmp/positive-a0-output-lease-handoff-independent-mechanical-20261102.json",
+  "mechanical_record_sha256": "c0d0c0636d8fd98f1b47855da63d0c55603c1578d5c316141156a5f5438fdaf7",
+  "hash_closure": "PASS all5 before/after hashes+lengths, immutablebase f7a7/currentA6+committed08a92823 exactafter, private/tmp applycheck. No source divergence.",
+  "exact_semantic_body_checks": [
+    "LocalWideForwardQuoteV2 fields unchanged; full forward_quote work/dimension/storage projection through original requested expression exact old bytes",
+    "Actual CPU prompt validation/loop/NoSink/row selection/IDs/output hash block exact old bytes; no arithmetic/profile/context/program/sampling/hashrecipe modification"
+  ],
+  "ownership_and_census": [
+    "Retained output is actual typed LocalWideForwardOutputV2 inline root plus generatedID Vec exact requested backing. Existing exact() verifies capacity==generated count, and complete run verifies ids.len==q.generated. No row/executor/Params/plan/context reference retained in Output. Purehelper acceptsu32 generated, so generated*4+current fixed root cannot overflowu64; no arbitrary u64 cardinality cast.",
+    "q.requested_bytes retains original FULL working reservation value. Checked handoff_peak=q.full+typedretained is admitted against max_requested, operation and cumulative request caps BEFORE CPU; cumulative +=full+retained, no full-work refund or counter reset to fit.",
+    "Full real work lease spans prompt validation, TirExecutor/range refinement, row selection, all CPU and output hash. Explicit drop(row),drop(exec) actually release executor-owned occPlans/run/work buffers; generatedIDs/root remain under fulllease.",
+    "Persistent Params range memo consists of preallocated OnceLock<Option<Interval>> cells already charged by quote_owned_params_table_v2; range() only fills inline Interval via value scan, no additional retained heap transferred from executor. DefaultfusedNone and fully owned Params path avoid unrelated row-source/global-cache retention.",
+    "Second required output lease is acquired while full guard remains live. If output reservation fails, no Output exists; IDs drop before work guard, budget attempts/work/full+retained remain spent. Success explicitly drops work only after output lease exists, Output data fields before _memory drop order retained.",
+    "Generic callback-owned backing remains host contract; concrete caller charges private Reservation box backing through same Ledger before Box allocation. Opaque guardhandle already counted in sizeofOutput; no fabricated sublease/optionalglobal fallback.",
+    "Dense prepare neededExternal now uses immutable Output.retained_requested_bytes rather than historical full working request. Output private constructor guarantees getter equals actual retained guard payload; no public numeric quote becomes success/native authority.",
+    "Concrete caller O ceiling now means full+retained handoff ceiling, so peak=max(O,D+typedretained) correct. Dense external=metadataE+parameter allowance+retained output, not fullO. Ledger still enforces8GiB including actual guardbacking; tight payloadcap may refuse safely due extra backing, never under-admit.",
+    "Env/Native/funding/P/publicactivation untouched; only local ordinary ownership, consumer floor and test assertions change. Data hashes and original maxctx retain semantics."
+  ],
+  "tests": {
+    "new_meaningful": 4,
+    "cases": [
+      "Both-guard event ordering and real held-byte reduction/result outlives Params owner for flat/tiled/wide",
+      "Late outputguard refusal after CPU produces no result, frees work, keeps spent attempts/work/full+retained; retry beyond max denied",
+      "Exact and onebelow perattempt/cumulative/operation handoff admission before any guard/CPU",
+      "Dense accepts precise metadata+Params+retained ordinary external floor and refuses onebelow for all3profiles"
+    ],
+    "existing_assertions": "Old ordinaryheldbytes switched to real retained getter; metadata callbackcount4\u21925 exact additionalrequiredguard. Other callcounts checked; dense additional2 guards measured relative priorcalls remain correct.",
+    "small_selected_total": 39,
+    "future_actual_models": 3,
+    "total_if_all_later_pass": 42,
+    "status": "ALL_NEW_OR_CHANGED_TESTS_UNCOMPILED_UNRUN"
+  },
+  "caveats": [
+    "Guard ordering tests verify operational callback/drop/held-request behavior; explicit source Drop of owned Rust buffers establishes lifetime separation. No allocatorRSS/cold/allCPU measurement inferred.",
+    "Removing duplicated idle executor reservation makes360comparison logically feasible under8GiB policy but does not prove actual quotes/runtime/whole metadata/CPU limit fit; actual3 still pending approved processes and must refuse unsupported/limits/mismatch.",
+    "Current caller options must use post-fix sequential peak and explicit adequate O/D ceilings (oldinitial1GiB/2GiB example may refuse). Do not lower real runtime quotes/shrink context/clip values to get success.",
+    "Real Source/profile/nativeCXX/target/sourcehash/testbinary provenance and strict Clippy/typecheck/defaultstack39small must pass before actual3. PhysicalRSS quota stays unsupported, outer sampledPG+wallcleanup external/no native permit.",
+    "IndependentHFexpected/fullmaxlength/Panel/Node/Court/P/credit/nativeAssignment/primary mining completion remain unestablished."
+  ]
+}

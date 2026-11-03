@@ -241,6 +241,7 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
     let m = PalwTirManifestV1::derive_streamed(artifact)?;
     let meta: serde_json::Value = {
         let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(artifact).map_err(|e| e.to_string())?;
+        validate_program_logits_profile_v2(&c.program, request.logits_bits)?;
         match opts.metadata_profile {
             Some(p) => misaka_palw_tir_artifact::metadata_v16::parse_metadata_v16(&c.header.meta, p)?,
             None => serde_json::from_str(&c.header.meta).unwrap_or(serde_json::Value::Null),
@@ -435,6 +436,7 @@ pub fn build(opts: &BuildOpts, log: &dyn Fn(String)) -> Result<BuiltPack, String
             max_window: request.max_window,
             gdn_core_wide: request.gdn_core_wide,
             linear_weight_bits: request.linear_weight_bits,
+            logits_bits: request.logits_bits,
             context: request.context,
             calibration,
         },

@@ -11,6 +11,12 @@ PINNED = {
 # 2026-11-02 rustfmt-only re-pin, independently reviewed: existing tags0..3,
 # field order/types/bounds unchanged; BeginReserved still total_bytes/body_hash/quote.
 'crate::palw_court_family_material_v1::FamilyMaterialActionV1': ('adapter', '2d607b0ddd2fdde4912d0651c7785d6151c300f6efdac534a9682d9c886637da'),
+# A6 2026-10-31: owner-local wire_kernel_aux adapter preserves derived
+# header/rows/aux field order and skipped ledger_cache. The manual decoder caps
+# aux151 key/value before allocation and rejects duplicate aux keys. Both the
+# direct decoder and shape adapter reject descending Positive key order before
+# map collection; the shape adapter additionally checks literal VALUE identity.
+'crate::palw_kernel_route_v1::PalwKernelRouteStateV1': ('adapter','43bd5d8077ef50e25f90fd5c4f3e155d03edc9fc02fe7fcad4ebeb8b0cef6154'),
 # Claude 2026-10-22: shared request intent: derived order; signature length exactly ML-DSA-87.
 'crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1': ('reviewed-field-layout','71cf3dc5061b5f7d67717d6aa541b520a745f8183aa7e62af6585738e9afae8d'),
 # Claude 2026-10-22: tag 178 shared op: derived enum framing (u8 variant, fields in order, u32-length vecs); every bound checked before allocation.

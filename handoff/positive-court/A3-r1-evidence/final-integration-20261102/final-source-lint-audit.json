@@ -1,0 +1,1294 @@
+{
+  "schema": "misaka.a3.final7a0.source_lint_boundary_audit.v1",
+  "status": "PASS_SCOPED_FINAL_SOURCE_AND_SELECTED_STRICT_CLIPPY4",
+  "recorded_utc": "2026-11-01T21:54:29.453996+00:00",
+  "final_code_source": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+  "runtime_evidence_source": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+  "runtime_relabelled_to_final": false,
+  "inputs": {
+    "closed_Clippy_manifest": {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/plain-clippy4-7a0-20261102.json",
+      "bytes": 1323278,
+      "sha256": "4908b3792bb7fd9009bfd9a4cff395eba059c3a805a79b9f24a76aa696a698f5"
+    },
+    "plan": {
+      "path": "/tmp/positive-a0-7a0-plain-Clippy4-v1-pinned.json",
+      "bytes": 664207,
+      "sha256": "d61ba042fd119fefc8f60d914f11780646b461412cda220787775e059d865642"
+    },
+    "executor": {
+      "path": "/private/tmp/positive-a0-7a0-plain-Clippy4-executor-v1.py",
+      "bytes": 10802,
+      "sha256": "e6b45fe155473b7e184f79ef838f475d55ad07164bfe12d89a63f7aa788510f8"
+    },
+    "policy": {
+      "path": "/tmp/positive-a0-7a0-plain-Clippy4-policy-v1.json",
+      "bytes": 664133,
+      "sha256": "d053513b3142b76c876de8b138e9ade9f87f3ad436ed2d84ec76398891080617"
+    },
+    "prior_all4956_a867_Git_audit": {
+      "path": "/tmp/a3-ordinary39-a867-composed-independent-audit-20261102.json",
+      "bytes": 59178,
+      "sha256": "cc1c1afc748581169c53d5421c948f655d0f88ef34ebbcc258f4e01b9e0cf04d"
+    }
+  },
+  "checks": [
+    {
+      "check": "manifest_exact_closed_hash",
+      "passed": true
+    },
+    {
+      "check": "final_source_tree",
+      "passed": true
+    },
+    {
+      "check": "four_commands_eight_surfaces_closed_pass",
+      "passed": true
+    },
+    {
+      "check": "same4956_before_after",
+      "passed": true
+    },
+    {
+      "check": "no_runtime_or_test_count",
+      "passed": true
+    },
+    {
+      "check": "no_stack_or_flags_override",
+      "passed": true
+    },
+    {
+      "check": "plan_hash",
+      "passed": true
+    },
+    {
+      "check": "executor_hash",
+      "passed": true
+    },
+    {
+      "check": "policy_hash",
+      "passed": true
+    },
+    {
+      "check": "native_config_hash",
+      "passed": true
+    },
+    {
+      "check": "exact_frozen_plan_policy_commands",
+      "passed": true
+    },
+    {
+      "check": "plan_final_source_tree_snapshot",
+      "passed": true
+    },
+    {
+      "check": "nativeconfig_same_policy_plan",
+      "passed": true
+    },
+    {
+      "check": "CXXguard_sha",
+      "passed": true
+    },
+    {
+      "check": "jobs2_incremental0",
+      "passed": true
+    },
+    {
+      "check": "baseline_is_provenance_only",
+      "passed": true
+    },
+    {
+      "check": "closed_snapshot_sha",
+      "passed": true
+    },
+    {
+      "check": "closed_ordinary39_sha",
+      "passed": true
+    },
+    {
+      "check": "closed_functional3_sha",
+      "passed": true
+    },
+    {
+      "check": "runtime_records_remain_a867",
+      "passed": true
+    },
+    {
+      "check": "prior_all4956Git_audit_sha",
+      "passed": true
+    },
+    {
+      "check": "whole_Git_diff_only_two_paths",
+      "passed": true
+    },
+    {
+      "check": "entire_metadata_file_only_letchain_substitution",
+      "passed": true
+    },
+    {
+      "check": "entire_A7_file_only_pure_test_conversion",
+      "passed": true
+    },
+    {
+      "check": "source_snapshot_keys_same",
+      "passed": true
+    },
+    {
+      "check": "snapshot_hash_delta_exact_two",
+      "passed": true
+    },
+    {
+      "check": "final_git_source_hash_misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+      "passed": true
+    },
+    {
+      "check": "final_git_source_hash_testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+      "passed": true
+    },
+    {
+      "check": "Loaded_stdio_Cargo_identical_misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+      "passed": true
+    },
+    {
+      "check": "Loaded_stdio_Cargo_identical_misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+      "passed": true
+    },
+    {
+      "check": "Loaded_stdio_Cargo_identical_misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs",
+      "passed": true
+    },
+    {
+      "check": "Loaded_stdio_Cargo_identical_misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+      "passed": true
+    },
+    {
+      "check": "Loaded_stdio_Cargo_identical_misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs",
+      "passed": true
+    },
+    {
+      "check": "Loaded_stdio_Cargo_identical_misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+      "passed": true
+    },
+    {
+      "check": "Loaded_stdio_Cargo_identical_misaka/palw/tir/exec/Cargo.toml",
+      "passed": true
+    },
+    {
+      "check": "exact_stdio_target_table",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_exact_frozen_command",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_strict_clippy_only_flags",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_all8_exact_profile_configs",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_nativeconfig_arg",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_closed_success",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_closed_rawsha",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_raw_build_finished_success",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_raw_no_warnings_or_errors",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_no_runtime_markers",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_Core_profile_actual",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_Source_label_honest",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_kaspa_consensus_core_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_kaspa_consensus_core_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_kaspa_consensus_core_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_kaspa_consensus_core_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_local_step_geometry_quote_noalloc_v1_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_local_step_geometry_quote_noalloc_v1_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_local_step_geometry_quote_noalloc_v1_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_local_step_geometry_quote_noalloc_v1_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "core_geometry_exact_selected_targets",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_exact_frozen_command",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_strict_clippy_only_flags",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_all8_exact_profile_configs",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_nativeconfig_arg",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_closed_success",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_closed_rawsha",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_raw_build_finished_success",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_raw_no_warnings_or_errors",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_no_runtime_markers",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_Core_profile_actual",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_Source_label_honest",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_misaka_palw_tir_exec_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_misaka_palw_tir_exec_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_misaka_palw_tir_exec_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_misaka_palw_tir_exec_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_wide_forward_v2_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_wide_forward_v2_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_wide_forward_v2_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_wide_forward_v2_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_forward_metadata_v2_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_forward_metadata_v2_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_forward_metadata_v2_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_local_forward_metadata_v2_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "exec_forward_metadata_exact_selected_targets",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_exact_frozen_command",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_strict_clippy_only_flags",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_all8_exact_profile_configs",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_nativeconfig_arg",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_closed_success",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_closed_rawsha",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_raw_build_finished_success",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_raw_no_warnings_or_errors",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_no_runtime_markers",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_Core_profile_actual",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_Source_label_honest",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_misaka_positive_a7_tests_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_misaka_positive_a7_tests_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_misaka_positive_a7_tests_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_misaka_positive_a7_tests_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_ordinary_trained_forward_guarded_v2_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_ordinary_trained_forward_guarded_v2_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_ordinary_trained_forward_guarded_v2_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_ordinary_trained_forward_guarded_v2_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "a7_prepared_caller_exact_selected_targets",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_exact_frozen_command",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_strict_clippy_only_flags",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_all8_exact_profile_configs",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_nativeconfig_arg",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_closed_success",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_closed_rawsha",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_raw_build_finished_success",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_raw_no_warnings_or_errors",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_no_runtime_markers",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_Core_profile_actual",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_Source_label_honest",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_misaka_palw_sdk_exact_artifact_record",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_misaka_palw_sdk_actual_profile",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_misaka_palw_sdk_metadata_only",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_misaka_palw_sdk_source_in_snapshot",
+      "passed": true
+    },
+    {
+      "check": "sdk_library_formerly_unrun_exact_selected_targets",
+      "passed": true
+    },
+    {
+      "check": "eight_unique_selected_targets",
+      "passed": true
+    },
+    {
+      "check": "final_manifest_still_closed_sha",
+      "passed": true
+    }
+  ],
+  "source_correspondence": {
+    "snapshot_entries": 4956,
+    "before_after_equal": true,
+    "unchanged_a867_source_hashes": 4954,
+    "changed_final_git_pins": [
+      "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+      "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs"
+    ],
+    "basis": "All4956 a867 Git blobs were independently hashed in prior A3 audit; final Git and snapshot differ only at the two independently hashed files.",
+    "deltas": [
+      {
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+        "a867": {
+          "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+          "bytes": 25680,
+          "sha256": "2478c4f76676d6ed8e13593627225bad69ea1e1fbb41843a0f765d4980460a78",
+          "git_blob": "c7d369e276eba1fd0dbb12f88a2e9c66c13707b5"
+        },
+        "final": {
+          "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+          "bytes": 25670,
+          "sha256": "7294b7bdc8e7f6deb730acea9d3f5a519cd684f1a6f72e8b353fa9081e9397fb",
+          "git_blob": "b9ff3cc322188afe4b4fb4a06828431df394f12c"
+        },
+        "classification": "Production lint-style conditional flattening: same borrowed Some match, short-circuit length predicate and M::Limit return.",
+        "exact_old": "    if let Some(l) = i.expected_layout {\n        if l.commit_tiles.len() > MAX_BLOCKS * MAX_NODES_PER_BLOCK || l.state_tiles.len() > MAX_STATES {\n            return Err(M::Limit);\n        }\n    }",
+        "exact_final": "    if let Some(l) = i.expected_layout\n        && (l.commit_tiles.len() > MAX_BLOCKS * MAX_NODES_PER_BLOCK || l.state_tiles.len() > MAX_STATES)\n    {\n        return Err(M::Limit);\n    }",
+        "entire_file_only_this_substitution": true
+      },
+      {
+        "path": "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+        "a867": {
+          "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+          "path": "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+          "bytes": 32343,
+          "sha256": "da6c76c826d7a1382243ba96aa94274691191f5037dbd8ce53aa5bb6120d63e3",
+          "git_blob": "da3034ef9e9f6a7211ca0dffe769a1afad282578"
+        },
+        "final": {
+          "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+          "path": "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+          "bytes": 32401,
+          "sha256": "9650228fde13b4a70bd0d1a16cd811b9622d2bf847c1d42d509857647510014d",
+          "git_blob": "51b71ac447f595b42b9a1dc184fabd53ffd52114"
+        },
+        "classification": "Pure-test-only lint conversion; production CPU-limit enforcement, model/context/result logic unchanged.",
+        "exact_old": "let infinity = libc::RLIM_INFINITY as u64;",
+        "exact_final": "let infinity = u64::try_from(u128::from(libc::RLIM_INFINITY)).expect(\"platform CPU limit fits u64\");",
+        "entire_file_only_this_substitution": true,
+        "value_scope": "Same value for supported RLIM_INFINITY fitting u64; checked form rejects instead of truncates a hypothetical wider value. Not a universal cast equivalence or a new runtime result."
+      }
+    ]
+  },
+  "Loaded_six_and_Cargo": [
+    {
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+      "runtime_source": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+        "bytes": 21407,
+        "sha256": "7ccd9a57eab2f80c2d244d734784ffd28466e95c3bb338ed607fd9f2b909491b",
+        "git_blob": "9735a4f0a8cdcbec7a714a74833288357dcdccad"
+      },
+      "final_code_source": {
+        "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+        "bytes": 21407,
+        "sha256": "7ccd9a57eab2f80c2d244d734784ffd28466e95c3bb338ed607fd9f2b909491b",
+        "git_blob": "9735a4f0a8cdcbec7a714a74833288357dcdccad"
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+      "runtime_source": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+        "bytes": 4487,
+        "sha256": "20264ad6a5afa2a09b90fedda55a5201c183e7b61e34e55eff75d4a4c14cfb6f",
+        "git_blob": "47e86f6299fafdaaa1e4a746ad16e1bf23f59550"
+      },
+      "final_code_source": {
+        "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+        "bytes": 4487,
+        "sha256": "20264ad6a5afa2a09b90fedda55a5201c183e7b61e34e55eff75d4a4c14cfb6f",
+        "git_blob": "47e86f6299fafdaaa1e4a746ad16e1bf23f59550"
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs",
+      "runtime_source": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs",
+        "bytes": 10051,
+        "sha256": "e66571fafe16e21e6b22ec7b9859480e65812e782c3250c807160135a9d0c859",
+        "git_blob": "66f27def6ae6ba82529319de54561971732c07f8"
+      },
+      "final_code_source": {
+        "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+        "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs",
+        "bytes": 10051,
+        "sha256": "e66571fafe16e21e6b22ec7b9859480e65812e782c3250c807160135a9d0c859",
+        "git_blob": "66f27def6ae6ba82529319de54561971732c07f8"
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+      "runtime_source": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+        "bytes": 24408,
+        "sha256": "54c600d9ee58dc505ed672f2899524f25a6be7f58a1cf299f8bea5b9c8cffd21",
+        "git_blob": "adf84ee7eefde3d18685b38886de4280dd77596a"
+      },
+      "final_code_source": {
+        "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+        "bytes": 24408,
+        "sha256": "54c600d9ee58dc505ed672f2899524f25a6be7f58a1cf299f8bea5b9c8cffd21",
+        "git_blob": "adf84ee7eefde3d18685b38886de4280dd77596a"
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs",
+      "runtime_source": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs",
+        "bytes": 19386,
+        "sha256": "5914d17b2e175541f76b5f7c0e377282d75ec513e3f6e791cbe124a8b7ebf8ae",
+        "git_blob": "27b36413d09f3a65a8c58f3516e3f876201f9d51"
+      },
+      "final_code_source": {
+        "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs",
+        "bytes": 19386,
+        "sha256": "5914d17b2e175541f76b5f7c0e377282d75ec513e3f6e791cbe124a8b7ebf8ae",
+        "git_blob": "27b36413d09f3a65a8c58f3516e3f876201f9d51"
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+      "runtime_source": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+        "bytes": 32985,
+        "sha256": "fab179ee6297df0429fc1e1ff82a3731ed9550b56a3fc6797eedb053ceba0ae3",
+        "git_blob": "f34e682535036fa124f3da1ea216e9e2e9714e43"
+      },
+      "final_code_source": {
+        "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+        "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+        "bytes": 32985,
+        "sha256": "fab179ee6297df0429fc1e1ff82a3731ed9550b56a3fc6797eedb053ceba0ae3",
+        "git_blob": "f34e682535036fa124f3da1ea216e9e2e9714e43"
+      },
+      "byte_identical": true
+    },
+    {
+      "path": "misaka/palw/tir/exec/Cargo.toml",
+      "runtime_source": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/Cargo.toml",
+        "bytes": 3452,
+        "sha256": "f6e796be66eced3974a3a2e9ffb03e36b3b182f7910b01d428a60f7d193bcd91",
+        "git_blob": "693db7de5382d0610d152ba816ddd25be01c59fb"
+      },
+      "final_code_source": {
+        "ref": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+        "path": "misaka/palw/tir/exec/Cargo.toml",
+        "bytes": 3452,
+        "sha256": "f6e796be66eced3974a3a2e9ffb03e36b3b182f7910b01d428a60f7d193bcd91",
+        "git_blob": "693db7de5382d0610d152ba816ddd25be01c59fb"
+      },
+      "byte_identical": true
+    }
+  ],
+  "stdio_target_table": {
+    "exact_text": "[[test]]\nname = \"loaded-wide-process-v2\"\npath = \"tests/loaded_wide_process_v2.rs\"\nharness = false\nrequired-features = [\"node\"]\n",
+    "sha256": "35e6d0ad45c39bdf5f10410cd87d468f28ac14fb04fd644115b253c1386e8004",
+    "name": "loaded-wide-process-v2",
+    "path": "tests/loaded_wide_process_v2.rs",
+    "harness": false,
+    "required-features": [
+      "node"
+    ]
+  },
+  "Clippy": {
+    "commands": [
+      {
+        "id": "core_geometry",
+        "argv": [
+          "cargo",
+          "clippy",
+          "-p",
+          "kaspa-consensus-core",
+          "--offline",
+          "--locked",
+          "--lib",
+          "--test",
+          "local_step_geometry_quote_noalloc_v1",
+          "--no-deps",
+          "--message-format=json-render-diagnostics",
+          "--config",
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.debug=0",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "log": {
+          "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/plain-clippy4-7a0-20261102-core_geometry.jsonl",
+          "bytes": 309643,
+          "sha256": "edc5a4463eedb1de60a2adf1ddb0e11d89cafb42492d8a8d6cdb537d2582d9d0"
+        },
+        "actual_build_finished": [
+          {
+            "line": 458,
+            "success": true
+          }
+        ],
+        "actual_compiler_message_count": 0,
+        "selected_artifacts": [
+          {
+            "line": 456,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "kaspa_consensus_core",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 0,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [
+              "default",
+              "pq-only"
+            ],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-b92c93b1c7ef1764.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          },
+          {
+            "line": 457,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core/Cargo.toml",
+            "target": {
+              "kind": [
+                "test"
+              ],
+              "crate_types": [
+                "bin"
+              ],
+              "name": "local_step_geometry_quote_noalloc_v1",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core/tests/local_step_geometry_quote_noalloc_v1.rs",
+              "edition": "2024",
+              "doc": false,
+              "doctest": false,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 0,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": true
+            },
+            "features": [
+              "default",
+              "pq-only"
+            ],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblocal_step_geometry_quote_noalloc_v1-0ee135d6b2a73e5c.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          }
+        ],
+        "Core_source_profiles": [
+          {
+            "line": 411,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "cfgs": [],
+            "env": {
+              "MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1": "unsupported"
+            }
+          }
+        ],
+        "Source_supported_under_frontend": false,
+        "runtime_executed": 0,
+        "cleanup": {
+          "group": 14449,
+          "signals_sent": [],
+          "direct_child_reaped": true,
+          "live_members": [],
+          "zombies": []
+        }
+      },
+      {
+        "id": "exec_forward_metadata",
+        "argv": [
+          "cargo",
+          "clippy",
+          "-p",
+          "misaka-palw-tir-exec",
+          "--offline",
+          "--locked",
+          "--features",
+          "positive-panel",
+          "--lib",
+          "--test",
+          "local_wide_forward_v2",
+          "--test",
+          "local_forward_metadata_v2",
+          "--no-deps",
+          "--message-format=json-render-diagnostics",
+          "--config",
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.debug=0",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "log": {
+          "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/plain-clippy4-7a0-20261102-exec_forward_metadata.jsonl",
+          "bytes": 315379,
+          "sha256": "b9fd2059be29384a3e61adedd4169df18d80d4b4b2c2e622b6ad06274460b081"
+        },
+        "actual_build_finished": [
+          {
+            "line": 473,
+            "success": true
+          }
+        ],
+        "actual_compiler_message_count": 0,
+        "selected_artifacts": [
+          {
+            "line": 465,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec#misaka-palw-tir-exec@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "misaka_palw_tir_exec",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 2,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [
+              "node",
+              "positive-contract",
+              "positive-panel"
+            ],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-70770ec95330c575.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          },
+          {
+            "line": 472,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec#misaka-palw-tir-exec@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+            "target": {
+              "kind": [
+                "test"
+              ],
+              "crate_types": [
+                "bin"
+              ],
+              "name": "local_wide_forward_v2",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/tests/local_wide_forward_v2.rs",
+              "edition": "2024",
+              "doc": false,
+              "doctest": false,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 2,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": true
+            },
+            "features": [
+              "node",
+              "positive-contract",
+              "positive-panel"
+            ],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblocal_wide_forward_v2-e91cd784c04c8585.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          },
+          {
+            "line": 471,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec#misaka-palw-tir-exec@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+            "target": {
+              "kind": [
+                "test"
+              ],
+              "crate_types": [
+                "bin"
+              ],
+              "name": "local_forward_metadata_v2",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec/tests/local_forward_metadata_v2.rs",
+              "edition": "2024",
+              "doc": false,
+              "doctest": false,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 2,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": true
+            },
+            "features": [
+              "node",
+              "positive-contract",
+              "positive-panel"
+            ],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/liblocal_forward_metadata_v2-0c69b4ce6bb323b2.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          }
+        ],
+        "Core_source_profiles": [
+          {
+            "line": 379,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "cfgs": [],
+            "env": {
+              "MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1": "unsupported"
+            }
+          }
+        ],
+        "Source_supported_under_frontend": false,
+        "runtime_executed": 0,
+        "cleanup": {
+          "group": 14555,
+          "signals_sent": [],
+          "direct_child_reaped": true,
+          "live_members": [],
+          "zombies": []
+        }
+      },
+      {
+        "id": "a7_prepared_caller",
+        "argv": [
+          "cargo",
+          "clippy",
+          "--manifest-path",
+          "testing/positive-court-a7/Cargo.toml",
+          "--offline",
+          "--locked",
+          "--lib",
+          "--no-deps",
+          "--message-format=json-render-diagnostics",
+          "--test",
+          "ordinary_trained_forward_guarded_v2",
+          "--config",
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.debug=0",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "log": {
+          "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/plain-clippy4-7a0-20261102-a7_prepared_caller.jsonl",
+          "bytes": 280156,
+          "sha256": "40daf571da127f65dfa97caa645168025d6ff3cc6e1eb0fb84607b3c2cd62069"
+        },
+        "actual_build_finished": [
+          {
+            "line": 400,
+            "success": true
+          }
+        ],
+        "actual_compiler_message_count": 0,
+        "selected_artifacts": [
+          {
+            "line": 397,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/testing/positive-court-a7#misaka-positive-a7-tests@0.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/testing/positive-court-a7/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "misaka_positive_a7_tests",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/testing/positive-court-a7/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 2,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_positive_a7_tests-37336696cde95f6d.rmeta"
+            ],
+            "executable": null,
+            "fresh": true
+          },
+          {
+            "line": 399,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/testing/positive-court-a7#misaka-positive-a7-tests@0.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/testing/positive-court-a7/Cargo.toml",
+            "target": {
+              "kind": [
+                "test"
+              ],
+              "crate_types": [
+                "bin"
+              ],
+              "name": "ordinary_trained_forward_guarded_v2",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+              "edition": "2024",
+              "doc": false,
+              "doctest": false,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 2,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": true
+            },
+            "features": [],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libordinary_trained_forward_guarded_v2-2afbc9332904527e.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          }
+        ],
+        "Core_source_profiles": [
+          {
+            "line": 373,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "cfgs": [
+              "misaka_source_local_audited_rust193_v1"
+            ],
+            "env": {
+              "MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1": "rust-1.93.0-borsh-1.5.1-v1"
+            }
+          }
+        ],
+        "Source_supported_under_frontend": true,
+        "runtime_executed": 0,
+        "cleanup": {
+          "group": 14654,
+          "signals_sent": [],
+          "direct_child_reaped": true,
+          "live_members": [],
+          "zombies": []
+        }
+      },
+      {
+        "id": "sdk_library_formerly_unrun",
+        "argv": [
+          "cargo",
+          "clippy",
+          "-p",
+          "misaka-palw-sdk",
+          "--offline",
+          "--locked",
+          "--lib",
+          "--no-deps",
+          "--message-format=json-render-diagnostics",
+          "--config",
+          "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.dev.package.kaspa-consensus.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus-core.debug=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.opt-level=0",
+          "--config",
+          "profile.test.package.kaspa-consensus.debug=0",
+          "--",
+          "-Dwarnings"
+        ],
+        "log": {
+          "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/plain-clippy4-7a0-20261102-sdk_library_formerly_unrun.jsonl",
+          "bytes": 299702,
+          "sha256": "eebf72bdcb24227c4a263f6db620ef519c98c753d8fb725c9120df20647b8e19"
+        },
+        "actual_build_finished": [
+          {
+            "line": 447,
+            "success": true
+          }
+        ],
+        "actual_compiler_message_count": 0,
+        "selected_artifacts": [
+          {
+            "line": 446,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/sdk#misaka-palw-sdk@1.1.0",
+            "manifest_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/sdk/Cargo.toml",
+            "target": {
+              "kind": [
+                "lib"
+              ],
+              "crate_types": [
+                "lib"
+              ],
+              "name": "misaka_palw_sdk",
+              "src_path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/sdk/src/lib.rs",
+              "edition": "2024",
+              "doc": true,
+              "doctest": true,
+              "test": true
+            },
+            "profile": {
+              "opt_level": "0",
+              "debuginfo": 2,
+              "debug_assertions": true,
+              "overflow_checks": true,
+              "test": false
+            },
+            "features": [],
+            "filenames": [
+              "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_sdk-61ac3a03a8a5ef9c.rmeta"
+            ],
+            "executable": null,
+            "fresh": false
+          }
+        ],
+        "Core_source_profiles": [
+          {
+            "line": 378,
+            "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+            "cfgs": [],
+            "env": {
+              "MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1": "unsupported"
+            }
+          }
+        ],
+        "Source_supported_under_frontend": false,
+        "runtime_executed": 0,
+        "cleanup": {
+          "group": 14662,
+          "signals_sent": [],
+          "direct_child_reaped": true,
+          "live_members": [],
+          "zombies": []
+        }
+      }
+    ],
+    "physical_command_count": 4,
+    "unique_selected_target_surfaces": 8,
+    "runtime_executed": 0,
+    "runtime_test_count": null,
+    "frontend_source_scope": "Core/Exec/SDK explicitly observed unsupported Source profile under Clippy; A7 cached dependency audited profile observed. Metadata lint is not Source-bootstrap runtime certification."
+  },
+  "evidence_boundaries": {
+    "ordinary39": {
+      "path": "/tmp/positive-a0-ordinary39-a867-composed-20261102.json",
+      "sha256": "dfb2bbeff448a82a8c2ee65abff7ced22a14344adaab425c3f924f6053a06ba2"
+    },
+    "ordinary_trained3": {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/ordinary-trained3-a867-functional-v4-20261102.json",
+      "sha256": "f452db631aac4b0b60ef447a3cb389ad4eebaab4e5e42cbdd5e21c3b5cd44796"
+    },
+    "actual_runtime_source": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+    "final7a0_validation": "Selected strict Clippy metadata only",
+    "Root_Native22_Core54": "Separate50fe evidence; not added, rerun or requalified by this audit.",
+    "trained3_scope": "Original context metadata8192/8192/2048; prefill16/decode1, ordinary NoTrace vs same-owned dense self-consistency, not independent HF arithmetic or full-context inference."
+  },
+  "limitations": [
+    "Four commands/eight listed library and integration metadata surfaces only. --no-deps is not all workspace coverage; lib profile.test=false is not cfg(test) unit-module lint coverage.",
+    "All selected outputs are rmeta with executable=null. No tests or models were executed by the lint executor; a867 runtime results remain a867, not7a0.",
+    "No model weights/model-artifact payloads were opened, statted, hashed or run by this auditor. Native input pins are retained as metadata only.",
+    "Source/log hashes, Cargo metadata and closed-process receipts are local evidence under a trusted filesystem/executor premise, not an independent reproducible-build or model-computation correctness attestation.",
+    "No canonical source/docs, index, branch or checkout edits and no Cargo/rustc/test/model launch were performed. Only this /tmp JSON is newly written."
+  ],
+  "actions": {
+    "Cargo_rustc_runtime_launched": false,
+    "model_weight_payload_read": false,
+    "canonical_source_docs_index_branch_checkout_write": false
+  }
+}

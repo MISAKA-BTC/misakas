@@ -1,0 +1,1345 @@
+{
+  "schema": "misaka.a3.final_handoff.source_correspondence.v1",
+  "recorded_utc": "2026-11-01T21:15:10.733863+00:00",
+  "status": "SOURCE_COMPARISON_ONLY_NO_BUILD_OR_RUNTIME_CLAIM",
+  "refs": {
+    "a3_current": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+    "root_integrated": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+    "bridge_frozen": "973ed058c494caeb759a8049970b47b17b9e558c",
+    "stdio_frozen": "9d828c26503349d1f77c6a24e79a36d2dc031454"
+  },
+  "files": [
+    {
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+      "frozen_origin": {
+        "ref": "973ed058c494caeb759a8049970b47b17b9e558c",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+        "bytes": 21407,
+        "sha256": "7ccd9a57eab2f80c2d244d734784ffd28466e95c3bb338ed607fd9f2b909491b",
+        "git_blob": "9735a4f0a8cdcbec7a714a74833288357dcdccad"
+      },
+      "current_a3": {
+        "ref": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+        "bytes": 21360,
+        "sha256": "c4ca1694e63e11af8bb391b07f2c0b63e4db479eaa8b7efd6081b4745b006b0d",
+        "git_blob": "405bab6e39e230e9ecf09e18849b047ed770ef61"
+      },
+      "root_integrated": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+        "bytes": 21407,
+        "sha256": "7ccd9a57eab2f80c2d244d734784ffd28466e95c3bb338ed607fd9f2b909491b",
+        "git_blob": "9735a4f0a8cdcbec7a714a74833288357dcdccad"
+      },
+      "root_matches_frozen_bytes": true,
+      "root_matches_current_a3_bytes": false,
+      "handoff_disposition": "KEEP_ROOT_EXACT_FROZEN_IMPLEMENTATION; no code overlay required"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+      "frozen_origin": {
+        "ref": "973ed058c494caeb759a8049970b47b17b9e558c",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+        "bytes": 4487,
+        "sha256": "20264ad6a5afa2a09b90fedda55a5201c183e7b61e34e55eff75d4a4c14cfb6f",
+        "git_blob": "47e86f6299fafdaaa1e4a746ad16e1bf23f59550"
+      },
+      "current_a3": null,
+      "root_integrated": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+        "bytes": 4487,
+        "sha256": "20264ad6a5afa2a09b90fedda55a5201c183e7b61e34e55eff75d4a4c14cfb6f",
+        "git_blob": "47e86f6299fafdaaa1e4a746ad16e1bf23f59550"
+      },
+      "root_matches_frozen_bytes": true,
+      "root_matches_current_a3_bytes": false,
+      "handoff_disposition": "KEEP_ROOT_EXACT_FROZEN_IMPLEMENTATION; no code overlay required"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs",
+      "frozen_origin": {
+        "ref": "973ed058c494caeb759a8049970b47b17b9e558c",
+        "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs",
+        "bytes": 10051,
+        "sha256": "e66571fafe16e21e6b22ec7b9859480e65812e782c3250c807160135a9d0c859",
+        "git_blob": "66f27def6ae6ba82529319de54561971732c07f8"
+      },
+      "current_a3": null,
+      "root_integrated": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs",
+        "bytes": 10051,
+        "sha256": "e66571fafe16e21e6b22ec7b9859480e65812e782c3250c807160135a9d0c859",
+        "git_blob": "66f27def6ae6ba82529319de54561971732c07f8"
+      },
+      "root_matches_frozen_bytes": true,
+      "root_matches_current_a3_bytes": false,
+      "handoff_disposition": "KEEP_ROOT_EXACT_FROZEN_IMPLEMENTATION; no code overlay required"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+      "frozen_origin": {
+        "ref": "973ed058c494caeb759a8049970b47b17b9e558c",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+        "bytes": 24408,
+        "sha256": "54c600d9ee58dc505ed672f2899524f25a6be7f58a1cf299f8bea5b9c8cffd21",
+        "git_blob": "adf84ee7eefde3d18685b38886de4280dd77596a"
+      },
+      "current_a3": null,
+      "root_integrated": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+        "bytes": 24408,
+        "sha256": "54c600d9ee58dc505ed672f2899524f25a6be7f58a1cf299f8bea5b9c8cffd21",
+        "git_blob": "adf84ee7eefde3d18685b38886de4280dd77596a"
+      },
+      "root_matches_frozen_bytes": true,
+      "root_matches_current_a3_bytes": false,
+      "handoff_disposition": "KEEP_ROOT_EXACT_FROZEN_IMPLEMENTATION; no code overlay required"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs",
+      "frozen_origin": {
+        "ref": "973ed058c494caeb759a8049970b47b17b9e558c",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs",
+        "bytes": 19386,
+        "sha256": "5914d17b2e175541f76b5f7c0e377282d75ec513e3f6e791cbe124a8b7ebf8ae",
+        "git_blob": "27b36413d09f3a65a8c58f3516e3f876201f9d51"
+      },
+      "current_a3": null,
+      "root_integrated": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs",
+        "bytes": 19386,
+        "sha256": "5914d17b2e175541f76b5f7c0e377282d75ec513e3f6e791cbe124a8b7ebf8ae",
+        "git_blob": "27b36413d09f3a65a8c58f3516e3f876201f9d51"
+      },
+      "root_matches_frozen_bytes": true,
+      "root_matches_current_a3_bytes": false,
+      "handoff_disposition": "KEEP_ROOT_EXACT_FROZEN_IMPLEMENTATION; no code overlay required"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+      "frozen_origin": {
+        "ref": "9d828c26503349d1f77c6a24e79a36d2dc031454",
+        "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+        "bytes": 32985,
+        "sha256": "fab179ee6297df0429fc1e1ff82a3731ed9550b56a3fc6797eedb053ceba0ae3",
+        "git_blob": "f34e682535036fa124f3da1ea216e9e2e9714e43"
+      },
+      "current_a3": {
+        "ref": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+        "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+        "bytes": 32985,
+        "sha256": "fab179ee6297df0429fc1e1ff82a3731ed9550b56a3fc6797eedb053ceba0ae3",
+        "git_blob": "f34e682535036fa124f3da1ea216e9e2e9714e43"
+      },
+      "root_integrated": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+        "bytes": 32985,
+        "sha256": "fab179ee6297df0429fc1e1ff82a3731ed9550b56a3fc6797eedb053ceba0ae3",
+        "git_blob": "f34e682535036fa124f3da1ea216e9e2e9714e43"
+      },
+      "root_matches_frozen_bytes": true,
+      "root_matches_current_a3_bytes": true,
+      "handoff_disposition": "KEEP_ROOT_EXACT_FROZEN_IMPLEMENTATION; no code overlay required"
+    }
+  ],
+  "cargo_targets": {
+    "a3_current": {
+      "cargo_file": {
+        "ref": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+        "path": "misaka/palw/tir/exec/Cargo.toml",
+        "bytes": 3149,
+        "sha256": "9fefd966f81e96d5dbb1bb4193655fb97b18061d518a4f5a04e53b99ed12016b",
+        "git_blob": "9a5238781d40b193b0d08b3a11aa5979f3e374a2"
+      },
+      "targets": {
+        "loaded-wide-process-v2": {
+          "table": {
+            "name": "loaded-wide-process-v2",
+            "path": "tests/loaded_wide_process_v2.rs",
+            "harness": false,
+            "required-features": [
+              "node"
+            ]
+          },
+          "raw_table": "[[test]]\nname = \"loaded-wide-process-v2\"\npath = \"tests/loaded_wide_process_v2.rs\"\nharness = false\nrequired-features = [\"node\"]\n",
+          "raw_table_sha256": "35e6d0ad45c39bdf5f10410cd87d468f28ac14fb04fd644115b253c1386e8004",
+          "discovery": "EXPLICIT_CARGO_TEST_TABLE"
+        },
+        "positive_wide_material_v2": {
+          "table": null,
+          "raw_table": null,
+          "raw_table_sha256": null,
+          "discovery": "NO_EXPLICIT_CARGO_TEST_TABLE"
+        }
+      }
+    },
+    "bridge_frozen": {
+      "cargo_file": {
+        "ref": "973ed058c494caeb759a8049970b47b17b9e558c",
+        "path": "misaka/palw/tir/exec/Cargo.toml",
+        "bytes": 2864,
+        "sha256": "0160303ae165f06ebdf68e8d091792c60c8899d51d0a0f7d245ff48e29b49aaa",
+        "git_blob": "28988a8f20ed5e7d2b61df18f603d3470687d3f0"
+      },
+      "targets": {
+        "loaded-wide-process-v2": {
+          "table": null,
+          "raw_table": null,
+          "raw_table_sha256": null,
+          "discovery": "NO_EXPLICIT_CARGO_TEST_TABLE"
+        },
+        "positive_wide_material_v2": {
+          "table": null,
+          "raw_table": null,
+          "raw_table_sha256": null,
+          "discovery": "NO_EXPLICIT_CARGO_TEST_TABLE"
+        }
+      }
+    },
+    "stdio_frozen": {
+      "cargo_file": {
+        "ref": "9d828c26503349d1f77c6a24e79a36d2dc031454",
+        "path": "misaka/palw/tir/exec/Cargo.toml",
+        "bytes": 3149,
+        "sha256": "9fefd966f81e96d5dbb1bb4193655fb97b18061d518a4f5a04e53b99ed12016b",
+        "git_blob": "9a5238781d40b193b0d08b3a11aa5979f3e374a2"
+      },
+      "targets": {
+        "loaded-wide-process-v2": {
+          "table": {
+            "name": "loaded-wide-process-v2",
+            "path": "tests/loaded_wide_process_v2.rs",
+            "harness": false,
+            "required-features": [
+              "node"
+            ]
+          },
+          "raw_table": "[[test]]\nname = \"loaded-wide-process-v2\"\npath = \"tests/loaded_wide_process_v2.rs\"\nharness = false\nrequired-features = [\"node\"]\n",
+          "raw_table_sha256": "35e6d0ad45c39bdf5f10410cd87d468f28ac14fb04fd644115b253c1386e8004",
+          "discovery": "EXPLICIT_CARGO_TEST_TABLE"
+        },
+        "positive_wide_material_v2": {
+          "table": null,
+          "raw_table": null,
+          "raw_table_sha256": null,
+          "discovery": "NO_EXPLICIT_CARGO_TEST_TABLE"
+        }
+      }
+    },
+    "root_integrated": {
+      "cargo_file": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/Cargo.toml",
+        "bytes": 3452,
+        "sha256": "f6e796be66eced3974a3a2e9ffb03e36b3b182f7910b01d428a60f7d193bcd91",
+        "git_blob": "693db7de5382d0610d152ba816ddd25be01c59fb"
+      },
+      "targets": {
+        "loaded-wide-process-v2": {
+          "table": {
+            "name": "loaded-wide-process-v2",
+            "path": "tests/loaded_wide_process_v2.rs",
+            "harness": false,
+            "required-features": [
+              "node"
+            ]
+          },
+          "raw_table": "[[test]]\nname = \"loaded-wide-process-v2\"\npath = \"tests/loaded_wide_process_v2.rs\"\nharness = false\nrequired-features = [\"node\"]\n",
+          "raw_table_sha256": "35e6d0ad45c39bdf5f10410cd87d468f28ac14fb04fd644115b253c1386e8004",
+          "discovery": "EXPLICIT_CARGO_TEST_TABLE"
+        },
+        "positive_wide_material_v2": {
+          "table": null,
+          "raw_table": null,
+          "raw_table_sha256": null,
+          "discovery": "NO_EXPLICIT_CARGO_TEST_TABLE"
+        }
+      }
+    }
+  },
+  "api_boundaries": [
+    {
+      "finding": "Full existing binding and its independently admitted opaque V2 verification remain mandatory inputs.",
+      "evidence": [
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+          "line": 96,
+          "text": "pub expected: &'a PalwTirStepBindingV1,"
+        },
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+          "line": 97,
+          "text": "pub verified: &'a PalwTirVerifiedBindingV2,"
+        },
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs",
+          "line": 98,
+          "text": "pub original_context: &'a PalwJobContextV2,"
+        }
+      ]
+    },
+    {
+      "finding": "The Core binding includes full_logits_trace_root, step_leaf_count, step_merkle_root and committed_execution_root. No optional/no-binding form is introduced by these six files.",
+      "core_binding_definition": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "consensus/core/src/palw_tir_step_v1.rs",
+        "bytes": 62307,
+        "sha256": "c23106f1cfe975fd460a8a7b75c4742aa4e7eb3a73b38c0ee08956f740b68b2a",
+        "git_blob": "bf80418ecc16ee76d7d87e336a4ead580cadf629"
+      },
+      "line": 1117
+    },
+    {
+      "finding": "Capture borrows Loaded and prompt, reuses private compiled plan/native params, uses original expected class/original context/verified space, and delegates once to Root capture_one_pass_v2. It does not create a trace-free first-Miner, a replacement binding, registry/native permission or claim-credit acceptance path.",
+      "evidence": [
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+          "line": 65,
+          "text": "pub fn capture_wide_panel_one_pass<'run>("
+        },
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+          "line": 81,
+          "text": "self.compiled.plan(),"
+        },
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+          "line": 87,
+          "text": "class: &self.inputs.expected.class,"
+        },
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+          "line": 89,
+          "text": "job: self.inputs.original_context,"
+        },
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+          "line": 93,
+          "text": "capture_one_pass_v2(expected, &runner, run_limits, work, tape, reserver)"
+        }
+      ]
+    },
+    {
+      "finding": "Shared Work remains mandatory and checks Loaded floor/class/context before runner comparison; limits are checked, not raised. Existing capture/run/disk guards remain producer contracts.",
+      "evidence": [
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+          "line": 73,
+          "text": "work.admit_loaded_runner_v2("
+        },
+        {
+          "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs",
+          "line": 37,
+          "text": "cap(limits.external_retained_bytes, limits.max_live_heap_bytes)?;"
+        }
+      ]
+    },
+    {
+      "finding": "The stdio test retains its existing-binding literal fixture and harness=false/node-only target; OS-main behavior is source intent, not a runtime result from this audit.",
+      "source_identity": {
+        "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+        "path": "misaka/palw/tir/exec/tests/loaded_wide_process_v2.rs",
+        "bytes": 32985,
+        "sha256": "fab179ee6297df0429fc1e1ff82a3731ed9550b56a3fc6797eedb053ceba0ae3",
+        "git_blob": "f34e682535036fa124f3da1ea216e9e2e9714e43"
+      }
+    }
+  ],
+  "a3_owned_handoff_overlay_inventory": [
+    {
+      "path": "handoff/positive-court/A3-bounded-artifact-header-results.md",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "b48c3297843140d70ff02b90c0c045fc2a03523d",
+        "bytes": 3176,
+        "mode": "100644"
+      },
+      "root": {
+        "git_blob": "ab2d5b295b8ff706d1bcb0f7560b5c42266d35c5",
+        "bytes": 3173,
+        "mode": "100644"
+      },
+      "root_status": "DIFFERS",
+      "recommended_disposition": "MANUAL_RECONCILE_WITH_ROOT_VERSION; do not overwrite Root changes",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-hello2-prepared-cpu-results.md",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "1163deb11084df024c52b12770348fdd7dd71bc2",
+        "bytes": 4071,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-loaded-panel-bridge-v2.md",
+      "group": "loaded_panel_bridge",
+      "a3": {
+        "git_blob": "f240eb59152f9bf45604afa6a81032d1c8553d1e",
+        "bytes": 3690,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/.gitattributes",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "d2ffa89d3269b60efc227fac800968db8b385d3d",
+        "bytes": 177,
+        "mode": "100644"
+      },
+      "root": {
+        "git_blob": "e93735be950250ea762ecbe450449884aedcba01",
+        "bytes": 82,
+        "mode": "100644"
+      },
+      "root_status": "DIFFERS",
+      "recommended_disposition": "MANUAL_RECONCILE_WITH_ROOT_VERSION; do not overwrite Root changes",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-batch.json",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "9d65adcb2ac876ce1fcdd8b4970a45ee0726f7c6",
+        "bytes": 6389,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-clippy-0.log",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "d7a19bf94a9aafa2dcbf75c596face0e205b8b35",
+        "bytes": 2379,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-clippy-1.log",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "38862061da0c9c52526ce6ce05713a3b2169dc87",
+        "bytes": 2221,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-clippy.json",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "169e1ef382a669e076aa9cac2173f0c3ab6c2c3b",
+        "bytes": 2824,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-corrected-batch.log",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "d2034a130a127d5f11333efdb11e217674c31883",
+        "bytes": 4216,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-producer.json",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "806e537d319878bd9b949f16d2243469c0fc9f14",
+        "bytes": 1709,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-root7a693-corrected/root-producer.log",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "578888d672d9cf6a59093c708abca0d420464626",
+        "bytes": 1052,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-source-review-1b14d1ecc/docs.log",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "83a9554e255c292e4c825ac3c43e19a728c483fe",
+        "bytes": 438,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-source-review-1b14d1ecc/manifest.json",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "5caa8a65866e9d915a61de87615bceb3305c0c60",
+        "bytes": 3816,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-source-review-451f50338/docs.log",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "83a9554e255c292e4c825ac3c43e19a728c483fe",
+        "bytes": 438,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/hello2-source-review-451f50338/manifest.json",
+      "group": "historical_hello2",
+      "a3": {
+        "git_blob": "bae0dffd7cfab7332234125ec61a4c80f7d7ef11",
+        "bytes": 3157,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-panel-bridge-source-973ed058c/a3-loaded-panel-bridge-frozen-973ed058c.patch",
+      "group": "loaded_panel_bridge",
+      "a3": {
+        "git_blob": "e711ef99ecffb34ecfd2909324edcab24255b38c",
+        "bytes": 28015,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-panel-bridge-source-973ed058c/a3-loaded-panel-bridge-source.json",
+      "group": "loaded_panel_bridge",
+      "a3": {
+        "git_blob": "4b7c08531a6e0a93f4558831eb6c831dc6f6be38",
+        "bytes": 1638,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-panel-bridge-source-973ed058c/a3-loaded-wide-panel-bridge.notes.md",
+      "group": "loaded_panel_bridge",
+      "a3": {
+        "git_blob": "6f9d215563a6f382b39d3ba2260e47f3ef94bc09",
+        "bytes": 14645,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-panel-bridge-source-973ed058c/a3-loaded-wide-panel-bridge.patch",
+      "group": "loaded_panel_bridge",
+      "a3": {
+        "git_blob": "6b4a2d592322736b38cc9f40f4d3a1315f83b720",
+        "bytes": 28049,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-panel-bridge-source-973ed058c/docs.log",
+      "group": "loaded_panel_bridge",
+      "a3": {
+        "git_blob": "83a9554e255c292e4c825ac3c43e19a728c483fe",
+        "bytes": 438,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-panel-bridge-source-973ed058c/manifest.json",
+      "group": "loaded_panel_bridge",
+      "a3": {
+        "git_blob": "672fd52764629fb5e6ea9bb28655c7d278128bd3",
+        "bytes": 4396,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-stdio-source-9d828c265/a3-loaded-wide-process-test.notes.md",
+      "group": "loaded_stdio",
+      "a3": {
+        "git_blob": "02b2611611d83067eca64a66b2b562119815a1a8",
+        "bytes": 8015,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-stdio-source-9d828c265/a3-loaded-wide-process-test.patch",
+      "group": "loaded_stdio",
+      "a3": {
+        "git_blob": "31bbc20e2b98c3a4f2aa621438db80a8f64bcd30",
+        "bytes": 34669,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-stdio-source-9d828c265/a3-startup-components-validation-plan.json",
+      "group": "loaded_stdio",
+      "a3": {
+        "git_blob": "b8dbb747a4bcba12781fa4acef201fedc9909f1d",
+        "bytes": 36588,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-stdio-source-9d828c265/docs.log",
+      "group": "loaded_stdio",
+      "a3": {
+        "git_blob": "83a9554e255c292e4c825ac3c43e19a728c483fe",
+        "bytes": 438,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-stdio-source-9d828c265/exact-source-and-marker.json",
+      "group": "loaded_stdio",
+      "a3": {
+        "git_blob": "2adbf8a5176208b84e6b516ebee3453fc0497cb9",
+        "bytes": 1317,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/loaded-stdio-source-9d828c265/manifest.json",
+      "group": "loaded_stdio",
+      "a3": {
+        "git_blob": "c6cbc0a3ae312688700acd39573bf412cb63d613",
+        "bytes": 3299,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/local-plan-compile-source-54d4fa6b3/a3-startup-plan-quote.notes.md",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "6d9bf83b06e6e5fb26d35e10eecc362f90973197",
+        "bytes": 16885,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/local-plan-compile-source-54d4fa6b3/a3-startup-plan-quote.patch",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "bff99e828a5cd49acb6d0c529d6cbf3add858469",
+        "bytes": 33289,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/local-plan-compile-source-54d4fa6b3/docs.log",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "83a9554e255c292e4c825ac3c43e19a728c483fe",
+        "bytes": 438,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/local-plan-compile-source-54d4fa6b3/manifest.json",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "20655ca6c2ec5d68c97b3b1a69c40e74f6504820",
+        "bytes": 2757,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/owned-artifact-params-source-9b3216719/a3-owned-artifact-params.notes.md",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "4af10f90fba0b68734cf60890a99ac37d0ae95af",
+        "bytes": 13218,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/owned-artifact-params-source-9b3216719/a3-owned-artifact-params.patch",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "d738f86f289ea9f62c5630cd451bcdcab65228d7",
+        "bytes": 46990,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/owned-artifact-params-source-9b3216719/docs.log",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "83a9554e255c292e4c825ac3c43e19a728c483fe",
+        "bytes": 438,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/owned-artifact-params-source-9b3216719/manifest.json",
+      "group": "other_a3_handoff",
+      "a3": {
+        "git_blob": "52e3a5d4e8e329936dc8d29c51585150e83f3b96",
+        "bytes": 3083,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/copy-manifest.json",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "c349cc77cce5c9d3d77d5ac7975c4a286a0fdd06",
+        "bytes": 10464,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-clippy-1c903-20261102-0.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "fd4ab7c9b791e5944cff38182ad0379bab6c384f",
+        "bytes": 2073,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-clippy-1c903-20261102-1.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "0d23251913d978aef322dfaff73a2ce5642f77ea",
+        "bytes": 297,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-clippy-1c903-20261102-2.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "3db9881de73531bfd40fc5dc8c8675c68b6cfa75",
+        "bytes": 1966,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-clippy-1c903-20261102.json",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "37d92c27514ddcd9fd0f040772b5465db9b0119e",
+        "bytes": 638382,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-0-positive_wide_material_v2.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "6e004980c87cf14ef14fd9c1f65964410b0467db",
+        "bytes": 819,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-1-wide_quote_noalloc.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "311238309b094c0ab464b75d9f4c2992d566b9f0",
+        "bytes": 212,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-2-run_wide_q24_v2.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "96b1dae85ceef1edd147ba9903d56691cb1bc459",
+        "bytes": 727,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-3-wide_capture_v2.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "35766b8c571fed1d8294fecbc54908fea060954e",
+        "bytes": 779,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-4-positive_full_relation.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "41a0d6eccb7b28ea9e731290ebefb25fe9be06c8",
+        "bytes": 1143,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-5-positive_expanded_plan.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "389f8202d4eee2c3ca8dc7ff3ff88250320c684d",
+        "bytes": 565,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-6-cell_ipc_v2.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "5c44fd9cf226f86eb8b3103c2ad90c6713146af7",
+        "bytes": 751,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-7-cell.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "843f9e10b342e54009cb70e193c1f9e8fa577ab8",
+        "bytes": 1221,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-8-misaka_palw_tir_exec.log",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "a39c56b985818b724835d5854ab5ceb96b8f384f",
+        "bytes": 1026,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-exec-build.jsonl",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "aab975eadf55392435b6f94ceb726b89142c512c",
+        "bytes": 295723,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102-forbid-cxx.py",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "9520003b8415690dff081c45fa376ed540fcc83c",
+        "bytes": 125,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/panel-r5-exec-1c903-20261102.json",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "b6c6eab762715fbc5e5b4b1e2a78e54f94a94de7",
+        "bytes": 658904,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/positive-a0-r5-1c903-independent-final-audit.json",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "c69e8c4ad618d8c02926d34d92fecff8ebaf72ad",
+        "bytes": 47933,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/positive-a0-r5-1c903-independent-final-audit.md",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "553904cfe49fca036b37642340ed9830c03ba7e2",
+        "bytes": 3577,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/positive-a0-r5-runtime-batch-1c903-guarded.py",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "dabf965f5be4f18692856e9dce65ed1ffb0df126",
+        "bytes": 10184,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/positive-a0-r5-runtime-batch-1c903-plan.json",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "e06950cad1bab18535aa7c35d989816854358d05",
+        "bytes": 636281,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root1c903-corrected/source-process-owner-contract.md",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "397d438fb81056770b8060d2e3e59cec7f9d1386",
+        "bytes": 5332,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root9193-initial/panel-r5-exec-9193-20261102-exec-build.jsonl",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "d9270fa13af909561edf2797f113c4bb8609b77b",
+        "bytes": 296772,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root9193-initial/panel-r5-exec-9193-20261102-forbid-cxx.py",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "9520003b8415690dff081c45fa376ed540fcc83c",
+        "bytes": 125,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/process-root9193-initial/panel-r5-exec-9193-20261102.json",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "7523635b110193a387fde32a51c16dddb404dd1b",
+        "bytes": 638051,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/source-program-local-74bd23932/a3-nf-diagnostic-audit.md",
+      "group": "source_local_audit",
+      "a3": {
+        "git_blob": "883f8a9b7f6c28bf5111d6b10c7f3a6f91ca9b90",
+        "bytes": 33696,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/source-program-local-74bd23932/a3-source-diagnostic-audit.md",
+      "group": "source_local_audit",
+      "a3": {
+        "git_blob": "0c03b15bfdd4c61e5e126c34ea7b028b5f05fc6a",
+        "bytes": 21494,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/source-program-local-74bd23932/docs.log",
+      "group": "source_local_audit",
+      "a3": {
+        "git_blob": "83a9554e255c292e4c825ac3c43e19a728c483fe",
+        "bytes": 438,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/source-program-local-74bd23932/manifest.json",
+      "group": "source_local_audit",
+      "a3": {
+        "git_blob": "62686609edd91ad02497dc185b6bd4775c0d1800",
+        "bytes": 4550,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/source-program-local-74bd23932/misaka-source-local-bootstrap-decision-2026-11-01.md",
+      "group": "source_local_audit",
+      "a3": {
+        "git_blob": "b06d9d3bbca44c2a0670fbe50fd2c74c024cd235",
+        "bytes": 5007,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/source-program-local-74bd23932/misaka-source-local-consolidated-2026-11-01.md",
+      "group": "source_local_audit",
+      "a3": {
+        "git_blob": "d32824fc0c36955cc02870c87dc1c296ec3b873a",
+        "bytes": 6269,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/source-program-local-74bd23932/misaka-source-local-plan-2026-11-01.md",
+      "group": "source_local_audit",
+      "a3": {
+        "git_blob": "32c567eb727f3c9ebed57f799c289c1aac4d0797",
+        "bytes": 23743,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-r1-evidence/wide-process-source-f95887209/manifest.json",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "63ccf1f2f2c270a4dad13cd40edf3ff37be22220",
+        "bytes": 2416,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    },
+    {
+      "path": "handoff/positive-court/A3-wide-process-owner-v2-results.md",
+      "group": "historical_process_r5",
+      "a3": {
+        "git_blob": "c6fc0ca07c86c3694d3c12c2ceeef6e2197190c2",
+        "bytes": 2590,
+        "mode": "100644"
+      },
+      "root": null,
+      "root_status": "ABSENT",
+      "recommended_disposition": "OPTIONAL_ADDITIVE_HANDOFF_EVIDENCE_OVERLAY_AFTER_FINAL_ROOT_REF_RECHECK; retain historical scope labels",
+      "contents_inspected": false
+    }
+  ],
+  "actions": {
+    "cargo": false,
+    "rustc": false,
+    "runtime": false,
+    "active_build_log_read": false,
+    "source_or_canonical_docs_write": false,
+    "checkout": false,
+    "index_write": false,
+    "commit": false
+  },
+  "scope": [
+    "All source comparisons use immutable Git blobs, not active worktree/build outputs.",
+    "Root ordinary forward APIs outside A3 are preserved; this inventory does not re-review or claim their results.",
+    "Earlier handoff documents may describe their historical source-only/unrun status. No old or parent-reported runtime result is promoted by this comparison.",
+    "Future overlay must be recomputed against the eventual final Root reference; a867 is a pinned preparation baseline."
+  ],
+  "owned_params_root_intentional_changes": {
+    "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+    "a3": {
+      "ref": "87017a0041693fbf3429a887a26a69b2d777fbcb",
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+      "bytes": 42661,
+      "sha256": "a8b411aefb6d6d0fded9f052c12a80f4ab3b1b821e1fe79e6ef773974f740a32",
+      "git_blob": "c5e99c8797b5f81a5204f3664fedc3153c18b15e"
+    },
+    "root": {
+      "ref": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+      "path": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+      "bytes": 43680,
+      "sha256": "f1d4d87f2bef24e36b5322a91cf16f0911786357ba842b85fb35a3358e0b77a9",
+      "git_blob": "8865b6ceba692bfafb5ebb2b1453839c3e497935"
+    },
+    "encode_piece_old_sha256": "54aeb2803ab92eedff0559a17a831baf9ae45e5ed388f0f1f789f321d207a749",
+    "encode_piece_root_sha256": "71937907e22751a1a7f3099a8290da133320b081839fd83ba3aaede1d5eaeb63",
+    "predicate_normalization_equals_entire_old_function": true,
+    "predicate_edits": [
+      {
+        "old": "start % width != 0",
+        "root": "!start.is_multiple_of(width)"
+      },
+      {
+        "old": "len % width != 0",
+        "root": "!len.is_multiple_of(width)"
+      }
+    ],
+    "meaning": "Equivalent divisibility rejection for the existing nonzero scalar dtype widths. No geometry/binding policy is relaxed.",
+    "other_root_changes": "Root adds ordinary forward module and extracts start_checked/quote_checked/read_owned_payload_v2 shared helpers; preserve these intentional Root changes. Do not replace this Root file with the older A3 whole file. This is correspondence scope, not a new review/test claim for ordinary forward."
+  },
+  "overlay_summary": {
+    "missing_root_paths": 67,
+    "differing_root_paths": 2,
+    "six_source_files_already_integrated": true,
+    "cargo_selected_target_tables_match": true,
+    "code_overlay_required_for_the_six_files": false,
+    "no_cherry_pick_or_overlay_performed": true,
+    "logs_are_committed_historical_inventory_names_only": true,
+    "groups": {
+      "other_a3_handoff": 10,
+      "historical_hello2": 12,
+      "loaded_panel_bridge": 7,
+      "loaded_stdio": 6,
+      "historical_process_r5": 27,
+      "source_local_audit": 7
+    },
+    "root_modified_paths_do_not_overwrite": [
+      "handoff/positive-court/A3-bounded-artifact-header-results.md",
+      "handoff/positive-court/A3-r1-evidence/.gitattributes"
+    ]
+  },
+  "cargo_auto_discovered_bridge_test": {
+    "path": "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs",
+    "explicit_test_table_present": false,
+    "package_autotests_false_present": false,
+    "source_line_1": "#![cfg(feature = \"positive-panel\")]",
+    "source_feature_chain": {
+      "positive-panel": [
+        "positive-contract"
+      ],
+      "positive-contract": [
+        "node"
+      ]
+    },
+    "scope": "Source-only declaration/discovery correspondence. No cargo metadata or test collection command executed."
+  }
+}

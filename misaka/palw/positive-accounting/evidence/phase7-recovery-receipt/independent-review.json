@@ -1,0 +1,67 @@
+{
+  "reviewed_execution_base_commit": "e4c1a08c5572872c173921687d91af87c796b1e1",
+  "scope": "Read-only review of private-store committed-case receipt recovery; no native restart/restore authority.",
+  "actions": {
+    "source_code_edited": false,
+    "builds_run": false,
+    "tests_rerun": false,
+    "git_commits_created": false,
+    "only_this_evidence_json_written": true
+  },
+  "findings": [],
+  "reviewed_invariants": [
+    "The getter reads self.case and requires all nine literal AdmissionIntent fields to match; unknown case and mismatched intent remain distinct errors.",
+    "The getter only clones the existing store owner Arc and returns admission_undo=None; it calls neither admission preparation/commit nor authority.now/admission.",
+    "Book, resource totals, journal head, epoch and initial supply remain unchanged, including after authority removal or admission expiry.",
+    "Recovered handles still pass the existing store-owner check and current-case lookup; foreign identical stores cannot consume them.",
+    "New admission remains subject to current authority and expiry. Existing recovered cases retain service/close deduplication and ordinary LIFO undo; a recovered handle does not obtain the original admission undo."
+  ],
+  "source_sha256": {
+    "misaka/palw/positive-accounting/src/credit.rs": "2e91f703e130356c61f68fbed5696bf15d20bffb0f7a9240f394ce7fedfd49d0",
+    "misaka/palw/positive-accounting/src/credit/consumers.rs": "a29f5cf1ac627cb1df45b89f2b9170ae576d30cbc9b192b1107def83a3f1e8b9",
+    "misaka/palw/positive-accounting/src/credit/tests.rs": "5969b6b12633707c8ac97fbec9cf24562871eec20a839217936b955d3db6e833",
+    "misaka/palw/positive-accounting/src/fees.rs": "fe7b3e59121b92a2fe406137b66a4f89ebb1ae48e85981e42e51d1c84fa312f7",
+    "misaka/palw/positive-accounting/src/fees/tests.rs": "9bef575130546715bcd2733914dd1e30eca9c32aa224efedc27e1a125c7a5db4",
+    "misaka/palw/positive-accounting/src/lib.rs": "5e9de0d6b3211b4129e24fc5c81f25214ed30ba7caf81a5dc55df72c26e23cb3",
+    "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs": "b8f523fb4d133fc11ab13ee359794966e86965854be4ad42590e17d61872b4a7",
+    "misaka/palw/positive-accounting/tests/independent_credit_graph.rs": "f19f5060af28cb1144912b031371c07ba13695f6cd9593e8160bb8a47bfb5e5e",
+    "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs": "d12221758134ada0cd64b4ffe74921a2d47f996202adee14ecc58644190fef84",
+    "misaka/palw/positive-contract/src/ports.rs": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4"
+  },
+  "execution_evidence": {
+    "leaf-all": {
+      "metadata": "leaf-all-result.json",
+      "metadata_sha256": "6bfd82dc7e86b40f17ff7cd6be066ca947ae4c03ba31a6a17c18c2ddd19a20db",
+      "raw_log": "leaf-all.log",
+      "raw_log_sha256": "649c8a2980082ac1a9930afde5007dad11ff2701ee82c52fe8ffecf4d9ebab06",
+      "exit_code": 0,
+      "all_recorded_source_hashes_match_current": true,
+      "source_unchanged_during_run": true,
+      "passed": 44,
+      "target_counts": {
+        "unit": 39,
+        "independent_consumers": 1,
+        "independent_graph": 2,
+        "independent_conservation": 2,
+        "doc": 0
+      },
+      "four_recovery_regressions_passed": true
+    },
+    "leaf-clippy": {
+      "metadata": "leaf-clippy-result.json",
+      "metadata_sha256": "367faa059664fd5424fb43f9bf68b4f98566bde4dbab98eb795b989b11dd0398",
+      "raw_log": "leaf-clippy.log",
+      "raw_log_sha256": "8111a9ad4fd10ec0afefa4672ecd9763c1bda57499a4f2c8bc64356958f37f93",
+      "exit_code": 0,
+      "all_recorded_source_hashes_match_current": true,
+      "source_unchanged_during_run": true,
+      "raw_warnings_found": false
+    }
+  },
+  "limits": [
+    "All test/Clippy executions were performed by root; this reviewer only inspected source, raw logs and source hashes.",
+    "A recovered private handle is not proof of native history, live UTXO funding, resource leases or restart/import validity.",
+    "A4 must validate its current root/generation, signed Result and committed view before binding its coordinator receipt; equality of a private intent does not establish native lineage or defeat rollback ABA.",
+    "The separately developed node A2 due-update adapter is outside this leaf recovery review."
+  ]
+}

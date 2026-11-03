@@ -1,0 +1,602 @@
+{
+  "schema": "misaka.strictClippy3.library-only-policy.v1",
+  "status": "POLICY_SOURCE_ONLY_NOT_EXECUTION",
+  "authorized_source": "50fe43e4c9ded609b1be9ab51125caa33ffffd8b",
+  "authorized_tree": "fe664df213a7f67b2fbe25bf95880f60e027769c",
+  "branch": "codex/positive-court-native-validation-f7bf",
+  "workspace": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet",
+  "target_dir": "/Users/wata/Downloads/MISAKA-testnet/target",
+  "source_roots": [
+    "consensus/core",
+    "consensus/src",
+    "misaka/palw",
+    "testing/reference",
+    "testing/positive-court-a1/inputs",
+    "consensus-vectors",
+    ".cargo"
+  ],
+  "native_config": {
+    "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+    "bytes": 956,
+    "sha256": "05498f7c7d1eb71c799ccda997f0411e920d52e02902a38faa2b61bdd23a484a"
+  },
+  "native_inputs": {
+    "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a": {
+      "bytes": 23048496,
+      "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+    },
+    "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/libsnappy.a": {
+      "bytes": 46784,
+      "sha256": "f45a4731a8dc330e5723b70dabb4be96167a71044fcdeb0ce4d78f837f9538e5"
+    },
+    "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/bindings.rs": {
+      "bytes": 208430,
+      "sha256": "cbe5eae46ca4209c1bfb020945fd86fb9a401015979112ae70933a2ac5621e62"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/manifest.json": {
+      "bytes": 4331,
+      "sha256": "1145fbcee0175990e58888c84532d5667e4d348b393bc4027124498f15a5ac86"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105673906,
+      "sha256": "d386892feecfd84ec42466bd64c641e5b3df61101a0470745752861205973acc"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/manifest.json": {
+      "bytes": 3180,
+      "sha256": "3c81871a059652135e48665c1e7a9e7bf193cd06d18cebae3dba0c2fc9745d70"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105673146,
+      "sha256": "08b00c4655a0439cb4917ea61cf540e9032e7784defce8eff2bc49b0c572ab98"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/manifest.json": {
+      "bytes": 3324,
+      "sha256": "898bf3254e97d61c82252732c3da88400c5585119f6c7f5f0898456226e5320c"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105692124,
+      "sha256": "91badc9ba258a2775bbe6c9eed13cb52384d85f301651221b3c4f20f6a86a467"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-82bb4-failure-preserved-20261102/manifest.json": {
+      "bytes": 3267,
+      "sha256": "e0c8b9838d3d73f83564f7f644c3ded6e5fb5e5f68dadec89fb7b9d4f01797a1"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-82bb4-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105693861,
+      "sha256": "2bf60d7a411d7c262aa4ccb1a3c81fc6e86db2ab20d988fa3a50d9dfe1382078"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-22a4-failure-preserved-20261102/manifest.json": {
+      "bytes": 3260,
+      "sha256": "405bd197b2bc3f238b0031f08519dcb4ede45fe7a9c7cffd4f29a94407ac7564"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-22a4-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105682844,
+      "sha256": "88301730d24296323623ba87edf1815342f2ac27924d879dd0d05c9753fdee3c"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-5745b-failure-preserved-20261102/manifest.json": {
+      "bytes": 3267,
+      "sha256": "f9034cfbbaf1c34482b29979bee273d3fd1253b1c0d26126af5db3c1c5fc7cae"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-5745b-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105666654,
+      "sha256": "39c55a349f7a83e967c6a97c0ee67847e0105751db5ce1e37e117181b435ecf1"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-e38f-failure-preserved-20261102/manifest-final.json": {
+      "bytes": 3557,
+      "sha256": "8f24b46c8bee3e2007ddbcb38d8fe767b23b52d9a03cbd031eb4a636453a962a"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-e38f-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105678328,
+      "sha256": "61d7f30e5ea94bece46c16e550a4cff2bda819ef7172de96f160d51475665b38"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-qualified-hf3-3a03-preserved-20261102/manifest.json": {
+      "bytes": 2287,
+      "sha256": "63792515484922120b9d2918db781fd0ed24bfc7f0a0e8f20d8499fc7750c421"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-qualified-hf3-3a03-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105690838,
+      "sha256": "6454c7fafc62ab5c749b364b724e634c9d44b23616cfc3845872af95d92d9434"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-3a55-preserved-20261102/manifest.json": {
+      "bytes": 11979,
+      "sha256": "437c9095ba5da6546bb2381bc0121a0e5ecd95ad35be55617907f05b58639d14"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-3a55-preserved-20261102/kaspa_consensus_core-e0bff1a98c19079f.gz": {
+      "bytes": 59066346,
+      "sha256": "92314ca8b547a414b0cc7e1bf8029836c13c52d5cce7a2814d10c5528740fe81"
+    }
+  },
+  "fixed_environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/Downloads/MISAKA-testnet/target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out",
+    "ROCKSDB_STATIC": "1",
+    "SNAPPY_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out",
+    "SNAPPY_STATIC": "1",
+    "ROCKSDB_COMPILE": "0",
+    "SNAPPY_COMPILE": "0",
+    "RAYON_NUM_THREADS": "2"
+  },
+  "commands": [
+    {
+      "id": "core_library",
+      "argv": [
+        "cargo",
+        "clippy",
+        "-p",
+        "kaspa-consensus-core",
+        "--offline",
+        "--locked",
+        "--lib",
+        "--no-deps",
+        "--message-format=json-render-diagnostics",
+        "--config",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "--",
+        "-Dwarnings"
+      ],
+      "actual_outcome": null,
+      "surface": "selected production library only; dependenciesnotlinted; cfg(test)fixtures/integrationtests/SDKCLI excluded"
+    },
+    {
+      "id": "exec_positive_panel_library",
+      "argv": [
+        "cargo",
+        "clippy",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--offline",
+        "--locked",
+        "--lib",
+        "--no-deps",
+        "--message-format=json-render-diagnostics",
+        "--features",
+        "positive-panel",
+        "--config",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "--",
+        "-Dwarnings"
+      ],
+      "actual_outcome": null,
+      "surface": "selected production library only; dependenciesnotlinted; cfg(test)fixtures/integrationtests/SDKCLI excluded"
+    },
+    {
+      "id": "sdk_library",
+      "argv": [
+        "cargo",
+        "clippy",
+        "-p",
+        "misaka-palw-sdk",
+        "--offline",
+        "--locked",
+        "--lib",
+        "--no-deps",
+        "--message-format=json-render-diagnostics",
+        "--config",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "--",
+        "-Dwarnings"
+      ],
+      "actual_outcome": null,
+      "surface": "selected production library only; dependenciesnotlinted; cfg(test)fixtures/integrationtests/SDKCLI excluded"
+    }
+  ],
+  "reviewed_command_provenance": {
+    "path": "/tmp/positive-a0-50fe-strict-Clippy3-deferred-plan-v1.json",
+    "sha256": "d324c3c8fe085028ae117dae0480de767dc1985fe3f428ab3591f05c7315df99"
+  },
+  "runtime_helpers": {
+    "path": "/tmp/positive-a0-next-validation-a6-mixed-v4-r6-runner.py",
+    "sha256": "ab0286b47ae577fce0396799504cdeb8c7c6e7dec6a155ba37b0cdf2de09f036",
+    "excluded_definitions": [
+      "main",
+      "group_commands"
+    ],
+    "included_definitions": 20
+  },
+  "helper_loader": {
+    "path": "/tmp/positive-a0-node-runtime-only-source-null-driver-v8.py",
+    "sha256": "d30d9ebfcb0d404dc2bc035a33611c396e0bbfaa0ff3039912c9c241480868c1"
+  },
+  "core54_plan": {
+    "path": "/tmp/positive-a0-core54-focused-50fe-v1-frozen.json",
+    "sha256": "71bdce4750220ba915fa1de9cfddb2a84c1c9d9c839b763d2e1fa5d0bab71a37"
+  },
+  "core54_driver": {
+    "path": "/tmp/positive-a0-core54-focused-50fe-v1-driver.py",
+    "sha256": "a998697ae02dadb2b1dc3b2a7dd7abc3f9898c84c634b08c354ade4392e8eab2"
+  },
+  "core54_specs": [
+    {
+      "id": "native_dispatch_and_full_mirror",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_tir_registration_dispatch_v1.rs"
+      ],
+      "filter": "palw_tir_registration_dispatch_v1::tests::",
+      "exact": false,
+      "names": [
+        "palw_tir_registration_dispatch_v1::tests::exact_profile_and_selected_fence_route_without_narrow_reinterpretation",
+        "palw_tir_registration_dispatch_v1::tests::legacy_errors_and_missing_runtime_mirror_keep_old_preflight_order",
+        "palw_tir_registration_dispatch_v1::tests::full_runtime_mirror_is_skipped_and_old_height_setter_clears_wide",
+        "palw_tir_registration_dispatch_v1::tests::params_reject_every_full_mirror_substitution"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "known_wide_legacy_attempts_refuse_before_writes_with_mesh_off_or_on",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_state_v2/tests.rs"
+      ],
+      "filter": "palw_state_v2::tests::known_wide_legacy_attempts_refuse_before_writes_with_mesh_off_or_on",
+      "exact": true,
+      "names": [
+        "palw_state_v2::tests::known_wide_legacy_attempts_refuse_before_writes_with_mesh_off_or_on"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "own_and_merged_legacy_wide_claim_generation_refuse_independently_of_mesh",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_state_v2/tests.rs"
+      ],
+      "filter": "palw_state_v2::tests::own_and_merged_legacy_wide_claim_generation_refuse_independently_of_mesh",
+      "exact": true,
+      "names": [
+        "palw_state_v2::tests::own_and_merged_legacy_wide_claim_generation_refuse_independently_of_mesh"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_state_v2/tests.rs"
+      ],
+      "filter": "palw_state_v2::tests::ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off",
+      "exact": true,
+      "names": [
+        "palw_state_v2::tests::ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "the_version_22_state_root_golden_vectors",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_state_v2/tests.rs"
+      ],
+      "filter": "palw_state_v2::tests::the_version_22_state_root_golden_vectors",
+      "exact": true,
+      "names": [
+        "palw_state_v2::tests::the_version_22_state_root_golden_vectors"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "carriage_round_trips_bit_for_bit_and_refuses_tampering",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_state_v2/tests.rs"
+      ],
+      "filter": "palw_state_v2::tests::carriage_round_trips_bit_for_bit_and_refuses_tampering",
+      "exact": true,
+      "names": [
+        "palw_state_v2::tests::carriage_round_trips_bit_for_bit_and_refuses_tampering"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_improve_eval_fold_v1.rs"
+      ],
+      "filter": "palw_state_v2::palw_improve_eval_fold_v1::tests::legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first",
+      "exact": true,
+      "names": [
+        "palw_state_v2::palw_improve_eval_fold_v1::tests::legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "row_profile_including_two_new_denials",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_tir_row_profile_v2/tests.rs"
+      ],
+      "filter": "palw_tir_row_profile_v2::tests::",
+      "exact": false,
+      "names": [
+        "palw_tir_row_profile_v2::tests::narrow_row_bytes_identity_and_profile_metadata_stay_unchanged",
+        "palw_tir_row_profile_v2::tests::wide_4097_vocab_dispatches_two_tiles_without_redefining_old_tiled_bit",
+        "palw_tir_row_profile_v2::tests::legacy_reader_guard_denies_wide_4097_without_reinterpreting_the_old_fact_bit",
+        "palw_tir_row_profile_v2::tests::legacy_reader_guard_does_not_authenticate_empty_unknown_or_synthetic_rows",
+        "palw_tir_row_profile_v2::tests::keys_artifacts_digests_and_every_program_derived_row_field_are_checked",
+        "palw_tir_row_profile_v2::tests::in_range_context_is_explicit_row_metadata_and_out_of_range_is_refused",
+        "palw_tir_row_profile_v2::tests::raw_caps_precede_hashing_or_decode_and_unknown_scheme_never_falls_back",
+        "palw_tir_row_profile_v2::tests::nonempty_dissection_metadata_is_compared_canonically_under_its_own_cap",
+        "palw_tir_row_profile_v2::tests::legacy_i8_i16_and_idx_outputs_keep_old_factory_bytes_and_four_byte_wire_lanes",
+        "palw_tir_row_profile_v2::tests::fixed_program_format_ceiling_bounds_actual_and_declared_bytes_independently",
+        "palw_tir_row_profile_v2::tests::rehashed_noncanonical_and_invalid_wide_programs_reach_structural_parser"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": null
+    },
+    {
+      "id": "full_relation_10_old_8_stream",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests.rs",
+        "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/mixed_state.rs",
+        "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs"
+      ],
+      "filter": "palw_positive_check_v2::full_relation",
+      "exact": false,
+      "names": [
+        "palw_positive_check_v2::full_relation::wide_v2::tests::actual_wide_source_relations_and_greedy_rows_complete_without_narrowing",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::signed_wrong_panel_intermediate_rejects_only_witness_not_miner_output",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::wrong_signed_miner_output_is_compared_only_after_all_wide_relations",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::corrupt_transport_or_wide_generated_pin_cannot_advance_coverage",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::insufficient_workspace_or_static_range_profile_never_becomes_miner_fault",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::coherently_committed_wrong_panel_greedy_id_never_refutes_the_signed_miner",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::wide_ids_pin_byte_unit_and_storage_bounds_include_the_new_root_and_ids",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::mixed_state::wide_stateful_windows_verify_fixed_history_and_partial_history_read_closure",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::mixed_state::dropped_corrupt_and_authenticated_stale_wide_checkpoint_cannot_advance_or_convict",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::mixed_state::signed_wrong_wide_checkpoint_is_panel_witness_rejection_only",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::old_record_bytes_match_stream_signature_and_every_wide_relation_is_required_before_eof_outcome",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::signed_bad_panel_claim_is_only_attributed_after_eof_and_never_turns_into_miner_output_fault",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::wrong_signed_miner_output_waits_for_complete_claims_source_coverage_and_eof_signature",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::post_begin_changed_unread_tape_with_local_mismatch_has_no_panel_or_miner_verdict_on_wrong_root",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::middle_disk_failure_or_invalid_signature_cannot_expose_a_computation_outcome",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::source_delivery_retry_uses_same_claim_without_re_read_or_coverage_advance",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::unknown_provider_owners_or_denied_mandatory_lease_refuse_before_any_stream_read",
+        "palw_positive_check_v2::full_relation::wide_v2::tests::stream_record::noncanonical_outer_or_claim_lengths_and_trailing_bytes_cannot_reach_an_outcome"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": "18 distinct tests: old10+stream8; no second overlapping stream runtime."
+    },
+    {
+      "id": "source_facade_8",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_native_resource_v1/source_local/tests.rs"
+      ],
+      "filter": "palw_native_resource_v1::source_local::tests::",
+      "exact": false,
+      "names": [
+        "palw_native_resource_v1::source_local::tests::checked_work_precharge_is_atomic_and_never_refunds",
+        "palw_native_resource_v1::source_local::tests::unknown_profile_refuses_before_any_scanner_charge",
+        "palw_native_resource_v1::source_local::tests::local_owner_is_independent_of_zero_global_limits_in_child",
+        "palw_native_resource_v1::source_local::tests::audited::same_bytes_narrow_wide_old_quote_and_four_reader_observations",
+        "palw_native_resource_v1::source_local::tests::audited::exact_limits_and_each_one_below_precede_canonical_decode",
+        "palw_native_resource_v1::source_local::tests::audited::failed_scans_observe_consumed_bytes_and_retries_spend_full_envelopes",
+        "palw_native_resource_v1::source_local::tests::audited::canonical_error_kinds_utf8_and_unvalidated_ranks_are_preserved",
+        "palw_native_resource_v1::source_local::tests::audited::bootstrap_branch_types_and_nf_text_are_finite_without_recharging_writers"
+      ],
+      "ignored": [
+        "palw_native_resource_v1::source_local::tests::global_flags_child_helper"
+      ],
+      "hf": false,
+      "model": null,
+      "scope_note": "Raw8+ignored child1 under supported build. Unknown-profile test returns under supported build and is negative-only, not successful Source decode. Child summary is nested and never added to outer8.",
+      "addition": "new",
+      "requires_supported_source_profile": true,
+      "nocapture": true
+    },
+    {
+      "id": "source_observation_ports_2",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_native_resource_v1/ledger_expansion.rs"
+      ],
+      "filter": "palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::",
+      "exact": false,
+      "names": [
+        "palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::failed_step_increments_and_refused_skip_observes_no_bytes",
+        "palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::observed_memory_port_keeps_legacy_error_kind_and_text"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": "Source-only selected new scope; not executed.",
+      "addition": "new",
+      "requires_supported_source_profile": true,
+      "nocapture": false
+    },
+    {
+      "id": "old_source_profile_3",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_native_resource_v1/ledger_expansion.rs"
+      ],
+      "filter": "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::",
+      "exact": false,
+      "names": [
+        "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_profile_real_program_and_exact_quota_lifetime",
+        "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_malformed_wire_rank_and_duplicate_carry_release_quota",
+        "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_repeated_liveness_edges_are_linear_and_reject_dead_node"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": "Source-only selected old scope; not executed.",
+      "addition": "old",
+      "requires_supported_source_profile": true,
+      "nocapture": false
+    },
+    {
+      "id": "old_vec_1",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_native_resource_v1/tir.rs"
+      ],
+      "filter": "palw_native_resource_v1::tir::tests::public_vec_capacity_envelope_keeps_literal_minimum_and_overflow_boundaries",
+      "exact": true,
+      "names": [
+        "palw_native_resource_v1::tir::tests::public_vec_capacity_envelope_keeps_literal_minimum_and_overflow_boundaries"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": "Two exact filters on same Core unit binary; no other tir module tests selected.",
+      "addition": "old",
+      "requires_supported_source_profile": true,
+      "nocapture": false
+    },
+    {
+      "id": "old_vec_2",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "sources": [
+        "consensus/core/src/palw_native_resource_v1/tir.rs"
+      ],
+      "filter": "palw_native_resource_v1::tir::tests::private_vec_request_preserves_capacity_byte_and_total_overflow_order",
+      "exact": true,
+      "names": [
+        "palw_native_resource_v1::tir::tests::private_vec_request_preserves_capacity_byte_and_total_overflow_order"
+      ],
+      "ignored": [],
+      "hf": false,
+      "model": null,
+      "scope_note": "Two exact filters on same Core unit binary; no other tir module tests selected.",
+      "addition": "old",
+      "requires_supported_source_profile": true,
+      "nocapture": false
+    }
+  ],
+  "required_supported_source_profile": {
+    "cfg": "misaka_source_local_audited_rust193_v1",
+    "environment_name": "MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1",
+    "environment_value": "rust-1.93.0-borsh-1.5.1-v1",
+    "unsupported_markers": [
+      "SOURCE_LOCAL_UNSUPPORTED_PROFILE",
+      "COMPILE_QUOTE_UNSUPPORTED_SOURCE_PROFILE",
+      "LOADED_WIDE_UNSUPPORTED_PROFILE",
+      "LOADED_PANEL_UNSUPPORTED_SOURCE_PROFILE",
+      "A3_LOADED_PROCESS_V2_UNSUPPORTED",
+      "A3_LOADED_PROCESS_V2_REFUSED"
+    ],
+    "negative_only_case": "palw_native_resource_v1::source_local::tests::unknown_profile_refuses_before_any_scanner_charge",
+    "negative_only_cases": [
+      "palw_native_resource_v1::source_local::tests::unknown_profile_refuses_before_any_scanner_charge",
+      "node::owned_artifact_params_v2::loaded::tests::unsupported_build_explicitly_refuses_without_startup_success_claim"
+    ]
+  },
+  "required_Native22_audit": {
+    "path": "/tmp/positive-a0-50fe-Native22-same-source-qualified-audit.json",
+    "sha256": "5703d450b46eb3c4d7168d3c3e4ab3d6a52812f5d3a8d04d97343424df33fef6"
+  },
+  "resource_policy": {
+    "mode": "CLIPPY3_LIBRARY_LINT_ONLY",
+    "initial_free_bytes": 1073741824,
+    "per_command_disk_floor_bytes": 536870912,
+    "jobs": 2,
+    "per_command_timeout_seconds": 1800,
+    "no_runtime_or_oldwholebatch_policy_change": true
+  },
+  "execution_source": null,
+  "execution_tree": null,
+  "source_before": null,
+  "core54_manifest": null,
+  "core_binary": null,
+  "protected_Node_binary": null,
+  "actual_lint_results": null,
+  "Core54_or_Native22_test_counts_not_reused_aslintresults": true,
+  "raw_parse_limits": {
+    "max_log_bytes": 67108864,
+    "max_line_bytes": 1048576,
+    "max_JSON_events": 100000,
+    "max_selected_artifacts": 128,
+    "max_compiler_messages": 10000
+  }
+}

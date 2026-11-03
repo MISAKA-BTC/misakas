@@ -12,6 +12,9 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
         let mut gc_content = 0u64;
         let mut gc_rows = 0u64;
         let mut gc_key_bytes = 0u64;
+        // Previous Positive key is fixed scratch; duplicates cannot collapse in BTreeMap decode.
+        let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
+        let mut previous_positive_len = 0usize;
         for _ in 0..count {
             let table = reader.byte()?;
             let key_bytes = reader.word()? as u64;
@@ -24,6 +27,16 @@ impl NativeWireScanV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             let mut key = [0u8; NATIVE_AUX_KEY_MAX_BYTES_V1 as usize];
             reader.step()?;
             reader.read_exact(&mut key[..key_bytes as usize])?;
+            if table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
+                let n = key_bytes as usize;
+                if n > previous_positive.len()
+                    || (previous_positive_len != 0 && key[..n] <= previous_positive[..previous_positive_len])
+                {
+                    return Err(wire::wire_bad("duplicate or noncanonical Positive aux key"));
+                }
+                previous_positive[..n].copy_from_slice(&key[..n]);
+                previous_positive_len = n;
+            }
             sum = sum.allocation(key_bytes.checked_mul(2).ok_or_else(|| wire::wire_bad("native aux key allocation overflow"))?, 1)?;
             if table == 144 && key_bytes == 65 && matches!(key[0], b'N' | b'B') {
                 gc_content = gc_content.checked_add(1).ok_or_else(|| wire::wire_bad("GC wire row count"))?;
@@ -1164,6 +1177,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         105 => return Err(wire::wire_bad("unallocated aux table 105 row namespace")),
         106 => return Err(wire::wire_bad("unallocated aux table 106 row namespace")),
         112 => return Err(wire::wire_bad("unallocated aux table 112 row namespace")),
+        136 if key_bytes == 65 && prefix == b'P' => super::positive_certification::scan_positive_certification_row_v2(k, frame)?,
         115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136 => {
             return Err(wire::wire_bad("unallocated aux row namespace"));
         }
@@ -1325,6 +1339,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         191 if key_bytes == 132 => crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2::scan_native_wire_v1(frame)?,
         191 => return Err(wire::wire_bad("unallocated finite provider fee V2 row namespace")),
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),
+        misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => super::positive_rows::scan_positive_aux_row_v1(key, frame)?,
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
@@ -1379,4 +1394,24 @@ fn any_aux_row_v1<R: Read>(
         }
     }
     best.ok_or_else(|| wire::wire_bad("no audited layout accepts this ambiguous aux row"))?.allocation(n, 1)
+}
+
+// Existing version-1 kernel reward hold. This adapter only checks its codec;
+// it grants no payout, certification, or native admission authority.
+impl NativeWireScanV1 for crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1 {
+    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        reader.step()?;
+        if reader.short()? != crate::palw_security_certification_v1::PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1 {
+            return Err(wire::wire_bad("unsupported kernel certified reward hold version"));
+        }
+        let mut sum = NativeWireShapeV1::default();
+        for _ in 0..5 {
+            sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        }
+        for _ in 0..2 {
+            sum = sum.merge(u64::scan_native_wire_v1(reader)?)?;
+        }
+        Ok(sum)
+    }
 }

@@ -14,6 +14,10 @@ use super::*;
 use kaspa_consensus_core::palw_rfc0018_v1::PalwRfc0018MirrorV1;
 use kaspa_consensus_core::palw_security_certification_v1::*;
 
+mod reopen;
+
+use std::{future::Future, pin::Pin};
+
 /// **TEST ONLY — not an approved policy.** m = 5 positions, k = 3 (a strict majority), no veto, one anchor span of delay, short
 /// windows, every Active genesis bond in the pool at once.
 pub(super) const TEST_ONLY_KERNEL_CERT_POLICY_V1: PalwSecurityCertificationPolicyV1 = PalwSecurityCertificationPolicyV1 {
@@ -42,6 +46,7 @@ pub(super) fn cert_panel_one_config() -> (Config, PalwConsensusParamsV2, Premine
 
 fn cert_config_over(base: (Config, PalwConsensusParamsV2, Premine, Premine)) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let (config, bundle, premine, floats) = base;
+    assert!(config.params.palw_positive_court_v2.is_none(), "this regression exercises legacy claims with Positive disabled");
     let mut params = config.params.clone();
     params.palw_independently_work_certified_v1 = Some(ForkActivation::new(0));
     let mut tmp = params.clone();
@@ -76,30 +81,47 @@ pub(super) fn hold(net: &Net, claim: &Digest) -> Option<PalwKernelCertifiedRewar
 
 /// The honest slice up to the kernel `Final`: returns the world and the claim. Asserts the NEGATIVE half of S3a': `Final` without
 /// SecurityCertified pays the producer nothing, the reward sits in the hold, the certification is committed and undecided.
-async fn honest_final_uncertified() -> (World, Digest) {
-    let (w, claim, seats) = honest_final_uncertified_seated(cert_config()).await;
-    assert_eq!(seats.len(), 3, "the colluding Panel covered it");
-    (w, claim)
+#[inline(never)]
+fn honest_final_uncertified() -> Pin<Box<dyn Future<Output = (World, Digest)>>> {
+    Box::pin(async move {
+        // Erased child futures keep scenario construction and nested polling in separate frames.
+        // A concrete Box alone lets LLVM inline the poll and retain large Config/Net temporaries.
+        let (w, claim, seats) = Box::pin(honest_final_uncertified_seated(cert_config())).await;
+        assert_eq!(seats.len(), 3, "the colluding Panel covered it");
+        (w, claim)
+    })
 }
 
 /// [`honest_final_uncertified`] with the cards of the Panel that covered it (the colluders, beside producer card 0).
-async fn honest_final_uncertified_seated(cfg: (Config, PalwConsensusParamsV2, Premine, Premine)) -> (World, Digest, Vec<usize>) {
-    kaspa_core::log::try_init_logger("warn");
-    let mut w = World::on(Net::over_cfg(cfg, TestConsensus::new)).await;
-    let (claim, seats) = claimed(&mut w, Mode::Panel, 0, false).await;
-    let floor = final_floor(&w, Mode::Panel, &claim.id);
-    let policy = w.policy();
-    let owed_poster = w.net.owed(1);
-    w.net.beat_to(floor).await;
-    assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&claim.id));
-    assert_eq!(w.net.owed(0), 0, "S3a' negative: a kernel Final without SecurityCertified pays the producer nothing");
-    assert_eq!(w.net.owed(1), owed_poster, "and returns nothing yet");
-    let h = hold(&w.net, &claim.id).expect("the Final reward is held for certification");
-    assert_eq!((h.version, h.amount), (PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1, Rules::final_reward(&policy)));
-    let row = cert_row(&w.net, &claim.id).expect("the certification is committed at Final");
-    assert!(row.outcome.is_none() && row.anchor.is_none(), "undecided and not drawn at the commit: {:?}", row.outcome);
-    assert_eq!(row.producer_bond, w.net.kid(0));
-    (w, claim.id, seats)
+#[inline(never)]
+fn honest_final_uncertified_seated(
+    cfg: (Config, PalwConsensusParamsV2, Premine, Premine),
+) -> Pin<Box<dyn Future<Output = (World, Digest, Vec<usize>)>>> {
+    Box::pin(async move {
+        kaspa_core::log::try_init_logger("warn");
+        Box::pin(honest_final_uncertified_on_net(Net::over_cfg(cfg, TestConsensus::new))).await
+    })
+}
+
+#[inline(never)]
+fn honest_final_uncertified_on_net(net: Net) -> Pin<Box<dyn Future<Output = (World, Digest, Vec<usize>)>>> {
+    Box::pin(async move {
+        let mut w = Box::pin(World::on(net)).await;
+        let (claim, seats) = claimed(&mut w, Mode::Panel, 0, false).await;
+        let floor = final_floor(&w, Mode::Panel, &claim.id);
+        let policy = w.policy();
+        let owed_poster = w.net.owed(1);
+        w.net.beat_to(floor).await;
+        assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }), "{:?}", w.net.claim_state(&claim.id));
+        assert_eq!(w.net.owed(0), 0, "S3a' negative: a kernel Final without SecurityCertified pays the producer nothing");
+        assert_eq!(w.net.owed(1), owed_poster, "and returns nothing yet");
+        let h = hold(&w.net, &claim.id).expect("the Final reward is held for certification");
+        assert_eq!((h.version, h.amount), (PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1, Rules::final_reward(&policy)));
+        let row = cert_row(&w.net, &claim.id).expect("the certification is committed at Final");
+        assert!(row.outcome.is_none() && row.anchor.is_none(), "undecided and not drawn at the commit: {:?}", row.outcome);
+        assert_eq!(row.producer_bond, w.net.kid(0));
+        (w, claim.id, seats)
+    })
 }
 
 /// Seed anchors from attempt blocks until the certification is drawn (a seed that did not exist at the commit).
@@ -172,63 +194,67 @@ pub(super) async fn attest(
 /// syncing the certified chain by IBD agrees on every row.
 #[tokio::test]
 async fn g14_cert_kernel_route_final_pays_only_after_the_drawn_verifiers_certify_and_a_reorg_cannot_carry_the_payment() {
-    s3a_prime_certified_reorg_ibd().await;
+    Box::pin(s3a_prime_certified_reorg_ibd()).await;
 }
 
-pub(super) async fn s3a_prime_certified_reorg_ibd() {
-    let (mut w, claim) = honest_final_uncertified().await;
-    let policy = w.policy();
-    let row = until_drawn(&mut w.net, &claim).await;
-    let cards = drawn_cards(&w.net, &row);
-    let k = TEST_ONLY_KERNEL_CERT_POLICY_V1.k as u32;
-    use misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced;
-    // Approvals one drawn bond at a time; the attestation that crosses k is the one a reorg removes.
-    let mut positive = 0u32;
-    let mut rest = cards.iter().copied();
-    let crossing = loop {
-        let (card, positions) = rest.next().expect("the drawn positions reach k");
-        if positive + positions >= k {
-            break card;
+#[inline(never)]
+pub(super) fn s3a_prime_certified_reorg_ibd() -> Pin<Box<dyn Future<Output = ()>>> {
+    Box::pin(async move {
+        let (mut w, claim) = Box::pin(honest_final_uncertified()).await;
+        let policy = w.policy();
+        let row = until_drawn(&mut w.net, &claim).await;
+        let cards = drawn_cards(&w.net, &row);
+        let k = TEST_ONLY_KERNEL_CERT_POLICY_V1.k as u32;
+        use misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced;
+        // Approvals one drawn bond at a time; the attestation that crosses k is the one a reorg removes.
+        let mut positive = 0u32;
+        let mut rest = cards.iter().copied();
+        let crossing = loop {
+            let (card, positions) = rest.next().expect("the drawn positions reach k");
+            if positive + positions >= k {
+                break card;
+            }
+            attest(&mut w.net, &claim, card, Reproduced).await;
+            positive += positions;
+        };
+        let fork = w.net.chain.sink();
+        let funding_at_fork = w.net.funding.clone();
+        attest(&mut w.net, &claim, crossing, Reproduced).await;
+        assert!(cert_row(&w.net, &claim).unwrap().positive_positions() >= k, "k positives on A");
+
+        // ---- reorg (inside the shipped shallow-tie window): a heavier branch B forked just before the crossing approval ----
+        let z = super::super::recovery::reorged_node(&w.net, fork, funding_at_fork).await;
+        let on_b = cert_row(&z, &claim).expect("the commit is below the fork");
+        assert!(on_b.positive_positions() < k, "B lacks the crossing approval: {}", on_b.positive_positions());
+        assert!(on_b.outcome.is_none(), "B is undecided: {:?}", on_b.outcome);
+        assert_eq!(z.owed(0), 0, "on B the kernel Final pays nothing: a reorg past an approval cannot carry a payment");
+        assert!(hold(&z, &claim).is_some(), "B still holds the reward");
+        drop(z);
+
+        for (card, _) in rest {
+            attest(&mut w.net, &claim, card, Reproduced).await;
         }
-        attest(&mut w.net, &claim, card, Reproduced).await;
-        positive += positions;
-    };
-    let fork = w.net.chain.sink();
-    let funding_at_fork = w.net.funding.clone();
-    attest(&mut w.net, &claim, crossing, Reproduced).await;
-    assert!(cert_row(&w.net, &claim).unwrap().positive_positions() >= k, "k positives on A");
+        let attested = cert_row(&w.net, &claim).unwrap();
+        assert_eq!(attested.positive_positions(), TEST_ONLY_KERNEL_CERT_POLICY_V1.m as u32, "every drawn position approved");
+        assert_eq!(w.net.owed(0), 0, "k positives alone do not pay: the decision waits for the prosecution window");
+        let (producer_before, _) =
+            until_decided(&mut w.net, &claim, TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50).await;
+        let decided = cert_row(&w.net, &claim).unwrap();
+        assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::Certified), "SecurityCertified");
+        assert!(palw_kernel_claim_security_certified_v1(&w.net.chain.tip_state().1, &claim));
+        assert!(decided.outcome.is_some_and(|(_, at)| at >= row.final_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa));
+        assert_eq!(
+            w.net.owed(0),
+            producer_before + Rules::final_reward(&policy),
+            "S3a' positive: certified, the producer is paid the held reward"
+        );
+        assert!(hold(&w.net, &claim).is_none(), "the hold is settled once: it can never pay again");
 
-    // ---- reorg (inside the shipped shallow-tie window): a heavier branch B forked just before the crossing approval ----
-    let z = super::super::recovery::reorged_node(&w.net, fork, funding_at_fork).await;
-    let on_b = cert_row(&z, &claim).expect("the commit is below the fork");
-    assert!(on_b.positive_positions() < k, "B lacks the crossing approval: {}", on_b.positive_positions());
-    assert!(on_b.outcome.is_none(), "B is undecided: {:?}", on_b.outcome);
-    assert_eq!(z.owed(0), 0, "on B the kernel Final pays nothing: a reorg past an approval cannot carry a payment");
-    assert!(hold(&z, &claim).is_some(), "B still holds the reward");
-    drop(z);
-
-    for (card, _) in rest {
-        attest(&mut w.net, &claim, card, Reproduced).await;
-    }
-    let attested = cert_row(&w.net, &claim).unwrap();
-    assert_eq!(attested.positive_positions(), TEST_ONLY_KERNEL_CERT_POLICY_V1.m as u32, "every drawn position approved");
-    assert_eq!(w.net.owed(0), 0, "k positives alone do not pay: the decision waits for the prosecution window");
-    let (producer_before, _) = until_decided(&mut w.net, &claim, TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50).await;
-    let decided = cert_row(&w.net, &claim).unwrap();
-    assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::Certified), "SecurityCertified");
-    assert!(palw_kernel_claim_security_certified_v1(&w.net.chain.tip_state().1, &claim));
-    assert!(decided.outcome.is_some_and(|(_, at)| at >= row.final_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa));
-    assert_eq!(
-        w.net.owed(0),
-        producer_before + Rules::final_reward(&policy),
-        "S3a' positive: certified, the producer is paid the held reward"
-    );
-    assert!(hold(&w.net, &claim).is_none(), "the hold is settled once: it can never pay again");
-
-    // ---- IBD: a cold node agrees on the certified chain ----
-    let node = ibd_node(&w.net).await;
-    agree(&w.net, &node, "the IBD node of the certified kernel claim");
-    assert!(palw_kernel_claim_security_certified_v1(&node.chain.tip_state().1, &claim), "the IBD node reads it certified");
+        // ---- IBD: a cold node agrees on the certified chain ----
+        let node = ibd_node(&w.net).await;
+        agree(&w.net, &node, "the IBD node of the certified kernel claim");
+        assert!(palw_kernel_claim_security_certified_v1(&node.chain.tip_state().1, &claim), "the IBD node reads it certified");
+    })
 }
 
 /// **S3a' approval shortfall and unavailability**: fewer than `k` drawn positions approve (one drawn bond reports the model
@@ -236,55 +262,58 @@ pub(super) async fn s3a_prime_certified_reorg_ibd() {
 /// paid, and the held reward returns whole to the poster. A Final the Panel's every seat covered does not substitute for the draw.
 #[tokio::test]
 async fn g14_cert_kernel_route_an_approval_shortfall_or_unavailable_verifiers_never_pay_the_final() {
-    s3a_prime_shortfall().await;
+    Box::pin(s3a_prime_shortfall()).await;
 }
 
-pub(super) async fn s3a_prime_shortfall() {
-    let (mut w, claim) = honest_final_uncertified().await;
-    let policy = w.policy();
-    let row = until_drawn(&mut w.net, &claim).await;
-    let cards = drawn_cards(&w.net, &row);
-    let k = TEST_ONLY_KERNEL_CERT_POLICY_V1.k as u32;
-    let mut positive = 0u32;
-    let mut silent_or_negative = 0usize;
-    for (i, (card, positions)) in cards.iter().enumerate() {
-        if i == 0 {
-            attest(&mut w.net, &claim, *card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Unavailable).await;
-            silent_or_negative += 1;
-        } else if positive + positions < k {
-            attest(&mut w.net, &claim, *card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced).await;
-            positive += positions;
-        } else {
-            silent_or_negative += 1;
+#[inline(never)]
+pub(super) fn s3a_prime_shortfall() -> Pin<Box<dyn Future<Output = ()>>> {
+    Box::pin(async move {
+        let (mut w, claim) = Box::pin(honest_final_uncertified()).await;
+        let policy = w.policy();
+        let row = until_drawn(&mut w.net, &claim).await;
+        let cards = drawn_cards(&w.net, &row);
+        let k = TEST_ONLY_KERNEL_CERT_POLICY_V1.k as u32;
+        let mut positive = 0u32;
+        let mut silent_or_negative = 0usize;
+        for (i, (card, positions)) in cards.iter().enumerate() {
+            if i == 0 {
+                attest(&mut w.net, &claim, *card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Unavailable).await;
+                silent_or_negative += 1;
+            } else if positive + positions < k {
+                attest(&mut w.net, &claim, *card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced).await;
+                positive += positions;
+            } else {
+                silent_or_negative += 1;
+            }
         }
-    }
-    assert!(silent_or_negative >= 1);
-    let short = cert_row(&w.net, &claim).unwrap();
-    assert_eq!(short.positive_positions(), positive);
-    assert!(short.positive_positions() < k, "short of k = {k}: {}", short.positive_positions());
-    let (producer_before, poster_before) = until_decided(
-        &mut w.net,
-        &claim,
-        TEST_ONLY_KERNEL_CERT_POLICY_V1.attest_window_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50,
-    )
-    .await;
-    let decided = cert_row(&w.net, &claim).unwrap();
-    assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::NotCertified), "{:?}", decided.outcome);
-    assert!(matches!(w.net.claim_state(&claim), ClaimStateV1::Final { .. }), "still a kernel Final");
-    assert!(decided.outcome.is_some_and(|(_, at)| at > short.deadline_daa), "decided only past the attestation deadline");
-    assert_eq!(w.net.owed(0), producer_before, "an uncertified Final never pays the producer");
-    let (burn, refund) = palw_kernel_uncertified_split_v1(Rules::final_reward(&policy));
-    assert_eq!(burn + refund, Rules::final_reward(&policy), "conservation: burn + refund = the held reward");
-    assert!(burn > 0, "the V3 burn share is taken");
-    assert_eq!(w.net.owed(1), poster_before + refund, "the poster gets the reward less the burn (PROVISIONAL split)");
-    assert!(hold(&w.net, &claim).is_none(), "settled once");
-    // Exactly once: later blocks never name the refund (or any producer payment) again.
-    for _ in 0..5 {
-        let (p0, p1) = (w.net.owed(0), w.net.owed(1));
-        let next = w.net.daa() + 1;
-        w.net.beat_to(next).await;
-        assert!(w.net.owed(0) <= p0 && w.net.owed(1) <= p1, "no second settlement of the held reward");
-    }
+        assert!(silent_or_negative >= 1);
+        let short = cert_row(&w.net, &claim).unwrap();
+        assert_eq!(short.positive_positions(), positive);
+        assert!(short.positive_positions() < k, "short of k = {k}: {}", short.positive_positions());
+        let (producer_before, poster_before) = until_decided(
+            &mut w.net,
+            &claim,
+            TEST_ONLY_KERNEL_CERT_POLICY_V1.attest_window_daa + TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50,
+        )
+        .await;
+        let decided = cert_row(&w.net, &claim).unwrap();
+        assert_eq!(decided.outcome.map(|(o, _)| o), Some(PalwCertificationOutcomeV1::NotCertified), "{:?}", decided.outcome);
+        assert!(matches!(w.net.claim_state(&claim), ClaimStateV1::Final { .. }), "still a kernel Final");
+        assert!(decided.outcome.is_some_and(|(_, at)| at > short.deadline_daa), "decided only past the attestation deadline");
+        assert_eq!(w.net.owed(0), producer_before, "an uncertified Final never pays the producer");
+        let (burn, refund) = palw_kernel_uncertified_split_v1(Rules::final_reward(&policy));
+        assert_eq!(burn + refund, Rules::final_reward(&policy), "conservation: burn + refund = the held reward");
+        assert!(burn > 0, "the V3 burn share is taken");
+        assert_eq!(w.net.owed(1), poster_before + refund, "the poster gets the reward less the burn (PROVISIONAL split)");
+        assert!(hold(&w.net, &claim).is_none(), "settled once");
+        // Exactly once: later blocks never name the refund (or any producer payment) again.
+        for _ in 0..5 {
+            let (p0, p1) = (w.net.owed(0), w.net.owed(1));
+            let next = w.net.daa() + 1;
+            w.net.beat_to(next).await;
+            assert!(w.net.owed(0) <= p0 && w.net.owed(1) <= p1, "no second settlement of the held reward");
+        }
+    })
 }
 
 /// **T-adversarial (C), user-approved 2026-10-27: Gate C when ONLY the colluders hold the model.** The producer and every Panel seat

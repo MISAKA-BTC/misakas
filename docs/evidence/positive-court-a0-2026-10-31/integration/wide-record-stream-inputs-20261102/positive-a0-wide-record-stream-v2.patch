@@ -1,0 +1,1389 @@
+diff --git a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/stream.rs b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/stream.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/stream.rs
+@@ -0,0 +1,508 @@
++//! Same signed record bytes, bounded sequential claims, SAME Node evaluator.
++//! No new codec/domain/authority. Before EOF/hash/signature completion this API
++//! exposes no computation verdict, even if an unauthenticated claim disagrees.
++use super::*;
++use std::io::{Cursor, Read};
++/// Unknown provider retention/scratch is refused. Declarations are operational
++/// bounds, not authentication or permission; the caller owns upstream providers.
++/// A provider must include its complete coexisting retained buffers and maximum
++/// scratch, including hidden aliases; `external_retained_bytes` covers separate
++/// preparation/model/material/export owners not transferred into this reader.
++/// Cursor<&[u8]> quotes only its view: its backing allocation remains external.
++/// File quotes the Rust handle, not kernel cache/disk capacity; that reservation
++/// and its persistence/retention contract remain the external disk owner's duty.
++pub trait ClaimsReaderV2: Read {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        None
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        None
++    }
++}
++impl<R: ClaimsReaderV2 + ?Sized> ClaimsReaderV2 for &mut R {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        R::retained_request_bytes(&**self)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        R::scratch_request_bytes(&**self)
++    }
++}
++impl ClaimsReaderV2 for std::fs::File {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        Some(size_of::<Self>() as u64)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++impl ClaimsReaderV2 for Cursor<Vec<u8>> {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        (size_of::<Self>() as u64).checked_add(self.get_ref().capacity() as u64)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++impl ClaimsReaderV2 for Cursor<&[u8]> {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        Some(size_of::<Self>() as u64)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++#[derive(Clone, Copy, Debug)]
++pub struct StreamRecordLimitsV2 {
++    pub max_record_bytes: u64,
++    pub max_claim_values: u32,
++    pub max_read_bytes: u64,
++    pub max_read_calls: u64,
++    pub max_extra_heap_bytes: u64,
++    pub metadata_auth_bytes: u64,
++    pub signature_workspace_bytes: u64,
++    /// All independent aliases/provider/metadata/preparation owners, pre-summed.
++    /// A same-name field or a nonzero number is not an actual reservation receipt.
++    pub external_retained_bytes: u64,
++}
++pub type StreamRecordLeaseV2 = Box<dyn Send + Sync>;
++pub type StreamRecordReserverV2<'a> = dyn Fn(u64) -> Result<StreamRecordLeaseV2, FullRelationError> + 'a;
++#[derive(Default, Clone, Copy, Debug, PartialEq, Eq)]
++pub struct StreamReadMeterV2 {
++    pub read_bytes: u64,
++    pub read_calls: u64,
++    pub geometry_visits: u64,
++    pub relations_read: u64,
++}
++/// Producer-owned metadata/digest, not a proof of numerical correctness. No
++/// Deserialize, saved progress, native receipt, or reusable acceptance capability.
++pub struct StreamPanelRecordV2 {
++    binding: PalwTirStepBindingV1,
++    generated: Vec<u32>,
++    author: PrincipalId,
++    commitment: Digest,
++    domains: PrototypeDomains,
++    _lease: StreamRecordLeaseV2,
++}
++impl StreamPanelRecordV2 {
++    pub fn signing_digest(&self) -> Digest {
++        self.commitment
++    }
++    pub fn signature_context(&self) -> &[u8] {
++        &self.domains.signature_context
++    }
++    pub fn binding(&self) -> &PalwTirStepBindingV1 {
++        &self.binding
++    }
++    pub fn generated(&self) -> &[u32] {
++        &self.generated
++    }
++    pub fn author(&self) -> PrincipalId {
++        self.author
++    }
++}
++struct StreamDataV2 {
++    binding: PalwTirStepBindingV1,
++    generated: Vec<u32>,
++    index: u64,
++    current: Option<Vec<i128>>,
++}
++impl super::record_access_sealed::Sealed for StreamDataV2 {}
++impl WideRecordAccessV2 for StreamDataV2 {
++    fn binding(&self) -> &PalwTirStepBindingV1 {
++        &self.binding
++    }
++    fn generated(&self) -> &[u32] {
++        &self.generated
++    }
++    fn claim(&self, index: u64) -> Option<&[i128]> {
++        (index == self.index).then_some(())?;
++        self.current.as_deref()
++    }
++}
++struct ClaimStreamV2<R> {
++    reader: R,
++    writer: HashWriter,
++    limits: StreamRecordLimitsV2,
++    meter: StreamReadMeterV2,
++    count: u64,
++    failed: bool,
++}
++impl<R: ClaimsReaderV2> ClaimStreamV2<R> {
++    fn read(&mut self, bytes: &mut [u8]) -> Result<(), FullRelationError> {
++        if self.failed {
++            return Err(FullRelationError::Unverified);
++        }
++        let mut filled = 0;
++        while filled < bytes.len() {
++            self.meter.read_calls = reserve(self.meter.read_calls, 1, self.limits.max_read_calls)?;
++            self.meter.read_bytes = reserve(self.meter.read_bytes, (bytes.len() - filled) as u64, self.limits.max_read_bytes)?;
++            match self.reader.read(&mut bytes[filled..]) {
++                Ok(0) => {
++                    self.failed = true;
++                    return Err(FullRelationError::Delivery);
++                }
++                Ok(n) if n <= bytes.len() - filled => {
++                    self.writer.write_all(&bytes[filled..filled + n]).map_err(|_| FullRelationError::Budget)?;
++                    filled += n;
++                }
++                Ok(_) => {
++                    self.failed = true;
++                    return Err(FullRelationError::Delivery);
++                }
++                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
++                Err(_) => {
++                    self.failed = true;
++                    return Err(FullRelationError::Delivery);
++                }
++            }
++        }
++        Ok(())
++    }
++    fn start_count(&mut self, expected: u64) -> Result<(), FullRelationError> {
++        let mut b = [0; 4];
++        self.read(&mut b)?;
++        if u64::from(u32::from_le_bytes(b)) != expected {
++            return Err(FullRelationError::Delivery);
++        }
++        self.count = expected;
++        Ok(())
++    }
++    fn next(&mut self, prep: &FullRelationPreparationV2) -> Result<Vec<i128>, FullRelationError> {
++        if self.meter.relations_read >= self.count {
++            return Err(FullRelationError::Incomplete);
++        }
++        // One prepaid R*G scan from the unchanged 2*R*G base allowance is
++        // consumed incrementally here, rather than by resident shape validation.
++        // Each relation can be read only once; source retries keep that claim.
++        let prepaid = mul(self.count, prep.plan.summary().geometry_visit_bound)?;
++        self.meter.geometry_visits = reserve(self.meter.geometry_visits, prep.plan.summary().geometry_visit_bound, prepaid)?;
++        let r = prep.plan.relation_at(self.meter.relations_read).ok_or(FullRelationError::Binding)?;
++        let (dtype, n) = match r.kind {
++            ExpandedRelationKind::Legacy(l) => (l.dtype, l.value_count),
++            ExpandedRelationKind::RecomputeNode { dtype, lane_count, .. } => (dtype, lane_count),
++        };
++        let mut b = [0; 4];
++        self.read(&mut b)?;
++        if u32::from_le_bytes(b) != n || n == 0 || n > self.limits.max_claim_values {
++            return Err(FullRelationError::Delivery);
++        }
++        let mut out = Vec::new();
++        out.try_reserve_exact(n as usize).map_err(|_| FullRelationError::Budget)?;
++        if out.capacity() != n as usize {
++            return Err(FullRelationError::Budget);
++        }
++        let mut left = n as usize;
++        let mut chunk = [0; 4096];
++        while left > 0 {
++            let take = left.min(chunk.len() / 16);
++            self.read(&mut chunk[..take * 16])?;
++            for b in chunk[..take * 16].chunks_exact(16) {
++                let v = i128::from_le_bytes(b.try_into().map_err(|_| FullRelationError::Delivery)?);
++                if !dtype.contains(v) {
++                    return Err(FullRelationError::Delivery);
++                }
++                out.push(v)
++            }
++            left -= take;
++        }
++        self.meter.relations_read += 1;
++        Ok(out)
++    }
++    fn eof(&mut self) -> Result<(), FullRelationError> {
++        if self.failed || self.meter.relations_read != self.count {
++            return Err(FullRelationError::Incomplete);
++        }
++        self.meter.read_calls = reserve(self.meter.read_calls, 1, self.limits.max_read_calls)?;
++        self.meter.read_bytes = reserve(self.meter.read_bytes, 1, self.limits.max_read_bytes)?;
++        let mut b = [0];
++        match self.reader.read(&mut b) {
++            Ok(0) => Ok(()),
++            _ => {
++                self.failed = true;
++                Err(FullRelationError::Delivery)
++            }
++        }
++    }
++    fn digest(&self) -> Digest {
++        Digest(self.writer.state.clone().finalize().as_bytes().try_into().expect("64"))
++    }
++}
++fn acquire<R: ClaimsReaderV2>(
++    prep: &FullRelationPreparationV2,
++    binding: &PalwTirStepBindingV1,
++    generated: &Vec<u32>,
++    reader: &R,
++    l: StreamRecordLimitsV2,
++    reserver: &StreamRecordReserverV2<'_>,
++) -> Result<StreamRecordLeaseV2, FullRelationError> {
++    if binding.class.program.len() > misaka_palw_tir::program::MAX_PROGRAM_BYTES
++        || binding.class.layout.commit_tiles.len()
++            > misaka_palw_tir::program::MAX_BLOCKS * misaka_palw_tir::program::MAX_NODES_PER_BLOCK
++        || binding.class.layout.state_tiles.len() > misaka_palw_tir::program::MAX_STATES
++        || binding.job_context.network_id.len() > crate::palw_v2::PALW_V2_MAX_NETWORK_ID_BYTES
++    {
++        return Err(FullRelationError::Binding);
++    }
++    u32::try_from(prep.plan.summary().relations).map_err(|_| FullRelationError::Budget)?;
++    if [
++        l.max_record_bytes,
++        u64::from(l.max_claim_values),
++        l.max_read_bytes,
++        l.max_read_calls,
++        l.max_extra_heap_bytes,
++        l.metadata_auth_bytes,
++        l.signature_workspace_bytes,
++    ]
++    .contains(&0)
++        || l.max_record_bytes > prep.limits.max_record_bytes
++        || u64::from(l.max_claim_values) > prep.limits.plan.max_target_lanes
++    {
++        return Err(FullRelationError::Budget);
++    }
++    let reader_bytes = reader.retained_request_bytes().ok_or(FullRelationError::Budget)?;
++    let scratch = reader.scratch_request_bytes().ok_or(FullRelationError::Budget)?;
++    let p = prep.plan.step_space().program();
++    let layers = (p.schedule.layers.len() as u64).checked_add(1).ok_or(FullRelationError::Budget)?;
++    let floor = [
++        mul(prep.class.program.len() as u64, 512)?,
++        mul(p.params.len() as u64, 1024u64.checked_add(mul(layers, 32)?).ok_or(FullRelationError::Budget)?)?,
++        mul(p.states.len() as u64, 1024u64.checked_add(mul(layers, 256)?).ok_or(FullRelationError::Budget)?)?,
++        65536,
++    ]
++    .into_iter()
++    .try_fold(0u64, |a, b| a.checked_add(b).ok_or(FullRelationError::Budget))?;
++    if l.metadata_auth_bytes < floor {
++        return Err(FullRelationError::Budget);
++    }
++    let empty = Vec::new();
++    let header = record_heap(binding, generated, &empty)?;
++    let extra = [
++        header,
++        size_of::<R>() as u64,
++        reader_bytes,
++        scratch,
++        mul(u64::from(l.max_claim_values), 16)?,
++        size_of::<HashWriter>() as u64,
++        4096,
++        (PUBKEY_BYTES + SIGNATURE_BYTES) as u64,
++        l.metadata_auth_bytes,
++        l.signature_workspace_bytes,
++        l.external_retained_bytes,
++    ]
++    .into_iter()
++    .try_fold(0u64, |a, b| a.checked_add(b).ok_or(FullRelationError::Budget))?;
++    if extra > l.max_extra_heap_bytes
++        || header.checked_add(mul(u64::from(l.max_claim_values), 16)?).is_none_or(|n| n > prep.limits.max_record_heap_bytes)
++    {
++        return Err(FullRelationError::Budget);
++    }
++    reserver(extra)
++}
++impl FullRelationPreparationV2 {
++    /// Hash/shape-check the producer's claims once, retaining only header/IDs
++    /// and one tile. This does not execute a model or certify its arithmetic.
++    /// Owned binding/generated inputs already exist at entry: the caller must
++    /// reserve every export/copy BEFORE creating it and keep that owner until
++    /// this factory has acquired its mandatory transferred-record lease.
++    /// Independently retained preparation/provider/material/aliases stay under
++    /// their external owner, including the stated signature implementation's
++    /// actual scratch bound. A nonzero declaration alone is not qualification.
++    #[allow(clippy::too_many_arguments)]
++    pub fn freeze_stream_record<R: ClaimsReaderV2>(
++        &self,
++        binding: PalwTirStepBindingV1,
++        generated: Vec<u32>,
++        author: PrincipalId,
++        reader: &mut R,
++        limits: StreamRecordLimitsV2,
++        reserver: &StreamRecordReserverV2<'_>,
++    ) -> Result<StreamPanelRecordV2, FullRelationError> {
++        let lease = acquire(self, &binding, &generated, &reader, limits, reserver)?;
++        self.validate_binding(&binding, &generated)?;
++        let policy = self.limits.words();
++        let writer = record_hash_prefix(
++            self.result.id(),
++            author,
++            &binding,
++            &generated,
++            &policy,
++            self.form,
++            &self.domains,
++            limits.max_record_bytes,
++        )?;
++        let mut stream = ClaimStreamV2 { reader, writer, limits, meter: StreamReadMeterV2::default(), count: 0, failed: false };
++        stream.start_count(self.plan.summary().relations)?;
++        while stream.meter.relations_read < stream.count {
++            drop(stream.next(self)?)
++        }
++        stream.eof()?;
++        Ok(StreamPanelRecordV2 {
++            binding,
++            generated,
++            author,
++            commitment: stream.digest(),
++            domains: self.domains.clone(),
++            _lease: lease,
++        })
++    }
++    /// Receiver boundary for existing literal signed record metadata + claims
++    /// bytes. No producer marker or saved acceptance flag is trusted. The Node
++    /// reads claims ONCE and cannot emit a verdict before exact EOF/hash/signature.
++    /// Input decoding, metadata copies and independent preparation/material
++    /// lifetimes remain externally reserved; only transferred record/read scratch
++    /// is acquired here. Keep all coexisting owners accounted during transfer.
++    #[allow(clippy::too_many_arguments)]
++    pub fn begin_stream<R: ClaimsReaderV2>(
++        self,
++        binding: PalwTirStepBindingV1,
++        generated: Vec<u32>,
++        author: PrincipalId,
++        commitment: Digest,
++        reader: R,
++        key: [u8; PUBKEY_BYTES],
++        signature: [u8; SIGNATURE_BYTES],
++        limits: StreamRecordLimitsV2,
++        reserver: &StreamRecordReserverV2<'_>,
++    ) -> Result<StreamFullRelationCheckerV2<R>, FullRelationError> {
++        let lease = acquire(&self, &binding, &generated, &reader, limits, reserver)?;
++        self.validate_binding(&binding, &generated)?;
++        if principal(&key) != author {
++            return Err(FullRelationError::Signature);
++        }
++        let writer = record_hash_prefix(
++            self.result.id(),
++            author,
++            &binding,
++            &generated,
++            &self.limits.words(),
++            self.form,
++            &self.domains,
++            limits.max_record_bytes,
++        )?;
++        // Same 2*R*G upfront allowance as resident begin: it includes this
++        // reader's single incremental shape scan. Shared submit charges each
++        // numerical relation (including unsuccessful delivery) separately.
++        let geometry = mul(mul(self.plan.summary().relations, 2)?, self.plan.summary().geometry_visit_bound)?;
++        let mut stream = ClaimStreamV2 { reader, writer, limits, meter: StreamReadMeterV2::default(), count: 0, failed: false };
++        stream.start_count(self.plan.summary().relations)?;
++        Ok(StreamFullRelationCheckerV2 {
++            inner: FullRelationCheckerV2 {
++                prepared: self,
++                record: StreamDataV2 { binding, generated, index: 0, current: None },
++                progress: FullRelationProgress { charged_geometry_visits: geometry, ..Default::default() },
++                best: None,
++                next_lane: 0,
++            },
++            stream,
++            commitment,
++            key,
++            signature,
++            pending_mismatch: false,
++            closed: false,
++            _lease: lease,
++        })
++    }
++}
++/// This control signal conveys no culprit or outcome before authentication.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum StreamSubmitV2 {
++    Continue,
++    NeedEof,
++}
++pub struct StreamFullRelationCheckerV2<R: ClaimsReaderV2> {
++    inner: FullRelationCheckerV2<StreamDataV2>,
++    stream: ClaimStreamV2<R>,
++    commitment: Digest,
++    key: [u8; PUBKEY_BYTES],
++    signature: [u8; SIGNATURE_BYTES],
++    pending_mismatch: bool,
++    closed: bool,
++    _lease: StreamRecordLeaseV2,
++}
++impl<R: ClaimsReaderV2> StreamFullRelationCheckerV2<R> {
++    pub fn preparation(&self) -> &FullRelationPreparationV2 {
++        &self.inner.prepared
++    }
++    /// Progress is local coverage only, never a signed/complete computation fact.
++    pub fn checked_relations(&self) -> u64 {
++        self.inner.progress.next_relation
++    }
++    pub fn checked_legacy_frontier(&self) -> u64 {
++        self.inner.progress.legacy_frontier
++    }
++    pub fn read_meter(&self) -> StreamReadMeterV2 {
++        self.stream.meter
++    }
++    pub fn submit(
++        &mut self,
++        material: &TirSourceOnlyMaterialV2<'_>,
++        target: Option<StepTargetV2<'_>>,
++    ) -> Result<StreamSubmitV2, FullRelationError> {
++        if self.closed {
++            return Err(FullRelationError::Closed);
++        }
++        if self.pending_mismatch {
++            return Ok(StreamSubmitV2::NeedEof);
++        }
++        if self.inner.record.current.is_none() {
++            match self.stream.next(&self.inner.prepared) {
++                Ok(claim) => {
++                    self.inner.record.index = self.inner.progress.next_relation;
++                    self.inner.record.current = Some(claim)
++                }
++                Err(e) => {
++                    self.closed = true;
++                    return Err(e);
++                }
++            }
++        }
++        match self.inner.submit(material, target) {
++            Ok(()) => {
++                self.inner.record.current = None;
++                Ok(if self.inner.progress.next_relation == self.stream.count {
++                    StreamSubmitV2::NeedEof
++                } else {
++                    StreamSubmitV2::Continue
++                })
++            }
++            Err(FullRelationError::PanelMismatch) => {
++                self.pending_mismatch = true;
++                self.inner.record.current = None;
++                Ok(StreamSubmitV2::NeedEof)
++            }
++            Err(e @ FullRelationError::Delivery) => Err(e),
++            Err(e) => {
++                self.closed = true;
++                Err(e)
++            }
++        }
++    }
++    /// Authenticate the SAME observed bytes before exposing ANY outcome.
++    /// A changed tape/short IO/wrong root never attributes a Miner error. A
++    /// pending local mismatch may reject only the authenticated Panel witness.
++    pub fn finish(&mut self) -> Result<CheckOutcome, FullRelationError> {
++        if self.closed {
++            return Err(FullRelationError::Closed);
++        }
++        if !self.pending_mismatch && self.inner.progress.next_relation != self.stream.count {
++            return Err(FullRelationError::Incomplete);
++        }
++        self.closed = true;
++        if self.pending_mismatch {
++            while self.stream.meter.relations_read < self.stream.count {
++                drop(self.stream.next(&self.inner.prepared)?);
++            }
++        }
++        self.stream.eof()?;
++        if self.stream.digest() != self.commitment {
++            return Err(FullRelationError::Delivery);
++        }
++        if !verify_signature(&self.key, self.commitment, &self.signature, &self.inner.prepared.domains.signature_context) {
++            return Err(FullRelationError::Signature);
++        }
++        if self.pending_mismatch {
++            return Ok(CheckOutcome::WitnessRejected);
++        }
++        self.inner.finish()
++    }
++}
+diff --git a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/stream_record.rs
+@@ -0,0 +1,329 @@
++//! Bounded compatibility vectors only. Production stream path never creates
++//! Vec<Vec<i128>>; this test uses it to pin the pre-existing signed bytes.
++use super::*;
++use crate::palw_positive_check_v2::full_relation::wide_v2::stream::*;
++use std::{
++    cell::RefCell,
++    io::{Cursor, Read},
++    rc::Rc,
++};
++fn caps() -> StreamRecordLimitsV2 {
++    StreamRecordLimitsV2 {
++        max_record_bytes: 1 << 20,
++        max_claim_values: 64,
++        max_read_bytes: 1 << 24,
++        max_read_calls: 1 << 20,
++        max_extra_heap_bytes: 1 << 30,
++        metadata_auth_bytes: 1 << 27,
++        signature_workspace_bytes: 1 << 20,
++        external_retained_bytes: 1 << 20,
++    }
++}
++fn reserve(bytes: u64) -> Result<StreamRecordLeaseV2, FullRelationError> {
++    assert!(bytes > 0);
++    Ok(Box::new(()))
++}
++fn signed(f: &Fixture, s: &Signed, claims: &[Vec<i128>]) -> (StreamPanelRecordV2, Vec<u8>, [u8; PUBKEY_BYTES], [u8; SIGNATURE_BYTES]) {
++    let prep = s.prep(f, limits());
++    let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([94; 32]);
++    let author = principal(panel.verification_key.as_ref());
++    let bytes = borsh::to_vec(claims).unwrap();
++    let mut reader = Cursor::new(bytes.clone());
++    let record = prep.freeze_stream_record(f.binding.clone(), f.generated.clone(), author, &mut reader, caps(), &reserve).unwrap();
++    let original_tuple = (
++        &s.result.id(),
++        &author,
++        &f.binding,
++        &f.generated,
++        &limits().words(),
++        &PalwPromptIdsFormV1::Flat,
++        &b"fixture-wide-exact-sign".as_slice(),
++        &claims,
++    );
++    let legacy_bytes = borsh::to_vec(&original_tuple).unwrap();
++    let digest = Digest(
++        blake2b_simd::Params::new().hash_length(64).key(b"fixture-wide-exact").hash(&legacy_bytes).as_bytes().try_into().unwrap(),
++    );
++    assert_eq!(record.signing_digest(), digest);
++    let resident = prep.freeze_record(f.binding.clone(), f.generated.clone(), author, claims.to_vec()).unwrap();
++    assert_eq!(record.signing_digest(), resident.signing_digest());
++    let key = *panel.verification_key.as_ref();
++    let sig = *libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, &record.signing_digest().0, record.signature_context(), [0; 32])
++        .unwrap()
++        .as_ref();
++    (record, bytes, key, sig)
++}
++fn begin<R: ClaimsReaderV2>(
++    f: &Fixture,
++    s: &Signed,
++    record: &StreamPanelRecordV2,
++    reader: R,
++    key: [u8; PUBKEY_BYTES],
++    sig: [u8; SIGNATURE_BYTES],
++) -> StreamFullRelationCheckerV2<R> {
++    s.prep(f, limits())
++        .begin_stream(
++            record.binding().clone(),
++            record.generated().to_vec(),
++            record.author(),
++            record.signing_digest(),
++            reader,
++            key,
++            sig,
++            caps(),
++            &reserve,
++        )
++        .unwrap()
++}
++fn submit<R: ClaimsReaderV2>(f: &Fixture, node: &mut StreamFullRelationCheckerV2<R>) -> Result<StreamSubmitV2, FullRelationError> {
++    let r = node.preparation().plan().relation_at(node.checked_relations()).unwrap();
++    let m = material(f, &r);
++    let t = target(f, &r);
++    node.submit(&m.view(), t.as_ref().map(Target::view))
++}
++#[test]
++fn old_record_bytes_match_stream_signature_and_every_wide_relation_is_required_before_eof_outcome() {
++    let f = fixture(false);
++    let s = Signed::new(&f, false);
++    let values = claims(&f, s.prep(&f, limits()).plan());
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let mut node = begin(&f, &s, &record, Cursor::new(bytes), key, sig);
++    assert_eq!(node.finish(), Err(FullRelationError::Incomplete));
++    let total = node.preparation().plan().summary().relations;
++    for i in 0..total {
++        let result = submit(&f, &mut node).unwrap();
++        assert_eq!(node.checked_relations(), i + 1);
++        if i + 1 < total {
++            assert_eq!(result, StreamSubmitV2::Continue);
++            assert_eq!(node.finish(), Err(FullRelationError::Incomplete));
++        } else {
++            assert_eq!(result, StreamSubmitV2::NeedEof);
++        }
++    }
++    assert_eq!(node.checked_legacy_frontier(), f.binding.step_leaf_count);
++    assert_eq!(node.finish().unwrap(), CheckOutcome::Matched);
++    assert_eq!(node.finish(), Err(FullRelationError::Closed));
++}
++#[test]
++fn signed_bad_panel_claim_is_only_attributed_after_eof_and_never_turns_into_miner_output_fault() {
++    let f = fixture(false);
++    let s = Signed::new(&f, false);
++    let plan = s.prep(&f, limits());
++    let mut values = claims(&f, plan.plan());
++    let index = plan.plan().iter().find(|r| matches!(r.kind, ExpandedRelationKind::RecomputeNode { .. })).unwrap().index as usize;
++    values[index][0] += 1;
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let mut node = begin(&f, &s, &record, Cursor::new(bytes), key, sig);
++    loop {
++        if submit(&f, &mut node).unwrap() == StreamSubmitV2::NeedEof {
++            break;
++        }
++    }
++    assert_eq!(node.checked_relations(), index as u64);
++    assert_eq!(node.finish().unwrap(), CheckOutcome::WitnessRejected);
++    s.result.authenticate(&s.key, &s.signature).unwrap();
++}
++#[test]
++fn wrong_signed_miner_output_waits_for_complete_claims_source_coverage_and_eof_signature() {
++    let f = fixture(false);
++    let s = Signed::new(&f, true);
++    let values = claims(&f, s.prep(&f, limits()).plan());
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let mut node = begin(&f, &s, &record, Cursor::new(bytes), key, sig);
++    while submit(&f, &mut node).unwrap() != StreamSubmitV2::NeedEof {}
++    assert_eq!(node.checked_relations(), node.preparation().plan().summary().relations);
++    assert_eq!(node.finish().unwrap(), CheckOutcome::OutputMismatch);
++}
++struct Changing {
++    bytes: Rc<RefCell<Vec<u8>>>,
++    position: usize,
++}
++impl Read for Changing {
++    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
++        let data = self.bytes.borrow();
++        let n = out.len().min(data.len() - self.position);
++        out[..n].copy_from_slice(&data[self.position..self.position + n]);
++        self.position += n;
++        Ok(n)
++    }
++}
++impl ClaimsReaderV2 for Changing {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        Some(self.bytes.borrow().capacity() as u64 + 128)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++#[test]
++fn post_begin_changed_unread_tape_with_local_mismatch_has_no_panel_or_miner_verdict_on_wrong_root() {
++    let f = fixture(false);
++    let s = Signed::new(&f, false);
++    let values = claims(&f, s.prep(&f, limits()).plan());
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let storage = Rc::new(RefCell::new(bytes));
++    let reader = Changing { bytes: storage.clone(), position: 0 };
++    let mut node = begin(&f, &s, &record, reader, key, sig);
++    assert_eq!(submit(&f, &mut node).unwrap(), StreamSubmitV2::Continue);
++    let next_value = 4 + 4 + values[0].len() * 16 + 4;
++    storage.borrow_mut()[next_value] ^= 1;
++    loop {
++        if submit(&f, &mut node).unwrap() == StreamSubmitV2::NeedEof {
++            break;
++        }
++    }
++    assert_eq!(node.finish(), Err(FullRelationError::Delivery));
++    assert_eq!(node.finish(), Err(FullRelationError::Closed));
++}
++struct DiskFail {
++    inner: Cursor<Vec<u8>>,
++    left: usize,
++}
++impl Read for DiskFail {
++    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
++        if self.left == 0 {
++            return Err(std::io::Error::other("injected middle disk failure"));
++        }
++        let n = out.len().min(self.left);
++        let got = self.inner.read(&mut out[..n])?;
++        self.left -= got;
++        Ok(got)
++    }
++}
++impl ClaimsReaderV2 for DiskFail {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        Some(self.inner.get_ref().capacity() as u64 + 128)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++#[test]
++fn middle_disk_failure_or_invalid_signature_cannot_expose_a_computation_outcome() {
++    let f = fixture(false);
++    let s = Signed::new(&f, false);
++    let values = claims(&f, s.prep(&f, limits()).plan());
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let mut node = begin(&f, &s, &record, DiskFail { inner: Cursor::new(bytes.clone()), left: 11 }, key, sig);
++    assert_eq!(submit(&f, &mut node), Err(FullRelationError::Delivery));
++    assert_eq!(node.checked_relations(), 0);
++    assert_eq!(node.finish(), Err(FullRelationError::Closed));
++    let mut node = begin(&f, &s, &record, Cursor::new(bytes), key, [0; SIGNATURE_BYTES]);
++    while submit(&f, &mut node).unwrap() != StreamSubmitV2::NeedEof {}
++    assert_eq!(node.finish(), Err(FullRelationError::Signature));
++}
++#[test]
++fn source_delivery_retry_uses_same_claim_without_re_read_or_coverage_advance() {
++    let f = fixture(false);
++    let s = Signed::new(&f, false);
++    let values = claims(&f, s.prep(&f, limits()).plan());
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let mut node = begin(&f, &s, &record, Cursor::new(bytes), key, sig);
++    let r = node.preparation().plan().relation_at(0).unwrap();
++    let m = material(&f, &r);
++    let mut t = target(&f, &r).unwrap();
++    t.preimage.values_le[0] ^= 1;
++    assert_eq!(node.submit(&m.view(), Some(t.view())), Err(FullRelationError::Delivery));
++    let meter = node.read_meter();
++    assert_eq!(node.checked_relations(), 0);
++    assert_eq!(meter.relations_read, 1);
++    submit(&f, &mut node).unwrap();
++    assert_eq!(node.read_meter().read_bytes, meter.read_bytes);
++    while node.checked_relations() < node.preparation().plan().summary().relations {
++        submit(&f, &mut node).unwrap();
++    }
++    assert_eq!(node.finish().unwrap(), CheckOutcome::Matched);
++}
++
++struct UnknownReader;
++impl Read for UnknownReader {
++    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
++        panic!("unknown reader must be refused before IO")
++    }
++}
++impl ClaimsReaderV2 for UnknownReader {}
++#[test]
++fn unknown_provider_owners_or_denied_mandatory_lease_refuse_before_any_stream_read() {
++    let f = fixture(false);
++    let s = Signed::new(&f, false);
++    let mut unknown = UnknownReader;
++    assert!(matches!(
++        s.prep(&f, limits()).freeze_stream_record(
++            f.binding.clone(),
++            f.generated.clone(),
++            PrincipalId(Digest([1; 64])),
++            &mut unknown,
++            caps(),
++            &reserve,
++        ),
++        Err(FullRelationError::Budget)
++    ));
++    let values = claims(&f, s.prep(&f, limits()).plan());
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let deny = |_: u64| -> Result<StreamRecordLeaseV2, FullRelationError> { Err(FullRelationError::Budget) };
++    let calls = std::cell::Cell::new(0);
++    struct NoRead<'a>(&'a std::cell::Cell<u32>);
++    impl Read for NoRead<'_> {
++        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
++            self.0.set(self.0.get() + 1);
++            panic!("lease denied")
++        }
++    }
++    impl ClaimsReaderV2 for NoRead<'_> {
++        fn retained_request_bytes(&self) -> Option<u64> {
++            Some(0)
++        }
++        fn scratch_request_bytes(&self) -> Option<u64> {
++            Some(0)
++        }
++    }
++    assert!(matches!(
++        s.prep(&f, limits()).begin_stream(
++            record.binding().clone(),
++            record.generated().to_vec(),
++            record.author(),
++            record.signing_digest(),
++            NoRead(&calls),
++            key,
++            sig,
++            caps(),
++            &deny,
++        ),
++        Err(FullRelationError::Budget)
++    ));
++    assert_eq!(calls.get(), 0);
++    drop(bytes);
++}
++#[test]
++fn noncanonical_outer_or_claim_lengths_and_trailing_bytes_cannot_reach_an_outcome() {
++    let f = fixture(false);
++    let s = Signed::new(&f, false);
++    let values = claims(&f, s.prep(&f, limits()).plan());
++    let (record, bytes, key, sig) = signed(&f, &s, &values);
++    let mut outer = bytes.clone();
++    outer[..4].copy_from_slice(&u32::MAX.to_le_bytes());
++    assert!(matches!(
++        s.prep(&f, limits()).begin_stream(
++            record.binding().clone(),
++            record.generated().to_vec(),
++            record.author(),
++            record.signing_digest(),
++            Cursor::new(outer),
++            key,
++            sig,
++            caps(),
++            &reserve,
++        ),
++        Err(FullRelationError::Delivery)
++    ));
++    let mut bad_claim = bytes.clone();
++    bad_claim[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
++    let mut node = begin(&f, &s, &record, Cursor::new(bad_claim), key, sig);
++    assert_eq!(submit(&f, &mut node), Err(FullRelationError::Delivery));
++    assert_eq!(node.checked_relations(), 0);
++    let mut trailing = bytes;
++    trailing.push(0);
++    let mut node = begin(&f, &s, &record, Cursor::new(trailing), key, sig);
++    while submit(&f, &mut node).unwrap() != StreamSubmitV2::NeedEof {}
++    assert_eq!(node.finish(), Err(FullRelationError::Delivery));
++}
+diff --git a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests.rs b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests.rs
+--- a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests.rs
++++ b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests.rs
+@@ -537,3 +537,5 @@
+ }
+ 
+ mod mixed_state;
++
++mod stream_record;
+diff --git a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs
+--- a/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs
++++ b/consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs
+@@ -9,6 +9,31 @@
+     palw_tir_court_v1::source_only::wide_v2::{TirSourceOnlyMaterialV2, authenticate_source_only_v2},
+     palw_tir_step_v1::wide_v2::verify_tir_binding_v2,
+ };
++mod record_access_sealed {
++    pub trait Sealed {}
++}
++/// Read-only sealed record view. Only signature-checked resident records and
++/// the private single-claim streaming adapter implement this interface.
++#[doc(hidden)]
++pub trait WideRecordAccessV2: record_access_sealed::Sealed {
++    fn binding(&self) -> &PalwTirStepBindingV1;
++    fn generated(&self) -> &[u32];
++    fn claim(&self, index: u64) -> Option<&[i128]>;
++}
++impl record_access_sealed::Sealed for PrototypePanelRecord {}
++impl WideRecordAccessV2 for PrototypePanelRecord {
++    fn binding(&self) -> &PalwTirStepBindingV1 {
++        &self.binding
++    }
++    fn generated(&self) -> &[u32] {
++        &self.generated
++    }
++    fn claim(&self, index: u64) -> Option<&[i128]> {
++        self.claims.get(usize::try_from(index).ok()?).map(Vec::as_slice)
++    }
++}
++/// Stream-backed private record/Node reader; no native authority or new codec.
++pub mod stream;
+ pub struct StepTargetV2<'a> {
+     pub opening: &'a PalwStepOpeningV1,
+     pub preimage: &'a PalwStepTileLeafV1,
+@@ -202,14 +227,14 @@
+ }
+ 
+ /// Immutable local manifest, not a shared DTO or old execution-record root.
+-pub struct FullRelationCheckerV2 {
++pub struct FullRelationCheckerV2<R: WideRecordAccessV2 = PrototypePanelRecord> {
+     prepared: FullRelationPreparationV2,
+-    record: PrototypePanelRecord,
++    record: R,
+     progress: FullRelationProgress,
+     best: Option<(i64, u32)>,
+     next_lane: u64,
+ }
+-impl FullRelationCheckerV2 {
++impl<R: WideRecordAccessV2> FullRelationCheckerV2<R> {
+     /// Borrow retained preparation for material construction. This grants no
+     /// mutable progress access or additional native authority.
+     pub fn preparation(&self) -> &FullRelationPreparationV2 {
+@@ -278,12 +303,12 @@
+             },
+         };
+         if let Some(pin) = material.decode_tokens
+-            && pin.generated_token_ids != self.record.generated
++            && pin.generated_token_ids.as_slice() != self.record.generated()
+         {
+             return Err(FullRelationError::Delivery);
+         }
+         let source =
+-            authenticate_source_only_v2(&self.record.binding, *material, self.progress.legacy_frontier, &rules, limits.source)
++            authenticate_source_only_v2(self.record.binding(), *material, self.progress.legacy_frontier, &rules, limits.source)
+                 .map_err(source_error)?;
+         let evaluation = match &relation.kind {
+             ExpandedRelationKind::RecomputeNode { ctx, node, first_lane, lane_count, .. } => {
+@@ -299,7 +324,7 @@
+             }
+         };
+         let values = evaluation.values();
+-        if values != self.record.claims[self.progress.next_relation as usize] {
++        if values != self.record.claim(self.progress.next_relation).ok_or(FullRelationError::Delivery)? {
+             return Err(FullRelationError::PanelMismatch);
+         }
+         // No coverage/selection mutation until membership, direct arithmetic,
+@@ -333,7 +358,7 @@
+     ) -> Result<(), FullRelationError> {
+         let mut counter = ByteCounter { bytes: 0, cap };
+         (target.opening, target.preimage, target.trace).serialize(&mut counter).map_err(|_| FullRelationError::Budget)?;
+-        let binding = &self.record.binding;
++        let binding = self.record.binding();
+         let width = if leaf.dtype == DType::I64 { 8 } else { 4 };
+         let version = if width == 8 { 2 } else { PALW_TIR_STEP_LEAF_VERSION_V1 };
+         if self.prepared.plan.step_space().leaf_at(&binding.job_context, leaf.index) != Some(*leaf)
+@@ -377,13 +402,13 @@
+             return Err(FullRelationError::Unverified);
+         }
+         let trace = target.trace.ok_or(FullRelationError::Delivery)?;
+-        if trace.generated != self.record.generated || trace.row != row {
++        if trace.generated.as_slice() != self.record.generated() || trace.row != row {
+             return Err(FullRelationError::Delivery);
+         }
+         trace
+             .authenticate(
+                 &self.prepared.job,
+-                &self.record.binding.full_logits_trace_root,
++                self.record.binding().full_logits_trace_root,
+                 self.prepared.vocab as usize,
+                 self.prepared.limits.plan.max_legacy_leaves,
+             )
+@@ -415,7 +440,7 @@
+             return Err(FullRelationError::Unverified);
+         }
+         if next == self.prepared.vocab {
+-            if best.map(|(_, token)| token) != self.record.generated.get(row as usize).copied() {
++            if best.map(|(_, token)| token) != self.record.generated().get(row as usize).copied() {
+                 return Err(FullRelationError::PanelMismatch);
+             }
+             self.progress.checked_rows += 1;
+@@ -439,7 +464,7 @@
+             return Err(FullRelationError::Incomplete);
+         }
+         self.progress.outcome =
+-            if digest(palw_attempt_output_root_v1(&self.prepared.job, &self.record.generated)) == self.prepared.result.output {
++            if digest(palw_attempt_output_root_v1(&self.prepared.job, self.record.generated())) == self.prepared.result.output {
+                 CheckOutcome::Matched
+             } else {
+                 CheckOutcome::OutputMismatch
+diff --git a/consensus/core/src/palw_positive_check_v2/full_relation.rs b/consensus/core/src/palw_positive_check_v2/full_relation.rs
+--- a/consensus/core/src/palw_positive_check_v2/full_relation.rs
++++ b/consensus/core/src/palw_positive_check_v2/full_relation.rs
+@@ -325,23 +325,32 @@
+     }
+     fn hash(&self, cap: u64) -> Result<Digest, FullRelationError> {
+         let mut writer =
+-            HashWriter { state: blake2b_simd::Params::new().hash_length(64).key(&self.domains.hash_key).to_state(), bytes: 0, cap };
+-        // Local structural tuple only. No public magic/version/tag is assigned.
+-        let value = (
+-            &self.result,
+-            &self.author,
+-            &self.binding,
+-            &self.generated,
+-            &self.policy,
+-            &self.form,
+-            &self.domains.signature_context,
+-            &self.claims,
+-        );
+-        value.serialize(&mut writer).map_err(|_| FullRelationError::Budget)?;
++            record_hash_prefix(self.result, self.author, &self.binding, &self.generated, &self.policy, self.form, &self.domains, cap)?;
++        self.claims.serialize(&mut writer).map_err(|_| FullRelationError::Budget)?;
+         Ok(Digest(writer.state.finalize().as_bytes().try_into().expect("64-byte hash")))
+     }
+ }
+ 
++/// Shared exact existing structural prefix. Splitting the tuple before its
++/// final claims field preserves every old Borsh byte and hash/domain recipe.
++#[allow(clippy::too_many_arguments)]
++fn record_hash_prefix(
++    result: misaka_palw_positive_contract::identity::ResultId,
++    author: PrincipalId,
++    binding: &PalwTirStepBindingV1,
++    generated: &[u32],
++    policy: &[u64],
++    form: PalwPromptIdsFormV1,
++    domains: &PrototypeDomains,
++    cap: u64,
++) -> Result<HashWriter, FullRelationError> {
++    let mut writer =
++        HashWriter { state: blake2b_simd::Params::new().hash_length(64).key(&domains.hash_key).to_state(), bytes: 0, cap };
++    (result, author, binding, generated, policy, form, &domains.signature_context)
++        .serialize(&mut writer)
++        .map_err(|_| FullRelationError::Budget)?;
++    Ok(writer)
++}
+ pub struct LegacyTarget<'a> {
+     pub opening: &'a PalwStepOpeningV1,
+     pub preimage: &'a PalwStepTileLeafV1,
+diff --git a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
+--- a/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
++++ b/misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs
+@@ -1,18 +1,20 @@
+ //! Bounded local claims tape. The bytes are EXACT Borsh Vec<Vec<i128>> order,
+ //! suitable as the claims section of the existing local record hash recipe.
+ //! No new domain/ID, generic deserializer, signature or arithmetic certificate.
+-//! The current Node PrototypePanelRecord still owns Vec<Vec<i128>>: stream-backed
+-//! record signing/checking is a required next integration, not completed here.
+-//! Existing Core record.hash already uses HashWriter streaming: the missing
+-//! part is replacing its retained Vec<Vec<i128>> owner/reader, not inventing a
+-//! new hash/domain or an extra full encoded-record allocation.
++//! This tape detaches from producer model/run retention and implements the
++//! bounded Core stream reader. Work/disk guards remain shared and cumulative.
++//! Native transport/acceptance is not assigned by this local reader.
++//! Existing Core record.hash's HashWriter recipe is preserved. The explicit
++//! V2 stream path reads one claim at a time; the old Vec record remains a
++//! compatibility API. Native body/version dispatch is not assigned here.
+ use super::proof::WidePanelBuilderV2;
+ use super::*;
+ /// Owns one empty local file. Not reopenable from a saved "complete" bit.
+ /// A callback/reader may retain exports only under its own additional reservation.
+-pub struct WideClaimsTapeV2<'s> {
++pub struct WideClaimsTapeV2 {
+     tape: Tape,
+-    session: &'s Session,
++    session: std::rc::Rc<Session>,
++    cursor: u64,
+     relations: u32,
+     max_tile_lanes: u64,
+ }
+@@ -22,7 +24,7 @@
+     /// separately quote/acquire/retain the complete Vec capacities, binding,
+     /// generated IDs, frozen record, signing/hash and Node-checker owners.
+     /// retained_record_bytes!=0 is only a declared cap, never such a receipt.
+-    pub fn claims_tape<'s>(&'s self, file: File) -> Result<WideClaimsTapeV2<'s>, Error> {
++    pub fn claims_tape(&self, file: File) -> Result<WideClaimsTapeV2, Error> {
+         let count = self.plan().summary().relations;
+         let relations = u32::try_from(count).map_err(|_| "wide claims Borsh count")?;
+         let mut tape = Tape::empty(file)?;
+@@ -41,10 +43,10 @@
+                 tape.append(&chunk[..values.len() * 16], self.session())?;
+             }
+         }
+-        Ok(WideClaimsTapeV2 { tape, session: self.session(), relations, max_tile_lanes })
++        Ok(WideClaimsTapeV2 { tape, session: self.capture.session.clone(), cursor: 0, relations, max_tile_lanes })
+     }
+ }
+-impl WideClaimsTapeV2<'_> {
++impl WideClaimsTapeV2 {
+     pub fn encoded_bytes(&self) -> u64 {
+         self.tape.len
+     }
+@@ -61,7 +63,7 @@
+         let mut b = [0; 4096];
+         while at < self.tape.len {
+             let n = (self.tape.len - at).min(b.len() as u64) as usize;
+-            self.tape.read(at, &mut b[..n], self.session)?;
++            self.tape.read(at, &mut b[..n], &self.session)?;
+             self.session.charge(Charge::Io, n as u64)?;
+             out.write_all(&b[..n]).map_err(|e| e.to_string())?;
+             at += n as u64;
+@@ -76,13 +78,13 @@
+     pub fn visit(&self, visit: &mut dyn FnMut(u32, &[i128]) -> Result<(), Error>) -> Result<(), Error> {
+         let mut at = 0;
+         let mut n = [0; 4];
+-        self.tape.read(at, &mut n, self.session)?;
++        self.tape.read(at, &mut n, &self.session)?;
+         at += 4;
+         if u32::from_le_bytes(n) != self.relations {
+             return Err("wide claims count changed".into());
+         }
+         for i in 0..self.relations {
+-            self.tape.read(at, &mut n, self.session)?;
++            self.tape.read(at, &mut n, &self.session)?;
+             at += 4;
+             let n = u64::from(u32::from_le_bytes(n));
+             if n > self.max_tile_lanes || mul(n, 16)? > self.session.limits.max_claim_bytes {
+@@ -94,7 +96,7 @@
+             while left > 0 {
+                 let take = left.min((chunk.len() / 16) as u64) as usize;
+                 let bytes = take * 16;
+-                self.tape.read(at, &mut chunk[..bytes], self.session)?;
++                self.tape.read(at, &mut chunk[..bytes], &self.session)?;
+                 at = add(at, bytes as u64)?;
+                 for b in chunk[..bytes].chunks_exact(16) {
+                     values.push(i128::from_le_bytes(b.try_into().map_err(|_| "wide claims lane")?));
+@@ -109,3 +111,59 @@
+         Ok(())
+     }
+ }
++
++impl WideClaimsTapeV2 {
++    /// Reset only the transport cursor between producer hashing and an
++    /// independent Node read. Work/IO/disk counters and guards never reset.
++    pub fn rewind(&mut self) {
++        self.cursor = 0;
++    }
++}
++impl Read for WideClaimsTapeV2 {
++    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
++        let actual = self.tape.file.borrow().metadata()?.len();
++        if actual != self.tape.len {
++            return Err(std::io::Error::other("claims tape length changed"));
++        }
++        let n = usize::try_from((self.tape.len - self.cursor).min(buf.len() as u64))
++            .map_err(|_| std::io::Error::other("claims tape read width"))?;
++        if n == 0 {
++            return Ok(0);
++        }
++        self.tape.read(self.cursor, &mut buf[..n], &self.session).map_err(std::io::Error::other)?;
++        self.cursor += n as u64;
++        Ok(n)
++    }
++}
++impl kaspa_consensus_core::palw_positive_check_v2::full_relation::wide_v2::stream::ClaimsReaderV2 for WideClaimsTapeV2 {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        Some(size_of::<Self>() as u64)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++
++impl WideClaimsTapeV2 {
++    /// Producer hashing reads this tape once. The returned metadata/digest owns
++    /// no model/run reference and certifies no arithmetic. Rewind only transport
++    /// position for an INDEPENDENT Node read; cumulative IO never resets.
++    #[allow(clippy::too_many_arguments)]
++    pub fn freeze_record(
++        &mut self,
++        prep: &kaspa_consensus_core::palw_positive_check_v2::full_relation::wide_v2::FullRelationPreparationV2,
++        binding: PalwTirStepBindingV1,
++        generated: Vec<u32>,
++        author: misaka_palw_positive_contract::identity::PrincipalId,
++        limits: kaspa_consensus_core::palw_positive_check_v2::full_relation::wide_v2::stream::StreamRecordLimitsV2,
++        reserver: &TirMemoryReserverV1,
++    ) -> Result<kaspa_consensus_core::palw_positive_check_v2::full_relation::wide_v2::stream::StreamPanelRecordV2, Error> {
++        let class = prep.job().shape_profile_id;
++        let execution = Hash64::from_bytes(prep.result().execution.0);
++        let acquire = |bytes| {
++            reserver("positive-wide-record-stream-v2", class, execution, bytes)
++                .map_err(|_| kaspa_consensus_core::palw_positive_check_v2::full_relation::FullRelationError::Budget)
++        };
++        prep.freeze_stream_record(binding, generated, author, self, limits, &acquire).map_err(|e| format!("wide record stream: {e:?}"))
++    }
++}
+diff --git a/misaka/palw/tir/exec/tests/positive_wide_material_v2/stream_record_tests.rs b/misaka/palw/tir/exec/tests/positive_wide_material_v2/stream_record_tests.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/tests/positive_wide_material_v2/stream_record_tests.rs
+@@ -0,0 +1,202 @@
++//! Local producer-generated test archive only; NOT a new peer codec/native row.
++//! The complete claims record is never materialized in RAM in these tests.
++use super::*;
++use borsh::{BorshDeserialize, BorshSerialize};
++use kaspa_consensus_core::{
++    palw_logits_q24_v2::WideLogitsEventV2,
++    palw_positive_check_v2::full_relation::wide_v2::{StepTargetV2, stream::*},
++    palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1},
++    palw_step_refute::PalwStepInputRowV1,
++    palw_tir_court_v1::{
++        PalwTirParamOpeningV1,
++        source_only::wide_v2::{TirSourceOnlyMaterialV2, WideGeneratedIdsPinV2},
++    },
++};
++use std::{
++    fs::File,
++    io::{Read, Seek, SeekFrom, Write},
++    sync::atomic::{AtomicUsize, Ordering},
++};
++
++// These are local test files made by this test's producer. Generic Borsh below
++// is deliberately not exported as a production untrusted material decoder.
++#[derive(BorshSerialize, BorshDeserialize)]
++struct Frame {
++    operands: PalwStepInputRowV1,
++    params: PalwTirParamOpeningV1,
++    prompt: Vec<u32>,
++    pin: Option<(Hash64, Vec<u32>)>,
++    target: Option<(PalwStepOpeningV1, PalwStepTileLeafV1, Option<WideLogitsEventV2>)>,
++}
++const FRAME_CAP: usize = 1 << 20;
++const ARCHIVE_CAP: u64 = 1 << 24;
++fn store(file: &mut File, frame: &Frame) {
++    let bytes = borsh::to_vec(frame).unwrap();
++    assert!(bytes.len() <= FRAME_CAP);
++    assert!(file.stream_position().unwrap() + 4 + bytes.len() as u64 <= ARCHIVE_CAP);
++    file.write_all(&(bytes.len() as u32).to_le_bytes()).unwrap();
++    file.write_all(&bytes).unwrap();
++}
++fn load(file: &mut File) -> Frame {
++    let mut count = [0; 4];
++    file.read_exact(&mut count).unwrap();
++    let n = u32::from_le_bytes(count) as usize;
++    assert!(n <= FRAME_CAP);
++    let mut bytes = vec![0; n];
++    file.read_exact(&mut bytes).unwrap();
++    borsh::from_slice(&bytes).unwrap()
++}
++fn stream_limits() -> StreamRecordLimitsV2 {
++    StreamRecordLimitsV2 {
++        max_record_bytes: 1 << 28,
++        max_claim_values: 1 << 14,
++        max_read_bytes: 1 << 30,
++        max_read_calls: 1 << 24,
++        max_extra_heap_bytes: 1 << 31,
++        metadata_auth_bytes: 1 << 29,
++        signature_workspace_bytes: 1 << 20,
++        external_retained_bytes: 1 << 28,
++    }
++}
++struct RunGuard(Arc<AtomicUsize>);
++impl Drop for RunGuard {
++    fn drop(&mut self) {
++        self.0.fetch_sub(1, Ordering::SeqCst);
++    }
++}
++#[test]
++fn detached_disk_claims_and_materials_finish_real_node_after_producer_run_is_released() {
++    for window in [1, 3] {
++        let live = Arc::new(AtomicUsize::new(0));
++        let seen = Arc::new(AtomicUsize::new(0));
++        let count = live.clone();
++        let seen_inner = seen.clone();
++        let reservation: TirMemoryReserverV1 = Arc::new(move |role, _, _, bytes| {
++            assert!(bytes > 0);
++            if role == "positive-wide-panel-capture-v2" || role == "tir-wide-q24-v2-required" {
++                count.fetch_add(1, Ordering::SeqCst);
++                seen_inner.fetch_add(1, Ordering::SeqCst);
++                Ok(Box::new(RunGuard(count.clone())) as Box<dyn Send + Sync>)
++            } else {
++                Ok(Box::new(()) as Box<dyn Send + Sync>)
++            }
++        });
++        // Independent export/preparation/archive owners acquired BEFORE copies.
++        // This test guard covers bounded local archive serialization buffers,
++        // metadata clones, held parameter inventory and one loaded frame.
++        let archive_owner =
++            reservation("test-only-material-archive", Hash64::from_u64_word(0), Hash64::from_u64_word(0), 1 << 28).unwrap();
++        let archive_disk_owner = disk_reserve()(Hash64::from_u64_word(0), Hash64::from_u64_word(0), ARCHIVE_CAP).unwrap();
++        let mut detached = None;
++        run_wide_common::with_fixture(window, |f, _| {
++            let space = PalwTirStepSpaceV2::new(&f.class).unwrap();
++            let runner = TirClassRunnerWideQ24V2::new(&space, f.plan, f.params, f.class.class_id(&f.artifact)).unwrap();
++            let work = WidePanelWorkV2::new(bounds(), f.job.shape_profile_id, f.job.context_hash(), &disk_reserve()).unwrap();
++            let capture = capture_one_pass_v2(
++                CaptureExpectedV2 { class: &f.class, artifact: f.artifact, job: &f.job, space: &space, prompt: PROMPT },
++                &runner,
++                run_bounds(),
++                &work,
++                tempfile::tempfile().unwrap(),
++                &reservation,
++            )
++            .unwrap();
++            let signed = SignedMiner::new(f, false);
++            let result = signed.authenticate();
++            let prep = signed.preparation(f);
++            let inventory = TirHeldInventoryV1::build(f.program, &TirParamsSourceV1(f.params)).unwrap();
++            let builder =
++                WidePanelBuilderV2::prepare(&capture, &prep, &result, &signed.rooted, &inventory, provider(), owners(), &reservation)
++                    .unwrap();
++            let mut tape = builder.claims_tape(tempfile::tempfile().unwrap()).unwrap();
++            let panel = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([96; 32]);
++            let record = tape
++                .freeze_record(
++                    &prep,
++                    capture.binding().unwrap(),
++                    capture.run().generated().to_vec(),
++                    principal(panel.verification_key.as_ref()),
++                    stream_limits(),
++                    &reservation,
++                )
++                .unwrap();
++            let signature =
++                *libcrux_ml_dsa::ml_dsa_87::sign(&panel.signing_key, &record.signing_digest().0, record.signature_context(), [0; 32])
++                    .unwrap()
++                    .as_ref();
++            tape.rewind();
++            let node_reserver = |bytes| {
++                reservation("test-stream-node", f.job.shape_profile_id, f.job.context_hash(), bytes)
++                    .map_err(|_| FullRelationError::Budget)
++            };
++            let node = signed
++                .preparation(f)
++                .begin_stream(
++                    record.binding().clone(),
++                    record.generated().to_vec(),
++                    record.author(),
++                    record.signing_digest(),
++                    tape,
++                    *panel.verification_key.as_ref(),
++                    signature,
++                    stream_limits(),
++                    &node_reserver,
++                )
++                .unwrap();
++            // Material proofs are generated from this SAME observed run, then
++            // bounded-spooled once. Node does not retain a model or a builder.
++            let mut archive = tempfile::tempfile().unwrap();
++            let mut frontier = 0;
++            for i in 0..prep.plan().summary().relations {
++                let relation = prep.plan().relation_at(i).unwrap();
++                assert_eq!(relation.legacy_frontier, frontier);
++                let material = builder.material(i, frontier).unwrap();
++                let m = material.as_borrowed();
++                let t = material.target();
++                store(
++                    &mut archive,
++                    &Frame {
++                        operands: m.operands.clone(),
++                        params: m.params.clone(),
++                        prompt: m.prompt_token_ids.to_vec(),
++                        pin: m.decode_tokens.map(|p| (p.rows_root, p.generated_token_ids.clone())),
++                        target: t.map(|t| (t.opening.clone(), t.preimage.clone(), t.trace.cloned())),
++                    },
++                );
++                if matches!(relation.kind, ExpandedRelationKind::Legacy(_)) {
++                    frontier += 1;
++                }
++            }
++            assert!(archive.metadata().unwrap().len() <= ARCHIVE_CAP);
++            archive.seek(SeekFrom::Start(0)).unwrap();
++            detached = Some((node, archive));
++            assert!(live.load(Ordering::SeqCst) > 0);
++        });
++        assert_eq!(seen.load(Ordering::SeqCst), 2);
++        assert_eq!(live.load(Ordering::SeqCst), 0, "CPU run/capture leases must be released before Node checking");
++        let (mut node, mut archive) = detached.unwrap();
++        let n = node.preparation().plan().summary().relations;
++        for i in 0..n {
++            let frame = load(&mut archive);
++            let pin = frame.pin.as_ref().map(|p| WideGeneratedIdsPinV2 { rows_root: p.0, generated_token_ids: p.1.clone() });
++            let material = TirSourceOnlyMaterialV2 {
++                operands: &frame.operands,
++                params: &frame.params,
++                prompt_token_ids: &frame.prompt,
++                prompt_ids_openings: &[],
++                decode_tokens: pin.as_ref(),
++            };
++            let target = frame.target.as_ref().map(|t| StepTargetV2 { opening: &t.0, preimage: &t.1, trace: t.2.as_ref() });
++            let step = node.submit(&material, target).unwrap();
++            assert_eq!(node.checked_relations(), i + 1);
++            assert_eq!(step, if i + 1 == n { StreamSubmitV2::NeedEof } else { StreamSubmitV2::Continue });
++        }
++        let mut eof = [0];
++        assert_eq!(archive.read(&mut eof).unwrap(), 0);
++        assert_eq!(node.finish().unwrap(), CheckOutcome::Matched);
++        assert_eq!(node.read_meter().relations_read, n);
++        assert_eq!(node.finish(), Err(FullRelationError::Closed));
++        drop(archive_owner);
++        drop(archive_disk_owner);
++    }
++}
+diff --git a/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs b/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
+--- a/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
++++ b/misaka/palw/tir/exec/tests/positive_wide_material_v2.rs
+@@ -589,3 +589,6 @@
+         assert_eq!(work.meter(), spent);
+     });
+ }
++
++#[path = "positive_wide_material_v2/stream_record_tests.rs"]
++mod stream_record_tests;

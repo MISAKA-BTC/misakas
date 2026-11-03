@@ -345,26 +345,75 @@ fn contraction(p: &TirProgramV1, block: usize, node: usize, h: u64) -> u64 {
 // §8: the cost of a node
 // ---------------------------------------------------------------------------------------------
 
-/// A node's §8 cost at `H = h`.
+/// Borrowed operand shape used ONLY by node_cost. Param/Const/State shapes
+/// stay in their original [u32] slice; no temporary TensorType/Dim Vec is made.
+/// Other admission/cone paths retain ref_type and their existing owner bounds.
+#[derive(Clone, Copy)]
+enum CostType<'a> {
+    Tensor(&'a TensorType),
+    Fixed(DType, &'a [u32]),
+    IndexScalar,
+}
+impl CostType<'_> {
+    fn dtype(self) -> DType {
+        match self {
+            Self::Tensor(t) => t.dtype,
+            Self::Fixed(d, _) => d,
+            Self::IndexScalar => DType::Idx,
+        }
+    }
+    fn elements(self, h: u64) -> u64 {
+        match self {
+            Self::Tensor(t) => t.elements_at(h),
+            Self::Fixed(_, shape) => shape.iter().fold(1u64, |n, d| n.saturating_mul(u64::from(*d))),
+            Self::IndexScalar => 1,
+        }
+    }
+    fn bytes(self, h: u64) -> u64 {
+        self.elements(h).saturating_mul(self.dtype().width() as u64)
+    }
+    fn last_extent(self, h: u64) -> u64 {
+        match self {
+            Self::Tensor(t) => dim_at(*t.shape.last().expect("validated MatMul rank"), h),
+            Self::Fixed(_, shape) => u64::from(*shape.last().expect("validated MatMul rank")),
+            Self::IndexScalar => panic!("validated MatMul rank"),
+        }
+    }
+}
+fn cost_type(p: &TirProgramV1, block: usize, r: Ref) -> CostType<'_> {
+    let b = &p.blocks[block];
+    match r {
+        Ref::Node(j) => CostType::Tensor(&b.nodes[j as usize].out),
+        Ref::CarryIn(k) => CostType::Tensor(&b.carry_in[k as usize]),
+        Ref::Param(j) => CostType::Fixed(p.params[j as usize].dtype, &p.params[j as usize].shape),
+        Ref::Const(j) => CostType::Fixed(p.consts[j as usize].dtype, &p.consts[j as usize].shape),
+        Ref::State(j) => CostType::Fixed(p.states[j as usize].dtype, &p.states[j as usize].shape),
+        Ref::Input(_) => CostType::IndexScalar,
+    }
+}
+
+/// A validated node's §8 cost at `H = h`, with no heap allocation. Cost
+/// arithmetic and operand-order saturation are unchanged; this permits a host
+/// to compute a run request BEFORE acquiring that run's actual RAM guard.
 pub fn node_cost(p: &TirProgramV1, block: usize, node: usize, h: u64) -> CostV1 {
     let n = &p.blocks[block].nodes[node];
     let out_e = elems(&n.out, h);
     let out_b = bytes(&n.out, h);
-    let ins: Vec<Cow<'_, TensorType>> = n.inputs.iter().map(|r| ref_type(p, block, *r)).collect();
-    let in_b: u64 = ins.iter().map(|t| bytes(t, h)).fold(0u64, u64::saturating_add);
+    let input = |i: usize| cost_type(p, block, n.inputs[i]);
+    let in_b = n.inputs.iter().fold(0u64, |sum, r| sum.saturating_add(cost_type(p, block, *r).bytes(h)));
     let mut c = CostV1 { bytes_written: out_b, ..Default::default() };
     match &n.prim {
         Prim::Iota { .. } => c.elementwise = out_e,
         Prim::Gather { .. } => {
             c.elementwise = out_e;
-            c.bytes_read = out_e.saturating_mul(ins[0].dtype.width() as u64).saturating_add(bytes(&ins[1], h));
+            c.bytes_read = out_e.saturating_mul(input(0).dtype().width() as u64).saturating_add(input(1).bytes(h));
         }
         Prim::MatMul => {
-            c.macs = out_e.saturating_mul(contraction(p, block, node, h));
+            c.macs = out_e.saturating_mul(input(0).last_extent(h));
             c.bytes_read = in_b;
         }
         Prim::ReduceSum { .. } | Prim::ReduceMax { .. } => {
-            c.elementwise = elems(&ins[0], h);
+            c.elementwise = input(0).elements(h);
             c.bytes_read = in_b;
         }
         Prim::IntExp | Prim::IntRsqrt | Prim::IntLn => {
@@ -372,13 +421,13 @@ pub fn node_cost(p: &TirProgramV1, block: usize, node: usize, h: u64) -> CostV1 
             c.bytes_read = in_b;
         }
         Prim::TopK { k, .. } => {
-            c.elementwise = elems(&ins[0], h).saturating_mul(*k as u64);
+            c.elementwise = input(0).elements(h).saturating_mul(*k as u64);
             c.bytes_read = in_b;
         }
         Prim::HistAppend { .. } => {
             c.elementwise = out_e;
             c.bytes_read = out_b;
-            c.bytes_written = bytes(&ins[0], h);
+            c.bytes_written = input(0).bytes(h);
         }
         _ => {
             c.elementwise = out_e;

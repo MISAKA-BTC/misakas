@@ -1,0 +1,164 @@
+{
+  "schema_version": 1,
+  "review_date_jst": "2026-11-02",
+  "reviewer": "A2 independent source-only review",
+  "source_repository": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet",
+  "commit": "74bd239321771f47cd2a6eabdb338c63649292ba",
+  "parent": "89b1d63465e95a57cec990390cbc4d24d00abea0",
+  "verdict": "no concrete blocker found under the documented audited-profile/trusted-build assumptions; runtime and complete startup remain unverified",
+  "blocking_findings": [],
+  "files": {
+    "consensus/core/build.rs": {
+      "sha256": "4bebbb8e4d33c2da4601b3782eb89fe95cc790a35ae83b12d4312bfdece91460",
+      "bytes": 5760
+    },
+    "consensus/core/src/palw_native_resource_v1.rs": {
+      "sha256": "ae50cb4be9442e207145eea7cc94bd174d6be8a89a12808acf7b2f4322e77267",
+      "bytes": 7208
+    },
+    "consensus/core/src/palw_native_resource_v1/ledger_expansion.rs": {
+      "sha256": "0f8690ccf277ce2e0b14912326d46ee3e6b5892567a5dc6d75175f2050ad774f",
+      "bytes": 62958
+    },
+    "consensus/core/src/palw_native_resource_v1/source_local.rs": {
+      "sha256": "fb82981273d1d274bac32459558d0b55a1481b2bf5b1c0cafac2844a3681e7bd",
+      "bytes": 13380
+    },
+    "consensus/core/src/palw_native_resource_v1/source_local/bootstrap.rs": {
+      "sha256": "7ccbd2bfd0a3d415a8df7833232b4f8beee6d76a29f8d239cf815f7fa2542bf6",
+      "bytes": 7657
+    },
+    "consensus/core/src/palw_native_resource_v1/source_local/tests.rs": {
+      "sha256": "0115daac6c89c8214377b5a89a2f3336d227fce035ff58e99706e0375fef120e",
+      "bytes": 17330
+    },
+    "consensus/core/src/palw_native_resource_v1/wire.rs": {
+      "sha256": "a81d241c6911f03f7d259a94a0f7cc0c434adc13f87af6bf84f19ddbc14823fd",
+      "bytes": 29697
+    },
+    "handoff/positive-court/A3-source-program-local-v1.md": {
+      "sha256": "34694d2d0f61ec6e99339fbe2f47b01553ff915ef41d1bbd917a83099a712143",
+      "bytes": 7054
+    }
+  },
+  "supporting_file_sha256": {
+    "consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+    "Cargo.toml": "5b1cf91b2106e81e3c4046c125ec062d33dae86e7b5d8361ec4a2ce187e51efc",
+    "Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+    "consensus/core/src/palw_native_resource_v1/tir.rs": "d58d8aab47f2025016d8cfe87e0ac72c560ddd752e20e772bbfc866281e2ac14",
+    "consensus/core/src/palw_native_resource_v1/typed.rs": "0364ba1f37fd31b12a867d33afe6e2b7438cac5f5aefe63ffd6b70376e6d2c16",
+    "consensus/core/src/palw_native_resource_v1/wire_generated.rs": "fbe2972a1e4f1a774342615b1b0671cca55078453e8e9e37d835f8eaf6386a98",
+    "misaka/palw/tir/core/src/program.rs": "ef9eed8581b0a43673c5fa9eb1a84fbf5ec5e2ae77a9316b442907d1c4f92f23",
+    "misaka/palw/tir/core/src/validate.rs": "b95af832779a177854b2e1eea23fa1f58afc593c864f52222c52e96034c7ab65",
+    "misaka/palw/tir/core/src/error.rs": "fcdca8e554f475d9944ffa277abeaec11e7743ec0308a32cd9480a65917d144c"
+  },
+  "static_byte_comparisons": {
+    "source_q_and_error_tail": {
+      "byte_identical_to_parent": true,
+      "sha256": "2f9a343f07b7e31de8d25b2bc624ed8f35bd8ad922ed016aad3e4b3d6516dd22"
+    },
+    "wider_program_q_tail": {
+      "byte_identical_to_parent": true,
+      "sha256": "668762c40427ea172c96d2e79a94accb82439dc22e50458d98227cfc686af466"
+    }
+  },
+  "checks": [
+    {
+      "id": "ownership_same_bytes",
+      "status": "no concrete escape found",
+      "references": [
+        "source_local.rs:208-249"
+      ],
+      "detail": "Private borrowed slice and private quote; consuming decode calls existing canonical decoder once; no replacement bytes, callback, Clone or mutable program access; public borrowed program export is caller-owned and is not NativeRetained or a native lease."
+    },
+    {
+      "id": "pre_reader_order",
+      "status": "source checked",
+      "references": [
+        "source_local.rs:269-297",
+        "source_local/bootstrap.rs:43-88"
+      ],
+      "detail": "Positive limits, byte ceilings, scalar step upper, private build gate and typed bootstrap ceiling precede scanner entry; fixed enum refusals require no owned diagnostic. Cumulative work charge occurs atomically before the observed scanner."
+    },
+    {
+      "id": "four_reader_accounting",
+      "status": "source checked",
+      "references": [
+        "source_local.rs:134-164",
+        "source_local.rs:252-259",
+        "ledger_expansion.rs:234-301",
+        "ledger_expansion.rs:646-741",
+        "wire.rs:48-105"
+      ],
+      "detail": "L(n+4)+3L(n)+4 includes increment-before-limit refusal; reader byte envelope is 4n+4. Observers run before success/error propagation, count actual remaining-byte deltas, reject duplicate/overflowed coverage and do not refund prior charges."
+    },
+    {
+      "id": "diagnostic_envelope",
+      "status": "no concrete underquote identified within documented assumptions; not measured",
+      "references": [
+        "source_local/bootstrap.rs:17-88",
+        "source_local/bootstrap.rs:96-149",
+        "source_local.rs:299-323",
+        "ledger_expansion.rs:737-789",
+        "misaka/palw/tir/core/src/validate.rs:36-43,140-159,374-411,519-566"
+      ],
+      "detail": "Bootstrap enumerates fixed memory-reader IO/Resource error families and type-name backing. Decode extra adds typed headers/custom-error/UTF8/frame/owner differences while retaining the existing four diagnostic byte writers. NF text census uses structural items, bounded prevalidated names, fixed Dim/perm/scalar/UTF8 display branches. Admission takes MAX of sequential scan/bootstrap and decode phases; backend owned errors are dropped before public fixed enums return."
+    },
+    {
+      "id": "legacy_compatibility",
+      "status": "source checked, two byte comparisons recorded",
+      "references": [
+        "ledger_expansion.rs",
+        "wire.rs"
+      ],
+      "detail": "Existing wrappers pass None to private observation ports. Source and wider q arithmetic/error tails are byte-identical to parent. Grammar, old messages, checked ordering, wire IDs, flags and fees have no identified semantic change; no differential execution performed."
+    },
+    {
+      "id": "build_and_cfg",
+      "status": "no obvious source-level visibility/type/cfg blocker; uncompiled",
+      "references": [
+        "build.rs:12-151",
+        "source_local.rs:80-89",
+        "source_local/tests.rs:22-137",
+        "consensus/core/Cargo.toml",
+        "Cargo.toml:251-260"
+      ],
+      "detail": "Core auto-discovers build.rs, which is included by workspace packaging. Gate requires supported cfg AND build-generated profile env, exact release, target width/endian/triple and Borsh/derive registry lock versions/checksums; wrappers/bootstrap/custom or unknown flags refuse. Unsupported builds keep the API but refuse before backend. Cargo/rustc was not run."
+    }
+  ],
+  "nonblocking_notes": [
+    {
+      "id": "trusted_build_premise",
+      "severity": "scope boundary, not a newly demonstrated defect",
+      "detail": "Gate does not hash all installed dependency .rs files, compiler executable or sysroot; same-version trusted installed sources/toolchain remain a prerequisite. No supply-chain attestation or complete build-integrity guarantee is established."
+    },
+    {
+      "id": "runtime_profile_counting",
+      "severity": "validation caveat",
+      "detail": "All added tests are unexecuted: supported native scope declares eight facade active tests plus one ignored child helper and two thin-port tests. Unsupported normal native scope has three facade active tests, wasm two. An externally injected cfg with unsupported build env can compile audited test bodies that return early; successful harness counts alone must not be labeled successful audited decode. Preserve audited/unsupported child markers and effective profile."
+    },
+    {
+      "id": "local_scope_only",
+      "severity": "scope boundary",
+      "detail": "Logical allocation requests, scalar scanner work and NF item ceilings do not establish total NF/compile CPU, stack/RSS, host leases, simultaneous-owner/input/export budgets, full artifact/model/process startup, native admission, model qualification or consensus credit."
+    },
+    {
+      "id": "pending_validation",
+      "severity": "unverified, not a demonstrated code blocker",
+      "detail": "Normal intended supported build, unsupported/refusal profile matrix, cfg-selected test compilation, old/new q/errors differential and diagnostic/allocation observations still require separately scheduled execution. No Cargo, rustc, test, model, target/cache mutation or source modification was performed by this review."
+    }
+  ],
+  "execution": {
+    "cargo": false,
+    "rustc": false,
+    "tests": false,
+    "models": false,
+    "new_agents": false,
+    "repository_mutation": false,
+    "target_cache_mutation": false,
+    "output_files": [
+      "/tmp/A2-source-local-review-20261102.md",
+      "/tmp/A2-source-local-review-20261102.json"
+    ]
+  }
+}

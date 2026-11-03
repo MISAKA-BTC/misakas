@@ -487,7 +487,13 @@ pub fn validate(p: &TirProgramV1) -> TirResult<ProgramInfo> {
     let Some(logits) = post_block.nodes.get(p.logits as usize) else {
         return nf("the logits node does not exist");
     };
-    if !logits.commit || !logits.out.dtype.committable() || logits.out.has_h() {
+    if p.wide_logits_q24() && (logits.out.dtype != DType::I64 || p.logits as usize + 1 != post_block.nodes.len()) {
+        return nf("wide Q24 requires an i64 final post logits node");
+    }
+    if !logits.commit
+        || !(logits.out.dtype.committable() || (p.wide_logits_q24() && logits.out.dtype == DType::I64))
+        || logits.out.has_h()
+    {
         return nf("the logits node is a committed, committable tensor without H");
     }
     // ---- per block: windows, refs, types, effects, liveness ---------------------------------
@@ -558,7 +564,7 @@ pub fn validate(p: &TirProgramV1) -> TirResult<ProgramInfo> {
                 ins.push(t);
             }
             check_node_type(&n.prim, &ins, &n.out, &p.states).or_else(|m| shape_err(bi, ni, &n.prim, m))?;
-            if n.commit && !n.out.dtype.committable() {
+            if n.commit && !n.out.dtype.committable() && !(p.is_wide_logits_node(bi, ni) && n.out.dtype == DType::I64) {
                 return nf(format!("block {bi} node {ni}: a commit point is i8, i16, i32 or idx (PALW-TIR-5)"));
             }
             match n.prim {

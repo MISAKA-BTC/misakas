@@ -29,6 +29,7 @@ indexmap.workspace = true
 itertools.workspace = true
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
+misaka-palw-positive-contract.workspace = true
 kaspa-consensus-notify.workspace = true
 kaspa-consensusmanager.workspace = true
 kaspa-core.workspace = true
@@ -66,6 +67,8 @@ misaka-palw-base0.workspace = true
 misaka-palw-kernel.workspace = true
 
 [dev-dependencies]
+# HF3 retained-input identity checks; never hashes a whole artifact in memory.
+sha2.workspace = true
 # Fresh pruned-import fixture reuses the shipped trusted-subdag conversion.
 kaspa-p2p-lib.workspace = true
 # Retained-source TCP fixture uses the shipping flows and native manager staging.

@@ -1,0 +1,207 @@
+{
+  "status": "PASS_PALWTRC2_DATA_IDENTITY_AND_SELECTED_LEGACY",
+  "source_commit": "c667259a6a8554de881e8b57f1b783737a98c17a",
+  "source_tree": "74ce1c6118330b3a6fd50b23ba0f3ca4ebbb09d3",
+  "base_commit": "ee629993047f5323a91a3b1984eefe6719271361",
+  "dependencies_upstream": [
+    "79b8804d9",
+    "ee6299930"
+  ],
+  "source_sequence": [
+    "c14d47b7d",
+    "2faef030d",
+    "c667259a6a8554de881e8b57f1b783737a98c17a"
+  ],
+  "started_utc": "2026-10-31T17:36:23.425888+00:00",
+  "build_settings": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a3-target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "ROCKSDB_STATIC": "1",
+    "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out"
+  },
+  "static_archive": {
+    "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+    "bytes": 23048496,
+    "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+  },
+  "source_files_sha256": {
+    "handoff/positive-court/A3-wide-capture-v2.md": "b134042a14fdad599eb0121ea013765d015d0dd4b54b2728ffbdf17600e35d48",
+    "misaka/palw/tir/exec/src/node/capture_codec.rs": "312045b1ca741216262cc83b7eb6d3d385ff0b40a50572d32cc21bc43fc48fbd",
+    "misaka/palw/tir/exec/src/node/mod.rs": "6b086506935b69e95876594d5ff81d809507ea7ad761fe34c808742b7d84c764",
+    "misaka/palw/tir/exec/src/node/wide_capture_v2.rs": "b91de0904467aebb7d7f9a947a7d46f1eb0cdec2a1afc574cc69161d10586945",
+    "misaka/palw/tir/exec/src/node/wide_capture_v2/budget.rs": "c66a8dd95cf3b0334e2ef25fb0162a57f7d935b287d2d01561442532d576128f",
+    "misaka/palw/tir/exec/tests/wide_capture_v2.rs": "73eea6016cde480af74f7dff55727d5ac3e2b45ffef010c698a1c709838acfe1",
+    "scripts/ci/a3-wide-capture-v2-ci.sh": "f127fa959a0ed3f0536305aa0e38af9c27558571c2f26bc39113a975f56465e8"
+  },
+  "checks": [
+    {
+      "name": "capture-and-legacy",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--test",
+        "wide_capture_v2",
+        "--test",
+        "capture_codec",
+        "--test",
+        "run_wide_q24_v2",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 12.215,
+      "log": "capture-and-legacy.log",
+      "log_sha256": "7cf402fee5bebb212b83eefb9bf90d24ad8475d4d1a11507a5d9a93eb7594856",
+      "top_level_results": [
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 18,
+      "failed": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "clippy",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 62.546,
+      "log": "clippy.log",
+      "log_sha256": "eee0e132dfe4cea88827a360883210de00aa2f5519498c98594a0db194591c8d",
+      "top_level_results": [],
+      "passed": 0,
+      "failed": 0
+    },
+    {
+      "name": "docs",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 2.467,
+      "log": "docs.log",
+      "log_sha256": "2371f24aef8cd2c9bb7b594fa643dadb096be69cb1009a54873644720e5bb793",
+      "top_level_results": [],
+      "passed": 0,
+      "failed": 0
+    }
+  ],
+  "test_binaries": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/capture_codec-3aaa65e22925c2a1",
+      "sha256": "70398a40e0a895f5e7959cae0b5c401a710bdea05295d22c9061e0923f3b20c4",
+      "bytes": 20023440
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_q24_v2-b7b0acdbdd74363d",
+      "sha256": "f9685d5d00f43d4336f558651cef4ee9a29c4c4d7519ab5df2044caf63e4a149",
+      "bytes": 21886608
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/wide_capture_v2-3fc56f2ab05111d1",
+      "sha256": "46271931d353e275c06d7f58a95ef309bf8383d1882dc595f1c6f78a2777522a",
+      "bytes": 21557200
+    }
+  ],
+  "count_policy": "Last outer result per Cargo-launched binary; nested child repeats excluded. Historical and other-role counts never added.",
+  "passed": 18,
+  "failed": 0,
+  "completed_utc": "2026-10-31T17:37:40.697269+00:00",
+  "scope": {
+    "capture_v2_tests": 7,
+    "unchanged_legacy_codec_tests": 4,
+    "wide_run_regressions": 7,
+    "historical_other_role_counts_added": false,
+    "wire_magic": "PALWTRC2",
+    "binding_DTO_version": 1,
+    "new_generic_BorshDeserialize": false,
+    "old_PALWTIRC_bytes_changed": false,
+    "model_reexecution_in_capture": false,
+    "Hello2_implemented": false,
+    "native_registration_admission_credit_activation_claimed": false,
+    "physical_hostlease_or_RSS_measured": false,
+    "trained_LLM_reproduced": false
+  },
+  "review_record": [
+    "A0 approved explicit API/version and resource inventory before coding/tests; requested source freeze then independent review before limited Cargo.",
+    "Frozen c14d47b7d reviewed read-only by separate codec/budget/test agents and A0 positive_roles; no nested generic program decode or allocation escape found.",
+    "Two reviewers found row-width scanning before minimum work admission; separate2faef030d moves that guard, then c667259a6 adds a direct error-order regression required by A0.",
+    "Source/format/diff review completed without Cargo during A0 disk hold. A0 granted limited18 tests/Clippy/Docs on exact c667; no mutable build/preflight/test failure occurred in this increment."
+  ],
+  "ownership_contract": "Decode: input frame span+new native backing+8192 parser+declared external. Build: source run.reserved_bytes+fresh capture copies+actual moved leaf capacities (subset of capture, counted once)+metadata scratch+external. Encode: retained capture actual backing+one exact frame+8192+external. Authenticate: retained capture+metadata/prompt, dense/row/tile Merkle, per-leaf i128/hash scratch+external. Pre-admitted opaque expected-space construction is caller-owned; independent retained frames/runs/expected/params/plans/prior exports must be pre-summed when not counted by that operation. Caps are not host leases/global allocator/RSS guarantees.",
+  "identity_boundary": "Rooted literal expected Binding plus independently pre-admitted opaque V2 space; class/artifact/full context/layout/program/count/roots all pinned. Borrowed program is compared by count-only+streaming writer; no new nested program decoder or model run. Full canonical dense geometry/hash membership or exactly empty fold capture. Correct selection/arithmetic is not inferred: coherently committed non-greedy/OOV IDs, raw narrow interval violations and separately committed row/step disagreement remain evidence.",
+  "test_fixture_external_envelope_bytes": 67108864,
+  "external_envelope_measurement": "Conservative caller-declared64MiB reservation for local fixture inputs/expected space/retained run/frame/copies when external to an operation; not measured allocation.",
+  "wire_oracle_scope": "Independent top-level five-field Borsh shadow and literal magic/binding version/extreme i64 bytes; nested BindingV1 and generic LeafV1 DTOs are shared unchanged. Not an immutable full-file-hash golden.",
+  "targets": {
+    "tests/capture_codec.rs": {
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0
+    },
+    "tests/run_wide_q24_v2.rs": {
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    },
+    "tests/wide_capture_v2.rs": {
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0
+    }
+  },
+  "final_qa": [
+    {
+      "name": "docs-final-artifacts",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "known_issue_occurrences": 43,
+      "new_issue_occurrences": 0,
+      "log": "docs-final-artifacts.log",
+      "log_sha256": "2371f24aef8cd2c9bb7b594fa643dadb096be69cb1009a54873644720e5bb793"
+    },
+    {
+      "name": "rustfmt-CI-shell-source-diff",
+      "outcome": "PASS"
+    }
+  ]
+}

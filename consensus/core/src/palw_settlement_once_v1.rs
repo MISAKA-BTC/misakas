@@ -97,6 +97,16 @@ pub enum PalwSettlementLegV1 {
     /// receipt on a paid claim the court convicted, on its own collateral. Subject: the paid base claim. Party: the seat (kernel
     /// id).
     ReceiptSignerLiability = 19,
+    /// RFC-0045 poster-funded success, never primary issuance. Subject is the Assignment.
+    AssignmentWorkerPayment = 20,
+    /// Exact native accepted service receipt, shared across A/C/prover debit accounts.
+    AssignmentServiceFee = 21,
+    /// Refundable native capital tranche of one original funding outpoint.
+    AssignmentCapitalReturn = 22,
+    /// Safe native refund tranche; ordinal is the source leg's prior refunded total.
+    AssignmentRefund = 23,
+    /// Contractually authenticated Assignment obligation; never an invented fine.
+    AssignmentContractualBurn = 24,
 }
 
 /// Which consumer settled a leg (audit only; never part of the obligation id).
@@ -125,6 +135,8 @@ pub enum PalwSettlementConsumerV1 {
     ImprovementPool = 14,
     /// RFC-0007 §4.1 T6: the paid-claim trap (a held check fee's release, a receipt signer's liability).
     PaidClaimTrap = 15,
+    /// RFC-0045 actual ordinary-script-validated UTXO settlement.
+    AssignmentNativeUtxo = 16,
 }
 
 /// **The real debit a leg is paid from** (the journal's source side). A payment is never larger than its debit.
@@ -140,15 +152,19 @@ pub enum PalwSettlementDebitV1 {
     Prepaid { sponsor: [u8; 64], amount: u64 },
     /// A bond's posted collateral (kernel id), charged by this leg itself.
     Collateral { bond: [u8; 64], amount: u64 },
+    /// Actual spent native purpose outpoint; the UTXO/PALW batch owns the debit.
+    NativeUtxo { outpoint: crate::tx::TransactionOutpoint, amount: u64 },
 }
 
 impl PalwSettlementDebitV1 {
     pub const fn amount(&self) -> u64 {
         match *self {
             Self::Issuance { carve } => carve,
-            Self::Escrow { amount, .. } | Self::Held { amount } | Self::Prepaid { amount, .. } | Self::Collateral { amount, .. } => {
-                amount
-            }
+            Self::Escrow { amount, .. }
+            | Self::Held { amount }
+            | Self::Prepaid { amount, .. }
+            | Self::Collateral { amount, .. }
+            | Self::NativeUtxo { amount, .. } => amount,
         }
     }
 }
@@ -221,6 +237,19 @@ impl PalwSettlementOnceRowV1 {
         }
         if key != self.obligation.id_v1().as_slice() {
             return Err("a settlement-once row under a foreign obligation key");
+        }
+        let assignment_leg = matches!(
+            self.obligation.leg,
+            PalwSettlementLegV1::AssignmentWorkerPayment
+                | PalwSettlementLegV1::AssignmentServiceFee
+                | PalwSettlementLegV1::AssignmentCapitalReturn
+                | PalwSettlementLegV1::AssignmentRefund
+                | PalwSettlementLegV1::AssignmentContractualBurn
+        );
+        let assignment_consumer = self.consumer == PalwSettlementConsumerV1::AssignmentNativeUtxo;
+        let native_debit = matches!(self.debit, PalwSettlementDebitV1::NativeUtxo { .. });
+        if (assignment_leg || assignment_consumer || native_debit) && !(assignment_leg && assignment_consumer && native_debit) {
+            return Err("Assignment native UTXO purpose cannot be cast to an old settlement leg/debit/consumer");
         }
         if self.amount > self.debit.amount() {
             return Err("a settled leg pays more than its recorded debit");

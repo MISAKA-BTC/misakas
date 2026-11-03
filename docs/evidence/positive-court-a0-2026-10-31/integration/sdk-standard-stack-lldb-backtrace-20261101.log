@@ -1,0 +1,60 @@
+(lldb) target create /Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893
+Current executable set to '/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893' (arm64).
+(lldb) run --exact explicit_wide_sdk_context_matches_the_resolver_without_enabling_v1_admission
+
+running 1 test
+Process 73758 launched: '/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893' (arm64)
+Process 73758 stopped
+* thread #2, name = 'explicit_wide_sdk_context_matches_the_resolver_without_enabling', stop reason = EXC_BAD_ACCESS (code=2, address=0x16fe03340)
+    frame #0: 0x000000010375faa0 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h30c01b4128731fd8 + 20
+runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h30c01b4128731fd8:
+->  0x10375faa0 <+20>: str    xzr, [sp]
+    0x10375faa4 <+24>: cmp    sp, x9
+    0x10375faa8 <+28>: b.ne   0x10375fa9c               ; <+16>
+    0x10375faac <+32>: sub    sp, sp, #0x6e0
+Target 0: (runtime_pack-066d0b88b30f6893) stopped.
+(lldb) thread backtrace
+* thread #2, name = 'explicit_wide_sdk_context_matches_the_resolver_without_enabling', stop reason = EXC_BAD_ACCESS (code=2, address=0x16fe03340)
+  * frame #0: 0x000000010375faa0 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h30c01b4128731fd8 + 20
+    frame #1: 0x0000000103793448 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_with_pair_v1::h8792d0bba7abede9 + 316
+    frame #2: 0x000000010375f6c0 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object::hd9e98241b51a0c90 + 116
+    frame #3: 0x00000001028a6a7c runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::apply_palw_transition_v7_inner::h7d0dfdf795fe28a1 + 2488
+    frame #4: 0x00000001028b86fc runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v7::_$u7b$$u7b$closure$u7d$$u7d$::h320cf79d4ff23918 + 280
+    frame #5: 0x0000000102516b2c runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2::ha521b372f4d88ecb + 152
+    frame #6: 0x00000001028b85d4 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v7::hce345a30998c8030 + 324
+    frame #7: 0x00000001028db6a0 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v2_with_extras::hb67007fa284f8aad + 272
+    frame #8: 0x00000001028b8448 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v2::h40c7238976ced11a + 144
+    frame #9: 0x00000001033ea5f0 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::config::params::palw_seed_attempt_targets_v1::hb9e060050991a3a0 + 244
+    frame #10: 0x00000001033f2b40 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::config::params::palw_v2_params_from_artifacts_on_base_with_utxos::h6c94a54b92b63373 + 1120
+    frame #11: 0x00000001033eca04 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::config::params::palw_v2_params_with_class_rows_v1::hff2c88b903fab857 + 488
+    frame #12: 0x00000001033ebe48 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::config::params::palw_t12_params_with_registry_v1::h78e2360a718a13aa + 296
+    frame #13: 0x00000001033eb9e8 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::config::params::palw_t12_public_params_over_v1::h4d0a1a3b5efeb8b7 + 552
+    frame #14: 0x00000001033e952c runtime_pack-066d0b88b30f6893`kaspa_consensus_core::config::params::palw_t12_shipped_params::he63c7d146823f3ff + 68
+    frame #15: 0x000000010326fd44 runtime_pack-066d0b88b30f6893`_$LT$kaspa_consensus_core..config..params..Params$u20$as$u20$core..convert..From$LT$kaspa_consensus_core..network..NetworkId$GT$$GT$::from::h8618f0d5cd38a18a + 404
+    frame #16: 0x00000001000cd9f0 runtime_pack-066d0b88b30f6893`_$LT$T$u20$as$u20$core..convert..Into$LT$U$GT$$GT$::into::hb033eb26487740c9 + 12
+    frame #17: 0x00000001001a4400 runtime_pack-066d0b88b30f6893`misaka_palw_sdk::runtime_pack::build::network::h781ee714ab31c652 + 296
+    frame #18: 0x0000000100013fa4 runtime_pack-066d0b88b30f6893`runtime_pack::explicit_wide_sdk_context_matches_the_resolver_without_enabling_v1_admission::hd2cbe3d341ec48f8 + 3788
+    frame #19: 0x0000000100014424 runtime_pack-066d0b88b30f6893`runtime_pack::explicit_wide_sdk_context_matches_the_resolver_without_enabling_v1_admission::_$u7b$$u7b$closure$u7d$$u7d$::h1f12e1e63325fbbd + 20
+    frame #20: 0x000000010001f7e4 runtime_pack-066d0b88b30f6893`core::ops::function::FnOnce::call_once::h4541adc6a4d197fd + 20
+    frame #21: 0x000000010004cd70 runtime_pack-066d0b88b30f6893`test::__rust_begin_short_backtrace::h6ca5fe182383a98d + 24
+    frame #22: 0x000000010005bf58 runtime_pack-066d0b88b30f6893`test::run_test::_$u7b$$u7b$closure$u7d$$u7d$::hca48f6c40383049d + 908
+    frame #23: 0x000000010003d0c8 runtime_pack-066d0b88b30f6893`std::sys::backtrace::__rust_begin_short_backtrace::h4ccc732acb10c9b8 + 132
+    frame #24: 0x00000001000400c8 runtime_pack-066d0b88b30f6893`core::ops::function::FnOnce::call_once$u7b$$u7b$vtable.shim$u7d$$u7d$::h590ca23b87b969e2 + 64
+    frame #25: 0x0000000104e1f800 runtime_pack-066d0b88b30f6893`std::sys::thread::unix::Thread::new::thread_start::hd42ed9e591878587 + 408
+    frame #26: 0x0000000181ac3c58 libsystem_pthread.dylib`_pthread_start + 136
+(lldb) disassemble -f -c 14
+runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h30c01b4128731fd8:
+    0x10375fa8c <+0>:  stp    x28, x27, [sp, #-0x20]!
+    0x10375fa90 <+4>:  stp    x29, x30, [sp, #0x10]
+    0x10375fa94 <+8>:  add    x29, sp, #0x10
+    0x10375fa98 <+12>: sub    x9, sp, #0xbc, lsl #12    ; =0xbc000 
+    0x10375fa9c <+16>: sub    sp, sp, #0x1, lsl #12     ; =0x1000 
+->  0x10375faa0 <+20>: str    xzr, [sp]
+    0x10375faa4 <+24>: cmp    sp, x9
+    0x10375faa8 <+28>: b.ne   0x10375fa9c               ; <+16>
+    0x10375faac <+32>: sub    sp, sp, #0x6e0
+    0x10375fab0 <+36>: str    xzr, [sp]
+    0x10375fab4 <+40>: sub    x9, x29, #0x80
+    0x10375fab8 <+44>: str    x9, [sp, #0x7d98]
+    0x10375fabc <+48>: add    x9, sp, #0xb1, lsl #12    ; =0xb1000 
+    0x10375fac0 <+52>: add    x9, x9, #0x7b8

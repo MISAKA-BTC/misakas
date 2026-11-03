@@ -29,6 +29,22 @@ impl NativeTransitionReservationV1 {
         construction.grow_v1(crate::palw_exec_v2_verify::PALW_EXEC_APPROVAL_KEY_BYTES_V1 as u64)?;
         Ok((value, construction))
     }
+    /// Reserve the typed carriage copy before stream-counting canonical bytes,
+    /// then admit root workspace before root hashing allocates its buffers.
+    pub(crate) fn state_root_v2(&mut self, state: &PalwChainStateV2) -> Result<crate::Hash64, NativeCoverageV1> {
+        let copy_bound = state.native_heap_v1("executed-prefix carriage copy").add::<PalwChainStateV2>(
+            NativeCoverageV1::Bounded { bytes: size_of::<crate::palw_state_v2::PalwStateCarriageV2>() as u64 },
+            "executed-prefix carriage owner",
+        );
+        let _copy_lease = reserve_native_requests_v1(copy_bound.bytes().ok_or(copy_bound)?)?;
+        let carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(state);
+        let canonical = borsh::object_length(&carriage)
+            .map_err(|e| NativeCoverageV1::unsupported::<PalwChainStateV2>("native executed-prefix root quote", &e.to_string()))?
+            as u64;
+        let requests = super::restore_workspace::native_restore_root_workspace_requests_v1(canonical)?;
+        self.grow_v1(requests)?;
+        Ok(state.state_root())
+    }
     pub(crate) fn grow_v1(&mut self, additional: u64) -> Result<(), NativeCoverageV1> {
         if self.lease.is_none() && !native_logical_admission_enabled_v1() && !native_resource_admission_enabled_v1() {
             return Ok(());
@@ -44,6 +60,19 @@ impl NativeTransitionReservationV1 {
         }
         self.requests = requests;
         Ok(())
+    }
+    /// Admit the fixed output frames before the fold builds their contents.
+    pub(crate) fn reserve_output_owners_v1(
+        &mut self,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), NativeCoverageV1> {
+        if !self.is_tracking_v1() {
+            return Ok(());
+        }
+        let delta = value_requests_v1(&PalwStateDeltaV2 { point: *point, entries: Vec::new() })?;
+        let skips = value_requests_v1(&Vec::<(crate::BlockHash, String)>::new())?;
+        let requests = delta.checked_add(skips).ok_or_else(|| NativeCoverageV1::overflow::<Self>("fresh output owners"))?;
+        self.grow_v1(requests)
     }
     fn take_value_v1<T: NativeHeapV1>(&mut self, value: T) -> Result<NativeRetainedV1<T>, NativeCoverageV1> {
         let requests = value_requests_v1(&value)?;
@@ -62,6 +91,35 @@ impl NativeTransitionReservationV1 {
     }
     pub(crate) fn finish_state_v1(mut self, state: PalwChainStateV2) -> Result<NativeChainStateV1, NativeCoverageV1> {
         self.take_value_v1(state)
+    }
+    pub(crate) fn finish_transition_with_assignment_materials_v2(
+        mut self,
+        state: PalwChainStateV2,
+        delta: PalwStateDeltaV2,
+        skips: Vec<(crate::BlockHash, String)>,
+        materials: crate::palw_state_v2::PositiveAssignmentMaterialOutcomeV2,
+    ) -> Result<
+        (
+            NativeChainStateV1,
+            NativeStateDeltaV1,
+            NativeRetainedV1<Vec<(crate::BlockHash, String)>>,
+            NativeRetainedV1<crate::palw_state_v2::PositiveAssignmentMaterialOutcomeV2>,
+        ),
+        NativeCoverageV1,
+    > {
+        if materials.is_empty() {
+            // Empty Assignment path preserves the exact old output split and
+            // carries no allocated record buffer into a fictitious new owner.
+            let (state, delta, skips) = self.finish_transition_v1(state, delta, skips)?;
+            return Ok((state, delta, skips, crate::palw_state_v2::PositiveAssignmentMaterialOutcomeV2::empty_retained_v2()));
+        }
+        // Every split occurs while the aggregate construction ticket is alive;
+        // no output is approved by a reservation after buffers were allocated.
+        let state = self.take_value_v1(state)?;
+        let delta = self.take_value_v1(delta)?;
+        let skips = self.take_value_v1(skips)?;
+        let materials = self.take_value_v1(materials)?;
+        Ok((state, delta, skips, materials))
     }
     pub(crate) fn finish_transition_v1(
         mut self,

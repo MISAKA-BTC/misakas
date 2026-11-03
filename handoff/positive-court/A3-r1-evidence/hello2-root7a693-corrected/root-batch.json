@@ -1,0 +1,133 @@
+{
+  "status": "ROOT_BATCH_30_PASS_NOT_A3_STANDALONE",
+  "source_commit": "7a6935de6add7fe66deb324090a7144b974a8730",
+  "selected_a3_source": "1b14d1ecc + test-only c99125eb8",
+  "root_metadata_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/hello2-admission-source-clock-corrected-20261101.json",
+  "root_metadata_snapshot_sha256": "5f61fb5a98fe509441d7ef14ac9ba804f880275a3aeca82f26e76eb175e92320",
+  "source_files_before": {
+    "misaka/palw/tir/exec/src/node/capture_codec.rs": "312045b1ca741216262cc83b7eb6d3d385ff0b40a50572d32cc21bc43fc48fbd",
+    "misaka/palw/tir/exec/src/node/cell.rs": "4f7027a642a45d67441f9ab7e875576ddbd8753637c04cbc821c0ca0c00d8f58",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2.rs": "faab0937b2bd67a26a4949c1291c645ec69186fa83719f486c394ed7650e9c83",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/budget.rs": "8845c484912871cd8035614671eb8d98d90b767bc46094d82a5f101e1b2a8602",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/codec.rs": "8bcbfed68fc358c1ae4165fd84460ade34c6cb03c5b01010170505056c770cf8",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/cpu.rs": "4e0e22705c75379ccf829e0c75ca21bacd5435bd5ef77b01ecda8c684ce86e55",
+    "misaka/palw/tir/exec/src/node/cell_ipc_v2/session.rs": "e024f159df9185f9cc60a3e0e54d90891f269057b0f58e3e21e5847ea5d16295",
+    "misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs": "46c29f1476252d4eeab6d37a387c0724a33b3f62df6045a95c0b1bac1fab81d4",
+    "misaka/palw/tir/exec/src/node/wide_capture_v2.rs": "b91de0904467aebb7d7f9a947a7d46f1eb0cdec2a1afc574cc69161d10586945",
+    "misaka/palw/tir/exec/src/node/wide_capture_v2/budget.rs": "c66a8dd95cf3b0334e2ef25fb0162a57f7d935b287d2d01561442532d576128f",
+    "misaka/palw/tir/exec/tests/capture_codec.rs": "e77e877c387175fff2d27733d4398ebc6bfdc00c10b31ac8e1dffa7eeafd154c",
+    "misaka/palw/tir/exec/tests/cell.rs": "94a0a75ff72d4a166f0248e3b508fb69edab674215fac76be2c52e28badbef11",
+    "misaka/palw/tir/exec/tests/cell_ipc_v2.rs": "98b0af4a33a4de578664e1fc4c612d967cc3766aa908e60505797553a50ee9fb",
+    "misaka/palw/tir/exec/tests/run_wide_common/mod.rs": "820caf4e26d9862d3972b9f7e12dc6ac91e5a5f483e377e1b803bad9f5c1a769",
+    "misaka/palw/tir/exec/tests/run_wide_idx_history.rs": "2cd1ccc48cc7832326b38eedece89c23755c6c171174202a518a0c2ce8566012",
+    "misaka/palw/tir/exec/tests/run_wide_memory.rs": "09085b944a6ed2bb3367b117ffc5333274c705eef3d7ba08685f2ba61fe87b92",
+    "misaka/palw/tir/exec/tests/run_wide_q24_v2.rs": "dc7bb7e9a0fb0990998f089c0335bcd2b7d960b159b5b468c50e877423a6497c",
+    "misaka/palw/tir/exec/tests/wide_capture_v2.rs": "73eea6016cde480af74f7dff55727d5ac3e2b45ffef010c698a1c709838acfe1"
+  },
+  "environment_overrides": {
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/positive-court-a0/target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2",
+    "ROCKSDB_STATIC": "1",
+    "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out"
+  },
+  "effective_RUST_MIN_STACK": null,
+  "archive": {
+    "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+    "bytes": 23048496,
+    "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+  },
+  "source_stable": true,
+  "archive_stable": true,
+  "root_recorded_result": {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "misaka-palw-tir-exec",
+      "--features",
+      "node",
+      "--test",
+      "cell_ipc_v2",
+      "--test",
+      "cell",
+      "--test",
+      "run_wide_memory",
+      "--test",
+      "wide_capture_v2",
+      "--test",
+      "capture_codec",
+      "--offline",
+      "--locked",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0",
+      "--config",
+      "profile.test.package.kaspa-consensus-core.opt-level=0"
+    ],
+    "exit_code": 0,
+    "passed": 30,
+    "effective_success": true,
+    "test_summaries": [
+      {
+        "status": "ok",
+        "passed": 4,
+        "failed": 0
+      },
+      {
+        "status": "ok",
+        "passed": 12,
+        "failed": 0
+      },
+      {
+        "status": "ok",
+        "passed": 6,
+        "failed": 0
+      },
+      {
+        "status": "ok",
+        "passed": 1,
+        "failed": 0
+      },
+      {
+        "status": "ok",
+        "passed": 7,
+        "failed": 0
+      }
+    ],
+    "all_targets_positive": true,
+    "elapsed_seconds": 6.652989875001367,
+    "log": "hello2-admission-source-clock-corrected-20261101-0.log",
+    "sha256": "490a5db705c95c233eb980485ebbb8531f38c6907728a1a20393a58aa08dcefd",
+    "binaries": [
+      {
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-bd9af3d9c95b8e12",
+        "bytes": 20027200,
+        "sha256": "3607109a7daacc699f4f505e8a8890c0b80566986180b837c221b5cadfa36966"
+      },
+      {
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell-31fb22b90f49729e",
+        "bytes": 25764080,
+        "sha256": "dc05e42a9ee9e9f209dd4a2a17d44dc711879e9c8e4f41ab3d48fa502904d00e"
+      },
+      {
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell_ipc_v2-24d04baed76552cc",
+        "bytes": 21257136,
+        "sha256": "daa9edc778bdaca61e781360ae3122e6a4437aff70dc74af7df8e75ab5ea1ac4"
+      },
+      {
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_memory-c0cdcb1dcf02896e",
+        "bytes": 20476672,
+        "sha256": "116ff22b9c1735c57a396adf550aa8b8f752374480b4e1d2d67c96c6598e4ff3"
+      },
+      {
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-cc910cf2d06a0915",
+        "bytes": 21577616,
+        "sha256": "130c570f006a7100e07e0bb35f4a2f78f37051cc1c018b006911d43bf734dead"
+      }
+    ]
+  },
+  "local_log": "root-corrected-batch.log",
+  "count_policy": "30=Hello2 new6+oldcell12+oldcapture4+widecapture7+memory1. Ignored child helper not added; historical counts excluded. Producer7 pending separately.",
+  "limits": "Prepared resident CPU data subset only. Generic artifact startup still incomplete. No strict Clippy result asserted for this source. A3 Cargo was held; Root owns execution/binary pinning."
+}

@@ -721,6 +721,13 @@ pub fn palw_staged_selected_events_v1(
     if point.daa_score < bundle.plan.terms.accepted_daa || point.daa_score >= bundle.plan.terms.material_until_daa {
         return Ok(None);
     }
+    // An already-selected session also must not expose an unadapted wide source.
+    if let Some(contract) = state.staged_bundle_contract_v1(key.0)
+        && let crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header) = &contract.original_binding
+        && let Some(record) = state.tir_class_v1(&header.job_context.shape_profile_id)
+    {
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(str::to_string)?;
+    }
     let session = match &bundle.selected {
         Some(session) => session.clone(),
         None => {
@@ -737,7 +744,9 @@ pub fn palw_staged_selected_events_v1(
             // A TIR claim's scheme is its registered record's; a legacy claim's its shape profile's.
             let tiled = match &bundle_contract.original_binding {
                 crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(_) => {
-                    state.tir_class_v1(&target.class_id).ok_or("selected TIR source has no registered class record")?.facts.tiled
+                    let record = state.tir_class_v1(&target.class_id).ok_or("selected TIR source has no registered class record")?;
+                    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(str::to_string)?;
+                    record.facts.tiled
                 }
                 _ => {
                     let profile = state.fp_work_profile_of(&target.class_id).ok_or("selected source has no accepted profile")?;
@@ -800,6 +809,7 @@ pub fn palw_staged_tir_view_v1(
         return Ok(None);
     };
     let record = state.tir_class_v1(&header.job_context.shape_profile_id).ok_or("TIR claim's registered class record is absent")?;
+    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(str::to_string)?;
     let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, maximum_leaves)?;
     let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(state, &claim).ok_or("TIR view claim target absent")?;
     if view.committed_execution_root != target.execution_root || view.class_id != target.class_id {
@@ -839,6 +849,7 @@ pub fn palw_tir_prefix_context_v1(
     job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
     maximum_leaves: u64,
 ) -> Result<PalwTirPrefixContextV1, String> {
+    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(str::to_string)?;
     let binding = header.resolve_registered_layout_v1(record, layout, header.committed_execution_root, maximum_leaves)?;
     let space = crate::palw_tir_step_v1::PalwTirStepSpaceV1::new(&binding.class).map_err(|e| e.to_string())?;
     if space.leaf_count_capped(&header.job_context, maximum_leaves).map_err(|e| e.to_string())? != header.step_leaf_count {

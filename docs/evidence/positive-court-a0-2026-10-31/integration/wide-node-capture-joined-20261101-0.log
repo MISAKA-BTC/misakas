@@ -1,0 +1,18 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 1m 53s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 10 tests
+test palw_positive_check_v2::full_relation::wide_v2::tests::wide_ids_pin_byte_unit_and_storage_bounds_include_the_new_root_and_ids ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::corrupt_transport_or_wide_generated_pin_cannot_advance_coverage ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::coherently_committed_wrong_panel_greedy_id_never_refutes_the_signed_miner ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::wrong_signed_miner_output_is_compared_only_after_all_wide_relations ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::signed_wrong_panel_intermediate_rejects_only_witness_not_miner_output ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::mixed_state::signed_wrong_wide_checkpoint_is_panel_witness_rejection_only ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::actual_wide_source_relations_and_greedy_rows_complete_without_narrowing ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::mixed_state::dropped_corrupt_and_authenticated_stale_wide_checkpoint_cannot_advance_or_convict ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::insufficient_workspace_or_static_range_profile_never_becomes_miner_fault ... ok
+test palw_positive_check_v2::full_relation::wide_v2::tests::mixed_state::wide_stateful_windows_verify_fixed_history_and_partial_history_read_closure ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 5473 filtered out; finished in 0.24s
+

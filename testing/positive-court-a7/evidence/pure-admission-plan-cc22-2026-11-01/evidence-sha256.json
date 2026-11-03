@@ -1,0 +1,16 @@
+{
+  "scope": "exact API/source/input inventory and plan only; no Cargo or pure-admission runtime",
+  "root_source_pin": "cc22b0da13784eb03a023cbd1781969577883d9e",
+  "files": [
+    {
+      "path": "PLAN.md",
+      "bytes": 8626,
+      "sha256": "81fb4e7e90582777f15cc5a6d94a36b4ae520265c4ccc57c4eca13c2f529f857"
+    },
+    {
+      "path": "api-and-inputs.json",
+      "bytes": 14915,
+      "sha256": "9940794da20ed5edee36f4c921e9c52e3d3179fd6e4b872470c38c6401b17555"
+    }
+  ]
+}

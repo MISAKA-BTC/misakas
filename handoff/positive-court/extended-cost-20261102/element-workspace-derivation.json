@@ -1,0 +1,21 @@
+{
+  "scope": "same pinned original program/job and workspace formula; conservative logical request bound only, not allocator/RSS or a native resource right",
+  "actual_compiled_memo_entry_envelope": 560,
+  "pointer_bytes": 8,
+  "old_actual_failed_target_lanes": 8,
+  "old_actual_workspace_quote": 807985600,
+  "old_elements_limit": 16384,
+  "extended_elements_limit": 32768,
+  "max_source_target_lanes": 65536,
+  "unchanged_source_reads": 262144,
+  "unchanged_terms": 262144,
+  "context_count_bound_is_unchanged": "positions*occurrences <= 16*(2+1024), below the old elements+reads+lanes+1 cap, so increasing elements cannot change the min() context count",
+  "per_extra_element_workspace_bytes": 3632,
+  "element_delta_bytes": 59506688,
+  "per_extra_target_lane_bytes": 712,
+  "conservative_workspace_at_max_source_target_lanes": 914148224,
+  "unchanged_actual_workspace_owner": 1073741824,
+  "fits_existing_owner": true,
+  "actual_runtime_quote_still_required_for_every_relation": true,
+  "full_job_feasibility_unproven": true
+}

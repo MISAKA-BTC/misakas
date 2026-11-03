@@ -1,0 +1,65 @@
+{
+  "status": "COMMITTED_MINIMAL_SOURCE_FIX_READY",
+  "scope": "Readonly review of proposed and exact committed replacement; no Cargo/rustc/model/CPP/runtime test by reviewer",
+  "source_sha256": {
+    "consensus/core/src/palw_state_v2.rs": "f77bb48b2ff44b7e19891afb2796c5ebb6f1bfb82853061733fa2c5de17e465b",
+    "consensus/core/src/palw_state_v2/objects.rs": "0b89cacda419128a0764a6198a15a73ac78ab10749fbfdbad6f8b257d5013b21",
+    "consensus/core/src/palw_kernel_route_fold_v1.rs": "9c8b072ddc51a5931b1d2d26deff797ab320979c69f2af07dc4a99c03e4ce2b6",
+    "consensus/core/src/palw_state_v2/native_writers.rs": "e6aa42fe9639cf638eb30a4cd01a37902096be5804986c0f5079c00ee8cf1561",
+    "consensus/core/src/palw_state_v2/transition_builder.rs": "a433c6f6b01c62d7ad202af314bcfb09f43d7c5cb4f25e6b1ee8f68087dc11de",
+    "consensus/core/src/palw_kernel_route_v1.rs": "bf1a6bb9bf6567b2d7f3b61ce8441280de027ff248ca1ef84e48d2c2a803e848"
+  },
+  "proposal": "Inside existing params.class_registration_origin_active_at(ctx.daa_score) && immutable_previous.is_none(), replace existing kernel_route.is_none() error return with palw_kernel_route_fold_v1::ensure_route_header(builder,ctx)? guarded by same is_none. Leave origin digest/row/typed writer otherwise unchanged.",
+  "checks": [
+    {
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "line": 19303,
+      "fact": "Outer origin fence and immutable previous-none remain exact. Digest/object shape errors still occur before helper, origin row binds same class/block/DAA/door/admission digest. Existing Some header behavior and immutable registration behavior unchanged."
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "line": 322,
+      "fact": "route_policies requires processor-resolved extras.kernel_route, derives network/ruleset policy, copies existing adjudication cap and OPV/typed roots, validates OPV against ledger policy. No peer-authored policy fallback/default activation introduced."
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "line": 349,
+      "fact": "Existing first-use helper creates header from policies and current DAA; no extras still refuses. Existing helper also checks stored policy if called with Some, but proposed None-only call intentionally preserves prior Some-path behavior rather than broadening policy semantics."
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "line": 263,
+      "fact": "Header writer uses existing native quote/admission before state/journal copy/write; one KernelRouteHeader entry records old None/new header. Typed origin row encoding separately admitted through existing native writer before Borsh and row insertion."
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2.rs",
+      "line": 23146,
+      "fact": "Delta apply/revert verifies expected header; reverse Header installNone refuses nonempty rows. New operation order Header then origin Row reverses Row then Header, so ordinary full delta undo can restore None."
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/transition_builder.rs",
+      "line": 9356,
+      "fact": "Existing checkpoints reserve state copy before clone and restore state+truncate journal+invalidate caches. No new checkpoint or exception-swallowing added; ordinary registration errors propagate out of one-object/block transition, discarding unpublished builder. Do not claim new per-object transactional wrapper."
+    },
+    {
+      "path": "consensus/core/src/palw_state_v2/objects.rs",
+      "line": 2105,
+      "fact": "Existing routing-profile registration already initializes missing route through same helper before typed row. Proposed origin path follows existing first-use pattern."
+    }
+  ],
+  "boundaries": [
+    "No Params/mirror/fence/PublicNone/newwire/domain/model tier/signature/admission gate changes",
+    "Active origin without kernel extras still errors; it does not become a registration bypass",
+    "Header writer admission is established for persisted write/journal; this review does not establish complete transient allocation/CPU/RSS bounds for preexisting new_typed/template constructor used by helper",
+    "Source proposal is not actual native/runtime acceptance evidence; parent reported actual tiny now reaches missing aux141 error after stack issue was removed"
+  ],
+  "required_validation": [
+    "virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore exact ignored/default-stack selection per retained parent runner",
+    "first-use new header/origin aux row, actual tiny native registration, replay and sameDB restore; failures remain failures",
+    "Do not update golden expected roots merely to force a pass; public presets remain unchanged"
+  ],
+  "applied_commit": "5745b1572dca27e3b185bd25f61fa4c5d31932e7",
+  "patch_sha256": "b537a06dc53086d82a04a503f7782dbd8c42cddbf20dd7110db5e61d8edb30dc",
+  "exact_commit_diff_matches_patch": true,
+  "commit_only_path": "consensus/core/src/palw_state_v2.rs"
+}

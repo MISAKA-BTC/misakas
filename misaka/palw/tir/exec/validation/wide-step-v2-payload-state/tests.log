@@ -1,0 +1,40 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/utils)
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/core)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/hashes)
+   Compiling librocksdb-sys v0.17.3+10.4.2
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/positive-contract)
+   Compiling misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/kernel)
+   Compiling rocksdb v0.24.0
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/math)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/consensus/core)
+   Compiling kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/database)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/positive-accounting)
+    Finished `test` profile [unoptimized] target(s) in 1m 35s
+     Running tests/palw_tir_step_wide_v2.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/palw_tir_step_wide_v2-fb55f4bb24b4889c)
+
+running 6 tests
+test profile_metadata_and_builder_admission_cannot_be_substituted ... ok
+test original_wide_program_has_mixed_width_geometry_and_independent_hash_roots ... ok
+test canonical_final_i64_format_rejects_out_of_range_and_forged_leaf_dtos ... ok
+test explicit_v2_validator_keeps_binding_v1_and_rejects_identity_root_and_count_changes ... ok
+test legacy_narrow_preimages_and_root_stay_byte_identical_and_v1_refuses_wide ... ok
+test fixed_checkpoints_and_windowed_history_keep_legacy_lanes_beside_wide_final_logits ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/wide_logits_primitives_v2.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/wide_logits_primitives_v2-898482192ea7821a)
+
+running 5 tests
+test normative_domains_and_length_prefixed_bytes_stay_exact ... ok
+test root_builders_reject_empty_ragged_count_and_old_scheme_shapes ... ok
+test coherently_committed_bad_token_is_data_not_computation_authority ... ok
+test authenticate_exact_rows_tiles_and_caps_without_narrowing ... ok
+test every_tested_i32_lane_key_and_seeded_selection_matches_legacy ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

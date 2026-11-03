@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized] target(s) in 0.32s
+     Running tests/positive_panel_r1.rs (target/debug/deps/positive_panel_r1-79a64246e192c9c3)
+
+running 5 tests
+test original_author_signature_survives_takeover_and_rejects_other_keys_or_content ... ok
+test unauthenticated_relay_mutations_never_touch_node_progress_or_charge_arithmetic ... ok
+test incomplete_ordered_and_over_budget_batches_cannot_skip_mandatory_relations ... ok
+test acyclic_funding_consent_precedes_final_result_and_actual_panel_node_plan ... ok
+test formal_r1_batches_reach_actual_a1_node_port_and_resume_at_live_cursor ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.76s
+
+     Running tests/positive_panel_sources_r1.rs (target/debug/deps/positive_panel_sources_r1-7bd9de6aee8ea30b)
+
+running 6 tests
+test missing_prompt_refuses_before_materializing_large_prefill ... ok
+test retained_registered_class_discards_caller_spare_capacity ... ok
+test altered_g14_units_and_foreign_request_cannot_populate_cache ... ok
+test current_duty_expiry_or_branch_revocation_after_io_discards_prepared_units ... ok
+test merkle_prompt_units_reconstruct_original_prompt_and_reject_substitution ... ok
+test actual_a2_fallback_sources_rebuild_cold_panel_artifact_and_replay ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+

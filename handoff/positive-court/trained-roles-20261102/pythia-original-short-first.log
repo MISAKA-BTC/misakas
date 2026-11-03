@@ -1,0 +1,16 @@
+
+running 1 test
+test trained_roles::pythia70m_original_short_job_ordinary_panel_and_complete_node ... ROLE_MEASURE_REFUSED trace-free metadata
+
+thread 'trained_roles::pythia70m_original_short_job_ordinary_panel_and_complete_node' (4947412) panicked at misaka/palw/tir/exec/tests/positive_wide_material_v2/trained_roles.rs:623:9:
+bounded actual trained role measurement refused: trace-free metadata
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    trained_roles::pythia70m_original_short_job_ordinary_panel_and_complete_node
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 16 filtered out; finished in 0.00s
+

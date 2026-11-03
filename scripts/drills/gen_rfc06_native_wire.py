@@ -29,6 +29,13 @@ manual.update({
     'crate::palw_court_family_material_v1::FamilyPrimaryDraftV2',
     'crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3',
 })
+manual.add('crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1')
+# These process-local fold inputs are heap-visited but have no wire codec.
+manual.update({
+    'crate::palw_state_v2::PalwTransitionExtrasV1',
+    'crate::palw_state_v2::positive_assignment_raw::PositiveAssignmentScheduledActionV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2',
+})
 
 # A newly reached handwritten decoder must be explicitly reviewed. Generic
 # struct/enum fields cannot silently stand in for an unrelated custom codec.
@@ -321,6 +328,8 @@ AUX_SPEC_ARMS+=' | '.join(str(t) for t in sorted(AUX.RESERVED))+'=>return Err(wi
 for _t in AUX.TABLES:
     if _t not in AUX.RESERVED and _t not in _total:AUX_SPEC_ARMS+=f'{_t}=>return Err(wire::wire_bad("unallocated aux table {_t} row namespace")),\n'
 # The RFC07/RFC08 tables above dispatch on guarded key shapes only; a shape none of their folds writes is malformed too.
+# The new P prefix in table 136 has its own bounded, identity-checking codec.
+AUX_SPEC_ARMS+="136 if key_bytes==65 && prefix==b'P'=>super::positive_certification::scan_positive_certification_row_v2(k,frame)?,\n"
 AUX_SPEC_ARMS+='115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136=>return Err(wire::wire_bad("unallocated aux row namespace")),\n'
 # RFC-0006 RFC06-8 (2026-10-15): class registration origins (aux 141, keyed by the 64-byte class id; dormant fence).
 AUX_SPEC_ARMS+='141 if key_bytes==64=>crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1::scan_native_wire_v1(&mut frame)?,\n141=>return Err(wire::wire_bad("unallocated class registration origin row namespace")),\n'
@@ -458,6 +467,30 @@ router_arms += '150=>crate::palw_kernel_court_admission_v1::KernelCourtCapitalRo
 router_arms += '191 if key_bytes==132=>crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2::scan_native_wire_v1(frame)?,\n'
 router_arms += '191=>return Err(wire::wire_bad("unallocated finite provider fee V2 row namespace")),\n'
 code=code.replace(router_marker, router_arms+router_marker, 1)
+# Keep owner-audited aux151 VALUE scanning and strict map order on regeneration.
+# Patch this small manual section only; do not regenerate the shared DTO codec.
+def positive_aux_wire_v1(code):
+    count = '  let count=reader.word()? as u64;\n  for _ in 0..count {'
+    ordered = ('  let count=reader.word()? as u64;\n'
+               '  // Previous Positive key is fixed scratch; duplicates cannot collapse in BTreeMap decode.\n'
+               '  let mut previous_positive=[0u8;misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];\n'
+               '  let mut previous_positive_len=0usize;\n  for _ in 0..count {')
+    key = '   let mut key=[0u8;NATIVE_AUX_KEY_MAX_BYTES_V1 as usize];reader.step()?;reader.read_exact(&mut key[..key_bytes as usize])?;\n'
+    checked = key + ('   if table==misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {\n'
+                     '    let n=key_bytes as usize;\n'
+                     '    if n>previous_positive.len() || (previous_positive_len!=0 && key[..n]<=previous_positive[..previous_positive_len]) {\n'
+                     '     return Err(wire::wire_bad("duplicate or noncanonical Positive aux key"));\n    }\n'
+                     '    previous_positive[..n].copy_from_slice(&key[..n]);previous_positive_len=n;\n   }\n')
+    fallback = ' _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>'
+    typed = (' misaka_palw_positive_contract::native::KERNEL_AUX_TABLE=>super::positive_rows::scan_positive_aux_row_v1(key,frame)?,\n' + fallback)
+    for before, after in [(count, ordered), (key, checked), (fallback, typed)]:
+        if code.count(before) != 1:
+            raise ValueError('Positive aux151 manual scanner template changed: ' + before[:70])
+        code = code.replace(before, after, 1)
+    return code
+
+code=positive_aux_wire_v1(code)
+code += '\n// Existing version-1 kernel reward hold. This adapter only checks its codec;\n// it grants no payout, certification, or native admission authority.\nimpl NativeWireScanV1 for crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1 {\n    fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {\n        reader.step()?;\n        reader.step()?;\n        if reader.short()? != crate::palw_security_certification_v1::PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1 {\n            return Err(wire::wire_bad("unsupported kernel certified reward hold version"));\n        }\n        let mut sum = NativeWireShapeV1::default();\n        for _ in 0..5 {\n            sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;\n        }\n        for _ in 0..2 {\n            sum = sum.merge(u64::scan_native_wire_v1(reader)?)?;\n        }\n        Ok(sum)\n    }\n}\n'
 # Incremental GC host residency and exact cold preparation; no wire field.
 gc_replacements = [('let count=reader.word()? as u64;', 'let count=reader.word()? as u64;let mut gc_content=0u64;let mut gc_rows=0u64;let mut gc_key_bytes=0u64;'), ('let row_bytes=reader.word()? as u64;', 'if table==144&&key_bytes==65&&matches!(key[0],b\'N\'|b\'B\'){gc_content=gc_content.checked_add(1).ok_or_else(||wire::wire_bad("GC wire row count"))?;}if table==144&&matches!(key[0],b\'N\'|b\'B\'|b\'I\'|b\'A\'){gc_rows=gc_rows.checked_add(1).ok_or_else(||wire::wire_bad("GC key row count"))?;gc_key_bytes=gc_key_bytes.checked_add(key_bytes).ok_or_else(||wire::wire_bad("GC key byte sum"))?;}let row_bytes=reader.word()? as u64;'), ('sum.outer_entries=count;', 'if gc_rows!=0{sum=sum.allocation(gc_rows,size_of::<Vec<u8>>())?.allocation(gc_key_bytes,1)?;}if gc_content!=0{sum=sum.allocation(gc_content,crate::palw_state_v2::context_gc_resident_unit_v3())?;sum=sum.allocation(1,usize::try_from(crate::palw_state_v2::context_gc_fixed_scratch_v3().map_err(|_|wire::wire_bad("GC scratch shape"))?).map_err(|_|wire::wire_bad("GC scratch host width"))?)?;}sum.outer_entries=count;'), ('sum=sum.merge(shape.allocation(row_bytes', 'let shape=if table==144&&key[0]==b\'A\'{shape.allocation(shape.collection_entries.checked_add(2).ok_or_else(||wire::wire_bad("GC archive plan pins"))?,crate::palw_state_v2::context_gc_change_unit_v3())?}else{shape};sum=sum.merge(shape.allocation(row_bytes')]
 gc_header_end=code.index('pub(crate) fn scan_native_aux_row_v1')

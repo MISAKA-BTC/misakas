@@ -60,6 +60,10 @@ use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
 
+pub mod assignment_journal;
+pub(crate) mod funding_relay;
+pub mod positive_journal;
+
 /// The layout the rows were written under. Bump on ANY change to the wrapped Borsh types or to
 /// the record shapes below, so old rows are discarded for rebuilding instead of read as absent.
 pub const PALW_STATE_V2_STORE_SCHEMA_VERSION: u32 = 1;
@@ -504,16 +508,51 @@ impl DbPalwStateV2Store {
         delta.into_unreserved_legacy_v1().map(|delta| (root, delta)).map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))
     }
 
+    /// Return the block's post-transition state root and its delta.
     /// Decode directly from a pinned record view. No intermediate bincode
     /// Vec/cache/deep clone occurs before the typed Borsh preflight.
     pub fn delta_of_retained_v1(
         &self,
         block: BlockHash,
     ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1)> {
+        let (root, delta, _) = self.read_retained_delta_v2(block, None)?;
+        Ok((root, delta))
+    }
+
+    /// A paid history reader supplies the remaining wire and decoded-heap caps.
+    /// Check both against the pinned record before allocating the delta.
+    pub(crate) fn delta_of_retained_bounded_v2(
+        &self,
+        block: BlockHash,
+        maximum_bytes: u64,
+        maximum_heap: u64,
+    ) -> StoreResult<(kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64)> {
+        let (_, delta, bytes) = self.read_retained_delta_v2(block, Some((maximum_bytes, maximum_heap)))?;
+        Ok((delta, bytes))
+    }
+
+    fn read_retained_delta_v2(
+        &self,
+        block: BlockHash,
+        limits: Option<(u64, u64)>,
+    ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64)> {
         let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Deltas.into();
         let key = kaspa_database::prelude::DbKey::new(&prefix, block);
         let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
+        let extent = bytes.len() as u64;
+        if limits.is_some_and(|(maximum_bytes, _)| extent > maximum_bytes) {
+            return Err(StoreError::LocalResourceUnavailable(format!("PALW delta wire cap at {block}")));
+        }
         let record: PalwDeltaRecordViewV1<'_> = bincode::deserialize(&bytes)?;
+        if let Some((_, maximum_heap)) = limits {
+            let wire = record.delta_borsh;
+            let preflight =
+                kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(wire, wire.len() as u64)
+                    .map_err(|why| StoreError::DataInconsistency(format!("PALW delta shape at {block}: {why}")))?;
+            if preflight.logical_requests_v1() > maximum_heap {
+                return Err(StoreError::LocalResourceUnavailable(format!("PALW delta decode heap cap at {block}")));
+            }
+        }
         let delta =
             kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_classified_v1(record.delta_borsh, || {
                 borsh::from_slice::<PalwStateDeltaV2>(record.delta_borsh)
@@ -526,7 +565,7 @@ impl DbPalwStateV2Store {
                     StoreError::DataInconsistency(format!("palw delta decode at {block}: {e}"))
                 }
             })?;
-        Ok((record.state_root, delta))
+        Ok((record.state_root, delta, extent))
     }
 
     fn with_pinned_tip_v1<T>(
@@ -1159,6 +1198,54 @@ mod tests {
                 signature: Vec::new(),
             },
         ]
+    }
+
+    #[test]
+    fn retained_delta_replays_original_prefix_from_distinct_parent_and_result_roots() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(8));
+        let params = params();
+        let parent_block = BlockHash::from_u64_word(31);
+        let parent = PalwChainStateV2::genesis();
+        let point = ctx(32, 100, 100);
+        let (child, delta) = apply_palw_transition_v2(&parent, &params, &point, &registrations(), None).unwrap();
+        let parent_root = parent.state_root();
+        let child_root = child.state_root();
+        assert_ne!(parent_root, child_root);
+        assert_ne!(parent_block, child_root);
+
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, parent_block, &parent).unwrap();
+        store.insert_delta_batch(&mut batch, point.block, child_root, &delta).unwrap();
+        db.write(batch).unwrap();
+
+        let (loaded_block, loaded_parent) = store.load_tip_retained_v1(&params).unwrap().unwrap();
+        let (recorded_root, retained_delta) = store.delta_of_retained_v1(point.block).unwrap();
+        assert_eq!(loaded_block, parent_block);
+        assert_eq!(loaded_parent.state_root(), parent_root);
+        assert_eq!(recorded_root, child_root);
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, parent_root, &params).is_ok());
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, recorded_root, &params).is_err());
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, retained_delta.entries.len(), recorded_root, &params).is_ok());
+
+        let wire = borsh::to_vec(&delta).unwrap();
+        let heap = kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(
+            wire.as_slice(),
+            wire.len() as u64,
+        )
+        .unwrap()
+        .logical_requests_v1();
+        let (loaded, extent) = store.delta_of_retained_bounded_v2(point.block, u64::MAX, heap).unwrap();
+        assert_eq!(*loaded, delta);
+        assert!(store.delta_of_retained_bounded_v2(point.block, extent, heap).is_ok());
+        assert!(matches!(
+            store.delta_of_retained_bounded_v2(point.block, extent - 1, heap),
+            Err(StoreError::LocalResourceUnavailable(_))
+        ));
+        assert!(matches!(
+            store.delta_of_retained_bounded_v2(point.block, extent, heap - 1),
+            Err(StoreError::LocalResourceUnavailable(_))
+        ));
     }
 
     /// **A `palw_*` read costs one materialization per TIP, not one per request** (audit M-7),

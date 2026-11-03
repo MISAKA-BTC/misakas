@@ -43,6 +43,18 @@ use misaka_palw_tir::program::{Ref, StateKind, TirProgramV1};
 use misaka_palw_tir::types::{DType, Dim};
 use misaka_palw_tir::validate::ProgramInfo;
 
+/// Owner-local typed geometry request census; no binding or native authority.
+mod local_geometry_quote_v1;
+/// Explicit mixed-width step construction; legacy entry points remain four-byte-only.
+pub mod wide_v2;
+pub use local_geometry_quote_v1::quote_local_tir_step_space_additional_v1;
+mod local_space_diagnostics_v1;
+pub use local_space_diagnostics_v1::{LocalTirStepSpaceFixedRequestsV1, quote_local_tir_step_space_fixed_requests_v1};
+pub use wide_v2::{
+    PALW_TIR_STEP_LEAF_VERSION_V2, PalwTirStepLegBuilderV2, PalwTirStepSpaceV2, PalwTirVerifiedBindingV2, palw_tir_leaf_preimage_v2,
+    palw_tir_leaf_values_v2, verify_tir_binding_v2,
+};
+
 /// The version a TIR step leaf's preimage carries (the legacy tile leaf's field).
 pub const PALW_TIR_STEP_LEAF_VERSION_V1: u16 = 1;
 /// Key of [`palw_tir_execution_root_v1`] — its own, so an IR execution root never verifies as a
@@ -71,6 +83,15 @@ pub enum PalwTirStepError {
 
 fn layout_err<T>(msg: impl Into<String>) -> Result<T, PalwTirStepError> {
     Err(PalwTirStepError::Layout(msg.into()))
+}
+
+/// This geometry and its leaves are the legacy four-byte family. Recognizing
+/// the wide program structurally never authorizes reinterpretation here.
+fn require_legacy_step_width_v1(program: &TirProgramV1) -> Result<(), PalwTirStepError> {
+    if program.wide_logits_q24() {
+        return layout_err("wide Q24 requires an explicit v2 step space; legacy step leaves are four-byte lanes");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -276,12 +297,20 @@ impl PalwTirStepSpaceV1 {
     /// Decode the class's program, validate it and check the layout against it.
     pub fn new(class: &PalwTirClassV1) -> Result<Self, PalwTirStepError> {
         let program = class.decode_program().map_err(|e| PalwTirStepError::Program(e.to_string()))?;
+        require_legacy_step_width_v1(&program)?;
         let info = misaka_palw_tir::validate::validate(&program).map_err(|e| PalwTirStepError::Program(e.to_string()))?;
         Self::from_program(program, info, class.layout.clone())
     }
 
     /// [`Self::new`] over an already-validated program.
     pub fn from_program(program: TirProgramV1, info: ProgramInfo, layout: PalwTirLayoutV1) -> Result<Self, PalwTirStepError> {
+        require_legacy_step_width_v1(&program)?;
+        Self::from_program_geometry(program, info, layout)
+    }
+
+    // Shared geometry only. The two public families independently validate their width profile
+    // before entering here; this is deliberately not a public width-selection switch.
+    fn from_program_geometry(program: TirProgramV1, info: ProgramInfo, layout: PalwTirLayoutV1) -> Result<Self, PalwTirStepError> {
         if layout.version != PALW_TIR_LAYOUT_VERSION_V1 {
             return layout_err(format!("layout version {} is not {PALW_TIR_LAYOUT_VERSION_V1}", layout.version));
         }
@@ -303,7 +332,8 @@ impl PalwTirStepSpaceV1 {
         let tile_ok = |t: u32| (PALW_STEP_MIN_TILE_LEN..=PALW_STEP_MAX_TILE_LEN).contains(&t);
         let mut tiles = layout.commit_tiles.iter();
         let mut blocks = Vec::with_capacity(program.blocks.len());
-        let tiled_scheme = crate::Hash64::from_bytes(program.logits_scheme_id) == crate::palw_step_refute::tiled_logits_scheme_id_v1();
+        let tiled_scheme = crate::Hash64::from_bytes(program.logits_scheme_id) == crate::palw_step_refute::tiled_logits_scheme_id_v1()
+            || program.wide_logits_q24();
         for (bi, b) in program.blocks.iter().enumerate() {
             let mut commits = Vec::new();
             for (ni, n) in b.nodes.iter().enumerate() {
@@ -657,8 +687,10 @@ impl PalwTirStepSpaceV1 {
         let a64 = a as u64;
         let post_occ = self.occurrences.len() - 1;
         let post_block = self.occurrences[post_occ].0;
-        // Occurrence multiplicity of every non-post block.
-        let mut mult = vec![0u128; self.blocks.len()];
+        // Validated programs have at most MAX_BLOCKS (16). Keep the existing
+        // linear counting algorithm in fixed 256-byte stack storage, so a
+        // leaf-count/quote caller needs no heap allocation before reservation.
+        let mut mult = [0u128; misaka_palw_tir::program::MAX_BLOCKS];
         for (i, (b, _)) in self.occurrences.iter().enumerate() {
             if i != post_occ {
                 mult[*b as usize] += 1;
@@ -995,6 +1027,9 @@ pub fn palw_tir_lanes_wire_v1(dtype: DType, values: &[i128]) -> Result<Vec<u8>, 
 /// other dtype's as `i32`. Whether each value is one its node can produce is PALW-TIR-33's
 /// question, asked by the court against the node's proven interval (which lies inside the dtype).
 pub fn palw_tir_lane_values_v1(dtype: DType, bytes: &[u8]) -> Result<Vec<i128>, PalwTirStepError> {
+    if !dtype.committable() {
+        return Err(PalwTirStepError::NotCanonical(format!("{} is never committed in legacy leaves", dtype.name())));
+    }
     if !bytes.len().is_multiple_of(4) {
         return Err(PalwTirStepError::NotCanonical("a lane is four bytes".into()));
     }
@@ -1035,6 +1070,7 @@ pub struct PalwTirStepLegBuilderV1<'s> {
 
 impl<'s> PalwTirStepLegBuilderV1<'s> {
     pub fn new(space: &'s PalwTirStepSpaceV1, ctx: &PalwJobContextV2, class_id: Hash64, cap: u64) -> Result<Self, PalwTirStepError> {
+        require_legacy_step_width_v1(&space.program)?;
         let total = space.leaf_count_capped(ctx, cap)?;
         Ok(Self { space, ctx: ctx.clone(), context_hash: ctx.context_hash(), class_id, total, cap, leaf_hashes: Vec::new() })
     }

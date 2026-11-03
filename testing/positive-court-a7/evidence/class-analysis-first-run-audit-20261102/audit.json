@@ -1,0 +1,267 @@
+{
+  "schema": "misaka.a7.class-run-independent-audit.v1",
+  "utc": "2026-11-01T15:39:57.249438+00:00",
+  "root_source_commit": "4e6724e32ac2cbde9f7d021ee87cf8f7c05f5218",
+  "root_raw_directory": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102",
+  "root_manifest_sha256": "4891ceeb66856f4bbd0b9fdf1ac305f7b7c470974f6c23b346ea104fb65f5f2e",
+  "root_build_sha256": "26f24d7c001bea6aaa891de509d9bdf175f57fac832e1a15e83c32e8488630ee",
+  "source_map_entries": 2452,
+  "source_map_records_agree": true,
+  "binary_record": {
+    "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/real_llm_class_analysis",
+    "bytes": 6259216,
+    "sha256": "60a84e2f4597724b24d46d98f87ddb8f232f45af0a0ab8222d35c8a363d98f2b",
+    "cargo_profile": {
+      "opt_level": "0",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "fresh": false
+  },
+  "binary_audit_scope": "build/run/Cargo-artifact records agree; A7 did not read target binary or native archive",
+  "original_runner_sha256": "faa43bd654699a05edcd9e4f9927014cacb6608bf460671eb73ba016cf04c79c",
+  "results": [
+    {
+      "slug": "pythia-70m",
+      "analysis_status": "CLASS_ONLY_ANALYSIS_COMPLETE",
+      "exit_code": 0,
+      "stop_reason": null,
+      "cleanup_empty": true,
+      "source_and_binary_stable": true,
+      "original_max_context": 2048,
+      "canonical": {
+        "prefill_tokens": 255,
+        "decode_tokens": 2,
+        "executed_positions": 256,
+        "max_context_tokens": 2049
+      },
+      "canonical_leaf_count": 224026,
+      "worst_leaf_count": 2208768,
+      "on_max_close_bytes": 648069,
+      "on_max_root_bytes": 89128,
+      "on_work": [
+        9982760,
+        1493106
+      ],
+      "off_cases": [
+        {
+          "twin": "element",
+          "status": "FULL_TRAVERSAL_COMPLETE",
+          "work": 32415592,
+          "error": null
+        },
+        {
+          "twin": "range",
+          "status": "FULL_TRAVERSAL_COMPLETE",
+          "work": 784030,
+          "error": null
+        }
+      ],
+      "resource_measurement": {
+        "status": "RECORDED",
+        "raw_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/pythia-70m/time-l.log",
+        "platform": "Darwin",
+        "rss_unit": "bytes",
+        "io_unit": "operations, not bytes",
+        "scope": "time child accounting; lifetime peak, not interval RSS or live owner sum",
+        "time_real_seconds": 23.16,
+        "user_cpu_seconds": 22.63,
+        "system_cpu_seconds": 0.07,
+        "peak_rss_bytes": 18350080,
+        "block_input_operations": 0,
+        "block_output_operations": 0
+      },
+      "raw_analysis_sha256": "5c068e257f598094b59a1bfee58f68741823bccdcc1419d67178bf8a5ed98552"
+    },
+    {
+      "slug": "smollm2-135m",
+      "analysis_status": "CLASS_ONLY_ANALYSIS_INCOMPLETE",
+      "exit_code": 2,
+      "stop_reason": null,
+      "cleanup_empty": true,
+      "source_and_binary_stable": true,
+      "original_max_context": 8192,
+      "canonical": {
+        "prefill_tokens": 1023,
+        "decode_tokens": 2,
+        "executed_positions": 1024,
+        "max_context_tokens": 8193
+      },
+      "canonical_leaf_count": 5173266,
+      "worst_leaf_count": 42244608,
+      "on_max_close_bytes": 685643,
+      "on_max_root_bytes": 57712,
+      "on_work": [
+        8870871,
+        1868424
+      ],
+      "off_cases": [
+        {
+          "twin": "element",
+          "status": "SIZING_CAP_REFUSED",
+          "work": null,
+          "error": "the close sizing exceeds its work cap"
+        },
+        {
+          "twin": "range",
+          "status": "FULL_TRAVERSAL_COMPLETE",
+          "work": 2675408,
+          "error": null
+        }
+      ],
+      "resource_measurement": {
+        "status": "RECORDED",
+        "raw_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-135m/time-l.log",
+        "platform": "Darwin",
+        "rss_unit": "bytes",
+        "io_unit": "operations, not bytes",
+        "scope": "time child accounting; lifetime peak, not interval RSS or live owner sum",
+        "time_real_seconds": 44.83,
+        "user_cpu_seconds": 44.7,
+        "system_cpu_seconds": 0.1,
+        "peak_rss_bytes": 38666240,
+        "block_input_operations": 0,
+        "block_output_operations": 0
+      },
+      "raw_analysis_sha256": "9f4804fd9ee13df2a6187e13fdced65958a2e3be2dbd7441440840e1a7a87529"
+    },
+    {
+      "slug": "smollm2-360m",
+      "analysis_status": "CLASS_ONLY_ANALYSIS_INCOMPLETE",
+      "exit_code": 2,
+      "stop_reason": null,
+      "cleanup_empty": true,
+      "source_and_binary_stable": true,
+      "original_max_context": 8192,
+      "canonical": {
+        "prefill_tokens": 1023,
+        "decode_tokens": 2,
+        "executed_positions": 1024,
+        "max_context_tokens": 8193
+      },
+      "canonical_leaf_count": 9195742,
+      "worst_leaf_count": 74473472,
+      "on_max_close_bytes": 1080999,
+      "on_max_root_bytes": 61680,
+      "on_work": [
+        16843661,
+        3109570
+      ],
+      "off_cases": [
+        {
+          "twin": "element",
+          "status": "SIZING_CAP_REFUSED",
+          "work": null,
+          "error": "the close sizing exceeds its work cap"
+        },
+        {
+          "twin": "range",
+          "status": "FULL_TRAVERSAL_COMPLETE",
+          "work": 4444398,
+          "error": null
+        }
+      ],
+      "resource_measurement": {
+        "status": "RECORDED",
+        "raw_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-360m/time-l.log",
+        "platform": "Darwin",
+        "rss_unit": "bytes",
+        "io_unit": "operations, not bytes",
+        "scope": "time child accounting; lifetime peak, not interval RSS or live owner sum",
+        "time_real_seconds": 49.31,
+        "user_cpu_seconds": 49.12,
+        "system_cpu_seconds": 0.14,
+        "peak_rss_bytes": 39239680,
+        "block_input_operations": 0,
+        "block_output_operations": 0
+      },
+      "raw_analysis_sha256": "4212c24678e58e1477af7747fae68219a95866124b5bbcd2774758c58bb1b02a"
+    }
+  ],
+  "raw_files_verified": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/pythia-70m/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/pythia-70m/stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/pythia-70m/analysis.json",
+      "bytes": 30384,
+      "sha256": "5c068e257f598094b59a1bfee58f68741823bccdcc1419d67178bf8a5ed98552"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/pythia-70m/time-l.log",
+      "bytes": 777,
+      "sha256": "449029bf64b5e28f5c1faec7cc8a9abeaf08227b0e857959916cf8c6a4695885"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-135m/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-135m/stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-135m/analysis.json",
+      "bytes": 27908,
+      "sha256": "9f4804fd9ee13df2a6187e13fdced65958a2e3be2dbd7441440840e1a7a87529"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-135m/time-l.log",
+      "bytes": 777,
+      "sha256": "b3df0e72b9836eed1a57be0ac5b23f7a6de080bcfebdde744b0fe74fa8bdeac7"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-360m/stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-360m/stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-360m/analysis.json",
+      "bytes": 27930,
+      "sha256": "4212c24678e58e1477af7747fae68219a95866124b5bbcd2774758c58bb1b02a"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-class-analysis-first-run-20261102/smollm2-360m/time-l.log",
+      "bytes": 777,
+      "sha256": "8787190302adc280d3a1c9cdc153dd51c5e364a4dd6c2d1fe2f4841165a7c331"
+    }
+  ],
+  "data_result": "CONSISTENT_CLASS_ONLY_MIXED_COMPLETION",
+  "actual_policy_conditions": "all stop_reason None, cleanup live+zombie empty, final source and per-case binary/source stable",
+  "latent_wrapper_findings": [
+    "complete predicate omits stop_reason/cleanup/stability",
+    "cancel can be lost after process/context exit or overwritten by RSS",
+    "aggregate completion does not require final source stability; finalized inside loop"
+  ],
+  "actual_false_completion_observed": false,
+  "originals_unchanged": true,
+  "no_model_rerun": true,
+  "not_certified": [
+    "coarse/typed protocol envelope",
+    "actual court/ladder/fee admission",
+    "weight inventory root recomputation",
+    "constructor/fullpuregate/native registration",
+    "credit/independent expected roots"
+  ],
+  "reviewers": [
+    "integration_audit: original class/context/Borsh and all raw identity",
+    "process_measurement: typed sizing/twins/work/resource units",
+    "adversarial_tests: wrapper races versus observed control conditions"
+  ]
+}

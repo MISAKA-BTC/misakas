@@ -1,0 +1,11 @@
+palw_native_resource_v1::source_local::tests::audited::bootstrap_branch_types_and_nf_text_are_finite_without_recharging_writers: test
+palw_native_resource_v1::source_local::tests::audited::canonical_error_kinds_utf8_and_unvalidated_ranks_are_preserved: test
+palw_native_resource_v1::source_local::tests::audited::exact_limits_and_each_one_below_precede_canonical_decode: test
+palw_native_resource_v1::source_local::tests::audited::failed_scans_observe_consumed_bytes_and_retries_spend_full_envelopes: test
+palw_native_resource_v1::source_local::tests::audited::same_bytes_narrow_wide_old_quote_and_four_reader_observations: test
+palw_native_resource_v1::source_local::tests::checked_work_precharge_is_atomic_and_never_refunds: test
+palw_native_resource_v1::source_local::tests::global_flags_child_helper: test
+palw_native_resource_v1::source_local::tests::local_owner_is_independent_of_zero_global_limits_in_child: test
+palw_native_resource_v1::source_local::tests::unknown_profile_refuses_before_any_scanner_charge: test
+
+9 tests, 0 benchmarks

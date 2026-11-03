@@ -60,6 +60,183 @@ use crate::palw_attempt_v2::{PALW_ATTEMPT_V2_VERSION, PalwAttemptUnsignedV2, cha
 use crate::palw_fork_choice::compare_palw_candidates_v1;
 use crate::tx::TransactionId;
 
+/// Source-only regression fixture: ordinary fold bond/class setup, plus an
+/// original, canonical wide program row. This does not authenticate a native
+/// registration or execute a model; it exercises the unsupported claim boundary.
+fn wide_legacy_attempt_fixture_v1(mesh: bool) -> (PalwStateParamsV2, PalwChainStateV2, PalwAttemptEnvelopeV2) {
+    let mut p = params().with_audit_mesh_from_daa(mesh.then_some(0));
+    let (mut state, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+    let mut class = crate::palw_tir_court_v1::test_support::tiny_execution(None).binding.class;
+    let mut program = class.decode_program().unwrap();
+    let post = &mut program.blocks[program.schedule.post as usize];
+    let mut out = post.nodes[program.logits as usize].out.clone();
+    out.dtype = misaka_palw_tir::DType::I64;
+    post.nodes.push(misaka_palw_tir::Node {
+        prim: misaka_palw_tir::Prim::Cast,
+        inputs: vec![misaka_palw_tir::Ref::Node(program.logits)],
+        out,
+        commit: true,
+    });
+    program.logits = (post.nodes.len() - 1) as u16;
+    program.logits_scheme_id = misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2;
+    class.program = program.encode();
+    class.layout.commit_tiles.push(4);
+    let row = crate::palw_tir_class_record_v2::ProfiledTirClassRecordV2::build(
+        &class,
+        h64(11),
+        crate::palw_tir_class_record_v2::TirClassRecordProfileLimitsV2 {
+            max_program_bytes: misaka_palw_tir::program::MAX_PROGRAM_BYTES,
+            max_layout_entries: class.program.len(),
+        },
+    )
+    .unwrap()
+    .into_storage_row();
+    let id = row.facts.class_id;
+    let native = state.classes.remove(&h64(1)).unwrap();
+    state.classes.insert(id, native);
+    state.tir_classes.insert(id, row);
+    p.base_class_id = id;
+    let env = attempt_for_class(40, 77, id, bond_key(1), vec![7; 4], op_id(21), h64(11));
+    (p, state, env)
+}
+
+#[test]
+fn known_wide_legacy_attempts_refuse_before_writes_with_mesh_off_or_on() {
+    for mesh in [false, true] {
+        let (p, state, env) = wide_legacy_attempt_fixture_v1(mesh);
+        let extras = PalwTransitionExtrasV1::default();
+        let point = ctx(2, 101, 2);
+        let mut builder = TransitionBuilder::try_new(&state, &p, false, false, false, false, &extras).unwrap();
+        let before = builder.state.state_root();
+        let exposure = builder.state.reserved_exposure(&bond_key(1));
+        let result = apply_attempt(
+            &mut builder,
+            &point,
+            &env,
+            PalwAttemptOriginV1 {
+                rider: false,
+                carrying_block: point.block,
+                escrows_reward: true,
+                escrow_subsidy: 0,
+                escrow_carve: None,
+                execution_key: Hash64::default(),
+                carrying_bits: 0,
+                job_anchor: Hash64::default(),
+                floor_event: PalwFloorEventSourceV1::BlockBlue,
+                budget_block_units: crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1,
+            },
+        );
+        assert!(matches!(result, Err(PalwStateV2Error::TirFence2Refused(message)) if message.contains("wide Q24")));
+        assert_eq!(builder.state.state_root(), before, "direct refusal mutated state with mesh={mesh}");
+        assert_eq!(builder.state.reserved_exposure(&bond_key(1)), exposure);
+        assert!(builder.state.claim(&attempt_id_v2(&env.attempt)).is_none());
+    }
+}
+
+#[test]
+fn own_and_merged_legacy_wide_claim_generation_refuse_independently_of_mesh() {
+    let admission = crate::palw_admission_v2::PalwAdmissionParamsV2::new(500).unwrap();
+    for mesh in [false, true] {
+        let (p, state, env) = wide_legacy_attempt_fixture_v1(mesh);
+        let point = ctx(2, 101, 2);
+        let extras = PalwTransitionExtrasV1::default();
+        let own = apply_palw_transition_v7(
+            &state,
+            &p,
+            Some(&admission),
+            &point,
+            &[],
+            PalwBlockWorkV3::Attempt(&env),
+            &[],
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &extras,
+        );
+        assert!(matches!(own, Err(PalwStateV2Error::TirFence2Refused(message)) if message.contains("wide Q24")));
+        let merged = [PalwMergedWorkV1 {
+            carrying_block: h64(0xB1),
+            work: PalwBlockWorkV3::Attempt(&env),
+            execution_key: Hash64::default(),
+            subsidy: 0,
+            escrow_carve: None,
+            bits: 0,
+            job_anchor: Hash64::default(),
+        }];
+        let (after, _, skips) = apply_palw_transition_v7(
+            &state,
+            &p,
+            Some(&admission),
+            &point,
+            &[],
+            PalwBlockWorkV3::None,
+            &merged,
+            Hash64::default(),
+            false,
+            false,
+            false,
+            false,
+            &extras,
+        )
+        .unwrap();
+        assert!(after.claim(&attempt_id_v2(&env.attempt)).is_none());
+        assert_eq!(after.reserved_exposure(&bond_key(1)), state.reserved_exposure(&bond_key(1)));
+        assert!(
+            skips.iter().any(|(_, reason)| reason.contains("wide Q24")),
+            "merged refusal did not reach the guard with mesh={mesh}"
+        );
+    }
+}
+
+#[test]
+fn ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off() {
+    let (p, state, env) = wide_legacy_attempt_fixture_v1(false);
+    let id = env.attempt.class_id;
+    let claim_id = h64(0xF0_77);
+    let mut object = fp_commit(0xF0_77, 60, 3);
+    let PalwConsensusObjectV2::FreePromptCommitted { class_id, consumed_prefix_state, .. } = &mut object else { unreachable!() };
+    *class_id = id;
+    *consumed_prefix_state = crate::palw_freeprompt_v3::PalwFpPrefixStateV1::genesis(id);
+    let point = ctx(2, 101, 2);
+
+    // A legacy rowless control reaches actual claim creation under both fences
+    // off. Thus the new refusal cannot be an unrelated malformed-claim gate.
+    let mut legacy = state.clone();
+    legacy.tir_classes.remove(&id);
+    let extras = PalwTransitionExtrasV1::default();
+    let (accepted, _) = apply_derived(&legacy, &p, &point, std::slice::from_ref(&object), &extras).unwrap();
+    assert!(accepted.claim(&claim_id).is_some());
+
+    for derived in [false, true] {
+        for public_original in [false, true] {
+            let extras = PalwTransitionExtrasV1 {
+                fp_derived_work_daa: derived.then_some(0),
+                tir_public_conviction_active: public_original,
+                ..Default::default()
+            };
+            let mut builder = TransitionBuilder::try_new(&state, &p, false, false, true, false, &extras).unwrap();
+            let before = builder.state.state_root();
+            let exposure = builder.state.reserved_exposure(&bond_key(1));
+            let refused = apply_object(&mut builder, &point, &object).unwrap_err();
+            if public_original {
+                // With no paired frame the existing G03 gate is earlier than
+                // class lookup. This is safe denial, not evidence that the new
+                // post-class guard was reached on this branch.
+                assert!(matches!(refused, PalwStateV2Error::ClassNotRewardable { code, .. }
+                    if code == crate::palw_state_v2::palw_tir_public_fold_v1::PALW_G03_FRAMELESS_TIR_ORIGINAL_CODE_V1));
+            } else {
+                assert!(matches!(refused, PalwStateV2Error::TirFence2Refused(message) if message.contains("wide Q24")));
+            }
+            assert_eq!(builder.state.state_root(), before, "refusal wrote state: derived={derived}, original={public_original}");
+            assert_eq!(builder.state.reserved_exposure(&bond_key(1)), exposure);
+            assert!(builder.state.claim(&claim_id).is_none());
+            assert!(apply_derived(&state, &p, &point, std::slice::from_ref(&object), &extras).is_err());
+        }
+    }
+}
+
 thread_local! {
     /// **R2's measure: how many times the fold asked the readiness predicate** — the unit the
     /// span step's cost is counted in (one ask per bond per class the step reads), so a test can
@@ -28645,6 +28822,8 @@ mod evm_market {
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,
             prefix_dependencies_v1: Default::default(),
+            assignment_settlements: Default::default(),
+            positive_assignment_actions: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
             native_court_rules_v1: None,
@@ -28946,6 +29125,8 @@ mod evm_market {
             claim_local_legacy_retention_fixture_v50: false,
             original_archive_data_observer_v16: false,
             prefix_dependencies_v1: Default::default(),
+            assignment_settlements: Default::default(),
+            positive_assignment_actions: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
             native_court_rules_v1: None,

@@ -1,0 +1,48 @@
+{
+  "status": "ROOT_ADDITIONAL_PRODUCER_7_PASS",
+  "source_commit": "7a6935de6add7fe66deb324090a7144b974a8730",
+  "root_metadata_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/source-clock-producer-correct-targets-20261101.json",
+  "root_metadata_snapshot_sha256": "02a0369d31bdf7a1a5c4600c849fdc16a9dbebc808c4ae57881d4bc44d2b57f4",
+  "root_recorded_result": {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "misaka-palw-tir-exec",
+      "--features",
+      "node",
+      "--test",
+      "run_wide_q24_v2",
+      "--offline",
+      "--locked",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0",
+      "--config",
+      "profile.test.package.kaspa-consensus-core.opt-level=0"
+    ],
+    "exit_code": 0,
+    "passed": 7,
+    "effective_success": true,
+    "test_summaries": [
+      {
+        "status": "ok",
+        "passed": 7,
+        "failed": 0
+      }
+    ],
+    "all_targets_positive": true,
+    "elapsed_seconds": 2.084706041001482,
+    "log": "source-clock-producer-correct-targets-20261101-4.log",
+    "sha256": "7222bd45e85befe1582d8c079c47bdd0e3ead469ba3239840781e4ddb17ff37a",
+    "binaries": [
+      {
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-33192694b100907b",
+        "bytes": 21907392,
+        "sha256": "215fa08033dfab5be6386f51e65cc059c0af0df13320a84c5b2263311399d486"
+      }
+    ]
+  },
+  "source_stable": true,
+  "local_log": "root-producer.log",
+  "count_policy": "Root30 prior batch + this producer7 =37, includes separate memory1. Other-role counts excluded. No A3 standalone execution or header5 added."
+}

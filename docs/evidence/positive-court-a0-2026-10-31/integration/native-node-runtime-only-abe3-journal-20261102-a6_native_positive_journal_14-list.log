@@ -1,0 +1,16 @@
+model::stores::palw_state_v2::positive_journal::tests::append_requires_literal_selected_predecessor_and_keeps_batch_on_failure: test
+model::stores::palw_state_v2::positive_journal::tests::coalesced_and_intermediate_rows_and_existing_old_head_are_supported: test
+model::stores::palw_state_v2::positive_journal::tests::every_stage_error_preserves_existing_caller_batch_bytes: test
+model::stores::palw_state_v2::positive_journal::tests::explicit_capacity_refusal_is_separate_and_never_mutates_batch: test
+model::stores::palw_state_v2::positive_journal::tests::multi_case_abandoned_batch_keeps_clone_and_fresh_readers_unpublished: test
+model::stores::palw_state_v2::positive_journal::tests::multi_case_coalesced_and_intermediate_tail_reopen_forward: test
+model::stores::palw_state_v2::positive_journal::tests::multi_case_missing_or_corrupt_predecessor_rejects_the_whole_batch: test
+model::stores::palw_state_v2::positive_journal::tests::raw_pinned_reader_is_bounded_but_chain_owns_corruption_and_identity_checks: test
+model::stores::palw_state_v2::positive_journal::tests::real_db_batch_atomicity_reopen_and_reindex_retain_inactive_raw_records: test
+processes::palw_positive_journal_v2::tests::canonical_compare_stream_checks_truncation_trailing_and_cached_fields: test
+processes::palw_positive_journal_v2::tests::merkle_workspace_checks_actual_typed_slots_and_overflow: test
+processes::palw_positive_journal_v2::tests::real_db_bad_merkle_and_stale_id_never_reach_callback: test
+processes::palw_positive_journal_v2::tests::real_db_exact_accepted_ordinal_includes_coinbase_and_raw_eof_is_strict: test
+processes::palw_positive_journal_v2::tests::real_db_missing_selected_point_or_body_never_uses_an_empty_fallback: test
+
+14 tests, 0 benchmarks

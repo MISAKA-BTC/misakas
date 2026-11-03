@@ -20,6 +20,12 @@ impl std::ops::Deref for PalwPrefixExtrasV1 {
         &self.extras
     }
 }
+impl PalwPrefixExtrasV1 {
+    /// Keep the admitted carriers through staging after releasing the fold overlays.
+    pub fn into_assignment_actions_v2(self) -> Vec<crate::palw_state_v2::PositiveAssignmentScheduledActionV2> {
+        self.extras.into_assignment_actions_v2()
+    }
+}
 impl PalwPrefixDependenciesV1 {
     pub fn insert_v1(
         &mut self,

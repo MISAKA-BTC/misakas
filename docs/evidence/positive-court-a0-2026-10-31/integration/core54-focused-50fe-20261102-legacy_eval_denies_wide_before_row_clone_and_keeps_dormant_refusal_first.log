@@ -1,0 +1,6 @@
+
+running 1 test
+test palw_state_v2::palw_improve_eval_fold_v1::tests::legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5528 filtered out; finished in 0.04s
+

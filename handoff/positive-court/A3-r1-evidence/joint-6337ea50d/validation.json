@@ -1,0 +1,272 @@
+{
+  "status": "PASS_ROLE_SUITES",
+  "source_commit": "6337ea50d7211b3eedcd4c39737555fc1b081723",
+  "source_tree": "fa1944c63e6904792f86190e8b89f139b1b723d3",
+  "branch": "codex/a3-a0-joint-validation",
+  "runs": [
+    {
+      "name": "common-contract",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract"
+      ],
+      "exit_code": 0,
+      "passed": 29,
+      "seconds": 2.893,
+      "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/common-contract.log",
+      "sha256": "139309b3d4e1dcbefad8e1233ef6e93543638fe9c15529853a18a1660abf5e5e"
+    },
+    {
+      "name": "a1-a3-exec",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_check",
+        "--test",
+        "positive_check_hardening",
+        "--test",
+        "positive_contract",
+        "--test",
+        "positive_panel_r1"
+      ],
+      "exit_code": 0,
+      "passed": 33,
+      "seconds": 98.699,
+      "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/a1-a3-exec.log",
+      "sha256": "6234e31c0ded6e0ff1dfd44c2942b8be06e51a447a387991a5c91bd5c3069887"
+    },
+    {
+      "name": "role-integration",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_panel_r1",
+        "--test",
+        "positive_panel_sources_r1"
+      ],
+      "exit_code": 0,
+      "passed": 11,
+      "seconds": 17.191,
+      "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/role-integration.log",
+      "sha256": "acccf5635944e99427dd82d0a5f3734aa39621c7ff814ac116ec366a44450f63"
+    },
+    {
+      "name": "source-guard",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "positive_panel_sources::"
+      ],
+      "exit_code": 0,
+      "passed": 1,
+      "seconds": 9.721,
+      "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/source-guard.log",
+      "sha256": "1a285d3369fdaee3fe1c7ebd0e4ae8fd94a7d1d127b492df951b85a67a5d734f"
+    },
+    {
+      "name": "a2-responder-recovery",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "miner::positive_v2"
+      ],
+      "exit_code": 0,
+      "passed": 51,
+      "seconds": 1.277,
+      "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/a2-responder-recovery.log",
+      "sha256": "31bd71d170d0411f614dba90f5ff1292ffeda64bfa30f07ac0b6b8edef76b892"
+    },
+    {
+      "name": "default-off-g14",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--lib",
+        "pursuit::"
+      ],
+      "exit_code": 0,
+      "passed": 4,
+      "seconds": 101.633,
+      "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/default-off-g14.log",
+      "sha256": "397a82bbb5d1bf4daf3ec3cbc5c8732faf8934775205125ccd6906c68a276b3c"
+    }
+  ],
+  "public_activation_changed": false,
+  "native_anchor_authority_claimed": false,
+  "optional_checks": [
+    {
+      "name": "typed-fence",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "kaspa-consensus-core",
+        "--lib",
+        "config::params::positive_court_v2::tests"
+      ],
+      "exit_code": -15,
+      "passed": 0,
+      "seconds": 187.181,
+      "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/typed-fence.log",
+      "sha256": "28c472bc3a50cae6805273a1b873a9f4ffaeb4bd2f79742b081c9799cf826641",
+      "status": "NOT_RUN_BUILD_CANCELLED",
+      "reason": "Optional core unit-test build triggered a full RocksDB rebuild; stopped only this optional owned process tree after all required role suites passed. No typed-fence runtime test executed."
+    }
+  ],
+  "total_passed": 129,
+  "required_test_failures": 0,
+  "all_required_role_suites_passed": true,
+  "fixture": {
+    "path": "misaka/palw/remote/tests/positive_panel_sources_r1.rs",
+    "sha256": "3a81e741376ae670d164f2826a728dbfe2b93291943058c92aac16f0bdd95daf",
+    "matches_prepared_patch": true,
+    "source_status_limit_literals": 2,
+    "max_status_checks_per_fixture": 64,
+    "completed_requery_delta": "request.end - request.first",
+    "other_meter_fields_unchanged": true,
+    "original_cache_import_meter_equality_preserved": true
+  },
+  "a2_dependencies": {
+    "initial_upstream": "1b8e4e5c98469e0a723a3fc62794c976dcf6b756",
+    "fix_upstream": "fd9d4c5d7a07efb791a82bb6b9717a4ff657136b",
+    "accepted_initial": "e2c2d13f0",
+    "accepted_fix": "56f5332ba",
+    "applied_fixture": "6337ea50d"
+  },
+  "test_binaries": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/contracts-8185f426e3ac8f6b",
+      "bytes": 2517472,
+      "sha256": "8f2bc0eb57f7c4e3191314720e2a89fca27a61da47e9e5a88b58ec34b5bbed64"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/funding-7ca5ce9bb4010c92",
+      "bytes": 2439008,
+      "sha256": "e28163517cb3d47718721963e2930f3e4f289fb80f6b5df136bf99cb490c9ee0"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_positive_contract-a39d79176e534abc",
+      "bytes": 883648,
+      "sha256": "8511a2291568229d6d00cc131fccacc67a1b119df06cdf0015e25c7aff223bdd"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_remote-ac9b867d2cf50d08",
+      "bytes": 141520768,
+      "sha256": "5329fee1c7f74d9f0048b3af67c6f8e7d54210f6bc48b1aa46961a62274e33f1"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_remote-f7dd6a33cd668a8f",
+      "bytes": 159284080,
+      "sha256": "2f8a0c751df298e3bd8de7216bff5e0159a6cf998b7819e00b58df3a409e92d9"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/native_namespace-b87866f978301536",
+      "bytes": 1421792,
+      "sha256": "ed8a7de36ec7f7b30f7a5eda4939e19bf11732b87af53cb20c8b23102161417c"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/native_rows-9e3f4079f3e67303",
+      "bytes": 2680800,
+      "sha256": "78c8ebe16029b2ed4f1a1fe4d15e1fa3e41fb85aa31a0c5639dc37ffd28c7584"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_check-86f857e0947782c2",
+      "bytes": 22092528,
+      "sha256": "e0aec1144dfc3623d56ffa2d6a9d696f143c2bd43570258ab5199f2bd382ae5c"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_check_hardening-d86ab8a0721e5148",
+      "bytes": 21910672,
+      "sha256": "469557e373dbb2ef83ba029a435ac6fffedb305a207ea779e74a09049ee9d3a3"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_contract-ddaf46aa01129dd9",
+      "bytes": 23296848,
+      "sha256": "242aa37c1fbee227199ed2601b0f856caee9e34702cc5d384a01dbb374e9ca1e"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_r1-4938cec0b778d250",
+      "bytes": 23471536,
+      "sha256": "ee9432561a8fa3043ffcecb7be4ddaf20d88b0d497e145a2348ff8d016ffbec2"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_r1-79a64246e192c9c3",
+      "bytes": 23522848,
+      "sha256": "4d80af2df251c5ae47c0d5873bcc0027896d66c1a74978cee2e11d18f6705276"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_sources_r1-7bd9de6aee8ea30b",
+      "bytes": 25687792,
+      "sha256": "ed58f6ad8288c72a1615d4178a1c1aab87066176534078a499d0c48fa5f949a8"
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/tir_contract-8820cb1dacd584b0",
+      "bytes": 1246624,
+      "sha256": "3fd2b1d97e4cdd5bfd76b870b2fedded67b29ea96ea4c94f7582fbf4af3d6259"
+    }
+  ],
+  "build_environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a3-target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "cargo_config": "profile.dev.package.kaspa-consensus-core.opt-level=0"
+  },
+  "documentation_check": {
+    "passed": true,
+    "known_issues": 43,
+    "new_issues": 0,
+    "log": "handoff/positive-court/A3-r1-evidence/joint-6337ea50d/docs-check.log",
+    "sha256": "38ca52631310d0b3d4d1afac2b99a1e7ccc5d8a6b36da16de6f9df8b3f8a797a"
+  },
+  "native_boundaries": [
+    "Native case/scope-bound ProtectedAnchorStoreV2 implementation remains incomplete; fixture protected stores are not native authority.",
+    "Successful A1 terminals and source preparation do not authorize native admission, UTXO locks, fees, payment, Gate C or consensus credit.",
+    "Public activation was not changed; optional typed-fence runtime tests were not executed in this run."
+  ]
+}

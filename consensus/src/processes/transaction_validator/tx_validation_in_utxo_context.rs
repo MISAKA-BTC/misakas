@@ -842,3 +842,96 @@ mod conservation_tests {
         assert_eq!(tv.check_output_values_and_compute_fee(&slashing_ptx, 500), Ok(500));
     }
 }
+
+#[cfg(test)]
+mod positive_relay_full_script_tests_v2 {
+    use super::*;
+    use crate::params::MAINNET_PARAMS;
+    use kaspa_consensus_core::{
+        Hash64,
+        config::params::PqEnforcementMode,
+        mldsa87_primitives::p2pkh_mldsa87_spk,
+        palw_positive_relay_signature_v2::{FundingRelaySignatureTemplateV2, assignment_relay_payload_v2},
+        subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        tx::{PopulatedTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry},
+    };
+    use libcrux_ml_dsa::ml_dsa_87::portable as mldsa;
+    use misaka_palw_positive_contract::{assignment::AssignmentId, identity::Digest};
+    #[test]
+    fn relay_presignature_passes_real_full_utxo_scripts_without_native_admission_claim() {
+        let params = MAINNET_PARAMS.clone();
+        let mut tv = TransactionValidator::new_for_tests(
+            10,
+            15,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.mergeset_size_limit(),
+            Default::default(),
+        );
+        tv.pq_enforcement = PqEnforcementMode::Consensus;
+        let keys = mldsa::generate_key_pair([91; 32]);
+        let key = *keys.verification_key.as_ref();
+        let point = TransactionOutpoint::new(Hash64::from_u64_word(990), 3);
+        let assignment = AssignmentId(Digest([92; 64]));
+        let template = FundingRelaySignatureTemplateV2::new(assignment, point, 10_000, key).unwrap();
+        // This is the only payer signature, made BEFORE the final outputs.
+        let signature = template.sign(&keys.signing_key, [93; 32]).unwrap();
+        let script = p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&key).as_bytes());
+        let entry = UtxoEntry::new(10_000, script.clone(), 10, false);
+        let fee_keys = mldsa::generate_key_pair([94; 32]);
+        let fee_key = *fee_keys.verification_key.as_ref();
+        let fee_script = p2pkh_mldsa87_spk(&kaspa_hashes::blake2b_512_address_payload(&fee_key).as_bytes());
+        let entries = vec![entry, UtxoEntry::new(2000, fee_script, 10, false)];
+        let mut tx = Transaction::new(
+            0,
+            vec![
+                TransactionInput::new(point, template.unlock_script(&signature).unwrap(), 0, 1),
+                TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(991), 0), Vec::new(), 0, 1),
+            ],
+            vec![TransactionOutput::new(10_000, script.clone())],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            assignment_relay_payload_v2(assignment).to_vec(),
+        );
+        for outputs in [
+            vec![TransactionOutput::new(10_000, script.clone())],
+            vec![TransactionOutput::new(4000, script.clone()), TransactionOutput::new(6000, script)],
+        ] {
+            tx.outputs = outputs;
+            // Only the independent fee-input owner signs the final outputs.
+            use kaspa_consensus_core::hashing::{
+                sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash},
+                sighash_type::SIG_HASH_ALL,
+            };
+            let hash = calc_mldsa87_signature_hash(
+                &PopulatedTransaction::new(&tx, entries.clone()),
+                1,
+                SIG_HASH_ALL,
+                &Mldsa87SigHashReusedValuesUnsync::new(),
+            );
+            let fee_signature = mldsa::sign(&fee_keys.signing_key, hash.as_byte_slice(), b"kaspa-pq-v2/tx/mldsa87", [95; 32]).unwrap();
+            let mut unlock = vec![0x4d];
+            unlock.extend_from_slice(&4628u16.to_le_bytes());
+            unlock.extend_from_slice(fee_signature.as_ref());
+            unlock.push(SIG_HASH_ALL.to_u8());
+            unlock.push(0x4d);
+            unlock.extend_from_slice(&2592u16.to_le_bytes());
+            unlock.extend_from_slice(&fee_key);
+            tx.inputs[1].signature_script = unlock;
+            tx.finalize();
+            assert_eq!(tx.inputs[0].signature_script, template.unlock_script(&signature).unwrap());
+            let populated = PopulatedTransaction::new(&tx, entries.clone());
+            tx.set_mass(tv.mass_calculator.calc_contextual_masses(&populated).unwrap().storage_mass);
+            assert_eq!(tv.resolved_script_policy(100), ScriptPolicy::PQ_ONLY);
+            assert_eq!(tv.validate_populated_transaction_and_get_fee(&populated, 100, TxValidationFlags::Full, None, None), Ok(2000));
+        }
+        tx.inputs[0].signature_script[35] ^= 1;
+        let populated = PopulatedTransaction::new(&tx, entries);
+        assert!(tv.validate_populated_transaction_and_get_fee(&populated, 100, TxValidationFlags::Full, None, None).is_err());
+        // This checks the real ordinary validator, not R custody/due/P/once or
+        // actual selected-chain Assignment acceptance and settlement.
+    }
+}

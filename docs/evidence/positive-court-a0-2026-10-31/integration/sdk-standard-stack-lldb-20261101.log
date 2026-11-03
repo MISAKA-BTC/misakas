@@ -1,0 +1,15 @@
+(lldb) target create /Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893
+Current executable set to '/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893' (arm64).
+(lldb) run --exact explicit_wide_sdk_context_matches_the_resolver_without_enabling_v1_admission
+
+running 1 test
+Process 73700 launched: '/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893' (arm64)
+Process 73700 stopped
+* thread #2, name = 'explicit_wide_sdk_context_matches_the_resolver_without_enabling', stop reason = EXC_BAD_ACCESS (code=2, address=0x16fe03340)
+    frame #0: 0x000000010375faa0 runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h30c01b4128731fd8 + 20
+runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h30c01b4128731fd8:
+->  0x10375faa0 <+20>: str    xzr, [sp]
+    0x10375faa4 <+24>: cmp    sp, x9
+    0x10375faa8 <+28>: b.ne   0x10375fa9c               ; <+16>
+    0x10375faac <+32>: sub    sp, sp, #0x6e0
+Target 0: (runtime_pack-066d0b88b30f6893) stopped.

@@ -1,0 +1,26 @@
+{
+  "reviewer": "/root/independent_validation",
+  "mode": "read-only evidence and source hash review; no build or writes by reviewer",
+  "candidate": "2e63b142108e9fca6697aa43f7751dceb524e089",
+  "captured_sources": 47,
+  "all_current_hashes_match": true,
+  "source_before_equals_after": true,
+  "raw_ok_test_lines": 42,
+  "summary": {
+    "passed": 42,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0
+  },
+  "exit_code": 0,
+  "log_sha256": "93a7591504b93b1503b066abe6a97ee5b15d8f04eb11b3d747176ad54128baae",
+  "result_record_sha256": "68d77ab9cb3322265010c77dd716b927e664426dc7c0824bcaf917b7247ecd91",
+  "scope": "positive-accounting --lib only; node clock fix and its two new tests remain uncompiled/unexecuted",
+  "environment_checked": "jobs1/debug0/incremental0/RUST_MIN_STACK unset/RUSTFLAGS unset/offline/locked/existing A5 target",
+  "compiled_packages_in_raw_log": [
+    "misaka-palw-positive-contract",
+    "misaka-palw-positive-accounting"
+  ],
+  "clippy_executed": false,
+  "concerns": []
+}

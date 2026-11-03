@@ -144,6 +144,8 @@ mod palw_kernel_route_fold_v1;
 mod palw_mesh_fold_v1;
 #[path = "palw_model_panel_one_fold_v1.rs"]
 mod palw_model_panel_one_fold_v1;
+#[path = "palw_positive_source_apply_v2.rs"]
+mod palw_positive_source_apply_v2;
 // G14 lane D phase 3: the onboarding objects' fold arms (artifact binding and refutation, kernel binding, conformance commitment).
 #[path = "palw_flat_model_vector_fold_v3.rs"]
 mod palw_flat_model_vector_fold_v3;
@@ -338,6 +340,9 @@ mod palw_claim_local_prefix_tir_context_v2;
 mod palw_claim_local_rewards_v1;
 #[path = "palw_security_certification_fold_v1.rs"]
 mod palw_security_certification_fold_v1;
+#[path = "palw_state_v2/positive_assignment_certification.rs"]
+mod positive_assignment_certification;
+mod positive_assignment_verifiers;
 // RFC-0023 stage 2: per-claim settlement read (dormant `palw_claim_local_settlement_v1`).
 pub use palw_claim_local_rewards_v1::{
     PalwClaimLocalSettlementV1, palw_claim_local_recorded_settlement_v1, palw_claim_local_settlement_v1,
@@ -1978,6 +1983,11 @@ pub struct PalwStateParamsV2 {
     /// `floor_refusal_retry_from_daa`'s reason, and `validate_palw_v2` refuses a copy that disagrees.
     #[borsh(skip)]
     tir_from_daa: Option<u64>,
+    /// Full chain-selected court2 registration fence, runtime-only. The Params
+    /// fence already fingerprints every field; this mirror changes no wire bytes.
+    /// Legacy court1/height-only fixtures cannot authorize wide registration.
+    #[borsh(skip)]
+    tir_wide_registration_fence: Option<crate::palw_tir_v1::PalwTirFenceV1>,
     /// **RFC-0003: `Params::palw_gen_v1`'s height**, mirrored by `Params::sync_palw_gen_v1` because
     /// the fold that admits a generative registration holds only these params: below the fence the
     /// fold refuses one by name, as the second lock behind the acceptance walk's drop. `None` on every
@@ -2750,7 +2760,12 @@ pub fn palw_bond_collateral_is_locked_v5(
     duty_gate: bool,
     window_court: u64,
 ) -> bool {
-    if palw_bond_collateral_is_locked_v2(bond, now_daa, withdrawal_delay_daa) {
+    // Prefix P is an independent new duty. Its attestor collateral cannot
+    // escape merely because the unrelated old R-core/duty fence is dormant.
+    // The P projection is zero with no P row and fail-closed if one is corrupt.
+    if crate::palw_positive_certification_v2::positive_verifier_liability_reserved_v2(state, key) > 0
+        || palw_bond_collateral_is_locked_v2(bond, now_daa, withdrawal_delay_daa)
+    {
         return true;
     }
     let retiring_held = match &bond.status {
@@ -3012,6 +3027,7 @@ fn palw_bond_committed_legacy_v1(
         .saturating_add(state.prefix_export_reserved_at_v1(bond, now_daa))
         .saturating_add(state.verifier_watch_reserved_at_v1(bond, now_daa))
         .saturating_add(state.family_supplier_collateral_reserved_v1(bond, now_daa))
+        .saturating_add(crate::palw_positive_certification_v2::positive_verifier_liability_reserved_v2(state,bond))
 }
 
 /// Checked shared collateral, including the exact native budget liability not
@@ -13373,6 +13389,9 @@ pub fn palw_model_carrier_payout_rows_v1(tx: &crate::tx::Transaction) -> Option<
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return None;
     }
+    if crate::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
+        return None;
+    }
     let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return None;
@@ -13461,6 +13480,9 @@ pub fn palw_model_market_carrier_refusal_v1(
 ) -> Option<PalwStateV2Error> {
     use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return None;
+    }
+    if crate::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
         return None;
     }
     let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
@@ -13630,6 +13652,12 @@ impl PalwBondRegistrationIndexV1 {
 }
 
 struct TransitionBuilder<'a> {
+    assignment_materials: Vec<PositiveAssignmentAcceptedMaterialV2>,
+    assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
+    assignment_active_raw: Option<PositiveAssignmentRawActionV2>,
+    assignment_raw_boundary: Option<(Hash64, usize)>,
+    assignment_case_cache:
+        BTreeMap<misaka_palw_positive_contract::identity::CaseId, positive_assignment_case::NativeAssignedCaseCacheV2>,
     native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     claim_local_gc_undo_v3: BTreeMap<u64, palw_claim_local_context_gc_v3::GcUndoV3>,
     claim_local_gc_sequence_v3: u64,
@@ -14209,6 +14237,25 @@ mod transition_builder;
 mod vesting_workspace_v2;
 // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.
 mod funded_escrow;
+mod positive_assignment;
+mod positive_assignment_backing;
+mod positive_assignment_case;
+mod positive_assignment_funds;
+mod positive_assignment_materials;
+mod positive_assignment_raw;
+pub use positive_assignment_backing::{
+    AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignedCaseBackingV2,
+    NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2,
+};
+pub use positive_assignment_funds::{
+    AssignmentMoneyOwnerErrorV2, qualify_rooted_assignment_candidate_v2, validate_assignment_once_reference_v2,
+};
+pub use positive_assignment_materials::{
+    PositiveAssignmentAcceptedMaterialV2, PositiveAssignmentMaterialOutcomeV2, PositiveCaseAcceptedMaterialV2,
+};
+pub use positive_assignment_raw::{
+    NativeAssignmentRulesV2, NativePendingRelayReplayV2, PositiveAssignmentRawActionV2, PositiveAssignmentScheduledActionV2,
+};
 // G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry's one writer and the disclosure court's fold.
 mod d2_readiness;
 pub use input_views::{PalwBlockFactsV1, PalwRulesAtBlockV1, PalwRulesForClaimV1};
@@ -14811,6 +14858,72 @@ fn palw_v2_apply_one_object_input_context_inner_v19(
     builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
+/// Raw native action rehearsal. A fresh builder resolves every expected field
+/// from this exact prefix. The returned state is for rehearsal only; final
+/// execution receives the original raw action and redoes the same checks.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_assignment_retained_v2(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    action: &PositiveAssignmentRawActionV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+    let mut builder =
+        TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
+    builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
+    source_bootstrap_v1::prepare(&mut builder, ctx)?;
+    builder.reserve_assignment_material_slots_v2(1)?;
+    builder.apply_positive_assignment_raw_v2(ctx, action)?;
+    let rehearsal_materials = PositiveAssignmentMaterialOutcomeV2 {
+        records: std::mem::take(&mut builder.assignment_materials),
+        case_records: std::mem::take(&mut builder.assignment_case_materials),
+    };
+    rehearsal_materials.validate_v2(&builder.entries)?;
+    drop(rehearsal_materials); // Final replay must produce its own actual bytes.
+
+    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
+}
+
+/// Preview one op14 against the supplied accepted prefix using the same
+/// checks and native row writer as final execution. The state returned is
+/// disposable and can extend a preview of the next accepted carrier. The
+/// partition is only a plan until the UTXO owner credits that exact tip.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_preview_initial_relay_fee_v2(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    action: &PositiveAssignmentRawActionV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
+    ),
+    PalwStateV2Error,
+> {
+    let mut builder =
+        TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
+    builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
+    source_bootstrap_v1::prepare(&mut builder, ctx)?;
+    builder.require_raw_assignment_origin_v2(ctx, action)?;
+    if action.transaction().payload.get(7) != Some(&14) {
+        return Err(PalwStateV2Error::KernelRouteRefused("relay fee preview requires op14".into()));
+    }
+    let fees = builder.install_initial_assignment_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
+    let state = builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)?;
+    Ok((state, fees))
+}
+
 /// **Would this licence object actually LICENSE its claim on `base`?** (2026-09-24 DoS audit review
 /// of #6.) `true` only for a `ReceiptLicensed`, `ReceiptLicensedV2` or `OptimisticLicensed` that
 /// folds without error AND leaves its claim `ReceiptLicensed` — asked by folding it, so the answer
@@ -15125,6 +15238,79 @@ pub fn apply_palw_transition_retained_v7(
     ),
     PalwStateV2Error,
 > {
+    if !extras.positive_assignment_actions.is_empty() {
+        return Err(PalwStateV2Error::DeltaMismatch("raw Assignment actions require v8 owned material outcome"));
+    }
+    let (state, delta, skips, materials) = crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
+        apply_palw_transition_v7_inner(
+            parent,
+            params,
+            admission,
+            ctx,
+            accepted_objects,
+            block_work,
+            merged_work,
+            own_execution_key,
+            unavailable_abstains,
+            capability_bound,
+            uncertified_weightless,
+            da_court,
+            extras,
+        )
+    })?;
+    if !materials.is_empty() {
+        return Err(PalwStateV2Error::DeltaMismatch("v7 must not drop nonempty Assignment material"));
+    }
+    Ok((state, delta, skips))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_retained_v8(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    // **B-4: the block's OWN attempt's pre_pow-inclusive execution commitment**, computed by the
+    // processor from this block's header (the fold holds no pre_pow). `Hash64::default()` when the
+    // block carries no attempt, and unread below `palw_audit_2026_09_11_deep`. A wrapper that has no
+    // header (rehearsal / genesis / sync) passes `default` — its fold carries no merged work, so the
+    // own-vs-merged dedup cannot fire there and the own attempt is applied identically either way.
+    own_execution_key: Hash64,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        crate::palw_native_resource_v1::NativeStateDeltaV1,
+        crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+        crate::palw_native_resource_v1::NativeRetainedV1<PositiveAssignmentMaterialOutcomeV2>,
+    ),
+    PalwStateV2Error,
+> {
+    if extras.positive_assignment_actions.is_empty() {
+        let (state, delta, skips) = apply_palw_transition_retained_v7(
+            parent,
+            params,
+            admission,
+            ctx,
+            accepted_objects,
+            block_work,
+            merged_work,
+            own_execution_key,
+            unavailable_abstains,
+            capability_bound,
+            uncertified_weightless,
+            da_court,
+            extras,
+        )?;
+        return Ok((state, delta, skips, PositiveAssignmentMaterialOutcomeV2::empty_retained_v2()));
+    }
     crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
         apply_palw_transition_v7_inner(
             parent,
@@ -15169,6 +15355,7 @@ fn apply_palw_transition_v7_inner(
         crate::palw_native_resource_v1::NativeChainStateV1,
         crate::palw_native_resource_v1::NativeStateDeltaV1,
         crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BlockHash, String)>>,
+        crate::palw_native_resource_v1::NativeRetainedV1<PositiveAssignmentMaterialOutcomeV2>,
     ),
     PalwStateV2Error,
 > {
@@ -15204,6 +15391,9 @@ fn apply_palw_transition_v7_inner(
     };
     builder.claim_local_gc_defer_v3 = true;
     palw_claim_local_execution_cohort_census_v15::prepare_first_active_boundary_v15(&mut builder, parent, ctx)?;
+
+    builder.native_reservation.reserve_output_owners_v1(ctx).map_err(PalwStateV2Error::NativeResource)?;
+    builder.reserve_assignment_material_slots_v2(extras.positive_assignment_actions.len())?;
 
     // Prospective custody is authenticated against the pre-object parent. A same-block
     // enrollment/replacement never authorizes this block's capture. A carriage that does not
@@ -15341,8 +15531,30 @@ fn apply_palw_transition_v7_inner(
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    for object in accepted_objects {
-        apply_object(&mut builder, ctx, object)?;
+    if !extras.assignment_settlements.is_empty() {
+        return Err(PalwStateV2Error::DeltaMismatch("tentative Assignment UTXO previews cannot drive rooted settlement"));
+    }
+    if extras.positive_assignment_actions.is_empty() {
+        for object in accepted_objects {
+            apply_object(&mut builder, ctx, object)?;
+        }
+    } else {
+        let mut raw_cursor = 0usize;
+        let mut previous_raw_ordinal = None;
+        for (index, object) in accepted_objects.iter().enumerate() {
+            positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, &mut raw_cursor, &mut previous_raw_ordinal)?;
+            apply_object(&mut builder, ctx, object)?;
+        }
+        positive_assignment::apply_raw_before_object_v2(
+            &mut builder,
+            ctx,
+            accepted_objects.len(),
+            &mut raw_cursor,
+            &mut previous_raw_ordinal,
+        )?;
+        if raw_cursor != builder.extras.positive_assignment_actions.len() {
+            return Err(PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix"));
+        }
     }
     // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): this accepting block's actual reserved court service supply, after every
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
@@ -15910,13 +16122,16 @@ fn apply_palw_transition_v7_inner(
     palw_claim_local_context_gc_v3::finish_fold_v3(&mut builder)?;
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
     // Weight / frontier / position entries, exactly once, at the end.
-    if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
+    let weights_changed = (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature);
+    let frontier_changed = old_frontier != new_frontier;
+    builder.reserve_final_journal_v1(1 + usize::from(weights_changed) + usize::from(frontier_changed))?;
+    if weights_changed {
         builder.entries.push(PalwDeltaEntryV2::Weights {
             old: (parent.safe_weight, parent.bounded_immature),
             new: (builder.state.safe_weight, builder.state.bounded_immature),
         });
     }
-    if old_frontier != new_frontier {
+    if frontier_changed {
         builder.entries.push(PalwDeltaEntryV2::Frontier { old: old_frontier, new: new_frontier });
     }
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: parent.last_point, new: Some(*ctx) });
@@ -15986,7 +16201,13 @@ fn apply_palw_transition_v7_inner(
     builder.claim_local_retired_exec_events_v24.clear();
     builder.claim_local_retired_claim_events_v25.clear();
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
-    builder.native_reservation.finish_transition_v1(builder.state, delta, merged_skips).map_err(PalwStateV2Error::NativeResource)
+    let materials =
+        PositiveAssignmentMaterialOutcomeV2 { records: builder.assignment_materials, case_records: builder.assignment_case_materials };
+    materials.validate_v2(&delta.entries)?;
+    builder
+        .native_reservation
+        .finish_transition_with_assignment_materials_v2(builder.state, delta, merged_skips, materials)
+        .map_err(PalwStateV2Error::NativeResource)
 }
 
 /// After the LAST open session on a licensed claim ends challenger-side (an explicit
@@ -19689,9 +19910,9 @@ fn apply_class_registration_v1(
             .map_err(|_| PalwStateV2Error::ImmutableModelUpdate("class registration admission digest"))?
             .ok_or(PalwStateV2Error::ImmutableModelUpdate("class registration origin needs a registration object"))?;
         if builder.state.kernel_route.is_none() {
-            return Err(PalwStateV2Error::ImmutableModelUpdate(
-                "class registration origin needs the kernel-route aux store (aux 141)",
-            ));
+            // A genesis registration can be the route's first writer. Create
+            // its journaled, policy-checked header before writing aux 141.
+            palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
         }
         let row = PalwClassRegistrationOriginRowV1 {
             version: PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1,
@@ -21063,6 +21284,12 @@ pub struct PalwTransitionExtrasV1 {
     /// refuses the block). Empty below `palw_tir_public_conviction_v1` and wherever no row exists — every network today — so
     /// `Default` is byte-identical to the transition before the field existed.
     pub funded_escrow_settlements: Vec<crate::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
+    /// Actual ordinary UTXO spends qualified against current rooted Assignment
+    /// entitlements; the canonical writer CASes and journals these in the same batch.
+    pub assignment_settlements: Vec<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
+    /// Raw native actions replayed at exact positions in the accepted object
+    /// fold. This is not a vector of prepared or previously accepted rows.
+    pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,
     /// **G14 r5 (lane r5-escrow-settlement): how long a SETTLED funded-escrow row stays rooted after its settling spend** — the
     /// processor's `2 × pruning_depth` (DAA advances at least as fast as blue score, so by then the pruning point has passed the
     /// settling block and a pruned node's carriage no longer needs the row). `None` below `palw_tir_public_conviction_v1` (no row
@@ -22490,6 +22717,13 @@ fn attach_riders_v1(
     if remainder < e_r {
         return refuse("the lead's remainder is below a rider's share");
     }
+    // Legacy rider generation has no wide source/court adapter. Refuse the
+    // whole batch before changing the lead's escrow, exposure or budget.
+    for class_id in std::iter::once(&lead.class_id).chain(riders.iter().map(|r| &r.attempt.class_id)) {
+        if let Some(record) = builder.state.tir_class_v1(class_id) {
+            crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
+        }
+    }
     // The lead gives its shares up FIRST (the commitment it held is released and re-reserved at what it keeps), so the riders meet the
     // ceilings with the room the split freed.
     let mut kept = lead.clone();
@@ -22635,6 +22869,11 @@ fn apply_attempt(
     let class = builder.state.classes.get(&attempt.class_id).ok_or(PalwStateV2Error::MissingClass(attempt.class_id))?;
     if let PalwClassStatusV2::Frozen { .. } = class.status {
         return Err(PalwStateV2Error::FrozenClass(attempt.class_id));
+    }
+    // This legacy claim path has no wide reader/court adapter. It must refuse
+    // before any claim/reservation write, independently of audit-mesh arming.
+    if let Some(record) = builder.state.tir_class_v1(&attempt.class_id) {
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
     }
     // ADR-0135: a class the registry does not admit (REGISTERED, PREFETCHING, HELD) takes no new
     // claim, and one at its inflight cap takes none until a claim leaves flight.
@@ -23083,6 +23322,27 @@ pub fn apply_delta_v2(
     params: &PalwStateParamsV2,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
     replay_delta_owned_v1(parent.clone(), delta, params, false)
+}
+
+/// Replay the exact recorded prefix without allocating or fabricating a new
+/// delta. Every old-value check is identical to full replay; the retained
+/// native owner must reserve the full audited replay quote before calling.
+pub(crate) fn apply_delta_prefix_v2(
+    parent: &PalwChainStateV2,
+    delta: &PalwStateDeltaV2,
+    end: usize,
+    params: &PalwStateParamsV2,
+) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    let entries = delta.entries.get(..end).ok_or(PalwStateV2Error::DeltaMismatch("recorded prefix exceeds actual delta"))?;
+    let mut state = parent.clone();
+    for entry in entries {
+        apply_delta_entry(&mut state, entry, false)?;
+    }
+    palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
+    rebuild_deadline_free_indices(&mut state);
+    rebuild_deadline_index_v2(&mut state, params)?;
+    rebuild_capacity_weight_index_v1(&mut state, params);
+    Ok(state)
 }
 
 /// Revert a recorded delta from the exact child it produced, restoring the parent bit-for-bit
@@ -27822,3 +28082,13 @@ mod palw_actual_fp_carrier_observation_v1;
 pub use palw_actual_fp_carrier_observation_v1::{
     PalwActualFpCarrierObservationV1, palw_actual_fp_accepting_point_from_live_stored_v1, palw_actual_fp_carrier_observation_v1,
 };
+#[cfg(test)]
+mod positive_assignment_tests;
+
+impl PalwChainStateV2 {
+    /// Borrow actual registry data for the concrete P source reader. This
+    /// iterator does not authenticate current lineage or create a role token.
+    pub(crate) fn bonds_for_positive_p_source_v2(&self) -> impl Iterator<Item = (&PalwBondKeyV2, &PalwBondStateV2)> {
+        self.bonds.iter()
+    }
+}

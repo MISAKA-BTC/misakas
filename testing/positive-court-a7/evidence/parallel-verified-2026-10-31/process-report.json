@@ -1,0 +1,164 @@
+{
+  "a2_miner_adapter_connected": false,
+  "a3_builder_port_connected": true,
+  "activation_allowed": false,
+  "cold_model": false,
+  "native_network": false,
+  "profile": "warm-4x4-3-decode",
+  "real_llm": false,
+  "recovery": "test-frame replay only; not A6 atomic/native persistence",
+  "reports": [
+    {
+      "detail": {
+        "generated": [
+          2,
+          0,
+          0
+        ],
+        "inference_with_fixture_setup_seconds": 0.00072625
+      },
+      "elapsed_seconds": 0.000730833,
+      "pid": 30829,
+      "role": "baseline",
+      "usage": {
+        "peak_rss_bytes": 10223616,
+        "system_cpu_seconds": 0.00301,
+        "user_cpu_seconds": 0.003927
+      }
+    },
+    {
+      "detail": {
+        "result_bytes": 8303
+      },
+      "elapsed_seconds": 0.019688209,
+      "pid": 30830,
+      "role": "miner",
+      "usage": {
+        "peak_rss_bytes": 11272192,
+        "system_cpu_seconds": 0.002645,
+        "user_cpu_seconds": 0.0221
+      }
+    },
+    {
+      "detail": {
+        "artifact": "994843db5f27dc0a76014a2171b34a89df59c29574de746549f1cdf9671cbd2a943fd7d64a9c3bccba86cd94aa9409a86a62a657558188f1017fcfa32b183da6",
+        "full_frame_bytes": 27288,
+        "input": "35f0d2bd9172a3387fc7c1800051751e0fbc582bb45be938af5378a673ef1cd9e76fcf85debfd6c3fdddc4131d39fffd3e164ce3aa682f4b228d248a9fa9a98b",
+        "leaves": 9,
+        "signed_delivery_bytes": 68931
+      },
+      "elapsed_seconds": 0.248019792,
+      "pid": 30831,
+      "role": "panel",
+      "usage": {
+        "peak_rss_bytes": 12500992,
+        "system_cpu_seconds": 0.003081,
+        "user_cpu_seconds": 0.248229
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 27288,
+        "charged_signature_bytes": 41643,
+        "charged_signed_transport_bytes": 68931,
+        "cursor": 9,
+        "native_credit": false,
+        "status": "Matched"
+      },
+      "elapsed_seconds": 0.087902584,
+      "pid": 30835,
+      "role": "node",
+      "usage": {
+        "peak_rss_bytes": 10698752,
+        "system_cpu_seconds": 0.002621,
+        "user_cpu_seconds": 0.089166
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 11549,
+        "charged_signature_bytes": 18508,
+        "charged_signed_transport_bytes": 30057,
+        "cursor": 4,
+        "native_credit": false,
+        "status": "Checking"
+      },
+      "elapsed_seconds": 0.047184875,
+      "pid": 30836,
+      "role": "prefix",
+      "usage": {
+        "peak_rss_bytes": 10649600,
+        "system_cpu_seconds": 0.002237,
+        "user_cpu_seconds": 0.048969
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 27288,
+        "charged_signature_bytes": 41643,
+        "charged_signed_transport_bytes": 68931,
+        "cursor": 9,
+        "native_credit": false,
+        "status": "Matched"
+      },
+      "elapsed_seconds": 0.086868417,
+      "pid": 30837,
+      "role": "restart",
+      "usage": {
+        "peak_rss_bytes": 10764288,
+        "system_cpu_seconds": 0.002283,
+        "user_cpu_seconds": 0.088251
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 27288,
+        "charged_signature_bytes": 41643,
+        "charged_signed_transport_bytes": 68931,
+        "cursor": 9,
+        "native_credit": false,
+        "status": "OutputMismatch"
+      },
+      "elapsed_seconds": 0.086149375,
+      "pid": 30838,
+      "role": "refute",
+      "usage": {
+        "peak_rss_bytes": 10715136,
+        "system_cpu_seconds": 0.002337,
+        "user_cpu_seconds": 0.087884
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 2342,
+        "charged_signature_bytes": 4627,
+        "charged_signed_transport_bytes": 6969,
+        "cursor": 0,
+        "native_credit": false,
+        "status": "WitnessRejected"
+      },
+      "elapsed_seconds": 0.023905,
+      "pid": 30839,
+      "role": "reject",
+      "usage": {
+        "peak_rss_bytes": 10420224,
+        "system_cpu_seconds": 0.002181,
+        "user_cpu_seconds": 0.026117
+      }
+    },
+    {
+      "detail": {
+        "status": "RejectedForeignScope"
+      },
+      "elapsed_seconds": 0.000190667,
+      "pid": 30853,
+      "role": "foreign",
+      "usage": {
+        "peak_rss_bytes": 8142848,
+        "system_cpu_seconds": 0.001733,
+        "user_cpu_seconds": 0.002723
+      }
+    }
+  ],
+  "schema": "a7-r1-all-node-i32-v1"
+}

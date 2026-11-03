@@ -1,0 +1,25 @@
+{
+  "audit_only_no_rewrites": true,
+  "files": {
+    "clippy-first.log": {
+      "sha256": "7194699b2f0c107149a269bf12ef4faca9cc78c51dc073135b90bb507752baab",
+      "bytes": 316207,
+      "trailing_whitespace_lines": []
+    },
+    "pythia-first.log": {
+      "sha256": "cf8e37c4d04c5b5d278a7057576774b9082248cc52c60b844ea180c1a7cb571f",
+      "bytes": 39905,
+      "trailing_whitespace_lines": []
+    },
+    "runtime-first.log": {
+      "sha256": "4df452631d88d473b6a2f522a3a91abcf0fd004d07b22f3a97cda47df77817e9",
+      "bytes": 328352,
+      "trailing_whitespace_lines": []
+    },
+    "docs-final.log": {
+      "sha256": "6b7b4c5cd4fe54eaa61b3d41bc4b3b85e9fb0390504e87e1f536fd216fa1ae65",
+      "bytes": 438,
+      "trailing_whitespace_lines": []
+    }
+  }
+}

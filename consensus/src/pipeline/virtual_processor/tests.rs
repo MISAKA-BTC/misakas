@@ -15479,7 +15479,10 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
         assert!(merged.contains(&round_block), "virtual merges every round tip's chain of round blocks");
     }
     let daa = virtual_state.daa_score;
-    let none = vp.palw_round_verdicts_v1(&state, &virtual_state.ghostdag_data, daa).expect("the lane is open");
+    let none = vp
+        .palw_round_verdicts_v1(&state, &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("the lane is open");
     assert_eq!(none.round_blocks.len(), 3);
     assert!(none.permitted.is_empty(), "no schedule, no permit");
     // Lane SCAN: the verdict's named reasons are the SAME decision as `permitted`, block for block.
@@ -15516,7 +15519,10 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
         carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
     };
     let scheduled = with_schedule(&[]);
-    let verdicts = vp.palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, daa).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(verdicts.permitted.contains(&e1_hash) && verdicts.permitted.contains(&e2_hash), "both even-round permits are granted");
     assert!(!verdicts.permitted.contains(&e3_hash), "a round block paying a stranger is not its bond's");
     assert_eq!(verdicts.uses.len(), 2);
@@ -15525,7 +15531,10 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     assert!(verdicts.uses.iter().all(|u| u.span == 0 && u.permit_index == 0));
 
     let spent = with_schedule(&[(0, first_round)]);
-    let verdicts = vp.palw_round_verdicts_v1(&spent, &virtual_state.ghostdag_data, daa).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&spent, &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(!verdicts.permitted.contains(&e1_hash), "a permit in the ledger is not granted again");
     agrees(&verdicts);
     assert_eq!(reason_of(&verdicts, e1_hash), Some(kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1::PermitAlreadyUsed));
@@ -15629,7 +15638,10 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
     assert!(vp.palw_v2_validate_objects(&scheduled, &bundle.state, &point, &[object(renamed)]).is_err(), "a permit it did not sign");
 
     // Before the burn the merging block would grant the permit to one of the two; after it, to neither.
-    let verdicts = vp.palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, virtual_state.daa_score)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(verdicts.permitted.contains(&first_hash) || verdicts.permitted.contains(&second_hash), "an unburned permit is granted");
     let (burned, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
         &scheduled,
@@ -15655,7 +15667,10 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
         burned.bond(&adr0125_harness_bond()).unwrap().slashed > bond.slashed,
         "the bond paid for signing two blocks for one permit"
     );
-    let verdicts = vp.palw_round_verdicts_v1(&burned, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&burned, &virtual_state.ghostdag_data, virtual_state.daa_score)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(
         !verdicts.permitted.contains(&first_hash) && !verdicts.permitted.contains(&second_hash),
         "a burned permit is granted to neither"
@@ -16030,13 +16045,19 @@ async fn adr0130_a_round_block_whose_permit_the_previous_round_held_is_not_grant
         carriage.round_schedules.insert(0, schedule.clone());
         carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
     };
-    let verdicts = vp.palw_round_verdicts_v1(&with(&schedule), &virtual_state.ghostdag_data, daa).expect("the lane is open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&with(&schedule), &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("the lane is open");
     assert!(verdicts.permitted.contains(&e_held_hash), "the round its parity holds is granted");
     assert!(
         !verdicts.permitted.contains(&e_missed_hash),
         "and the round before or after it is not — the operator does not hold two in a row"
     );
-    let relaxed = vp.palw_round_verdicts_v1(&with(&both_parities), &virtual_state.ghostdag_data, daa).expect("open");
+    let relaxed = vp
+        .palw_round_verdicts_v1(&with(&both_parities), &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(
         relaxed.permitted.contains(&e_held_hash) && relaxed.permitted.contains(&e_missed_hash),
         "the schedule the rule replaced grants both"
@@ -16875,6 +16896,7 @@ mod t12_tir_registration_cap;
 // G14 lane D: a model registration on the REAL consensus path against the offline gate (preflight parity, adversarial
 // registrations, mempool -> template -> fold -> persisted tip -> ConsensusApi reads, replay and reorg).
 mod g14_registration_e2e;
+mod tir_wide_registration_e2e;
 // G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
 mod g14_kernel_route_e2e;
 // Lane LG14-A: the legacy V2 route under G14 -- a bond registered after genesis reserves, localizes and convicts a lie every seat

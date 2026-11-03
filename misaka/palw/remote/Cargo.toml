@@ -11,6 +11,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+misaka-palw-positive-contract = { path = "../positive-contract", optional = true }
+misaka-palw-tir-exec = { path = "../tir/exec", optional = true }
+rocksdb = { workspace = true, optional = true }
 misaka-endpoints.workspace = true
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
@@ -40,6 +43,11 @@ kaspa-pq-validator-core = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "time"], optional = true }
 
 [features]
+# Private process adapter only; no native tag, activation height or credit.
+positive-miner = ["dep:misaka-palw-positive-contract", "dep:misaka-palw-tir-exec"]
+# Dedicated local spent-I/O anchors. No chain rollback or native activation.
+positive-miner-rocksdb = ["positive-miner", "dep:rocksdb"]
+positive-panel = ["positive-miner", "misaka-palw-tir-exec/positive-panel"]
 rpc = ["dep:kaspa-wrpc-client", "dep:kaspa-rpc-core", "dep:kaspa-pow", "dep:kaspa-pq-validator-core", "dep:tokio"]
 
 [[bin]]

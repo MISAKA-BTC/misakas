@@ -88,7 +88,7 @@ async fn funded_escrow_real_native_signatures_payment_burn_continuation_and_refu
     let full = crate::processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags::Full;
     let validated = vp.validate_transaction_in_utxo_context(&spend, &view, 500, full, None).unwrap();
     assert_eq!(validated.calculated_fee, burn);
-    let locks = PalwEscrowSpendLocksV1 { rows: [(row.funding_outpoint, row)].into_iter().collect(), provisional: Default::default() };
+    let locks = PalwEscrowSpendLocksV1 { rows: [(row.funding_outpoint, row)].into_iter().collect(), ..Default::default() };
     assert_eq!(locks.refusal(&spend, [row.amount_sompi], 500), None);
     let plan = escrow::palw_escrow_qualified_spend_v1(
         &row,

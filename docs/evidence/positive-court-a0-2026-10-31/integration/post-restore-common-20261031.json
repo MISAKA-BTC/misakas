@@ -1,0 +1,90 @@
+{
+  "head": "815b7ca1c8d8f6ddc36fdf8b96b1cce90b398dc5",
+  "source_before": {
+    "misaka/palw/positive-contract/src/certification.rs": "139092972ee5a0e083bf256681a3235e44c9cd8d3bc434e547ba70137f456140",
+    "misaka/palw/positive-contract/src/funding.rs": "0996296c8d2b114e099133d46b16814ae13e02acf177acee16246fb4163162a9",
+    "misaka/palw/positive-contract/src/identity.rs": "b7e4f78c6f4a4912d75f39d56dbde19124a1bc3c754abb3b7448ee3e26ec4cc1",
+    "misaka/palw/positive-contract/src/lib.rs": "072ff714efe6980790f0df99f31d3fb5412d3dadb8384d612f64f07b722e929f",
+    "misaka/palw/positive-contract/src/messages.rs": "4709303de84dd3a4bad272d65dfbd14224297bcfad779368cab61f9ef10ebbf1",
+    "misaka/palw/positive-contract/src/native.rs": "1bab234dce4bb6b0bad63b91cac9f097c9c24d87c961fff19f5627b34302a7e8",
+    "misaka/palw/positive-contract/src/ports.rs": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4",
+    "misaka/palw/positive-contract/src/record.rs": "43b885cec90f6928d01d87cc2d72eb84ec0f3b42500c8ec7f79ab89ff828cb05",
+    "misaka/palw/positive-contract/src/rows.rs": "53d42d3a6f65af575eaf3ccebc16e63155501bb9128ae6c934994b5a683be7d4",
+    "misaka/palw/positive-contract/src/tir.rs": "d43d1d1d051997a5f2bdb760313cb3c670f867dc138e84c2e6a7ed72b0ab59b0",
+    "misaka/palw/positive-contract/src/wire.rs": "c8737515c35305facb5d12ba6866b09a7a94a1efb6c2500f0d46b8b42ee82b79",
+    "misaka/palw/positive-contract/tests/certification.rs": "6e8f30fa91c7b0991e97493290479ef10fdf5f95640a7fff1fc67accd948b3fd",
+    "misaka/palw/positive-contract/tests/contracts.rs": "6d1f0ef78607f6d5b53f91d5de67bfac9380bbd0ee126f4c1152f5c56cf42f90",
+    "misaka/palw/positive-contract/tests/execution_record.rs": "7d019a65c29ebd6883e68067e29ab3d004b658c659d059afcf1693ea309902ec",
+    "misaka/palw/positive-contract/tests/funding.rs": "c50de7cde1b166604ebf81b808616962b4872ec1ab7fd86b38f1456cb47948c8",
+    "misaka/palw/positive-contract/tests/native_namespace.rs": "8619bb32ebbd914e0fa57b91477219ed5b2e40c4371af74adef1686485b4be5d",
+    "misaka/palw/positive-contract/tests/native_preflight_alloc.rs": "696d64ddc4c4d4b02c6f76ab8fb26277135cdf7463cb43d85242768a318920a1",
+    "misaka/palw/positive-contract/tests/native_rows.rs": "a87849b1ab0f919b0acf5a24c3a68964d8d2b98e43f05d81f21ea9edc31b685a",
+    "misaka/palw/positive-contract/tests/tir_contract.rs": "8067c6059c059adf8f97a3e5a1ca9452e078a45b0a9ec5567321065684b9766d",
+    "Cargo.lock": "82ba353a60d3d95369045d3fce6aff7eb9d4bf2f928dbcb59ee1a654ef52c613",
+    "misaka/palw/positive-contract/Cargo.toml": "16ae4b261062e692618fc4e5db75491af9bf12a817872db1a272b97f619dcac5"
+  },
+  "environment_overrides": {
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/positive-court-a0/target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "results": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--offline",
+        "--locked"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 5.632116416993085,
+      "log": "post-restore-common-20261031-0.log",
+      "sha256": "055c7e61c2dc0c2a81278f21a8dbde8a69964d5f918b33aa50826c727e36a2a1"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--all-targets",
+        "--offline",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 1.1942575839930214,
+      "log": "post-restore-common-20261031-1.log",
+      "sha256": "13a6da550f1d7c6bc30112845e0714bba708af4b78c6e7ccb910fc45b55ab952"
+    }
+  ],
+  "scope": "common contract only; no native admission, funding, replay or activation",
+  "source_after": {
+    "misaka/palw/positive-contract/src/certification.rs": "139092972ee5a0e083bf256681a3235e44c9cd8d3bc434e547ba70137f456140",
+    "misaka/palw/positive-contract/src/funding.rs": "0996296c8d2b114e099133d46b16814ae13e02acf177acee16246fb4163162a9",
+    "misaka/palw/positive-contract/src/identity.rs": "b7e4f78c6f4a4912d75f39d56dbde19124a1bc3c754abb3b7448ee3e26ec4cc1",
+    "misaka/palw/positive-contract/src/lib.rs": "072ff714efe6980790f0df99f31d3fb5412d3dadb8384d612f64f07b722e929f",
+    "misaka/palw/positive-contract/src/messages.rs": "4709303de84dd3a4bad272d65dfbd14224297bcfad779368cab61f9ef10ebbf1",
+    "misaka/palw/positive-contract/src/native.rs": "1bab234dce4bb6b0bad63b91cac9f097c9c24d87c961fff19f5627b34302a7e8",
+    "misaka/palw/positive-contract/src/ports.rs": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4",
+    "misaka/palw/positive-contract/src/record.rs": "43b885cec90f6928d01d87cc2d72eb84ec0f3b42500c8ec7f79ab89ff828cb05",
+    "misaka/palw/positive-contract/src/rows.rs": "53d42d3a6f65af575eaf3ccebc16e63155501bb9128ae6c934994b5a683be7d4",
+    "misaka/palw/positive-contract/src/tir.rs": "d43d1d1d051997a5f2bdb760313cb3c670f867dc138e84c2e6a7ed72b0ab59b0",
+    "misaka/palw/positive-contract/src/wire.rs": "c8737515c35305facb5d12ba6866b09a7a94a1efb6c2500f0d46b8b42ee82b79",
+    "misaka/palw/positive-contract/tests/certification.rs": "6e8f30fa91c7b0991e97493290479ef10fdf5f95640a7fff1fc67accd948b3fd",
+    "misaka/palw/positive-contract/tests/contracts.rs": "6d1f0ef78607f6d5b53f91d5de67bfac9380bbd0ee126f4c1152f5c56cf42f90",
+    "misaka/palw/positive-contract/tests/execution_record.rs": "7d019a65c29ebd6883e68067e29ab3d004b658c659d059afcf1693ea309902ec",
+    "misaka/palw/positive-contract/tests/funding.rs": "c50de7cde1b166604ebf81b808616962b4872ec1ab7fd86b38f1456cb47948c8",
+    "misaka/palw/positive-contract/tests/native_namespace.rs": "8619bb32ebbd914e0fa57b91477219ed5b2e40c4371af74adef1686485b4be5d",
+    "misaka/palw/positive-contract/tests/native_preflight_alloc.rs": "696d64ddc4c4d4b02c6f76ab8fb26277135cdf7463cb43d85242768a318920a1",
+    "misaka/palw/positive-contract/tests/native_rows.rs": "a87849b1ab0f919b0acf5a24c3a68964d8d2b98e43f05d81f21ea9edc31b685a",
+    "misaka/palw/positive-contract/tests/tir_contract.rs": "8067c6059c059adf8f97a3e5a1ca9452e078a45b0a9ec5567321065684b9766d",
+    "Cargo.lock": "82ba353a60d3d95369045d3fce6aff7eb9d4bf2f928dbcb59ee1a654ef52c613",
+    "misaka/palw/positive-contract/Cargo.toml": "16ae4b261062e692618fc4e5db75491af9bf12a817872db1a272b97f619dcac5"
+  }
+}

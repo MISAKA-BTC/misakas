@@ -33,6 +33,10 @@ mod kernel_ledger;
 mod kernel_material;
 mod kernel_salted;
 mod kernel_segment_assembly;
+mod positive_assignment;
+mod positive_certification;
+pub mod positive_journal;
+pub(crate) mod positive_rows;
 pub use kernel_material::{
     native_kernel_parameter_auth_requests_v4, native_kernel_parameter_tensor_requests_v4, native_kernel_position_auth_requests_v4,
     native_kernel_segment_auth_requests_v4,
@@ -42,14 +46,19 @@ mod ledger_expansion;
 // RFC-0006: the kernel ledger's consensus mutations, admitted from the real typed values (replaces `DerefMut`).
 mod kernel_ledger_mutation;
 pub use kernel_ledger_mutation::{PALW_KERNEL_LEDGER_APPLY_MEMBERSHIP_CEILING_V1, PALW_KERNEL_LEDGER_EVENTS_PER_ROW_CEILING_V1};
+mod source_local;
 mod tir;
 pub use demand::reserve_native_requests_v1;
 pub(crate) use ledger_expansion::source_tir_program_shape_v1;
 pub(crate) use ledger_expansion::{NativeTirProgramShapeV1, standalone_tir_program_shape_v1};
 pub use ledger_expansion::{ReservedKernelLedgerV1, inventory_ledger_expansion_v1, preflight_kernel_served_row_v1};
 pub(crate) use ledger_expansion::{ledger_cache_clone_v1, reserve_ledger_expansion_v1};
-pub use tir::decode_native_tir_program_v1;
+pub use source_local::{
+    LocalScanWorkBudgetV1, LocalSourceProgramOwnerV1, ScannedSourceProgramLocalV1, SourceProgramLocalErrorV1,
+    SourceProgramLocalLimitsV1, SourceProgramLocalQuoteV1, require_source_program_local_profile_v1, scan_source_program_local_v1,
+};
 pub(crate) use tir::{NativeTirShardWorkspaceV1, TirNativeRequestsV1, reserve_native_tir_shard_workspace_v1};
+pub use tir::{decode_native_tir_program_v1, growing_vec_request_capacity_v1};
 pub(crate) use typed::BTreeNodeEnvelopeV1;
 #[cfg(test)]
 mod aux_registry_tests;

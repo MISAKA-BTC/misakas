@@ -1,0 +1,24 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+error[E0505]: cannot move out of `program` because it is borrowed
+   --> misaka/palw/tir/exec/tests/positive_typed_capture_common/mod.rs:226:23
+    |
+210 |     let (program, params) = program(window);
+    |          ------- binding `program` declared here
+...
+214 |     let inventory = TirHeldInventoryV1::build(&program, &source).unwrap();
+    |                                               -------- borrow of `program` occurs here
+...
+226 |     let f = Fixture { program, params, class, artifact, job, nodes, steps, encoded_program };
+    |                       ^^^^^^^ move out of `program` occurs here
+...
+229 |     body(&f, &runner, &inventory);
+    |                       ---------- borrow later used here
+    |
+help: consider cloning the value if the performance cost is acceptable
+    |
+214 |     let inventory = TirHeldInventoryV1::build(&program.clone(), &source).unwrap();
+    |                                                       ++++++++
+
+For more information about this error, try `rustc --explain E0505`.
+error: could not compile `misaka-palw-tir-exec` (test "positive_typed_capture") due to 1 previous error
+warning: build failed, waiting for other jobs to finish...

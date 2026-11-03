@@ -1,0 +1,16 @@
+{
+  "argv": [
+    "python3",
+    "-B",
+    "testing/positive-court-a7/real_llm_process.py",
+    "--out",
+    "testing/positive-court-a7/runs/real-llm-source-freeze-20261101-283385c31/preflight",
+    "--mode",
+    "dry-run",
+    "--source-commit",
+    "283385c31f808b4894fbc7a9969215645a97dbe4"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 2.8558849999972153,
+  "utc": "2026-11-01T13:46:09.606799+00:00"
+}

@@ -436,10 +436,63 @@ fn native_store_capacity_v1(
         other => panic!("unexpected native store failure: {other}"),
     }
 }
+/// An armed monetary path must have the state of this exact parent before
+/// either EXEC anchoring or UTXO acceptance can use it.
+fn virtual_palw_parent_from_tip_v2(
+    loaded: kaspa_database::prelude::StoreResult<
+        Option<(BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>,
+    >,
+    parent: BlockHash,
+    required: bool,
+) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>, RuleError> {
+    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
+    match loaded {
+        Ok(Some((block, state))) if block == parent => Ok(Some(state)),
+        _ if !required => Ok(None),
+        Ok(_) => Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable)),
+        Err(error @ StoreError::LocalResourceUnavailable(_)) => {
+            Err(RuleError::LocalNativeCapacityUnavailable(native_store_capacity_v1(error)))
+        }
+        Err(_) => Err(RuleError::LocalNativeStateContextUnavailable(Fault::StoreUnreadable)),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn virtual_palw_parent_requires_the_matching_tip_for_armed_money() {
+    use kaspa_consensus_core::{
+        palw_native_resource_v1::NativeChainStateV1, palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault,
+        palw_state_v2::PalwChainStateV2,
+    };
+    let parent = BlockHash::from_u64_word(1);
+    let other = BlockHash::from_u64_word(2);
+    let genesis = PalwChainStateV2::genesis();
+    let state = || NativeChainStateV1::try_from_clone_v1(&genesis).unwrap();
+    assert!(virtual_palw_parent_from_tip_v2(Ok(Some((parent, state()))), parent, true).unwrap().is_some());
+    assert!(virtual_palw_parent_from_tip_v2(Ok(Some((other, state()))), parent, false).unwrap().is_none());
+    for loaded in [Ok(None), Ok(Some((other, state())))] {
+        assert!(matches!(
+            virtual_palw_parent_from_tip_v2(loaded, parent, true),
+            Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable))
+        ));
+    }
+    let no_capacity = || Err(StoreError::LocalResourceUnavailable("test parent restore demand".into()));
+    assert!(virtual_palw_parent_from_tip_v2(no_capacity(), parent, false).unwrap().is_none());
+    assert!(matches!(virtual_palw_parent_from_tip_v2(no_capacity(), parent, true), Err(RuleError::LocalNativeCapacityUnavailable(_))));
+    assert!(matches!(
+        virtual_palw_parent_from_tip_v2(Err(StoreError::DataInconsistency("test bad PALW tip".into())), parent, true),
+        Err(RuleError::LocalNativeStateContextUnavailable(Fault::StoreUnreadable))
+    ));
+}
+
 struct PalwUtxoCommitV2 {
+    relay_carriers: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
     root: Hash64,
     delta: kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
     _native_delta_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    assignment_materials: kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<
+        kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2,
+    >,
     genesis: Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
     _native_genesis_carriages_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
     genesis_carriages: Vec<(Hash64, crate::model::stores::palw_class_carriage::PalwClassCarriageRecord)>,
@@ -989,6 +1042,9 @@ pub struct VirtualStateProcessor {
     /// force at a block is the live build's undecodable payload there: the objects-of-block walk drops it before the acceptance walk,
     /// a chunk group assembling to it is undecodable to the walk, and the UTXO walk burns no rent for it.
     pub(super) palw_lifecycle_kind_fences: kaspa_consensus_core::palw_lifecycle_objects_v2::PalwLifecycleKindFencesV1,
+    /// Complete immutable native policy preimages, retained only for the new
+    /// Assignment profile. The fired resolver must not hash heights alone.
+    pub(super) palw_positive_assignment_params_v2: Option<Arc<Params>>,
     /// ADR-0152 v2 F2: `Params::palw_offence_attribution` (`Some(0)` on testnet-12 alone), resolved
     /// once in [`Self::palw_offence_attribution_at`]; the `ObjectiveOffence` gate and the fold's
     /// extras both read it there, so a node cannot admit a false-Valid offence its fold then routes
@@ -1265,6 +1321,9 @@ pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
 /// the map `calculate_utxo_state` filled, and spent in `palw_v2_accepted_objects`.
 pub(super) struct PalwCarriedObjectV1 {
     pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    /// Actual accepted transaction identity. Synthetic pre-object bindings have
+    /// no carrier and remain before the new accepted-prefix ordering.
+    pub(super) native_carrier: Option<TransactionId>,
     /// Internal only: fee available for rent after mandatory bond burn, or the unpriced sentinel.
     pub(super) carrier_fee: u64,
     pub(super) fp_answer: Option<kaspa_consensus_core::palw_native_resource_v1::NativeRetainedV1<Vec<u32>>>,
@@ -1341,6 +1400,7 @@ mod palw_evm_asof_v2;
 pub(crate) mod palw_h1_guard;
 mod palw_pruning_capture_v1;
 mod palw_validate;
+pub(super) mod positive_assignment_archive;
 mod template;
 mod template_parent_snapshot_v1;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
@@ -1684,6 +1744,7 @@ impl VirtualStateProcessor {
             palw_receipt_spend_v4: params.palw_receipt_spend_v4_fence(),
             palw_header_forms: params.palw_header_form_fences_v1(),
             palw_lifecycle_kind_fences: params.palw_lifecycle_kind_fences_v1(),
+            palw_positive_assignment_params_v2: params.palw_positive_assignment_v2.as_ref().map(|_| Arc::new(params.clone())),
             palw_offence_attribution: params.palw_offence_attribution_fence(),
             palw_activation_pool: params.palw_activation_pool_fence(),
             palw_rcore_plus: params.palw_rcore_plus_fence(),
@@ -2537,10 +2598,47 @@ impl VirtualStateProcessor {
                     // G14 lane escrow-rfc08 (RFC-0035 A): and which funded-escrow outpoints are locked, from the same parent state.
                     ctx.palw_escrow_locks.rows =
                         palw_state.as_ref().map(|s| self.palw_escrow_locked_rows_v1(s, pov_daa_score)).unwrap_or_default();
+                    ctx.palw_escrow_locks.assignment = palw_state
+                        .as_ref()
+                        .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
+                        .transpose()
+                        .map_err(|why| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Assignment funding lock projection",
+                                &format!("{why:?}"),
+                            )
+                        })?
+                        .unwrap_or_default();
+                    ctx.palw_escrow_locks.positive_case = palw_state
+                        .as_ref()
+                        .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
+                        .transpose()
+                        .map_err(|why| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Positive Case funding lock projection",
+                                &format!("{why:?}"),
+                            )
+                        })?
+                        .unwrap_or_default();
+                    ctx.palw_escrow_locks.assignment_prover = palw_state
+                        .as_ref()
+                        .map(|state| {
+                            kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state)
+                        })
+                        .transpose()
+                        .map_err(|why| {
+                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                "Assignment prover funding lock projection",
+                                &format!("{why:?}"),
+                            )
+                        })?
+                        .unwrap_or_default();
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts = palw_state
                         .as_ref()
-                        .and_then(|s| self.palw_round_verdicts_at_v1(s, &ctx.ghostdag_data, pov_daa_score, current));
+                        .map(|s| self.palw_round_verdicts_at_v1(s, &ctx.ghostdag_data, pov_daa_score, current))
+                        .transpose()?
+                        .flatten();
                     // Lane SCAN: node-local telemetry of each judged round block (never read by consensus).
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                         self.palw_record_round_verdicts(verdicts);
@@ -2550,7 +2648,43 @@ impl VirtualStateProcessor {
                     // Native integration tests exercise its synchronous entry with
                     // real validated inputs; ordinary production processing adds
                     // no unfunded decode/signature/graph work.
-                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
+                    let positive_point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                        block: current,
+                        daa_score: header.daa_score,
+                        blue_score: header.blue_score,
+                        subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                    };
+                    if palw_state.is_some() && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(pov_daa_score) {
+                        ctx.positive_accepting_point = Some(positive_point);
+                    }
+                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
+                    let mut assignment_raw_actions =
+                        self.take_assignment_actions_v2(&mut ctx, positive_point, &selected_parent_utxo_view, palw_state.as_deref())?;
+                    if let Some(state) = palw_state.as_deref()
+                        && let Some(plan) =
+                            self.preview_candidate_relay_fees_v2(&ctx, state, &positive_point, &header, &assignment_raw_actions)?
+                    {
+                        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+                        drop(assignment_raw_actions);
+                        let parent_multiset = self.utxo_multisets_store.get(selected_parent).map_err(|why| {
+                            NativeCoverageV1::unsupported::<Self>("relay fee replay parent MuHash", &why.to_string())
+                        })?;
+                        self.replay_relay_utxo_fees_v2(
+                            &mut ctx,
+                            &selected_parent_utxo_view,
+                            bond_view,
+                            positive_point,
+                            state,
+                            parent_multiset,
+                            plan,
+                        )?;
+                        assignment_raw_actions = self.take_assignment_actions_v2(
+                            &mut ctx,
+                            positive_point,
+                            &selected_parent_utxo_view,
+                            palw_state.as_deref(),
+                        )?;
+                    }
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
                     // native (payment) transactions are counted apart from PALW carriers and the first
@@ -2788,15 +2922,18 @@ impl VirtualStateProcessor {
                                     None
                                 };
                                 let (
-                                    objects,
-                                    folded,
-                                    carrier_refunds,
-                                    tir_public_originals,
-                                    tir_funded_originals,
-                                    fp_answers,
-                                    prefix_dependencies,
-                                    carrier_input_spends,
-                                ) = self.palw_v2_accepted_objects_with_native_original_context_v19(
+                                    (
+                                        objects,
+                                        folded,
+                                        carrier_refunds,
+                                        tir_public_originals,
+                                        tir_funded_originals,
+                                        fp_answers,
+                                        prefix_dependencies,
+                                        carrier_input_spends,
+                                    ),
+                                    assignment_rehearsal,
+                                ) = self.palw_v2_accepted_objects_and_raw_assignments_v2(
                                     state,
                                     state_params,
                                     &point,
@@ -2806,7 +2943,19 @@ impl VirtualStateProcessor {
                                     &ctx.palw_round_fee_incomes,
                                     &ctx.palw_escrow_settlements,
                                     native_original_context_v19.as_deref(),
+                                    assignment_raw_actions,
+                                    &ctx.accepted_tx_ids,
+                                    palw_accept::NativeAssignmentRehearsalModeV2::Observed,
                                 )?;
+                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(assignment_raw_schedule) =
+                                    assignment_rehearsal
+                                else {
+                                    return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                        "Assignment final fold",
+                                        "fee preview cannot supply the observed schedule",
+                                    )
+                                    .into());
+                                };
                                 // The singleton filter has consumed the measured basis. The
                                 // authoritative fold below builds its own actual basis anew.
                                 drop(native_original_context_v19);
@@ -2975,7 +3124,70 @@ impl VirtualStateProcessor {
                                 // Telemetry is scoped to the synchronous authoritative fold, never acceptance rehearsals.
                                 let court_observation_guard =
                                     kaspa_consensus_core::palw_court_observation_v1::CourtObservationGuardV1::enter(current);
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v7(
+                                let transition_extras = prefix_dependencies.attach_v1(&fp_answers, {
+                                    let mut extras =
+                                        self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
+                                    extras.history_custody_pledges = history_custody_pledges;
+                                    extras.tir_public_originals = tir_public_originals;
+                                    extras.tir_funded_originals = tir_funded_originals;
+                                    extras.carrier_input_spends = carrier_input_spends;
+                                    extras.public_original_bindings = public_original_bindings;
+                                    extras.producer_custody_delegations = producer_custody_delegations;
+                                    if state_params.exec_v2_active_at(point.daa_score)
+                                        || state_params.monetary_material_at_v1(point.daa_score).is_some()
+                                    {
+                                        if attempt.is_some()
+                                            && let Ok(bytes) = borsh::to_vec(header.as_ref())
+                                        {
+                                            extras.exec_v2_origin_headers.insert(current, bytes);
+                                        }
+                                        for owned in &merged_owned {
+                                            if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned
+                                                && let Ok(bytes) = borsh::to_vec(origin_header.as_ref())
+                                            {
+                                                extras.exec_v2_origin_headers.insert(*source, bytes);
+                                            }
+                                        }
+                                    }
+                                    if let Some(staged) = evm_staged.as_ref() {
+                                        extras.evm_actions = staged.result.market_actions.clone();
+                                    }
+                                    // P-B1: what the filter above refused and owes back. Empty
+                                    // below `palw_audit_2026_09_23`, and the fold checks again.
+                                    extras.carrier_market_refunds = carrier_refunds;
+                                    // ADR-0125: the permits this block accepted, as decided above.
+                                    if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
+                                        extras.round_permit_uses = verdicts.uses.clone();
+                                    }
+                                    extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
+                                    // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
+                                    // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
+                                    extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
+                                    extras.positive_assignment_actions = assignment_raw_schedule;
+                                    // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
+                                    // re-judged by the fold against its own running state) and the covered set itself.
+                                    if let Some(resolved) = exec_resolved.as_ref() {
+                                        let (anchor, slices) = self.palw_exec_v2_fold_inputs(resolved, point.daa_score);
+                                        extras.exec_v2_anchor = Some(anchor);
+                                        extras.exec_v2_covered = slices;
+                                    }
+                                    // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
+                                    extras.own_job_anchor = own_job_anchor;
+                                    // **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of this block's mergeset** — the floor state machine reads a merged
+                                    // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
+                                    extras.merged_reds = ctx
+                                        .ghostdag_data
+                                        .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member))
+                                        .genuine_reds()
+                                        .iter()
+                                        .copied()
+                                        .collect();
+                                    // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
+                                    extras.audit_1004_draw_seed_source =
+                                        self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
+                                    extras
+                                })?;
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -2992,70 +3204,9 @@ impl VirtualStateProcessor {
                                     self.palw_da_court_at(point.daa_score),
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
-                                    &*prefix_dependencies.attach_v1(&fp_answers, {
-                                        let mut extras =
-                                            self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
-                                        extras.history_custody_pledges = history_custody_pledges;
-                                        extras.tir_public_originals = tir_public_originals;
-                                        extras.tir_funded_originals = tir_funded_originals;
-                                        extras.carrier_input_spends = carrier_input_spends;
-                                        extras.public_original_bindings = public_original_bindings;
-                                        extras.producer_custody_delegations = producer_custody_delegations;
-                                        if state_params.exec_v2_active_at(point.daa_score)
-                                            || state_params.monetary_material_at_v1(point.daa_score).is_some()
-                                        {
-                                            if attempt.is_some()
-                                                && let Ok(bytes) = borsh::to_vec(header.as_ref())
-                                            {
-                                                extras.exec_v2_origin_headers.insert(current, bytes);
-                                            }
-                                            for owned in &merged_owned {
-                                                if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned
-                                                    && let Ok(bytes) = borsh::to_vec(origin_header.as_ref())
-                                                {
-                                                    extras.exec_v2_origin_headers.insert(*source, bytes);
-                                                }
-                                            }
-                                        }
-                                        if let Some(staged) = evm_staged.as_ref() {
-                                            extras.evm_actions = staged.result.market_actions.clone();
-                                        }
-                                        // P-B1: what the filter above refused and owes back. Empty
-                                        // below `palw_audit_2026_09_23`, and the fold checks again.
-                                        extras.carrier_market_refunds = carrier_refunds;
-                                        // ADR-0125: the permits this block accepted, as decided above.
-                                        if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
-                                            extras.round_permit_uses = verdicts.uses.clone();
-                                        }
-                                        extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
-                                        // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
-                                        // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
-                                        extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
-                                        // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
-                                        // re-judged by the fold against its own running state) and the covered set itself.
-                                        if let Some(resolved) = exec_resolved.as_ref() {
-                                            let (anchor, slices) = self.palw_exec_v2_fold_inputs(resolved, point.daa_score);
-                                            extras.exec_v2_anchor = Some(anchor);
-                                            extras.exec_v2_covered = slices;
-                                        }
-                                        // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
-                                        extras.own_job_anchor = own_job_anchor;
-                                        // **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of this block's mergeset** — the floor state machine reads a merged
-                                        // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
-                                        extras.merged_reds = ctx
-                                            .ghostdag_data
-                                            .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member))
-                                            .genuine_reds()
-                                            .iter()
-                                            .copied()
-                                            .collect();
-                                        // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
-                                        extras.audit_1004_draw_seed_source =
-                                            self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
-                                        extras
-                                    })?,
+                                    &transition_extras,
                                 ) {
-                                    Ok((next, delta, merged_skips)) => {
+                                    Ok((next, delta, merged_skips, assignment_materials)) => {
                                         committed_court_observation = court_observation_guard.finish().map(|outcomes| {
                                             kaspa_consensus_core::palw_court_observation_v1::CommittedCourtObservationV1 {
                                                 block: current,
@@ -3121,7 +3272,10 @@ impl VirtualStateProcessor {
                                             );
                                         }
                                         let (delta, delta_lease) = delta.into_parts_v1();
-                                        Some((state.state_root(), delta, delta_lease))
+                                        // Keep the observed fee evidence even when the fold wrote
+                                        // no rows, so staging can detect a debit with no custody.
+                                        let relay_carriers = transition_extras.into_assignment_actions_v2();
+                                        Some((state.state_root(), delta, delta_lease, assignment_materials, relay_carriers))
                                     }
                                     Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
                                         return Err(why.into());
@@ -3170,10 +3324,12 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged.map(|(root, delta, delta_lease)| PalwUtxoCommitV2 {
+                            palw_v2_staged.map(|(root, delta, delta_lease, assignment_materials, relay_carriers)| PalwUtxoCommitV2 {
+                                relay_carriers,
                                 root,
                                 delta,
                                 _native_delta_lease: delta_lease,
+                                assignment_materials,
                                 genesis: None,
                                 _native_genesis_carriages_lease: None,
                                 genesis_carriages: Vec::new(),
@@ -3626,8 +3782,45 @@ impl VirtualStateProcessor {
         let mut genesis_class_store = None;
         let mut native_delta_write = None;
         let mut native_genesis_write = None;
+        let mut native_assignment_write = None;
+        let mut native_case_material_write = None;
+        let mut native_relay_material_write = None;
+        let mut native_relay_carriers_hold = None;
+        let mut native_assignment_materials_hold = None;
         if let Some(staged) = palw_v2_staged {
             let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
+            // Keep the native typed material owner alive through the exact same
+            // WriteBatch commit as UTXOs, state root and this delta. A missing
+            // material outcome is a local failed preparation, never a partial
+            // commit of its canonical frame/head/account rows.
+            native_assignment_materials_hold = Some(staged.assignment_materials);
+            native_assignment_write = store
+                .stage_positive_assignment_material_outcome_v2(
+                    &mut batch,
+                    &staged.delta,
+                    native_assignment_materials_hold.as_ref().expect("retained Assignment material outcome"),
+                )
+                .map_err(native_store_capacity_v1)?;
+            native_case_material_write = store
+                .stage_positive_case_material_outcome_v2(
+                    &mut batch,
+                    &staged.delta,
+                    native_assignment_materials_hold.as_ref().expect("retained original Case material outcome"),
+                )
+                .map_err(native_store_capacity_v1)?;
+            native_relay_carriers_hold = Some(staged.relay_carriers);
+            native_relay_material_write = store
+                .stage_funding_relay_material_v2(
+                    &mut batch,
+                    &staged.delta,
+                    native_relay_carriers_hold.as_deref().expect("retained relay carriers"),
+                )
+                .map_err(|why| {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwUtxoCommitV2>(
+                        "native relay material staging",
+                        &why.to_string(),
+                    )
+                })?;
             native_delta_write = Some(
                 store
                     .insert_delta_batch_tracked_v1(&mut batch, current, staged.root, &staged.delta)
@@ -3802,6 +3995,11 @@ impl VirtualStateProcessor {
         let write_guard = self.statuses_store.set_batch(&mut batch, current, StatusUTXOValid).unwrap();
         self.db.write(batch).unwrap();
         drop(native_delta_write);
+        drop(native_assignment_write);
+        drop(native_case_material_write);
+        drop(native_relay_material_write);
+        drop(native_relay_carriers_hold);
+        drop(native_assignment_materials_hold);
         drop(native_genesis_write);
         drop(genesis_class_store);
         if let Some(ticket) = rewarded_commit {
@@ -3843,6 +4041,59 @@ impl VirtualStateProcessor {
         Ok(new_virtual_state)
     }
 
+    fn take_assignment_actions_v2(
+        &self,
+        ctx: &mut UtxoProcessingContext<'_>,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        selected_parent_utxo_view: &impl UtxoView,
+        state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    ) -> Result<
+        Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
+            return Err(fault);
+        }
+        std::mem::take(&mut ctx.positive_native_carriers)
+            .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, point, ctx.selected_parent())
+            .map_err(|why| NativeCoverageV1::unsupported::<Self>("Positive carrier phase-two provenance", &format!("{why:?}")))?
+            .into_assignment_raw_actions_v2(self, &selected_parent_utxo_view.compose(&ctx.mergeset_diff), state)
+    }
+
+    fn replay_relay_utxo_fees_v2(
+        &self,
+        ctx: &mut UtxoProcessingContext<'_>,
+        selected_parent_utxo_view: &(impl UtxoView + Sync),
+        bond_view: &ActiveBondView,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        parent_state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        parent_multiset: MuHash,
+        plan: palw_accept::NativeRelayFeePlanV2,
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        let fault = |why| PalwLocalTransitionFaultV1::Resource(NativeCoverageV1::unsupported::<Self>("relay fee replay", why));
+        if let Some(round) = ctx.palw_round_verdicts.as_mut().filter(|round| round.has_fee_gated_body()) {
+            if round.relay_plan_changes_fee_admission(&plan) {
+                return Err(fault("fee-gated Round carrier requires prefix replanning"));
+            }
+            round.fee_budget = Some(
+                self.palw_round_fee_admission_at_v1(parent_state, &ctx.ghostdag_data, point.daa_score, point.block)?
+                    .ok_or_else(|| fault("original Round fee budget unavailable"))?,
+            );
+        }
+        let round_incomes = std::mem::take(&mut ctx.palw_round_fee_incomes);
+        let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan);
+        self.calculate_utxo_state(ctx, selected_parent_utxo_view, bond_view, point.daa_score)?;
+        if round_incomes != ctx.palw_round_fee_incomes {
+            return Err(fault("Round income changed during replay"));
+        }
+        if !super::utxo_validation::relay_acceptance_matches(&original, &ctx.mergeset_acceptance_data) {
+            return Err(fault("accepted blocks, transactions or carrier positions changed"));
+        }
+        Ok(())
+    }
+
     pub(super) fn calculate_virtual_state(
         &self,
         virtual_stores: &VirtualStores,
@@ -3859,23 +4110,22 @@ impl VirtualStateProcessor {
 
         // Calc virtual DAA score, difficulty bits and past median time
         let virtual_daa_window = self.window_manager.block_daa_window(&virtual_ghostdag_data)?;
+        let daa = virtual_daa_window.daa_score;
+        let assignment = self.palw_positive_assignment_params_v2.as_ref().filter(|params| {
+            self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
+                && params.palw_positive_assignment_v2_at(daa).is_some()
+        });
+        let loaded =
+            self.palw_state_params_v2.as_ref().map_or(Ok(None), |params| self.palw_state_v2_store.read().load_tip_retained_v1(params));
+        let virtual_palw_state =
+            virtual_palw_parent_from_tip_v2(loaded, virtual_ghostdag_data.selected_parent, self.palw_state_params_v2.is_some())?;
 
-        // **RFC-0008 v2: the anchor the block built on this virtual will carry.** Read from the store tip, which IS virtual's selected
-        // parent (the same filter the lock and verdict reads below use). The covered EXEC blocks join virtual's reds, so virtual's UTXO
-        // state, rewards and coinbase accept them exactly as the block that anchors them will; the DAG's own window and the stored
-        // ghostdag data of every real block are untouched.
-        let exec_state = if self.palw_exec_v2_active_at(virtual_daa_window.daa_score) {
-            self.palw_state_params_v2
-                .as_ref()
-                .and_then(|params| self.palw_state_v2_store.read().load_tip_retained_v1(params).ok().flatten())
-                .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent)
-                .map(|(_, state)| state)
-        } else {
-            None
-        };
-        let (virtual_ghostdag_data, exec_anchor) = match exec_state
+        // RFC-0008 v2: augment virtual from the same parent snapshot used for
+        // the UTXO locks and fees below. The original selected parent is kept.
+        let (virtual_ghostdag_data, exec_anchor) = match virtual_palw_state
             .as_ref()
-            .and_then(|state| self.palw_exec_v2_virtual(&virtual_ghostdag_data, state, virtual_daa_window.daa_score))
+            .filter(|_| self.palw_exec_v2_active_at(daa))
+            .and_then(|state| self.palw_exec_v2_virtual(&virtual_ghostdag_data, state, daa))
         {
             Some((augmented, anchor)) => (augmented, Some(anchor)),
             None => (virtual_ghostdag_data, None),
@@ -3887,32 +4137,9 @@ impl VirtualStateProcessor {
         let virtual_bits = self.window_manager.calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window);
         let virtual_past_median_time = self.window_manager.calc_past_median_time(&virtual_ghostdag_data)?.0;
 
-        // Audit C-08: virtual acceptance runs the same bond-spend filter the chain walk runs, or
-        // the template would build on a UTXO view that includes a spend every validating node
-        // skips. Read from the store tip, which IS virtual's selected parent — and only when the
-        // tip really names it, because a tip on another branch is not this candidate's registry.
-        let virtual_palw_state = match self.palw_state_params_v2.as_ref() {
-            None => None,
-            Some(params) => {
-                let snapshot = self
-                    .palw_state_v2_store
-                    .read()
-                    .load_tip_retained_v1(params)
-                    .map_err(|e| palw::bond_exit_store_error_v1(e).into_rule_error_v1())?;
-                match snapshot {
-                    Some((block, state)) if block == virtual_ghostdag_data.selected_parent => Some((block, state)),
-                    _ => {
-                        return Err(PalwLocalTransitionFaultV1::Context(
-                            kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
-                        )
-                        .into_rule_error_v1());
-                    }
-                }
-            }
-        };
         ctx.palw_v2_locked_bonds = virtual_palw_state
             .as_ref()
-            .map(|(_, state)| self.palw_v2_locked_bond_outpoints(state, virtual_daa_window.daa_score))
+            .map(|state| self.palw_v2_locked_bond_outpoints(state, virtual_daa_window.daa_score))
             .transpose()
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
             .unwrap_or_default();
@@ -3926,22 +4153,106 @@ impl VirtualStateProcessor {
         }
         ctx.palw_v2_bond_burns = virtual_palw_state
             .as_ref()
-            .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
+            .map(|state| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
             .transpose()
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
             .unwrap_or_default();
         // G14 lane escrow-rfc08: virtual locks the funded-escrow rows exactly as the chain walk does.
-        ctx.palw_escrow_locks.rows = virtual_palw_state
+        ctx.palw_escrow_locks.rows =
+            virtual_palw_state.as_ref().map(|state| self.palw_escrow_locked_rows_v1(state, daa)).unwrap_or_default();
+        ctx.palw_escrow_locks.assignment = virtual_palw_state
             .as_ref()
-            .map(|(_, state)| self.palw_escrow_locked_rows_v1(state, virtual_daa_window.daa_score))
+            .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
+            .transpose()
+            .map_err(|why| {
+                RuleError::LocalNativeCapacityUnavailable(
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                        "Assignment virtual funding lock projection",
+                        &format!("{why:?}"),
+                    ),
+                )
+            })?
+            .unwrap_or_default();
+        ctx.palw_escrow_locks.positive_case = virtual_palw_state
+            .as_ref()
+            .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
+            .transpose()
+            .map_err(|why| {
+                RuleError::LocalNativeCapacityUnavailable(
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                        "Positive virtual Case funding lock projection",
+                        &format!("{why:?}"),
+                    ),
+                )
+            })?
+            .unwrap_or_default();
+        ctx.palw_escrow_locks.assignment_prover = virtual_palw_state
+            .as_ref()
+            .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
+            .transpose()
+            .map_err(|why| {
+                RuleError::LocalNativeCapacityUnavailable(
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                        "Assignment virtual prover funding lock projection",
+                        &format!("{why:?}"),
+                    ),
+                )
+            })?
             .unwrap_or_default();
         // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
         ctx.palw_round_verdicts = virtual_palw_state
             .as_ref()
-            .and_then(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score));
+            .map(|state| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, daa))
+            .transpose()
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
+            .flatten();
+
+        // The reserved origin distinguishes scratch records from every real block.
+        // The preview uses the real virtual bits. Timestamp-dependent Round
+        // inputs and the own-attempt-dependent overlay carve need later inputs.
+        if virtual_palw_state.is_some()
+            && self.palw_execution_lane_at(daa).is_none()
+            && !self.dns_retired_at(daa)
+            && assignment.is_some_and(|params| params.palw_positive_funding_relay_v2_at(daa).is_some())
+        {
+            ctx.positive_relay_preview_point = Some(kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: kaspa_consensus_core::blockhash::ORIGIN,
+                daa_score: daa,
+                blue_score: virtual_ghostdag_data.blue_score,
+                subsidy: self.coinbase_manager.calc_block_subsidy(daa),
+            });
+        }
+        let relay_parent_multiset = ctx.positive_relay_preview_point.map(|_| ctx.multiset_hash.clone());
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score);
+        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, daa)
+            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+        if let (Some(point), Some(parent_multiset), Some(state)) =
+            (ctx.positive_relay_preview_point, relay_parent_multiset, virtual_palw_state.as_ref())
+        {
+            let actions = self
+                .take_assignment_actions_v2(&mut ctx, point, &selected_parent_utxo_view, Some(state))
+                .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+            let plan = self
+                .preview_template_relay_fees_v2(&ctx, state, virtual_bits, &actions)
+                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+            drop(actions);
+            if let Some(plan) = plan {
+                self.replay_relay_utxo_fees_v2(
+                    &mut ctx,
+                    &selected_parent_utxo_view,
+                    selected_parent_bond_view,
+                    point,
+                    state,
+                    parent_multiset,
+                    plan,
+                )
+                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+            }
+        }
+        if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
+            return Err(RuleError::LocalNativeCapacityUnavailable(fault));
+        }
 
         // Update the accumulated diff
         accumulated_diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();
@@ -4276,6 +4587,7 @@ impl VirtualStateProcessor {
             .into_iter()
             .map(|object| PalwCarriedObjectV1 {
                 object,
+                native_carrier: None,
                 carrier_fee: PALW_RENT_UNPRICED,
                 fp_answer: None,
                 prefix_dependency: None,
@@ -6183,9 +6495,12 @@ impl VirtualStateProcessor {
                     }
                 }
                 Ok(PalwUtxoCommitV2 {
+                    relay_carriers: Vec::new(),
                     root: genesis_state.state_root(),
                     delta,
                     _native_delta_lease: delta_lease,
+                    assignment_materials:
+                        kaspa_consensus_core::palw_state_v2::PositiveAssignmentMaterialOutcomeV2::empty_retained_for_legacy_v2(),
                     _native_genesis_carriages_lease: carriage_lease,
                     genesis: Some(genesis_state),
                     genesis_carriages,

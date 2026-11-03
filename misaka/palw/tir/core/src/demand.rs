@@ -68,6 +68,7 @@ use std::collections::BTreeMap;
 
 use crate::arith::{div_round, int_exp, int_ln, int_rsqrt, log2_floor};
 use crate::error::{TirError, TirErrorKind, TirResult};
+use crate::lane_geometry::{broadcast_index, gather_data_coordinate, gather_index_coordinate, ravel, unravel};
 use crate::prim::Prim;
 use crate::program::{Block, INPUT_TOKEN, Ref, StateKind, TirProgramV1};
 use crate::types::{DType, element_count, strides};
@@ -536,28 +537,6 @@ struct Engine<'p, 's> {
     inputs: DemandInputsV1<'p>,
 }
 
-fn unravel(mut i: usize, st: &[usize]) -> Vec<usize> {
-    st.iter()
-        .map(|s| {
-            let q = i / s;
-            i %= s;
-            q
-        })
-        .collect()
-}
-
-fn ravel(ix: &[usize], st: &[usize]) -> usize {
-    ix.iter().zip(st).map(|(a, b)| a * b).sum()
-}
-
-/// The element of `in_shape` that output multi-index `o` (of rank ≥ `in_shape.len()`) reads under
-/// numpy broadcasting — `eval.rs`'s `broadcast_map`, one element at a time.
-fn broadcast_index(o: &[usize], in_shape: &[usize]) -> usize {
-    let ist = strides(in_shape);
-    let off = o.len() - in_shape.len();
-    (0..in_shape.len()).map(|k| if in_shape[k] == 1 { 0 } else { o[off + k] * ist[k] }).sum()
-}
-
 fn fit(v: i128, dtype: DType, what: &str) -> DemandResult<i128> {
     if dtype.contains(v) { Ok(v) } else { fail(TirErrorKind::Overflow, format!("{what}: {v} does not fit {}", dtype.name())) }
 }
@@ -1022,17 +1001,13 @@ impl Engine<'_, '_> {
                 let (a, bd) = (*axis as usize, *batch_dims as usize);
                 let dshape = self.operand_shape(ci, inputs[0])?;
                 let xshape = self.operand_shape(ci, inputs[1])?;
-                let m = xshape.len() - bd;
                 let o = unravel(index, &ost);
-                let mut xi: Vec<usize> = o[..bd].to_vec();
-                xi.extend_from_slice(&o[a..a + m]);
+                let xi = gather_index_coordinate(&o, a, bd, xshape.len());
                 let Some(v) = self.fetch_one(ci, inputs[1], ravel(&xi, &strides(&xshape)))? else { return Ok(None) };
                 if v < 0 || v >= dshape[a] as i128 {
                     return fail(TirErrorKind::Index, format!("Gather: index {v} outside [0, {})", dshape[a]));
                 }
-                let mut di: Vec<usize> = o[..a].to_vec();
-                di.push(v as usize);
-                di.extend_from_slice(&o[a + m..]);
+                let di = gather_data_coordinate(&o, a, xshape.len(), bd, v as usize);
                 self.fetch_one(ci, inputs[0], ravel(&di, &strides(&dshape)))
             }
             Prim::Add | Prim::Sub | Prim::Mul | Prim::Div { .. } | Prim::Compare { .. } => {

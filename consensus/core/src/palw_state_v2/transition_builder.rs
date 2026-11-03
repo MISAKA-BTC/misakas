@@ -90,6 +90,11 @@ impl<'a> TransitionBuilder<'a> {
             claim_local_retired_exec_events_v24: BTreeMap::new(),
             claim_local_retired_claim_events_v25: BTreeMap::new(),
             claim_local_input_basis_v12: None,
+            assignment_materials: Vec::new(),
+            assignment_case_materials: Vec::new(),
+            assignment_active_raw: None,
+            assignment_raw_boundary: None,
+            assignment_case_cache: BTreeMap::new(),
             registration_index: None,
             unavailable_abstains,
             model_moves: 0,
@@ -9550,6 +9555,11 @@ impl<'a> TransitionBuilder<'a> {
         super::palw_claim_local_legacy_terminal_v18::rollback_cert_relay_seals_v18(self, checkpoint.1);
         palw_claim_local_object_spans_v2::restore(self, checkpoint.3);
         crate::palw_court_observation_v1::restore_v1(checkpoint.2);
+        self.assignment_materials.retain(|record| record.delta_end <= checkpoint.1);
+        self.assignment_case_materials.retain(|record| record.delta_end <= checkpoint.1);
+        // This private nonserialized cache is never an accepted completion
+        // capability. Any restore/undo drops it and forces actual rebind.
+        self.assignment_case_cache.clear();
         // The caches describe the state just replaced; the next reader rebuilds them from the
         // restored one (audit #13b).
         *self.inflight_index.get_mut() = None;

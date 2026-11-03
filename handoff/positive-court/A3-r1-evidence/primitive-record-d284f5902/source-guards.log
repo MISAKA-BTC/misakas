@@ -1,0 +1,9 @@
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/remote)
+    Finished `test` profile [unoptimized] target(s) in 8.97s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_remote-f7dd6a33cd668a8f)
+
+running 1 test
+test positive_panel_sources::tests::inventory_metadata_expansion_is_bounded_before_allocating_instances ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 228 filtered out; finished in 0.00s
+

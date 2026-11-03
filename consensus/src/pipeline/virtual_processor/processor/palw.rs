@@ -542,12 +542,20 @@ impl VirtualStateProcessor {
         {
             return Ok(Some(gate.clone()));
         }
+        let assignment = kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(&state);
+        let positive_case = kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(&state);
+        let assignment_prover = kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(&state);
+        let assignment_invalid = assignment.is_err() || positive_case.is_err() || assignment_prover.is_err();
         let gate = Arc::new(PalwMempoolBondGate {
             locked: self.palw_v2_locked_bond_outpoints(&state, now_daa)?,
             burns: self.palw_v2_bond_burn_obligations(&state, now_daa)?,
             escrow: super::super::utxo_validation::PalwEscrowSpendLocksV1 {
                 rows: self.palw_escrow_locked_rows_v1(&state, now_daa),
                 provisional: Default::default(),
+                assignment: assignment.unwrap_or_default(),
+                assignment_invalid,
+                positive_case: positive_case.unwrap_or_default(),
+                assignment_prover: assignment_prover.unwrap_or_default(),
             },
         });
         *cache = Some((tip, now_daa, gate.clone()));
@@ -4230,10 +4238,17 @@ impl VirtualStateProcessor {
         ctx: &UtxoProcessingContext,
     ) -> std::collections::HashSet<TransactionOutpoint> {
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
-        let mergeset_txs: Vec<kaspa_consensus_core::tx::Transaction> = std::iter::once(ctx.selected_parent())
+        let mut mergeset_txs: Vec<kaspa_consensus_core::tx::Transaction> = std::iter::once(ctx.selected_parent())
             .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
             .flat_map(|b| (*self.block_transactions_store.get(b).unwrap()).clone())
             .collect();
+        // Positive's reserved carrier can never be a legacy BondRegistered.
+        // This raw mergeset scan has no admission clock; do not decode its body
+        // even on a future private Positive branch just to find bond outputs.
+        mergeset_txs.retain(|tx| {
+            tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+                || !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload)
+        });
         kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&mergeset_txs)
             .objects
             .iter()
@@ -6996,13 +7011,16 @@ impl VirtualStateProcessor {
         if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
             return None;
         }
-        let object =
-            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
-                .objects
-                .into_iter()
-                .next()
-                .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, virtual_daa_score))
-                .map(|carried| carried.object)?;
+        let object = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
+            std::slice::from_ref(tx),
+            &self.palw_lifecycle_kind_fences,
+            virtual_daa_score,
+        )
+        .objects
+        .into_iter()
+        .next()
+        .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, virtual_daa_score))
+        .map(|carried| carried.object)?;
         if !matches!(object, Obj::KernelRouteV1 { .. } | Obj::KernelConstraintReceiptV1 { .. }) {
             return None;
         }
@@ -8385,8 +8403,44 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         ghostdag_data: &GhostdagData,
         daa_score: u64,
-    ) -> Option<super::super::utxo_validation::PalwRoundVerdictsV1> {
+    ) -> Result<Option<super::super::utxo_validation::PalwRoundVerdictsV1>, PalwLocalTransitionFaultV1> {
         self.palw_round_verdicts_at_v1(state, ghostdag_data, daa_score, Default::default())
+    }
+
+    pub(super) fn palw_round_fee_admission_at_v1(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        ghostdag_data: &GhostdagData,
+        daa_score: u64,
+        accepting_block: BlockHash,
+    ) -> Result<Option<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeAdmissionV1>, PalwLocalTransitionFaultV1> {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        state
+            .round_fee_admission_v1(
+                params,
+                &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: Default::default(),
+                    daa_score,
+                    blue_score: ghostdag_data.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
+                },
+                self.palw_escrow_for_carrier_at(accepting_block, daa_score, daa_score),
+            )
+            .map_err(Self::palw_round_fee_admission_fault_v1)
+    }
+
+    pub(super) fn palw_round_fee_admission_fault_v1(
+        why: kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
+    ) -> PalwLocalTransitionFaultV1 {
+        use kaspa_consensus_core::{palw_native_resource_v1::NativeCoverageV1, palw_state_v2::PalwStateV2Error};
+        match why {
+            PalwStateV2Error::NativeResource(coverage) => coverage.into(),
+            PalwStateV2Error::NativeContextUnavailable(context) => PalwLocalTransitionFaultV1::Context(context),
+            // The budget is built solely from the selected parent, before
+            // accepting any candidate transaction. Defer if that state cannot
+            // supply a budget; do not judge the candidate by this failure.
+            why => NativeCoverageV1::unsupported::<Self>("Round fee budget preparation", &why.to_string()).into(),
+        }
     }
 
     pub(super) fn palw_round_verdicts_at_v1(
@@ -8395,30 +8449,19 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         daa_score: u64,
         accepting_block: BlockHash,
-    ) -> Option<super::super::utxo_validation::PalwRoundVerdictsV1> {
+    ) -> Result<Option<super::super::utxo_validation::PalwRoundVerdictsV1>, PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_execution_lane_v1::{
             PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
         };
-        let lane = self.palw_execution_lane_at(daa_score)?;
+        let Some(lane) = self.palw_execution_lane_at(daa_score) else { return Ok(None) };
         // Route-matrix #2: past ADR-0151's bundle with the quanta armed, a permit is a ticket.
         let tickets_only = self.palw_round_permits_are_tickets_at(daa_score);
         let span_daa = lane.schedule_span_daa_at(daa_score);
         let span_now = palw_execution_span_v1(daa_score, span_daa);
         let mut verdicts = super::super::utxo_validation::PalwRoundVerdictsV1 {
             round_blocks: self.palw_round_blocks_of(ghostdag_data),
-            fee_budget: self.palw_state_params_v2.as_ref().and_then(|params| {
-                state.round_fee_admission_v1(
-                    params,
-                    &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                        block: Default::default(),
-                        daa_score,
-                        blue_score: ghostdag_data.blue_score,
-                        subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
-                    },
-                    self.palw_escrow_for_carrier_at(accepting_block, daa_score, daa_score),
-                )
-            }),
+            fee_budget: self.palw_round_fee_admission_at_v1(state, ghostdag_data, daa_score, accepting_block)?,
             ..Default::default()
         };
         // **RFC-0008 v2: the covered set is judged in the canonical order — `(round, permit index, hash)` — so two blocks of one permit,
@@ -8560,7 +8603,7 @@ impl VirtualStateProcessor {
             }
         }
         verdicts.uses.sort();
-        Some(verdicts)
+        Ok(Some(verdicts))
     }
 
     /// **Lane SCAN: write each round block's verdict into the node's telemetry ledger.** Node-local
@@ -9839,6 +9882,10 @@ impl VirtualStateProcessor {
             }
         }
         if kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_id_v1(&whole) != *group {
+            return None;
+        }
+        // A Positive lifecycle body is never this old FamilyCertified payload.
+        if kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_object_bytes_v2(&whole) {
             return None;
         }
         match borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&whole) {

@@ -1,0 +1,17 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/endpoints)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/remote)
+    Finished `test` profile [unoptimized] target(s) in 2m 21s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_remote-58f01cd9e6b48b55)
+
+running 4 tests
+test pursuit::tests::the_resume_bound_leaves_the_carriage_and_one_fold ... ok
+test pursuit::tests::horizon_words_are_the_ledgers_refusals ... ok
+test pursuit::tests::g14k_a_step_sends_exactly_its_objects ... ok
+test pursuit::tests::g14k_both_chunk_lanes_reassemble_in_any_order_once ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 173 filtered out; finished in 0.00s
+

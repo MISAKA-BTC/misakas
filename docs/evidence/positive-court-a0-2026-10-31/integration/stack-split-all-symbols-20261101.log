@@ -1,0 +1,276 @@
+(lldb) target create "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893"
+Current executable set to '/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893' (arm64).
+(lldb) image lookup -r -n objects::apply_object_
+136 matches found in /Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893:
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042132ec] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69282092)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::h7f93df6b10e91d1f
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104214368] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286312)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::_$u7b$$u7b$closure$u7d$$u7d$::h073986e8500362fd
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042143b4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286388)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::_$u7b$$u7b$closure$u7d$$u7d$::h3b50c3ceb5a9a3db
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042143e0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286432)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_inner::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h66bbd89a0db621ca
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042145fc] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69286972)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::h68abbc030766bd36
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219418] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69306968)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::h71699f04a0e4c3e8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219420] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69306976)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb3d7a9281929191e
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219450] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307024)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb571f0cfc4be1de0
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042194c8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307144)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hc9362fc2e64cfbff
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219540] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307264)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd031876031d1ab1e
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219584] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307332)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd170b9d60c32ad1a
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042195b4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307380)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd2e3754dee666ad0
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042195f8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307448)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::he03d8e6a72cfcd63
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219638] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307512)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_00_v1::_$u7b$$u7b$closure$u7d$$u7d$::he3ba468479b113cb
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104219640] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69307520)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::h237cf9aeda80835d
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f024] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69330532)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h12957879f71da421
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f06c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69330604)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h166aaa4fd58d826c
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f11c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69330780)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h17bd3f605fd6abf4
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f1cc] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69330956)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h44d6ef5d84d35e97
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f27c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331132)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h58fe1ed550129c3f
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f2b0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331184)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h5e1ead06a01b0f59
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f2f4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331252)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h7ce8c8f5a167a0d7
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f3a4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331428)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9884bd4a32c30034
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f3d4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331476)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::hbc36429b95893874
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f3ec] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331500)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::hca6a626824eae229
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f434] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331572)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_01_v1::_$u7b$$u7b$closure$u7d$$u7d$::he2ef6991ed6f919c
+        Address: runtime_pack-066d0b88b30f6893[0x000000010421f570] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69331888)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::h0665ac9c27ad8625
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224b68] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69353896)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h3ccd2a871645f8f4
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224bb0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69353968)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h53897c33ab895e08
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224bf4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354036)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h5ee9359d5467bef7
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224c38] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354104)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h71274e69f24c9c58
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224ce8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354280)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h77640d2f6d6e0d37
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224de4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354532)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h7c122affa42ee0e8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224e28] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354600)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h886b78730bd2ded2
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224e58] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354648)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h94ae6a0d282415f8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224ed0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354768)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::h98496b37eb0a81fa
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224f14] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354836)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::hab135909f8191121
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104224f5c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69354908)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::hc313c8b1abf7842b
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104225098] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69355224)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::hc404e5987f050c3b
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104225148] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69355400)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd7c91085e06b43d1
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042251c0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69355520)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::hdb36451df6f178f1
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104225240] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69355648)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::hfa4a02520078527d
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104225298] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69355736)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_02_v1::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::hdd8a9449840e3fb7
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042252b8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69355768)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::h18459887da66f229
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104229220] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372000)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::h1fa83b23bd6a99b6
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104229234] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372020)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::h2293aadf2d4e7915
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104229280] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372096)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::h48dde1e29dc05244
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104229298] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372120)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::h7beb76f34632ba49
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042292e4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372196)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9a3710133e408d23
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042292f8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372216)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::hcf171da1df968290
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104229318] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372248)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::hdff66c77ebc139f6
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104229338] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372280)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::hf79828b75753b794
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042293c4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372420)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_03_v1::_$u7b$$u7b$closure$u7d$$u7d$::hfb5ce7db011436c2
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104229428] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69372520)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::h937413184b917ed8
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422d970] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390256)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h0c4e3e7143aaba99
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422d9b0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390320)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h20061658e2f7b8ad
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422d9c0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390336)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h33dcec63df8faa5b
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422da40] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390464)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h3e99541719a7c1d5
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422da70] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390512)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h4153d0d34885483d
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422daa0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390560)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h4e04501028f7b298
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422db0c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390668)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h722ecfad09654431
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422db60] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390752)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h74461599ef971093
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dbac] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390828)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9c6124925a462979
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dbc8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390856)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::ha24b68ee8d0dd692
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dbd4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390868)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hadd1c2d44b8e4e18
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dc08] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69390920)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hae2c067048d75cf7
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dc80] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391040)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb86d2c1f71d3c621
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dcec] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391148)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb9878d41978bcd0d
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dd1c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391196)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hbaf4688ecf6cc249
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dd88] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391304)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hbb8baea83254728a
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dda8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391336)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hc0f64c2f49ce53e8
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422ddac] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391340)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::hc5923cde42ca2ea4
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422dde0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391392)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::he597210f4f456dce
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422de74] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391540)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_04_v1::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::hbe9962de3e56d3d5
+        Address: runtime_pack-066d0b88b30f6893[0x000000010422df4c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69391756)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::hcece0add2b8514ba
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104231424] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405284)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::_$u7b$$u7b$closure$u7d$$u7d$::h04ccca63e5dcef04
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042314a4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405412)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::_$u7b$$u7b$closure$u7d$$u7d$::h0b4b5fab98175ca7
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042314f4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405492)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::_$u7b$$u7b$closure$u7d$$u7d$::h127aa677f1ab4015
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104231530] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405552)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::_$u7b$$u7b$closure$u7d$$u7d$::h4729d8e9d2a5eb2f
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104231550] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405584)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::_$u7b$$u7b$closure$u7d$$u7d$::h53aa21d3424e7e59
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104231570] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405616)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::_$u7b$$u7b$closure$u7d$$u7d$::h5f219d5836d2648b
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104231588] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405640)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_05_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb91574aab0c4b9b2
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423159c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69405660)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_06_v1::h0a72089036376fb8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104233948] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69414792)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_06_v1::_$u7b$$u7b$closure$u7d$$u7d$::h015593f5d7309d9e
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104233950] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69414800)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_06_v1::_$u7b$$u7b$closure$u7d$$u7d$::h1e314487079b7e62
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042339d0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69414928)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_06_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9176ba5c05ad9d24
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042339e4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69414948)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_06_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9322a54efa0369ab
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104233a64] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69415076)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_06_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9a3868a541408d97
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104233a78] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69415096)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_06_v1::_$u7b$$u7b$closure$u7d$$u7d$::hea668e3711376298
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104233af8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69415224)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_07_v1::hdcfdef548305932d
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423628c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69425356)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_07_v1::_$u7b$$u7b$closure$u7d$$u7d$::h0ed86305daebd88b
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042362f0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69425456)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_07_v1::_$u7b$$u7b$closure$u7d$$u7d$::h2b45583726844b3b
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104236308] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69425480)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_07_v1::_$u7b$$u7b$closure$u7d$$u7d$::h35b939c651ef6604
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104236324] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69425508)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_07_v1::_$u7b$$u7b$closure$u7d$$u7d$::hfc8d2a258da06533
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104236354] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69425556)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_07_v1::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h5e7312eee74deb42
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104236378] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69425592)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::h134afb44cc4da549
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423935c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69437852)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h0ab1649c3d9577f2
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042393ec] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69437996)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h11ec34a8c13fd6e7
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042393f8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69438008)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h2c4583891121eb73
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042394a8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69438184)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h490baf218f54da6a
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239558] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69438360)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h7e8b0c3cdd75d7b9
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042395e4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69438500)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h81b1010b9d042cf8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239628] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69438568)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h8f6eced42ff6d693
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042396d8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69438744)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h91cb89a4ee98a0b8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239758] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69438872)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9ea77f9371d9ffc4
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042397d8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439000)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::ha9585238f91dd41d
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239864] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439140)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::hae0e6d8e243090fa
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042398f0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439280)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd6584993a7513b34
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423997c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439420)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd6e65e0dd5594348
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239a2c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439596)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::hf236babaec1f4b16
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239adc] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439772)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::hf6160e201384c4e1
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239b38] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439864)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::hf8d6989c8794afcb
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239b50] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69439888)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_08_v1::_$u7b$$u7b$closure$u7d$$u7d$::hffc97fafa097f3d8
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104239d20] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69440352)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::h6b058595358c5e88
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f350] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69462416)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h16fad03e25b2d063
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f3d8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69462552)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h2894bdb1fe46bba5
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f488] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69462728)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h2dc8aaeae384cff7
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f538] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69462904)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h5212ec044509ee49
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f5e8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69463080)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h54e92facb324dc93
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f670] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69463216)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h653336bfde3eb137
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f6d0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69463312)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h65b3921a3dcf9884
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f780] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69463488)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h892672b4e8f7ab78
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f808] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69463624)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h8bd46409a713e788
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f8b8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69463800)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h9503e1f9d0561e38
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f928] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69463912)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::h961685194a8a88d8
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423f9b0] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69464048)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::hb6937b9315614882
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423fa08] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69464136)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::hba061cf96cbfff9a
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423fa78] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69464248)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd02c411c4d83a107
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423fb00] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69464384)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_09_v1::_$u7b$$u7b$closure$u7d$$u7d$::hd235d63d94631f76
+        Address: runtime_pack-066d0b88b30f6893[0x000000010423fb70] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69464496)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_10_v1::h746617567c11b0f5
+        Address: runtime_pack-066d0b88b30f6893[0x0000000104244514] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69483348)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_10_v1::_$u7b$$u7b$closure$u7d$$u7d$::h099cf0e261a75a15
+        Address: runtime_pack-066d0b88b30f6893[0x000000010424458c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69483468)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_10_v1::_$u7b$$u7b$closure$u7d$$u7d$::h49ef139321a2e4c8
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042445d8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69483544)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_10_v1::_$u7b$$u7b$closure$u7d$$u7d$::h552a62ab48e2d24d
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042445e4] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69483556)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_10_v1::_$u7b$$u7b$closure$u7d$$u7d$::hbd0ebc1237636c00
+        Address: runtime_pack-066d0b88b30f6893[0x00000001042445f8] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69483576)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_batch_10_v1::_$u7b$$u7b$closure$u7d$$u7d$::_$u7b$$u7b$closure$u7d$$u7d$::h9c7574cd1c6cf745
+        Address: runtime_pack-066d0b88b30f6893[0x000000010424462c] (runtime_pack-066d0b88b30f6893.__TEXT.__text + 69483628)
+        Summary: runtime_pack-066d0b88b30f6893`kaspa_consensus_core::palw_state_v2::objects::apply_object_with_pair_v1::h8792d0bba7abede9

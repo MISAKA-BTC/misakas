@@ -1,0 +1,22 @@
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/remote)
+    Finished `test` profile [unoptimized] target(s) in 11.13s
+     Running unittests src/lib.rs (/tmp/misaka-a2-target/debug/deps/misaka_palw_remote-7f5ddc1bd06de1f5)
+
+running 1 test
+test miner::positive_v2::rocksdb::tests::raw_journal_does_not_merge_equal_complete_status_meters_from_fresh_sessions ... FAILED
+
+failures:
+
+---- miner::positive_v2::rocksdb::tests::raw_journal_does_not_merge_equal_complete_status_meters_from_fresh_sessions stdout ----
+
+thread 'miner::positive_v2::rocksdb::tests::raw_journal_does_not_merge_equal_complete_status_meters_from_fresh_sessions' (2985419) panicked at misaka/palw/remote/src/positive_miner_v2_rocksdb_tests.rs:191:5:
+fresh session merged equal status meters into one case journal
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    miner::positive_v2::rocksdb::tests::raw_journal_does_not_merge_equal_complete_status_meters_from_fresh_sessions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 248 filtered out; finished in 0.13s
+
+error: test failed, to rerun pass `-p misaka-palw-remote --lib`

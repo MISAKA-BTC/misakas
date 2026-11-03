@@ -1,0 +1,281 @@
+{
+  "head": "a93fee855812a2474ffd717e88444236736568c8",
+  "reason": "Core-native/stream source changes; only explicit fingerprint-proven direct Core dependents; unproven transitive lower/sketch caches excluded. Initial provenance-only assertion attempt made no changes.",
+  "files": [
+    {
+      "package": "kaspa-pq-validator-core",
+      "manifest": "misaka/pq/validator-core/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_pq_validator_core-dc8884d3e969abeb.rmeta",
+      "bytes": 430305,
+      "sha256": "94a6ef393d640da7351b958c5b6440f1aea41d600d9a38797c7a9fbfce37f08b",
+      "mtime_ns": 1793540083873328350,
+      "inode": 48296605,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-pq-validator-core-dc8884d3e969abeb/lib-kaspa_pq_validator_core.json",
+      "fingerprint_sha256": "1328e7e5efc05578bdf1a24825bda69cbfd3011dca144339f89a86a59b861b04",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        11663665369010105532
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "94a6ef393d640da7351b958c5b6440f1aea41d600d9a38797c7a9fbfce37f08b"
+    },
+    {
+      "package": "kaspa-pq-validator-core",
+      "manifest": "misaka/pq/validator-core/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_pq_validator_core-136ef79657c10543.rmeta",
+      "bytes": 295567,
+      "sha256": "793c3ac024c2f2a795abb6273677d06e500de9ef27157f12934ae721b48b1367",
+      "mtime_ns": 1793540697931239496,
+      "inode": 48307579,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-pq-validator-core-136ef79657c10543/lib-kaspa_pq_validator_core.json",
+      "fingerprint_sha256": "8bc537b5b6f0b1917e397d4ff4c6fce528e25fc24c9c0795af41d811bb1380b6",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        9483475822648851253
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "793c3ac024c2f2a795abb6273677d06e500de9ef27157f12934ae721b48b1367"
+    },
+    {
+      "package": "kaspa-pq-validator-core",
+      "manifest": "misaka/pq/validator-core/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_pq_validator_core-dc8884d3e969abeb.rlib",
+      "bytes": 2087336,
+      "sha256": "680cd017b18706b8a163737ee8549cd6b0cd76b71f188a50f9ef6839a44546d7",
+      "mtime_ns": 1793540084228464000,
+      "inode": 48296692,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-pq-validator-core-dc8884d3e969abeb/lib-kaspa_pq_validator_core.json",
+      "fingerprint_sha256": "1328e7e5efc05578bdf1a24825bda69cbfd3011dca144339f89a86a59b861b04",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        11663665369010105532
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "94a6ef393d640da7351b958c5b6440f1aea41d600d9a38797c7a9fbfce37f08b"
+    },
+    {
+      "package": "kaspa-txscript",
+      "manifest": "crypto/txscript/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_txscript-3f1f7c4c206f9203.rlib",
+      "bytes": 5277280,
+      "sha256": "48e3cfb9f4873fa0df70f74730d6a3c197e7695e9b496706594bbbe6689127aa",
+      "mtime_ns": 1793547125083342442,
+      "inode": 48326757,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-txscript-3f1f7c4c206f9203/lib-kaspa_txscript.json",
+      "fingerprint_sha256": "b3c6374118ad470b4479ed8d671559647a27268470f507c86f1eac286756f338",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        6265599338366557386
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "7937074b0303f46b4ab444d36c76e1b26039cf1b22499deee1de429bc2276ec2"
+    },
+    {
+      "package": "kaspa-txscript",
+      "manifest": "crypto/txscript/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_txscript-3c22ad761414bc38.rmeta",
+      "bytes": 1733843,
+      "sha256": "4c120715e316c919d39b28334f3ecc75be1562bf5056d3424872508fff599269",
+      "mtime_ns": 1793540696568423670,
+      "inode": 48307577,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-txscript-3c22ad761414bc38/lib-kaspa_txscript.json",
+      "fingerprint_sha256": "304c0af1d7190ccbd20b26caac1a01d8b695aecade233bd99a6842b45da57767",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        9483475822648851253
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "4c120715e316c919d39b28334f3ecc75be1562bf5056d3424872508fff599269"
+    },
+    {
+      "package": "kaspa-txscript",
+      "manifest": "crypto/txscript/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_txscript-59564fbf4df6caa7.rmeta",
+      "bytes": 3199236,
+      "sha256": "31071cebede74d7481e58d680054f0ae621ffedd8faada277fcfe9dfb10061f0",
+      "mtime_ns": 1793540072615134203,
+      "inode": 48296560,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-txscript-59564fbf4df6caa7/lib-kaspa_txscript.json",
+      "fingerprint_sha256": "4715650fabbe1c79f1ae44b2e664b8a72583f5bc3d03dd4181bab5af6b90a468",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        11663665369010105532
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "31071cebede74d7481e58d680054f0ae621ffedd8faada277fcfe9dfb10061f0"
+    },
+    {
+      "package": "kaspa-txscript",
+      "manifest": "crypto/txscript/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_txscript-59564fbf4df6caa7.rlib",
+      "bytes": 5276488,
+      "sha256": "cab078c7c64f4cd309e575822f90f3bc1db48fa15ffc6ebd19b168db0157ba55",
+      "mtime_ns": 1793540083367248822,
+      "inode": 48296603,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-txscript-59564fbf4df6caa7/lib-kaspa_txscript.json",
+      "fingerprint_sha256": "4715650fabbe1c79f1ae44b2e664b8a72583f5bc3d03dd4181bab5af6b90a468",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        11663665369010105532
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "31071cebede74d7481e58d680054f0ae621ffedd8faada277fcfe9dfb10061f0"
+    },
+    {
+      "package": "kaspa-txscript",
+      "manifest": "crypto/txscript/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_txscript-3f1f7c4c206f9203.rmeta",
+      "bytes": 3199236,
+      "sha256": "7937074b0303f46b4ab444d36c76e1b26039cf1b22499deee1de429bc2276ec2",
+      "mtime_ns": 1793547114700519594,
+      "inode": 48326728,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/kaspa-txscript-3f1f7c4c206f9203/lib-kaspa_txscript.json",
+      "fingerprint_sha256": "b3c6374118ad470b4479ed8d671559647a27268470f507c86f1eac286756f338",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        6265599338366557386
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "7937074b0303f46b4ab444d36c76e1b26039cf1b22499deee1de429bc2276ec2"
+    },
+    {
+      "package": "misaka-endpoints",
+      "manifest": "misaka/endpoints/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_endpoints-ae6fa54eaf43215e.rlib",
+      "bytes": 241592,
+      "sha256": "698045f19256a65853841b55698e79b388683809de1f03aff2101fe30cbcdff1",
+      "mtime_ns": 1793547112975752776,
+      "inode": 48326726,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/misaka-endpoints-ae6fa54eaf43215e/lib-misaka_endpoints.json",
+      "fingerprint_sha256": "3827acaeabf2e64dfd4b55076aa8acafefdd362d44aa0b9b528d4c9dc0fd8e26",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        6265599338366557386
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "49bffb922c92c26250cb53822130d7c79f471cd92945fa7e2a93863091ee7ee2"
+    },
+    {
+      "package": "misaka-endpoints",
+      "manifest": "misaka/endpoints/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_endpoints-ae6fa54eaf43215e.rmeta",
+      "bytes": 114251,
+      "sha256": "49bffb922c92c26250cb53822130d7c79f471cd92945fa7e2a93863091ee7ee2",
+      "mtime_ns": 1793547112937542185,
+      "inode": 48326721,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/misaka-endpoints-ae6fa54eaf43215e/lib-misaka_endpoints.json",
+      "fingerprint_sha256": "3827acaeabf2e64dfd4b55076aa8acafefdd362d44aa0b9b528d4c9dc0fd8e26",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        6265599338366557386
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "49bffb922c92c26250cb53822130d7c79f471cd92945fa7e2a93863091ee7ee2"
+    },
+    {
+      "package": "misaka-palw-base0",
+      "manifest": "misaka/palw/base0/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_base0-623cf61bcf8169e5.rmeta",
+      "bytes": 4464306,
+      "sha256": "2fd3a34ef4c16a2304e1931491aaeffc4f833df85c0803f13e17d01fd33ce7d8",
+      "mtime_ns": 1793540698195808295,
+      "inode": 48307587,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/misaka-palw-base0-623cf61bcf8169e5/lib-misaka_palw_base0.json",
+      "fingerprint_sha256": "bc2484865bee90c508a555184f034f1c9e96fbb0b4a4b571442a00053f2469af",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        9483475822648851253
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "2fd3a34ef4c16a2304e1931491aaeffc4f833df85c0803f13e17d01fd33ce7d8"
+    },
+    {
+      "package": "misaka-palw-base0",
+      "manifest": "misaka/palw/base0/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_base0-6b9edd2eca118d93.rlib",
+      "bytes": 32025648,
+      "sha256": "ec118158cbef17bb09857ff4cc769f0730e8d3f48a42efcb3a7f61b3f9e6ddb7",
+      "mtime_ns": 1793540093922118759,
+      "inode": 48296732,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/misaka-palw-base0-6b9edd2eca118d93/lib-misaka_palw_base0.json",
+      "fingerprint_sha256": "10ac110fee923a72eca11a65e6e1999209d98df2172b27fcdf3dd26e5de25ecb",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        11663665369010105532
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "5172447b2084dbf1b529a63e1b01388b73af7d369afbd6c67a69fece3fd29699"
+    },
+    {
+      "package": "misaka-palw-base0",
+      "manifest": "misaka/palw/base0/Cargo.toml",
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_base0-6b9edd2eca118d93.rmeta",
+      "bytes": 6641772,
+      "sha256": "5172447b2084dbf1b529a63e1b01388b73af7d369afbd6c67a69fece3fd29699",
+      "mtime_ns": 1793540089255117957,
+      "inode": 48296706,
+      "device": 16777234,
+      "nlink": 1,
+      "fingerprint_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/.fingerprint/misaka-palw-base0-6b9edd2eca118d93/lib-misaka_palw_base0.json",
+      "fingerprint_sha256": "10ac110fee923a72eca11a65e6e1999209d98df2172b27fcdf3dd26e5de25ecb",
+      "actual_core_dependency": [
+        11865557049430793590,
+        "kaspa_consensus_core",
+        false,
+        11663665369010105532
+      ],
+      "paired_rmeta_has_root_absolute_source_path": true,
+      "paired_rmeta_sha256": "5172447b2084dbf1b529a63e1b01388b73af7d369afbd6c67a69fece3fd29699"
+    }
+  ],
+  "total_bytes": 64986860,
+  "free_bytes_after": 4015374336
+}

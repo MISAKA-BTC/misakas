@@ -1,0 +1,20 @@
+{
+  "scope": "Root-authorized exact Core8d pair unlink only; preserve original receipt and source-evidence-only head reconciliation",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 1955,
+      "sha256": "a97b4f05b4bd7884a2e0981b74093166ca0b1a90a20c66a5e622d77d1d264774"
+    },
+    {
+      "path": "a7-core-8d-unlink-receipt-20261102.final.json",
+      "bytes": 6255,
+      "sha256": "6b72ea1d877a2f88c759b4f790b0458de812c5df0cf275c7fbf06183dcaef5d6"
+    },
+    {
+      "path": "a7-core-8d-unlink-receipt-20261102.json",
+      "bytes": 3206,
+      "sha256": "60914949cff28ac01d592ac3d21179a7f00614c27a483259555e77b13de08499"
+    }
+  ]
+}

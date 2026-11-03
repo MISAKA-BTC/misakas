@@ -1,0 +1,222 @@
+{
+  "scope": "actual pinned original noncanonical Pythia 16/1 short job, shared producer/Node process; complete local checks and EOF/root/signature only, not native acceptance, isolated cold-role qualification or activation",
+  "source_commit": "db0f42fce",
+  "runtime_record": "pythia-r3.json",
+  "actual_case_exit": 0,
+  "actual_case_test_counts": [
+    [
+      1,
+      0,
+      0
+    ]
+  ],
+  "all_numeric_relations": 213298,
+  "complete_event": {
+    "canonical_job": false,
+    "detail": {
+      "checked_relations": 213298,
+      "claim_relations_read": 213298,
+      "claim_tape_read_bytes": 212467949,
+      "claim_tape_read_calls": 426598,
+      "completed_elements": 184572795,
+      "completed_source_reads": 3156969214,
+      "completed_terms": 3036075176,
+      "model_runs": 0,
+      "node_check_ns": 424062857495,
+      "observed_evaluations": 213298,
+      "opening_attempts": 149358,
+      "peak_elements": 26282,
+      "peak_reads": 170720,
+      "peak_terms": 164864,
+      "peak_workspace_bytes": 867668864,
+      "producer_material_ns": 546715340647,
+      "producer_retained": true,
+      "provider_bytes": 4447335950,
+      "provider_calls": 8492230,
+      "record_auth_finish_ns": 6911416,
+      "verdict": "Matched"
+    },
+    "full_context_execution": false,
+    "native_authority": false,
+    "node_process_isolated": false,
+    "phase": "complete-node",
+    "physical_rss_hard_quota": false,
+    "process_maxrss_native_units": 174063616,
+    "process_system_seconds": 18.866255,
+    "process_user_seconds": 957.342263,
+    "requested_cumulative": 12747777737,
+    "requested_live": 8053697455,
+    "requested_peak": 8053697455,
+    "wall_ns": 971658363084
+  },
+  "other_phases": [
+    {
+      "phase": "measurement-window",
+      "phase_wall_seconds": 1.3959e-05,
+      "process_user_seconds": 0.002666,
+      "process_system_seconds": 0.002054,
+      "detail": {
+        "actual_provider_max_bytes": 8589934592,
+        "actual_provider_max_calls": 16777216,
+        "cpu_seconds": 1440,
+        "cumulative_tape_cap": 335544320,
+        "diagnostic_only": true,
+        "logical_request_cap": 8589934592,
+        "max_attempts": 2,
+        "max_openings": 1048576,
+        "memo_entry_envelope": 560,
+        "per_relation_elements": 32768,
+        "per_relation_source_reads": 262144,
+        "per_relation_terms": 262144,
+        "per_relation_workspace_cap": 1073741824
+      }
+    },
+    {
+      "phase": "trace-free-metadata",
+      "phase_wall_seconds": 0.002209833,
+      "process_user_seconds": 0.004917,
+      "process_system_seconds": 0.002334,
+      "detail": {
+        "context": "d9ca9eae0abcafa087e4e06ba9fcd8a8f71f0f435735e3302a7725d2465fb9a22eb728f4a7d3075bffcdc6208d791b999e6f1f25574864ac7b41d792379ee868",
+        "model": "EleutherAI/pythia-70m",
+        "original_artifact": "427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4",
+        "original_class": "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
+        "revision": "a39f36b100fe8a5377810d56c3f4789b9c53ac42"
+      }
+    },
+    {
+      "phase": "original-owned-weights",
+      "phase_wall_seconds": 0.321403083,
+      "process_user_seconds": 0.313981,
+      "process_system_seconds": 0.015794,
+      "detail": {
+        "read_bytes": 103378910
+      }
+    },
+    {
+      "phase": "ordinary-preflight",
+      "phase_wall_seconds": 7.0416e-05,
+      "process_user_seconds": 0.314072,
+      "process_system_seconds": 0.015841,
+      "detail": {
+        "handoff_peak": 2344624638,
+        "requested_bytes": 2344624394,
+        "work": 5636947135
+      }
+    },
+    {
+      "phase": "ordinary-miner",
+      "phase_wall_seconds": 0.078643333,
+      "process_user_seconds": 0.391273,
+      "process_system_seconds": 0.021584,
+      "detail": {
+        "generated": [
+          273
+        ],
+        "output": "282a19435f7e3884a8b5ab062580cddf53175ad6701e7bc7022cf33f153d652fcbf9893b2635088bb83fd54fcb49855ecf3e5d565e17cf47a170cfaf6f33ca6d",
+        "witness_runs": 0
+      }
+    },
+    {
+      "phase": "cumulative-copy-preflight",
+      "phase_wall_seconds": 0.000779375,
+      "process_user_seconds": 0.392077,
+      "process_system_seconds": 0.021641,
+      "detail": {
+        "actual_file_traffic": false,
+        "actual_provider_read_cap": 8589934592,
+        "cumulative_io_and_copy_cap": 9356116492288,
+        "diagnostic_only": true,
+        "existing_io_and_copy_headroom": 2199023255552,
+        "material_copy_allowance": 7157093236736,
+        "per_relation_material_copy": 33554432,
+        "relations": 213298
+      }
+    },
+    {
+      "phase": "original-source-index",
+      "phase_wall_seconds": 0.519160209,
+      "process_user_seconds": 0.712252,
+      "process_system_seconds": 0.220403,
+      "detail": {
+        "read_bytes": 103378910,
+        "read_calls": 205485
+      }
+    },
+    {
+      "phase": "one-pass-panel-capture",
+      "phase_wall_seconds": 0.485911542,
+      "process_user_seconds": 0.918358,
+      "process_system_seconds": 0.504315,
+      "detail": {
+        "held_run_requests": 1308868,
+        "leaves": 14157,
+        "tape_bytes": 93329660
+      }
+    },
+    {
+      "phase": "panel-record",
+      "phase_wall_seconds": 3.507465,
+      "process_user_seconds": 2.485287,
+      "process_system_seconds": 2.406047,
+      "detail": {
+        "provider_bytes": 103378910,
+        "relations": 213298,
+        "tape_bytes": 305797608
+      }
+    },
+    {
+      "phase": "node-started",
+      "phase_wall_seconds": 0.007944459,
+      "process_user_seconds": 2.4932090000000002,
+      "process_system_seconds": 2.406142,
+      "detail": {
+        "conservative_envelope_cap": 1099511627776,
+        "file_io_hard_cap": 8589934592,
+        "required_relations": 213298
+      }
+    },
+    {
+      "phase": "complete-node",
+      "phase_wall_seconds": 971.658363084,
+      "process_user_seconds": 957.342263,
+      "process_system_seconds": 18.866255,
+      "detail": {
+        "checked_relations": 213298,
+        "claim_relations_read": 213298,
+        "claim_tape_read_bytes": 212467949,
+        "claim_tape_read_calls": 426598,
+        "completed_elements": 184572795,
+        "completed_source_reads": 3156969214,
+        "completed_terms": 3036075176,
+        "model_runs": 0,
+        "node_check_ns": 424062857495,
+        "observed_evaluations": 213298,
+        "opening_attempts": 149358,
+        "peak_elements": 26282,
+        "peak_reads": 170720,
+        "peak_terms": 164864,
+        "peak_workspace_bytes": 867668864,
+        "producer_material_ns": 546715340647,
+        "producer_retained": true,
+        "provider_bytes": 4447335950,
+        "provider_calls": 8492230,
+        "record_auth_finish_ns": 6911416,
+        "verdict": "Matched"
+      }
+    }
+  ],
+  "monitor": {
+    "elapsed_seconds": 976.7301517919999,
+    "minimum_free_bytes": 1720713216,
+    "sampled_pg_rss_peak_bytes": 174063616,
+    "rss_monitor_is_kernel_quota": false,
+    "stop_reason": null,
+    "remaining_pg_members": []
+  },
+  "unchanged_original_inputs_after_execution": true,
+  "full_goal_complete": false,
+  "native_accepted_case": false,
+  "activation_approved_or_enabled": false,
+  "physical_cold_role_costs_qualified": false
+}

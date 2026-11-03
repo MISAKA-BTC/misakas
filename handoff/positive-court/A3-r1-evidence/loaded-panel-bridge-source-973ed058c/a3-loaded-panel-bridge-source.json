@@ -1,0 +1,33 @@
+{
+  "source_commit": "973ed058c494caeb759a8049970b47b17b9e558c",
+  "source_tree": "55ce97eb3812de5bf322d2e120e769e9ab330c60",
+  "base_commit": "7c3cdf8de4263cec373ffa0ed05e9dc09bd92742",
+  "branch": "codex/a3-loaded-panel-bridge-v2",
+  "root_worktree_modified": false,
+  "source_only": true,
+  "cargo_rustc": "HOLD_UNRUN",
+  "new_tests_unrun": 2,
+  "patch_sha256": "aafd6d184bbf0b93977519a7f8623642652712d4f9ef86306ca822ab8442cad4",
+  "files": {
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded.rs": {
+      "before_sha256": "c4ca1694e63e11af8bb391b07f2c0b63e4db479eaa8b7efd6081b4745b006b0d",
+      "after_sha256": "7ccd9a57eab2f80c2d244d734784ffd28466e95c3bb338ed607fd9f2b909491b"
+    },
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/panel.rs": {
+      "before_sha256": null,
+      "after_sha256": "20264ad6a5afa2a09b90fedda55a5201c183e7b61e34e55eff75d4a4c14cfb6f"
+    },
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs": {
+      "before_sha256": "4af9dc1df10ecf6e536178ed7bcb9f6db5dc52581c1fc673f20787e85451a239",
+      "after_sha256": "e66571fafe16e21e6b22ec7b9859480e65812e782c3250c807160135a9d0c859"
+    },
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs": {
+      "before_sha256": "cff213ac6114dac0742dba6d329b508f8140055d05860eb40fe5e9d7d25bbdf2",
+      "after_sha256": "54c600d9ee58dc505ed672f2899524f25a6be7f58a1cf299f8bea5b9c8cffd21"
+    },
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2/loaded_bridge_tests.rs": {
+      "before_sha256": null,
+      "after_sha256": "5914d17b2e175541f76b5f7c0e377282d75ec513e3f6e791cbe124a8b7ebf8ae"
+    }
+  }
+}

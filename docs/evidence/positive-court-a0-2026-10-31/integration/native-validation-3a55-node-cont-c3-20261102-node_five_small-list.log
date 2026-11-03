@@ -1,0 +1,10 @@
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_pythia_70m_native_registration: test
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_135m_native_registration: test
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_360m_native_registration: test
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::isolated_wide_carrier_origin_matches_actual_accepting_block_and_survives_same_db_restore: test
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_invalid_bond_signature_or_target_still_spends_only_the_valid_carrier: test
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_one_per_block_cap_preserves_both_real_carrier_utxo_acceptances: test
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_real_carrier_replays_and_rolls_back_across_a_reorg: test
+pipeline::virtual_processor::tests::tir_wide_registration_e2e::wide_registration_restarts_from_the_same_real_database: test
+
+8 tests, 0 benchmarks

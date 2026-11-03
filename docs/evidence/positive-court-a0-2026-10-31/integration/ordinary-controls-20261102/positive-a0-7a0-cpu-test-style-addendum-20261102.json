@@ -1,0 +1,23 @@
+{
+  "status": "LOW_IMPACT_TEST_STYLE_EQUIVALENCE_PASS",
+  "scope": "Readonly exact source diff/hash only, no tests/Cargo/model/source/index modifications",
+  "previous_style_review": "/tmp/positive-a0-bf3-metadata-style-independent-review-20261102.json",
+  "previous_style_review_sha256": "046f259e7d68eeadcca727ed0b474b2f31bc4a9b094081703925ea7b0fcd01e2",
+  "base_style_commit": "bf3e523445a6de3b70278c5ad5e1a7609419f416",
+  "new_style_commit": "7a0ffcc7fb318fdf025d60beeb45f4b411539eec",
+  "only_additional_changed_path": "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+  "before_sha256": "da6c76c826d7a1382243ba96aa94274691191f5037dbd8ce53aa5bb6120d63e3",
+  "after_sha256": "9650228fde13b4a70bd0d1a16cd811b9622d2bf847c1d42d509857647510014d",
+  "one_exact_test_line_replacement_all_other_bytes_identical": true,
+  "total_style_paths_vs_actual_a867": [
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+    "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs"
+  ],
+  "equivalence": [
+    "On supported32/64bit Unix unsigned rlim_t (u32/u64), RLIM_INFINITY fitsu64. u128::from preserves all bits; u64::try_from succeeds with identical value to old asu64. Platform-infinity boundary assertion still tests same constant, no clipping/changed threshold.",
+    "Conversion is inside pure finite_cpu_conversion regression only. Actual finite_cpu_limit()/installCPU/syscalls/guard/metadata/measurement/model implementation byte-identical, as are all assertions apart from how the same test local constant is initialized.",
+    "No extra allocation/IO/runtime policy or native/data/context/authority change. No broad/model retest justified for this pure test-syntax lint change."
+  ],
+  "runtime_attribution": "Keep actual models3PASS and39 sameSource evidence attributed to a867 and recorded463ecdc3 caller binary; no reexecution or new7a0 runtime PASS claimed. Final plainClippy is independently Root-owned.",
+  "reviewer_runtime_actions": "NONE"
+}

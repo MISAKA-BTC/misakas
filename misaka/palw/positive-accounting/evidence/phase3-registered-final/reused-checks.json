@@ -1,0 +1,82 @@
+[
+  {
+    "check": "common-contract",
+    "original_record": "../independent-phase3/common-contract-result.json",
+    "original_raw_log": "../independent-phase3/common-contract.log",
+    "reason": "Source and component manifests unchanged; only root workspace membership/lock package metadata changed. Node-only deadline fix is outside these components.",
+    "verified_source_files": [
+      "misaka/palw/positive-contract/src/funding.rs",
+      "misaka/palw/positive-contract/src/identity.rs",
+      "misaka/palw/positive-contract/src/lib.rs",
+      "misaka/palw/positive-contract/src/messages.rs",
+      "misaka/palw/positive-contract/src/native.rs",
+      "misaka/palw/positive-contract/src/ports.rs",
+      "misaka/palw/positive-contract/src/tir.rs",
+      "misaka/palw/positive-contract/src/wire.rs",
+      "misaka/palw/positive-contract/tests/contracts.rs",
+      "misaka/palw/positive-contract/tests/funding.rs",
+      "misaka/palw/positive-contract/tests/native_namespace.rs",
+      "misaka/palw/positive-contract/tests/tir_contract.rs"
+    ]
+  },
+  {
+    "check": "leaf-all",
+    "original_record": "../independent-phase3/leaf-all-result.json",
+    "original_raw_log": "../independent-phase3/leaf-all.log",
+    "reason": "Source and component manifests unchanged; only root workspace membership/lock package metadata changed. Node-only deadline fix is outside these components.",
+    "verified_source_files": [
+      "misaka/palw/positive-accounting/Cargo.toml",
+      "misaka/palw/positive-accounting/src/credit/consumers.rs",
+      "misaka/palw/positive-accounting/src/credit/tests.rs",
+      "misaka/palw/positive-accounting/src/credit.rs",
+      "misaka/palw/positive-accounting/src/fees/tests.rs",
+      "misaka/palw/positive-accounting/src/fees.rs",
+      "misaka/palw/positive-accounting/src/lib.rs",
+      "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs",
+      "misaka/palw/positive-accounting/tests/independent_credit_graph.rs",
+      "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs",
+      "misaka/palw/positive-contract/src/funding.rs",
+      "misaka/palw/positive-contract/src/identity.rs",
+      "misaka/palw/positive-contract/src/lib.rs",
+      "misaka/palw/positive-contract/src/messages.rs",
+      "misaka/palw/positive-contract/src/native.rs",
+      "misaka/palw/positive-contract/src/ports.rs",
+      "misaka/palw/positive-contract/src/tir.rs",
+      "misaka/palw/positive-contract/src/wire.rs",
+      "misaka/palw/positive-contract/tests/contracts.rs",
+      "misaka/palw/positive-contract/tests/funding.rs",
+      "misaka/palw/positive-contract/tests/native_namespace.rs",
+      "misaka/palw/positive-contract/tests/tir_contract.rs"
+    ]
+  },
+  {
+    "check": "leaf-clippy",
+    "original_record": "../independent-phase3/leaf-clippy-result.json",
+    "original_raw_log": "../independent-phase3/leaf-clippy.log",
+    "reason": "Source and component manifests unchanged; only root workspace membership/lock package metadata changed. Node-only deadline fix is outside these components.",
+    "verified_source_files": [
+      "misaka/palw/positive-accounting/Cargo.toml",
+      "misaka/palw/positive-accounting/src/credit/consumers.rs",
+      "misaka/palw/positive-accounting/src/credit/tests.rs",
+      "misaka/palw/positive-accounting/src/credit.rs",
+      "misaka/palw/positive-accounting/src/fees/tests.rs",
+      "misaka/palw/positive-accounting/src/fees.rs",
+      "misaka/palw/positive-accounting/src/lib.rs",
+      "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs",
+      "misaka/palw/positive-accounting/tests/independent_credit_graph.rs",
+      "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs",
+      "misaka/palw/positive-contract/src/funding.rs",
+      "misaka/palw/positive-contract/src/identity.rs",
+      "misaka/palw/positive-contract/src/lib.rs",
+      "misaka/palw/positive-contract/src/messages.rs",
+      "misaka/palw/positive-contract/src/native.rs",
+      "misaka/palw/positive-contract/src/ports.rs",
+      "misaka/palw/positive-contract/src/tir.rs",
+      "misaka/palw/positive-contract/src/wire.rs",
+      "misaka/palw/positive-contract/tests/contracts.rs",
+      "misaka/palw/positive-contract/tests/funding.rs",
+      "misaka/palw/positive-contract/tests/native_namespace.rs",
+      "misaka/palw/positive-contract/tests/tir_contract.rs"
+    ]
+  }
+]

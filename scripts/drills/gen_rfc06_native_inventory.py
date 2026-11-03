@@ -141,7 +141,7 @@ queue=['crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1','cr
        'crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1','crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1',
        'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1',
        # RFC-0018 (2026-10-15): the SecurityCertified rows of kernel route aux 136.
-       'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
+       'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
        'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1',
        # Existing kernel Gate C hold row, decoded by native checkpoint/effects.
        'crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1',
@@ -238,6 +238,13 @@ while queue:
     unresolved.append(path);continue
  kind=item['kind']; form=item['form']; body=item['body']
  if path in {'crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15'}:continue
+ # Route fields still seed dependencies, but aux151 needs its manual typed-workspace visitor.
+ if path=='crate::palw_kernel_route_v1::PalwKernelRouteStateV1':
+    for _,typ,_ in fields(item):references(typ,item)
+    continue
+ # These process-local Assignment owners already visit their nested values.
+ if path in {'crate::palw_state_v2::positive_assignment_raw::PositiveAssignmentScheduledActionV2',
+             'crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2'}:continue
  # Funded-original pairing (holds a whole carrier Transaction) and its test-only schedule: hand-written visitors in typed.rs.
  if path in FUNDED_MANUAL:unresolved.append(path);continue
  if kind=='struct' and form=='named':
@@ -283,7 +290,7 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'crate::palw_kernel_route_v1::PalwKernelRouteStateV1','crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
 # Reviewed NativeHeap implementations already live beside these owners. Keep
 # traversal/visited intact so nested fields and structural wire coverage remain

@@ -1,0 +1,43 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/utils)
+   Compiling kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/core)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/math)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/merkle)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/crypto/addresses)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/tir/artifact)
+   Compiling misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/misaka/palw/positive-accounting)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 41s
+     Running tests/positive_court_a4_integration.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_court_a4_integration-a21d9f9a1e95c479)
+
+running 8 tests
+test a6_journal_replay::actual_checker_panel_failure_keeps_charged_wire_without_miner_refutation ... ok
+test a6_journal_replay::bounded_budget_refusal_precedes_native_authentication_and_external_callbacks ... ok
+test a6_journal_replay::actual_tir_journal_replay_recomputes_pass_and_genuine_miner_mismatch ... ok
+test a6_journal_replay::current_clock_expiry_and_final_generation_or_clock_changes_are_rechecked ... ok
+test a6_journal_replay::current_historical_frame_role_is_rechecked_under_the_step_guard ... ok
+test a6_journal_replay::pinned_tail_and_exact_native_material_references_cannot_be_shortened ... FAILED
+test a6_journal_replay::omitted_record_or_relation_and_future_or_idempotent_court_deliveries_are_not_journal_events ... ok
+test a6_journal_replay::unsupported_source_and_native_settlement_ports_refuse_without_any_live_commit ... ok
+
+failures:
+
+---- a6_journal_replay::pinned_tail_and_exact_native_material_references_cannot_be_shortened stdout ----
+
+thread 'a6_journal_replay::pinned_tail_and_exact_native_material_references_cannot_be_shortened' (3189021) panicked at misaka/palw/tir/exec/tests/positive_court_a4_integration/positive_court_a6_journal.rs:559:5:
+assertion `left == right` failed
+  left: 9
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    a6_journal_replay::pinned_tail_and_exact_native_material_references_cannot_be_shortened
+
+test result: FAILED. 7 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 2.29s
+
+error: test failed, to rerun pass `-p misaka-palw-tir-exec --test positive_court_a4_integration`

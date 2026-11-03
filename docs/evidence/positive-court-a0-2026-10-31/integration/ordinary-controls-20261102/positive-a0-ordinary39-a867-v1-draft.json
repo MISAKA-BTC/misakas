@@ -1,0 +1,846 @@
+{
+  "status": "OWNER_EXPLICIT_FOCUSED_PREPARED_NOT_EXECUTED",
+  "prepared_source": "f419920c6ae696e6ec9d51c4db53f2e701ed2674",
+  "execution_source": null,
+  "root": null,
+  "source_roots": [
+    "consensus/core",
+    "consensus/src",
+    "misaka/palw",
+    "testing/reference",
+    "testing/positive-court-a1/inputs",
+    "consensus-vectors",
+    ".cargo",
+    "testing/positive-court-a7"
+  ],
+  "prepared_source_snapshot": null,
+  "test_source_hashes": {
+    "misaka/palw/tir/exec/tests/local_wide_forward_v2.rs": "f627bdf3600ed378a4e570a7c6c7a3add4de36ea854f83b4e14f3e7ebce17b4d"
+  },
+  "specs": [
+    {
+      "id": "same_source_mixed_fixed_hist_and_repeated_layer_geometry_fits_actual_capacities",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "filter": "palw_tir_step_v1::local_geometry_quote_v1::tests::same_source_mixed_fixed_hist_and_repeated_layer_geometry_fits_actual_capacities",
+      "exact": true,
+      "names": [
+        "palw_tir_step_v1::local_geometry_quote_v1::tests::same_source_mixed_fixed_hist_and_repeated_layer_geometry_fits_actual_capacities"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "constructor_diagnostics_cover_actual_narrow_and_wide_error_allocations",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "filter": "palw_tir_step_v1::local_space_diagnostics_v1::tests::constructor_diagnostics_cover_actual_narrow_and_wide_error_allocations",
+      "exact": true,
+      "names": [
+        "palw_tir_step_v1::local_space_diagnostics_v1::tests::constructor_diagnostics_cover_actual_narrow_and_wide_error_allocations"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "private_native_coverage_diagnostics_fit_without_sdk_type_name_copies",
+      "group": "core",
+      "key": "kaspa_consensus_core",
+      "filter": "palw_tir_step_v1::local_space_diagnostics_v1::tests::private_native_coverage_diagnostics_fit_without_sdk_type_name_copies",
+      "exact": true,
+      "names": [
+        "palw_tir_step_v1::local_space_diagnostics_v1::tests::private_native_coverage_diagnostics_fit_without_sdk_type_name_copies"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "successful_immutable_source_geometry_quote_allocates_zero_after_prepared_setup",
+      "group": "core",
+      "key": "local_step_geometry_quote_noalloc_v1",
+      "filter": "successful_immutable_source_geometry_quote_allocates_zero_after_prepared_setup",
+      "exact": true,
+      "names": [
+        "successful_immutable_source_geometry_quote_allocates_zero_after_prepared_setup"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "successful_fixed_space_diagnostic_quote_allocates_zero",
+      "group": "core",
+      "key": "local_step_geometry_quote_noalloc_v1",
+      "filter": "successful_fixed_space_diagnostic_quote_allocates_zero",
+      "exact": true,
+      "names": [
+        "successful_fixed_space_diagnostic_quote_allocates_zero"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "native_owned_endpoints_idx_root_context_and_guard_stay_together",
+      "group": "exec",
+      "key": "misaka_palw_tir_exec",
+      "filter": "node::owned_artifact_params_v2::tests::native_owned_endpoints_idx_root_context_and_guard_stay_together",
+      "exact": true,
+      "names": [
+        "node::owned_artifact_params_v2::tests::native_owned_endpoints_idx_root_context_and_guard_stay_together"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "root_mismatch_and_truncation_release_guard_without_returning_partial_owner",
+      "group": "exec",
+      "key": "misaka_palw_tir_exec",
+      "filter": "node::owned_artifact_params_v2::tests::root_mismatch_and_truncation_release_guard_without_returning_partial_owner",
+      "exact": true,
+      "names": [
+        "node::owned_artifact_params_v2::tests::root_mismatch_and_truncation_release_guard_without_returning_partial_owner"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "exact_and_one_below_native_chunk_payload_work_and_io_caps_are_preallocation",
+      "group": "exec",
+      "key": "misaka_palw_tir_exec",
+      "filter": "node::owned_artifact_params_v2::tests::exact_and_one_below_native_chunk_payload_work_and_io_caps_are_preallocation",
+      "exact": true,
+      "names": [
+        "node::owned_artifact_params_v2::tests::exact_and_one_below_native_chunk_payload_work_and_io_caps_are_preallocation"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "i16_per_layer_and_i32_multi_piece_values_keep_authoritative_root_and_metadata",
+      "group": "exec",
+      "key": "misaka_palw_tir_exec",
+      "filter": "node::owned_artifact_params_v2::tests::i16_per_layer_and_i32_multi_piece_values_keep_authoritative_root_and_metadata",
+      "exact": true,
+      "names": [
+        "node::owned_artifact_params_v2::tests::i16_per_layer_and_i32_multi_piece_values_keep_authoritative_root_and_metadata"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "narrow_row_retains_legacy_idx_refusal_and_checks_storage_values_without_clipping",
+      "group": "exec",
+      "key": "misaka_palw_tir_exec",
+      "filter": "node::owned_artifact_params_v2::forward::row_tests::narrow_row_retains_legacy_idx_refusal_and_checks_storage_values_without_clipping",
+      "exact": true,
+      "names": [
+        "node::owned_artifact_params_v2::forward::row_tests::narrow_row_retains_legacy_idx_refusal_and_checks_storage_values_without_clipping"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "local_wide_forward_v2",
+      "group": "exec",
+      "key": "local_wide_forward_v2",
+      "filter": "",
+      "exact": false,
+      "names": [
+        "first_trace_free_startup_and_plain_forward_match_original_dense_for_fixed_hist_windows",
+        "output_owns_required_guard_and_failed_prompt_or_guard_attempts_do_not_refund",
+        "one_below_load_and_run_caps_refuse_before_payload_or_cpu_guards",
+        "bounded_short_read_interrupt_seek_truncation_and_root_failure_never_return_partial_owner",
+        "unknown_provider_quote_is_denied_before_guard_or_io",
+        "flat_and_tiled_i32_ordinary_match_legacy_without_changing_context_or_row_width",
+        "declared_i8_i16_idx_and_unknown_scheme_are_not_reinterpreted_as_i32",
+        "dynamic_gather_select_and_topk_follow_the_same_ordinary_and_legacy_execution",
+        "checked_arithmetic_abort_returns_no_output_and_spends_each_attempt_like_the_legacy_runner",
+        "measurement_borrows_same_owned_params_after_file_is_gone_and_holds_both_guard_scopes",
+        "denied_measurement_guards_and_undersized_extra_caps_preserve_budget_without_partial_comparison",
+        "explicit_required_executor_denial_releases_extra_without_fallback_or_partial_comparison",
+        "long_prefill_one_post_leaf_quote_covers_bridge_prompt_before_any_runner_lease",
+        "narrow_runner_work_cap_is_enforced_independently_of_larger_aggregate_cap",
+        "working_to_output_handoff_keeps_both_guards_until_scratch_drops_then_retains_only_ids",
+        "output_handoff_denial_after_cpu_returns_no_result_and_never_refunds_attempts_or_requests",
+        "exact_and_one_below_handoff_caps_cover_both_real_guards_before_cpu",
+        "dense_external_floor_uses_real_retained_output_after_working_guard_release"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "local_forward_metadata_v2",
+      "group": "exec",
+      "key": "local_forward_metadata_v2",
+      "filter": "",
+      "exact": false,
+      "names": [
+        "trace_free_same_descriptor_owner_reaches_ordinary_outputs_all_three_profiles",
+        "required_guard_denial_is_before_backend_and_keeps_attempt_reservation",
+        "layout_none_requires_exact_independent_preimage_and_never_repairs_declared_layout",
+        "source_cap_stage_rejects_before_scan_and_failed_io_is_not_free",
+        "independent_class_artifact_context_pins_and_changed_descriptor_fail_closed",
+        "nested_external_double_count_and_zero_limits_are_refused"
+      ],
+      "ignored": [],
+      "hf": false,
+      "requires_supported_source_profile": true
+    },
+    {
+      "id": "ordinary_caller_pure5",
+      "group": "a7",
+      "key": "ordinary_trained_forward_guarded_v2",
+      "filter": "",
+      "exact": false,
+      "names": [
+        "requested_ledger_denial_and_drop_never_create_an_unreserved_lease",
+        "bounded_numeric_options_reject_zero_overflow_and_nondecimal",
+        "exact_layout_parser_rejects_duplicate_trailing_and_oversized_counts",
+        "fixed_original_jobs_keep_recorded_hashes_prompt_and_zero_tokenizer_cu",
+        "finite_cpu_conversion_rejects_platform_infinity_zero_and_overflow_without_syscalls"
+      ],
+      "ignored": [
+        "ordinary_trained_smollm2_360m",
+        "ordinary_trained_smollm2_135m",
+        "ordinary_trained_pythia_70m"
+      ],
+      "hf": false,
+      "requires_supported_source_profile": true
+    }
+  ],
+  "small_expected_pass": 39,
+  "hf_expected_invocations": 0,
+  "native_config": {
+    "path": null,
+    "bytes": 956,
+    "sha256": "05498f7c7d1eb71c799ccda997f0411e920d52e02902a38faa2b61bdd23a484a"
+  },
+  "native_inputs": {
+    "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a": {
+      "bytes": 23048496,
+      "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+    },
+    "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/libsnappy.a": {
+      "bytes": 46784,
+      "sha256": "f45a4731a8dc330e5723b70dabb4be96167a71044fcdeb0ce4d78f837f9538e5"
+    },
+    "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/bindings.rs": {
+      "bytes": 208430,
+      "sha256": "cbe5eae46ca4209c1bfb020945fd86fb9a401015979112ae70933a2ac5621e62"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/manifest.json": {
+      "bytes": 4331,
+      "sha256": "1145fbcee0175990e58888c84532d5667e4d348b393bc4027124498f15a5ac86"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105673906,
+      "sha256": "d386892feecfd84ec42466bd64c641e5b3df61101a0470745752861205973acc"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/manifest.json": {
+      "bytes": 3180,
+      "sha256": "3c81871a059652135e48665c1e7a9e7bf193cd06d18cebae3dba0c2fc9745d70"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105673146,
+      "sha256": "08b00c4655a0439cb4917ea61cf540e9032e7784defce8eff2bc49b0c572ab98"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/manifest.json": {
+      "bytes": 3324,
+      "sha256": "898bf3254e97d61c82252732c3da88400c5585119f6c7f5f0898456226e5320c"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105692124,
+      "sha256": "91badc9ba258a2775bbe6c9eed13cb52384d85f301651221b3c4f20f6a86a467"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-82bb4-failure-preserved-20261102/manifest.json": {
+      "bytes": 3267,
+      "sha256": "e0c8b9838d3d73f83564f7f644c3ded6e5fb5e5f68dadec89fb7b9d4f01797a1"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-82bb4-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105693861,
+      "sha256": "2bf60d7a411d7c262aa4ccb1a3c81fc6e86db2ab20d988fa3a50d9dfe1382078"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-22a4-failure-preserved-20261102/manifest.json": {
+      "bytes": 3260,
+      "sha256": "405bd197b2bc3f238b0031f08519dcb4ede45fe7a9c7cffd4f29a94407ac7564"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-22a4-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105682844,
+      "sha256": "88301730d24296323623ba87edf1815342f2ac27924d879dd0d05c9753fdee3c"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-5745b-failure-preserved-20261102/manifest.json": {
+      "bytes": 3267,
+      "sha256": "f9034cfbbaf1c34482b29979bee273d3fd1253b1c0d26126af5db3c1c5fc7cae"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-5745b-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105666654,
+      "sha256": "39c55a349f7a83e967c6a97c0ee67847e0105751db5ce1e37e117181b435ecf1"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-e38f-failure-preserved-20261102/manifest-final.json": {
+      "bytes": 3557,
+      "sha256": "8f24b46c8bee3e2007ddbcb38d8fe767b23b52d9a03cbd031eb4a636453a962a"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-e38f-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105678328,
+      "sha256": "61d7f30e5ea94bece46c16e550a4cff2bda819ef7172de96f160d51475665b38"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-qualified-hf3-3a03-preserved-20261102/manifest.json": {
+      "bytes": 2287,
+      "sha256": "63792515484922120b9d2918db781fd0ed24bfc7f0a0e8f20d8499fc7750c421"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-native-qualified-hf3-3a03-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+      "bytes": 105690838,
+      "sha256": "6454c7fafc62ab5c749b364b724e634c9d44b23616cfc3845872af95d92d9434"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-3a55-preserved-20261102/manifest.json": {
+      "bytes": 11979,
+      "sha256": "437c9095ba5da6546bb2381bc0121a0e5ecd95ad35be55617907f05b58639d14"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-3a55-preserved-20261102/kaspa_consensus_core-e0bff1a98c19079f.gz": {
+      "bytes": 59066346,
+      "sha256": "92314ca8b547a414b0cc7e1bf8029836c13c52d5cce7a2814d10c5528740fe81"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-50fe-preserved-20261102/manifest.json": {
+      "bytes": 14297,
+      "sha256": "a96e964307b7dbeb9fa1fb9a4e08a5ff148c62d1f508984e74d60ca360c85efb"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-50fe-preserved-20261102/kaspa_consensus_core-e0bff1a98c19079f.gz": {
+      "bytes": 59057472,
+      "sha256": "fa793624cd931dabc6002238c0a4dedee7f0826a9dda6c89d1f27a44615730da"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-exec-unit-3a55-preserved-20261102/manifest.json": {
+      "bytes": 10669,
+      "sha256": "ae9c3fb6ded98a559f49eefaf77cf3126b32865ec9f4712c6874dc791638a74d"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-exec-unit-3a55-preserved-20261102/misaka_palw_tir_exec-d08da94eef3b29c0.gz": {
+      "bytes": 6598355,
+      "sha256": "9d01476f85e1fe3ca4650dcbeac6e03f721da4dd1dfdfb83ef81118dfbb5b256"
+    },
+    "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus-0b18fc1c82530da7": {
+      "bytes": 429673920,
+      "sha256": "5e942b83cb35ffcf8878c5c1ac6ddb37fd2e24406503c235cf40cc95a2ce37e7"
+    }
+  },
+  "hf_pins": {
+    "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/testing/positive-court-a1/inputs/hf3-native-registration-pins-20261102.json",
+    "sha256": "b9b30c7909ff0dd8545e6e74eadb1c7edb20a4eb1d453802cffd4491dbe776fc",
+    "models": [
+      {
+        "slug": "smollm2-360m",
+        "repository": "HuggingFaceTB/SmolLM2-360M",
+        "revision": "f8027fd0eaeea54caa13c31d31b9fdc459c38b49",
+        "original_max_context": 8192,
+        "wide_q24": false,
+        "artifact": {
+          "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/model.palwtir.testnet-12.palwtir",
+          "bytes": 436395392,
+          "sha256": "d17a82c83fcd86736feb60b05e492ebae79f5e2507600bc35ec2c024a2fe36c8"
+        },
+        "fixture": {
+          "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/registration-fixture.json",
+          "sha256": "c56ab4d0491f2be025b4efc37f0769b8bee4c7bd23564e0373270ad5d1a3bc40"
+        },
+        "inventory": {
+          "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/testing/positive-court-a7/evidence/real-llm-inventory-4753-2026-11-01/smollm2-360m.json",
+          "sha256": "80e43e0fd9ad9fb0b4dc0b44cdda2b78513ef29ea1fa549d1e2b99fe4bc26548"
+        },
+        "class_id": "ad6c9866ee15de51ad18c4c83c595dfafd646a931cc18db77b8bbe627b8e9f555dd87f3efb81943d098ff32729d9c5c645a88571f65b5e007061234fa5489476",
+        "artifact_root": "041029123feed837f46db580ee1b89092e0c1700b4cc033c9089f50afd587be75ceab1f985700042ee934194f244fafbd9e4940299621a8c3e2b09529dd8ec12",
+        "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+        "program_sha256": "4e28b26f43de39c6ea6549dd37d196d7a2da8c7d2a7a6095dad13381534eafe3",
+        "layout_sha256": "cdf5d64207dc9d34e5b659cb7e5873fafe789088b2b92f51f3dd74f3eb4f8a33",
+        "checkpoint_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/checkpoint",
+        "tokenizer_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/checkpoint/tokenizer.json"
+      },
+      {
+        "slug": "smollm2-135m",
+        "repository": "HuggingFaceTB/SmolLM2-135M",
+        "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+        "original_max_context": 8192,
+        "wide_q24": false,
+        "artifact": {
+          "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+          "bytes": 180336320,
+          "sha256": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90"
+        },
+        "fixture": {
+          "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/registration-fixture.json",
+          "sha256": "252c20d0aab613bdc3e7349ba85e1a1306167cf06185ffff4bf12dea6df6e1b9"
+        },
+        "inventory": {
+          "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/testing/positive-court-a7/evidence/real-llm-inventory-4753-2026-11-01/smollm2-135m.json",
+          "sha256": "e6d86d57454fae5ae36b0625b73de537cf0fc552c19d882096cae015824f8920"
+        },
+        "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+        "artifact_root": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+        "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+        "program_sha256": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+        "layout_sha256": "cdf5d64207dc9d34e5b659cb7e5873fafe789088b2b92f51f3dd74f3eb4f8a33",
+        "checkpoint_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint",
+        "tokenizer_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/checkpoint/tokenizer.json"
+      },
+      {
+        "slug": "pythia-70m",
+        "repository": "EleutherAI/pythia-70m",
+        "revision": "a39f36b100fe8a5377810d56c3f4789b9c53ac42",
+        "original_max_context": 2048,
+        "wide_q24": true,
+        "artifact": {
+          "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/model.palwtir.private-wide-q24.palwtir",
+          "bytes": 103402560,
+          "sha256": "2d1010327664743f240ea8d5bc089daed5a704d4340fea322d1f9cafbe009651"
+        },
+        "fixture": {
+          "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/registration-fixture.json",
+          "sha256": "29c0d221c7f998dee2e4778bd8bfd9f9b8b4e610b17a62b1bf6f4484b7f367a8"
+        },
+        "inventory": {
+          "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/testing/positive-court-a7/evidence/real-llm-inventory-4753-2026-11-01/pythia-70m.json",
+          "sha256": "24296d0c2a56a50d662092eb20f1dc8e35dfa46af6762ad32e7e184f1c54f60b"
+        },
+        "class_id": "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
+        "artifact_root": "427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4",
+        "tokenizer_id": "9ccc3c319505ec74ccccb984a97bbd955c2c3f30e4c8f2dbe95ff8e13b213d84074d705cf61decf466eb2026e4a1b9ebf3e33f32abdc0653382ea0a669941a43",
+        "program_sha256": "1c5dba053682afd2a53b5649da96150860463a35ae35505aa0c114e425e145b9",
+        "layout_sha256": "a7ddfddc283c60995e94da60bfa1f5bac022d57928c8b0bc156c5aefcda9802e",
+        "checkpoint_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/checkpoint",
+        "tokenizer_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/checkpoint/tokenizer.json"
+      }
+    ]
+  },
+  "fixed_environment": {
+    "CARGO_TARGET_DIR": null,
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out",
+    "ROCKSDB_STATIC": "1",
+    "SNAPPY_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out",
+    "SNAPPY_STATIC": "1",
+    "ROCKSDB_COMPILE": "0",
+    "SNAPPY_COMPILE": "0",
+    "RAYON_NUM_THREADS": "2"
+  },
+  "core_consensus_opt_level": "0 in dev and test package overrides",
+  "disk_stop_bytes": 536870912,
+  "scope": "NEW SOURCEa867 ORDINARY39 PURE REGRESSIONS ONLY; f419preparedNOTRUN, old4b64failureunchanged/notaggregated. Core5+Exec5+forward18+metadata6+caller5; trained3ignored.",
+  "estimate": "No guarantee: reuseexisting target/native deps; actual compile/link size/time/diskwork unknown. Initial2GiB focusedphase only, ownPG512MiBstop.",
+  "workspace": null,
+  "target_dir": null,
+  "runtime_parameters": null,
+  "pending_scope_extensions": [],
+  "projected_small_after_pending": 39,
+  "profile_policy": "a6-mixed",
+  "profile_policy_details": {
+    "CoreConsensus": "dev/test package opt-level0/debug0 only",
+    "other_workspace_packages": "Preserve current workspace debug2; no global CARGO_PROFILE_DEV_DEBUG=0/test equivalent",
+    "artifact_copy": "Forbidden; existing target selected explicitly; no new target",
+    "supported_profile_required": "Build-script Core cfg plus generated profile env must both equal supported; runtime unsupported markers cannot count as audited success."
+  },
+  "required_supported_source_profile": {
+    "cfg": "misaka_source_local_audited_rust193_v1",
+    "environment_name": "MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1",
+    "environment_value": "rust-1.93.0-borsh-1.5.1-v1",
+    "unsupported_markers": [
+      "SOURCE_LOCAL_UNSUPPORTED_PROFILE",
+      "COMPILE_QUOTE_UNSUPPORTED_SOURCE_PROFILE",
+      "LOADED_WIDE_UNSUPPORTED_PROFILE",
+      "LOADED_PANEL_UNSUPPORTED_SOURCE_PROFILE",
+      "A3_LOADED_PROCESS_V2_UNSUPPORTED",
+      "A3_LOADED_PROCESS_V2_REFUSED"
+    ],
+    "negative_only_case": "palw_native_resource_v1::source_local::tests::unknown_profile_refuses_before_any_scanner_charge",
+    "negative_only_cases": [
+      "palw_native_resource_v1::source_local::tests::unknown_profile_refuses_before_any_scanner_charge",
+      "node::owned_artifact_params_v2::loaded::tests::unsupported_build_explicitly_refuses_without_startup_success_claim"
+    ]
+  },
+  "prepare_reference_checkout": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet",
+  "old_runner_preserved": {
+    "path": "/tmp/positive-a0-next-validation-runner.py",
+    "sha256": "7f6fd25b1cf1d414b3174f7d5c9fe1e39753c28a88c4de6eee20a4e2b5d96235"
+  },
+  "a6_switch_or_merge_performed": false,
+  "owner_candidate_selection_pending": false,
+  "pending_owner_decisions": [],
+  "expected_scope_inventory": {
+    "small_selected_source_names": 39,
+    "os_main_standalone_markers": 0,
+    "hf_exact_ignored_cases": 0,
+    "runtime_counts": null
+  },
+  "test_source_hash_observation_boundary": {
+    "actual_commit_compared": "5745b1572dca27e3b185bd25f61fa4c5d31932e7",
+    "nonchanged_entries_compared": 31,
+    "Root_explicit_changed_paths": [
+      "consensus/src/pipeline/virtual_processor/tests/tir_wide_registration_e2e.rs",
+      "consensus/src/pipeline/virtual_processor/tests/tir_wide_registration_e2e/hf3.rs"
+    ],
+    "self_repin": false
+  },
+  "authorized_candidate": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+  "authorized_tree": "3cb715e6d4867f6409063afebbddc6cbb6f9804c",
+  "authorized_branch": "codex/positive-court-native-validation-f7bf",
+  "authorized_owner_parameters": {
+    "workspace": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet",
+    "target_dir": "/Users/wata/Downloads/MISAKA-testnet/target",
+    "native_config": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+    "profile_policy": "a6-mixed"
+  },
+  "owner_execution_authorization": "Rootselected08a9 and purefreeze; separateRootGO required. Same2GiBruntimeinitial/per512/defaultstack/jobs2/CPPguard.",
+  "runtime_profile_status": "NOT_RUN",
+  "cleanup_policy": "Own group TERM1s/KILL5s, direct wait, ps live and zombie census. Hash only after no live members; inherited or escaped different sessions and SIGKILL of controller outside guarantee.",
+  "supersedes_unsafe_cleanup_runner": {
+    "path": "/tmp/positive-a0-next-validation-a6-mixed-v4-runner.py",
+    "sha256": "2f2125c688a274f437d3b99a75b0cdadf8651ee5d4ddeaf22af4072e67954d8e",
+    "reason": "leader-only TERM/wait can leave TERM-ignoring descendants alive; historical freeze is NOT approved for runtime"
+  },
+  "environment_hardening": "Frozen fixed_environment must equal immutable draft with only selected existing target substituted; scrub and record inherited CXX/CXX_*/HOST_CXX/TARGET_CXX before mandatory guard.",
+  "approved_candidate_delta": {
+    "previous_candidate": "f419920c6ae696e6ec9d51c4db53f2e701ed2674",
+    "candidate": "a867e78e05f8fdfb6586c21c8ddbf64f76dd159b",
+    "tree": "3cb715e6d4867f6409063afebbddc6cbb6f9804c",
+    "only_paths": [
+      "misaka/palw/tir/exec/tests/local_wide_forward_v2.rs"
+    ],
+    "numstat": "3\t1\tmisaka/palw/tir/exec/tests/local_wide_forward_v2.rs",
+    "change": "RootTESTONLY Longfixture checkpoint_interval=context_max=2^21, positions=2^21-1; avoids fixedcheckpoint injob andkeepsonePOSTleaf. Otherfixturesunchanged. f419notexecuted."
+  },
+  "os_main_expected_invocations": 0,
+  "initial_free_bytes_authorized_for_this_diagnostic_only": 2147483648,
+  "immutable_input_kinds": {
+    "native_link_archives_and_bindings": {
+      "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a": {
+        "bytes": 23048496,
+        "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+      },
+      "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/libsnappy.a": {
+        "bytes": 46784,
+        "sha256": "f45a4731a8dc330e5723b70dabb4be96167a71044fcdeb0ce4d78f837f9538e5"
+      },
+      "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/bindings.rs": {
+        "bytes": 208430,
+        "sha256": "cbe5eae46ca4209c1bfb020945fd86fb9a401015979112ae70933a2ac5621e62"
+      }
+    },
+    "failed_C3_forensic_preservation_map_and_gzip_only": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/manifest.json": {
+        "bytes": 4331,
+        "sha256": "1145fbcee0175990e58888c84532d5667e4d348b393bc4027124498f15a5ac86"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105673906,
+        "sha256": "d386892feecfd84ec42466bd64c641e5b3df61101a0470745752861205973acc"
+      }
+    },
+    "failed_93054_b507_forensic_preservation_map_and_gzip_only": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/manifest.json": {
+        "bytes": 3180,
+        "sha256": "3c81871a059652135e48665c1e7a9e7bf193cd06d18cebae3dba0c2fc9745d70"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105673146,
+        "sha256": "08b00c4655a0439cb4917ea61cf540e9032e7784defce8eff2bc49b0c572ab98"
+      }
+    },
+    "failed_beeb9_292_forensic_preservation_map_and_gzip_only": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/manifest.json": {
+        "bytes": 3324,
+        "sha256": "898bf3254e97d61c82252732c3da88400c5585119f6c7f5f0898456226e5320c"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105692124,
+        "sha256": "91badc9ba258a2775bbe6c9eed13cb52384d85f301651221b3c4f20f6a86a467"
+      }
+    },
+    "failed_82bb4_e2d984_forensic_preservation_map_and_gzip_only": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-82bb4-failure-preserved-20261102/manifest.json": {
+        "bytes": 3267,
+        "sha256": "e0c8b9838d3d73f83564f7f644c3ded6e5fb5e5f68dadec89fb7b9d4f01797a1"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-82bb4-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105693861,
+        "sha256": "2bf60d7a411d7c262aa4ccb1a3c81fc6e86db2ab20d988fa3a50d9dfe1382078"
+      }
+    },
+    "failed_22a4_abb677_forensic_preservation_map_and_gzip_only": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-22a4-failure-preserved-20261102/manifest.json": {
+        "bytes": 3260,
+        "sha256": "405bd197b2bc3f238b0031f08519dcb4ede45fe7a9c7cffd4f29a94407ac7564"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-22a4-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105682844,
+        "sha256": "88301730d24296323623ba87edf1815342f2ac27924d879dd0d05c9753fdee3c"
+      }
+    },
+    "failed_5745b_542ec0_forensic_preservation_map_and_gzip_only": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-5745b-failure-preserved-20261102/manifest.json": {
+        "bytes": 3267,
+        "sha256": "f9034cfbbaf1c34482b29979bee273d3fd1253b1c0d26126af5db3c1c5fc7cae"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-5745b-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105666654,
+        "sha256": "39c55a349f7a83e967c6a97c0ee67847e0105751db5ce1e37e117181b435ecf1"
+      }
+    },
+    "failed_e38f_5b6905_finalmap_and_gzip_only": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-e38f-failure-preserved-20261102/manifest-final.json": {
+        "bytes": 3557,
+        "sha256": "8f24b46c8bee3e2007ddbcb38d8fe767b23b52d9a03cbd031eb4a636453a962a"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-e38f-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105678328,
+        "sha256": "61d7f30e5ea94bece46c16e550a4cff2bda819ef7172de96f160d51475665b38"
+      }
+    },
+    "QUALIFIED_HF3_TINY1_HISTORICAL_BINARY": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-qualified-hf3-3a03-preserved-20261102/manifest.json": {
+        "bytes": 2287,
+        "sha256": "63792515484922120b9d2918db781fd0ed24bfc7f0a0e8f20d8499fc7750c421"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-native-qualified-hf3-3a03-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz": {
+        "bytes": 105690838,
+        "sha256": "6454c7fafc62ab5c749b364b724e634c9d44b23616cfc3845872af95d92d9434"
+      }
+    },
+    "QUALIFIED_CORE54_3A55_HISTORICAL_BINARY_ONLY": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-3a55-preserved-20261102/manifest.json": {
+        "bytes": 11979,
+        "sha256": "437c9095ba5da6546bb2381bc0121a0e5ecd95ad35be55617907f05b58639d14"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-3a55-preserved-20261102/kaspa_consensus_core-e0bff1a98c19079f.gz": {
+        "bytes": 59066346,
+        "sha256": "92314ca8b547a414b0cc7e1bf8029836c13c52d5cce7a2814d10c5528740fe81"
+      }
+    },
+    "HISTORICAL_history-qualified-core54-50fe-preserved-20261102": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-50fe-preserved-20261102/manifest.json": {
+        "bytes": 14297,
+        "sha256": "a96e964307b7dbeb9fa1fb9a4e08a5ff148c62d1f508984e74d60ca360c85efb"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-50fe-preserved-20261102/kaspa_consensus_core-e0bff1a98c19079f.gz": {
+        "bytes": 59057472,
+        "sha256": "fa793624cd931dabc6002238c0a4dedee7f0826a9dda6c89d1f27a44615730da"
+      }
+    },
+    "HISTORICAL_history-qualified-exec-unit-3a55-preserved-20261102": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-exec-unit-3a55-preserved-20261102/manifest.json": {
+        "bytes": 10669,
+        "sha256": "ae9c3fb6ded98a559f49eefaf77cf3126b32865ec9f4712c6874dc791638a74d"
+      },
+      "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-exec-unit-3a55-preserved-20261102/misaka_palw_tir_exec-d08da94eef3b29c0.gz": {
+        "bytes": 6598355,
+        "sha256": "9d01476f85e1fe3ca4650dcbeac6e03f721da4dd1dfdfb83ef81118dfbb5b256"
+      }
+    },
+    "PROTECTED_NODE50FE_NO_NODE_BUILD": {
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus-0b18fc1c82530da7": {
+        "bytes": 429673920,
+        "sha256": "5e942b83cb35ffcf8878c5c1ac6ddb37fd2e24406503c235cf40cc95a2ce37e7"
+      }
+    }
+  },
+  "preserved_failed_C3_binary": {
+    "map": {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/manifest.json",
+      "bytes": 4331,
+      "sha256": "1145fbcee0175990e58888c84532d5667e4d348b393bc4027124498f15a5ac86"
+    },
+    "gzip": {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-native-c3-failure-preserved-r2-20261102/kaspa_consensus-0b18fc1c82530da7.gz",
+      "bytes": 105673906,
+      "sha256": "d386892feecfd84ec42466bd64c641e5b3df61101a0470745752861205973acc"
+    },
+    "original_sha256": "c18a168a77dce3b33b0c7809b2e4687534f32459c97224b8461f54e1040b7410",
+    "original_bytes": 429685952,
+    "original_mode": "0755",
+    "original_UUID": "ac9d6cd6-fa59-35dc-ba3d-428bea2bba61",
+    "original_alias_is_NOT_immutable_input": true,
+    "no_manual_unlink_or_restore": true,
+    "forensics_only_not_successful_union_binary_map": true
+  },
+  "before_after_record_contract": {
+    "source": "source_before plus unchanged helper stable() checks before build/list/runtime and after each",
+    "plan_helper": "recorded exact frozenplan/runner SHA; helper22functions unchanged",
+    "actual_new_binary": "build actual Cargo JSON artifact SHA/bytes/profile, list and runtime same artifact, binary_stable after test",
+    "failed_C3_map_gzip": "declared immutable auxpins under native_inputs cause unchanged static_inputs()/stable() SHA+size checks each command boundary; labels explicitly nonlink forensic inputs",
+    "closure": "independent after-close receipt may rehash map/gzip to record actual aftervalues; original alias can normally be overwritten by Cargo, never included as immutable input",
+    "failed_93054_map_gzip": "Additional separately labelled forensic auxpins checked by unchanged static_inputs()/stable() before/after every command; actual alias remains mutable Cargo output.",
+    "failed_beeb9_map_gzip": "Third failed-binary forensic pair separately labelled and checked by unchanged static_inputs()/stable() before/after each command; original Cargo alias not immutable.",
+    "e38f_final_forensics": "Native17 includes only explicit final e38f map+gzip; partialmap notinput; mutable failedalias notinput. Exact immutable SHA/size checked by unchanged stable() before/after commands.",
+    "qualified3a03_historical_binary": "Native19 adds only qualifiedHF3+tiny1 historicalmap/gzip from SourceNULLv7. Not fullNode19/whole163/futureSource qualification. Mutableunit alias notinput."
+  },
+  "focused_profile_contract": "Require actual Core build-script audited Source cfg+generatedenv on the Node build as well; no additional test/model scope.",
+  "preserved_failed_93054_binary": {
+    "map": {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/manifest.json",
+      "bytes": 3180,
+      "sha256": "3c81871a059652135e48665c1e7a9e7bf193cd06d18cebae3dba0c2fc9745d70"
+    },
+    "gzip": {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-93054-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz",
+      "bytes": 105673146,
+      "sha256": "08b00c4655a0439cb4917ea61cf540e9032e7784defce8eff2bc49b0c572ab98"
+    },
+    "original_sha256": "b507ee380f2f4c7da026be42132f4d027b16852bf021bd8fc13436f224d052f5",
+    "original_bytes": 429665056,
+    "original_UUIDs": [
+      "7a13545e-bbf5-3b9c-ad90-5ff1c3a073bc"
+    ],
+    "original_alias_is_NOT_immutable_input": true,
+    "no_manual_unlink_or_restore": true,
+    "forensics_only_not_successful_union_binary_map": true,
+    "restore_evidence": "Owner A6 map records actual-temp restore/hash/UUID; preparation hashes map+gzip only and performs no restore."
+  },
+  "preserved_failed_beeb9_binary": {
+    "map": {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/manifest.json",
+      "bytes": 3324,
+      "sha256": "898bf3254e97d61c82252732c3da88400c5585119f6c7f5f0898456226e5320c"
+    },
+    "gzip": {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-native-focused-beeb9-failure-preserved-20261102/kaspa_consensus-0b18fc1c82530da7.gz",
+      "bytes": 105692124,
+      "sha256": "91badc9ba258a2775bbe6c9eed13cb52384d85f301651221b3c4f20f6a86a467"
+    },
+    "original_sha256": "2923078db0aa622338e461c8769b637b5966f49c5ca70cc71fbd9fefdcfcb0ff",
+    "original_bytes": 429780960,
+    "original_UUIDs": [
+      "def565ab-821c-3e93-82f3-a40569179355"
+    ],
+    "original_alias_is_NOT_immutable_input": true,
+    "no_manual_unlink_or_restore": true,
+    "forensics_only_not_successful_union_binary_map": true,
+    "restore_evidence": "A6 map contains owner restore evidence; preparation verifies map/gzip SHA+size without decompression/restoration."
+  },
+  "builds": [
+    {
+      "group": "core",
+      "argv": [
+        "cargo",
+        "--config",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "test",
+        "-p",
+        "kaspa-consensus-core",
+        "--offline",
+        "--locked",
+        "--no-run",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "--test",
+        "local_step_geometry_quote_noalloc_v1"
+      ],
+      "expected_test_artifacts": [
+        "kaspa_consensus_core",
+        "local_step_geometry_quote_noalloc_v1"
+      ]
+    },
+    {
+      "group": "exec",
+      "argv": [
+        "cargo",
+        "--config",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "test",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--offline",
+        "--locked",
+        "--no-run",
+        "--message-format=json-render-diagnostics",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "--test",
+        "local_wide_forward_v2",
+        "--test",
+        "local_forward_metadata_v2"
+      ],
+      "expected_test_artifacts": [
+        "misaka_palw_tir_exec",
+        "local_wide_forward_v2",
+        "local_forward_metadata_v2"
+      ]
+    },
+    {
+      "group": "a7",
+      "argv": [
+        "cargo",
+        "--config",
+        "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "test",
+        "--manifest-path",
+        "testing/positive-court-a7/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--no-run",
+        "--message-format=json-render-diagnostics",
+        "--lib",
+        "--test",
+        "ordinary_trained_forward_guarded_v2"
+      ],
+      "expected_test_artifacts": [
+        "misaka_positive_a7_tests",
+        "ordinary_trained_forward_guarded_v2"
+      ]
+    }
+  ]
+}

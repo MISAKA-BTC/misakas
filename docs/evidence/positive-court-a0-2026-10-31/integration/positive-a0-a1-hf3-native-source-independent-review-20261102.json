@@ -1,0 +1,82 @@
+{
+  "review": "Independent immutable HF3 native carrier test source review; readonly/no builds/no payload hashing",
+  "commit": "6a0a5e13be70e7d7dd3e7cb3a25ba5dfb12ad3da",
+  "parent": "cd1567a1162e5b06de351abda506d6a4d6e7009d",
+  "hf3_sha256": "71f4bc178acdf109aa4735f069390826ea31600621b4f1f8072c34fb010c390f",
+  "hash_evidence": "/tmp/positive-a0-a1-hf3-native-source-independent-hashes-20261102.json",
+  "all_owner5_source_hashes_match": true,
+  "prior_manifest_and6_small_input_hashes_match": true,
+  "all3_prior_model_pins_match": true,
+  "source_recommendation": "READY_FOR_SELECTIVE_IMPORT_AND_COMPILE: no source-level blocker identified; no runtime/native success result established",
+  "blocking_findings": [],
+  "line_anchors": {
+    "consensus/src/pipeline/virtual_processor/tests/tir_wide_registration_e2e/hf3.rs": {
+      "async fn execute": 168,
+      "original_class_program_layout_profile": 196,
+      "private_same_court2_params": 252,
+      "native_genesis_active_bond": 262,
+      "sdk_unsigned_build_and_selected_full_gate": 292,
+      "actual_registrant_mldsa_signature": 297,
+      "actual_native_processor_validation": 337,
+      "actual_funded_carrier_and_production_fee": 377,
+      "production_mining_manager_standard_insertion": 402,
+      "standard_template_and_carrying_block": 415,
+      "accepted_utxo_and_native_full_row_origin": 420,
+      "second_node_replay_identity": 518,
+      "same_database_restore": 534,
+      "async fn run": 577,
+      "async fn retained_smollm2_360m": 597,
+      "async fn retained_smollm2_135m": 602,
+      "async fn retained_pythia_70m": 607
+    },
+    "consensus/src/pipeline/virtual_processor/tests/tir_wide_registration_e2e.rs": {
+      "fn isolated_origin_config": 59
+    }
+  },
+  "findings": [
+    {
+      "area": "original cohort/context",
+      "finding": "Fixed retained SmolLM2-360M f8027fd0 and135M93efa2f0 use original narrowI32/context8192; Pythia70M a39f36b1 wideQ24/I64/context2048. Program/layout/tokenizer/root/classID compare both fixture and pins, full artifact bytes/streamed SHA, inventory root from actual opened SDK artifact, C65536/h64 unchanged. No model substitution/conversion/context shortening. Small pins/fixtures/inventories and prior manifest rehashed by reviewer; large artifact/checkpoint payload not reread."
+    },
+    {
+      "area": "actual chain authority",
+      "finding": "Existing isolated_origin_config performs full Params validation and existing isolated-genesis record-pin exception. T12 harness retains real premine outpoints/collateral, replaces genesis registry keys/payouts with harness keys, recomputes UTXO/genesis commitments, imports premine through node API. Real Active bond resolved from state; actual chain terms/DAA feed SDK constructor+selected gate. Only signature field is filled from actual corresponding bond key using original tag61 message/context; original canonical/class/target/slash/share0 preserved. No directly injected registered model rows/fake successful gate."
+    },
+    {
+      "area": "private Params limitations",
+      "finding": "Private inherited harness is launch-style T12 with relevant court2/origin fences at0, isolated genesis record pin exemption, EVM lane inert, skip PoW and test time. All3 share same configuration/full validation. This is genuine native processing under that private configuration, not public T12 preset/arming-record/PoW acceptance. No model-specific ceiling/work/fee/mass policy relaxation was added by HF3 commit."
+    },
+    {
+      "area": "fee/auth/production policy",
+      "finding": "Actual fee-float input spent with SIG_HASH_ALL MLDSA signature and contextual storage mass, positive change, relay compute fee from production10000 rate and final mass recheck. MiningManager::new_with_extended_config uses relay_nonstd=false,PQ=true and unchanged caps; actual validate_and_insert_transaction must return accepted carrier. Existing heartbeat uses TemplateBuildMode::Standard with OnetimeTxSelector, then actual block processing; insertion and template are separately tested, not proof that MiningManager supplied template selection."
+    },
+    {
+      "area": "actual native checks",
+      "finding": "Separate actual palw_v2_validate_objects diagnostic is run before carrier. Real accepting-block transaction store, class row, expected full schema1 storage row, originalroot/registrant/status/target, collateral burn, exposure, funding input disappearance/change output presence, registration status join, and aux141 foldingblock/DAA/door/admissiondigest must all pass. No successful diagnostic substitutes for absent folded row."
+    },
+    {
+      "area": "failure handling",
+      "finding": "Missing fixtures/pins and every gate/policy/native refusal fail rather than skip. Stage JSON catches returned errors/panics; final result includes failure/currentstage and assert fails test. Missing postfold class explicitly says actual skip code UNAVAILABLE and separately names diagnostic validator/rehearsal; no silent successful substitute. Subsequent stages of failed model do not run; other models are independent ignored tests and may be invoked separately. Parent orchestrator must continue all three model invocations after per-case failure."
+    },
+    {
+      "area": "replay/restore",
+      "finding": "Second actual node imports private genesis then arrives all validated blocks and compares final root/full row plus per-block persisted roots. Same DB restart sets process_genesis=false, reopens existing DB and compares sink/root/class/full row/aux141 origin/change UTXO and per-block roots. Main accepted-case checks supply burn/input spent invariant; second replay root equality implicitly covers those state facts, not separately queried balances."
+    },
+    {
+      "area": "ignored test counting/scope",
+      "finding": "Exactly3 tokio ignored tests; normal suite success does not execute them. Each requires explicit ignored exact selection and one model at a time (static async mutex also serializes in-process). Model inference/full max-position execution, numerical Court/Panel/Node roles cost, source checkpoint equivalence, selected-verifier P/credit/publicactivation are excluded. Registration status is weightless Registered share0, not model qualification/tier promotion."
+    }
+  ],
+  "exact_ignored_tests": [
+    "pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_360m_native_registration",
+    "pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_smollm2_135m_native_registration",
+    "pipeline::virtual_processor::tests::tir_wide_registration_e2e::hf3::retained_pythia_70m_native_registration"
+  ],
+  "remaining_validation": [
+    "Compile new consensus dev dependency/fixture APIs on Root after conflict review; all3 tests still UNCOMPILED/UNRUN under this review",
+    "Run exact ignored tests separately and continue collecting failure JSON for each. Preserve raw stage/result and source identity/environment/time/peakRSS metrics.",
+    "Additional full SDK artifact opening/inventory, streaming SHA and repeated gate/pipeline/replay work are unmeasured. No new hardRSS/coldcache/preallocation proof supplied.",
+    "Review Root selected cherry-pick conflicts semantically, particularly Cargo.lock dependency edge and parent hf3 module; do not whole-copy A1 workingtree."
+  ],
+  "reviewer_operations": "git show immutable commit and read-only source/metadata reads; only /tmp evidence created. No Cargo/Root/source/index/build/model execution or large payload hashing."
+}

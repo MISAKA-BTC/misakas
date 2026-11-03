@@ -58,6 +58,9 @@ members = [
     "misaka/palw/tir/sketch",
     "misaka/palw/gen",
     "misaka/palw/panel",
+    "misaka/palw/positive-contract",
+    "misaka/palw/positive-accounting",
+    "misaka/palw/positive-accounting-node",
     "simpa",
     "wasm",
     "wasm/core",
@@ -182,6 +185,9 @@ default-members = [
     "misaka/palw/tir/sketch",
     "misaka/palw/gen",
     "misaka/palw/panel",
+    "misaka/palw/positive-contract",
+    "misaka/palw/positive-accounting",
+    "misaka/palw/positive-accounting-node",
     "simpa",
     "wasm",
     "wasm/core",
@@ -324,6 +330,9 @@ misaka-palw-constraint = { version = "1.1.0", path = "misaka/palw/constraint" }
 misaka-palw-tir = { path = "misaka/palw/tir/core" }
 misaka-palw-gen = { path = "misaka/palw/gen" }
 misaka-palw-panel = { path = "misaka/palw/panel" }
+misaka-palw-positive-contract = { path = "misaka/palw/positive-contract" }
+misaka-palw-positive-accounting = { path = "misaka/palw/positive-accounting" }
+misaka-palw-positive-accounting-node = { path = "misaka/palw/positive-accounting-node" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka/endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka/palw/core" }

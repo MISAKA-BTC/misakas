@@ -54,6 +54,11 @@ impl<R: Read> NativeWireReaderV1<R> {
     pub fn remaining(&self) -> u64 {
         self.remaining
     }
+    /// Owner-local observation only. The legacy increment-before-refusal rule
+    /// and intrinsic limit are unchanged; a failed step may report limit + 1.
+    pub(crate) fn observed_steps_v1(&self) -> u64 {
+        self.steps
+    }
     pub fn into_inner(self) -> R {
         self.inner
     }

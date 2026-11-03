@@ -925,6 +925,9 @@ mod tests {
                 params.palw_native_execution_v39 =
                     Some(crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(at, [0; 64]));
             }
+            "palw_positive_court_v2" => {
+                params.palw_positive_court_v2 = Some(crate::config::params::PositiveCourtFenceV2::unapproved_probe_at(at));
+            }
             "palw_native_mining_v39" => {
                 params.palw_native_mining_v39 =
                     Some(crate::palw_native_mining_v39::PalwNativeMiningFenceV39::unapproved_probe_at(at, [0; 64]));

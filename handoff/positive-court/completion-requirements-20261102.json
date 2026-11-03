@@ -1,0 +1,394 @@
+{
+  "scope": "full original goal; no substitute completion from local fixtures or a first paid-assignment subset",
+  "objective_attachment": "/Users/wata/.codex/attachments/e24ea6d0-fd4a-48b8-8d83-03715961ca5e/pasted-text-1.txt",
+  "objective_attachment_sha256": "81285e4ec9164e7fc1d63d220afa644536909255065ff7317ecdfe5009946297",
+  "governing_spec": "docs/rfc/0044-positive-court-full-coverage.md",
+  "governing_spec_sha256": "b22376781e4c27e34fdafd03c325c4a5b2790a93f81771f492a57275c220dd08",
+  "fully_complete": false,
+  "gates": [
+    {
+      "id": "A01",
+      "requirement": "変更承認",
+      "evidence_required": "RFC+ADR、PRINCIPLESの対象限定改定、旧model/tier/claim非変更確認",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A02",
+      "requirement": "被覆完全性",
+      "evidence_required": "全対応TIR op・input/control/output、最大shape、未対応拒否の証拠",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A03",
+      "requirement": "全員共謀安全性",
+      "evidence_required": "正直なmodel holderなしの検査。EXACTの帰納条件、確率型のQ/G/source含む上界",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A04",
+      "requirement": "bounded implementation",
+      "evidence_required": "parser・opening・field・CPU/RAM/IO/controlの最大値",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A05",
+      "requirement": "raw measurements",
+      "evidence_required": "target minimum node、cold/warm、全LLM job/profile、敵対ピーク、再起動",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A06",
+      "requirement": "原子的資金・予約",
+      "evidence_required": "全必要期間・全分岐・独立搬送、rollbackと重複支払防止",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A07",
+      "requirement": "不提出判定",
+      "evidence_required": "coverage不足と帰責の分離、機会台帳、境界・censorship前提",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A08",
+      "requirement": "全信用経路",
+      "evidence_required": "legacy/kernel/native・全tier・全readerの未検証=0を実processで確認",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A09",
+      "requirement": "復旧",
+      "evidence_required": "reorg、seed変更、snapshot、pruning、IBD、独立claim不巻込み",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A10",
+      "requirement": "release",
+      "evidence_required": "versioned wire/domain、networkごとの設定、実署名・build/CI・独立review",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A11",
+      "requirement": "Miner軽量性",
+      "evidence_required": "標準経路でMinerの全trace/witness生成呼出しが0。追加CPU/GPU/bytes/保持が実測上限内",
+      "completion": "not proven at full native scope"
+    },
+    {
+      "id": "A12",
+      "requirement": "役割と帰責",
+      "evidence_required": "正直Miner＋悪意Panel、data応答完了後のPanel放棄、checkpoint偽造・Panel交代・無効要求拒否の試験",
+      "completion": "not proven at full native scope"
+    }
+  ],
+  "acceptance_cases": [
+    {
+      "id": "T01",
+      "scenario": "正しいモデル・入力・全資料、Node事前モデルなし",
+      "expected": "正常完了。ただしGate C未完ならcreditなし",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T02",
+      "scenario": "登録者・Miner・全Panel共謀、署名だけ",
+      "expected": "pass不可",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T03",
+      "scenario": "正しい局所計算だけ抜粋、最後の1relation欠落",
+      "expected": "pass不可",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T04",
+      "scenario": "Panel中間stateを1か所偽造し、その後は整合的に計算",
+      "expected": "witnessを拒否。直接検査は仕様上界で検出。Minerへ自動帰責しない",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T05",
+      "scenario": "正しい別model・別input・別tokenizerの資料",
+      "expected": "bindingで拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T06",
+      "scenario": "Panel witness rootを乱数後に変更",
+      "expected": "拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T07",
+      "scenario": "seedをPanelが選択、abort/reorgで選別",
+      "expected": "確率型arm不可またはQ/Gへ計上",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T08",
+      "scenario": "AB-Cがprimeの倍数",
+      "expected": "値域条件違反を拒否。modだけの見逃しを実証",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T09",
+      "scenario": "float round・overflow・saturation・NaN・signed zero",
+      "expected": "登録semantics通り。未対応拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T10",
+      "scenario": "logits/選択/制約/tokenizer/KV/prefixだけ不正",
+      "expected": "exact関係で拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T11",
+      "scenario": "空・重複・重なり・逆順・巨大length・圧縮爆弾",
+      "expected": "有界に拒否、他者責任は発生させない",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T12",
+      "scenario": "純粋な不提出、正規機会あり",
+      "expected": "Unverified、契約条件成立時だけdefault",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T13",
+      "scenario": "送信済みだが検閲/配送妨害、機会不成立",
+      "expected": "無信用、計算有罪・根拠なしslash禁止",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T14",
+      "scenario": "cutoff直前・一致・直後、同一blockのFinishと反証",
+      "expected": "deterministic。遅れた成功・二重終了なし",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T15",
+      "scenario": "positive大量受付でnegative Courtを締め出す",
+      "expected": "予約段階で拒否。既存権利を保持",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T16",
+      "scenario": "Miner停止後、provider/第三者が正常資料提出",
+      "expected": "限定契約と認証データで進行、資金鍵不要",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T17",
+      "scenario": "Gate C 41/75肯定、Positive未完",
+      "expected": "全consumerでcredit=0",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T18",
+      "scenario": "Positive通過、Gate C不足",
+      "expected": "credit=0。前提を取り違えない",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T19",
+      "scenario": "同じ回答・同じexecution・同じmaterialの二重支払",
+      "expected": "一回だけ",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T20",
+      "scenario": "A未検証、CがA依存、Bは独立",
+      "expected": "A/C hold、Bは対応fence下で進行",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T21",
+      "scenario": "3model siblingの全到着順、BLUE/RED差",
+      "expected": "同じcase/credit/state root",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T22",
+      "scenario": "reorgでseed・input・依存が変化",
+      "expected": "旧passを破棄、再検査・rollback",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T23",
+      "scenario": "pruning/IBDでpass flagだけを搬入",
+      "expected": "履歴検証または明示trustなしでは自己検証済みにしない",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T24",
+      "scenario": "cold-cache実LLM、最大context、全同時case",
+      "expected": "全資源上限・deadline内。未達profileは無効",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T25",
+      "scenario": "zero/簡約可能model",
+      "expected": "計算正当性と実FLOPsを混同しない",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T26",
+      "scenario": "署名scope外providerへ有罪責任転嫁",
+      "expected": "拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T27",
+      "scenario": "bootstrapで未検証claimの搬送をそのcreditに依存",
+      "expected": "循環検出。独立carrier未完成ならarm拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T28",
+      "scenario": "旧/新fence境界・全tier・legacy/kernel/native迂回",
+      "expected": "新claimは全て同じ必須gate",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T29",
+      "scenario": "Minerに全trace/witness生成APIを用意しない正常run",
+      "expected": "Panelが再構築・提出し、Nodeが完了できる",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T30",
+      "scenario": "正直Miner、悪意Panelが偽witnessを署名",
+      "expected": "witness拒否、Miner計算罰則0",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T31",
+      "scenario": "Miner outputは誤り、Panelが正しい全traceを作る",
+      "expected": "exact終端比較でMiner claimを反証。Panelは誤りを肩代わりしない",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T32",
+      "scenario": "別Panel・nonce・overlapで同じdataを大量要求",
+      "expected": "canonical union、累積予算、冪等応答。一回の費用",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T33",
+      "scenario": "full witness/projectionをMinerに要求",
+      "expected": "要求自体を拒否。無応答defaultなし",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T34",
+      "scenario": "Minerは全data応答済み、Panelが放棄",
+      "expected": "Panel scope未完。Miner delivery defaultなし。claimは未検証",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T35",
+      "scenario": "Panelがreceiptを握り潰す",
+      "expected": "provider/直接fallbackのcanonical応答でMiner義務完了",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T36",
+      "scenario": "checkpointがproducer署名済みだが値が偽",
+      "expected": "未検証初期状態として採用しない。署名scopeに従って裁定",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T37",
+      "scenario": "Panel交代が既知seedに適応した新witnessを提出",
+      "expected": "拒否。新candidateは未知seedと試行/費用予算を要する",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T38",
+      "scenario": "Panel takeoverが同じwitnessを再送",
+      "expected": "最初の帰属を維持、二重課金・Miner再応答なし",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T39",
+      "scenario": "cold sole-holder model、要求dataがMiner上限超過",
+      "expected": "受付/要求拒否または事前provider委任。隠れた全量義務なし",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T40",
+      "scenario": "Panelが正しいinputを捨て、別inputから正しいtraceを作る",
+      "expected": "input bindingで拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T41",
+      "scenario": "証拠生成費をMinerへ後付け、再計算を新たな採掘と計上",
+      "expected": "同意/上限または二重報酬規則で拒否",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T42",
+      "scenario": "ResultCommitのみの新routeと旧trace必須routeの混在",
+      "expected": "明示version/fence。旧fieldを省略して互換扱いにしない",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T43",
+      "scenario": "確率型の別出力だけでMinerをslash",
+      "expected": "exact negative court未完なら計算罰則なし",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    },
+    {
+      "id": "T44",
+      "scenario": "restartでrequest予算・witness attempt数を消す",
+      "expected": "journal復元、予算増加なし",
+      "evidence_required": "same integrated native/process candidate exercising this scenario with actual accepted roles, funds, history and state; conditional unsupported profiles must be explicitly rejected",
+      "completion": "native end-to-end evidence absent; local fixtures do not complete this requirement"
+    }
+  ],
+  "current_required_decision": "explicit adoption of existing native-assignment RFC and ADR; question pending",
+  "new_local_evidence": "remaining-capacity-20261102/source-court-integration-final.json (40 tests); native scope still unconnected"
+}

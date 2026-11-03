@@ -1,0 +1,764 @@
+{
+  "artifact_sha256": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+  "canonical": {
+    "borsh_hex": "02000e0000006d6973616b612d70616c772d726300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ff0300000200000001200000",
+    "borsh_sha256": "f571a9f6f384ed80d4986e7ba7073d2b8b4fba8295e443efd6d66d8895b0603d",
+    "decode_tokens": 2,
+    "executed_positions": 1024,
+    "max_context_tokens": 8193,
+    "network_id_hex": "6d6973616b612d70616c772d7263",
+    "prefill_tokens": 1023,
+    "shape_profile_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "tokenizer_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "trace_scheme_id": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1"
+  },
+  "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+  "close_cases": [
+    {
+      "analysis_probe_borsh_sha256": "99107162d92d4c00716395e3ce29c16c28f8e28daab94a27bad286cb2e038058",
+      "coarse_close_bytes": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "coarse_typed_envelope": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "court_source": "EXPLICIT_CALLER_ASSUMPTION_NOT_PROTOCOL_RULES",
+      "diagnostic_court": false,
+      "elapsed_seconds": 39.716843583,
+      "error": "the close sizing exceeds its work cap",
+      "full_traversal_complete": false,
+      "parameter_form": "Multiproof",
+      "profile_api": "LEGACY_V1_NARROW",
+      "protocol_terminal_comparison": "NOT_CHECKED_MISSING_ACTUAL_COURT",
+      "sizing_work": null,
+      "status": "SIZING_CAP_REFUSED",
+      "step_lane_price": "LEGACY_V1",
+      "stop_above": null,
+      "twin": "element",
+      "typed_max_dissected_root_claim_bytes": null,
+      "typed_max_terminal_close_bytes": null,
+      "work_cap": 67108864,
+      "work_measurement": "API does not return partial work on error"
+    },
+    {
+      "analysis_probe_borsh_sha256": "99107162d92d4c00716395e3ce29c16c28f8e28daab94a27bad286cb2e038058",
+      "bounds": [
+        {
+          "block": 0,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 7,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 487851
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 25,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 18170
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 42,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 69385
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 59,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 65545
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 76,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 65545
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 109,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 10813
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 124,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 10813
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 159,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 4856920
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 178,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 71471
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 204,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 18170
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 221,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 78985
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 238,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 79249
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 240,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 138953
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 246,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 23589
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 265,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 137201
+        },
+        {
+          "block": 2,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 25,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 16954
+        },
+        {
+          "block": 2,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 33,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 685643
+        }
+      ],
+      "coarse_close_bytes": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "coarse_missing_dependencies": [
+        "original model_rules.court/F7/window",
+        "original demand rules",
+        "original fence ceilings"
+      ],
+      "coarse_typed_envelope": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "court_source": "EXPLICIT_CALLER_ASSUMPTION_NOT_PROTOCOL_RULES",
+      "coverage": {
+        "exact_key_set": true,
+        "gen_checkpoints_expected": false,
+        "layer_occurrences_multiplied": false,
+        "ordinary_commit_points": 17,
+        "returned_bounds": 17
+      },
+      "diagnostic_court": false,
+      "dissected_points": 0,
+      "elapsed_seconds": 0.247026834,
+      "full_traversal_complete": true,
+      "parameter_form": "Multiproof",
+      "profile_api": "LEGACY_V1_NARROW",
+      "protocol_terminal_comparison": "NOT_CHECKED_MISSING_ACTUAL_COURT",
+      "root_claim_format_comparison": {
+        "applicable": false,
+        "cap_bytes": 100000,
+        "fits": true,
+        "maximum_bytes": 0,
+        "scope": "FIXED_ROOT_ONE_CARRIER_FORMAT_BOUND_ONLY"
+      },
+      "sizing_work": 2675408,
+      "status": "FULL_TRAVERSAL_COMPLETE",
+      "step_lane_price": "LEGACY_V1",
+      "stop_above": null,
+      "twin": "range",
+      "typed_max_dissected_root_claim_bytes": 0,
+      "typed_max_terminal_close_bytes": 4856920,
+      "work_cap": 67108864
+    },
+    {
+      "analysis_probe_borsh_sha256": "99107162d92d4c00716395e3ce29c16c28f8e28daab94a27bad286cb2e038058",
+      "bounds": [
+        {
+          "block": 0,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 7,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 487851
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 25,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 18170
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 42,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 69385
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 59,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 65545
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 76,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 65545
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 109,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 10813
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 124,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 10813
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": true,
+          "node": 159,
+          "root_claim_bytes": 57712,
+          "terminal_close_bytes": 583821
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 178,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 71471
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 204,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 18170
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 221,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 78985
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 238,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 79249
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 240,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 138953
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 246,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 23589
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 265,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 137201
+        },
+        {
+          "block": 2,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 25,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 16954
+        },
+        {
+          "block": 2,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 33,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 685643
+        }
+      ],
+      "coarse_close_bytes": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "coarse_missing_dependencies": [
+        "original model_rules.court/F7/window",
+        "original demand rules",
+        "original fence ceilings"
+      ],
+      "coarse_typed_envelope": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "court_source": "EXPLICIT_CALLER_ASSUMPTION_NOT_PROTOCOL_RULES",
+      "coverage": {
+        "exact_key_set": true,
+        "gen_checkpoints_expected": false,
+        "layer_occurrences_multiplied": false,
+        "ordinary_commit_points": 17,
+        "returned_bounds": 17
+      },
+      "diagnostic_court": true,
+      "dissected_points": 1,
+      "elapsed_seconds": 4.053801916,
+      "full_traversal_complete": true,
+      "parameter_form": "Multiproof",
+      "profile_api": "LEGACY_V1_NARROW",
+      "protocol_terminal_comparison": "NOT_CHECKED_MISSING_ACTUAL_COURT",
+      "root_claim_format_comparison": {
+        "applicable": true,
+        "cap_bytes": 100000,
+        "fits": true,
+        "maximum_bytes": 57712,
+        "scope": "FIXED_ROOT_ONE_CARRIER_FORMAT_BOUND_ONLY"
+      },
+      "sizing_work": 8870871,
+      "status": "FULL_TRAVERSAL_COMPLETE",
+      "step_lane_price": "LEGACY_V1",
+      "stop_above": null,
+      "twin": "element",
+      "typed_max_dissected_root_claim_bytes": 57712,
+      "typed_max_terminal_close_bytes": 685643,
+      "work_cap": 67108864
+    },
+    {
+      "analysis_probe_borsh_sha256": "99107162d92d4c00716395e3ce29c16c28f8e28daab94a27bad286cb2e038058",
+      "bounds": [
+        {
+          "block": 0,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 7,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 487851
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 25,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 18170
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 42,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 69385
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 59,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 65545
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 76,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 65545
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 109,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 10813
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 124,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 10813
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": true,
+          "node": 159,
+          "root_claim_bytes": 57712,
+          "terminal_close_bytes": 583821
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 178,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 71471
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 204,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 18170
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 221,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 78985
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 238,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 79249
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 240,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 138953
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 246,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 23589
+        },
+        {
+          "block": 1,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 265,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 137201
+        },
+        {
+          "block": 2,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 25,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 16954
+        },
+        {
+          "block": 2,
+          "checkpoint": null,
+          "dissected": false,
+          "node": 33,
+          "root_claim_bytes": 0,
+          "terminal_close_bytes": 685643
+        }
+      ],
+      "coarse_close_bytes": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "coarse_missing_dependencies": [
+        "original model_rules.court/F7/window",
+        "original demand rules",
+        "original fence ceilings"
+      ],
+      "coarse_typed_envelope": {
+        "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+        "value": null
+      },
+      "court_source": "EXPLICIT_CALLER_ASSUMPTION_NOT_PROTOCOL_RULES",
+      "coverage": {
+        "exact_key_set": true,
+        "gen_checkpoints_expected": false,
+        "layer_occurrences_multiplied": false,
+        "ordinary_commit_points": 17,
+        "returned_bounds": 17
+      },
+      "diagnostic_court": true,
+      "dissected_points": 1,
+      "elapsed_seconds": 0.249933875,
+      "full_traversal_complete": true,
+      "parameter_form": "Multiproof",
+      "profile_api": "LEGACY_V1_NARROW",
+      "protocol_terminal_comparison": "NOT_CHECKED_MISSING_ACTUAL_COURT",
+      "root_claim_format_comparison": {
+        "applicable": true,
+        "cap_bytes": 100000,
+        "fits": true,
+        "maximum_bytes": 57712,
+        "scope": "FIXED_ROOT_ONE_CARRIER_FORMAT_BOUND_ONLY"
+      },
+      "sizing_work": 1868424,
+      "status": "FULL_TRAVERSAL_COMPLETE",
+      "step_lane_price": "LEGACY_V1",
+      "stop_above": null,
+      "twin": "range",
+      "typed_max_dissected_root_claim_bytes": 57712,
+      "typed_max_terminal_close_bytes": 685643,
+      "work_cap": 67108864
+    }
+  ],
+  "coarse_close_bytes": {
+    "status": "NOT_CHECKED_MISSING_ADMISSION_RULES",
+    "value": null
+  },
+  "coarse_missing_dependencies": [
+    "original model_rules.court/F7/window",
+    "original demand rules",
+    "original fence ceilings"
+  ],
+  "constructor": "NOT_RUN_MISSING_REGISTRATION_INPUTS",
+  "cpu_executed": false,
+  "credit_executed": false,
+  "diagnostic_options": {
+    "court_assumptions": [
+      false,
+      true
+    ],
+    "leaf_cap": 18446744073709551615,
+    "protocol_ladder": null,
+    "sizing_work_cap": 67108864,
+    "stop_above": null
+  },
+  "economic_or_authentication_fields_synthesized": false,
+  "external_owners_excluded_from_parser_quote": [
+    "fixture JSON/raw hex owners",
+    "decoded TIR program/class/layout",
+    "StepSpace and inventory metadata",
+    "read maps and sizing caches",
+    "bounds and JSON export buffers"
+  ],
+  "fixture_sha256": "252c20d0aab613bdc3e7349ba85e1a1306167cf06185ffff4bf12dea6df6e1b9",
+  "full_pure_gate": "NOT_RUN_MISSING_REGISTRATION_INPUTS",
+  "geometry": {
+    "canonical_leaf_count": {
+      "status": "COUNTED",
+      "value": 5173266
+    },
+    "checkpoint_interval": 65536,
+    "commit_points": 17,
+    "commit_tile_entries": 17,
+    "diagnostic_leaf_cap": 18446744073709551615,
+    "h_tile": 64,
+    "original_layout_max_positions": 8192,
+    "profile": "TiledI32",
+    "program_unmodified": true,
+    "protocol_ladder_comparison": "NOT_CHECKED_MISSING_ACTUAL_LADDER",
+    "state_tile_entries": 2,
+    "token_bound": 49152,
+    "worst_leaf_count": {
+      "status": "COUNTED",
+      "value": 42244608
+    }
+  },
+  "host_reserver_installed": false,
+  "identity": {
+    "artifact_bytes": 180336320,
+    "artifact_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+    "artifact_realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/model.palwtir.testnet-12.palwtir",
+    "artifact_root_from_original_fixture": "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
+    "artifact_root_source": "FIXTURE_DECLARED",
+    "artifact_sha256": "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
+    "artifact_sha256_verified": true,
+    "artifact_stat_stable_through_analysis": true,
+    "class_borsh_sha256": "396f77afb6628eaaaa96b206eaa577d0b368b888d3f99be90e0120c337c520c9",
+    "class_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "class_id_recomputed_from_declared_root": true,
+    "fixture_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/registration-fixture.json",
+    "fixture_realpath": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/registration-fixture.json",
+    "fixture_sha256": "252c20d0aab613bdc3e7349ba85e1a1306167cf06185ffff4bf12dea6df6e1b9",
+    "fixture_sha_rechecked_after_analysis": true,
+    "full_artifact_sha_streamed": true,
+    "header_parser": "read_header_bounded_v1 + validate_with_program",
+    "identity_setup_seconds": 0.532624833,
+    "inventory_root_recomputed": false,
+    "layout_borsh_sha256": "cdf5d64207dc9d34e5b659cb7e5873fafe789088b2b92f51f3dd74f3eb4f8a33",
+    "parser_limit_scope": "PARSER_INTERNAL_ONLY; external owners and TIR decode/geometry/sizing excluded",
+    "parser_limits": {
+      "external_retained_bytes": 0,
+      "max_copy_bytes": 16777216,
+      "max_file_bytes": 180336320,
+      "max_header_bytes": 1048576,
+      "max_layout_bytes": 1048576,
+      "max_meta_bytes": 1048576,
+      "max_native_bytes": 16777216,
+      "max_operation_bytes": 67108864,
+      "max_program_bytes": 262144,
+      "max_tensors": 65536,
+      "max_work": 1099511627776
+    },
+    "program_history_bound": 262144,
+    "program_layout_tokenizer_exact": true,
+    "program_sha256": "744225e2c41ebb11a741f86e9109f49cae28b3a0b50a07d266685779872cf6df",
+    "tokenizer_id": "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
+    "weight_inventory_root_recomputed": false,
+    "weight_verification_scope": "WHOLE_FILE_SHA_IDENTITY_ONLY; inventory root not independently recomputed",
+    "weights_verified": false
+  },
+  "independent_expected_executed": false,
+  "longest_analysis_probe": {
+    "borsh_hex": "02000e0000006d6973616b612d70616c772d726300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000007a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000200000ffffffff",
+    "borsh_sha256": "99107162d92d4c00716395e3ce29c16c28f8e28daab94a27bad286cb2e038058",
+    "decode_tokens": 8192,
+    "executed_positions": 8192,
+    "max_context_tokens": 4294967295,
+    "network_id_hex": "6d6973616b612d70616c772d7263",
+    "prefill_tokens": 1,
+    "scope": "SEPARATE_GEOMETRY_PROBE_NOT_CPU_EXECUTION_OR_JOB_AUTHORITY",
+    "shape_profile_id": "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
+    "tokenizer_id": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+    "trace_scheme_id": "e0532a21545ebcdee3e6bc9c65b963ba123667fe60b4aaf5e56a0f4378f3ca1fc58e58937e9863341a67dcbb0f000af1d77333f8dfd48135e0ebf95e71d5f5a1"
+  },
+  "missing_registration_inputs": [
+    "authentic original share_permille",
+    "authentic original initial_target",
+    "authentic original slash_value_per_pwu",
+    "authentic original activation_daa",
+    "authentic original registrant_bond",
+    "authentic original signature",
+    "actual registration rules/DAA/bundle/ladder",
+    "authenticated genesis/chain family-certified facts"
+  ],
+  "mode": "class-only-analysis",
+  "model": "HuggingFaceTB/SmolLM2-135M",
+  "native_lease": false,
+  "native_v2_admission_executed": false,
+  "original_max_context": 8192,
+  "phase": "complete",
+  "protocol_admission": "NOT_CHECKED_MISSING_ACTUAL_RULES_COURT_CEILINGS",
+  "protocol_params_modified": false,
+  "registered_or_rooted_state_installed": false,
+  "resource_scope": "logical local parser/sizing operation limits only; no total RAM/work/fee/native resource guarantee",
+  "revision": "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+  "root_claim_one_carrier_format_cap_bytes": 100000,
+  "schema": "misaka.a7.real-llm-class-analysis.v1",
+  "scope": "CLASS_ONLY_DATA_ANALYSIS",
+  "source_base": "07d7eaebad0021164476c6289d8ccbbcbc45862c",
+  "startup_allocation_before_limit_guaranteed": false,
+  "status": "CLASS_ONLY_ANALYSIS_INCOMPLETE",
+  "terminal_carriable_bytes": {
+    "status": "NOT_CHECKED_MISSING_ACTUAL_COURT",
+    "value": null
+  },
+  "twin_comparisons": [
+    {
+      "both_full_traversals_complete": false,
+      "bounds_equal": null,
+      "compared": "canonical (block,node,checkpoint,dissected,terminal_close_bytes,root_claim_bytes) data only",
+      "cross_court_comparison": false,
+      "diagnostic_court": false,
+      "scope": "SIZING_TWIN_CONSISTENCY_ONLY_NOT_INDEPENDENT_MODEL_EXPECTED",
+      "status": "NOT_COMPARABLE_INCOMPLETE",
+      "work_counters_expected_equal": false
+    },
+    {
+      "both_full_traversals_complete": true,
+      "bounds_equal": true,
+      "compared": "canonical (block,node,checkpoint,dissected,terminal_close_bytes,root_claim_bytes) data only",
+      "cross_court_comparison": false,
+      "diagnostic_court": true,
+      "scope": "SIZING_TWIN_CONSISTENCY_ONLY_NOT_INDEPENDENT_MODEL_EXPECTED",
+      "status": "MATCH",
+      "work_counters_expected_equal": false
+    }
+  ],
+  "whole_process_observation": "requires separately authorized external timeout/RSS observation",
+  "whole_process_rss_bounded": false
+}

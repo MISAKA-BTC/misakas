@@ -1,0 +1,41 @@
+{
+  "code_commit": "f13710caf3d77de3cd83dfd75bc94d1c9b7f5681",
+  "runtime_cases": 38,
+  "runtime_suites": {
+    "local_forward_metadata_v2": 6,
+    "local_wide_forward_v2": 18,
+    "positive_wide_material_v2": 14
+  },
+  "strict_clippy_scope": "exec library and three selected integration targets --no-deps -D warnings",
+  "strict_clippy_passed": true,
+  "full_dependency_lint_passed": false,
+  "documentation_new_regressions": 0,
+  "documentation_known_missing_references": 43,
+  "native_or_activation_complete": false,
+  "sha256": {
+    ".gitattributes": "0ded296e877d1b2a383ec19feee9b1536073a064a02e90a23f4a62d84bdef214",
+    "README.md": "b8405ccc1bbd8f2d6454ccf17f7e193d29c6865b30d78fdd4ea6694596bb811d",
+    "docs-check-final.log": "6b7b4c5cd4fe54eaa61b3d41bc4b3b85e9fb0390504e87e1f536fd216fa1ae65",
+    "docs-check.log": "6b7b4c5cd4fe54eaa61b3d41bc4b3b85e9fb0390504e87e1f536fd216fa1ae65",
+    "final-source-audit.json": "062716be67b0f147f068cbe6c6470ee67277a1a305e683396640cff35226c8e6",
+    "first-runtime.json": "4a8ba298dff55a0d2a531bc5d02f139d77d73750d9de2b7285abec8a2737c5ce",
+    "first-runtime.log": "ae1fc4c8092ffd3c0bc7e9d7779b4efcbcad057760771f9ad6f042fdb2ed499b",
+    "format-legacy-child.log": "56735ba41c69ec65487a1f341d636925ed85ec5fa23ef9d5319eb9f683441bf5",
+    "format-scope.json": "a64fe491b10d838b9fb56f9df6dbd613f1f3aa54914258e16ebade134bd64a60",
+    "format-selected.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "full-runtime.json": "0c76c7f9b9f9016149395c32c90ce38e290c614794d253888152f3b428d8f9a7",
+    "full-runtime.log": "711fa768742156e22a4bce903d46b57ef53e14c503e0db0ef37fbfa247b32355",
+    "old-core-library-compressed-preservation.json": "f4d6f498bbb9eb3a7bbba500fe32aaf9634e13c983a08dab2fcc8fb42d83048f",
+    "own-completed-build-preservation.json": "de515934367358142377fd104c55afcc86d73569de3a93d3785774c4e203cb06",
+    "preserve-old-library.py": "bfd273a3429b6fb00bc1eb1c5b1ea830431dd3a596db069b125f6b980c21d226",
+    "preserve-own-completed.py": "c7757f4fdfda218dde8ae97dbf994ba865c03c9d50d258904240c05caaebe54a",
+    "run-full-runtime.py": "25471eb3bb18b6ed713a6f49eefdea449188345d71778d53a96259e5c8672369",
+    "run-strict-clippy.py": "3cb01880381966fc9236262a39ef1441d1fd79a2e5ffee1a89f7459d5620be45",
+    "strict-clippy-final.json": "fc9edfea6c2991f180dd2ba0b2f2cdcce1e958fd71faf2a36141094311c2abc2",
+    "strict-clippy-final.log": "d4c6debf8dc7492baa8a91d40898f68abde8f286c290474ab1ad21666ac5976e",
+    "strict-clippy-retry.json": "c335c9c54e2fce5c53b1568573611fbeb110ce92afa293f0ad547badcfe6fb8b",
+    "strict-clippy-retry.log": "9421ab4df1c1aef709395d24c21425a60116af0ca8249daff43f2fdc8e5662df",
+    "strict-clippy.json": "1457002a8635d687be1e28e13336264a92cd8646e032c88ae8de90e2300628d4",
+    "strict-clippy.log": "a01bec139686be97ba37fdd04cda875565d264a65e00359ff091bd4d7187df7c"
+  }
+}

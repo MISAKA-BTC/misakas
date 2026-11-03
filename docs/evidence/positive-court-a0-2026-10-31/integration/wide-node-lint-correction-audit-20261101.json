@@ -1,0 +1,8 @@
+{
+  "prior_commit": "8b3afa25a",
+  "prior_commit_note": "Subject intended a fix but assertion stopped before source writes; commit contains only first lint-failure evidence",
+  "duplicate_run": "wide-node-capture-clippy-final-20261101.json, accidentally started on same unfixed source; own confirmedCargo/clippy-driver stopped withSIGINT,255exit,noPASS",
+  "actual_fix": "Five source lines remove exactly7 unnecessary references reported bystrictClippy; same borrowed program/info/operand values, no format/hash/arithmetic/cap/authority changes",
+  "preceding_runtime": "67 same-source tests on4753 before this behavior-preserving lint-only fix; not rerun asnew source yet",
+  "raw_logs_changed": false
+}

@@ -5,7 +5,10 @@
 use std::sync::{Arc, OnceLock};
 
 use kaspa_consensus_core::{
-    Hash64, palw_tir_class_v1::PalwTirClassV1, palw_tir_step_v1::PalwTirStepSpaceV1, palw_v2::PalwJobContextV2,
+    Hash64,
+    palw_tir_class_v1::PalwTirClassV1,
+    palw_tir_step_v1::{PalwTirStepSpaceV1, PalwTirStepSpaceV2},
+    palw_v2::PalwJobContextV2,
 };
 use misaka_palw_tir::program::StateKind;
 
@@ -185,9 +188,30 @@ pub fn tir_retained_storage_need_v1(
 /// envelope is separate from retained data and full-tree reservations.
 pub fn tir_executor_storage_need_v1(space: &PalwTirStepSpaceV1, plan: &TirPlan, ctx: &PalwJobContextV2) -> Result<u64, String> {
     let job = space.job_shape(ctx).map_err(|e| e.to_string())?;
+    executor_storage_need(plan, job.positions, space.layout.h_tile)
+}
+
+/// The same conservative working-buffer envelope for the explicit wide Q24
+/// geometry. Uses the original borrowed plan, without converting a wide space
+/// to V1 or cloning/re-executing its program. Wide retained rows/hash vectors
+/// and trace/root construction require separate reservation by the run owner.
+/// This quote supplies no native admission or computation-credit authority.
+pub fn tir_executor_storage_need_wide_q24_v2(
+    space: &PalwTirStepSpaceV2,
+    plan: &TirPlan,
+    ctx: &PalwJobContextV2,
+) -> Result<u64, String> {
+    if space.program() != &plan.program {
+        return Err("the wide step geometry and executor plan name different programs".into());
+    }
+    let job = space.job_shape(ctx).map_err(|e| e.to_string())?;
+    executor_storage_need(plan, job.positions, space.layout().h_tile)
+}
+
+fn executor_storage_need(plan: &TirPlan, positions: u32, h_tile: u32) -> Result<u64, String> {
     let mut values = 0u128;
     for block in &plan.blocks {
-        let h = u64::from(block.window.unwrap_or(1).min(job.positions));
+        let h = u64::from(block.window.unwrap_or(1).min(positions));
         for node in &block.nodes {
             values = add(values, mul(u128::from(node.out.elements_at(h)), 16)?)?;
         }
@@ -200,7 +224,7 @@ pub fn tir_executor_storage_need_v1(space: &PalwTirStepSpaceV1, plan: &TirPlan, 
         let rows = match instance.kind {
             StateKind::Fixed { .. } => 2,
             StateKind::Hist { window } => {
-                u128::from(window.min(job.positions)).checked_add(u128::from(space.layout.h_tile)).ok_or("state rows overflow")?
+                u128::from(window.min(positions)).checked_add(u128::from(h_tile)).ok_or("state rows overflow")?
             }
         };
         values = add(values, mul(mul(elements, rows)?, 16)?)?;
@@ -210,7 +234,10 @@ pub fn tir_executor_storage_need_v1(space: &PalwTirStepSpaceV1, plan: &TirPlan, 
         Ok::<_, String>(largest.max(mul(elements, p.dtype.width() as u128)?))
     })?;
     values = add(values, largest_param)?;
-    let metadata = mul(mul(plan.program.encode().len() as u128, 64)?, plan.occurrences.len().max(1) as u128)?;
+    // Counting the same canonical Borsh bytes preserves the legacy numerical
+    // envelope while avoiding an encoded-program allocation before admission.
+    let program_bytes = borsh::object_length(&plan.program).map_err(|error| format!("TIR executor metadata length: {error}"))?;
+    let metadata = mul(mul(program_bytes as u128, 64)?, plan.occurrences.len().max(1) as u128)?;
     bytes(add(add(mul(values, 32)?, metadata)?, 16 << 20)?)
 }
 

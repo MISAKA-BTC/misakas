@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized] target(s) in 0.25s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 2 tests
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::object_dispatch_panel_lifetime_service_deadline_is_inclusive_and_late_receipts_write_nothing ... ok
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::object_dispatch_panel_lifetime_maximum_pause_is_inclusive_and_over_budget_receipts_write_nothing ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5496 filtered out; finished in 0.15s
+

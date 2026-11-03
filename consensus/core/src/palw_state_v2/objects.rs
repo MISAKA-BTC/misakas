@@ -68,6 +68,11 @@ fn apply_object_with_pair_v1(
     result
 }
 
+// One borrowed dispatch call keeps branch Result temporaries out of the common frame.
+// This private type is not a wire type or a native authorization.
+type ApplyObjectHandlerV1 =
+    fn(&mut TransitionBuilder<'_>, &PalwBlockContextV2, &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error>;
+
 fn apply_object_inner(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -107,6 +112,174 @@ fn apply_object_inner(
         }
         _ => {}
     }
+    let handler: ApplyObjectHandlerV1 = match object {
+        PalwConsensusObjectV2::TirPublicControlV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SharedCourtOpV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SourceBootstrapV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::PanelBeaconProofV3 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ExecOriginRecordedV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::VerificationVertexV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::VertexEquivocationV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TrapCommittedV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TrapRevealedV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::LineageHeadRolledBack { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::HardCaseSubmitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::DataUseOptIn { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SetterSetCommitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SetterSetRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SetterKeysRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::HardCaseKeyRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::DatasetRegistered { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TeachingArtifactCommitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TeachingArtifactRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TeacherLicenceRegistered { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::CandidateSubmitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ImprovementPoolFunded { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::BondRegistered { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ModelBuy { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ModelSell { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TirShardCourtAccused { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::GenShardCourtAccused { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::AdapterClassListed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::KernelRouteV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::KernelRouteChunkV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::KernelBoundV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MonetaryMaterialEnrolledV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MonetaryMaterialReplacedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MonetaryMaterialActionV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ProviderChallengeV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ProviderAnswerV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DaTransferV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DisputeReleasedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirClassContainerBoundV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SignedRegistrationV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ReaderRouterDeclaredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::GdnStepAccusedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MemoryRoutingV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirPositionDissectedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirPositionClosedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirLookaheadDisclosedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirLookaheadChosenV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SeatReadinessRootV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SeatReadinessDemandedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SeatReadinessAnsweredV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MaterialIntakeV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::RoutedStepAccusedV2 { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::ShardCourtAccused { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::CheckpointAccused { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::DefaultAccusedHeld { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::MaterialDisclosedHeld { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::RoundPermitEquivocated { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::TirShardPlanDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::TirShardReceiptLicensed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::TirSeatReadinessProved { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ClassShardPlanDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::BondShardsDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ShardReceiptLicensed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelSeed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ActivationPoolFunded { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineFounded { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelVersionPublished { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelVersionPromoted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelVersionWithdrawn { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineRolesSet { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineOwnerTransferred { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineRetired { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelProposalPosted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelProposalClosed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelEvaluationPosted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::BondCapabilityDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::BondRetireRequested { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::GenTensorCommitted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassRegistered { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::DerivedArtifactV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::FamilyCertified { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassLaneCertified { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ObjectChunk { .. } => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::ClassFrozen(..) => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::PanelBound { .. } => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::ReceiptLicensed { .. } => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::CourtOpened { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtClosed { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtDisclosed { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtVerdictPosted { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtCloseDeclared { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::SeatReadinessProved { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ObjectiveOffence { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ClassManifestV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::AttemptRidersV1 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReporterCommitted { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReporterRevealed { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::OptimisticLicensed { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::CourtCloseChunk { .. } => apply_object_batch_08_v1,
+        PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. } => apply_object_batch_08_v1,
+        PalwConsensusObjectV2::CourtAttnDissected { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtAttnChildChosen { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtTirRootClaimed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtGenRootClaimed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtTirDissected { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtTirChildChosen { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::ProducerDefaulted { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::ReservedPipelineDa84(..) | PalwConsensusObjectV2::ReservedPipelineDa85(..) => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::DefaultAccused { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::MaterialDisclosed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::FreePromptCommitted { .. } => apply_object_batch_10_v1,
+    };
+    handler(builder, ctx, object)?;
+    Ok(())
+}
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_00_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
     match object {
         PalwConsensusObjectV2::TirPublicControlV1 { control } => {
             let network = builder.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
@@ -504,6 +677,19 @@ fn apply_object_inner(
         PalwConsensusObjectV2::AdapterClassListed { payload, lister, signature: _ } => {
             palw_adapter_class_fold_v1::apply_adapter_class_listed_v1(builder, ctx, payload, lister)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_01_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         // **G14 lane D (tags 110 and 111): the kernel route** — dormant behind `palw_probabilistic_constraints_v1`, which no network
         // can arm (`palw_kernel_route_fold_v1`). A kernel refusal drops the object; only a missing fence fails the block.
         PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, signature: _ } => {
@@ -901,6 +1087,19 @@ fn apply_object_inner(
         PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { answer } => {
             da_sessions::apply_routed_material_answer_v2(builder, ctx, answer)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_02_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::RoutedStepAccusedV2 { accusation } => {
             let limits = builder.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
             let claim_id = accusation.claim;
@@ -1298,6 +1497,19 @@ fn apply_object_inner(
             }
             close_da_session_refuted_v2(builder, ctx, claim_id, &claim, accused_daa, accuser, accuser_exposure, *resumed)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_03_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         // **ADR-0125 §7.3: a permit signed twice burns, and its bond pays the floor.**
         PalwConsensusObjectV2::RoundPermitEquivocated { evidence } => {
             builder.record_round_equivocation(ctx, evidence)?;
@@ -1670,6 +1882,19 @@ fn apply_object_inner(
                 },
             )?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_04_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::ClassRegisteredGenV1 {
             class_id,
             artifact_root,
@@ -1717,9 +1942,10 @@ fn apply_object_inner(
             builder.write_gen_class(*class_id, Some(record))?;
         }
         // **RFC-0002 Phase F (tag 61): an IR class registration**, past `palw_tir_v1` (the lock above
-        // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
-        // inside the transition); the fold derives what it keeps from the carried class — the
-        // `tir_classes` row by the one function v10 derives it with, and the registry work from the
+        // refuses it below). Chain-selected v10 or explicit wide V2 admission ran at acceptance
+        // (ADR-0049 Decision H: no full admission/range walk inside the transition);
+        // the fold derives what it keeps from the carried class — the
+        // `tir_classes` row by the same selected derivation, and the registry work from the
         // program — and folds the rest through the legacy registration's own body. A class with a
         // dissected commit point (spec 04b §9.5.1: a cone that reduces over the history) owes its
         // court's terminal move — a root claim at a dissected leaf, an acquitting close at any other
@@ -1743,8 +1969,19 @@ fn apply_object_inner(
                 });
             }
             builder.tir_registrations += 1;
-            let (record, program) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
-                .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?;
+            let (record, program) = match builder.params.tir_wide_registration_fence_at(ctx.daa_score) {
+                Some(selected) => crate::palw_tir_registration_dispatch_v1::palw_tir_class_record_selected_v1(
+                    &admission.class,
+                    artifact_root,
+                    &selected,
+                    ctx.daa_score,
+                )
+                .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?,
+                // The old height-only/manual and court1 paths remain exactly
+                // the legacy factory. In particular, neither can admit wide.
+                None => crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
+                    .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?,
+            };
             if record.facts.class_id != *class_id {
                 return Err(PalwStateV2Error::TirRegistrationRefused("the declared class id is not the carried class's"));
             }
@@ -2067,6 +2304,19 @@ fn apply_object_inner(
             }
             seat_attempt_lane_class_v1(builder, ctx, class_id)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_05_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes } => {
             if *count == 0 || *count > PALW_OBJECT_CHUNK_MAX_COUNT {
                 return Err(PalwStateV2Error::ChunkCountOutOfRange { count: *count, max: PALW_OBJECT_CHUNK_MAX_COUNT });
@@ -2350,6 +2600,19 @@ fn apply_object_inner(
                 builder.license_claim(*claim_id, staged, ctx.daa_score)?;
             }
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_06_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond, space, space_size, signature: _ } => {
             // **ADR-0103 Decision 1: under the held regime nobody walks the leaf ladder.** Every
             // conviction is a one-move object or a dissection the accusation opens at its named
@@ -2652,6 +2915,19 @@ fn apply_object_inner(
             cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session))?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_07_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature: _ } => {
             let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
             let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
@@ -2915,6 +3191,19 @@ fn apply_object_inner(
             let staged = builder.staged_licence_v1(*claim_id, &claim, PalwLicenceDoorV1::Optimistic, &carried, ctx.daa_score);
             builder.license_claim(*claim_id, staged, ctx.daa_score)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_08_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
             let mut group = builder
                 .state
@@ -2996,7 +3285,10 @@ fn apply_object_inner(
             for index in 0..group.count {
                 assembled.extend_from_slice(group.chunks.get(&index).expect("a complete group holds every index below count"));
             }
-            let decoded = (palw_court_close_chunk_digest_v1(&assembled) == group.close_digest)
+            // A reserved Positive body cannot be an old CourtClosed. Refuse it
+            // before generic Borsh could allocate its peer-sized inner fields.
+            let decoded = (!crate::palw_lifecycle_objects_v2::palw_positive_object_bytes_v2(&assembled)
+                && palw_court_close_chunk_digest_v1(&assembled) == group.close_digest)
                 .then(|| borsh::from_slice::<PalwConsensusObjectV2>(&assembled).ok())
                 .flatten()
                 .filter(|object| {
@@ -3305,6 +3597,19 @@ fn apply_object_inner(
             cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session))?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_09_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtAttnDissected { session_id, round, signature: _ } => {
             let mut session =
                 builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
@@ -3621,6 +3926,19 @@ fn apply_object_inner(
             builder.disarm_deadline(*claim_id);
             rearm_claim_after_da_session(builder, ctx, *claim_id, &restored)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_10_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::FreePromptCommitted {
             claim: claim_id,
             class_id,
@@ -3758,6 +4076,14 @@ fn apply_object_inner(
             let class = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?;
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
+            }
+            // Ordinary (eval=None) legacy free-prompt generation has no wide
+            // source/court adapter. The separate rewardless evaluation branch
+            // above keeps its existing evaluator-specific rules.
+            // This check is independent of derived-work/original-frame fences
+            // and precedes every claim, exposure and prefix-state write.
+            if let Some(record) = builder.state.tir_class_v1(class_id) {
+                crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
             }
             // **2026-09-24 DoS audit #11: the class gate an attempt passes, on this lane too.**
             //
@@ -4210,6 +4536,7 @@ fn apply_object_inner(
                 palw_tir_public_fold_v1::install_original_admission_v1(builder, ctx, frame, &prompt_row)?;
             }
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
     }
     Ok(())
 }

@@ -1590,6 +1590,12 @@ pub fn lower_cnn(hl: &HlProgram, spec: &CnnSpec) -> Result<Lowered> {
 /// [`lower_cnn`] with the registrant's options: [`LowerOpts::conv_weight_bits`] (8, the default, or 16) is the width of the
 /// convolutions' weight codes.
 pub fn lower_cnn_opts(hl: &HlProgram, spec: &CnnSpec, opts: &LowerOpts) -> Result<Lowered> {
+    if opts.logits_bits != 32 {
+        return Err(LowerError::not_lowerable(format!(
+            "logits_bits = {}: convolutional feature output requires the legacy 32-bit profile",
+            opts.logits_bits
+        )));
+    }
     if !matches!(opts.conv_weight_bits, 8 | 16) {
         return Err(LowerError::not_lowerable(format!(
             "conv_weight_bits = {}: a convolution's weight codes are 8 bits (i8 per output row, the default) or 16 (i16 per output row)",
@@ -1620,6 +1626,7 @@ pub fn lower_cnn_opts(hl: &HlProgram, spec: &CnnSpec, opts: &LowerOpts) -> Resul
         carry_keys: BTreeMap::new(),
         table_chunk: 1 << 24,
         linear_weight_bits: 8,
+        logits_dtype: DType::I32,
         conv_weight_bits: opts.conv_weight_bits,
         out_major_rows: false,
         gdn_core_wide: false,

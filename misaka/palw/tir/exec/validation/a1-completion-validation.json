@@ -1,0 +1,48 @@
+{
+  "date": "2026-10-31",
+  "candidate_commit": "729d513ec22b3060308c898d8780f014177374ee",
+  "branch": "codex/positive-court-a1",
+  "runs": [
+    {
+      "name": "a1-and-court",
+      "log": "a1-auth-final-tests-2026-10-31.log",
+      "passed": 35,
+      "failed": 0,
+      "sha256": "0ada0229c595008b36a33240bfa32fd51db84c146799a6f54bde7731d88e4995"
+    },
+    {
+      "name": "common-contract",
+      "log": "a0-auth-contract-tests-2026-10-31.log",
+      "passed": 17,
+      "failed": 0,
+      "sha256": "fb3517414c6a5ed9e114af8febcabd1233c5df0d3c7f49258c5592f174ce55af"
+    }
+  ],
+  "total_passed": 52,
+  "total_failed": 0,
+  "package_clippy": {
+    "passed": true,
+    "scope": "executor library and 3 A1 test targets, --no-deps -D warnings",
+    "log": "a1-authenticated-clippy-package-2026-10-31.log",
+    "sha256": "93fd95d84c03e13cdb7005a7a4fd67daf6109a6528717243843e4503c7a0884c"
+  },
+  "dependency_inclusive_clippy": {
+    "passed": false,
+    "unchanged_findings": [
+      "clone_on_copy:consensus/core/src/palw_model_panel_one_v1.rs:92",
+      "nonminimal_bool:consensus/core/src/palw_state_v2/chain_state.rs:3728"
+    ],
+    "log": "a1-clippy-2026-10-31.log"
+  },
+  "docs": {
+    "no_new_regressions": true,
+    "known_missing": 43,
+    "new_occurrences": 0,
+    "log": "a1-auth-docs-check-2026-10-31.log",
+    "sha256": "d5c2e8049f9b12f200d58f69ea6a9abc18c0734c57510e402f5e1688770586ba"
+  },
+  "native_activation": false,
+  "total_node_rss_qualified": false,
+  "source_hashes_verified": true,
+  "other_candidate_integration_reference": "a3-integration-reference.json"
+}

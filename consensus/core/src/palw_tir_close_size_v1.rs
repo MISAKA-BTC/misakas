@@ -58,9 +58,12 @@ use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1};
 use crate::palw_step_refute::PalwStepInputRowV1;
 use crate::palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1;
 use crate::palw_tir_class_v1::{PALW_TIR_CLASS_VERSION_V1, PalwTirClassV1};
+use crate::palw_tir_close_size_v2::CloseGeometry;
 use crate::palw_tir_court_v1::{PalwTirConeRefutationV1, PalwTirInventoryIndexV1};
 use crate::palw_tir_dissect_v1::{PALW_TIR_DISSECT_OBJECT_VERSION_V1, PalwTirRangeClaimV1, PalwTirRootClaimV1};
-use crate::palw_tir_step_v1::{PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirJobShapeV1, PalwTirStepBindingV1, PalwTirStepSpaceV1};
+use crate::palw_tir_step_v1::{
+    PALW_TIR_STEP_BINDING_VERSION_V1, PalwTirJobShapeV1, PalwTirStepBindingV1, PalwTirStepSpaceV1, PalwTirStepSpaceV2,
+};
 use crate::palw_v2::{PALW_V2_MAX_NETWORK_ID_BYTES, PalwJobContextV2};
 use misaka_palw_tir::demand::{DemandContext, carry_in_node_v1, hist_row_node_v1, history_length_v1, state_writer_v1};
 use misaka_palw_tir::program::StateKind;
@@ -216,7 +219,7 @@ struct CtxState {
 struct Twin<'a> {
     /// A pipeline stage's reading of its inputs and its `post`-written states; `None` for an IR class.
     gen_stage: Option<&'a PalwGenTwinStageV1>,
-    space: &'a PalwTirStepSpaceV1,
+    space: CloseGeometry<'a>,
     job_ctx: &'a PalwJobContextV2,
     job: PalwTirJobShapeV1,
     inventory: &'a PalwTirInventoryIndexV1,
@@ -312,8 +315,12 @@ pub(crate) fn element_count(shape: &[usize]) -> usize {
 
 impl Twin<'_> {
     fn tick(&mut self, n: u64) -> Result<(), String> {
-        self.work = self.work.saturating_add(n);
-        if self.work > self.cap { Err(PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.to_string()) } else { Ok(()) }
+        self.work = if matches!(self.space, CloseGeometry::Wide { .. }) {
+            self.work.checked_add(n).ok_or(PALW_TIR_CLOSE_SIZING_OVER_CAP_V1)?
+        } else {
+            self.work.saturating_add(n)
+        };
+        if self.work > self.cap { Err(PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.to_string()) } else { self.space.guard_allocation(self.work) }
     }
 
     fn block_of(&self, occurrence: u16) -> Result<(u8, Option<u16>), String> {
@@ -326,9 +333,10 @@ impl Twin<'_> {
             return Ok(());
         }
         let (block, layer) = self.block_of(key.occurrence)?;
-        let h = history_length_v1(&self.space.info, block, key.pos).ok_or("the program's info does not cover the block")?;
-        let b = &self.space.program.blocks[block as usize];
+        let h = history_length_v1(self.space.info(), block, key.pos).ok_or("the program's info does not cover the block")?;
+        let b = &self.space.program().blocks[block as usize];
         self.tick(b.nodes.len() as u64)?;
+        self.space.guard_allocation(b.nodes.len() as u64)?;
         let shapes: Vec<Vec<usize>> = b.nodes.iter().map(|n| n.out.resolve(h)).collect();
         let demand = vec![BTreeSet::new(); b.nodes.len()];
         self.ctxs.insert(k, CtxState { block, layer, h, shapes, demand });
@@ -337,7 +345,7 @@ impl Twin<'_> {
 
     fn is_leaf(&self, key: DemandContext, node: u16) -> bool {
         let Ok((block, _)) = self.block_of(key.occurrence) else { return false };
-        let committed = self.space.program.blocks[block as usize].nodes.get(node as usize).is_some_and(|n| n.commit);
+        let committed = self.space.program().blocks[block as usize].nodes.get(node as usize).is_some_and(|n| n.commit);
         let in_target = key == self.target;
         (committed && !(in_target && node == self.target_node)) || (in_target && self.supplied.contains(&node))
     }
@@ -383,8 +391,8 @@ impl Twin<'_> {
         if self.placed.contains(&(self.in_hist, coord.call_index, coord.node_slot, coord.position, coord.tile_index)) {
             return Ok(());
         }
-        let h = history_length_v1(&self.space.info, block, key.pos).ok_or("no block info")?;
-        let out = &self.space.program.blocks[block as usize].nodes[node as usize].out;
+        let h = history_length_v1(self.space.info(), block, key.pos).ok_or("no block info")?;
+        let out = &self.space.program().blocks[block as usize].nodes[node as usize].out;
         let count = element_count(&out.resolve(h));
         let values = tile_len.min(count.saturating_sub(tile * tile_len)) as u32;
         self.step_leaf(coord, values, out.has_h())
@@ -426,7 +434,7 @@ impl Twin<'_> {
     }
 
     fn param_read(&mut self, param: u16, layer: Option<u16>, index: usize) -> Result<(), String> {
-        let d = self.space.program.params.get(param as usize).ok_or("no such param")?;
+        let d = self.space.program().params.get(param as usize).ok_or("no such param")?;
         let byte = (index as u64).saturating_mul(d.dtype.width() as u64);
         if let Some((p, l, from, to)) = self.last_piece
             && p == param
@@ -454,7 +462,7 @@ impl Twin<'_> {
             let Some(prev) = pos.checked_sub(1) else { return Ok(()) };
             return self.leaf_read(DemandContext { pos: prev, occurrence: *occurrence }, *node, index);
         }
-        let c = self.space.layout.checkpoint_interval.max(1);
+        let c = self.space.layout().checkpoint_interval.max(1);
         let mut at = pos;
         loop {
             self.tick(1)?;
@@ -469,7 +477,7 @@ impl Twin<'_> {
                 let coord = self.reserved_coord(at - 1, k as u32, tile);
                 return self.step_leaf(coord, values, false);
             }
-            match state_writer_v1(&self.space.program, state, layer) {
+            match state_writer_v1(self.space.program(), state, layer) {
                 Some((occ, w)) => {
                     let key = DemandContext { pos: at - 1, occurrence: occ };
                     self.ctx(key)?;
@@ -494,7 +502,7 @@ impl Twin<'_> {
     }
 
     fn hist_row_reads(&mut self, pos: u32, state: u16, layer: Option<u16>, row_pos: u32, index: usize) -> Result<(), String> {
-        let h_tile = self.space.layout.h_tile.max(1);
+        let h_tile = self.space.layout().h_tile.max(1);
         let tile_start = row_pos - row_pos % h_tile;
         let tile_end = tile_start + (h_tile - 1);
         let complete = tile_end < pos;
@@ -520,7 +528,7 @@ impl Twin<'_> {
                 Some(x) => *x,
                 None => {
                     let (key, node) =
-                        hist_row_node_v1(&self.space.program, state, layer, 0).ok_or("a history that appends nothing")?;
+                        hist_row_node_v1(self.space.program(), state, layer, 0).ok_or("a history that appends nothing")?;
                     self.hist_nodes.insert((state, layer), (key.occurrence, node));
                     (key.occurrence, node)
                 }
@@ -529,8 +537,8 @@ impl Twin<'_> {
             if self.pattern.is_some() {
                 let (block, _) = self.block_of(occurrence)?;
                 let tile_len = self.space.commit_tile_len(block, node).ok_or("a history row that is no commit point")? as usize;
-                let h = history_length_v1(&self.space.info, block, row_pos).ok_or("no block info")?;
-                let count = element_count(&self.space.program.blocks[block as usize].nodes[node as usize].out.resolve(h));
+                let h = history_length_v1(self.space.info(), block, row_pos).ok_or("no block info")?;
+                let count = element_count(&self.space.program().blocks[block as usize].nodes[node as usize].out.resolve(h));
                 let tile = index / tile_len;
                 let values = tile_len.min(count.saturating_sub(tile * tile_len)) as u32;
                 if let Some(pattern) = self.pattern.as_mut() {
@@ -554,7 +562,7 @@ impl Twin<'_> {
             return Ok(());
         }
         let space = self.space;
-        let program = &space.program;
+        let program = space.program();
         match r {
             Ref::Node(j) => {
                 if self.is_leaf(key, j) {
@@ -616,7 +624,7 @@ impl Twin<'_> {
                 Ok(())
             }
             Ref::Param(j) if stride == 1 => {
-                let d = self.space.program.params.get(j as usize).ok_or("no such param")?;
+                let d = self.space.program().params.get(j as usize).ok_or("no such param")?;
                 let layer = if d.per_layer { self.ctxs[&(key.pos, key.occurrence)].layer } else { None };
                 let width = d.dtype.width() as u64;
                 let (mut byte, end) = ((start as u64).saturating_mul(width), ((start + count) as u64).saturating_mul(width));
@@ -639,7 +647,7 @@ impl Twin<'_> {
     }
 
     fn operand_shape(&self, key: DemandContext, r: Ref) -> Result<Vec<usize>, String> {
-        let p = &self.space.program;
+        let p = self.space.program();
         let st = &self.ctxs[&(key.pos, key.occurrence)];
         Ok(match r {
             Ref::Node(j) => st.shapes.get(j as usize).ok_or("no such node")?.clone(),
@@ -667,7 +675,7 @@ impl Twin<'_> {
             let shape = &st.shapes[node as usize];
             (st.block, st.h, strides(shape), shape.len())
         };
-        let n = &space.program.blocks[block as usize].nodes[node as usize];
+        let n = &space.program().blocks[block as usize].nodes[node as usize];
         let inputs = &n.inputs;
         match n.prim {
             Prim::Reshape
@@ -730,7 +738,7 @@ impl Twin<'_> {
                 match inputs[0] {
                     Ref::Const(_) => Ok(()),
                     Ref::Param(pj) if a == 0 && dsh.len() >= 2 && self.input_of(pj).is_none() => {
-                        let d = &space.program.params[pj as usize];
+                        let d = &space.program().params[pj as usize];
                         let layer = if d.per_layer { self.ctxs[&(key.pos, key.occurrence)].layer } else { None };
                         let within = ravel(&di, &dst) as u64 * d.dtype.width() as u64;
                         let piece = within / PALW_TIR_ROW_PIECE_BYTES_V1;
@@ -791,7 +799,7 @@ impl Twin<'_> {
                 self.want_run(key, inputs[0], ravel(&o, &ist), ist[a], xs[a])
             }
             Prim::HistAppend { state } => {
-                let s = space.program.states.get(state as usize).ok_or("no such state")?;
+                let s = space.program().states.get(state as usize).ok_or("no such state")?;
                 let StateKind::Hist { .. } = s.kind else { return Err("HistAppend on a Fixed state".into()) };
                 let row_len: usize = s.shape.iter().map(|d| *d as usize).product();
                 if row_len == 0 {
@@ -819,6 +827,7 @@ impl Twin<'_> {
             let key = DemandContext { pos: k.0, occurrence: k.1 };
             let nodes = self.ctxs[&k].demand.len();
             for node in (0..nodes).rev() {
+                self.space.guard_allocation(self.ctxs[&k].demand[node].len() as u64)?;
                 let elements: Vec<usize> =
                     std::mem::take(&mut self.ctxs.get_mut(&k).expect("live").demand[node]).into_iter().collect();
                 if elements.is_empty() {
@@ -850,7 +859,10 @@ struct Split {
 /// The work of placing one step leaf of `space`: its index walks the program's commit points and
 /// occurrences.
 pub(crate) fn leaf_cost_of(space: &PalwTirStepSpaceV1) -> u64 {
-    let commits: u64 = space.program.blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count() as u64).sum();
+    leaf_cost_of_geometry(CloseGeometry::from_v1(space))
+}
+pub(crate) fn leaf_cost_of_geometry(space: CloseGeometry<'_>) -> u64 {
+    let commits: u64 = space.program().blocks.iter().map(|b| b.nodes.iter().filter(|n| n.commit).count() as u64).sum();
     16 + commits + space.occurrences().len() as u64
 }
 
@@ -858,7 +870,7 @@ pub(crate) fn leaf_cost_of(space: &PalwTirStepSpaceV1) -> u64 {
 /// (`pattern`) when asked.
 #[allow(clippy::too_many_arguments)]
 fn close_reads_split(
-    space: &PalwTirStepSpaceV1,
+    space: CloseGeometry<'_>,
     job_ctx: &PalwJobContextV2,
     inventory: &PalwTirInventoryIndexV1,
     request: &PalwTirCloseRequestV1<'_>,
@@ -870,6 +882,9 @@ fn close_reads_split(
 ) -> Result<Split, String> {
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let (block, _) = space.occurrences().get(request.ctx.occurrence as usize).copied().ok_or("no such occurrence")?;
+    space.guard_allocation(request.elements.len() as u64)?;
+    space.guard_allocation(request.supplied.len() as u64)?;
+    space.guard_allocation(space.program().blocks[block as usize].nodes.len() as u64)?;
     let mut twin = Twin {
         gen_stage,
         space,
@@ -889,7 +904,7 @@ fn close_reads_split(
         runs: HashSet::new(),
         last_piece: None,
         hist_only,
-        reaches_hist: if hist_only { reaches_hist(&space.program.blocks[block as usize], request.target) } else { Vec::new() },
+        reaches_hist: if hist_only { reaches_hist(&space.program().blocks[block as usize], request.target) } else { Vec::new() },
         hist_nodes: HashMap::new(),
         pattern: pattern.then(HistPattern::default),
         leaf_cost,
@@ -898,7 +913,7 @@ fn close_reads_split(
     };
     // A request's setup: its seed, and (history-only) the block's reach.
     twin.tick(
-        32 + request.elements.len() as u64 + if hist_only { space.program.blocks[block as usize].nodes.len() as u64 } else { 0 },
+        32 + request.elements.len() as u64 + if hist_only { space.program().blocks[block as usize].nodes.len() as u64 } else { 0 },
     )?;
     twin.ctx(request.ctx)?;
     {
@@ -928,8 +943,17 @@ pub fn palw_tir_close_reads_split_v1(
     hist_only: bool,
     pattern: bool,
 ) -> Result<(PalwTirCloseReadsV1, PalwTirCloseReadsV1, HistPattern, u64), String> {
-    let Split { reads, hist, pattern, work } =
-        close_reads_split(space, job_ctx, inventory, request, cap, hist_only, pattern, leaf_cost_of(space), None)?;
+    let Split { reads, hist, pattern, work } = close_reads_split(
+        CloseGeometry::from_v1(space),
+        job_ctx,
+        inventory,
+        request,
+        cap,
+        hist_only,
+        pattern,
+        leaf_cost_of(space),
+        None,
+    )?;
     Ok((reads, hist, pattern, work))
 }
 
@@ -943,7 +967,7 @@ pub fn palw_tir_close_reads_v1(
     cap: u64,
 ) -> Result<(PalwTirCloseReadsV1, u64), String> {
     let Split { mut reads, hist, work, .. } =
-        close_reads_split(space, job_ctx, inventory, request, cap, false, false, leaf_cost_of(space), None)?;
+        close_reads_split(CloseGeometry::from_v1(space), job_ctx, inventory, request, cap, false, false, leaf_cost_of(space), None)?;
     reads.merge(&hist);
     Ok((reads, work))
 }
@@ -958,8 +982,17 @@ pub fn palw_gen_close_reads_v1(
     cap: u64,
     stage: &PalwGenTwinStageV1,
 ) -> Result<(PalwTirCloseReadsV1, u64), String> {
-    let Split { mut reads, hist, work, .. } =
-        close_reads_split(space, job_ctx, inventory, request, cap, false, false, leaf_cost_of(space), Some(stage))?;
+    let Split { mut reads, hist, work, .. } = close_reads_split(
+        CloseGeometry::from_v1(space),
+        job_ctx,
+        inventory,
+        request,
+        cap,
+        false,
+        false,
+        leaf_cost_of(space),
+        Some(stage),
+    )?;
     reads.merge(&hist);
     Ok((reads, work))
 }
@@ -1004,7 +1037,7 @@ fn gen_leaf_bytes(values: u32, depth: u64) -> u64 {
 /// **How one class's closes are priced**: the frames, serialized, and the opening forms.
 #[derive(Clone, Debug)]
 pub struct PalwTirClosePriceV1<'a> {
-    space: &'a PalwTirStepSpaceV1,
+    space: CloseGeometry<'a>,
     inventory: &'a PalwTirInventoryIndexV1,
     /// The step tree's depth over the longest job (a path's siblings at most).
     depth: u64,
@@ -1029,6 +1062,15 @@ impl<'a> PalwTirClosePriceV1<'a> {
         job_ctx: &PalwJobContextV2,
         form: PalwTirParamFormV1,
     ) -> Result<Self, String> {
+        Self::from_geometry(CloseGeometry::from_v1(space), inventory, job_ctx, form)
+    }
+
+    fn from_geometry(
+        space: CloseGeometry<'a>,
+        inventory: &'a PalwTirInventoryIndexV1,
+        job_ctx: &PalwJobContextV2,
+        form: PalwTirParamFormV1,
+    ) -> Result<Self, String> {
         let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
         let step_leaves = space.running_total(&job, job.positions).min(u64::MAX as u128) as u64;
         let depth = ceil_log2(step_leaves.max(1));
@@ -1038,7 +1080,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
         let class = PalwTirClassV1 {
             version: PALW_TIR_CLASS_VERSION_V1,
             program: Vec::new(),
-            layout: space.layout.clone(),
+            layout: space.layout().clone(),
             tokenizer_id: zero,
         };
         let binding = PalwTirStepBindingV1 {
@@ -1106,7 +1148,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
             inv_depth: ceil_log2(inventory.leaf_count().max(1) as u64),
             form,
             composite,
-            token_bytes: 64 + 16 + 4 * (space.layout.max_context as u64 + 1) + 64 * 64,
+            token_bytes: 64 + 16 + 4 * (space.layout().max_context as u64 + 1) + 64 * 64,
             frame,
             root_frame,
             pipe: None,
@@ -1122,9 +1164,10 @@ impl<'a> PalwTirClosePriceV1<'a> {
         class_inventory_leaves: u32,
         pricing: PalwGenClosePricingV1,
     ) -> Result<Self, String> {
+        CloseGeometry::from_v1(space).require_legacy_width()?;
         let depth = *pricing.stage_depths.get(stage).ok_or("a stage with no step tree depth")?;
         Ok(Self {
-            space,
+            space: CloseGeometry::from_v1(space),
             inventory,
             depth,
             inv_depth: ceil_log2(class_inventory_leaves.max(1) as u64),
@@ -1177,7 +1220,7 @@ impl<'a> PalwTirClosePriceV1<'a> {
     /// instance of a per-layer param, whose leaves sit elsewhere in the inventory (a proof's siblings
     /// are at most the sum of its runs'). A location-free row's pieces are a run of their own.
     pub fn params(&self, reads: &PalwTirCloseReadsV1) -> u64 {
-        let program = &self.space.program;
+        let program = self.space.program();
         // Per section — one, or a composite's two — the operands and the siblings.
         let (mut lens, mut siblings): ([Vec<u64>; 2], [u64; 2]) = ([Vec::with_capacity(reads.params.len()), Vec::new()], [0, 0]);
         let depth = |side: usize| match self.composite {
@@ -1308,6 +1351,244 @@ impl<'a> PalwTirClosePriceV1<'a> {
     }
 }
 
+/// Private typed byte arithmetic shared by the two sizing twins. Legacy is
+/// intentionally an exact adapter over the existing four-byte API; Wide uses
+/// checked arithmetic and eight-byte lane bounds before every candidate max.
+pub(crate) trait ClosePriceDriver {
+    fn depth(&self) -> u64;
+    fn units(&self, reads: &PalwTirCloseReadsV1, every_leaf_a_run: bool) -> Result<u64, String>;
+    fn h_allowance(&self, reads: &PalwTirCloseReadsV1) -> Result<u64, String>;
+    fn close(&self, reads: &PalwTirCloseReadsV1, leaf_values: u32) -> Result<u64, String>;
+    fn frame(&self, leaf_values: u32) -> Result<u64, String>;
+    fn root_frame(&self, leaf_values: u32, reductions: usize) -> Result<u64, String>;
+    fn step_preimage_bytes(&self, values: u32) -> Result<u64, String>;
+    fn add(&self, a: u64, b: u64) -> Result<u64, String>;
+    fn mul(&self, a: u64, b: u64) -> Result<u64, String>;
+    fn guard_allocation(&self, count: usize) -> Result<(), String>;
+    fn sum<I: IntoIterator<Item = u64>>(&self, values: I) -> Result<u64, String> {
+        values.into_iter().try_fold(0, |total, value| self.add(total, value))
+    }
+}
+
+pub(crate) struct LegacyClosePriceDriver<'a>(PalwTirClosePriceV1<'a>);
+impl<'a> LegacyClosePriceDriver<'a> {
+    pub(crate) fn from_price(price: PalwTirClosePriceV1<'a>) -> Self {
+        Self(price)
+    }
+}
+impl ClosePriceDriver for LegacyClosePriceDriver<'_> {
+    fn depth(&self) -> u64 {
+        self.0.depth()
+    }
+    fn units(&self, r: &PalwTirCloseReadsV1, each: bool) -> Result<u64, String> {
+        Ok(self.0.units(r, each))
+    }
+    fn h_allowance(&self, r: &PalwTirCloseReadsV1) -> Result<u64, String> {
+        Ok(self.0.h_allowance(r))
+    }
+    fn close(&self, r: &PalwTirCloseReadsV1, n: u32) -> Result<u64, String> {
+        Ok(self.0.close(r, n))
+    }
+    fn frame(&self, n: u32) -> Result<u64, String> {
+        Ok(self.0.frame(n))
+    }
+    fn root_frame(&self, n: u32, reductions: usize) -> Result<u64, String> {
+        Ok(self.0.root_frame(n, reductions))
+    }
+    fn step_preimage_bytes(&self, n: u32) -> Result<u64, String> {
+        Ok(step_preimage_bytes(n))
+    }
+    fn add(&self, a: u64, b: u64) -> Result<u64, String> {
+        Ok(a + b)
+    }
+    fn mul(&self, a: u64, b: u64) -> Result<u64, String> {
+        Ok(a * b)
+    }
+    fn guard_allocation(&self, _: usize) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Explicit V2 data sizing, never a V1-space conversion or native capability.
+/// All lanes are conservatively eight bytes, even actual narrow intermediates.
+pub(crate) struct WideClosePriceDriver<'a> {
+    price: PalwTirClosePriceV1<'a>,
+}
+impl<'a> WideClosePriceDriver<'a> {
+    pub(crate) fn new(
+        space: &'a PalwTirStepSpaceV2,
+        inventory: &'a PalwTirInventoryIndexV1,
+        job: &PalwJobContextV2,
+        form: PalwTirParamFormV1,
+    ) -> Result<Self, String> {
+        if matches!(form, PalwTirParamFormV1::Composite { .. }) {
+            return Err("wide Q24 composite close sizing is not implemented".into());
+        }
+        let geometry = CloseGeometry::from_v2(space);
+        let shape = geometry.job_shape(job).map_err(|e| e.to_string())?;
+        u64::try_from(geometry.running_total(&shape, shape.positions)).map_err(|_| "wide close leaf count overflows")?;
+        let maximum_payload = space.maximum_leaf_payload_bytes_v2(job).map_err(|e| e.to_string())?;
+        u32::try_from(maximum_payload).map_err(|_| "wide lane bytes exceed their format")?;
+        geometry.guard_allocation(geometry.layout().commit_tiles.len() as u64)?;
+        geometry.guard_allocation(geometry.layout().state_tiles.len() as u64)?;
+        let price = PalwTirClosePriceV1::from_geometry(geometry, inventory, job, form)?;
+        let driver = Self { price };
+        let token_count = u64::from(geometry.layout().max_context).checked_add(1).ok_or("wide token count overflows")?;
+        u32::try_from(token_count).map_err(|_| "wide token vector exceeds its format")?;
+        // The token IDs stay u32. Only step-leaf lanes are widened.
+        let token_bytes = driver.add(driver.add(80, driver.mul(4, token_count)?)?, 64 * 64)?;
+        Ok(Self { price: PalwTirClosePriceV1 { token_bytes, ..driver.price } })
+    }
+    pub(crate) fn with_allocation_cap(mut self, cap: u64) -> Self {
+        self.price.space = self.price.space.with_allocation_cap(cap);
+        self
+    }
+    fn operand(&self, name: usize, layer: bool, bytes: u64) -> Result<u64, String> {
+        u32::try_from(name).map_err(|_| "wide operand name exceeds its format")?;
+        u32::try_from(bytes).map_err(|_| "wide operand bytes exceed their format")?;
+        self.add(self.add(12 + if layer { 3 } else { 1 }, name as u64)?, bytes)
+    }
+    fn path(&self, run: u64, depth: u64) -> Result<u64, String> {
+        self.mul(if run == 1 { 1 } else { 2 }, depth)
+    }
+    fn steps(&self, reads: &PalwTirCloseReadsV1, each: bool) -> Result<u64, String> {
+        let mut bytes = 0;
+        let mut run = 0;
+        let mut last = None::<u64>;
+        for (index, values) in &reads.steps {
+            bytes = self.add(bytes, self.step_preimage_bytes(*values)?)?;
+            if run > 0 && !each && last.and_then(|n| n.checked_add(1)) == Some(*index) {
+                run = self.add(run, 1)?;
+            } else {
+                if run > 0 {
+                    bytes = self.add(bytes, self.add(4, self.mul(64, self.path(run, self.depth())?)?)?)?;
+                }
+                run = 1;
+            }
+            last = Some(*index);
+        }
+        if run > 0 {
+            bytes = self.add(bytes, self.add(4, self.mul(64, self.path(run, self.depth())?)?)?)?;
+        }
+        for values in &reads.loose_steps {
+            bytes = self.add(bytes, self.add(self.step_preimage_bytes(*values)?, self.add(4, self.mul(64, self.depth())?)?)?)?;
+        }
+        Ok(bytes)
+    }
+    fn params(&self, reads: &PalwTirCloseReadsV1) -> Result<u64, String> {
+        let mut operands = 0;
+        let mut count = 0;
+        let mut siblings = 0;
+        let mut run = 0;
+        let mut last = None::<u32>;
+        for leaf in &reads.params {
+            let (param, layer, _, len) =
+                self.price.inventory.piece_of(*leaf).ok_or("wide parameter leaf is outside this inventory")?;
+            let name = self.price.space.program().params.get(param as usize).ok_or("wide parameter is absent")?.name.len();
+            operands = self.add(operands, self.operand(name, layer.is_some(), u64::from(len))?)?;
+            count = self.add(count, 1)?;
+            if last.and_then(|n| n.checked_add(1)) == Some(*leaf) {
+                run = self.add(run, 1)?;
+            } else {
+                if run > 0 {
+                    siblings = self.add(siblings, self.path(run, self.price.inv_depth)?)?;
+                }
+                run = 1;
+            }
+            last = Some(*leaf);
+        }
+        if run > 0 {
+            siblings = self.add(siblings, self.path(run, self.price.inv_depth)?)?;
+        }
+        for ((param, layer, _), pieces) in &reads.wild_rows {
+            let d = self.price.space.program().params.get(*param as usize).ok_or("wide parameter is absent")?;
+            let dims = if d.shape.len() >= 2 { &d.shape[1..] } else { &d.shape[..] };
+            let row = dims.iter().try_fold(d.dtype.width() as u64, |n, dim| self.mul(n, u64::from(*dim)))?;
+            for piece in pieces {
+                let offset = self.mul(*piece, PALW_TIR_ROW_PIECE_BYTES_V1)?;
+                u32::try_from(offset).map_err(|_| "wide parameter offset exceeds its format")?;
+                let len = row.saturating_sub(offset).min(PALW_TIR_ROW_PIECE_BYTES_V1);
+                operands = self.add(operands, self.operand(d.name.len(), layer.is_some(), len)?)?;
+                count = self.add(count, 1)?;
+            }
+            siblings = self.add(siblings, self.path(pieces.len() as u64, self.price.inv_depth)?)?;
+        }
+        if count == 0 {
+            return Ok(0);
+        }
+        u32::try_from(count).map_err(|_| "wide parameter vector exceeds its format")?;
+        u32::try_from(siblings).map_err(|_| "wide sibling vector exceeds its format")?;
+        match self.price.form {
+            PalwTirParamFormV1::PerLeaf => {
+                self.add(4, self.add(operands, self.mul(count, self.add(12, self.mul(64, self.price.inv_depth)?)?)?)?)
+            }
+            PalwTirParamFormV1::Multiproof => {
+                self.add(12, self.add(self.add(operands, self.mul(4, count)?)?, self.mul(64, siblings)?)?)
+            }
+            PalwTirParamFormV1::Composite { .. } => Err("wide Q24 composite close sizing is not implemented".into()),
+        }
+    }
+}
+fn wide_add(a: u64, b: u64) -> Result<u64, String> {
+    a.checked_add(b).ok_or_else(|| "wide close byte addition overflows".into())
+}
+fn wide_mul(a: u64, b: u64) -> Result<u64, String> {
+    a.checked_mul(b).ok_or_else(|| "wide close byte multiplication overflows".into())
+}
+fn wide_step_preimage_bytes(n: u32) -> Result<u64, String> {
+    let payload = wide_mul(8, u64::from(n))?;
+    u32::try_from(payload).map_err(|_| "wide lane bytes exceed their format")?;
+    wide_add(26, payload)
+}
+
+impl ClosePriceDriver for WideClosePriceDriver<'_> {
+    fn depth(&self) -> u64 {
+        self.price.depth
+    }
+    fn units(&self, reads: &PalwTirCloseReadsV1, each: bool) -> Result<u64, String> {
+        if !reads.edges.is_empty() || !reads.images.is_empty() {
+            return Err("wide Q24 GEN close sizing is not implemented".into());
+        }
+        self.add(self.add(self.steps(reads, each)?, self.params(reads)?)?, if reads.token { self.price.token_bytes } else { 0 })
+    }
+    fn h_allowance(&self, reads: &PalwTirCloseReadsV1) -> Result<u64, String> {
+        let widest = reads.h_steps.iter().filter_map(|i| reads.steps.get(i)).copied().max().unwrap_or(0);
+        let mut runs = 0;
+        let mut last = None::<u64>;
+        for index in &reads.h_steps {
+            if last.and_then(|n| n.checked_add(1)) != Some(*index) {
+                runs = self.add(runs, 1)?;
+            }
+            last = Some(*index);
+        }
+        self.mul(runs, self.add(self.step_preimage_bytes(widest)?, self.add(4, self.mul(128, self.depth())?)?)?)
+    }
+    fn close(&self, reads: &PalwTirCloseReadsV1, n: u32) -> Result<u64, String> {
+        self.add(self.frame(n)?, self.units(reads, false)?)
+    }
+    fn frame(&self, n: u32) -> Result<u64, String> {
+        self.step_preimage_bytes(n)?;
+        self.add(self.price.frame, self.mul(8, u64::from(n))?)
+    }
+    fn root_frame(&self, n: u32, reductions: usize) -> Result<u64, String> {
+        self.step_preimage_bytes(n)?;
+        u32::try_from(reductions).map_err(|_| "wide reduction vector exceeds its format")?;
+        self.add(self.add(self.price.root_frame, self.mul(8, u64::from(n))?)?, self.mul(8, reductions as u64)?)
+    }
+    fn step_preimage_bytes(&self, n: u32) -> Result<u64, String> {
+        wide_step_preimage_bytes(n)
+    }
+    fn add(&self, a: u64, b: u64) -> Result<u64, String> {
+        wide_add(a, b)
+    }
+    fn mul(&self, a: u64, b: u64) -> Result<u64, String> {
+        wide_mul(a, b)
+    }
+    fn guard_allocation(&self, count: usize) -> Result<(), String> {
+        self.price.space.guard_allocation(u64::try_from(count).map_err(|_| "wide allocation count overflows")?)
+    }
+}
+
 // =================================================================================================
 // The worst close of every commit point, over every job
 // =================================================================================================
@@ -1342,8 +1623,15 @@ pub struct PalwTirCloseSizingV1 {
     pub stop_above: Option<(u64, u64)>,
 }
 
-fn tile_elements(first: usize, len: usize) -> Vec<usize> {
-    (first..first + len).collect()
+fn priced_elements<P: ClosePriceDriver>(price: &P, shape: &[usize]) -> Result<usize, String> {
+    let count = shape.iter().try_fold(1, |n, dim| price.mul(n, *dim as u64))?;
+    usize::try_from(count).map_err(|_| "close shape element count overflows".into())
+}
+
+fn tile_elements<P: ClosePriceDriver>(price: &P, first: usize, len: usize) -> Result<Vec<usize>, String> {
+    price.guard_allocation(len)?;
+    let end = usize::try_from(price.add(first as u64, len as u64)?).map_err(|_| "tile index overflows")?;
+    Ok((first..end).collect())
 }
 
 /// The entries of a read set (what merging or pricing it walks).
@@ -1386,7 +1674,15 @@ pub fn palw_tir_worst_closes_work_v1(
     sizing: &PalwTirCloseSizingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
-    worst_closes_priced(space, inventory, job_ctx, sizing, price, None, None)
+    worst_closes_priced(
+        CloseGeometry::from_v1(space),
+        inventory,
+        job_ctx,
+        sizing,
+        LegacyClosePriceDriver::from_price(price),
+        None,
+        None,
+    )
 }
 
 /// **Diagnostics only** (RFC-0011 §4.A, `cap_exceeded_at`): [`palw_tir_worst_closes_work_v1`], recording after each commit point
@@ -1400,7 +1696,15 @@ pub fn palw_tir_worst_closes_trace_v1(
     trace: &mut Vec<(u8, u16, u64)>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::new(space, inventory, job_ctx, sizing.form)?;
-    worst_closes_priced(space, inventory, job_ctx, sizing, price, None, Some(trace))
+    worst_closes_priced(
+        CloseGeometry::from_v1(space),
+        inventory,
+        job_ctx,
+        sizing,
+        LegacyClosePriceDriver::from_price(price),
+        None,
+        Some(trace),
+    )
 }
 
 /// **The worst terminal close of every commit point of pipeline stage `stage`** (RFC-0003 PALW-GEN-20): the stage's version-1 view
@@ -1420,22 +1724,41 @@ pub fn palw_gen_worst_closes_v1(
     pricing: PalwGenClosePricingV1,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
     let price = PalwTirClosePriceV1::generative(space, inventory, stage, class_inventory_leaves, pricing)?;
-    worst_closes_priced(space, inventory, job_ctx, sizing, price, Some(model), None)
+    worst_closes_priced(
+        CloseGeometry::from_v1(space),
+        inventory,
+        job_ctx,
+        sizing,
+        LegacyClosePriceDriver::from_price(price),
+        Some(model),
+        None,
+    )
 }
 
-fn worst_closes_priced(
-    space: &PalwTirStepSpaceV1,
+pub(crate) fn palw_tir_worst_closes_work_wide_v2(
+    space: &PalwTirStepSpaceV2,
     inventory: &PalwTirInventoryIndexV1,
     job_ctx: &PalwJobContextV2,
     sizing: &PalwTirCloseSizingV1,
-    price: PalwTirClosePriceV1<'_>,
+) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
+    let geometry = CloseGeometry::from_v2(space).with_allocation_cap(sizing.cap);
+    let price = WideClosePriceDriver::new(space, inventory, job_ctx, sizing.form)?.with_allocation_cap(sizing.cap);
+    worst_closes_priced(geometry, inventory, job_ctx, sizing, price, None, None)
+}
+
+fn worst_closes_priced<P: ClosePriceDriver>(
+    space: CloseGeometry<'_>,
+    inventory: &PalwTirInventoryIndexV1,
+    job_ctx: &PalwJobContextV2,
+    sizing: &PalwTirCloseSizingV1,
+    price: P,
     gen_stage: Option<&PalwGenTwinStageV1>,
     mut trace: Option<&mut Vec<(u8, u16, u64)>>,
 ) -> Result<(Vec<PalwTirCloseBoundV1>, u64), String> {
-    let program = &space.program;
+    let program = space.program();
     let job = space.job_shape(job_ctx).map_err(|e| e.to_string())?;
     let p_max = job.positions.checked_sub(1).ok_or("a job with no position")?;
-    let c = space.layout.checkpoint_interval.max(1);
+    let c = space.layout().checkpoint_interval.max(1);
     let has_fixed = !space.fixed_instances().is_empty();
     // The position of `[lo, p_max]` whose replay is the longest: the largest `≡ C − 1 (mod C)`, or
     // the last one where none is (the replay then grows to the end).
@@ -1446,16 +1769,16 @@ fn worst_closes_priced(
         let p = p_max - ((p_max + 1) % c);
         if p >= lo { p } else { p_max }
     };
-    let h_tile = space.layout.h_tile.max(1) as usize;
+    let h_tile = space.layout().h_tile.max(1) as usize;
     // The misalignment allowance of a part read at one alignment (the dissected bound's): one more
     // step leaf per run.
     let slack = |reads: &PalwTirCloseReadsV1| {
         let widest = reads.steps.values().chain(reads.loose_steps.iter()).copied().max().unwrap_or(0);
-        step_runs(reads) * (step_preimage_bytes(widest) + 4 + 2 * 64 * price.depth)
+        price.mul(step_runs(reads), price.add(price.step_preimage_bytes(widest)?, price.add(4, price.mul(128, price.depth())?)?)?)
     };
     // The work left, shared by the twin's reads and the counting outside them.
     let budget = std::cell::Cell::new(sizing.cap);
-    let leaf_cost = leaf_cost_of(space);
+    let leaf_cost = leaf_cost_of_geometry(space);
     let charge = |n: u64| -> Result<(), String> {
         let left = budget.get();
         if n > left {
@@ -1464,6 +1787,7 @@ fn worst_closes_priced(
         budget.set(left - n);
         Ok(())
     };
+    price.guard_allocation(space.occurrences().len())?;
     let occurrences: Vec<(u8, Option<u16>)> = space.occurrences().to_vec();
     // One occurrence per block kind and predecessor: `pre`, the first two layers, `post`.
     let mut chosen: Vec<u16> = Vec::new();
@@ -1473,7 +1797,7 @@ fn worst_closes_priced(
         }
     }
     // A leaf priced as a run of its own.
-    let lone = |values: u32| step_preimage_bytes(values) + 4 + 64 * price.depth;
+    let lone = |values: u32| price.add(price.step_preimage_bytes(values)?, price.add(4, price.mul(64, price.depth())?)?);
     let mut out = Vec::new();
     for (bi, block) in program.blocks.iter().enumerate() {
         for (ni, node) in block.nodes.iter().enumerate() {
@@ -1491,20 +1815,21 @@ fn worst_closes_priced(
             let has_h = h_axes == 1;
             let h_axis = node.out.shape.iter().position(|d| d.is_h());
             let inner = match h_axis {
-                Some(a) => node.out.resolve(1)[a + 1..].iter().product::<usize>().max(1),
+                Some(a) => priced_elements(&price, &node.out.resolve(1)[a + 1..])?.max(1),
                 None => 1,
             };
-            let h_at = |pos: u32| history_length_v1(&space.info, bi8, pos).unwrap_or(1);
-            let count_at = |pos: u32| element_count(&node.out.resolve(h_at(pos)));
+            let h_at = |pos: u32| history_length_v1(space.info(), bi8, pos).unwrap_or(1);
+            let count_at = |pos: u32| priced_elements(&price, &node.out.resolve(h_at(pos)));
             // Every tile of `pos`, `(first element, length)`: its elements are made one tile at a time.
             let tiles_at = |pos: u32| {
-                let count = count_at(pos);
-                (0..count).step_by(tile_len).map(move |first| (first, tile_len.min(count - first)))
+                let count = count_at(pos)?;
+                Ok::<_, String>((0..count).step_by(tile_len).map(move |first| (first, tile_len.min(count - first))))
             };
             // The first position at which a tile spans at most two row-parts.
             let mut p_late = 0u32;
             if has_h {
-                while p_late <= p_max && h_at(p_late) * inner < tile_len {
+                while p_late <= p_max && price.mul(h_at(p_late) as u64, inner as u64)? < tile_len as u64 {
+                    space.guard_allocation(u64::from(p_late) + 1)?;
                     p_late += 1;
                 }
             }
@@ -1551,11 +1876,24 @@ fn worst_closes_priced(
                     let pl = rep_from(p_late);
                     let h = h_at(pl);
                     let a = h_axis.expect("has H");
-                    let outer: usize = node.out.resolve(h)[..a].iter().product::<usize>().max(1);
+                    let outer = priced_elements(&price, &node.out.resolve(h)[..a])?.max(1);
                     let t_len = (tile_len.div_ceil(inner) + 1).min(h);
-                    let row = |o: usize, from: usize, to: usize| -> Vec<usize> {
-                        (from..to).flat_map(|t| (0..inner).map(move |i| (o * h + t) * inner + i)).collect()
-                    };
+                    let row =
+                        |o: usize, from: usize, to: usize| -> Result<Vec<usize>, String> {
+                            let count = price.mul((to - from) as u64, inner as u64)?;
+                            price.guard_allocation(usize::try_from(count).map_err(|_| "row allocation overflows")?)?;
+                            (from..to)
+                                .flat_map(|t| (0..inner).map(move |i| (t, i)))
+                                .map(|(t, i)| {
+                                    usize::try_from(price.add(
+                                        price.mul(price.add(price.mul(o as u64, h as u64)?, t as u64)?, inner as u64)?,
+                                        i as u64,
+                                    )?)
+                                    .map_err(|_| "row index overflows".to_string())
+                                })
+                                .collect()
+                        };
+                    price.guard_allocation(outer)?;
                     // Outside the history rows, per row: the window ending it (with the position's own
                     // row) and the one starting it — at every position the same units, but for the
                     // alignment of an `H`-carrying commit point read (its allowance).
@@ -1566,15 +1904,15 @@ fn worst_closes_priced(
                     let mut commits_cost = Vec::with_capacity(outer);
                     let mut patterns = Vec::with_capacity(outer);
                     for o in 0..outer {
-                        ends.push(read!(pl, &row(o, h - t_len, h), &[], ni16, None, false).0);
-                        starts.push(read!(pl, &row(o, 0, t_len), &[], ni16, None, false).0);
+                        ends.push(read!(pl, &row(o, h - t_len, h)?, &[], ni16, None, false).0);
+                        starts.push(read!(pl, &row(o, 0, t_len)?, &[], ni16, None, false).0);
                         let pattern = if h >= 2 {
-                            twin(pl, &row(o, h - 2, h - 1), &[], ni16, None, true, true, true)?.pattern
+                            twin(pl, &row(o, h - 2, h - 1)?, &[], ni16, None, true, true, true)?.pattern
                         } else {
                             HistPattern::default()
                         };
-                        tiles_cost.push(pattern.tiles.values().map(|v| lone(*v)).sum::<u64>());
-                        commits_cost.push(pattern.commits.values().map(|v| lone(*v)).sum::<u64>());
+                        tiles_cost.push(pattern.tiles.values().try_fold(0, |total, v| price.add(total, lone(*v)?))?);
+                        commits_cost.push(pattern.commits.values().try_fold(0, |total, v| price.add(total, lone(*v)?))?);
                         patterns.push(pattern);
                     }
                     // The rows `lo..=hi` outside the history: the union of their windows.
@@ -1589,7 +1927,7 @@ fn worst_closes_priced(
                             u.merge(&ends[o]);
                             u.merge(&starts[o]);
                         }
-                        let units = price.units(&u, false) + price.h_allowance(&u);
+                        let units = price.add(price.units(&u, false)?, price.h_allowance(&u)?)?;
                         outside_of.insert((lo, hi), units);
                         Ok(units)
                     };
@@ -1597,8 +1935,8 @@ fn worst_closes_priced(
                     // through its complete history tile, or its row's commit before).
                     for p in 0..p_late.min(p_max + 1) {
                         let hp = h_at(p);
-                        let row_len = hp * inner;
-                        let count = count_at(p);
+                        let row_len = usize::try_from(price.mul(hp as u64, inner as u64)?).map_err(|_| "row length overflows")?;
+                        let count = count_at(p)?;
                         for first in (0..count).step_by(tile_len) {
                             let last = (first + tile_len).min(count) - 1;
                             let (o_lo, o_hi) = (first / row_len, last / row_len);
@@ -1610,26 +1948,27 @@ fn worst_closes_priced(
                                 let t_lo = if o == o_lo { (first % row_len) / inner } else { 0 };
                                 let t_hi = if o == o_hi { (last % row_len) / inner + 1 } else { hp };
                                 let rows = t_hi.min(hp.saturating_sub(1)).saturating_sub(t_lo) as u64;
-                                charge(rows * (1 + (pattern.tiles.len() + pattern.commits.len()) as u64))?;
+                                charge(price.mul(rows, price.add(1, (pattern.tiles.len() + pattern.commits.len()) as u64)?)?)?;
                                 for t in t_lo..t_hi.min(hp.saturating_sub(1)) {
                                     let row_pos = (p as usize + 1 - hp + t) as u32;
                                     let group = row_pos / h_tile as u32;
                                     if (group as usize + 1) * h_tile - 1 < p as usize {
                                         for ((k, sub), v) in &pattern.tiles {
                                             if tiles.insert((group, *k, *sub)) {
-                                                hist_cost += lone(*v);
+                                                hist_cost = price.add(hist_cost, lone(*v)?)?;
                                             }
                                         }
                                     } else {
                                         for ((oc, n, tile), v) in &pattern.commits {
                                             if commits.insert((row_pos, *oc, *n, *tile)) {
-                                                hist_cost += lone(*v);
+                                                hist_cost = price.add(hist_cost, lone(*v)?)?;
                                             }
                                         }
                                     }
                                 }
                             }
-                            let close = price.frame((last + 1 - first) as u32) + outside(o_lo, o_hi)? + hist_cost;
+                            let close =
+                                price.add(price.add(price.frame((last + 1 - first) as u32)?, outside(o_lo, o_hi)?)?, hist_cost)?;
                             worst.close_bytes = worst.close_bytes.max(close);
                         }
                     }
@@ -1637,15 +1976,16 @@ fn worst_closes_priced(
                     // part's history rows are at most `t_len` rows of at most `groups` history tiles,
                     // priced in both forms (a bound for every position and alignment).
                     let groups = (t_len.saturating_sub(1)).div_ceil(h_tile) + 1;
-                    let part = |o: usize| t_len as u64 * commits_cost[o] + groups as u64 * tiles_cost[o];
+                    let part =
+                        |o: usize| price.add(price.mul(t_len as u64, commits_cost[o])?, price.mul(groups as u64, tiles_cost[o])?);
                     let mut late = 0u64;
                     for o in 0..outer {
-                        late = late.max(outside(o, o)? + part(o));
+                        late = late.max(price.add(outside(o, o)?, part(o)?)?);
                         if o + 1 < outer {
-                            late = late.max(outside(o, o + 1)? + part(o) + part(o + 1));
+                            late = late.max(price.add(price.add(outside(o, o + 1)?, part(o)?)?, part(o + 1)?)?);
                         }
                     }
-                    worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + late);
+                    worst.close_bytes = worst.close_bytes.max(price.add(price.frame(tile_len as u32)?, late)?);
                     continue;
                 }
                 // Every tile's whole close, exactly, at `pos` (with the alignment allowance where the
@@ -1663,12 +2003,12 @@ fn worst_closes_priced(
                                 allowance: bool|
                  -> Result<u64, String> {
                     let mut worst = 0u64;
-                    for (first, len) in tiles_at(pos) {
-                        let tile = tile_elements(first, len);
+                    for (first, len) in tiles_at(pos)? {
+                        let tile = tile_elements(&price, first, len)?;
                         let (mut reads, hist) = read(pos, &tile, &[], ni16, None, false)?;
                         reads.merge(&hist);
-                        let extra = if allowance { price.h_allowance(&reads) } else { 0 };
-                        worst = worst.max(price.close(&reads, tile.len() as u32) + extra);
+                        let extra = if allowance { price.h_allowance(&reads)? } else { 0 };
+                        worst = worst.max(price.add(price.close(&reads, tile.len() as u32)?, extra)?);
                     }
                     Ok(worst)
                 };
@@ -1702,27 +2042,40 @@ fn worst_closes_priced(
                     let pl = rep_from(p_late);
                     let h = h_at(pl);
                     let a = h_axis.expect("has H");
-                    let outer: usize = node.out.resolve(h)[..a].iter().product::<usize>().max(1);
+                    let outer = priced_elements(&price, &node.out.resolve(h)[..a])?.max(1);
                     let t_len = (tile_len.div_ceil(inner) + 1).min(h);
-                    let row = |o: usize, from: usize, to: usize| -> Vec<usize> {
-                        (from..to).flat_map(|t| (0..inner).map(move |i| (o * h + t) * inner + i)).collect()
-                    };
+                    let row =
+                        |o: usize, from: usize, to: usize| -> Result<Vec<usize>, String> {
+                            let count = price.mul((to - from) as u64, inner as u64)?;
+                            price.guard_allocation(usize::try_from(count).map_err(|_| "row allocation overflows")?)?;
+                            (from..to)
+                                .flat_map(|t| (0..inner).map(move |i| (t, i)))
+                                .map(|(t, i)| {
+                                    usize::try_from(price.add(
+                                        price.mul(price.add(price.mul(o as u64, h as u64)?, t as u64)?, inner as u64)?,
+                                        i as u64,
+                                    )?)
+                                    .map_err(|_| "row index overflows".to_string())
+                                })
+                                .collect()
+                        };
+                    price.guard_allocation(outer)?;
                     // Outside the history rows: the window ending each row and the one starting it.
                     let mut ends = Vec::with_capacity(outer);
                     let mut starts = Vec::with_capacity(outer);
                     for o in 0..outer {
-                        ends.push(read!(pl, &row(o, h - t_len, h), &[], ni16, None, false).0);
-                        starts.push(read!(pl, &row(o, 0, t_len), &[], ni16, None, false).0);
+                        ends.push(read!(pl, &row(o, h - t_len, h)?, &[], ni16, None, false).0);
+                        starts.push(read!(pl, &row(o, 0, t_len)?, &[], ni16, None, false).0);
                     }
                     let mut outside = 0u64;
                     for o in 0..outer {
                         for part in [&ends[o], &starts[o]] {
-                            outside = outside.max(price.units(part, false) + price.h_allowance(part));
+                            outside = outside.max(price.add(price.units(part, false)?, price.h_allowance(part)?)?);
                         }
                         if o + 1 < outer {
                             let mut pair = ends[o].clone();
                             pair.merge(&starts[o + 1]);
-                            outside = outside.max(price.units(&pair, false) + price.h_allowance(&pair));
+                            outside = outside.max(price.add(price.units(&pair, false)?, price.h_allowance(&pair)?)?);
                         }
                     }
                     // Through the history rows: every `T`-window of every row at every alignment of the
@@ -1735,11 +2088,12 @@ fn worst_closes_priced(
                             if start >= end {
                                 continue;
                             }
-                            let hist = twin(pl, &row(o, start, end), &[], ni16, None, true, true, false)?.hist;
-                            history = history.max(price.units(&hist, true));
+                            let hist = twin(pl, &row(o, start, end)?, &[], ni16, None, true, true, false)?.hist;
+                            history = history.max(price.units(&hist, true)?);
                         }
                     }
-                    worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + outside + 2 * history);
+                    worst.close_bytes =
+                        worst.close_bytes.max(price.add(price.add(price.frame(tile_len as u32)?, outside)?, price.mul(2, history)?)?);
                     continue;
                 }
                 // Position 0: the history is one row, the dissection has no rounds, and the whole close
@@ -1759,6 +2113,7 @@ fn worst_closes_priced(
                 }
                 positions.insert(rep_from(1));
                 if has_h {
+                    space.guard_allocation(u64::from(p_late.min(p_max + 1)))?;
                     positions.extend(1..p_late.min(p_max + 1));
                     if p_late <= p_max {
                         positions.insert(rep_from(p_late.max(1)));
@@ -1769,8 +2124,9 @@ fn worst_closes_priced(
                     let parts = if late_h { 2 } else { 1 };
                     let mut root_worst = 0u64;
                     let mut bottom_worst = 0u64;
-                    for (first, len) in tiles_at(pos) {
-                        let tile = tile_elements(first, len);
+                    for (first, len) in tiles_at(pos)? {
+                        let tile = tile_elements(&price, first, len)?;
+                        price.guard_allocation(reductions.len())?;
                         let supplied: Vec<u16> = reductions.iter().copied().filter(|r| *r != ni16).collect();
                         let (mut finalize, hist) = read!(pos, &tile, &supplied, ni16, None, false);
                         finalize.merge(&hist);
@@ -1798,6 +2154,7 @@ fn worst_closes_priced(
                                 break;
                             }
                             for (r, es) in pending {
+                                price.guard_allocation(reductions.len())?;
                                 let others: Vec<u16> = reductions.iter().copied().filter(|x| *x != r).collect();
                                 let (mut probe, hist) = read!(pos, &es, &others, r, Some((0, 1)), false);
                                 probe.merge(&hist);
@@ -1807,10 +2164,11 @@ fn worst_closes_priced(
                                 root_reads.merge(&probe);
                             }
                         }
-                        let values: u64 = closure.values().map(|s| s.len() as u64).sum();
+                        let values = price.sum(closure.values().map(|s| s.len() as u64))?;
                         root_reads.supplied.clear();
-                        let root_units = price.units(&root_reads, false) + if late_h { slack(&root_reads) } else { 0 };
-                        root_worst = root_worst.max(root_units * parts + values * parts * 20);
+                        let root_units = price.add(price.units(&root_reads, false)?, if late_h { slack(&root_reads)? } else { 0 })?;
+                        root_worst =
+                            root_worst.max(price.add(price.mul(root_units, parts)?, price.mul(price.mul(values, parts)?, 20)?)?);
                         // The bottom: every reduction over the first and the last history tile, in
                         // both-mode — the two together bound any tile at any position.
                         let h = h_at(pos);
@@ -1821,23 +2179,26 @@ fn worst_closes_priced(
                             let to = ((tau + 1) * h_tile).min(h);
                             let mut reads = PalwTirCloseReadsV1::default();
                             for r in &reductions {
+                                price.guard_allocation(closure.get(r).map_or(0, BTreeSet::len))?;
                                 let es: Vec<usize> = closure.get(r).map(|s| s.iter().copied().collect()).unwrap_or_default();
                                 if es.is_empty() {
                                     continue;
                                 }
+                                price.guard_allocation(reductions.len())?;
                                 let others: Vec<u16> = reductions.iter().copied().filter(|x| x != r).collect();
                                 let (part, hist) = read!(pos, &es, &others, *r, Some((from, to)), true);
                                 reads.merge(&part);
                                 reads.merge(&hist);
                             }
                             reads.supplied.clear();
-                            bottom += price.units(&reads, false) + if late_h { slack(&reads) } else { 0 };
+                            bottom =
+                                price.add(bottom, price.add(price.units(&reads, false)?, if late_h { slack(&reads)? } else { 0 })?)?;
                         }
-                        bottom_worst = bottom_worst.max(bottom * parts);
+                        bottom_worst = bottom_worst.max(price.mul(bottom, parts)?);
                     }
                     worst.root_claim_bytes =
-                        worst.root_claim_bytes.max(price.root_frame(tile_len as u32, reductions.len()) + root_worst);
-                    worst.close_bytes = worst.close_bytes.max(price.frame(tile_len as u32) + bottom_worst);
+                        worst.root_claim_bytes.max(price.add(price.root_frame(tile_len as u32, reductions.len())?, root_worst)?);
+                    worst.close_bytes = worst.close_bytes.max(price.add(price.frame(tile_len as u32)?, bottom_worst)?);
                 }
             }
             let past = sizing
@@ -1846,6 +2207,7 @@ fn worst_closes_priced(
             if let Some(t) = trace.as_deref_mut() {
                 t.push((bi8, ni16, sizing.cap - budget.get()));
             }
+            price.guard_allocation(out.len().checked_add(1).ok_or("bound count overflows")?)?;
             out.push(worst);
             if past {
                 return Ok((out, sizing.cap - budget.get()));
@@ -1880,6 +2242,7 @@ fn worst_closes_priced(
                 root_claim_bytes: 0,
             };
             for first in (0..count).step_by(lanes.max(1)) {
+                price.guard_allocation(lanes.min(count - first))?;
                 let elements: Vec<usize> = (first..(first + lanes).min(count)).collect();
                 charge(16 + elements.len() as u64)?;
                 let request = PalwTirCloseRequestV1 {
@@ -1894,7 +2257,7 @@ fn worst_closes_priced(
                 budget.set(budget.get().saturating_sub(split.work));
                 let mut reads = split.reads;
                 reads.merge(&split.hist);
-                bound.close_bytes = bound.close_bytes.max(price.close(&reads, elements.len() as u32));
+                bound.close_bytes = bound.close_bytes.max(price.close(&reads, elements.len() as u32)?);
             }
             out.push(bound);
             if sizing.stop_above.is_some_and(|(close, _)| out.last().is_some_and(|b| b.close_bytes > close)) {
@@ -1903,4 +2266,26 @@ fn worst_closes_priced(
         }
     }
     Ok((out, sizing.cap - budget.get()))
+}
+
+#[cfg(test)]
+mod wide_price_arithmetic_tests {
+    use super::{wide_add, wide_mul, wide_step_preimage_bytes};
+    #[test]
+    fn wide_price_arithmetic_refuses_overflow_before_any_allocation() {
+        assert!(wide_add(u64::MAX, 1).is_err());
+        assert!(wide_mul(u64::MAX, 8).is_err());
+        assert_eq!(wide_add(u64::MAX - 1, 1).unwrap(), u64::MAX);
+        assert_eq!(wide_mul(7, 8).unwrap(), 56);
+    }
+    #[test]
+    fn wide_step_price_uses_eight_byte_lanes_and_checks_the_byte_vector_format() {
+        for lanes in [0, 1, 7, 4096] {
+            assert_eq!(wide_step_preimage_bytes(lanes).unwrap(), 26 + 8 * u64::from(lanes));
+        }
+        let last = u32::MAX / 8;
+        assert_eq!(wide_step_preimage_bytes(last).unwrap(), 26 + 8 * u64::from(last));
+        assert!(wide_step_preimage_bytes(last + 1).is_err());
+        assert!(wide_step_preimage_bytes(u32::MAX).is_err());
+    }
 }

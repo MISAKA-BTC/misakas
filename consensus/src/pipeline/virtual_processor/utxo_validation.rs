@@ -1,4 +1,7 @@
-use super::VirtualStateProcessor;
+#[path = "positive_native_context_v2.rs"]
+pub(super) mod positive_native_context_v2;
+
+use super::{VirtualStateProcessor, processor::palw_accept::NativeRelayFeePlanV2};
 use crate::{
     errors::{
         BlockProcessResult,
@@ -24,6 +27,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
@@ -97,6 +101,13 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub multiset_hash: MuHash,
     pub mergeset_diff: UtxoDiff,
     pub accepted_tx_ids: Vec<TransactionId>,
+    /// Actual accepting block only, set by the owning chain walk. No virtual,
+    /// mempool or selected-parent snapshot may manufacture this provenance.
+    pub positive_accepting_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    /// Disposable reward calculation only. Never forwarded to the accepted fold.
+    pub positive_relay_preview_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    pub positive_native_carriers: positive_native_context_v2::PositiveCarrierCompanionsV2,
+    pub relay_fee_plan: Option<NativeRelayFeePlanV2>,
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
     pub mergeset_rewards: BlockHashMap<BlockRewardData>,
     pub pruning_sample_from_pov: Option<BlockHash>,
@@ -211,6 +222,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// The qualified escrow spends this block accepted, in acceptance order — handed to the fold as
     /// `PalwTransitionExtrasV1::funded_escrow_settlements`, so the row settles in the same rooted delta as the UTXO spend.
     pub palw_escrow_settlements: Vec<kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
+    pub palw_assignment_settlements: Vec<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
 }
 
 /// **G14 lane escrow-rfc08 (RFC-0035 A): what the funded-escrow half of the spend filter reads.**
@@ -220,11 +232,32 @@ pub(crate) struct PalwEscrowSpendLocksV1 {
     pub rows: std::collections::HashMap<TransactionOutpoint, kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
     /// TFO1 carriers' OWN funding outputs accepted earlier in this mergeset: not spendable for the rest of it.
     pub provisional: std::collections::HashSet<TransactionOutpoint>,
+    /// RFC-0045 purpose-separated rooted locks. Missing native entitlement is
+    /// a denial, never permission to treat this P2PKH as ordinary free value.
+    pub assignment: std::collections::HashMap<
+        TransactionOutpoint,
+        (
+            misaka_palw_positive_contract::assignment::rows::AssignmentFundingRow,
+            Option<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendAuthorizationV2>,
+        ),
+    >,
+    /// A malformed rooted money projection fails closed in the mempool.
+    pub assignment_invalid: bool,
+    /// Fresh Case purpose locks. Only an actual native Case settlement owner
+    /// may qualify these; no such authority is inferred from row DTOs.
+    pub positive_case: std::collections::HashMap<TransactionOutpoint, misaka_palw_positive_contract::rows::FundingRow>,
+    pub assignment_prover:
+        std::collections::HashMap<TransactionOutpoint, misaka_palw_positive_contract::assignment::rows::AssignmentProverFundingRow>,
 }
 
 impl PalwEscrowSpendLocksV1 {
     fn is_empty(&self) -> bool {
-        self.rows.is_empty() && self.provisional.is_empty()
+        self.rows.is_empty()
+            && self.provisional.is_empty()
+            && self.assignment.is_empty()
+            && self.positive_case.is_empty()
+            && self.assignment_prover.is_empty()
+            && !self.assignment_invalid
     }
 
     /// **The one escrow-lock rule** — the block filter (`BondSpendFilter::escrow_refusal`), the mempool
@@ -250,15 +283,47 @@ impl PalwEscrowSpendLocksV1 {
         daa_score: u64,
         bond_burn: u64,
     ) -> Option<TransactionOutpoint> {
+        if self.assignment_invalid {
+            return tx.inputs.first().map(|i| i.previous_outpoint);
+        }
         if self.is_empty() {
             return None;
         }
         let amounts: Vec<u64> = input_amounts.into_iter().collect();
         let mut escrow_burn = 0u64;
         let mut first_rooted = None;
+        let mut locked_count = 0usize;
         for outpoint in tx.inputs.iter().map(|input| input.previous_outpoint) {
             if self.provisional.contains(&outpoint) {
                 return Some(outpoint);
+            }
+            if self.positive_case.contains_key(&outpoint) || self.assignment_prover.contains_key(&outpoint) {
+                return Some(outpoint);
+            }
+            // Cross-purpose exclusivity: neither legacy escrow nor A/C may
+            // count a second locked input as the first account's fee funding.
+            if self.rows.contains_key(&outpoint) || self.assignment.contains_key(&outpoint) {
+                locked_count += 1;
+                if locked_count > 1 || (self.rows.contains_key(&outpoint) && self.assignment.contains_key(&outpoint)) {
+                    return Some(outpoint);
+                }
+            }
+            if let Some((row, authorization)) = self.assignment.get(&outpoint) {
+                let Some(authorization) = authorization else { return Some(outpoint) };
+                match kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
+                    row,
+                    authorization,
+                    tx,
+                    &amounts,
+                    daa_score,
+                ) {
+                    Err(_) => return Some(outpoint),
+                    Ok(plan) => {
+                        first_rooted.get_or_insert(outpoint);
+                        let Some(sum) = escrow_burn.checked_add(plan.burned_now) else { return Some(outpoint) };
+                        escrow_burn = sum;
+                    }
+                }
             }
             if let Some(row) = self.rows.get(&outpoint) {
                 match kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(
@@ -315,13 +380,51 @@ pub(super) struct PalwRoundVerdictsV1 {
     )>,
 }
 
+impl PalwRoundVerdictsV1 {
+    pub(super) fn has_fee_gated_body(&self) -> bool {
+        self.fee_budget.is_some() && self.permitted.iter().any(|block| self.fee_recipients.contains_key(block))
+    }
+
+    pub(super) fn relay_plan_changes_fee_admission(&self, plan: &NativeRelayFeePlanV2) -> bool {
+        self.fee_budget.is_some()
+            && plan.debits_any_carrier(|block| self.permitted.contains(&block) && self.fee_recipients.contains_key(&block))
+    }
+}
+
 impl<'a> UtxoProcessingContext<'a> {
+    /// Rewind the disposable acceptance pass. The caller must re-seed any
+    /// Round fee budget from the same selected-parent inputs before replay.
+    pub(super) fn restart_with_relay_fee_plan(
+        &mut self,
+        selected_parent_multiset: MuHash,
+        plan: NativeRelayFeePlanV2,
+    ) -> kaspa_consensus_core::acceptance_data::AcceptanceData {
+        self.multiset_hash = selected_parent_multiset;
+        self.mergeset_diff = UtxoDiff::default();
+        self.accepted_tx_ids.clear();
+        self.positive_native_carriers = Default::default();
+        self.mergeset_rewards.clear();
+        self.reserve_accrual = 0;
+        self.palw_v2_accepted_tx_fees.clear();
+        self.palw_v2_rent_available_fees.clear();
+        self.palw_round_fee_incomes.clear();
+        self.palw_escrow_locks.provisional.clear();
+        self.palw_escrow_settlements.clear();
+        self.palw_assignment_settlements.clear();
+        self.relay_fee_plan = Some(plan);
+        std::mem::take(&mut self.mergeset_acceptance_data)
+    }
+
     pub fn new(ghostdag_data: Refs<'a, GhostdagData>, selected_parent_multiset_hash: MuHash) -> Self {
         let mergeset_size = ghostdag_data.mergeset_size();
         Self {
             ghostdag_data,
             multiset_hash: selected_parent_multiset_hash,
             mergeset_diff: UtxoDiff::default(),
+            positive_accepting_point: None,
+            positive_relay_preview_point: None,
+            positive_native_carriers: Default::default(),
+            relay_fee_plan: None,
             accepted_tx_ids: Vec::with_capacity(1), // We expect at least the selected parent coinbase tx
             mergeset_rewards: BlockHashMap::with_capacity(mergeset_size),
             mergeset_acceptance_data: Vec::with_capacity(mergeset_size),
@@ -343,12 +446,45 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_round_fee_incomes: Vec::new(),
             palw_escrow_locks: Default::default(),
             palw_escrow_settlements: Vec::new(),
+            palw_assignment_settlements: Vec::new(),
         }
     }
 
     pub fn selected_parent(&self) -> BlockHash {
         self.ghostdag_data.selected_parent
     }
+}
+
+pub(super) fn relay_acceptance_matches(original: &[MergesetBlockAcceptanceData], replay: &[MergesetBlockAcceptanceData]) -> bool {
+    original.len() == replay.len()
+        && original.iter().zip(replay).all(|(before, after)| {
+            before.block_hash == after.block_hash
+                && before
+                    .accepted_transactions
+                    .iter()
+                    .map(|tx| (tx.transaction_id, tx.index_within_block))
+                    .eq(after.accepted_transactions.iter().map(|tx| (tx.transaction_id, tx.index_within_block)))
+        })
+}
+
+#[cfg(test)]
+#[test]
+fn relay_acceptance_replay_checks_carrier_block_index_and_order() {
+    let block =
+        |word, entries| MergesetBlockAcceptanceData { block_hash: BlockHash::from_u64_word(word), accepted_transactions: entries };
+    let tx = |word, index| AcceptedTxEntry { transaction_id: BlockHash::from_u64_word(word), index_within_block: index };
+    let original = vec![block(1, vec![tx(2, 0), tx(3, 1)]), block(4, vec![])];
+    assert!(relay_acceptance_matches(&original, &original.clone()));
+    let mut replay = original.clone();
+    replay[0].accepted_transactions[1].index_within_block = 2;
+    assert!(!relay_acceptance_matches(&original, &replay));
+    let mut replay = original.clone();
+    replay[0].accepted_transactions.swap(0, 1);
+    assert!(!relay_acceptance_matches(&original, &replay));
+    let mut replay = original.clone();
+    replay[1].block_hash = BlockHash::from_u64_word(5);
+    assert!(!relay_acceptance_matches(&original, &replay));
+    assert!(!relay_acceptance_matches(&original, &original[..1]));
 }
 
 /// **Audit C-08 part three: what `tx` must leave unclaimed, in total** — the sum over its inputs of
@@ -435,11 +571,12 @@ impl<'a> BondSpendFilter<'a> {
     /// the schedule is typed-missing, so no settlement with a burn qualifies).
     fn escrow_burned(&self, tx: &Transaction, entries: &[UtxoEntry]) -> u64 {
         let Some(locks) = self.escrow else { return 0 };
-        if locks.rows.is_empty() {
+        if locks.rows.is_empty() && locks.assignment.is_empty() {
             return 0;
         }
         let amounts: Vec<u64> = entries.iter().map(|entry| entry.amount).collect();
-        tx.inputs
+        let legacy = tx
+            .inputs
             .iter()
             .filter_map(|input| locks.rows.get(&input.previous_outpoint))
             .filter_map(|row| {
@@ -452,7 +589,23 @@ impl<'a> BondSpendFilter<'a> {
                 )
                 .ok()
             })
-            .fold(0u64, |sum, plan| sum.saturating_add(plan.burned_now))
+            .fold(0u64, |sum, plan| sum.saturating_add(plan.burned_now));
+        let assignment = tx
+            .inputs
+            .iter()
+            .filter_map(|input| locks.assignment.get(&input.previous_outpoint))
+            .filter_map(|(row, authorization)| {
+                kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
+                    row,
+                    authorization.as_ref()?,
+                    tx,
+                    &amounts,
+                    self.daa_score,
+                )
+                .ok()
+            })
+            .fold(0u64, |sum, plan| sum.saturating_add(plan.burned_now));
+        legacy.saturating_add(assignment)
     }
 
     /// **What this transaction must leave unclaimed, in total** — [`palw_bond_burn_owed`] over this
@@ -526,8 +679,10 @@ impl VirtualStateProcessor {
             use kaspa_consensus_core::palw_tir_public_carriage_v1::{
                 PalwTirPublicControlActionV1 as A, PalwTirPublicControlTargetV1 as T,
             };
-            return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(
+            return kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
                 std::slice::from_ref(tx),
+                &self.palw_lifecycle_kind_fences,
+                daa,
             )
             .objects
             .first()
@@ -553,22 +708,26 @@ impl VirtualStateProcessor {
     pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
         let rent_active = self.palw_certification_rent_at(daa) || self.palw_model_lines_active_at(daa);
         let rent = if rent_active && tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
-            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
-                .objects
-                .first()
-                .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, daa))
-                .map(|carried| {
-                    // LG14-A: the canonical FP proof appended to contradiction 13 is priced past the public-filer fence, read at the
-                    // same DAA by the acceptance walk and here.
-                    kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
-                        &carried.object,
-                        self.palw_offence_attribution_at(daa),
-                        self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(daa)),
-                        self.palw_legacy_public_filer_at(daa),
-                    )
-                })
-                .unwrap_or(0)
-                .min(fee)
+            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
+                std::slice::from_ref(tx),
+                &self.palw_lifecycle_kind_fences,
+                daa,
+            )
+            .objects
+            .first()
+            .filter(|carried| self.palw_lifecycle_kind_fences.kind_in_force_at(&carried.object, daa))
+            .map(|carried| {
+                // LG14-A: the canonical FP proof appended to contradiction 13 is priced past the public-filer fence, read at the
+                // same DAA by the acceptance walk and here.
+                kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v3(
+                    &carried.object,
+                    self.palw_offence_attribution_at(daa),
+                    self.palw_state_params_v2.as_ref().is_some_and(|params| params.capacity_batch_active_at(daa)),
+                    self.palw_legacy_public_filer_at(daa),
+                )
+            })
+            .unwrap_or(0)
+            .min(fee)
         } else {
             0
         };
@@ -614,14 +773,14 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
-    ) {
+    ) -> Result<(), NativeCoverageV1> {
         self.calculate_utxo_state_with_funded_candidates_v1(
             ctx,
             selected_parent_utxo_view,
             selected_parent_bond_view,
             pov_daa_score,
             None,
-        );
+        )
     }
 
     /// Borrow branch PALW state only while actual native validated inputs live.
@@ -634,7 +793,15 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
-    ) {
+    ) -> Result<(), NativeCoverageV1> {
+        let relay_plan = ctx.relay_fee_plan.take();
+        let accepting = ctx.positive_accepting_point.or(ctx.positive_relay_preview_point);
+        let selected_parent = ctx.selected_parent();
+        let match_relay = |ordinal, carrier_block, tx: &Transaction, gross, burn, before_relay| match &relay_plan {
+            Some(plan) => plan.match_carrier(ordinal, accepting, selected_parent, carrier_block, tx, gross, burn, before_relay),
+            None => Ok(None),
+        };
+        let mut applied_relay_debits = 0;
         let selected_parent_transactions = self.block_transactions_store.get(ctx.selected_parent()).unwrap();
         let validated_coinbase = ValidatedTransaction::new_coinbase(&selected_parent_transactions[0]);
 
@@ -754,12 +921,16 @@ impl VirtualStateProcessor {
                 && verdicts.permitted.contains(&merged_block)
                 && let (Some(bond), Some(budget)) = (verdicts.fee_recipients.get(&merged_block), verdicts.fee_budget.as_mut())
             {
-                let maximum = validated_transactions.iter().try_fold(0u64, |sum, (tx, _)| {
+                let first_ordinal = ctx.accepted_tx_ids.len();
+                let maximum = validated_transactions.iter().enumerate().try_fold(Some(0u64), |sum, (offset, (tx, _))| {
+                    let Some(sum) = sum else { return Ok::<_, NativeCoverageV1>(None) };
                     let burned = bond_filter
                         .map(|filter| filter.burn_owed(tx.tx).saturating_add(filter.escrow_burned(tx.tx, &tx.entries)))
                         .unwrap_or(0);
-                    sum.checked_add(self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score))
-                });
+                    let before_relay = self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score);
+                    let fees = match_relay(first_ordinal + offset, merged_block, tx.tx, tx.calculated_fee, burned, before_relay)?;
+                    Ok(sum.checked_add(fees.map_or(before_relay, |fees| fees.credited_tip())))
+                })?;
                 let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
                     block: merged_block,
                     bond: *bond,
@@ -810,7 +981,46 @@ impl VirtualStateProcessor {
             // applied after this merged block, so the filter borrowed above is not mutated while it is read.
             let escrow_fence_active = self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
             let mut new_provisional_escrows: Vec<TransactionOutpoint> = Vec::new();
-            for (validated_tx, _) in validated_transactions.iter() {
+            for (validated_tx, original_index) in validated_transactions.iter() {
+                let accepted_ordinal = ctx.accepted_tx_ids.len();
+                // The Full-script seal is provenance only. Each borrow ends
+                // before the ordinary acceptance code mutates this prefix.
+                // Failed extra validation leaves the ordinary UTXO path intact.
+                if let Some(point) = accepting
+                    && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&validated_tx.tx.payload)
+                    && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(point.daa_score)
+                {
+                    let prefix = positive_native_context_v2::NativePrefixStampV2 {
+                        accepting: point,
+                        selected_parent: ctx.selected_parent(),
+                        accepted_transactions: ctx.accepted_tx_ids.len() as u64,
+                        last_accepted_transaction: ctx.accepted_tx_ids.last().copied(),
+                    };
+                    let current = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
+                    let locked = !ctx.palw_escrow_locks.is_empty();
+                    let filter = (bond_gate_view.is_some()
+                        || !ctx.palw_v2_locked_bonds.is_empty()
+                        || !ctx.palw_v2_bond_burns.is_empty()
+                        || locked)
+                        .then_some(BondSpendFilter {
+                            bond_view: bond_gate_view.as_ref(),
+                            daa_score: point.daa_score,
+                            palw_locked: &ctx.palw_v2_locked_bonds,
+                            palw_burns: &ctx.palw_v2_bond_burns,
+                            escrow: locked.then_some(&ctx.palw_escrow_locks),
+                        });
+                    ctx.positive_native_carriers.capture(
+                        self,
+                        &transactions_owner,
+                        *original_index,
+                        merged_block,
+                        prefix,
+                        validated_tx,
+                        &current,
+                        filter,
+                    );
+                }
                 // G14 r5: what a qualified escrow settlement destroys (its scheduled burns) — withheld from the collectible fee
                 // together with the bond burn, so RFC-0035 §7.1's one allocation of F holds (0 wherever no row exists).
                 let mut escrow_burned = 0u64;
@@ -850,6 +1060,30 @@ impl VirtualStateProcessor {
                                     },
                                 );
                             }
+                        }
+                    }
+                }
+                if !ctx.palw_escrow_locks.assignment.is_empty() {
+                    let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();
+                    for input in &validated_tx.tx.inputs {
+                        if let Some((row, Some(authorization))) = ctx.palw_escrow_locks.assignment.get(&input.previous_outpoint) {
+                            let plan = kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
+                                row,
+                                authorization,
+                                validated_tx.tx,
+                                &amounts,
+                                pov_daa_score,
+                            )
+                            .expect("the shared spend filter admitted this exact rooted Assignment plan");
+                            if let Some(point) = plan.new.current_outpoint {
+                                new_provisional_escrows.push(
+                                    kaspa_consensus_core::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2(point),
+                                );
+                            }
+                            escrow_burned = escrow_burned
+                                .checked_add(plan.burned_now)
+                                .expect("the shared filter checked the combined fee/burn allocation");
+                            ctx.palw_assignment_settlements.push(plan);
                         }
                     }
                 }
@@ -923,20 +1157,35 @@ impl VirtualStateProcessor {
                 // above the rent is ordinary carriage and stays with the miner, which is why an
                 // ordinary court move or a free-prompt commitment — objects no rule prices — burn
                 // nothing at all.
-                let collectible =
+                let before_relay =
                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
-                block_fee += collectible;
+                let fees =
+                    match_relay(accepted_ordinal, merged_block, validated_tx.tx, validated_tx.calculated_fee, owed, before_relay)?;
+                applied_relay_debits += usize::from(fees.is_some());
+                let credited_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
+                if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
+                {
+                    ctx.positive_native_carriers.record_relay_carrier_fees_v2(validated_tx.id(), owed, before_relay, credited_tip);
+                }
+                block_fee += credited_tip;
                 // Finality classifies collectible fees, never destroyed bond/rent funds — past `palw_tir_public_conviction_v1` only
                 // (AUDIT-8b, 2026-10-27): below it the finality share reads the raw fee, exactly as the live chain does.
                 let finality_base = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score)) {
-                    collectible
+                    credited_tip
                 } else {
-                    validated_tx.calculated_fee
+                    validated_tx.calculated_fee - fees.map_or(0, |fees| fees.relay_charge())
                 };
                 finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, finality_base, finality_fee_active);
             }
 
             if let Some(income) = round_income {
+                if relay_plan.is_some() && income.actual_sompi != block_fee {
+                    return Err(NativeCoverageV1::unsupported::<Self>(
+                        "relay fee plan input",
+                        "Round reserve and final credited fees differ",
+                    ));
+                }
                 debug_assert_eq!(income.actual_sompi, block_fee, "preflight and actual collectible fees share one rule");
                 ctx.palw_round_fee_incomes.push(income);
             }
@@ -963,12 +1212,20 @@ impl VirtualStateProcessor {
             );
         }
 
+        if relay_plan.as_ref().is_some_and(|plan| plan.debit_count() != applied_relay_debits) {
+            return Err(NativeCoverageV1::unsupported::<Self>(
+                "relay fee plan input",
+                "planned debit is outside final UTXO acceptance",
+            ));
+        }
+
         // kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): apply the
         // slashing side-effect over the fully-applied mergeset. Gated on
         // `dns_activation_daa_score` (= 0 on every current network), so it runs
         // from genesis everywhere (the 4-way reserve/victim split is the part
         // fenced behind `pos_v2_activation_daa_score` — see below).
         self.apply_slashing_side_effects(ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score);
+        Ok(())
     }
 
     /// kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): the atomic
@@ -3681,7 +3938,7 @@ mod tests {
         use super::super::{BondSpendFilter, PalwEscrowSpendLocksV1};
         use kaspa_consensus_core::{
             dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
-            tx::TransactionOutpoint,
+            tx::{Transaction, TransactionOutpoint, UtxoEntry},
         };
         use kaspa_hashes::Hash64;
 
@@ -3814,6 +4071,40 @@ mod tests {
             assert!(!filter.locks(&bond_op), "a bond that owes a burn is one that may be spent");
         }
 
+        /// A corrupt native projection refuses the same actual input in both shared filter entry points.
+        #[test]
+        fn malformed_assignment_money_projection_fails_closed_in_the_shared_filter() {
+            use kaspa_consensus_core::tx::{TransactionInput, TransactionOutput};
+            let op = outpoint(4);
+            let payload =
+                kaspa_hashes::blake2b_512_address_payload(&[17; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
+            let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let transaction = Transaction::new(
+                0,
+                vec![TransactionInput::new(op, vec![], 0, 0)],
+                vec![TransactionOutput::new(99, script.clone())],
+                0,
+                kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            );
+            let entries = vec![UtxoEntry::new(100, script, DAA - 1, false)];
+            let no_locks = PalwEscrowSpendLocksV1::default();
+            assert_eq!(no_locks.refusal(&transaction, entries.iter().map(|entry| entry.amount), DAA), None);
+            let malformed = PalwEscrowSpendLocksV1 { assignment_invalid: true, ..Default::default() };
+            let empty = std::collections::HashSet::new();
+            let no_burns = std::collections::HashMap::new();
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                escrow: Some(&malformed),
+            };
+            assert_eq!(filter.escrow_refusal(&transaction, &entries), Some(op));
+            assert_eq!(malformed.refusal(&transaction, [100], DAA), Some(op));
+        }
+
         /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow half of the filter.** A rooted row's outpoint (a LATER block's
         /// view of an installed escrow) refuses a non-qualified spend and admits the qualified payer return; a same-mergeset
         /// provisional lock refuses every spend of the carrier's own output; and with no lock — a refused contract's output in the
@@ -3857,7 +4148,14 @@ mod tests {
             let no_burns = std::collections::HashMap::new();
 
             // A later block: the rooted row locks; only the qualified payer return passes.
-            let rooted = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
+            let rooted = PalwEscrowSpendLocksV1 {
+                rows: [(escrow_op, row)].into_iter().collect(),
+                provisional: Default::default(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
+            };
             let filter =
                 BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
             assert_eq!(
@@ -3872,7 +4170,14 @@ mod tests {
             assert_eq!(early.escrow_refusal(&payer_return, &entries), Some(escrow_op));
 
             // The same mergeset: the carrier's own output is provisionally locked against every spend, the payer's included.
-            let provisional = PalwEscrowSpendLocksV1 { rows: Default::default(), provisional: [escrow_op].into_iter().collect() };
+            let provisional = PalwEscrowSpendLocksV1 {
+                rows: Default::default(),
+                provisional: [escrow_op].into_iter().collect(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
+            };
             let filter = BondSpendFilter {
                 bond_view: None,
                 daa_score: DAA,
@@ -3946,6 +4251,10 @@ mod tests {
             let locks = PalwEscrowSpendLocksV1 {
                 rows: [(a_op, row(1, a_op)), (b_op, row(21, b_op))].into_iter().collect(),
                 provisional: Default::default(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
             };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
@@ -3994,7 +4303,14 @@ mod tests {
                 false,
             )
             .unwrap();
-            let locks = PalwEscrowSpendLocksV1 { rows: [(escrow_op, row)].into_iter().collect(), provisional: Default::default() };
+            let locks = PalwEscrowSpendLocksV1 {
+                rows: [(escrow_op, row)].into_iter().collect(),
+                provisional: Default::default(),
+                assignment: Default::default(),
+                assignment_invalid: false,
+                positive_case: Default::default(),
+                assignment_prover: Default::default(),
+            };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
             let filter =

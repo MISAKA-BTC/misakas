@@ -1,0 +1,17 @@
+
+running 12 tests
+test a_capture_is_reassembled_from_answered_runs_and_refuses_a_false_leaf_or_a_gap ... ok
+test a_helper_process_device_answers_every_cell_as_the_cpu_does_and_a_lying_helper_is_caught_by_the_mirror ... ok
+test a_lie_inside_a_cell_is_found_by_that_cell_at_that_leaf_and_a_consistent_boundary_lie_by_the_upstream_cell ... ok
+test a_pipelined_producer_commits_what_the_whole_schedule_producer_commits ... ok
+test a_row_pursuit_over_peers_refuses_liars_and_ends_with_the_mirrors_holding ... ok
+test a_seat_duty_verifies_its_shards_cells_over_a_backends_capture ... ok
+test a_shard_only_holder_fetches_its_rows_proves_each_and_verifies_its_cells ... ok
+test a_wrong_generated_id_is_a_token_fault_and_a_missing_input_is_unavailable_and_runs_answer_like_a_capture ... ok
+test every_cell_of_every_partition_verifies_from_its_boundary_rows_and_its_shards_weights ... ok
+test malformed_public_cell_run_requests_refuse_before_indexing_or_demanding_unrestorable_material ... ok
+test the_cell_wire_round_trips_and_refuses_hostile_frames ... ok
+test the_drills_boundary_lie_is_found_upstream_and_passes_downstream ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.82s
+

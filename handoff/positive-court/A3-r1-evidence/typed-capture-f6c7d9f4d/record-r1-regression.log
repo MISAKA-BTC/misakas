@@ -1,0 +1,15 @@
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/crypto/txscript)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/endpoints)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/remote)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/pq/validator-core)
+    Finished `test` profile [unoptimized] target(s) in 14.30s
+     Running tests/positive_panel_record_r1.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_record_r1-bc2a1fc867bfe448)
+
+running 3 tests
+test primitive_execution_record_roundtrips_literal_roots_and_ids_with_exact_extent ... ok
+test corrupt_record_deliveries_do_not_poison_original_signed_witness_or_retry ... ok
+test primitive_record_reconstructs_trusted_binding_and_checks_all_signed_relations ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+

@@ -1,0 +1,4 @@
+$ cargo clippy --locked --offline -p misaka-palw-positive-contract -p misaka-palw-positive-accounting --all-targets -- -D warnings
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/positive-accounting)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.77s

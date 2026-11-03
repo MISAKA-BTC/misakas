@@ -1,0 +1,20 @@
+[
+  {
+    "original": "/tmp/positive-a0-native-stack-focused-50fe-v1-driver.py",
+    "snapshot": "positive-a0-native-stack-focused-50fe-v1-driver.py",
+    "sha256": "b368c6a16676584afe85a6f760260bb076653c41e77d62954be1d34e32a57ad8",
+    "bytes": 27583
+  },
+  {
+    "original": "/tmp/positive-a0-native-stack-focused-50fe-v1-frozen.json",
+    "snapshot": "positive-a0-native-stack-focused-50fe-v1-frozen.json",
+    "sha256": "6d98a30318ca5e1998d8869e14698f2cc207ff509320457f7a0cec240b6c8e25",
+    "bytes": 672413
+  },
+  {
+    "original": "/tmp/positive-a0-node-runtime-only-50fe-v8-pinned.json",
+    "snapshot": "positive-a0-node-runtime-only-50fe-v8-pinned.json",
+    "sha256": "5bb59023091faaf0fd7b2315d8778a054daeb333fd830a425776d7a3b55e6515",
+    "bytes": 664782
+  }
+]

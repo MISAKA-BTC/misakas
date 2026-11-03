@@ -268,6 +268,9 @@ impl Params {
         self.validate_palw_stage_execution_v28()?;
         self.validate_palw_native_execution_v39()?;
         self.validate_palw_native_mining_v39()?;
+        self.validate_palw_positive_court_v2()?;
+        self.validate_palw_positive_assignment_v2()?;
+        self.validate_palw_positive_funding_relay_v2()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
         // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.

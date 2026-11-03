@@ -1,0 +1,28 @@
+{
+  "base_commit": "8abea08a5",
+  "passing_runs": [
+    "verifier-cohort-replay-clippy-first",
+    "verifier-cohort-replay-runtime-first"
+  ],
+  "source_maps_match": true,
+  "executed_core_unit_cases": 4,
+  "binaries": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/positive-legacy-native-fresh-20261102/debug/deps/kaspa_consensus_core-b273d62e854cf3f3",
+      "sha256": "13be9d365b356802ce8decd4b113d0af47caa4ad7484672792b445d55b12aa1a",
+      "bytes": 130891360,
+      "features": [
+        "default",
+        "pq-only"
+      ],
+      "profile": {
+        "opt_level": "2",
+        "debuginfo": 0,
+        "debug_assertions": true,
+        "overflow_checks": true,
+        "test": true
+      }
+    }
+  ],
+  "native_A_C_P_end_to_end_execution": false
+}

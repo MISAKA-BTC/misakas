@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized] target(s) in 0.26s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 2 tests
+test palw_tir_close_size_v1::wide_price_arithmetic_tests::wide_price_arithmetic_refuses_overflow_before_any_allocation ... ok
+test palw_tir_close_size_v1::wide_price_arithmetic_tests::wide_step_price_uses_eight_byte_lanes_and_checks_the_byte_vector_format ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5493 filtered out; finished in 0.00s
+

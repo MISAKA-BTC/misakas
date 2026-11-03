@@ -1,0 +1,7 @@
+
+running 1 test
+test ordinary_trained_smollm2_135m ... ORDINARY_LOCAL_SELF_CONSISTENCY_ONLY model=HuggingFaceTB/SmolLM2-135M REQUESTED_BYTES_CAP=8589934592 physical_rss_quota=UNSUPPORTED outer_monitor=EXTERNAL_NOT_ATTESTED outer_monitor_semantics=sampled_pg_kill_after_sample_only cpu_limit_process_seconds=180 context_max=8192 prefill=16 decode=1 metadata_allowance=536870912 earlier_E=2173892 peak_requested=3331652795 cumulative_requested=5909218261 ordinary_no_trace=1 dense_comparison_has_trace=1 node_claim=0 native_authority=0 public_P=0 full_context_inference=0 independent_HF_expected=0 load_ns=16957818292 ordinary_ns=7096693709 dense_prepare_ns=3388833 dense_ns=7656229750 generated=30, output_hash=4e509d2cfdc5d96f21bf32e4b0320868e71881776d50a1ba99e82ebe2004d9fd42cd534c2e651d1943df3170c988847143980e37125da8d680d214e304ae1158
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 31.74s
+

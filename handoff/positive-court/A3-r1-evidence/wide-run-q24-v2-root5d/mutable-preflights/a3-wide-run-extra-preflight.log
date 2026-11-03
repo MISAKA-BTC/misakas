@@ -1,0 +1,21 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 1.55s
+     Running tests/run_wide_idx_history.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_idx_history-625b2f274777dd32)
+
+running 2 tests
+test idx_fixed_and_history_states_remain_structurally_forbidden_in_both_profiles ... ok
+test high_bit_idx_nodes_and_i32_state_keep_exact_legacy_words_in_wide_run ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_wide_memory.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_memory-3d007e6baf6f8ea7)
+
+running 1 test
+LOGICAL_HOST_LEASE requested_bytes=16961358 executor_bytes=16877696 retained_bytes=3048 scratch_bytes=80614 leaf_count=42 work=8192288 (logical request; not physical RSS)
+LOGICAL_HOST_LEASE active_on_return=1
+LOGICAL_HOST_LEASE active_after_drop=0
+LOGICAL_HOST_LEASE active_after_reject=0
+test wide_run_reserves_before_execution_and_retains_host_lease_until_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

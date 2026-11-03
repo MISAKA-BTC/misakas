@@ -1,0 +1,70 @@
+{
+  "head": "6fcfaeac2fccef5c0e2a2d7d2c10a6f1650a445a",
+  "source_before": {
+    "misaka/palw/positive-accounting/src/credit/consumers.rs": "a29f5cf1ac627cb1df45b89f2b9170ae576d30cbc9b192b1107def83a3f1e8b9",
+    "misaka/palw/positive-accounting/src/credit/tests.rs": "5969b6b12633707c8ac97fbec9cf24562871eec20a839217936b955d3db6e833",
+    "misaka/palw/positive-accounting/src/credit.rs": "2e91f703e130356c61f68fbed5696bf15d20bffb0f7a9240f394ce7fedfd49d0",
+    "misaka/palw/positive-accounting/src/fees/tests.rs": "9bef575130546715bcd2733914dd1e30eca9c32aa224efedc27e1a125c7a5db4",
+    "misaka/palw/positive-accounting/src/fees.rs": "fe7b3e59121b92a2fe406137b66a4f89ebb1ae48e85981e42e51d1c84fa312f7",
+    "misaka/palw/positive-accounting/src/lib.rs": "5e9de0d6b3211b4129e24fc5c81f25214ed30ba7caf81a5dc55df72c26e23cb3",
+    "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs": "b8f523fb4d133fc11ab13ee359794966e86965854be4ad42590e17d61872b4a7",
+    "misaka/palw/positive-accounting/tests/independent_credit_graph.rs": "f19f5060af28cb1144912b031371c07ba13695f6cd9593e8160bb8a47bfb5e5e",
+    "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs": "d12221758134ada0cd64b4ffe74921a2d47f996202adee14ecc58644190fef84",
+    "Cargo.lock": "82ba353a60d3d95369045d3fce6aff7eb9d4bf2f928dbcb59ee1a654ef52c613",
+    "misaka/palw/positive-accounting/Cargo.toml": "c4f3ea3b8a5dc04d1e34def6dfc20c391d5b6e9e70c0f9a7c34232bdb512ea4e"
+  },
+  "environment_overrides": {
+    "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/positive-court-a0/target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "results": [
+    {
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "misaka-palw-positive-accounting",
+        "--offline",
+        "--locked"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 2.7563236669811886,
+      "log": "private-recovery-accounting-20261031-0.log",
+      "sha256": "3b0a1d151ab21a8140b6eacccbd1f9f1e646562d3f2e78460003efdf75b1ca59"
+    },
+    {
+      "command": [
+        "cargo",
+        "clippy",
+        "-p",
+        "misaka-palw-positive-accounting",
+        "--all-targets",
+        "--offline",
+        "--locked",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 0.6092399999906775,
+      "log": "private-recovery-accounting-20261031-1.log",
+      "sha256": "81f99da3a57ec7a33cf67123f33f41808bce975352ce7c46a02488473a250e70"
+    }
+  ],
+  "scope": "private accounting/recovery receipt only; no native money or restart authority",
+  "source_after": {
+    "misaka/palw/positive-accounting/src/credit/consumers.rs": "a29f5cf1ac627cb1df45b89f2b9170ae576d30cbc9b192b1107def83a3f1e8b9",
+    "misaka/palw/positive-accounting/src/credit/tests.rs": "5969b6b12633707c8ac97fbec9cf24562871eec20a839217936b955d3db6e833",
+    "misaka/palw/positive-accounting/src/credit.rs": "2e91f703e130356c61f68fbed5696bf15d20bffb0f7a9240f394ce7fedfd49d0",
+    "misaka/palw/positive-accounting/src/fees/tests.rs": "9bef575130546715bcd2733914dd1e30eca9c32aa224efedc27e1a125c7a5db4",
+    "misaka/palw/positive-accounting/src/fees.rs": "fe7b3e59121b92a2fe406137b66a4f89ebb1ae48e85981e42e51d1c84fa312f7",
+    "misaka/palw/positive-accounting/src/lib.rs": "5e9de0d6b3211b4129e24fc5c81f25214ed30ba7caf81a5dc55df72c26e23cb3",
+    "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs": "b8f523fb4d133fc11ab13ee359794966e86965854be4ad42590e17d61872b4a7",
+    "misaka/palw/positive-accounting/tests/independent_credit_graph.rs": "f19f5060af28cb1144912b031371c07ba13695f6cd9593e8160bb8a47bfb5e5e",
+    "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs": "d12221758134ada0cd64b4ffe74921a2d47f996202adee14ecc58644190fef84",
+    "Cargo.lock": "82ba353a60d3d95369045d3fce6aff7eb9d4bf2f928dbcb59ee1a654ef52c613",
+    "misaka/palw/positive-accounting/Cargo.toml": "c4f3ea3b8a5dc04d1e34def6dfc20c391d5b6e9e70c0f9a7c34232bdb512ea4e"
+  }
+}

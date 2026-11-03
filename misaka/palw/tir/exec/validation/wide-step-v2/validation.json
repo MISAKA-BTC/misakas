@@ -1,0 +1,112 @@
+{
+  "date_jst": "2026-11-01",
+  "base_commit": "e5e7ec22ecf3a87c4f45602e258dececda0f7714",
+  "branch": "codex/a1-wide-step-v2",
+  "implementation_commit": "41a00f590fb59c0a7d98d6e0689618e0fe35aeda",
+  "fixture_correction_commit": "b048ce4e16651c5187a4f1646d15e844a374e8f7",
+  "candidate_commit": "b048ce4e16651c5187a4f1646d15e844a374e8f7",
+  "preserved_original_a1_branch": "eef290f1d2534b91563d08d7fd918eec27dabd05",
+  "final_tests": {
+    "log": "final-tests.log",
+    "passed": 10,
+    "failed": 0,
+    "new_wide_step": 5,
+    "existing_wide_primitives": 5,
+    "historical_counts_added": false
+  },
+  "core_strict_clippy": {
+    "passed": true,
+    "scope": "core library and both integration test targets; --no-deps -D warnings",
+    "log": "final-clippy.log"
+  },
+  "initial_failure": {
+    "log": "initial-tests.log",
+    "passed": 4,
+    "failed": 1,
+    "cause": "Two different programs had equal ProgramInfo; rejecting equal metadata was an invalid test assumption.",
+    "fix": "Only test changed: explicitly forge a differing pre-block window and assert_ne before rejection.",
+    "core_changed_after_initial_compile": false
+  },
+  "docs": {
+    "mode": "no-new-regressions",
+    "passed": true,
+    "known_missing": 43,
+    "new_occurrences": 0,
+    "log": "docs-check.log"
+  },
+  "build_provenance": {
+    "normal_cargo_source_compile": true,
+    "rust_rlib_manually_reused": false,
+    "cpp_rebuilt": false,
+    "source_unchanged_during_final_run": true,
+    "inputs": "final-build-inputs.json",
+    "results": "final-build-result.json",
+    "archive": {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+      "sha256_before": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2",
+      "size": 23048496,
+      "sha256_after": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+    },
+    "binaries": [
+      {
+        "target": "palw_tir_step_wide_v2.rs",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/palw_tir_step_wide_v2-fb55f4bb24b4889c",
+        "size": 2231312,
+        "sha256": "d558667ec73e5a211d6d4fa83d0b9850dfd1bf4181cf0c75e5e0a0ac6d2deb60"
+      },
+      {
+        "target": "wide_logits_primitives_v2.rs",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_primitives_v2-898482192ea7821a",
+        "size": 1301632,
+        "sha256": "897291fa9330d0cb0b96ca1d2f513bf78d2b587d7015d29b13bb83c81d088d73"
+      }
+    ],
+    "exclusive_existing_a0_cache_released": true,
+    "a7_shared_a1_cache_used": false,
+    "new_worktree_or_large_target_created": false
+  },
+  "compatibility": {
+    "old_v1_encoders_roots_validator_hash_bodies": "static-before-build.json",
+    "v1_valid_narrow_bytes_preserved": true,
+    "v1_mutable_space_builder_wide_bypass_refused": true,
+    "v1_unsupported_i64_i128_reader_refused": true,
+    "narrow_invalid_disclosed_values_retained": true,
+    "binding_dto_version": 1,
+    "wide_final_step_leaf_version": 2,
+    "new_binding_version_domain_or_native_tag_assigned": false
+  },
+  "scope": {
+    "data_geometry_identity_only": true,
+    "strict_exact_scheme_final_post_i64_only": true,
+    "public_bool_wide_authority": false,
+    "rooted_native_authentication_added": false,
+    "full_relation_i64_automatically_enabled": false,
+    "native_or_public_activation_changed": false,
+    "real_llm_or_total_rss_validated": false,
+    "caller_reserves_hash_vectors_merkle_temporary_and_metadata": true
+  },
+  "independent_review": "Private V2 wrapper and verified fields; actualprogram revalidation; canonical leaf rederivation; exact mixed widths; builder class/context pin; no blocker.",
+  "source_sha256": {
+    "Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+    "consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+    "consensus/core/src/lib.rs": "b91c6fe6c2004bf63770696ddbc07d84e1e4c58219fd5cbacf348f5cf3b186a0",
+    "consensus/core/src/palw_step_leg.rs": "372f065a2491c77ac0ceff73898704a2abcb44da005a00329d709a7b2a2fe1e1",
+    "consensus/core/src/palw_tir_step_v1.rs": "7dc8c66373bc13dcbdbdec0bee52b0ad6edd40e0e44e6cd51b08877acb4664da",
+    "consensus/core/src/palw_tir_step_v1/wide_v2.rs": "bbfaf96b2019e90474401490b708a6a8db497b9840abc994e0fa1eb234cbf782",
+    "consensus/core/src/palw_logits_q24_v2.rs": "64aed6659e9431823f82e3bc2e9ad2856a6ec76149481344e88b977c704d3843",
+    "consensus/core/tests/palw_tir_step_wide_v2.rs": "659233f6ea36dbad7acebbed8b87193a096a8dab5e7f8ef243f03d079a8f02c3",
+    "consensus/core/tests/wide_logits_primitives_v2.rs": "1ffbdeaaf719ba62be0d613e6799f5e972eb657ed39dfeeea8b803be8bdda36a"
+  },
+  "handoff_sha256": "503f4fb1865a6a9df09d29392ae9821141ad9beb0b4ec5e67a055e5b8c275da8",
+  "evidence_sha256": {
+    "docs-check.log": "2371f24aef8cd2c9bb7b594fa643dadb096be69cb1009a54873644720e5bb793",
+    "final-build-inputs.json": "f8458d64e5e9bb4f5fe1d11d38ad2a86f9d066fc1071f34eb847a06d2acfe907",
+    "final-build-result.json": "acb086604b3340fe0ab8c6d2cb316bf5e6d8d0444fc2d468ed151d96be5de99f",
+    "final-clippy.log": "d63393f26337ceafc851dcc4024d3a99fcbc383433e54e575df490f84178ae2c",
+    "final-tests.log": "4e93d0250a2be6fb223638d918feabc74e4d9f75509b67ef9f9b1eee7d618068",
+    "initial-build-inputs.json": "512e6f43b4634eb93f6b875fc9cad4e015976f19d55ef7925a910cfbc9937d3c",
+    "initial-build-result.json": "d9ff14b3c04b4c3ac1ca5e21e694b92c03fff0788d13ebbb10dbcf36e13858bd",
+    "initial-tests.log": "94b7ac7e85ec076282543174eb4905982d3741b1f93f08b21110cbe65d040a61",
+    "static-before-build.json": "e8074959d6e7e0ece1b5de6e415fdbd7972ab8d16df2e1be39b868de109fa9f3"
+  }
+}

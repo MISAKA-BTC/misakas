@@ -89,7 +89,7 @@ pub struct PalwFpClaimAnswersV1 {
     carriers: std::collections::BTreeMap<crate::Hash64, crate::Hash64>,
 }
 /// Scoped reservation for *only the answer overlay*. Existing extras fields keep their original admission contract;
-/// this is deliberately not a `NativeRetainedV1<Extras>` and has no ownership extraction API.
+/// this is deliberately not a `NativeRetainedV1<Extras>`.
 pub struct PalwFpAnswerExtrasV1 {
     extras: crate::palw_state_v2::PalwTransitionExtrasV1,
     _answer_lease: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
@@ -98,6 +98,13 @@ impl std::ops::Deref for PalwFpAnswerExtrasV1 {
     type Target = crate::palw_state_v2::PalwTransitionExtrasV1;
     fn deref(&self) -> &Self::Target {
         &self.extras
+    }
+}
+impl PalwFpAnswerExtrasV1 {
+    /// After the fold, keep the admitted raw carriers through DB staging.
+    /// Their own transport tickets cover the carriers and the schedule slots.
+    pub fn into_assignment_actions_v2(self) -> Vec<crate::palw_state_v2::PositiveAssignmentScheduledActionV2> {
+        self.extras.positive_assignment_actions
     }
 }
 impl PalwFpClaimAnswersV1 {

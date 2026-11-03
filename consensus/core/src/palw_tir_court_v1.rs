@@ -53,8 +53,14 @@
 //! **The check order is normative** (the verdict and its evidence id must be the same on every
 //! implementation): see [`check_tir_cone_refutation_v1`].
 
+mod exact_geometry;
 pub mod parameter_cover;
 mod source_geometry;
+use exact_geometry::{ExactBindingGeometry, ExactGeometry};
+
+/// Source membership and bounded direct evaluation for local prototypes only.
+#[doc(hidden)]
+pub mod source_only;
 
 use std::{
     cell::Cell,
@@ -448,6 +454,42 @@ pub struct PalwTirInventoryIndexV1 {
 /// One inventory leaf's coordinates: `(param, layer, byte offset in the tensor, bytes)`.
 pub type PalwTirInventoryPieceV1 = (u16, Option<u16>, u32, u32);
 
+/// Allocation-only predecode envelope from the audited actual program shape.
+/// Both parameter-instance analysis passes and the retained private index are
+/// named explicitly. Each independently collected per-param Vec keeps its own
+/// growth/minimum allowance; params*layers alone would miss small Vecs.
+pub(crate) fn native_tir_inventory_index_requests_v1(
+    shape: &crate::palw_native_resource_v1::NativeTirProgramShapeV1,
+) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    let (blocks, _, layers, _, _, _, _) = shape.step_space_counts_v1();
+    inventory_index_requests_from_counts_v1(shape.parameter_count_v1(), blocks, layers)
+}
+fn inventory_index_requests_from_counts_v1(
+    params: u64,
+    blocks: u64,
+    layers: u64,
+) -> Result<u64, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{TirNativeRequestsV1, btree_node_envelope_bytes_v1};
+    let mut q = TirNativeRequestsV1::new();
+    q.exact_v1::<PalwTirInventoryIndexV1>(1)?;
+    if params == 0 {
+        return Ok(q.bytes_v1());
+    }
+    q.exact_v1::<ParamIndexV1>(params)?;
+    for _pass in 0..2 {
+        q.exact_v1::<BTreeSet<u8>>(params)?;
+        q.add_v1(TirNativeRequestsV1::product_v1(
+            TirNativeRequestsV1::product_v1(params, blocks)?,
+            btree_node_envelope_bytes_v1::<u8, ()>() as u64,
+        )?)?;
+        q.vec_v1::<Vec<Option<u16>>>(params)?;
+        let mut one_param = TirNativeRequestsV1::new();
+        one_param.vec_v1::<Option<u16>>(layers.max(1))?;
+        q.add_v1(TirNativeRequestsV1::product_v1(params, one_param.bytes_v1())?)?;
+    }
+    Ok(q.bytes_v1())
+}
+
 impl PalwTirInventoryIndexV1 {
     /// The index of `program`'s inventory (empty for a program that declares no param), or `None`
     /// when the inventory refuses the program (a tensor past 4 GiB, or past a `u32` of leaves).
@@ -629,7 +671,7 @@ fn check_output_leaf(
 // PALW-TIR-33: the interval each leaf's lanes must lie in
 // ---------------------------------------------------------------------------------------------
 
-fn occurrence_block(space: &PalwTirStepSpaceV1, occurrence: u16) -> Option<u8> {
+fn occurrence_block(space: &dyn ExactGeometry, occurrence: u16) -> Option<u8> {
     space.occurrences().get(occurrence as usize).map(|(b, _)| *b)
 }
 
@@ -637,7 +679,11 @@ fn occurrence_block(space: &PalwTirStepSpaceV1, occurrence: u16) -> Option<u8> {
 /// a checkpoint's writer interval (the clamped write) — or `{0}` for an instance nothing writes,
 /// which holds its initial zero; a history tile's appended-row interval.
 pub fn palw_tir_leaf_interval_v1(space: &PalwTirStepSpaceV1, intervals: &[Vec<Interval>], leaf: &PalwTirLeafV1) -> Option<Interval> {
-    let program = &space.program;
+    leaf_interval_geometry(space, intervals, leaf)
+}
+
+fn leaf_interval_geometry(space: &dyn ExactGeometry, intervals: &[Vec<Interval>], leaf: &PalwTirLeafV1) -> Option<Interval> {
+    let program = &space.program();
     match leaf.kind {
         PalwTirLeafKindV1::Commit { block, node, .. } => intervals.get(block as usize)?.get(node as usize).copied(),
         PalwTirLeafKindV1::State { state, layer, .. } => match state_writer_v1(program, state, layer) {
@@ -741,7 +787,7 @@ struct Requests {
 }
 
 struct TirSource<'a, 's> {
-    space: &'a PalwTirStepSpaceV1,
+    space: &'a dyn ExactGeometry,
     ctx: &'a PalwJobContextV2,
     job: PalwTirJobShapeV1,
     inventory: &'a PalwTirInventoryIndexV1,
@@ -788,6 +834,9 @@ impl TirSource<'_, '_> {
     }
 
     fn step_lane_at(&mut self, index: u64, dtype: DType, lane_index: usize) -> TirResult<i128> {
+        if !dtype.committable() {
+            return tir_err(TirErrorKind::Malformed, "a wide final output cannot be a source operand");
+        }
         if index >= self.before {
             return tir_err(TirErrorKind::Malformed, format!("leaf {index} does not precede the disputed leaf {}", self.before));
         }
@@ -834,7 +883,7 @@ impl DemandSource for TirSource<'_, '_> {
         let Some(tile_len) = self.space.commit_tile_len(block, node) else {
             return tir_err(TirErrorKind::Malformed, format!("node {node} of block {block} is not a commit point"));
         };
-        let dtype = self.space.program.blocks[block as usize].nodes[node as usize].out.dtype;
+        let dtype = self.space.program().blocks[block as usize].nodes[node as usize].out.dtype;
         let tile = (index / tile_len as usize) as u64;
         let leaf = self.commit_leaf(ctx, node, tile)?;
         self.step_lane_at(leaf, dtype, index % tile_len as usize)
@@ -842,7 +891,7 @@ impl DemandSource for TirSource<'_, '_> {
 
     fn param(&mut self, param: u16, layer: Option<u16>, index: usize) -> TirResult<i128> {
         self.source_read()?;
-        let Some(d) = self.space.program.params.get(param as usize) else {
+        let Some(d) = self.space.program().params.get(param as usize) else {
             return tir_err(TirErrorKind::Malformed, "no such param");
         };
         let width = d.dtype.width();
@@ -908,7 +957,7 @@ impl DemandSource for TirSource<'_, '_> {
 
 /// **Evaluate the values a leaf must hold**, from the source.
 fn evaluate_leaf(
-    space: &PalwTirStepSpaceV1,
+    space: &dyn ExactGeometry,
     leaf: &PalwTirLeafV1,
     source: &mut TirSource<'_, '_>,
     limits: &DemandLimits,
@@ -917,7 +966,7 @@ fn evaluate_leaf(
 }
 
 fn evaluate_leaf_with_work(
-    space: &PalwTirStepSpaceV1,
+    space: &dyn ExactGeometry,
     leaf: &PalwTirLeafV1,
     source: &mut TirSource<'_, '_>,
     limits: &DemandLimits,
@@ -931,18 +980,18 @@ fn evaluate_leaf_with_work(
                 target: DemandTarget::Node { ctx: DemandContext { pos: leaf.position, occurrence: occurrence as u16 }, node },
                 elements: &elements,
             };
-            eval_demanded(&space.program, &space.info, &request, source, limits)
+            eval_demanded(space.program(), space.info(), &request, source, limits)
         }
         PalwTirLeafKindV1::State { state, layer, first_element, .. } => {
             let elements = range(first_element);
             let request = DemandRequest { target: DemandTarget::StateAfter { pos: leaf.position, state, layer }, elements: &elements };
-            eval_demanded(&space.program, &space.info, &request, source, limits)
+            eval_demanded(space.program(), space.info(), &request, source, limits)
         }
         PalwTirLeafKindV1::HistTile { state, layer, first_lane, row_lanes, first_position, .. } => {
             // A history tile is the committed rows it concatenates, read from their commit points.
             let mut out = Vec::with_capacity(leaf.value_count as usize);
             for row_pos in first_position..=leaf.position {
-                let (ctx, node) = hist_row_node_v1(&space.program, state, layer, row_pos)
+                let (ctx, node) = hist_row_node_v1(space.program(), state, layer, row_pos)
                     .ok_or_else(|| DemandError::Tir(TirError::new(TirErrorKind::Malformed, "the history appends nothing")))?;
                 for l in first_lane..first_lane + row_lanes as u64 {
                     out.push(source.node(ctx, node, l as usize)?);
@@ -971,7 +1020,7 @@ fn evaluation_refusal(e: &DemandError) -> PalwStepRefuteError {
 /// preceding the disputed one, well formed) against the step root by the runs their indices derive.
 fn authenticate_operands(
     binding: &PalwTirStepBindingV1,
-    v: &PalwTirVerifiedBindingV1,
+    v: &dyn ExactBindingGeometry,
     row: &PalwStepInputRowV1,
     before: u64,
     max_step_leaf_count: u64,
@@ -979,21 +1028,21 @@ fn authenticate_operands(
     let mut leaves: Vec<(u64, PalwTirLeafV1)> = Vec::with_capacity(row.preimages.len());
     let mut hashes = Vec::with_capacity(row.preimages.len());
     for preimage in &row.preimages {
-        let index = v.space.leaf_index(&binding.job_context, &preimage.coord).ok_or(bad("an operand names no leaf of this job"))?;
+        let index = v.space().leaf_index(&binding.job_context, &preimage.coord).ok_or(bad("an operand names no leaf of this job"))?;
         if leaves.last().is_some_and(|(prev, _)| *prev >= index) {
             return Err(bad("the operands are not in ascending leaf order"));
         }
         if index >= before {
             return Err(bad("an operand does not precede the disputed leaf"));
         }
-        let leaf = v.space.leaf_at(&binding.job_context, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
+        let leaf = v.space().leaf_at(&binding.job_context, index).ok_or(PalwStepRefuteError::Unadjudicable)?;
         if preimage.version != PALW_TIR_STEP_LEAF_VERSION_V1
             || preimage.value_count != leaf.value_count
             || preimage.values_le.len() != 4 * leaf.value_count as usize
         {
             return Err(bad("an operand leaf is not well formed"));
         }
-        hashes.push(step_tile_leaf_hash_v1(&v.context_hash, &v.class_id, preimage));
+        hashes.push(step_tile_leaf_hash_v1(&v.context_hash(), &v.class_id(), preimage));
         leaves.push((index, leaf));
     }
     let mut runs: Vec<(usize, usize)> = Vec::new();
@@ -1028,7 +1077,7 @@ fn authenticate_operands(
 /// sibling short, extra or altered, an operand not its leaf's piece — is refused, never a panic.
 fn authenticate_params(
     binding: &PalwTirStepBindingV1,
-    v: &PalwTirVerifiedBindingV1,
+    v: &dyn ExactBindingGeometry,
     inventory: &PalwTirInventoryIndexV1,
     opening: &PalwTirParamOpeningV1,
 ) -> Result<BTreeMap<u32, (u32, Vec<u8>)>, PalwStepRefuteError> {
@@ -1075,7 +1124,7 @@ fn authenticate_params(
 /// inventory, or a composite section): its tree's size, its leaves ascending, and each opened
 /// operand the canonical piece of its leaf.
 fn check_opened_leaves(
-    v: &PalwTirVerifiedBindingV1,
+    v: &dyn ExactBindingGeometry,
     inventory: &PalwTirInventoryIndexV1,
     proof: &PalwArtifactMultiproofV1,
     base: u32,
@@ -1096,7 +1145,7 @@ fn check_opened_leaves(
         if *index >= count {
             return Err(bad("the artifact multiproof names no leaf"));
         }
-        check_inventory_operand_v1(&v.space.program, inventory, base + *index, operand)?;
+        check_inventory_operand_v1(v.space().program(), inventory, base + *index, operand)?;
     }
     Ok(())
 }
@@ -4687,5 +4736,31 @@ mod inventory_material_tests {
         other_program.params[0].name.push('!');
         let other = TirInventoryOpeningVerifierV1::new(&other_program, x.binding.artifact_root).unwrap();
         assert!(other.check(&opening).is_err());
+    }
+}
+
+#[cfg(test)]
+mod assignment_inventory_allocation_tests_v2 {
+    use super::*;
+    #[test]
+    fn per_parameter_small_vec_minima_and_reader_nodes_are_accounted() {
+        let one = inventory_index_requests_from_counts_v1(1, 1, 1).unwrap();
+        let four = inventory_index_requests_from_counts_v1(4, 1, 1).unwrap();
+        let readers = inventory_index_requests_from_counts_v1(4, 8, 1).unwrap();
+        assert!(four > one);
+        assert!(readers > four);
+        assert!(inventory_index_requests_from_counts_v1(u64::MAX, 2, 2).is_err());
+        assert!(inventory_index_requests_from_counts_v1(2, u64::MAX, 2).is_err());
+        assert!(inventory_index_requests_from_counts_v1(2, 1, u64::MAX).is_err());
+    }
+    #[test]
+    fn predecode_inventory_quote_bounds_real_retained_index() {
+        let execution = test_support::tiny_execution(None);
+        let program = execution.binding.class.decode_program().unwrap();
+        let (shape, _) = crate::palw_native_resource_v1::source_tir_program_shape_v1(&execution.binding.class.program).unwrap();
+        let inventory = PalwTirInventoryIndexV1::new(&program).unwrap();
+        let retained = inventory.params.capacity() * std::mem::size_of::<ParamIndexV1>()
+            + inventory.params.iter().map(|p| p.layers.capacity() * std::mem::size_of::<Option<u16>>()).sum::<usize>();
+        assert!(native_tir_inventory_index_requests_v1(&shape).unwrap() >= retained as u64);
     }
 }

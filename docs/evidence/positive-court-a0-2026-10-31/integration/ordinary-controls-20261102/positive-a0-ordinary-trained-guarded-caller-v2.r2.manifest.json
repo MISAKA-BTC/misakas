@@ -1,0 +1,88 @@
+{
+  "status": "R2_SOURCE_REVIEW_ONLY_ALL8_UNCOMPILED_UNRUN",
+  "file": "testing/positive-court-a7/tests/ordinary_trained_forward_guarded_v2.rs",
+  "before_sha256": null,
+  "after_sha256": "55ba870897897eaadfda59b804e140befb05d9c1d8f687becf6cd5f6f34453a6",
+  "bytes": 32014,
+  "patch": "/tmp/positive-a0-ordinary-trained-guarded-caller-v2.r2.patch",
+  "patch_sha256": "10ea05e31aeeb982bd77c2b2e9fd2c60105b22b4c030cfcd6eaddf0e5386f587",
+  "requires_combined_r2": {
+    "path": "/tmp/positive-a0-ordinary-forward-combined-3a03.r2.patch",
+    "sha256": "deb200fb2d22a4c6cfbf5f939073b4764973f0635cdca5ee9365c26ba2fcb0a3"
+  },
+  "new_target": {
+    "manifest_path": "testing/positive-court-a7/Cargo.toml",
+    "target": "--test ordinary_trained_forward_guarded_v2",
+    "auto_discovered": true,
+    "no_Cargo_toml_or_dependency_change": true,
+    "pure_tests": [
+      "requested_ledger_denial_and_drop_never_create_an_unreserved_lease",
+      "bounded_numeric_options_reject_zero_overflow_and_nondecimal",
+      "exact_layout_parser_rejects_duplicate_trailing_and_oversized_counts",
+      "fixed_original_jobs_keep_recorded_hashes_prompt_and_zero_tokenizer_cu",
+      "finite_cpu_conversion_rejects_platform_infinity_zero_and_overflow_without_syscalls"
+    ],
+    "ignored_actual_models": [
+      "ordinary_trained_smollm2_360m",
+      "ordinary_trained_smollm2_135m",
+      "ordinary_trained_pythia_70m"
+    ],
+    "all_tests": "UNCOMPILED_UNRUN"
+  },
+  "checks": {
+    "fmt_exit": 0,
+    "apply_check_against_combined_r2": 0,
+    "source_only_model_payload_reads": 0,
+    "Cargo": "NOT_RUN",
+    "rustc": "NOT_RUN",
+    "CPP": "NOT_RUN",
+    "runtime": "NOT_RUN",
+    "physical_RSS_quota": "UNSUPPORTED_NOT_CLAIMED",
+    "outer_monitor": "EXTERNAL_NOT_ATTESTED_BY_CALLER",
+    "source_no_global_fallback": true,
+    "no_whole_class_clone": true,
+    "actual_rlimit_calls": "NONE"
+  },
+  "reference_sources": [
+    {
+      "path": "testing/positive-court-a7/src/bin/real_llm_repro.rs",
+      "sha256": "c6a109455adcc5f3654467453d6a06cbfe63bbcb2293db8164e9397ebe5c7dc5"
+    },
+    {
+      "path": "consensus/core/src/palw_native_resource_v1/wire.rs",
+      "sha256": "a81d241c6911f03f7d259a94a0f7cc0c434adc13f87af6bf84f19ddbc14823fd"
+    },
+    {
+      "path": "consensus/core/src/palw_native_resource_v1/quota.rs",
+      "sha256": "60ed172a224cba51ac3da702998ae6a531611cdc2eda4df5d2b7610400833888"
+    }
+  ],
+  "resource_contract": {
+    "requested_limit": 8589934592,
+    "earlier_E": "typed public roots, exact configured fixture/layout/network/writer capacities, noncapturing two-counter Arc backing",
+    "component_guards": [
+      "E before context/layout/File/Arc",
+      "M via full Source+2Source+geometry+diagnostics owner",
+      "required same-ledger native Params",
+      "required ordinary output",
+      "required dense extra+runtime retained result"
+    ],
+    "callback_guard_heap": "same ledger charges sizeof private Reservation before Box too",
+    "cpu": "strict finite conversion rejects value>=platform RLIM_INFINITY before checked getrlimit/setrlimit/getrlimit; total process seconds",
+    "no_kernel_RSS_qualification": true,
+    "single_actual_case_per_process": true,
+    "context": "exact archived local16prompt1decode, max8192/8192/2048 unchanged",
+    "scope": "ordinary CPU NoSink then explicit same-owned dense SELF CONSISTENCY ONLY; no Node/native/P/fullctx/independentHFexpected"
+  },
+  "preserved_initial": {
+    "patch": "/tmp/positive-a0-ordinary-trained-guarded-caller-v2.patch",
+    "sha256": "d54c8e9f663876c564b26b8c54dee2af0cb91ffab2f378c55a46ed3b160c3ead",
+    "review": "/tmp/positive-a0-ordinary-trained-guarded-caller-v2-independent-review-20261102.json",
+    "review_sha256": "3665808334f9f130262c47fc72c4227f3bbed0f0228d14b6031ee3ef4635b6e7"
+  },
+  "r2_change": "Only pure finite CPU conversion, setter uses it before any get/set syscall, and one regression test; zero/infinity/above-infinity/overflow refused without clipping.",
+  "r2_vs_v1_diff": {
+    "path": "/tmp/positive-a0-ordinary-trained-guarded-caller-v2.r2-v1.diff",
+    "sha256": "1741649ee18d5332590700ab1ba8a5e3cb73deb08fc8435127998f2431e1ed1f"
+  }
+}

@@ -365,3 +365,48 @@ pub(crate) fn slice_range(s: Slice<'_>) -> Option<Interval> {
     }
     crate::with_slice!(s, v => minmax(v).map(|(lo, hi)| Interval::new(lo.to_i128(), hi.to_i128())))
 }
+
+/// Producer-owned quote for exactly new()'s fully resident empty table.
+/// Uses the reviewed shared public Vec envelope (Core9c010109d).
+/// No program decode/validate/compile, row source or parameter payload is covered.
+#[cfg(feature = "node")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OwnedParamsTableQuoteV2 {
+    pub root_bytes: u64,
+    pub heap_bytes: u64,
+    pub layer_slots: u64,
+}
+#[cfg(feature = "node")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnedParamsTableQuoteErrorV2 {
+    Overflow,
+}
+#[cfg(feature = "node")]
+pub fn quote_owned_params_table_v2(
+    program: &misaka_palw_tir::TirProgramV1,
+) -> Result<OwnedParamsTableQuoteV2, OwnedParamsTableQuoteErrorV2> {
+    use OwnedParamsTableQuoteErrorV2::Overflow;
+    use kaspa_consensus_core::palw_native_resource_v1::growing_vec_request_capacity_v1;
+    use std::mem::size_of;
+    fn array<T>(n: u64) -> Result<u64, OwnedParamsTableQuoteErrorV2> {
+        n.checked_mul(size_of::<T>() as u64).ok_or(Overflow)
+    }
+    fn growing<T>(n: u64) -> Result<u64, OwnedParamsTableQuoteErrorV2> {
+        array::<T>(growing_vec_request_capacity_v1::<T>(n).ok_or(Overflow)?)
+    }
+    let params = u64::try_from(program.params.len()).map_err(|_| Overflow)?;
+    let layers = u64::try_from(program.schedule.layers.len().max(1)).map_err(|_| Overflow)?;
+    let mut heap = growing::<Vec<Option<ParamData<'static>>>>(params)?;
+    heap = heap.checked_add(growing::<bool>(params)?).ok_or(Overflow)?;
+    heap = heap.checked_add(growing::<Vec<OnceLock<Option<Interval>>>>(params)?).ok_or(Overflow)?;
+    let mut layer_slots = 0u64;
+    for declaration in &program.params {
+        let width = if declaration.per_layer { layers } else { 1 };
+        layer_slots = layer_slots.checked_add(width).ok_or(Overflow)?;
+        // table inner is vec![None; width], not a payload clone.
+        heap = heap.checked_add(array::<Option<ParamData<'static>>>(width)?).ok_or(Overflow)?;
+        // ranges inner is the existing map(OnceLock::new).collect() path.
+        heap = heap.checked_add(growing::<OnceLock<Option<Interval>>>(width)?).ok_or(Overflow)?;
+    }
+    Ok(OwnedParamsTableQuoteV2 { root_bytes: size_of::<TirParams<'static>>() as u64, heap_bytes: heap, layer_slots })
+}

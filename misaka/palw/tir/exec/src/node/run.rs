@@ -45,6 +45,28 @@ pub struct TirLeafOutV1<'l> {
     pub hash: Hash64,
 }
 
+/// Fallible, borrowed observations from one ordinary execution. The original
+/// registered program/layout and old step commitments remain unchanged. A
+/// failed callback makes the whole observed run unsuccessful; receivers must
+/// discard partial observations, never persist them as completed captures.
+/// Declared dtype and native storage slice are passed unchanged (the executor
+/// may store proven-narrow intermediate values in narrower native buffers).
+pub trait TirRunObserverV1 {
+    fn node(&mut self, position: u32, value: &NodeValue<'_>) -> Result<(), String>;
+    #[allow(clippy::too_many_arguments)]
+    fn state(
+        &mut self,
+        position: u32,
+        state: u16,
+        layer: Option<u16>,
+        history_row: Option<u32>,
+        dtype: DType,
+        shape: &[usize],
+        data: Slice<'_>,
+    ) -> Result<(), String>;
+    fn last_output(&mut self, position: u32, dtype: DType, shape: &[usize], data: Slice<'_>, selected: u32) -> Result<(), String>;
+}
+
 /// What a job commits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TirJobRunV1 {
@@ -90,6 +112,27 @@ pub struct TirBoundaryLieV1 {
 
 /// A free-prompt job's decode rule: `(ids generated so far, logits row, row index) -> selected id`.
 pub type TirDecodeSelectorV1 = std::sync::Arc<dyn Fn(&[u32], &[i32], u32) -> u32 + Send + Sync>;
+
+/// Measurement-only construction/inline request. Private concrete types are
+/// counted here rather than guessed by external callers. Payload/rows/hash/tree
+/// backing and the executor each have separately named measurement requests.
+pub(crate) fn dense_measurement_constructor_requests_v2(program: &misaka_palw_tir::TirProgramV1) -> Result<u64, String> {
+    use kaspa_consensus_core::palw_native_resource_v1::growing_vec_request_capacity_v1;
+    let mut bytes =
+        (std::mem::size_of::<TirClassRunnerV1<'_>>() + std::mem::size_of::<Emitter>() + std::mem::size_of::<Driven>()) as u64;
+    let outer = growing_vec_request_capacity_v1::<Vec<u32>>(program.blocks.len() as u64).ok_or("dense constructor overflow")?;
+    bytes = bytes
+        .checked_add(outer.checked_mul(std::mem::size_of::<Vec<u32>>() as u64).ok_or("dense constructor overflow")?)
+        .ok_or("dense constructor overflow")?;
+    for block in &program.blocks {
+        bytes = bytes
+            .checked_add(
+                (block.nodes.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64).ok_or("dense constructor overflow")?,
+            )
+            .ok_or("dense constructor overflow")?;
+    }
+    Ok(bytes)
+}
 
 /// Runs jobs of one IR class over one artifact's params.
 pub struct TirClassRunnerV1<'a> {
@@ -137,6 +180,9 @@ fn lanes_typed<T: Elem>(v: &[T], out: &mut Vec<u8>) {
 
 impl<'a> TirClassRunnerV1<'a> {
     pub fn new(space: &'a PalwTirStepSpaceV1, plan: &'a TirPlan, params: &'a TirParams<'a>, class_id: Hash64) -> Result<Self, String> {
+        if plan.program.wide_logits_q24() || space.program.wide_logits_q24() {
+            return Err("wide Q24 requires the explicit V2 runner".into());
+        }
         if space.program != plan.program {
             return Err("the step space and the plan are of different programs".into());
         }
@@ -187,7 +233,59 @@ impl<'a> TirClassRunnerV1<'a> {
         verify: bool,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirJobRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None, None)?;
+        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None, None, None)?;
+        self.commit(ctx, cap, d)
+    }
+
+    /// Same default unobserved computation with an explicit REQUIRED executor
+    /// ledger. Only the measurement bridge calls this; old APIs keep None.
+    /// Retained rows/hashes/roots need the bridge's separate extra-owner guard.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn run_required_v2(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        expected_execution: Hash64,
+        reserver: &super::memory::TirMemoryReserverV1,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+    ) -> Result<TirJobRunV1, String> {
+        let d = self.drive_reserved(
+            ctx,
+            prompt,
+            cap,
+            false,
+            None,
+            None,
+            None,
+            on_leaf,
+            None,
+            None,
+            None,
+            Some((reserver, expected_execution)),
+        )?;
+        self.commit(ctx, cap, d)
+    }
+
+    /// Observe every node and each successful after-step native state in one
+    /// ordinary rerun, while producing exactly the existing step leaves/roots.
+    /// Wide-final selection is a separate profile and is refused here before
+    /// the legacy i32 logits row conversion; wide intermediates remain intact.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_observed(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        verify: bool,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+        observer: &mut dyn TirRunObserverV1,
+    ) -> Result<TirJobRunV1, String> {
+        let logits = &self.plan.program.blocks[self.plan.program.schedule.post as usize].nodes[self.plan.program.logits as usize];
+        if matches!(logits.out.dtype, DType::I64 | DType::I128 | DType::Idx) {
+            return Err("observed run refuses unsupported wide-final logits selection".into());
+        }
+        let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None, None, Some(observer))?;
         self.commit(ctx, cap, d)
     }
 
@@ -200,7 +298,7 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<(TirJobRunV1, Vec<TirResumePointV1>), String> {
         let mut points = Vec::new();
-        let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf, None, None)?;
+        let d = self.drive(ctx, prompt, cap, false, None, None, Some(&mut points), on_leaf, None, None, None)?;
         Ok((self.commit(ctx, cap, d)?, points))
     }
 
@@ -254,7 +352,7 @@ impl<'a> TirClassRunnerV1<'a> {
         until: Option<u32>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
     ) -> Result<TirRangeRunV1, String> {
-        let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf, None, None)?;
+        let d = self.drive(ctx, prompt, cap, false, from, until, None, on_leaf, None, None, None)?;
         Ok(TirRangeRunV1 { first_index: d.first_index, leaf_hashes: d.hashes, logits_rows: d.rows, generated: d.generated })
     }
 
@@ -270,7 +368,7 @@ impl<'a> TirClassRunnerV1<'a> {
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
         on_row: &mut dyn FnMut(u32, &[i32]) -> Result<(), String>,
     ) -> Result<Vec<u32>, String> {
-        let d = self.drive(ctx, prompt, cap, false, None, None, None, on_leaf, Some(on_row), None)?;
+        let d = self.drive(ctx, prompt, cap, false, None, None, None, on_leaf, Some(on_row), None, None)?;
         debug_assert!(d.hashes.is_empty() && d.rows.is_empty());
         Ok(d.generated)
     }
@@ -293,7 +391,7 @@ impl<'a> TirClassRunnerV1<'a> {
         };
         let until = next.checked_add(1).ok_or("TIR replay position overflow")?;
         let mut last = None;
-        let driven = self.drive(ctx, prompt, cap, false, from, Some(until), None, on_leaf, Some(on_row), Some(&mut last))?;
+        let driven = self.drive(ctx, prompt, cap, false, from, Some(until), None, on_leaf, Some(on_row), Some(&mut last), None)?;
         debug_assert!(driven.hashes.is_empty() && driven.rows.is_empty());
         last.ok_or("TIR streamed position produced no continuation state".into())
     }
@@ -307,10 +405,29 @@ impl<'a> TirClassRunnerV1<'a> {
         verify: bool,
         start: Option<&TirResumePointV1>,
         until: Option<u32>,
+        record: Option<&mut Vec<TirResumePointV1>>,
+        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+        stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
+        last_resume: Option<&mut Option<TirResumePointV1>>,
+        observer: Option<&mut dyn TirRunObserverV1>,
+    ) -> Result<Driven, String> {
+        self.drive_reserved(ctx, prompt, cap, verify, start, until, record, on_leaf, stream_rows, last_resume, observer, None)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn drive_reserved(
+        &self,
+        ctx: &PalwJobContextV2,
+        prompt: &[u32],
+        cap: u64,
+        verify: bool,
+        start: Option<&TirResumePointV1>,
+        until: Option<u32>,
         mut record: Option<&mut Vec<TirResumePointV1>>,
         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
         mut stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
         last_resume: Option<&mut Option<TirResumePointV1>>,
+        mut observer: Option<&mut dyn TirRunObserverV1>,
+        required: Option<(&super::memory::TirMemoryReserverV1, Hash64)>,
     ) -> Result<Driven, String> {
         let space = self.space;
         if ctx.shape_profile_id != self.class_id {
@@ -331,7 +448,16 @@ impl<'a> TirClassRunnerV1<'a> {
         };
         let h_tile = space.layout.h_tile as usize;
         let memory_need = super::memory::tir_executor_storage_need_v1(space, self.plan, ctx)?;
-        let memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-executor", self.class_id, ctx, memory_need)?;
+        let memory = match required {
+            Some((reserver, expected_execution)) => {
+                let lease = reserver("tir-dense-measurement-executor-v2", self.class_id, expected_execution, memory_need)?;
+                if ctx.context_hash() != expected_execution {
+                    return Err("dense measurement original execution pin differs".into());
+                }
+                Some(lease)
+            }
+            None => super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-executor", self.class_id, ctx, memory_need)?,
+        };
         let mut exec = TirExecutor::new(self.plan, self.params).map_err(|e| e.to_string())?;
         exec.set_hist_tail(h_tile);
         if self.fused {
@@ -400,26 +526,60 @@ impl<'a> TirClassRunnerV1<'a> {
             let run_post = job.runs_post(a);
             {
                 let mut sink = CommitSink { runner: self, emit: &mut emit, on_leaf };
-                match self.boundary_lie {
-                    Some(lie) if lie.position == a => exec
-                        .step_with_boundary_lie(token, &mut sink, run_post, lie.boundary, &|lanes: &mut [i128]| {
-                            if let Some(first) = lanes.first_mut() {
-                                *first ^= 1;
-                            }
-                        })
-                        .map_err(|e| format!("position {a}: {e}"))?,
-                    _ => exec.step_opt(token, &mut sink, run_post).map_err(|e| format!("position {a}: {e}"))?,
+                let mut step = |sink: &mut dyn StepSink| -> Result<(), String> {
+                    match self.boundary_lie {
+                        Some(lie) if lie.position == a => exec
+                            .step_with_boundary_lie(token, sink, run_post, lie.boundary, &|lanes: &mut [i128]| {
+                                if let Some(first) = lanes.first_mut() {
+                                    *first ^= 1;
+                                }
+                            })
+                            .map_err(|e| format!("position {a}: {e}")),
+                        _ => exec.step_opt(token, sink, run_post).map_err(|e| format!("position {a}: {e}")),
+                    }
+                };
+                if let Some(observe) = observer.as_mut() {
+                    step(&mut ObservedSink::new(&mut sink, &mut **observe, a))?;
+                } else {
+                    step(&mut sink)?;
                 }
             }
             if let Some(e) = emit.error.take() {
                 return Err(e);
             }
+            if let Some(observe) = observer.as_mut() {
+                exec.visit_state(&mut |state, layer, history_row, dtype, shape, data| {
+                    observe.state(a, state, layer, history_row, dtype, shape, data)
+                })?;
+            }
             if run_post {
-                let (_, logits) = exec.logits();
-                if logits.dtype() == DType::Idx {
-                    return Err("an idx logits row has no place in the logits schemes".into());
-                }
-                let row: Vec<i32> = logits.to_i128s().into_iter().map(|v| v as i32).collect();
+                let (shape, logits) = exec.logits();
+                let row: Vec<i32> = if observer.is_some() {
+                    // Views/refinement can leave a declared narrow result in a
+                    // wider physical buffer. Check mathematical values rather
+                    // than rejecting its storage variant or truncating lanes.
+                    let declared = self.plan.program.blocks[self.plan.program.schedule.post as usize].nodes
+                        [self.plan.program.logits as usize]
+                        .out
+                        .dtype;
+                    let mut row = Vec::new();
+                    row.try_reserve_exact(logits.len()).map_err(|_| "cannot reserve observed logits row")?;
+                    with_slice!(logits, values => {
+                        for value in values {
+                            let value = value.to_i128();
+                            if !declared.contains(value) {
+                                return Err("observed logits value does not fit its declared dtype".into());
+                            }
+                            row.push(i32::try_from(value).map_err(|_| "observed logits value does not fit i32 selection")?);
+                        }
+                    });
+                    row
+                } else {
+                    if logits.dtype() == DType::Idx {
+                        return Err("an idx logits row has no place in the logits schemes".into());
+                    }
+                    logits.to_i128s().into_iter().map(|v| v as i32).collect()
+                };
                 if row.is_empty() {
                     return Err("an empty logits row selects no token".into());
                 }
@@ -427,6 +587,15 @@ impl<'a> TirClassRunnerV1<'a> {
                     Some(select) => select(&generated, &row, generated.len() as u32),
                     None => base0_decode_token_select_v1(&row) as u32,
                 };
+                if let Some(observe) = observer.as_mut() {
+                    let dtype = self.plan.program.blocks[self.plan.program.schedule.post as usize].nodes
+                        [self.plan.program.logits as usize]
+                        .out
+                        .dtype;
+                    // The original native buffer is still borrowed here. The
+                    // legacy row copy above is used only for ordinary selection.
+                    observe.last_output(a, dtype, shape, logits, id)?;
+                }
                 if let Some(consume) = stream_rows.as_mut() {
                     consume(generated.len() as u32, &row)?;
                 } else {
@@ -616,6 +785,33 @@ impl Emitter {
             self.hashes.push(hash);
         }
         on_leaf(&TirLeafOutV1 { index, position: self.position, preimage: &self.leaf, hash });
+    }
+}
+
+/// Adds fallible every-node observation only to the observed route. The inner
+/// legacy commit sink still sees each original committed node exactly once.
+pub(crate) struct ObservedSink<'a, 'o> {
+    inner: &'a mut dyn StepSink,
+    observer: &'o mut dyn TirRunObserverV1,
+    position: u32,
+}
+impl<'a, 'o> ObservedSink<'a, 'o> {
+    pub(crate) fn new(inner: &'a mut dyn StepSink, observer: &'o mut dyn TirRunObserverV1, position: u32) -> Self {
+        Self { inner, observer, position }
+    }
+}
+impl StepSink for ObservedSink<'_, '_> {
+    fn every_node(&self) -> bool {
+        true
+    }
+    fn node(&mut self, value: &NodeValue<'_>) {
+        self.inner.node(value);
+    }
+    fn try_node(&mut self, value: &NodeValue<'_>) -> misaka_palw_tir::TirResult<()> {
+        self.observer
+            .node(self.position, value)
+            .map_err(|message| misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, message))?;
+        self.inner.try_node(value)
     }
 }
 

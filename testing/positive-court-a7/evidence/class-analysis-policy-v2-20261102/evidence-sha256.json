@@ -1,0 +1,40 @@
+{
+  "scope": "separate wrapper source, mock regressions and review; no model rerun",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 3147,
+      "sha256": "b8f895a72208b63b694f8abc7f5b09c6e4f341f19200e046ea8381d279014e24"
+    },
+    {
+      "path": "positive-a0-class-analysis-policy-v2-mock-20261102-v2.json",
+      "bytes": 8775,
+      "sha256": "89fdee8462dc55d57b149e41e2a270b9169db11bd2a9348c02748156f4265c55"
+    },
+    {
+      "path": "positive-a0-class-analysis-policy-v2-mock-20261102-v2.stderr.log",
+      "bytes": 2327,
+      "sha256": "5ee96b7f0500ef374f05b52d817a78ca3c1b7ebcade61d83038a7948590efed5"
+    },
+    {
+      "path": "positive-a0-class-analysis-policy-v2-mock-20261102-v2.stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "positive-a0-class-analysis-run-policy-v2-20261102.py",
+      "bytes": 21211,
+      "sha256": "c597f3cfe5cae8aaa76653310d5e55e2827866d4f7cf366d725772715dd8edcb"
+    },
+    {
+      "path": "review.json",
+      "bytes": 1621,
+      "sha256": "ff3c456fd29f6567e8c80c5556f5f5d2cba4dc9e4c370aed2a1a48c6b83adc36"
+    },
+    {
+      "path": "test_positive_a0_class_analysis_run_policy_v2_20261102.py",
+      "bytes": 14814,
+      "sha256": "5caa0e3fb1a140a5f01cd41de7772ca880754c7321855a760e455f8e25c7e8e4"
+    }
+  ]
+}

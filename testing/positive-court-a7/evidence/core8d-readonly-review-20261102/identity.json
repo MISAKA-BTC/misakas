@@ -1,0 +1,228 @@
+{
+  "schema": "misaka.a7.core-cache-candidate-identity.v1",
+  "mode": "READ_ONLY; no reclaim authorization",
+  "utc": "2026-11-01T17:31:49.087770+00:00",
+  "a1_reference_map_sha256": "2fd10d3857c3d358f2cbb272c5c657f7672a3d35898aa79782468a6e4288d31a",
+  "rows": [
+    {
+      "unit": "0bbd599cd27ef842",
+      "artifacts": [
+        {
+          "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rlib",
+          "realpath": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rlib",
+          "sha256": "28e80968474045c8d608811ec19a35de46ab4aa270c9dcc79dbc58416d495a95",
+          "stat_before": {
+            "device": 16777234,
+            "inode": 47931122,
+            "bytes": 366275728,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462791700638020,
+            "ctime_ns": 1793462791703097018,
+            "atime_ns": 1793464415342385648,
+            "blocks": 715384
+          },
+          "fstat_before": {
+            "device": 16777234,
+            "inode": 47931122,
+            "bytes": 366275728,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462791700638020,
+            "ctime_ns": 1793462791703097018,
+            "atime_ns": 1793464415342385648,
+            "blocks": 715384
+          },
+          "fstat_after": {
+            "device": 16777234,
+            "inode": 47931122,
+            "bytes": 366275728,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462791700638020,
+            "ctime_ns": 1793462791703097018,
+            "atime_ns": 1793464415342385648,
+            "blocks": 715384
+          },
+          "stat_after": {
+            "device": 16777234,
+            "inode": 47931122,
+            "bytes": 366275728,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462791700638020,
+            "ctime_ns": 1793462791703097018,
+            "atime_ns": 1793464415342385648,
+            "blocks": 715384
+          },
+          "stable_during_read": true,
+          "a1_reference_stat_matches": true,
+          "notes": "content read-only; filesystem access time may advance"
+        },
+        {
+          "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rmeta",
+          "realpath": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rmeta",
+          "sha256": "b6894ac0aa1d05d843084611e97b1abf1d7ebee03f7053691c90bd43f21b9527",
+          "stat_before": {
+            "device": 16777234,
+            "inode": 47930987,
+            "bytes": 118604235,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462763888633979,
+            "ctime_ns": 1793462763889587603,
+            "atime_ns": 1793463044556248247,
+            "blocks": 231656
+          },
+          "fstat_before": {
+            "device": 16777234,
+            "inode": 47930987,
+            "bytes": 118604235,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462763888633979,
+            "ctime_ns": 1793462763889587603,
+            "atime_ns": 1793463044556248247,
+            "blocks": 231656
+          },
+          "fstat_after": {
+            "device": 16777234,
+            "inode": 47930987,
+            "bytes": 118604235,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462763888633979,
+            "ctime_ns": 1793462763889587603,
+            "atime_ns": 1793463044556248247,
+            "blocks": 231656
+          },
+          "stat_after": {
+            "device": 16777234,
+            "inode": 47930987,
+            "bytes": 118604235,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462763888633979,
+            "ctime_ns": 1793462763889587603,
+            "atime_ns": 1793463044556248247,
+            "blocks": 231656
+          },
+          "stable_during_read": true,
+          "a1_reference_stat_matches": true,
+          "notes": "content read-only; filesystem access time may advance"
+        }
+      ]
+    },
+    {
+      "unit": "8d23c7aaac2eb958",
+      "artifacts": [
+        {
+          "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rlib",
+          "realpath": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rlib",
+          "sha256": "5563bc3c5528de7c937fa88003e889e8c646ba572ae2030343bf630ab25719e5",
+          "stat_before": {
+            "device": 16777234,
+            "inode": 47929526,
+            "bytes": 365504688,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462675837367302,
+            "ctime_ns": 1793462675839328884,
+            "atime_ns": 1793462676443956840,
+            "blocks": 713880
+          },
+          "fstat_before": {
+            "device": 16777234,
+            "inode": 47929526,
+            "bytes": 365504688,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462675837367302,
+            "ctime_ns": 1793462675839328884,
+            "atime_ns": 1793462676443956840,
+            "blocks": 713880
+          },
+          "fstat_after": {
+            "device": 16777234,
+            "inode": 47929526,
+            "bytes": 365504688,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462675837367302,
+            "ctime_ns": 1793462675839328884,
+            "atime_ns": 1793462676443956840,
+            "blocks": 713880
+          },
+          "stat_after": {
+            "device": 16777234,
+            "inode": 47929526,
+            "bytes": 365504688,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462675837367302,
+            "ctime_ns": 1793462675839328884,
+            "atime_ns": 1793462676443956840,
+            "blocks": 713880
+          },
+          "stable_during_read": true,
+          "a1_reference_stat_matches": true,
+          "notes": "content read-only; filesystem access time may advance"
+        },
+        {
+          "path": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rmeta",
+          "realpath": "/Users/wata/.cache/misaka-positive-a1-target/debug/deps/libkaspa_consensus_core-8d23c7aaac2eb958.rmeta",
+          "sha256": "c153194d3dad1b278edfe4ee72148d27da92220d4665a3e3e1c6643677e82382",
+          "stat_before": {
+            "device": 16777234,
+            "inode": 47929361,
+            "bytes": 118601642,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462643883894169,
+            "ctime_ns": 1793462643884770794,
+            "atime_ns": 1793462659385188648,
+            "blocks": 231648
+          },
+          "fstat_before": {
+            "device": 16777234,
+            "inode": 47929361,
+            "bytes": 118601642,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462643883894169,
+            "ctime_ns": 1793462643884770794,
+            "atime_ns": 1793462659385188648,
+            "blocks": 231648
+          },
+          "fstat_after": {
+            "device": 16777234,
+            "inode": 47929361,
+            "bytes": 118601642,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462643883894169,
+            "ctime_ns": 1793462643884770794,
+            "atime_ns": 1793462659385188648,
+            "blocks": 231648
+          },
+          "stat_after": {
+            "device": 16777234,
+            "inode": 47929361,
+            "bytes": 118601642,
+            "nlink": 1,
+            "mode": 33188,
+            "mtime_ns": 1793462643883894169,
+            "ctime_ns": 1793462643884770794,
+            "atime_ns": 1793462659385188648,
+            "blocks": 231648
+          },
+          "stable_during_read": true,
+          "a1_reference_stat_matches": true,
+          "notes": "content read-only; filesystem access time may advance"
+        }
+      ]
+    }
+  ],
+  "sum_file_bytes": 968986293,
+  "action": "No unlink, compression, build, model run or new target; no other owner artifact content read"
+}

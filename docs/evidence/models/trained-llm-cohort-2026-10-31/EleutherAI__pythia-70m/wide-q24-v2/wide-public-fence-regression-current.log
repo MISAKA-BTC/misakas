@@ -1,0 +1,25 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/Downloads/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 11s
+     Running tests/palw_tir_fences_are_dormant.rs (target/debug/deps/palw_tir_fences_are_dormant-b14293f39a1f3919)
+
+running 2 tests
+test every_armed_row_is_its_pinned_row_with_the_ir_flag_day_at_2000 ... ok
+test every_shipped_ruleset_keeps_its_three_ids ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+     Running tests/palw_tir_v1_fence.rs (target/debug/deps/palw_tir_v1_fence-3b203e6f48249d7f)
+
+running 9 tests
+test the_ids_are_keyed_hashes_of_what_they_name ... ok
+test testnet_12_leaves_it_dormant_and_the_accessor_agrees ... ok
+test validate_refuses_every_value_this_build_cannot_run ... ok
+test the_value_is_fingerprinted_and_the_height_alone_is_what_the_identity_normalises ... ok
+test the_fork_id_gate_names_it_at_its_height ... ok
+test the_flag_day_entry_sets_the_field_it_names ... ok
+test a_scheduled_fence_moves_the_ruleset_and_the_schedule_and_never_the_identity ... ok
+test never_is_absence_for_the_identity_and_genesis_is_a_rule ... ok
+test the_fold_reads_the_height_through_a_mirror_the_ruleset_must_agree_with ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+

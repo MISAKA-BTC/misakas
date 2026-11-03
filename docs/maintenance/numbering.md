@@ -49,3 +49,7 @@ CourtSupplierConsent と AllModelG14PanelOne は並行 branch で同じ RFC-0042
 - [RFC-0042 (CourtSupplierConsent)](../rfc/0042-court-family-supplier-consent-and-native-reservation.md)
 - [ADR-0210 (AllModelG14PanelOne)](../adr/0210-all-model-g14-panel-one.md)
 - [ADR-0210 (CourtSupplierConsent)](../adr/0210-court-family-supplier-consent-and-native-reservation.md)
+
+## 2026-11-03 先行relay資料の採択
+
+[RFC-0046](../rfc/0046-positive-native-funded-relay.md) / [ADR-0214](../adr/0214-positive-native-funded-relay.md)を、ユーザーの「両案を採択し、限定実装を進める」により同時採択。ローカル全refの履歴で同番号の主文書が無いことを確認した。先行署名資料・有限custody・条件付き部分精算を実装する。本番有効化・旧原資移行は別承認。未fetch remoteや将来branchの未使用を保証しない。

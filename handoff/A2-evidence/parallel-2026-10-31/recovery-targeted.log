@@ -1,0 +1,18 @@
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/remote)
+    Finished `test` profile [unoptimized] target(s) in 12.40s
+     Running unittests src/lib.rs (/tmp/misaka-a2-target/debug/deps/misaka_palw_remote-cfa50af76678a7cd)
+
+running 10 tests
+test miner::positive_v2::recovery::tests::journal_process_child ... ok
+test miner::positive_v2::recovery::tests::bounded_record_capacity_stops_before_provider_and_poison_live_session ... ok
+test miner::positive_v2::recovery::tests::second_writer_nonregular_and_symlink_journals_are_refused_without_blocking ... ok
+test miner::positive_v2::recovery::tests::protected_anchor_is_committed_before_control_provider_and_response_effects ... ok
+test miner::positive_v2::recovery::tests::unavailable_provider_cost_is_durable_and_read_cap_does_not_reset ... ok
+test miner::positive_v2::recovery::tests::restart_preserves_union_retries_and_all_preparation_counters ... ok
+test miner::positive_v2::recovery::tests::missing_anchor_wrong_scope_and_complete_rollback_are_not_recovery ... ok
+test miner::positive_v2::recovery::tests::failed_protected_anchor_commit_poison_prevents_provider_io_and_tail_is_conservative ... ok
+test miner::positive_v2::recovery::tests::torn_corrupt_oversized_and_reordered_record_bodies_are_refused ... ok
+test miner::positive_v2::recovery::tests::separate_process_restart_preserves_counters_and_live_lease ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 210 filtered out; finished in 0.66s
+

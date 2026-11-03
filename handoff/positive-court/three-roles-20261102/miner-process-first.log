@@ -1,0 +1,18 @@
+
+running 1 test
+test trained_roles::isolated_process::trained_miner_process_only ... 
+running 1 test
+test trained_roles::isolated_process::miner_child ... ROLE_MEASURE {"canonical_job":false,"detail":{"context":"d9ca9eae0abcafa087e4e06ba9fcd8a8f71f0f435735e3302a7725d2465fb9a22eb728f4a7d3075bffcdc6208d791b999e6f1f25574864ac7b41d792379ee868","model":"EleutherAI/pythia-70m","original_artifact":"427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4","original_class":"356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1","revision":"a39f36b100fe8a5377810d56c3f4789b9c53ac42"},"full_context_execution":false,"native_authority":false,"node_process_isolated":false,"phase":"trace-free-metadata","physical_rss_hard_quota":false,"pid":96819,"process_maxrss_native_units":8945664,"process_system_seconds":0.001396,"process_user_seconds":0.00436,"requested_cumulative":1342177280,"requested_live":1342177280,"requested_peak":1342177280,"wall_ns":2117209}
+ROLE_MEASURE {"canonical_job":false,"detail":{"read_bytes":103378910},"full_context_execution":false,"native_authority":false,"node_process_isolated":false,"phase":"original-owned-weights","physical_rss_hard_quota":false,"pid":96819,"process_maxrss_native_units":112934912,"process_system_seconds":0.014701,"process_user_seconds":0.322229,"requested_cumulative":1445683375,"requested_live":1445683375,"requested_peak":1445683375,"wall_ns":329907459}
+ROLE_MEASURE {"canonical_job":false,"detail":{"handoff_peak":2344624638,"requested_bytes":2344624394,"work":5636947135},"full_context_execution":false,"native_authority":false,"node_process_isolated":false,"phase":"ordinary-preflight","physical_rss_hard_quota":false,"pid":96819,"process_maxrss_native_units":112984064,"process_system_seconds":0.014745,"process_user_seconds":0.322326,"requested_cumulative":1445683375,"requested_live":1445683375,"requested_peak":1445683375,"wall_ns":78875}
+ROLE_MEASURE {"canonical_job":false,"detail":{"generated":[273],"output":"282a19435f7e3884a8b5ab062580cddf53175ad6701e7bc7022cf33f153d652fcbf9893b2635088bb83fd54fcb49855ecf3e5d565e17cf47a170cfaf6f33ca6d","witness_runs":0},"full_context_execution":false,"native_authority":false,"node_process_isolated":false,"phase":"ordinary-miner","physical_rss_hard_quota":false,"pid":96819,"process_maxrss_native_units":127991808,"process_system_seconds":0.021212,"process_user_seconds":0.402629,"requested_cumulative":3790308013,"requested_live":1445683619,"requested_peak":3790308013,"wall_ns":81512792}
+ROLE_ISOLATED {"canonical_job":false,"cpu_system_us":21330,"cpu_user_us":402766,"detail":{"returned_result":true,"witness_runs":0},"full_context_execution":false,"logical_request_peak":3790308013,"native_authority":false,"node_process_isolated":false,"phase":"ordinary-miner-process-complete","pid":96819,"process_maxrss_native_units":128057344,"role":"miner"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.42s
+
+ROLE_ISOLATED {"canonical_job":false,"cpu_system_us":2318,"cpu_user_us":2709,"detail":{"miner_cpu_system_us":21274,"miner_cpu_user_us":402760,"miner_exited_before_panel":true,"miner_maxrss":128008192,"miner_pid":96819,"miner_request_peak":3790308013,"miner_witness_runs":0,"wire_received":8351},"full_context_execution":false,"logical_request_peak":8589934592,"native_authority":false,"node_process_isolated":false,"phase":"miner-result-received","pid":96817,"process_maxrss_native_units":7192576,"role":"panel"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 31 filtered out; finished in 0.43s
+
