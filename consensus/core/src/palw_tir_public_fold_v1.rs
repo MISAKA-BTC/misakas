@@ -501,7 +501,15 @@ pub fn palw_tir_public_original_quote_with_diagnostics_v1(
         return Ok(None);
     }
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
-    let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header, diagnostics)?;
+    let quoted = original_plan_v1(&builder, now_daa, original, header, diagnostics.as_deref_mut());
+    if let Some(Some(breakdown)) = diagnostics
+        && breakdown.semantic_families.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer)
+    {
+        breakdown.batch_tokenizer_openings = crate::palw_tokenizer_rendering_v2::palw_rooted_tokenizer_opening_bounds_v1(
+            base, extras, now_daa, original, header,
+        );
+    }
+    let (plan, _, _, geometry) = quoted?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
     let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
     // Mirrors `prepare_original_v1`: a semantic stage is framed only where its staged court can open (G-18).

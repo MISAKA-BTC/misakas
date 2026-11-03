@@ -610,6 +610,13 @@ mod tests {
         assert_eq!(facts.eog_leaf, eog.opening.leaf_hash);
         assert_eq!(facts.eog_count, 1);
         assert_eq!(facts.lowest_eog_id, 2);
+        let registration = Hash64::from_u64_word(1);
+        let bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(registration, &facts);
+        assert_eq!(bounds.registration_id, registration);
+        assert_eq!(bounds.eog_opening_bytes, borsh::object_length(&eog).unwrap() as u64);
+        let openings = (0..statement.vocab).map(|id| table.opening_of(id).unwrap());
+        let actual = openings.map(|opening| borsh::object_length(&opening).unwrap() as u64).max().unwrap();
+        assert_eq!(bounds.maximum_rendering_opening_bytes, actual);
     }
 
     #[test]
@@ -1057,6 +1064,57 @@ pub(crate) fn palw_rooted_tokenizer_registration_v1<'a>(
     let key = PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(class_id, semantics.commitment());
     let PalwStagedCourtRowV1::VerifiedTokenizerRegistration(row) = state.staged_court_row_v1(&key)? else { return None };
     (row.point.daa_score < candidate_daa && row.key() == key && row.check_context(state).is_ok()).then_some(row.as_ref())
+}
+
+/// Claim-local operand bounds after reuse of a verified registration. These
+/// sizes exclude the carrier, authenticated ID source and terminal execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwRootedTokenizerOpeningBoundsV1 {
+    pub registration_id: Hash64,
+    pub maximum_rendering_opening_bytes: u64,
+    pub eog_opening_bytes: u64,
+}
+
+impl PalwRootedTokenizerOpeningBoundsV1 {
+    fn from_facts(registration_id: Hash64, facts: &PalwDerivedTokenizerRenderingV2) -> Self {
+        let vocab = u64::from(facts.statement.vocab);
+        let leaves = vocab + 1;
+        let rendering_siblings = crate::palw_step_leg::step_leg_max_opening_siblings_v1(leaves) as u64;
+        let eog_siblings = crate::palw_step_leg::step_range_sibling_count_v1(leaves, vocab, 1);
+        // PalwStepOpeningV1: u64 index, 64-byte hash, Vec length and sibling hashes.
+        let step_opening_bytes = |siblings| 8 + 64 + 4 + 64 * siblings;
+        Self {
+            registration_id,
+            // ID, Some discriminant, Vec length, rendering bytes and opening.
+            maximum_rendering_opening_bytes: 4 + 1 + 4 + facts.maximum_rendering_bytes + step_opening_bytes(rendering_siblings),
+            eog_opening_bytes: 4 + 4 * u64::from(facts.eog_count) + step_opening_bytes(eog_siblings),
+        }
+    }
+}
+
+pub(crate) fn palw_rooted_tokenizer_opening_bounds_v1(
+    state: &PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    candidate_daa: u64,
+    original: &PalwFreePromptCommitmentV3,
+    header: &PalwPublicTirBindingHeaderV1,
+) -> Option<PalwRootedTokenizerOpeningBoundsV1> {
+    let class = original.job.class_id;
+    let row = palw_rooted_tokenizer_registration_v1(state, extras, class, candidate_daa)?;
+    let record = state.tir_class_v1(&class)?;
+    let facts = row.facts_v1();
+    if !row.semantics.well_formed_for(&class, &header.artifact_root)
+        || !row.semantics.matches_context(&header.job_context)
+        || original.job.tokenizer_id != facts.statement.tokenizer_id
+        || original.execution_root != header.committed_execution_root
+        || original.decode_tokens_executed != header.job_context.exact_decode_tokens
+        || record.logits_vocab != facts.statement.vocab
+        || palw_fp_constraint_table_root_v1(&original.job).is_some_and(|root| root != facts.statement.table_root)
+    {
+        return None;
+    }
+    Some(PalwRootedTokenizerOpeningBoundsV1::from_facts(row.record_id_v1(), facts))
 }
 
 /// Borrowed facts for one accepted original and its source-authenticated IDs.

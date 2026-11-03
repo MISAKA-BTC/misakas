@@ -2703,3 +2703,29 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-verification-edge.1tUlGg/te
 B0 and relay agreed at DAA 19,696 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-verification-live.zF6QyN/page.json`.
+
+## Rooted tokenizer operands in the pre-signing quote
+
+The horizon-refusal diagnostic can now report a separate prospective
+Batch tokenizer envelope when the old plan has a tokenizer stage.
+The envelope comes from the accepted branch's verified registration
+for the original and pins its registration ID. It reports the Borsh
+bound for one rendering opening and the exact Borsh size of the EOG
+opening from the registered vocabulary, rendering length and EOG
+count. The quote withholds that envelope when the registration is
+absent, dormant, too recent or belongs to a different context.
+Authenticated ID transport, carrier overhead, operation counts, CPU,
+and terminal execution still require their own Batch reservations.
+The old quote's resource totals, wire plan and acceptance rule
+continue to use their existing route.
+
+The extracted renderer suite passed nine checks, including comparing
+the bounds to actual serialized table openings with an odd leaf
+count. The new accepted-branch fixture checks the previous branch,
+same-DAA rejection, mismatched tokenizer and restored state. It and the
+RPC diagnostic wiring still need an integrated build and run. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-tokenizer-quote.enQA0Z/test.log`.
+
+B0 and relay agreed on DAA 19,696 and the newly selected block in
+the scanned interval had no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-rooted-tokenizer-quote-live.bofd73/page.json`.
