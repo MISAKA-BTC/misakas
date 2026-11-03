@@ -619,11 +619,11 @@ pub fn palw_claim_local_owned_checkpoint_v1(
         if state.last_point() != Some(point) {
             return Err(bad("native checkpoint consumer point differs from actual retained state"));
         }
-        // A row/commitment is not the original admission material. The general
-        // checkpoint may describe missing provenance as held; an EVM lifecycle
-        // capability must refuse rather than assert that loss is preserved.
+        // A lifecycle capability requires the complete original admission.
+        // Current claims can have a scoped native source without an F1 frame.
         for (id, claim) in &state.claims {
-            if rewards::origin_for(state, params, *id, claim)?.is_none() {
+            let scoped = super::palw_claim_local_source_admission_v8::for_stored_claim_v8(state, *id, claim)?;
+            if scoped.is_none() && rewards::origin_for(state, params, *id, claim)?.is_none() {
                 return Err(bad("native lifecycle checkpoint lost original admission material"));
             }
         }
