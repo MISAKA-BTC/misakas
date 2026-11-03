@@ -1020,13 +1020,10 @@ impl CheckedUnconsumedAssignmentCloseV2 {
         amounts: &[u64],
         now: u64,
     ) -> Result<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2, PalwStateV2Error> {
-        use crate::palw_positive_assignment_funds_v2::{
-            AssignmentAuthorizedDueV2, AssignmentSpendAuthorizationV2, assignment_funding_image_v2, qualify_assignment_spend_v2,
-        };
+        use crate::palw_positive_assignment_funds_v2::{assignment_funding_image_v2, qualify_unconsumed_assignment_refund_v2};
         use crate::palw_positive_court_v2::coordinator::assignment_body::{
             PositiveAssignmentNativeOperationV2 as O, decode_assignment_body_v2,
         };
-        use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2;
 
         if !self.cooperative || now < self.receipt.origin.accepted_daa || tx.payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 12]) {
             return Err(refusal("first cooperative unconsumed refund carrier"));
@@ -1064,28 +1061,8 @@ impl CheckedUnconsumedAssignmentCloseV2 {
             self.history_storage_limit,
             tx.payload.len() - 3,
         )?;
-        let dues = [(0, funding.worker.remaining), (3, funding.surplus.remaining)]
-            .into_iter()
-            .filter(|&(_, amount)| amount != 0)
-            .map(|(source_leg, amount)| AssignmentAuthorizedDueV2 {
-                source_leg,
-                kind: AssignmentSettlementLegV2::Refund,
-                party: funding.authorization.payer,
-                recipient: funding.authorization.refund_payload,
-                amount,
-                receipt: self.receipt,
-            })
-            .collect();
-        let authorization = AssignmentSpendAuthorizationV2 {
-            protected_after: [0, funding.earned_service_due, funding.liability_floor, 0],
-            before: funding,
-            dues,
-            daa: now,
-            max_frame_bytes: self.max_frame_bytes,
-            max_history_frames: self.max_history_frames,
-            payload: tx.payload.clone(),
-        };
-        qualify_assignment_spend_v2(&authorization.before, &authorization, tx, amounts, now).map_err(refusal)
+        qualify_unconsumed_assignment_refund_v2(funding, self.receipt, tx, amounts, now, self.max_frame_bytes, self.max_history_frames)
+            .map_err(refusal)
     }
 }
 

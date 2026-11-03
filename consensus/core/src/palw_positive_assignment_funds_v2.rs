@@ -1008,6 +1008,42 @@ impl AssignmentSpendPlanV2 {
     }
 }
 
+/// Build the monetary part of a first unconsumed refund. The native caller
+/// has already matched the accepted close, original funding and journal.
+pub(crate) fn qualify_unconsumed_assignment_refund_v2(
+    funding: AssignmentFundingRow,
+    receipt: AcceptedMaterial,
+    tx: &Transaction,
+    amounts: &[u64],
+    now: u64,
+    max_frame_bytes: u64,
+    max_history_frames: u32,
+) -> Result<AssignmentSpendPlanV2, AssignmentFundsErrorV2> {
+    use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2;
+    let dues = [(0, funding.worker.remaining), (3, funding.surplus.remaining)]
+        .into_iter()
+        .filter(|&(_, amount)| amount != 0)
+        .map(|(source_leg, amount)| AssignmentAuthorizedDueV2 {
+            source_leg,
+            kind: AssignmentSettlementLegV2::Refund,
+            party: funding.authorization.payer,
+            recipient: funding.authorization.refund_payload,
+            amount,
+            receipt,
+        })
+        .collect();
+    let authorization = AssignmentSpendAuthorizationV2 {
+        protected_after: [0, funding.earned_service_due, funding.liability_floor, 0],
+        before: funding,
+        dues,
+        daa: now,
+        max_frame_bytes,
+        max_history_frames,
+        payload: tx.payload.clone(),
+    };
+    qualify_assignment_spend_v2(&authorization.before, &authorization, tx, amounts, now)
+}
+
 /// Qualifies exactly one current native Assignment A input at index zero.
 /// Native authorizes exact op12 receipts, not arbitrary payload bytes. Ordinary
 /// scripts remain mandatory. All fees/change outside this account use foreign
