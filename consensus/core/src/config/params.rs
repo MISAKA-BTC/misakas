@@ -2427,6 +2427,9 @@ pub struct Params {
     /// G14 TIR required-family staged route (native-context seeds/answers over the decode view).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_tir_route_v1: Option<ForkActivation>,
+    /// RFC-0026 §11 BCT1 transport and rent. Independent of the legacy
+    /// material route and disabled until the complete Batch profile is ready.
+    pub palw_batch_court_v1: Option<ForkActivation>,
     /// Original paid TIR public-conviction allocations and signed controls.
     /// Independent and dormant on every shipped preset; never reprices old claims.
     pub palw_tir_public_conviction_v1: Option<ForkActivation>,
@@ -5100,6 +5103,13 @@ impl Params {
         }
     }
 
+    pub fn palw_batch_court_v1_fence(&self) -> Option<ForkActivation> {
+        let batch = self.palw_batch_court_v1.filter(|f| *f != ForkActivation::never())?;
+        let tir = self.palw_tir_public_conviction_v1_fence()?;
+        let audit = self.palw_audit_2026_09_11_fence()?;
+        (batch.daa_score() >= tir.daa_score().max(audit.daa_score())).then_some(batch)
+    }
+
     /// **G14's original paid TIR public-conviction route** — in force only where every rule its verdicts consume is in force too
     /// (the later of them): the staged TIR route and public court it extends, the objective-offence funnel it convicts through,
     /// R-core+ (the conviction tiers, vesting and the exit-lock lattice a collectible debit needs) and ADR-0160's aggregate
@@ -6251,6 +6261,7 @@ impl Params {
             palw_court_commitment_scope_v1: self.palw_court_commitment_scope_v1,
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
+            palw_batch_court_v1: self.palw_batch_court_v1,
             palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
             palw_tir_container_identity_v1: self.palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: self.palw_tir_frame_cost_v1,
@@ -7436,6 +7447,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
@@ -7813,6 +7825,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
@@ -8172,6 +8185,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
@@ -13758,6 +13772,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,

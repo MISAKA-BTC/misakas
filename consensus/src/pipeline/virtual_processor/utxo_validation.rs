@@ -562,7 +562,9 @@ impl VirtualStateProcessor {
         } else {
             0
         };
-        fee.saturating_sub(bond_burned.saturating_add(rent).saturating_add(self.palw_tir_public_declared_rent_v1(tx, daa)))
+        let remaining =
+            fee.saturating_sub(bond_burned.saturating_add(rent).saturating_add(self.palw_tir_public_declared_rent_v1(tx, daa)));
+        self.palw_lifecycle_kind_fences.batch_court_collectible_fee_v1(tx, remaining, daa).unwrap_or(remaining)
     }
 
     /// Calculates UTXO state and transaction acceptance data relative to the selected parent state

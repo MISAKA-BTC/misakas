@@ -2580,3 +2580,25 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-carrier-fee.cqn1sP/tests.l
 B0 and relay agreed at DAA 19,692. The selected interval contained no
 new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-fees-live.1Mjs9y/page.json`.
+
+## Batch lifecycle and fee activation boundary
+
+The BCT1 transaction shape check and the virtual processor's shared
+collectible fee calculation use the same prospective Batch Court
+fence. The latter is already the path for Round preflight, template and
+coinbase. It applies the BCT1 storage debit only to the fee left after
+existing allocations. Malformed historical carriers have no Batch fee
+effect; above the fence a malformed new carrier fails the header
+shape check. Other lifecycle payloads use the existing rules.
+
+The independent fence is named in the schedule and fork ID logic.
+Every preset leaves it absent, and validation refuses an attempt to
+arm it while native profile and accepted object folding are incomplete.
+The candidate adds native identity/schedule tests. The extracted suite
+passed 32 checks, including agreement of shape and fee at fence minus
+one, equality and plus one. The complete Params identity and
+consensus integration tests were not run on this build host.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-lifecycle-gate.1vvoQv/tests.log`.
+
+B0 and relay agreed at DAA 19,692. This page reported no new Qwen
+carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-batch-gate-live.ryzBqR/page.json`.

@@ -176,7 +176,11 @@ pub fn decode_batch_court_carrier_v1(carrier: &crate::tx::Transaction) -> Result
     if carrier.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return Ok(None);
     }
-    let Some(body) = carrier.payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else { return Ok(None) };
+    decode_batch_court_payload_v1(&carrier.payload)
+}
+
+pub(crate) fn decode_batch_court_payload_v1(payload: &[u8]) -> Result<Option<BatchCourtWireV1>, String> {
+    let Some(body) = payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else { return Ok(None) };
     borsh::from_slice(body).map(Some).map_err(|error| error.to_string())
 }
 
