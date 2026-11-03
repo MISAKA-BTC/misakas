@@ -15063,7 +15063,7 @@ fn apply_palw_transition_v7_inner(
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
     use crate::palw_batch_court_v1::fold_order::{AcceptedCourtItemV1, in_accepted_order_v1};
-    let ordered = in_accepted_order_v1(accepted_objects, &extras.batch_court_carriers_v1)
+    let ordered = in_accepted_order_v1(accepted_objects.iter(), &extras.batch_court_carriers_v1)
         .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("Batch carriers do not follow accepted lifecycle order".into()))?;
     for item in ordered {
         match item {

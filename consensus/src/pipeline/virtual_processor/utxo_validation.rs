@@ -199,6 +199,12 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Actual accepted carrier fee remaining after mandatory released-bond burn.
     /// The raw fee map above retains its existing meaning.
     pub palw_v2_rent_available_fees: std::collections::HashMap<TransactionId, u64>,
+    /// Real accepting point and BCT1 facts retained only for the candidate
+    /// block's Court walk. The virtual template needs fee projection only.
+    pub palw_batch_accepting_point_v1: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    pub palw_batch_handoffs_v1: std::collections::HashMap<
+        TransactionId, std::sync::Arc<kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1>,
+    >,
     /// **ADR-0125: the merged round blocks and which of them hold their permit**, decided against
     /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
     /// every shipped preset walks the mergeset exactly as before.
@@ -339,6 +345,8 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_bond_burns: Default::default(),
             palw_v2_accepted_tx_fees: Default::default(),
             palw_v2_rent_available_fees: Default::default(),
+            palw_batch_accepting_point_v1: None,
+            palw_batch_handoffs_v1: Default::default(),
             palw_round_verdicts: None,
             palw_round_fee_incomes: Vec::new(),
             palw_escrow_locks: Default::default(),
@@ -538,9 +546,7 @@ impl VirtualStateProcessor {
         0
     }
 
-    /// The amount the recipient can actually collect, shared by Round fee
-    /// admission, template preflight and the final coinbase reward calculation.
-    pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
+    fn palw_fee_before_batch_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
         let rent_active = self.palw_certification_rent_at(daa) || self.palw_model_lines_active_at(daa);
         let rent = if rent_active && tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
             kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(tx))
@@ -562,8 +568,13 @@ impl VirtualStateProcessor {
         } else {
             0
         };
-        let remaining =
-            fee.saturating_sub(bond_burned.saturating_add(rent).saturating_add(self.palw_tir_public_declared_rent_v1(tx, daa)));
+        fee.saturating_sub(bond_burned.saturating_add(rent).saturating_add(self.palw_tir_public_declared_rent_v1(tx, daa)))
+    }
+
+    /// The amount the recipient can actually collect, shared by Round fee
+    /// admission, template preflight and the final coinbase reward calculation.
+    pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
+        let remaining = self.palw_fee_before_batch_v1(tx, fee, bond_burned, daa);
         self.palw_lifecycle_kind_fences.batch_court_collectible_fee_v1(tx, remaining, daa).unwrap_or(remaining)
     }
 
@@ -902,8 +913,29 @@ impl VirtualStateProcessor {
                 // above the rent is ordinary carriage and stays with the miner, which is why an
                 // ordinary court move or a free-prompt commitment — objects no rule prices — burn
                 // nothing at all.
-                let collectible =
-                    self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
+                let mut batch_fee = None;
+                if let Some(point) = ctx.palw_batch_accepting_point_v1
+                    && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && validated_tx.tx.payload.starts_with(kaspa_consensus_core::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1)
+                {
+                    let fee = validated_tx.calculated_fee;
+                    let remaining = self.palw_fee_before_batch_v1(validated_tx.tx, fee, owed, pov_daa_score);
+                    match kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1::prepare_v1(
+                        validated_tx,
+                        fee - remaining,
+                        point,
+                    ) {
+                        Ok(Some(handoff)) => {
+                            batch_fee = Some(handoff.fee_v1().collectible_fee);
+                            ctx.palw_batch_handoffs_v1.insert(validated_tx.id(), std::sync::Arc::new(handoff));
+                        }
+                        Ok(None) => {}
+                        Err(why) => debug!("[palw-batch] carrier {} did not yield a UTXO handoff: {why}", validated_tx.id()),
+                    }
+                }
+                let collectible = batch_fee.unwrap_or_else(|| {
+                    self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score)
+                });
                 block_fee += collectible;
                 // Finality classifies collectible fees, never destroyed bond/rent funds — past `palw_tir_public_conviction_v1` only
                 // (AUDIT-8b, 2026-10-27): below it the finality share reads the raw fee, exactly as the live chain does.

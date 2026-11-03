@@ -2627,3 +2627,30 @@ ordered handoff list are still pending. See
 B0 and relay agreed at DAA 19,693, with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-ordered-live.7pokAY/page.json`.
+
+## Processor integration of accepted Batch carriers
+
+The block-validation path now captures a BCT1 handoff from the actual
+UTXO-validated transaction at the accepting block. Its fee projection
+uses the existing deductions, and that same handoff supplies the
+collectible fee. Virtual fee projection uses the same calculation
+without retaining a handoff for a block that does not exist yet.
+
+The processor indexes Batch handoffs against the accepted transaction
+stream, preserving the existing derived and free-prompt prefix and the
+relative order of lifecycle notices. It rehearses each candidate in that
+order. A semantic refusal drops the Court effect and keeps the block;
+local resource and context faults propagate. Accepted handoffs are
+indexed relative to the surviving ordinary objects and replayed by the
+final Core transition with the same accepting point and fee fact.
+
+The extracted suite passed 34 checks, including indexing around skipped
+transactions and rejection when the extracted lifecycle order differs.
+The full processor build, isolated activation and public T12 execution
+remain unverified. Production activation still requires the full native
+profile, terminal adjudication and resource bounds.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-processor-ingress.pa7jeB/tests.log`.
+
+B0 and relay agreed at DAA 19,694. The selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-processor-live.53cslt/page.json`.

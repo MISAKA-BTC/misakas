@@ -2530,6 +2530,14 @@ impl VirtualStateProcessor {
                     // Native integration tests exercise its synchronous entry with
                     // real validated inputs; ordinary production processing adds
                     // no unfunded decode/signature/graph work.
+                    if self.palw_lifecycle_kind_fences.batch_court_in_force_at(pov_daa_score) {
+                        ctx.palw_batch_accepting_point_v1 = Some(kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                            block: current,
+                            daa_score: header.daa_score,
+                            blue_score: header.blue_score,
+                            subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                        });
+                    }
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
@@ -2662,7 +2670,7 @@ impl VirtualStateProcessor {
                                 // produced rather than from the store — the store row is written
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
-                                let objects = self.palw_v2_objects_of_block(
+                                let (objects, batch_candidates) = self.palw_v2_objects_of_block(
                                     &ctx.mergeset_acceptance_data,
                                     state,
                                     current,
@@ -2671,6 +2679,7 @@ impl VirtualStateProcessor {
                                     // by the UTXO walk two frames up, where the fee is knowable.
                                     &ctx.palw_v2_accepted_tx_fees,
                                     &ctx.palw_v2_rent_available_fees,
+                                    &ctx.palw_batch_handoffs_v1,
                                 )?;
                                 let history_custody_pledges = objects
                                     .iter()
@@ -2727,6 +2736,7 @@ impl VirtualStateProcessor {
                                 // its MSK in the sink** (the 2026-09-23 Position route matrix,
                                 // P-B1), so past `palw_audit_2026_09_23` the filter also names what
                                 // each such carrier is owed and the transition pays it back.
+                                let mut accepted_batch = Vec::new();
                                 let (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers) = self
                                     .palw_v2_accepted_objects_and_originals(
                                         state,
@@ -2737,6 +2747,8 @@ impl VirtualStateProcessor {
                                         own_attempt_class,
                                         &ctx.palw_round_fee_incomes,
                                         &ctx.palw_escrow_settlements,
+                                        &batch_candidates,
+                                        &mut accepted_batch,
                                     )?;
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
@@ -2896,6 +2908,7 @@ impl VirtualStateProcessor {
                                         extras.history_custody_pledges = history_custody_pledges;
                                         extras.tir_public_originals = tir_public_originals;
                                         extras.tir_funded_originals = tir_funded_originals;
+                                        extras.batch_court_carriers_v1 = accepted_batch;
                                         extras.public_original_bindings = public_original_bindings;
                                         extras.producer_custody_delegations = producer_custody_delegations;
                                         if state_params.exec_v2_active_at(point.daa_score)

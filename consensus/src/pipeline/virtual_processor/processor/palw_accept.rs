@@ -1,6 +1,10 @@
 //! **`VirtualStateProcessor`: palw accept methods** — moved out of `processor.rs` (2026-10-13, a behaviour-preserving split: the methods are the same; each keeps the reach it had).
 
 use super::*;
+use kaspa_consensus_core::palw_batch_court_v1::fold_order::{AcceptedCourtItemV1, in_accepted_order_v1, index_batch_carriers_v1};
+
+pub(super) type BatchHandoffV1 = std::sync::Arc<kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1>;
+pub(super) type IndexedBatchHandoffsV1 = Vec<(usize, BatchHandoffV1)>;
 
 /// Immutable output of the existing production resolver at one block. The legacy
 /// extras remain readable for the existing fold APIs, but cannot be mutated through
@@ -415,6 +419,8 @@ impl VirtualStateProcessor {
             None,
             &[],
             &[],
+            &[],
+            &mut Vec::new(),
         )
         .map(|(objects, ..)| objects.len())
     }
@@ -557,6 +563,8 @@ impl VirtualStateProcessor {
             own_attempt_class,
             round_fee_incomes,
             escrow_settlements,
+            &[],
+            &mut Vec::new(),
         )?;
         Ok((accepted, folded, refunds))
     }
@@ -575,6 +583,8 @@ impl VirtualStateProcessor {
         own_attempt_class: Option<kaspa_hashes::Hash64>,
         round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
         escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        batch_candidates: &[(usize, BatchHandoffV1)],
+        accepted_batch: &mut IndexedBatchHandoffsV1,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -602,6 +612,8 @@ impl VirtualStateProcessor {
                 own_attempt_class,
                 round_fee_incomes,
                 escrow_settlements,
+                batch_candidates,
+                accepted_batch,
             )
         })
     }
@@ -619,6 +631,8 @@ impl VirtualStateProcessor {
         own_attempt_class: Option<kaspa_hashes::Hash64>,
         round_fee_incomes: &[kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1],
         escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
+        batch_candidates: &[(usize, BatchHandoffV1)],
+        accepted_batch: &mut IndexedBatchHandoffsV1,
     ) -> Result<
         (
             Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
@@ -841,7 +855,13 @@ impl VirtualStateProcessor {
         // Armed only (see the accounting below): the fault vectors this block has already asked
         // the grader to walk, refused or accepted. Dormant it is never read and never written.
         let mut vectors_graded = 0usize;
-        for carried in objects {
+        let ordered = in_accepted_order_v1(objects.into_iter(), batch_candidates).ok_or_else(|| {
+            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<IndexedBatchHandoffsV1>(
+                "Batch carrier indexing",
+                "Batch candidate lifecycle order is inconsistent",
+            )
+        })?;
+        for item in ordered {
             Self::palw_v2_settle_carrier_refund(
                 &mut refund_owed,
                 accepted.len(),
@@ -850,6 +870,34 @@ impl VirtualStateProcessor {
                 &mut refunds,
                 block,
             );
+            let carried = match item {
+                AcceptedCourtItemV1::Ordinary(carried) => carried,
+                AcceptedCourtItemV1::Batch(handoff) => {
+                    let extras = self.palw_transition_extras_for_rehearsal_v1(point, &[], &fee_extras);
+                    match kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
+                        &folded,
+                        state_params,
+                        point,
+                        handoff,
+                        self.palw_unavailable_abstains_at(point.daa_score),
+                        self.palw_capability_bound_at(point.daa_score),
+                        self.palw_uncertified_weightless_at(point.daa_score),
+                        self.palw_da_court_at(point.daa_score),
+                        &extras,
+                    ) {
+                        Ok(next) => {
+                            folded = next;
+                            accepted_batch.push((accepted.len(), handoff.clone()));
+                        }
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+                        Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                            return Err(PalwLocalTransitionFaultV1::Context(why));
+                        }
+                        Err(why) => info!("Block {block}: a Batch Court carrier was dropped, and the block stands: {why}"),
+                    }
+                    continue;
+                }
+            };
             let PalwCarriedObjectV1 {
                 object,
                 carrier_fee,
@@ -2614,9 +2662,10 @@ impl VirtualStateProcessor {
         block_daa: u64,
         raw_carrier_fees: &std::collections::HashMap<TransactionId, u64>,
         rent_available_fees: &std::collections::HashMap<TransactionId, u64>,
-    ) -> Result<Vec<PalwCarriedObjectV1>, PalwLocalTransitionFaultV1> {
+        batch_handoffs: &std::collections::HashMap<TransactionId, BatchHandoffV1>,
+    ) -> Result<(Vec<PalwCarriedObjectV1>, IndexedBatchHandoffsV1), PalwLocalTransitionFaultV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         };
         let mut txs = self.accepted_txs_from_acceptance_data(acceptance);
         let history_armed = self.palw_staged_public_court_v1.is_some_and(|fence| fence.is_active(block_daa));
@@ -2968,6 +3017,9 @@ impl VirtualStateProcessor {
         // one walk from reordering the other's objects.
         let lifecycle = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&txs);
         for (carrier, reason) in &lifecycle.skipped {
+            if batch_handoffs.contains_key(carrier) {
+                continue;
+            }
             info!("[palw-lifecycle] carrier {carrier} produced no object: {reason}");
         }
         // **A-2 uniformity: a kind whose owning fence is not in force at this block is the live build's undecodable payload here** —
@@ -2985,6 +3037,29 @@ impl VirtualStateProcessor {
                 carried.carrier
             );
         }
+        let lifecycle_count = lifecycle_objects.len();
+        let mut batch = if batch_handoffs.is_empty() {
+            Vec::new()
+        } else {
+            let indexed = index_batch_carriers_v1(
+                txs.iter().map(Transaction::id),
+                lifecycle_objects.iter().map(|carried| carried.carrier),
+                |id| batch_handoffs.get(id).cloned(),
+            )
+            .ok_or_else(|| {
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<IndexedBatchHandoffsV1>(
+                    "Batch carrier indexing",
+                    "Batch and lifecycle transaction order differs",
+                )
+            })?;
+            if indexed.len() != batch_handoffs.len() {
+                return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<IndexedBatchHandoffsV1>(
+                    "Batch carrier indexing",
+                    "Batch handoff does not name an accepted carrier",
+                ).into());
+            }
+            indexed
+        };
         // The derived bindings go FIRST: a claim bound by this block may then be licensed by an
         // object the same block carries, which is the order a chain that is catching up needs.
         //
@@ -3041,7 +3116,7 @@ impl VirtualStateProcessor {
                 None => (None, Some(carried.carrier)),
             }
         };
-        self.palw_v2_derived_panel_bindings(state, block, block_daa)?
+        let objects = self.palw_v2_derived_panel_bindings(state, block, block_daa)?
             .into_iter()
             // Nothing carried a derived binding, so nothing owes rent for it.
             .map(|object| Ok(PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED, fp_answer: None, history_pledge: None, tir_public_original: None, funded_original: None, original_binding: None, custody_delegation: None, refund: None, unrefundable: None }))
@@ -3090,8 +3165,12 @@ impl VirtualStateProcessor {
                     object: carried.object,
                 })
             }))
-            .collect::<Result<Vec<_>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>>()
-            .map_err(Into::into)
+            .collect::<Result<Vec<_>, kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1>>()?;
+        let non_lifecycle_prefix = objects.len() - lifecycle_count;
+        for (before, _) in &mut batch {
+            *before += non_lifecycle_prefix;
+        }
+        Ok((objects, batch))
     }
 
     /// **RFC-0009 stage D: the proof of one PALW collection against the header of `block`.**
