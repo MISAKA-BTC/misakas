@@ -1395,3 +1395,26 @@ referenced a new Qwen carrier with header DAA 19,627 and signed retention
 DAA 40,235. The exact claim row was absent on both nodes. Public REST
 and WebSocket matched at DAA 19,629, with twelve sampled selected
 blocks all classified as legacy heartbeats.
+
+The exact B0 journal confirmed the new carrier was Qwen #56 and
+refused it with 20,607 of the required 20,608 DAA remaining. B0,
+the public relay and the 113 tunnel agreed at DAA 19,630. B1
+was still unsynced at DAA 19,389. The original 113 primary
+service was inactive, and the unsigned host-5 IBD trial was
+inactive with 19,258,056,704 root bytes free. The paired Qwen
+inventory at DAA 19,630 found nine independently eligible bonds,
+zero independently ready, and zero assigned. This is a class
+inventory without a claim-specific draw.
+
+Public REST returned a checkpoint virtual-context lag response
+while its WebSocket was synced. The recheck returned HTTP 200
+and its selected tip matched WebSocket at DAA 19,630.
+
+The exact offline comparison now supports opt-in position and
+phase timing on standard error. It retains the result schema and
+reports native and mirror times separately. Five focused tests
+passed, including final counter parity with the progress observer
+off and on. The timed-out Darwin executable had linked unoptimized
+native A16 and TIR arithmetic dependencies. The guarded diagnostic
+build compiles those same sources with optimization and preserves
+overflow checks and debug assertions.
