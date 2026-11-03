@@ -327,6 +327,7 @@ mod rooted_tests {
             entries: vec![
                 PalwDeltaEntryV2::StagedCourtSeed { key: frame_key, old: None, new: Some(Row::TirClaim(Box::new(f.frame).into())) },
                 PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(decoded) },
+                PalwDeltaEntryV2::LastPoint { old: None, new: Some(point) },
             ],
         };
         let child = apply_delta_v2(&base, &delta, &bundle.state).unwrap();
@@ -339,10 +340,9 @@ mod rooted_tests {
 
         // A valid parked-row codec is not permission to restore a response
         // reservation without its native acquisition in the same branch.
-        let PalwDeltaEntryV2::StagedCourtSeed { new, .. } = &mut delta.entries[1] else { unreachable!() };
-        *new = Some(parked);
-        assert!(apply_delta_v2(&base, &delta, &bundle.state).is_err());
-        *new = Some(row);
+        let mut orphan = delta.clone();
+        orphan.entries[1] = PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new: Some(parked) };
+        assert!(apply_delta_v2(&base, &orphan, &bundle.state).is_err());
         let PalwDeltaEntryV2::StagedCourtSeed { key, .. } = &mut delta.entries[1] else { unreachable!() };
         *key = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirOwnerSchedule(Hash64::from_u64_word(9));
         assert!(apply_delta_v2(&base, &delta, &bundle.state).is_err());
