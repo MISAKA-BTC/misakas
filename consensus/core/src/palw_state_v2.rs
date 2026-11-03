@@ -13415,8 +13415,6 @@ struct TransitionBuilder<'a> {
     assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
     assignment_active_raw: Option<PositiveAssignmentRawActionV2>,
     assignment_raw_boundary: Option<(Hash64, usize)>,
-    assignment_case_cache:
-        BTreeMap<misaka_palw_positive_contract::identity::CaseId, positive_assignment_case::NativeAssignedCaseCacheV2>,
     native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     monetary_native_ready: BTreeMap<Hash64, (Hash64, crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3)>,
     court_end_evidence:

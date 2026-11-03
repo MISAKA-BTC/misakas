@@ -857,6 +857,22 @@ impl TransitionBuilder<'_> {
     }
 }
 
+pub(super) fn check_rooted_positive_finish_v2(
+    state: &PalwChainStateV2,
+    result: &misaka_palw_positive_contract::messages::MinerResultCommit,
+    witness: WitnessId,
+    material: AcceptedMaterial,
+) -> Result<(), PalwStateV2Error> {
+    let owned = read(state, certification_subject(result), 0)?;
+    let bundle = PositiveRowsV2::new(state).bundle(result.claim_id()).map_err(refuse)?;
+    let row = owned.row;
+    check_positive_certification_result_links_v2(&row.fixed.header, &bundle.result, &bundle.case).map_err(refuse)?;
+    if row.fixed.finality != Some(PositiveCertificationFinalV2 { origin: material.origin, witness, material }) {
+        return Err(refuse("rooted P Final differs from literal checked Finish"));
+    }
+    Ok(())
+}
+
 fn bound_session_case(
     builder: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,

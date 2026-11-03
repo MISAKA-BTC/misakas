@@ -57,7 +57,6 @@ impl<'a> TransitionBuilder<'a> {
             assignment_case_materials: Vec::new(),
             assignment_active_raw: None,
             assignment_raw_boundary: None,
-            assignment_case_cache: BTreeMap::new(),
             registration_index: None,
             unavailable_abstains,
             model_moves: 0,
@@ -9386,9 +9385,6 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.truncate(checkpoint.1);
         self.assignment_materials.retain(|record| record.delta_end <= checkpoint.1);
         self.assignment_case_materials.retain(|record| record.delta_end <= checkpoint.1);
-        // This private nonserialized cache is never an accepted completion
-        // capability. Any restore/undo drops it and forces actual rebind.
-        self.assignment_case_cache.clear();
         // The caches describe the state just replaced; the next reader rebuilds them from the
         // restored one (audit #13b).
         *self.inflight_index.get_mut() = None;
