@@ -2533,14 +2533,16 @@ impl PalwProducerService {
                 && !self.config.attempt_retention.is_zero()
                 && self.consensus_config.params.palw_model_panel_one_retention_v1_fence().is_some()
             {
-                use crate::palw_retention::{ATTEMPT_PRESSURE_GRACE_BYTES, stage_attempt_pressure_grace_v1};
+                use crate::palw_retention::{attempt_pressure_grace_disk_quote_v1, stage_attempt_pressure_grace_v1};
                 let carried = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&block.header.palw_commitment)
                     .map_err(|e| format!("cannot identify the model attempt before publication: {e}"))?;
                 if carried.attempt != attempt || attempt_id_v2(&carried.attempt) != message {
                     return Err("the model carrier does not bind its retained attempt".into());
                 }
                 let path = palw_retained_material_path(&self.config.retention_dir, &message);
-                let _storage = self.reserve_attempt_retention_write_v1(&path, ATTEMPT_PRESSURE_GRACE_BYTES as u64)?;
+                let quote = attempt_pressure_grace_disk_quote_v1(&path)
+                    .map_err(|e| format!("cannot quote the local pressure grace for model attempt {message}: {e}"))?;
+                let _storage = self.reserve_attempt_retention_write_v1(&path, quote)?;
                 stage_attempt_pressure_grace_v1(&path, &_retention_pin, hash, material.len() as u64)
                     .map_err(|e| format!("cannot retain the local pressure grace for model attempt {message}: {e}"))?;
             }
