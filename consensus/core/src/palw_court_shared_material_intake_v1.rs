@@ -560,17 +560,7 @@ pub(crate) fn claim_budget_v1(
 ) -> Result<u64, String> {
     use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, c.claim)?, source, c.profile_id)?;
-    let mut total = 0u64;
-    for ordinal in 0..set.len() {
-        let q = set.request_at(ordinal)?;
-        if matches!(q, Query::Ids { .. }) {
-            continue;
-        }
-        total = add(total, crate::palw_tir_public_owned_v1::request_body_bound_v1(source, q)?.0)?;
-    }
-    if let Ok((ids, _)) = crate::palw_tir_public_owned_v1::request_body_bound_v1(source, Query::Ids { offset: 0 }) {
-        total = add(total, ids)?;
-    }
+    let mut total = set.material_body_budget_v1()?;
     if !leaves.is_empty() {
         total = add(
             total,
