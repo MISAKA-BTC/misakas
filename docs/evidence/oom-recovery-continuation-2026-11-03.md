@@ -1493,3 +1493,49 @@ tiles and two registered artifact openings. All eight output
 lanes matched. Missing operands deferred the verdict, and
 altered input or source data was refused. This covers one
 relation from the original signed claim.
+
+## Same-claim Qwen #58 replay and ordinary Court recovery — 06:58 UTC
+
+The separate complete A16-to-typed comparison for #58
+replayed the recovered claim's exact anchor. All 689,505
+compared rows across 1,023 input positions and the final
+logits row matched. Both engines selected token 220 and
+reproduced the original signed output root. Wall time was
+222.089 seconds and peak RSS 4,682,760,192 bytes. Across
+110 samples there was no swap growth, and the run was
+network-isolated. The result SHA-256 is
+`7f5b2921426814a3f3321fceb799f10cc9e714f063e21bb7e1c3c9572a249305`.
+The full arithmetic comparison used the model. The
+model-free verification used only the single previously
+recorded projection from the same #58 claim.
+
+Ordinary CoreV1 Court responses can now recover from an
+existing external HTTP provider copy after local material
+failure. The background fetch shares the existing single
+slot and grants Seat requests first access in the tick.
+Use requires the exact accepted carrier, matching roots
+and effective retention, and successful backend material
+validation. Provider-backed signing rechecks the current
+claim, due unit, deadline and stable view before using the
+same session for assembly. The patch adds no archive writes
+or authority to delete a sole copy.
+
+The first executable helper test exposed that the legacy
+fixture did not check the optional output root. The new
+provider branch is limited to CoreV1 and the corrected
+fixture verifies both the expected result and refusal of
+a different output root, invalid bytes, missing anchor,
+missing draw and a legacy backend. The extracted helper
+also opened a real event from the exact fixture material.
+The final Kaspad test-crate, wRPC, remote and Base0 metadata
+checks passed, as did the extracted native helper test.
+The network fetch and signing path has not been deployed
+or exercised on an accepted public claim.
+
+B0 and the relay reached DAA 19,635. Qwen #59 had signed
+retention DAA 40,240 and was referenced by the selected
+fold at DAA 19,634. B0 logged 20,606 remaining against
+20,608 required, and both nodes lacked the claim row.
+At DAA 19,636 the public REST index briefly reported
+checkpoint context lag and then matched its synced
+WebSocket tip with HTTP 200.
