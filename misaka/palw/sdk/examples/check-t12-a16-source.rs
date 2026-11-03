@@ -1,4 +1,4 @@
-//! Local diagnostic for one original T12 A16 embedding or query projection tile.
+//! Local diagnostic for one original T12 A16 embedding, RMS normalization or query projection tile.
 //! The Panel command opens the mapped artifact. The verifier has no artifact argument.
 use kaspa_consensus_core::{
     Hash64,
@@ -35,7 +35,7 @@ use kaspa_consensus_core::{
         step_opening_root_capped_v1, step_range_opening_root_capped_v1, step_tile_leaf_hash_ctx_v1,
     },
     palw_step_refute::{
-        KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, PalwStepRefuteError, canonical_input_leaves_v1,
+        KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, KDESC_A16_RMS_NORM, PalwStepRefuteError, canonical_input_leaves_v1,
         check_execution_step_refutation_opened_capped_v1, palw_refutation_prompt_carriage_v1,
     },
     palw_v2::PalwJobContextV2,
@@ -81,6 +81,7 @@ const QUERY_QUANT: &str = "blk.{layer}.attn_q.weight.a16";
 #[derive(Clone, Copy)]
 enum Relation {
     Embedding,
+    RmsNorm,
     QueryProjection,
 }
 
@@ -251,15 +252,19 @@ fn target(claim: &RootedClaim, relation: Relation) -> Result<Target<'_>, String>
             canonical_step_coordinates(profile, &claim.job, EMBEDDING_LEAF).ok_or("first leaf has no coordinates")?,
             KDESC_A16_EMBED,
         ),
-        Relation::QueryProjection => {
+        Relation::RmsNorm | Relation::QueryProjection => {
+            let (offset, kernel) = match relation {
+                Relation::RmsNorm => (0, KDESC_A16_RMS_NORM),
+                _ => (2, KDESC_A16_MATMUL_REQUANT),
+            };
             let coord = PalwStepCoordinateV1 {
                 call_index: 0,
                 position: 0,
                 tile_index: 0,
-                node_slot: u32::try_from(profile.pre_nodes.len()).map_err(|e| e.to_string())? + 2,
+                node_slot: u32::try_from(profile.pre_nodes.len()).map_err(|e| e.to_string())? + offset,
             };
-            let leaf = canonical_step_leaf_index(profile, &claim.job, &coord).ok_or("first projection leaf is absent")?;
-            (leaf, coord, KDESC_A16_MATMUL_REQUANT)
+            let leaf = canonical_step_leaf_index(profile, &claim.job, &coord).ok_or("first layer tile is absent")?;
+            (leaf, coord, kernel)
         }
     };
     let (node, layer) = profile.resolve_node_slot(coord.node_slot).ok_or("target leaf has no node")?;
@@ -276,11 +281,18 @@ fn target(claim: &RootedClaim, relation: Relation) -> Result<Target<'_>, String>
         "target differs from the fixed A16 diagnostic relation",
     )?;
     let output_lanes = node.tile_len.min(elements);
-    let (inputs, operands) = match relation {
+    let operands = match relation {
         Relation::Embedding => {
             require(node.input_refs.is_empty(), "embedding must have no committed input row")?;
             let offset = claim.prompt[0].checked_mul(elements).ok_or("embedding byte offset overflow")?;
-            (0, vec![OperandKey { name: &node.weight_name, layer, offset, width: elements }])
+            vec![OperandKey { name: &node.weight_name, layer, offset, width: elements }]
+        }
+        Relation::RmsNorm => {
+            require(
+                layer == Some(0) && node.weight_name.is_empty() && elements == profile.hidden_dim,
+                "target differs from the first RMS norm tile",
+            )?;
+            Vec::new()
         }
         Relation::QueryProjection => {
             require(
@@ -291,32 +303,35 @@ fn target(claim: &RootedClaim, relation: Relation) -> Result<Target<'_>, String>
                     && output_lanes <= 128,
                 "target differs from the first query tile",
             )?;
-            let rows = canonical_input_leaves_v1(profile, &claim.job, &coord).ok_or("projection has no canonical input set")?;
-            let [row] = rows.as_slice() else { return Err("projection must read one committed activation row".into()) };
-            require(
-                leaf < 1 << PALW_BASE0_SPARSE_RETAIN_LEVEL_V1
-                    && !row.is_empty()
-                    && row.len() <= 32
-                    && row.iter().all(|(input, coord)| *input < leaf && coord.position == 0 && coord.call_index == 0),
-                "projection inputs are outside the first bounded replay block",
-            )?;
             let code_bytes = output_lanes.checked_mul(profile.hidden_dim).ok_or("query weight tile width overflow")?;
             require(code_bytes as usize <= 192 << 10, "query weight tile exceeds diagnostic cap")?;
             let quant_bytes = output_lanes * A16QuantParams::WIRE_BYTES as u32;
-            (
-                row.len(),
-                vec![
-                    OperandKey { name: QUERY_WEIGHTS, layer, offset: 0, width: code_bytes },
-                    OperandKey { name: QUERY_QUANT, layer, offset: 0, width: quant_bytes },
-                ],
-            )
+            vec![
+                OperandKey { name: QUERY_WEIGHTS, layer, offset: 0, width: code_bytes },
+                OperandKey { name: QUERY_QUANT, layer, offset: 0, width: quant_bytes },
+            ]
         }
+    };
+    let inputs = if matches!(relation, Relation::Embedding) {
+        0
+    } else {
+        let rows = canonical_input_leaves_v1(profile, &claim.job, &coord).ok_or("step has no canonical input set")?;
+        let [row] = rows.as_slice() else { return Err("step must read one committed activation row".into()) };
+        require(
+            leaf < 1 << PALW_BASE0_SPARSE_RETAIN_LEVEL_V1
+                && !row.is_empty()
+                && row.len() <= 32
+                && row.iter().all(|(input, coord)| *input < leaf && coord.position == 0 && coord.call_index == 0),
+            "step inputs are outside the first bounded replay block",
+        )?;
+        row.len()
     };
     Ok(Target { relation, leaf, inputs, output_lanes, operands })
 }
 
 fn operand_digests(target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Vec<Hash64>, String> {
     let bytes: Vec<Vec<u8>> = match target.relation {
+        Relation::RmsNorm => Vec::new(),
         Relation::Embedding => {
             let key = &target.operands[0];
             let end = key.offset.checked_add(key.width).ok_or("embedding row end overflow")?;
@@ -341,6 +356,9 @@ fn operand_digests(target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Ve
 }
 
 fn open_operands(claim: &RootedClaim, target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Vec<PalwArtifactOpeningV1>, String> {
+    if target.operands.is_empty() {
+        return Ok(Vec::new());
+    }
     let digests = operand_digests(target, artifact)?;
     let mut indices = vec![None; digests.len()];
     let mut duplicate = false;
@@ -468,7 +486,7 @@ fn verdict(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidence
     require(
         match target.relation {
             Relation::Embedding => inputs.is_empty(),
-            Relation::QueryProjection => inputs.len() == 1 && inputs[0].preimages.len() == target.inputs,
+            Relation::RmsNorm | Relation::QueryProjection => inputs.len() == 1 && inputs[0].preimages.len() == target.inputs,
         },
         "evidence exceeds the bounded canonical input row",
     )?;
@@ -507,9 +525,20 @@ fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), S
         )?;
         evidence.artifact_openings[index].operand.bytes[0] ^= 1;
     }
-    if matches!(target.relation, Relation::QueryProjection) {
+    if matches!(target.relation, Relation::RmsNorm) {
+        let inputs = std::mem::take(&mut evidence.refutation.inputs);
+        require(
+            matches!(
+                evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true),
+                Err(PalwShardCourtError::Refutation(PalwStepRefuteError::InputSetNotCanonical(_)))
+            ),
+            "native checker accepted the withheld activation row",
+        )?;
+        evidence.refutation.inputs = inputs;
+    }
+    if target.inputs > 0 {
         let input = &mut evidence.refutation.inputs[0].preimages[0].values_le;
-        *input.first_mut().ok_or("verified projection input is empty")? ^= 1;
+        *input.first_mut().ok_or("verified activation input is empty")? ^= 1;
         require(
             matches!(
                 evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true),
@@ -520,6 +549,7 @@ fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), S
     }
     let scope = match target.relation {
         Relation::Embedding => "one-original-t12-a16-embedding-tile",
+        Relation::RmsNorm => "one-original-t12-a16-rms-norm-tile",
         Relation::QueryProjection => "one-original-t12-a16-query-projection-tile",
     };
     let mut report = json!({
@@ -532,13 +562,18 @@ fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), S
         "evidenceBytes": bytes.len(),
         "evidenceSha256": sha256(&bytes),
         "matched": true,
-        "missingSourceDeferred": true,
-        "wrongSourceRejected": true,
         "fullExecutionVerified": false,
         "chainAcceptanceInferred": false,
         "gateCInferred": false,
     });
-    if matches!(target.relation, Relation::QueryProjection) {
+    if !target.operands.is_empty() {
+        report["missingSourceDeferred"] = json!(true);
+        report["wrongSourceRejected"] = json!(true);
+    }
+    if matches!(target.relation, Relation::RmsNorm) {
+        report["missingInputRejected"] = json!(true);
+    }
+    if target.inputs > 0 {
         report["artifactOpenings"] = json!(target.operands.len());
         report["authenticatedInputTiles"] = json!(target.inputs);
         report["outputLanes"] = json!(target.output_lanes);
@@ -701,9 +736,9 @@ fn verify_counterfactual_projection(claim: &RootedClaim, path: &Path) -> Result<
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
-        [mode, input, sha, capture, artifact, output] if mode == "build" || mode == "build-projection" => {
+        [mode, input, sha, capture, artifact, output] if mode == "build" || mode == "build-rms-norm" || mode == "build-projection" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
-            let relation = if mode == "build" { Relation::Embedding } else { Relation::QueryProjection };
+            let relation = if mode == "build-rms-norm" { Relation::RmsNorm } else if mode == "build" { Relation::Embedding } else { Relation::QueryProjection };
             let target = target(&claim, relation)?;
             let evidence = build(&claim, &target, Path::new(capture), Path::new(artifact))?;
             require(verdict(&claim, &target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation, "built tile did not recompute")?;
@@ -717,16 +752,16 @@ fn run() -> Result<(), String> {
             borsh::to_writer(&mut file, &evidence).map_err(|e| e.to_string())?;
             file.flush().and_then(|()| file.sync_all()).map_err(|e| e.to_string())
         }
-        [mode, input, sha, evidence] if mode == "verify" || mode == "verify-projection" => {
+        [mode, input, sha, evidence] if mode == "verify" || mode == "verify-rms-norm" || mode == "verify-projection" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
-            let relation = if mode == "verify" { Relation::Embedding } else { Relation::QueryProjection };
+            let relation = if mode == "verify-rms-norm" { Relation::RmsNorm } else if mode == "verify" { Relation::Embedding } else { Relation::QueryProjection };
             verify(&claim, &target(&claim, relation)?, Path::new(evidence))
         }
         [mode, input, sha, evidence] if mode == "verify-counterfactual-projection" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
             verify_counterfactual_projection(&claim, Path::new(evidence))
         }
-        _ => Err("usage: check-t12-a16-source build|build-projection OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify|verify-projection|verify-counterfactual-projection OBSERVATION OBS_SHA256 EVIDENCE".into()),
+        _ => Err("usage: check-t12-a16-source build|build-rms-norm|build-projection OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify|verify-rms-norm|verify-projection|verify-counterfactual-projection OBSERVATION OBS_SHA256 EVIDENCE".into()),
     }
 }
 
