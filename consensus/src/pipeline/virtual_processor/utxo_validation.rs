@@ -852,7 +852,7 @@ impl VirtualStateProcessor {
                 Err(E::InvalidContinuation) => continue,
                 _ => return Err(unavailable("actual selected-parent Case history is unavailable")),
             };
-            let spend = match qualify_case_source_spend_v2(state, &backing, tx, &entries) {
+            let spend = match qualify_case_source_spend_v2(state, &backing, tx, &entries, daa) {
                 Ok(spend) => spend,
                 Err(PalwStateV2Error::NativeResource(why)) => return Err(why),
                 Err(PalwStateV2Error::NativeContextUnavailable(_)) => return Err(unavailable("Case replay context is unavailable")),

@@ -8,9 +8,13 @@ use crate::{
     palw_positive_source_v2::RetainedSourceRequestV2,
 };
 use misaka_palw_positive_contract::{
+    assignment::{
+        funding_relay::{FUNDING_RELAY_OPERATION_V2, FundingRelayRegistrationBodyV2, RelayFundingPurposeV2, RelayTargetV2},
+        funding_relay_rows::{FundingRelayBindingV2, FundingRelayCustodyRowV2},
+    },
     funding::{SourceFeeDeltaIntent, funding_scope},
     identity::{RequestId, principal},
-    rows::ServiceReceiptRow,
+    rows::{FundingRow, MAX_NATIVE_KEY_BYTES, NativeHash64, NativeOutpoint, NativeRowValue, ServiceReceiptRow},
 };
 
 pub(super) struct CheckedAssignedSourceResponseV2 {
@@ -209,7 +213,37 @@ impl NativeAssignedCourtV2 {
 
 struct CaseSourcePaymentV2 {
     funding: misaka_palw_positive_contract::rows::FundingRow,
-    debit: misaka_palw_positive_contract::rows::NativeOutpoint,
+    debit: NativeOutpoint,
+    successor: Option<PendingCaseRelaySuccessorV2>,
+}
+
+struct PendingCaseRelaySuccessorV2 {
+    custody: FundingRelayCustodyRowV2,
+    predecessor: NativeOutpoint,
+    original_funding: NativeOutpoint,
+    original_contract: Digest,
+    _lease: NativeDemandLeaseV1,
+}
+
+impl PendingCaseRelaySuccessorV2 {
+    fn bind(mut self, origin: AcceptedOrigin, case_reservation: AcceptedMaterial) -> (FundingRelayCustodyRowV2, NativeDemandLeaseV1) {
+        let digest = blake2b_simd::Params::new()
+            .hash_length(64)
+            .key(b"misaka/positive/case-relay-rotation/v2/r1")
+            .to_state()
+            .update(&case_reservation.digest.0)
+            .update(&self.custody.reservation.digest.0)
+            .finalize();
+        let reservation = AcceptedMaterial { origin, digest: Digest(*digest.as_array()) };
+        self.custody.binding = Some(FundingRelayBindingV2 {
+            origin,
+            original_funding: self.original_funding,
+            predecessor: Some(self.predecessor),
+            original_contract: self.original_contract,
+            reservation,
+        });
+        (self.custody, self._lease)
+    }
 }
 use crate::palw_settlement_once_v1::{
     PALW_SETTLEMENT_ONCE_TABLE_V1, PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
@@ -226,6 +260,99 @@ fn source_fee_obligation_v2(assignment: AssignmentId, fee: &SourceFeeDeltaIntent
 }
 
 impl NativeAssignedCourtV2 {
+    fn qualify_case_relay_successor_v2(
+        &mut self,
+        state: &PalwChainStateV2,
+        backing: &NativeCommittedAssignedCaseV2,
+        funding: &FundingRow,
+        (predecessor, continuation_amount): (NativeOutpoint, u64),
+        (daa, accepting_block): (u64, Option<NativeHash64>),
+        remaining_heap: u64,
+    ) -> Result<Option<PendingCaseRelaySuccessorV2>, PalwStateV2Error> {
+        use crate::palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2};
+        let (Some(minimum_service_cutoff), Some(point)) = (self.relay_service_cutoff, funding.current_outpoint) else {
+            return Ok(None);
+        };
+        let mut quote = TirNativeRequestsV1::new();
+        quote.exact_v1::<NativeRowValue>(3).map_err(PalwStateV2Error::NativeResource)?;
+        quote.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
+        quote.exact_v1::<u8>((2 * MAX_NATIVE_KEY_BYTES) as u64).map_err(PalwStateV2Error::NativeResource)?;
+        let scratch = quote.bytes_v1();
+        let signature_heap = remaining_heap.checked_sub(scratch).ok_or_else(capacity)?;
+        let _lease = reserve_native_requests_v1(scratch).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
+        let rows = PositiveRowsV2::new(state);
+        let purpose = RelayFundingPurposeV2::CaseC;
+        let Some(NativeRowBody::FundingRelayAuthorization(auth)) =
+            rows.read(NativeRowKey::FundingRelayAuthorization { funding: point, purpose }).map_err(refuse)?.map(|row| row.body)
+        else {
+            return Err(refuse("Case continuation needs an accepted successor relay"));
+        };
+        let NativeRowBody::FundingRelayCustody(custody) =
+            required(state, NativeRowKey::FundingRelayCustody { funding: point, purpose })?
+        else {
+            return Err(missing());
+        };
+        let assignment = backing.assignment();
+        let original_contract = funding.consent.id().0;
+        let target = RelayTargetV2::Continuation {
+            original_funding: funding.original_outpoint,
+            predecessor,
+            parent_spend: point.transaction,
+            original_contract,
+        };
+        custody.check_pair(&auth).map_err(refuse)?;
+        if custody.binding.is_some()
+            || auth.terms.target != target
+            || auth.terms.assignment != assignment.id()
+            || auth.terms.contract_network != assignment.bundle.terms.network
+            || auth.terms.contract_ruleset != assignment.bundle.terms.ruleset
+            || auth.terms.contract_anchor != assignment.bundle.terms.branch_anchor
+            || auth.terms.payer_bond != assignment.bundle.terms.poster
+            || auth.terms.payer != funding.consent.payer
+            || auth.terms.refund_payload != funding.consent.refund_payload
+            || auth.payer_key != funding.payer_key
+            || auth.terms.expected_amount != continuation_amount
+            || auth.origin.accepted_daa > daa
+            || accepting_block == Some(auth.origin.accepting_block)
+            || daa >= auth.terms.funding_admission_before_daa
+            || custody
+                .retention_until_daa
+                .checked_sub(auth.policy.rollback_margin_daa)
+                .is_none_or(|cutoff| cutoff < minimum_service_cutoff)
+        {
+            return Err(refuse("successor relay differs from the literal Case continuation or custody horizon"));
+        }
+        let body = FundingRelayRegistrationBodyV2 {
+            version: misaka_palw_positive_contract::CONTRACT_VERSION,
+            revision: misaka_palw_positive_contract::CONTRACT_REVISION,
+            operation: FUNDING_RELAY_OPERATION_V2,
+            terms: auth.terms,
+            purpose_signature: auth.purpose_signature,
+            relay_signature: custody.relay_signature,
+        };
+        let schedule = &backing.material().native_preimages.source_policy.work;
+        let row_work = schedule.court_body_work(scratch).map_err(refuse)?;
+        let signature_work = schedule.court_operation_work(2, 2, 0, 0).map_err(refuse)?;
+        self.remaining_work = self
+            .remaining_work
+            .checked_sub(row_work)
+            .and_then(|n| n.checked_sub(signature_work))
+            .ok_or_else(|| refuse("Case successor relay replay work cap"))?;
+        verify_funding_relay_package_signatures_v2(&body, &auth.payer_key, signature_heap.min(auth.quote.usage.heap_bytes)).map_err(
+            |why| match why {
+                FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+                FundingRelayBodyErrorV2::Contract(why) => refuse(why),
+            },
+        )?;
+        Ok(Some(PendingCaseRelaySuccessorV2 {
+            custody,
+            predecessor,
+            original_funding: funding.original_outpoint,
+            original_contract,
+            _lease,
+        }))
+    }
+
     /// Preflight op12 against the unique first receipts and actual current
     /// input. The enclosing writer owns the spend, updates and journal.
     fn qualify_case_source_payment_v2(
@@ -236,7 +363,7 @@ impl NativeAssignedCourtV2 {
         carriage: (&crate::tx::Transaction, &[crate::tx::UtxoEntry], u64),
         assignment: AssignmentId,
         receipts: &[AcceptedMaterial],
-        decode_heap: u64,
+        (decode_heap, daa, accepting_block): (u64, u64, Option<NativeHash64>),
     ) -> Result<CaseSourcePaymentV2, PalwStateV2Error> {
         use crate::{
             mldsa87_primitives::p2pkh_mldsa87_payload,
@@ -357,7 +484,17 @@ impl NativeAssignedCourtV2 {
                 index: u32::try_from(receipts.len()).map_err(refuse)?,
             })
         };
-        Ok(CaseSourcePaymentV2 { funding, debit })
+        drop(seen);
+        drop(_scratch);
+        let relay_heap = self
+            .available_heap
+            .checked_sub(self.checker_heap)
+            .and_then(|n| n.checked_sub(self.candidate_heap))
+            .and_then(|n| n.checked_sub(decode_heap))
+            .ok_or_else(capacity)?;
+        let successor =
+            self.qualify_case_relay_successor_v2(state, backing, &funding, (debit, continuation), (daa, accepting_block), relay_heap)?;
+        Ok(CaseSourcePaymentV2 { funding, debit, successor })
     }
 
     pub(super) fn replay_case_source_payment_v2(
@@ -402,8 +539,15 @@ impl NativeAssignedCourtV2 {
             (carriage.transaction(), carriage.entries(), carriage.fee()),
             assignment,
             &receipts,
-            summary.heap,
+            (summary.heap, carriage.origin().accepted_daa, Some(carriage.origin().accepting_block)),
         )?;
+        if let Some(successor) = payment.successor.take() {
+            let (expected, _lease) = successor.bind(carriage.origin(), prior.reservation);
+            let key = NativeRowKey::FundingRelayCustody { funding: expected.funding_outpoint, purpose: expected.purpose };
+            if required(after, key)? != NativeRowBody::FundingRelayCustody(expected) {
+                return Err(refuse("Case successor relay was not bound atomically with the historical payment"));
+            }
+        }
         let material = source_material(carriage.origin())?;
         payment.funding.last_settlement = Some(material);
         let mut expected_case = *prior;
@@ -466,7 +610,7 @@ impl TransitionBuilder<'_> {
             (action.transaction(), action.entries(), action.fee()),
             assignment,
             receipts,
-            0,
+            (0, ctx.daa_score, Some(origin.accepting_block)),
         )?;
         let material = source_material(origin)?;
         payment.funding.last_settlement = Some(material);
@@ -499,6 +643,10 @@ impl TransitionBuilder<'_> {
             self.write_assignment_aux_v2(NativeRowBody::ServiceReceipt(receipt))?;
         }
         prior.last_event = origin;
+        if let Some(successor) = payment.successor.take() {
+            let (custody, _lease) = successor.bind(origin, prior.reservation);
+            self.write_assignment_aux_v2(NativeRowBody::FundingRelayCustody(custody))?;
+        }
         self.write_assignment_aux_v2(NativeRowBody::Funding(payment.funding))?;
         self.write_assignment_aux_v2(NativeRowBody::Case(prior))?;
         self.write_assigned_case_payment_journal_v2(backing)
@@ -536,6 +684,7 @@ pub fn qualify_case_source_spend_v2(
     backing: &NativeCommittedAssignedCaseV2,
     transaction: &crate::tx::Transaction,
     entries: &[crate::tx::UtxoEntry],
+    daa: u64,
 ) -> Result<QualifiedCaseSourceSpendV2, PalwStateV2Error> {
     use crate::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2;
     use crate::palw_positive_court_v2::coordinator::assignment_body::{
@@ -582,7 +731,7 @@ pub fn qualify_case_source_spend_v2(
         (transaction, entries, fee),
         supplied,
         &receipts,
-        summary.heap,
+        (summary.heap, daa, None),
     )?;
     Ok(QualifiedCaseSourceSpendV2 {
         transaction: transaction.id(),
