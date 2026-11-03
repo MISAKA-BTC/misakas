@@ -44,6 +44,7 @@ struct ResponseQuote {
     draft_expires_daa: u64,
     retained_submitter: Option<String>,
     retained_body_hash: Option<String>,
+    material_available: bool,
     parts: Vec<PartSlot>,
 }
 
@@ -223,6 +224,13 @@ pub(crate) async fn open(
 }
 
 impl ResponseQuote {
+    fn check_material_needed(&self, step: ResponseStep) -> CliResult {
+        if self.material_available && !matches!(step, ResponseStep::Finish) {
+            return Err(refused("the original already has authenticated material for this target"));
+        }
+        Ok(())
+    }
+
     fn action(
         &self,
         step: ResponseStep,
@@ -320,6 +328,7 @@ pub(crate) async fn respond(
         return Err(refused(error));
     }
     let quote: ResponseQuote = serde_json::from_value(doc["response"].clone()).map_err(|e| refused(e.to_string()))?;
+    quote.check_material_needed(step)?;
     let maximum = u64::from(MAX_BATCH_PART_BYTES_V1) * MAX_BATCH_PARTS_V1 as u64;
     if !(1..=maximum).contains(&quote.total_bytes) {
         return Err(refused("the quoted material exceeds the Batch body bound"));
@@ -335,6 +344,9 @@ pub(crate) async fn respond(
         .map_err(|e| refused(format!("{}: {e}", body_path.display())))?;
     let body_hash = kaspa_consensus_core::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body);
     let (slot, action) = quote.action(step, offset, draft, &bond_text(signer), body_hash, &body)?;
+    if now > slot {
+        return Err(refused(format!("Batch response slot {slot} has passed at DAA {now}")));
+    }
     if submit && now != slot {
         return Err(refused(format!("Batch response is booked at DAA {slot}, current fold DAA is {now}")));
     }
@@ -467,6 +479,7 @@ mod tests {
             draft_expires_daa: 13,
             retained_submitter: None,
             retained_body_hash: None,
+            material_available: false,
             parts: vec![PartSlot { offset: 0, bytes: 3, assigned_daa: 11, accepted_daa: None }],
         };
         assert!(matches!(
@@ -484,5 +497,9 @@ mod tests {
         assert!(quote.action(ResponseStep::Part, Some(0), draft, "bond", hash, &body).is_err());
         assert!(matches!(quote.action(ResponseStep::Finish, None, draft, "bond", hash, &body),
             Ok((12, MaterialActionV1::Finish { draft_id })) if draft_id == draft));
+        quote.material_available = true;
+        assert!(quote.check_material_needed(ResponseStep::Begin).is_err());
+        assert!(quote.check_material_needed(ResponseStep::Part).is_err());
+        assert!(quote.check_material_needed(ResponseStep::Finish).is_ok());
     }
 }

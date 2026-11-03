@@ -478,6 +478,7 @@ fn batch_response_json_v1(
             "draftExpiresDaa": quote.draft_expires_daa,
             "retainedSubmitter": quote.retained_submitter.as_ref().map(palw_bond_key_text_v1),
             "retainedBodyHash": quote.retained_body_hash.map(|hash| hash.to_string()),
+            "materialAvailable": quote.material_available,
             "parts": quote.parts.iter().map(|part| json!({
                 "offset": part.offset, "bytes": part.bytes, "assignedDaa": part.assigned_daa, "acceptedDaa": part.accepted_daa,
             })).collect::<Vec<_>>(),

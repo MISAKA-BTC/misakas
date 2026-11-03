@@ -3452,3 +3452,23 @@ public recovery under a funded profile remain unverified.
 B0 and relay still agreed at virtual DAA 19,718, with no new Qwen
 carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-unused-slots-live.UXWfK7/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-repair-unused-slots.qyAd7v/tests.log`.
+
+## Batch resume recognizes already authenticated material
+
+The response quote now exposes whether the selected branch already
+holds authenticated material for the original target. The CLI checks
+this before reading the local body and refuses a redundant Begin or
+Part. It also refuses stale slots at preview. A Finish for a retained
+draft can still follow the existing cleanup path. The recovery sweep
+skips slots for material already available through any valid request;
+it records neither new supply nor fulfilment of a specific signer's duty.
+
+The extracted suite passed 42 checks, including the case where a late
+missing Part is superseded by canonical shared material and no slot
+moves. The native fixture now checks the response view both during
+assembly and after Finish removes the draft. That fixture has not run.
+Public and whole-node validation still require the funded profile.
+
+B0 and relay agreed at virtual DAA 19,718, with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-shared-material-live.IOZNPK/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-shared-material-resume.84DH16/tests.log`.

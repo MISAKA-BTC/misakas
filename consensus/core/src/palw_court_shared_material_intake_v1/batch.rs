@@ -227,6 +227,9 @@ pub struct BatchResponseQuoteV1 {
     /// Accepted Begin, if a draft is still retained. Shared material may outlive that draft.
     pub retained_submitter: Option<PalwBondKeyV2>,
     pub retained_body_hash: Option<Hash64>,
+    /// The original's authenticated material is available on this branch.
+    /// It may have arrived through another request or provider.
+    pub material_available: bool,
     pub parts: Vec<BatchResponsePartSlotV1>,
 }
 
@@ -323,6 +326,7 @@ pub fn quote_batch_response_v1(
         draft_expires_daa,
         retained_submitter,
         retained_body_hash,
+        material_available: super::target_complete_v1(state, claim, target)?,
         parts,
     })
 }
@@ -695,6 +699,7 @@ pub(crate) fn repair_rooted_batch_slots_v1(
         }
     }
     let schedule = super::material_intake_schedule_v1().map_err(|_| InvalidState)?;
+    let full_ids = MaterialTargetV1::FullIds.id_v1(claim).map_err(|_| InvalidState)?;
     let mut repairable = ids.clone();
     let mut expires = BTreeMap::new();
     let mut bound = |id, before| {
@@ -737,6 +742,11 @@ pub(crate) fn repair_rooted_batch_slots_v1(
             let begin = packet(Stage::Begin)?;
             let finish = packet(Stage::Finish)?;
             let mut before = demand.response_deadline_daa;
+            let material_available = if range.id == full_ids {
+                super::target_complete_v1(state, claim, MaterialTargetV1::FullIds).map_err(|_| InvalidState)?
+            } else {
+                matches!(state.staged_court_row_v1(&Key::CourtMaterial(claim, range.id)), Some(Row::CourtMaterial(_)))
+            };
             let draft = retained.remove(&(rooted.request_root, range.id));
             if let Some(draft) = draft {
                 if draft.scope_id != rooted.scope_id
@@ -758,12 +768,20 @@ pub(crate) fn repair_rooted_batch_slots_v1(
                     }
                     repairable.remove(&id);
                 }
+                if material_available {
+                    repairable.remove(&id);
+                }
                 bound(id, before)?;
             }
             let first_unused = u64::from(range.bytes).div_ceil(PART);
             exclude_unused_response_parts_v1(position, claim, rooted.scope_id, first_unused, ids, &mut repairable)?;
             bound(begin, before)?;
             bound(finish, before)?;
+            if material_available {
+                repairable.remove(&begin);
+                repairable.remove(&finish);
+                continue;
+            }
             spans.push((begin, finish, rooted.material_until(), before));
         }
     }

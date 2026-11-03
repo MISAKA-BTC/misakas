@@ -854,6 +854,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(draft_id, quote.draft_id);
     apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 3), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
     let resumed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert!(!resumed.material_available);
     assert_eq!((resumed.retained_submitter, resumed.retained_body_hash), (Some(who), Some(hash)));
     assert_eq!(resumed.parts[0].accepted_daa, Some(quote.parts[0].assigned_daa));
     use crate::palw_user_views_v1::{PalwCourtTargetV1, PalwUserViewClockV1, palw_court_state_json_v1};
@@ -884,6 +885,12 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
     let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
     assert_eq!(material.bytes, body);
+    let completed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert!(completed.material_available);
+    assert!(completed.retained_submitter.is_none());
+    let view = palw_court_state_json_v1(&b.state, &params, PalwCourtTargetV1::BatchResponse { claim, ordinal, target },
+        &PalwUserViewClockV1::default()).unwrap();
+    assert_eq!(view["response"]["materialAvailable"], true);
     let Some(Row::CourtBatchDemand(rooted)) = b.state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)) else {
         panic!("Batch demand did not stay rooted");
     };
