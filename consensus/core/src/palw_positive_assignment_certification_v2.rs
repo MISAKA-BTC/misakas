@@ -13,6 +13,8 @@ pub enum AssignmentGateCClockErrorV2 {
     Overflow,
     UnresolvedPendingFraudOwner,
     UnboundedVerifierUniverse,
+    VerifierRegistryWorkBound,
+    InvalidRegistrationChronology,
 }
 
 /// Original Result/C acceptance is the commit clock, never Assignment intake.
@@ -110,4 +112,38 @@ pub fn assignment_verifier_registration_cutoff_v2(
         return Err(AssignmentGateCClockErrorV2::UnboundedVerifierUniverse);
     }
     Ok(Some(cutoff))
+}
+
+/// Bound the future verifier count from the actual intake prefix. Removed bonds
+/// cannot re-enter with an old registration date. New registrations use their
+/// accepting DAA, so the strict ancestor cutoff excludes every later entrant,
+/// including one in the same DAA. The native caller owns ancestry and the
+/// registry's provenance. Eligibility is evaluated afresh at the actual draw.
+pub fn assignment_verifier_registry_bound_v2(
+    policy: &PalwSecurityCertificationPolicyV1,
+    anchor_daa: u64,
+    result_before_daa: u64,
+    intake_daa: u64,
+    maximum_scan_rows: u64,
+    registrations: impl ExactSizeIterator<Item = u64>,
+) -> Result<u64, AssignmentGateCClockErrorV2> {
+    if anchor_daa > intake_daa || intake_daa >= result_before_daa {
+        return Err(AssignmentGateCClockErrorV2::InvalidClockOrder);
+    }
+    let Some(cutoff) = assignment_verifier_registration_cutoff_v2(policy, anchor_daa, result_before_daa)? else {
+        return Ok(0);
+    };
+    if registrations.len() as u64 > maximum_scan_rows {
+        return Err(AssignmentGateCClockErrorV2::VerifierRegistryWorkBound);
+    }
+    let mut candidates = 0;
+    for registered in registrations {
+        if registered > intake_daa {
+            return Err(AssignmentGateCClockErrorV2::InvalidRegistrationChronology);
+        }
+        if registered <= cutoff {
+            candidates += 1;
+        }
+    }
+    Ok(candidates)
 }

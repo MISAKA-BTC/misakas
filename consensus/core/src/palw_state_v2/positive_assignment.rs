@@ -614,6 +614,37 @@ impl TransitionBuilder<'_> {
                     }
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
                     assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
+                    let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
+                    if anchor.as_bytes() != bundle.terms.branch_anchor.0 {
+                        return Err(refusal("Assignment verifier bound uses a different signed ancestor"));
+                    }
+                    let certification = rules.certification_policy().ok_or_else(|| refusal("missing actual Gate C policy"))?;
+                    let maximum_scan = rules.assignment_policy().max_replay_work / preimages.source_policy.work.per_control;
+                    let registry_bound = crate::palw_positive_assignment_certification_v2::assignment_verifier_registry_bound_v2(
+                        certification,
+                        anchor_daa,
+                        bundle.terms.result_before_daa,
+                        ctx.daa_score,
+                        maximum_scan,
+                        self.state.bonds.values().map(|bond| bond.registered_daa),
+                    )
+                    .map_err(refusal)?;
+                    let workspace = super::positive_assignment_certification::positive_certification_workspace_bytes_v2(
+                        certification.m,
+                        registry_bound,
+                    )?;
+                    if workspace
+                        > rules
+                            .assignment_policy()
+                            .max_heap_bytes
+                            .min(preimages.physical.max_heap_bytes)
+                            .min(rules.positive_policy().max_case_heap_bytes)
+                    {
+                        return Err(refusal("original Assignment budget cannot cover Gate C draw workspace"));
+                    }
+                    // Check the real local workspace now. Persisting a future
+                    // slot and protecting its work/custody remain separate.
+                    let _p_workspace = super::positive_assignment_certification::reserve_p_workspace(workspace)?;
                     let clock = rules.gate_c_clock(bundle.terms.result_before_daa).map_err(refusal)?;
                     match clock.require_complete_native_bound() {
                         Err(why) => Err(refusal(why)),

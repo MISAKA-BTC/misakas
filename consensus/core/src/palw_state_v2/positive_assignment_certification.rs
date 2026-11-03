@@ -48,7 +48,16 @@ struct OwnedP {
     row: PositiveCertificationRowV2,
     _lease: NativeDemandLeaseV1,
 }
-fn lease(m: u16, pool: u64) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
+fn pool_workspace_bytes(count: u64) -> Result<u64, NativeCoverageV1> {
+    let mut q = TirNativeRequestsV1::new();
+    q.exact_v1::<PalwEligibilityVerifierV1>(count)?;
+    q.vec_v1::<([u8; 64], u64)>(count)?;
+    // The shared eligibility draw stably sorts its projected weights. Cover
+    // a full row-length scratch buffer while both rosters are live.
+    q.exact_v1::<([u8; 64], u64)>(count)?;
+    Ok(q.bytes_v1())
+}
+pub(super) fn positive_certification_workspace_bytes_v2(m: u16, pool: u64) -> Result<u64, PalwStateV2Error> {
     if m == 0 || m > MAX_POSITIVE_DRAW_POSITIONS_V2 {
         return Err(refuse("unsupported actual P draw codec"));
     }
@@ -64,8 +73,7 @@ fn lease(m: u16, pool: u64) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
     q.vec_v1::<PositiveCertificationVoteV2>(positions).map_err(PalwStateV2Error::NativeResource)?;
     q.vec_v1::<Digest>(positions).map_err(PalwStateV2Error::NativeResource)?;
     q.vec_v1::<[u8; 64]>(positions).map_err(PalwStateV2Error::NativeResource)?;
-    q.vec_v1::<PalwEligibilityVerifierV1>(pool).map_err(PalwStateV2Error::NativeResource)?;
-    q.vec_v1::<([u8; 64], u64)>(pool).map_err(PalwStateV2Error::NativeResource)?;
+    q.add_v1(pool_workspace_bytes(pool).map_err(PalwStateV2Error::NativeResource)?).map_err(PalwStateV2Error::NativeResource)?;
     // Exact fixed Borsh maxima: header/finality/outcome/release4823, drawmeta440,
     // 64 per draw position,8348 per literal signed vote; no encoded/RSS guess.
     let encoded = 4823u64
@@ -73,7 +81,13 @@ fn lease(m: u16, pool: u64) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
         .and_then(|n| positions.checked_mul(64 + 8348).and_then(|x| n.checked_add(x)))
         .ok_or_else(|| refuse("P codec arithmetic"))?;
     q.vec_v1::<u8>(encoded.max(1024)).map_err(PalwStateV2Error::NativeResource)?;
-    reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+    Ok(q.bytes_v1())
+}
+fn lease(m: u16, pool: u64) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
+    reserve_p_workspace(positive_certification_workspace_bytes_v2(m, pool)?)
+}
+pub(super) fn reserve_p_workspace(bytes: u64) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
+    reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
         PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PositiveCertificationRowV2>(
             "P memory owner",
             "actual checker is not armed",
@@ -219,7 +233,7 @@ impl TransitionBuilder<'_> {
             daa: ctx.daa_score,
             blue_score: ctx.blue_score,
         };
-        let mut owned = read(&self.state, subject, self.state.bonds.len() as u64)?;
+        let mut owned = read(&self.state, subject, 0)?;
         let row = &mut owned.row;
         if row.fixed.outcome.is_some() || row.draw.is_some() {
             return Err(refuse("P draw already fixed"));
@@ -252,27 +266,37 @@ impl TransitionBuilder<'_> {
         if network.draws >= h.policy.draws_per_epoch {
             return Err(refuse("actual shared N queue full"));
         }
-        let mut pool: Vec<PalwEligibilityVerifierV1> = self
-            .state
-            .bonds
-            .iter()
-            .filter(|(_, b)| {
-                palw_certification_pool_admits_v1(
-                    &h.policy,
-                    h.commit_origin.accepted_daa,
-                    &h.worker_operator.0,
-                    matches!(b.status, PalwBondStatusV2::Active),
-                    b.registered_daa,
-                    b.collateral,
-                    &b.operator_id.as_bytes(),
-                )
-            })
-            .map(|(key, b)| PalwEligibilityVerifierV1 {
+        let eligible = |bond: &PalwBondStateV2| {
+            palw_certification_pool_admits_v1(
+                &h.policy,
+                h.commit_origin.accepted_daa,
+                &h.worker_operator.0,
+                matches!(bond.status, PalwBondStatusV2::Active),
+                bond.registered_daa,
+                bond.collateral,
+                &bond.operator_id.as_bytes(),
+            )
+        };
+        let count = self.state.bonds.values().filter(|bond| eligible(bond)).count();
+        let _pool_lease = reserve_p_workspace(pool_workspace_bytes(count as u64).map_err(PalwStateV2Error::NativeResource)?)?;
+        let mut pool = Vec::new();
+        let allocation = || {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<PalwEligibilityVerifierV1>(
+                "P eligible roster",
+                "allocation did not fit the leased capacity",
+            ))
+        };
+        pool.try_reserve_exact(count).map_err(|_| allocation())?;
+        if pool.capacity() > count {
+            return Err(allocation());
+        }
+        for (key, bond) in self.state.bonds.iter().filter(|(_, bond)| eligible(bond)) {
+            pool.push(PalwEligibilityVerifierV1 {
                 bond: palw_kernel_bond_id_v1(key),
-                operator: b.operator_id.as_bytes(),
-                stake: b.collateral,
-            })
-            .collect();
+                operator: bond.operator_id.as_bytes(),
+                stake: bond.collateral,
+            });
+        }
         pool.sort_unstable_by_key(|member| member.bond);
         struct Roster<'a>(&'a [PalwEligibilityVerifierV1]);
         impl BorshSerialize for Roster<'_> {

@@ -129,6 +129,7 @@ struct PositiveAssignmentRawDataV2 {
     rules: NativeAssignmentRulesV2,
     case_backing: Option<Arc<NativeAssignedCaseBackingV2>>,
     original_open: Option<Arc<NativeAcceptedCaseCarriageV2>>,
+    signed_anchor: Option<(BlockHash, u64)>,
     _transport: Arc<NativeDemandLeaseV1>,
     _decode: Arc<NativeDemandLeaseV1>,
 }
@@ -164,6 +165,7 @@ impl PositiveAssignmentRawActionV2 {
             rules,
             case_backing: None,
             original_open: None,
+            signed_anchor: None,
             _transport: Arc::new(transport),
             _decode: Arc::new(decode),
         })))
@@ -176,6 +178,21 @@ impl PositiveAssignmentRawActionV2 {
             + std::mem::size_of::<[usize; 2]>()
             + std::mem::align_of::<NativeDemandLeaseV1>();
         (arc_data + 2 * arc_ticket) as u64
+    }
+    /// Attach the signed ancestor's clock after native reachability/header
+    /// lookup. The fold binds it to the literal op8 and accepting point.
+    pub fn with_signed_anchor_clock_v2(mut self, block: BlockHash, daa: u64) -> Result<Self, NativeCoverageV1> {
+        let error = || NativeCoverageV1::unsupported::<Self>("Assignment signed ancestor", "wrong operation, clock or shared owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(error)?;
+        if data.signed_anchor.is_some() || data.body[data.index as usize].payload.get(7) != Some(&8) || daa > data.origin.accepted_daa
+        {
+            return Err(error());
+        }
+        data.signed_anchor = Some((block, daa));
+        Ok(self)
+    }
+    pub(super) fn signed_anchor_clock_v2(&self) -> Option<(BlockHash, u64)> {
+        self.0.signed_anchor
     }
     /// Retain the original accepted op8 and executed prefix for op9 replay.
     pub fn with_original_open_carriage_v2(mut self, carriage: NativeAcceptedCaseCarriageV2) -> Result<Self, NativeCoverageV1> {
@@ -260,6 +277,7 @@ impl PartialEq for PositiveAssignmentRawActionV2 {
             && self.selected_parent() == other.selected_parent()
             && self.current_output() == other.current_output()
             && self.rules() == other.rules()
+            && self.signed_anchor_clock_v2() == other.signed_anchor_clock_v2()
             && match (&self.0.original_open, &other.0.original_open) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -352,6 +370,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             rules,
             case_backing,
             original_open,
+            signed_anchor: _,
             _transport: _,
             _decode: _,
         } = &*self.0;

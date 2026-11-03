@@ -158,3 +158,44 @@ fn verifier_universe_cutoff_preserves_exclusive_end_and_never_wraps_maturity() {
     assert_eq!(assignment_verifier_registration_cutoff_v2(&p, u64::MAX - 2, u64::MAX - 1), Ok(None));
     assert!(!palw_certification_pool_admits_v1(&p, u64::MAX - 2, &[1; 64], true, u64::MAX - 3, 1, &[2; 64]));
 }
+
+#[test]
+fn bounded_intake_census_covers_later_eligible_bonds_even_if_their_status_changes() {
+    let mut p = policy();
+    p.verifier_maturity_daa = 10;
+    let registrations = [1, 9, 10, 11, 18];
+    let anchor = 15;
+    let intake = 18;
+    let result_before = 21; // Latest commit 20 makes registration 10 inclusive.
+    let bound = assignment_verifier_registry_bound_v2(&p, anchor, result_before, intake, 5, registrations.into_iter()).unwrap();
+    assert_eq!(bound, 3);
+    for commit in intake..result_before {
+        // At the draw all earlier bonds can be active, including any that
+        // were inactive when counted. Later registrations cannot mature.
+        let current = registrations.into_iter().chain(intake..=commit);
+        let eligible = current
+            .filter(|registered| palw_certification_pool_admits_v1(&p, commit, &[3; 64], true, *registered, 1, &[4; 64]))
+            .count();
+        assert!(eligible as u64 <= bound);
+    }
+    assert_eq!(
+        assignment_verifier_registry_bound_v2(
+            &p,
+            anchor,
+            result_before,
+            intake,
+            4,
+            registrations.into_iter().inspect(|_| panic!("over-cap census must refuse before scanning")),
+        ),
+        Err(AssignmentGateCClockErrorV2::VerifierRegistryWorkBound),
+    );
+    assert_eq!(
+        assignment_verifier_registry_bound_v2(&p, anchor, result_before, intake, 5, [19].into_iter()),
+        Err(AssignmentGateCClockErrorV2::InvalidRegistrationChronology),
+    );
+    assert_eq!(
+        assignment_verifier_registry_bound_v2(&p, anchor, 26, intake, 5, registrations.into_iter()),
+        Err(AssignmentGateCClockErrorV2::UnboundedVerifierUniverse),
+    );
+    assert_eq!(assignment_verifier_registry_bound_v2(&p, 2, 5, 3, 0, registrations.into_iter()), Ok(0));
+}

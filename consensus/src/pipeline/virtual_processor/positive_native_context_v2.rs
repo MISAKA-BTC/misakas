@@ -5,7 +5,7 @@
 //! The second phase must independently resolve notice/origin, current roles,
 //! policy, funding, resource leases and the canonical TransitionBuilder rows.
 use super::BondSpendFilter;
-use crate::model::services::reachability::ReachabilityService;
+use crate::model::{services::reachability::ReachabilityService, stores::headers::HeaderStoreReader};
 use crate::{
     pipeline::virtual_processor::VirtualStateProcessor,
     processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags,
@@ -600,6 +600,7 @@ impl PositiveCarrierPhaseTwoV2 {
                 .and_then(|n| n.checked_add(output_script))
                 .ok_or_else(|| NativeCoverageV1::overflow::<Self>("native Positive raw retained action"))?;
             let decode = require_positive_carrier_lease_v2(reserve_native_requests_v1(bytes)?)?;
+            let mut signed_anchor = None;
             let output = if kind <= 7 {
                 let Ok(body) = decode_native_body_v2(&tx.payload[3..], old_limits) else {
                     continue;
@@ -627,6 +628,10 @@ impl PositiveCarrierPhaseTwoV2 {
                         {
                             continue;
                         }
+                        let anchor_daa = processor.headers_store.get_daa_score(anchor).map_err(|_| {
+                            NativeCoverageV1::unsupported::<Self>("Assignment signed ancestor", "verified ancestor header unavailable")
+                        })?;
+                        signed_anchor = Some((anchor, anchor_daa));
                         Some(bundle.funding.funding_output_index)
                     }
                     A::AdmitAssignedResult { payload, .. } => Some(payload.consent.funding_output_index),
@@ -660,6 +665,10 @@ impl PositiveCarrierPhaseTwoV2 {
                 transport,
                 decode,
             )?;
+            let action = match signed_anchor {
+                Some((block, daa)) => action.with_signed_anchor_clock_v2(block, daa)?,
+                None => action,
+            };
             let action = match open_carriage {
                 Some(carriage) => action.with_original_open_carriage_v2(carriage)?,
                 None => action,

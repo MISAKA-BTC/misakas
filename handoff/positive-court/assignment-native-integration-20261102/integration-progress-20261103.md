@@ -199,3 +199,39 @@ The corrected run and focused test Clippy passed. The funds, original material,
 and resource quote targets passed all 16 Core cases on that source. The scoped
 artifact audit records the three executable hashes. The native A/C path still
 needs end-to-end execution with actual accepted contracts.
+
+
+## Gate C verifier capacity at Assignment intake
+
+The native carrier resolver reads the signed ancestor's DAA from the accepted
+header store after its selected-chain reachability check. Op8 binds that clock
+to the signed ancestor and derives the latest possible mature registration from
+the original Gate C policy and the exclusive Result deadline.
+
+The census uses the actual intake prefix. It includes every registration that
+can mature before the cutoff, including inactive and depleted bonds, and checks
+the registry length against the signed work budget before iterating. The cutoff
+must strictly precede the ancestor DAA. Normal bond registration uses its actual
+accepting DAA, and the selected-chain clock adds only nonnegative advances.
+Later registrations, including reuse of a removed outpoint, therefore cannot
+enter this date range. Existing bond update writers preserve registration DAA.
+This counts remaining potential candidates at intake and does not reconstruct
+removed rows from the ancestor snapshot.
+
+Op8 checks the draw workspace against the original physical limits and obtains
+a real local allocation lease during preflight. The draw uses the same memory
+calculation for its currently eligible population, including the weighted
+sort scratch space. Active status, operator exclusion, stake and the existing
+weighted draw continue to come from the draw's actual state and seed.
+
+The allocation lease is temporary. Persisted future capacity, a bounded later
+registration query, complete snapshot provenance verification, and the pending
+fraud/service owners are still required before accepting A. The current draw
+still traverses the current bond registry when collecting eligible members.
+
+The first library check passed. Its dependent test check was stopped before
+runtime to add the shared weighted-sort scratch space to the workspace bound.
+The final Core and Consensus library Clippy and focused test Clippy passed.
+All 11 Gate C and P cases passed on the same source. The census case verifies
+the bound against the existing live eligibility predicate and checks that the
+length guard refuses before scanning. The artifact audit records both binaries.
