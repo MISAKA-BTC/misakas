@@ -158,17 +158,7 @@ pub(crate) fn batch_open_response_deadline_v1(
             return Err("Batch native demand requires whole range authentication".into());
         }
         let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: range_index as u32 };
-        let graph =
-            position.reservation_graph_v1(claim, scope, u64::from(range.bytes), service.clone(), |bytes| {
-                Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 })
-            })?;
-        let slot = |id| {
-            book.assigned_daa(&id)
-                .filter(|daa| service.contains(daa))
-                .ok_or("Batch response position has no assigned service within the demand")
-        };
-        let begin = slot(graph[0].packet.id)?;
-        let finish = slot(graph[graph.len() - 1].packet.id)?;
+        let (begin, finish) = checked_response_span_v1(position, claim, scope, u64::from(range.bytes), service.clone(), book, owned)?;
         let expires = schedule
             .draft_expires_v1(begin, hard, demand.case_window.material_until_daa)
             .map_err(|_| "Batch response draft expiry cannot be derived")?;
@@ -176,24 +166,161 @@ pub(crate) fn batch_open_response_deadline_v1(
             return Err("Batch response finish crosses the draft expiry".into());
         }
         last_finish = last_finish.max(finish);
-        for node in graph {
-            let id = node.packet.id;
-            let at = slot(id)?;
-            if !owned.contains(&id) || book.packet(&id).is_none_or(|packet| packet.cost.bytes < node.packet.cost.bytes) {
-                return Err("Batch response exceeds the original reserved packet".into());
-            }
-            for predecessor in node.predecessors {
-                if slot(predecessor)? >= at {
-                    return Err("Batch response reservation does not preserve causal order".into());
-                }
-            }
-        }
     }
     let deadline = last_finish.checked_add(1).ok_or("Batch response deadline overflows")?;
     if deadline >= demand.case_window.collect_until_daa || deadline > hard {
         return Err("Batch response has no exclusive deadline inside the collection window".into());
     }
     Ok(deadline)
+}
+
+fn checked_response_span_v1(
+    position: BatchResponsePositionV1,
+    claim: Hash64,
+    scope: Hash64,
+    bytes: u64,
+    service: std::ops::Range<u64>,
+    book: &ServiceReservations,
+    owned: &std::collections::BTreeSet<[u8; 64]>,
+) -> Result<(u64, u64), String> {
+    let graph = position
+        .reservation_graph_v1(claim, scope, bytes, service.clone(), |bytes| Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 }))?;
+    let slot = |id| {
+        book.assigned_daa(&id)
+            .filter(|daa| service.contains(daa))
+            .ok_or("Batch response position has no assigned service within the demand")
+    };
+    for node in &graph {
+        let id = node.packet.id;
+        let at = slot(id)?;
+        if !owned.contains(&id) || book.packet(&id).is_none_or(|packet| packet.cost.bytes < node.packet.cost.bytes) {
+            return Err("Batch response exceeds the original reserved packet".into());
+        }
+        for &predecessor in &node.predecessors {
+            if slot(predecessor)? >= at {
+                return Err("Batch response reservation does not preserve causal order".into());
+            }
+        }
+    }
+    Ok((slot(graph[0].packet.id)?, slot(graph[graph.len() - 1].packet.id)?))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchResponsePartSlotV1 {
+    pub offset: u64,
+    pub bytes: u64,
+    pub assigned_daa: u64,
+    pub accepted_daa: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchResponseQuoteV1 {
+    pub request_root: Hash64,
+    pub draft_id: Hash64,
+    pub total_bytes: u64,
+    pub begin_daa: u64,
+    pub finish_daa: u64,
+    pub draft_expires_daa: u64,
+    /// Accepted Begin, if a draft is still retained. Shared material may outlive that draft.
+    pub retained_submitter: Option<PalwBondKeyV2>,
+    pub retained_body_hash: Option<Hash64>,
+    pub parts: Vec<BatchResponsePartSlotV1>,
+}
+
+/// Read the selected branch's exact slots and still-retained partial progress.
+/// The quote neither signs a response nor authorizes a provider or a body.
+pub fn quote_batch_response_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    ordinal: u64,
+    target: MaterialTargetV1,
+) -> Result<BatchResponseQuoteV1, String> {
+    use crate::palw_batch_court_v1::BatchRangeAuthenticationV1;
+    let key = Key::CourtBatchDemand(claim, ordinal);
+    let Some(Row::CourtBatchDemand(rooted)) = state.staged_court_row_v1(&key) else {
+        return Err("Batch response quote has no accepted demand".into());
+    };
+    rooted.check(&key)?;
+    rooted.check_context(state)?;
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim)?;
+    let service = state.court_service_state_v1().ok_or("Batch response quote has no service book")?;
+    context.check_binding(service)?;
+    let owned = &service.claims.get(&claim).ok_or("Batch response quote has no live original binding")?.packet_ids;
+    let target_id = target.id_v1(claim)?;
+    let demand = &rooted.demand;
+    let index = demand
+        .ranges
+        .binary_search_by_key(&target_id, |range| range.id)
+        .map_err(|_| "Batch response target is outside the accepted demand")?;
+    let range = &demand.ranges[index];
+    if range.authentication != BatchRangeAuthenticationV1::WholeRange || u64::from(demand.part_bytes) != PART {
+        return Err("Batch response quote has a foreign authentication mode or part width".into());
+    }
+    let total_bytes = u64::from(range.bytes);
+    let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: index as u32 };
+    let release = demand.opened_daa.checked_add(1).ok_or("Batch demand opening overflows")?;
+    let (begin_daa, finish_daa) = checked_response_span_v1(
+        position,
+        claim,
+        rooted.scope_id,
+        total_bytes,
+        release..demand.response_deadline_daa,
+        &service.book,
+        owned,
+    )?;
+    let request_root = rooted.request_root;
+    let draft_id = material_batch_draft_id_v1(request_root, claim, target)?;
+    let draft_key = Key::CourtMaterialDraft(claim, draft_id);
+    let (draft_expires_daa, retained_submitter, retained_body_hash) = match state.staged_court_row_v1(&draft_key) {
+        Some(Row::CourtMaterialDraft(draft)) => {
+            draft.check(&draft_key)?;
+            if draft.version != MATERIAL_BATCH_VERSION
+                || draft.head != request_root
+                || draft.target != target
+                || draft.scope_id != rooted.scope_id
+                || draft.total_bytes != total_bytes
+                || draft.begun_daa != begin_daa
+                || draft.material_until_daa != context.material_until_daa
+                || draft.expires_daa > context.hard_daa
+            {
+                return Err("Batch response quote substitutes the retained draft".into());
+            }
+            (draft.expires_daa, Some(draft.submitter), Some(draft.body_hash))
+        }
+        None => {
+            let schedule = super::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
+            (schedule.draft_expires_v1(begin_daa, context.hard_daa, context.material_until_daa)?, None, None)
+        }
+        _ => return Err("Batch response draft has another row type".into()),
+    };
+    if finish_daa >= draft_expires_daa {
+        return Err("Batch response Finish crosses the draft expiry".into());
+    }
+    let mut parts = Vec::with_capacity(total_bytes.div_ceil(PART) as usize);
+    for offset in (0..total_bytes).step_by(PART as usize) {
+        let packet = position.packet_id(claim, rooted.scope_id, Stage::Part(offset))?;
+        let assigned_daa = service.book.assigned_daa(&packet).ok_or("Batch response part has no reserved DAA")?;
+        let accepted_daa = match state.staged_court_row_v1(&Key::CourtMaterialPart(draft_id, offset)) {
+            Some(Row::CourtMaterialPart(part)) if part.version == MATERIAL_BATCH_VERSION && part.claim == claim => {
+                part.check_loaded_context(state)?;
+                Some(part.daa)
+            }
+            None => None,
+            _ => return Err("Batch response part has another row type".into()),
+        };
+        parts.push(BatchResponsePartSlotV1 { offset, bytes: PART.min(total_bytes - offset), assigned_daa, accepted_daa });
+    }
+    Ok(BatchResponseQuoteV1 {
+        request_root,
+        draft_id,
+        total_bytes,
+        begin_daa,
+        finish_daa,
+        draft_expires_daa,
+        retained_submitter,
+        retained_body_hash,
+        parts,
+    })
 }
 
 /// An exact signed delivery branch of a previously accepted demand. Original

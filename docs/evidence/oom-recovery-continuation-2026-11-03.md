@@ -3148,3 +3148,25 @@ B0 and relay agreed on an advanced selected tip at DAA 19,709 with no
 Qwen carrier in the new selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-open-quote.dsc4oo/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-batch-open-quote-live.HTUX0l/page.json`.
+
+## Quote the booked response and retained part progress
+
+The Core response quote reads an accepted BCT1 demand and one canonical
+material target from the selected branch. It returns the request root,
+draft ID, exact Begin, Part and Finish slots, and draft expiry. When a
+draft remains, it returns the original submitter and body hash, plus the
+accepting DAA of each still-retained part. The same slot checker verifies
+ownership, byte capacity and causal order for Open and for this quote.
+The quote is read-only. The accepting fold authenticates the sender and
+body separately.
+
+The extracted suite passed 39 checks, including the shared slot and
+expiry predicates. The updated native fixture queries the empty draft
+plan and then the same plan after Part acceptance, with the same request
+root and draft ID. The native fixture, actual restart, Panel/RPC client
+connection and public G0–G7 remain unverified.
+
+B0 and relay agreed at DAA 19,710. The newly scanned selected interval
+contained no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-response-quote.ytMks8/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-response-quote-live.FlXRXl/page.json`.

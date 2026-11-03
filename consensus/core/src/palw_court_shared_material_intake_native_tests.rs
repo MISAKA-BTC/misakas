@@ -808,6 +808,14 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let opening = BatchCourtWireV1::Open(open);
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges).is_err());
+    let quote = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert_eq!(quote.request_root, request_root);
+    assert_eq!((quote.begin_daa, quote.finish_daa, quote.retained_submitter), (begin_at.daa_score, response_deadline - 1, None));
+    assert_eq!(quote.total_bytes, body.len() as u64);
+    assert_eq!(quote.parts, [BatchResponsePartSlotV1 {
+        offset: 0, bytes: body.len() as u64, assigned_daa: at(frame, NOTICE_WINDOW_DAA + 3).daa_score, accepted_daa: None,
+    }]);
+    assert!(quote_batch_response_v1(&b.state, claim, ordinal, MaterialTargetV1::FullIds).is_err());
     let after_open = b.state.state_root();
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert_eq!(b.state.state_root(), after_open);
@@ -822,7 +830,11 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(apply(&mut b, &begin_at, &conflicting, rent + 2, 1).is_err());
     assert_eq!(b.state.state_root(), after_begin);
     let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
+    assert_eq!(draft_id, quote.draft_id);
     apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 3), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
+    let resumed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert_eq!((resumed.retained_submitter, resumed.retained_body_hash), (Some(who), Some(hash)));
+    assert_eq!(resumed.parts[0].accepted_daa, Some(quote.parts[0].assigned_daa));
     let draft_key = Key::CourtMaterialDraft(claim, draft_id);
     let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&draft_key) else { panic!("missing Batch draft") };
     use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
