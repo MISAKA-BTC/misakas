@@ -1737,6 +1737,7 @@ fn replay_assigned_court_history_v2(
                 let NativeRowBody::JournalHead(head) = required(after, NativeRowKey::JournalHead(pin.case))? else {
                     return Err(refuse("archived Finish lacks the accepted journal head"));
                 };
+                NativeAssignedArchiveV2::check_carriage(state, backing, finish, carriage)?;
                 let history = finish.history();
                 if finish.header().kind != CaseJournalEventKind::NativeBody
                     || finish.payload() != body_bytes
