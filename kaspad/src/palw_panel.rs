@@ -12313,7 +12313,9 @@ impl PalwPanelService {
                 }
                 let mut bytes = Vec::new();
                 file.take(PALW_MATERIAL_MAX_BYTES as u64 + 1).read_to_end(&mut bytes).ok()?;
-                (bytes.len() <= PALW_MATERIAL_MAX_BYTES && !kaspa_p2p_flows::palw_gossip::material_is_private(&bytes)).then_some(bytes)
+                use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, palw_fp_privacy_mode_peek_v1};
+                (bytes.len() <= PALW_MATERIAL_MAX_BYTES && palw_fp_privacy_mode_peek_v1(&bytes) == Some(PALW_FP_PRIVACY_PUBLIC_DA))
+                    .then_some(bytes)
             });
         };
         let size = std::fs::metadata(&material_path).ok()?.len();
