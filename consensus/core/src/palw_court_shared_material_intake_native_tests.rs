@@ -734,7 +734,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         root.inputs.iter().any(|input| matches!(input, RootInputBoundaryV1::PromptPosition(_)))
     }).unwrap().leaf;
     let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(fx.record.program.as_slice()).unwrap();
-    let projected = numerical_batch_envelope_v1(frame, &source, &cover, &program, context.profile_id, 64).unwrap();
+    let projected = numerical_batch_envelope_v1(frame, &source, &cover, &program, context.profile_id, 4_096).unwrap();
     let plan = numerical_batch_root_demand_v1(frame, &source, &cover, &program, context.profile_id, &projected, notice_leaf, 0).unwrap();
     let notice_ordinal = set.step_leaf_ordinal_v1(notice_leaf).unwrap();
     let notice_id = set.request_id(notice_ordinal).unwrap();
@@ -809,7 +809,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap().batch_notice_only_v1());
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).is_err());
-    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 64, &lengths),
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 4_096, &lengths),
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch has no accepted notice"));
     use super::super::palw_court_shared_tir_fold_v1::request;
     use crate::palw_court_shared_tir_frontier_v1::SharedRequestEffectV1;
@@ -834,7 +834,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         "Batch Open route differs from its initial notice",
     );
     let other_leaf = u64::from(notice_leaf == 0);
-    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, other_leaf, 0, 64, &lengths),
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, other_leaf, 0, 4_096, &lengths),
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch leaf differs from its initial notice"));
     let mut follow_up = notice.clone();
     follow_up.ordinal = set.step_leaf_ordinal_v1(other_leaf).unwrap();
@@ -844,7 +844,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(request(&mut b, &open_at, claim, &follow_up).is_err());
     assert_eq!(b.state.state_root(), after_notice);
     let mut open = quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).unwrap();
-    let operator_quote = quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 64, &lengths).unwrap();
+    let operator_quote = quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 4_096, &lengths).unwrap();
     assert_eq!(*operator_quote, open);
     assert_eq!((open.signer, open.demand.opened_daa, open.demand.response_deadline_daa), (who, open_at.daa_score, response_deadline));
     let request_root = open.demand.checked_request_root_v1().unwrap();

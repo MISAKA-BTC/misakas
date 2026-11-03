@@ -183,19 +183,20 @@
                 let b = TransitionBuilder::try_new(&served, &params, false, false, false, false, &ok).unwrap();
                 let prepared = prepare_paired_original_v1(&b, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
                 let geometry = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap();
-                let streaming_budget = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
-                    total: budgets.1,
-                    per_root_edges: budgets.1.max_total_edges,
-                    per_root_coordinates: budgets.1.max_total_coordinates,
-                    per_root_memberships: budgets.1.max_root_memberships,
-                    max_workspace_bytes: 128 << 20,
-                };
-                let streamed_envelope = geometry.streaming_batch_envelope_v1(&b, &ctx, streaming_budget, 4_096).unwrap();
-                assert!(geometry.streaming_batch_envelope_v1(
-                    &b, &ctx, streaming_budget, streamed_envelope.maximums_v1().len() - 1,
-                ).is_err());
                 let req = geometry.prepare_requirements_v1(&b, &ctx,
                     PreparedRequirementBudgetsV1 { numerical: budgets.0, input: budgets.1, source: budgets.2 }).unwrap();
+                let roots = &req.inputs_v1().parameters_v1().roots;
+                let streaming_budget = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
+                    total: budgets.1,
+                    per_root_edges: roots.iter().map(|root| root.explored_edges).max().unwrap(),
+                    per_root_coordinates: roots.iter().map(|root| root.explored_coordinates).max().unwrap(),
+                    per_root_memberships: roots.iter().map(|root| root.parameters.len() as u64).max().unwrap(),
+                    max_workspace_bytes: 128 << 20,
+                };
+                let streamed_envelope = req.geometry.streaming_batch_envelope_v1(&b, &ctx, streaming_budget, 4_096).unwrap();
+                assert!(req.geometry.streaming_batch_envelope_v1(
+                    &b, &ctx, streaming_budget, streamed_envelope.maximums_v1().len() - 1,
+                ).is_err());
                 let envelope = req.numerical_batch_envelope_v1(&b, &ctx, 4_096).unwrap();
                 assert!(req.constraint_stop_batch_operands_v1(&b, &ctx).unwrap().is_none(),
                     "this numerical fixture has no verified tokenizer registration");
