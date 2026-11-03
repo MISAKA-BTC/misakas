@@ -274,7 +274,7 @@ fn da_sessions_json(state: &PalwChainStateV2, claim_id: &Hash64, now_daa: u64) -
         .collect()
 }
 
-fn claim_row_json(row: &crate::palw_producer_v2::PalwClaimRowV1) -> Value {
+fn claim_row_json(row: &crate::palw_producer_v2::PalwClaimRowV1, accepted_blue_score: u64) -> Value {
     let (phase, phase_daa, void_reason) = palw_claim_phase_text_v1(&row.phase);
     json!({
         "claimId": row.claim_id.to_string(),
@@ -287,6 +287,7 @@ fn claim_row_json(row: &crate::palw_producer_v2::PalwClaimRowV1) -> Value {
         "phaseDaa": phase_daa,
         "voidReason": void_reason,
         "acceptedDaa": row.accepted_daa,
+        "acceptedBlueScore": accepted_blue_score,
         "acceptedBlock": row.accepted_block.to_string(),
         "reboundDaa": opt_u64(row.rebound_daa),
         "boundDaa": opt_u64(row.bound_daa),
@@ -326,6 +327,7 @@ pub fn palw_claim_detail_json_v1(
         crate::palw_producer_v2::palw_claim_rows_bind_by_anchor_slot_v1(std::slice::from_mut(&mut row), params, delay);
     }
     let now = clock.next_daa;
+    let tip = state.last_point();
     let sessions: Vec<Value> = state
         .court_sessions_iter()
         .filter(|(_, s)| s.claim == *claim_id)
@@ -335,8 +337,9 @@ pub fn palw_claim_detail_json_v1(
         "version": PALW_USER_VIEW_VERSION_V1,
         "kind": "palwClaimDetail",
         "nowDaa": now,
-        "tipDaa": state.last_point().map(|p| p.daa_score).unwrap_or(0),
-        "claim": claim_row_json(&row),
+        "tipDaa": tip.map(|p| p.daa_score).unwrap_or(0),
+        "tipBlock": tip.map(|p| p.block.to_string()),
+        "claim": claim_row_json(&row, claim.accepted_blue_score),
         "gateCGoverns": crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, claim),
         "accusationPending": state.palw_accusation_pending_v1(claim_id),
         "receiptPause": receipt_pause_json(state, params, claim_id, claim),
@@ -346,6 +349,7 @@ pub fn palw_claim_detail_json_v1(
         "courtSessions": sessions,
         "notes": [
             "phaseDeadlineDaa is the date the phase ends by itself (palw_claim_phase_deadline_v1); a court or accusation can hold it",
+            "For an Attempt, acceptedBlock identifies the carrier. acceptedDaa and acceptedBlueScore identify its fold on the selected chain.",
             "Final is not SecurityCertified: only a certified claim carries consensus credit (RFC-0018 Gate C)",
         ],
     }))

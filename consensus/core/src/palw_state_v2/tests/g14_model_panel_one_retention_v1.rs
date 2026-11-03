@@ -131,6 +131,12 @@ fn delayed_signed_attempt_extends_only_new_acceptance_and_survives_revert_and_co
     let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&accepted)).unwrap();
     let cold = borsh::from_slice::<PalwStateCarriageV2>(&carriage).unwrap().into_state(&p, Some(accepted.state_root())).unwrap();
     assert_eq!(cold.claim(&id).unwrap().trace_retention_daa, 104 + span);
+    let view = crate::palw_user_views_v1::palw_claim_detail_json_v1(&cold, &p, &id, &Default::default(), None).unwrap();
+    assert_eq!(view["tipBlock"], h64(3).to_string());
+    assert_eq!(view["claim"]["acceptedBlock"], claim.accepted_block.to_string());
+    assert_eq!(view["claim"]["acceptedDaa"], 104);
+    assert_eq!(view["claim"]["acceptedBlueScore"], 3);
+    assert_eq!(view["courtClocks"]["traceRetentionDaa"], 104 + span);
     let between = env.attempt.trace_retention_daa + 1;
     assert!(between < claim.trace_retention_daa);
     assert!(crate::palw_da_rcore_v1::palw_da_material_owed_v1(claim, between));
