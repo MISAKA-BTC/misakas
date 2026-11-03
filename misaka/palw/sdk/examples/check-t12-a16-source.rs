@@ -9,7 +9,7 @@ use kaspa_consensus_core::{
     hashing::header::{hash as header_hash, pre_pow_hash_64},
     header::Header,
     palw_artifact::{
-        PalwArtifactMultiproofStreamV1, PalwArtifactMultiproofV1, PalwArtifactOpeningV1, artifact_leaf_parts_v1,
+        PalwArtifactMultiproofStreamV1, PalwArtifactMultiproofV1, PalwArtifactOpeningV1, PalwProvenOperandsV1, artifact_leaf_parts_v1,
         verify_artifact_opening_v1,
     },
     palw_attempt_rules_v1::{
@@ -29,9 +29,14 @@ use kaspa_consensus_core::{
         PalwStepCoordinateV1, PalwStepOutLenV1, canonical_step_coordinates, canonical_step_leaf_index, kernel_semantics_id_v1,
         step_leaf_count_capped_v1,
     },
-    palw_step_leg::PalwStepLegError,
+    palw_step_leg::{
+        PalwStepEvidenceV1, PalwStepFaultV1, PalwStepLegError, PalwStepOpeningV1, PalwStepRangeOpeningV1, PalwStepRefutationV1,
+        binding_commitment_root_v1, check_step_refutation_capped_v1, step_merkle_leaf_v1, step_merkle_node_v1,
+        step_opening_root_capped_v1, step_range_opening_root_capped_v1, step_tile_leaf_hash_ctx_v1,
+    },
     palw_step_refute::{
-        KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, PalwStepRefuteError, canonical_input_leaves_v1, palw_refutation_prompt_carriage_v1,
+        KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, PalwStepRefuteError, canonical_input_leaves_v1,
+        check_execution_step_refutation_opened_capped_v1, palw_refutation_prompt_carriage_v1,
     },
     palw_v2::PalwJobContextV2,
     pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
@@ -470,11 +475,16 @@ fn verdict(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidence
     evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true).map_err(|e| format!("{e:?}"))
 }
 
-fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), String> {
+fn read_evidence(path: &Path) -> Result<(Vec<u8>, PalwLeafEvidenceV1), String> {
     let bytes = read_bounded(path, MAX_EVIDENCE)?;
     let quote = preflight_native_value_v1::<PalwLeafEvidenceV1>(bytes.as_slice(), bytes.len() as u64).map_err(|e| format!("{e:?}"))?;
     require(quote.logical_requests_v1() <= MAX_EVIDENCE_HEAP, "evidence allocation quote exceeds cap")?;
-    let mut evidence: PalwLeafEvidenceV1 = borsh::from_slice(&bytes).map_err(|e| e.to_string())?;
+    let evidence = borsh::from_slice(&bytes).map_err(|e| e.to_string())?;
+    Ok((bytes, evidence))
+}
+
+fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), String> {
+    let (bytes, mut evidence) = read_evidence(path)?;
     require(
         verdict(claim, target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation,
         "the named original tile did not recompute",
@@ -538,6 +548,156 @@ fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), S
     Ok(())
 }
 
+// The projection opens one contiguous activation row before its output. The
+// one range sibling containing that output can be updated from its single
+// path. All other subtrees, including the activation leaves, stay unchanged.
+fn replace_later_range_sibling(
+    leaf_count: u64,
+    range: &mut PalwStepRangeOpeningV1,
+    output: &PalwStepOpeningV1,
+    new_leaf_hash: Hash64,
+) -> Result<(), String> {
+    let mut first = range.first_leaf_index;
+    let mut end = first.checked_add(range.leaf_hashes.len() as u64).ok_or("range overflow")?;
+    let mut position = output.leaf_index;
+    require(first < end && end <= position && position < leaf_count, "expected one earlier nonempty activation range")?;
+    let mut before = step_merkle_leaf_v1(position, &output.leaf_hash);
+    let mut after = step_merkle_leaf_v1(position, &new_leaf_hash);
+    let mut width = leaf_count;
+    let mut range_siblings = range.siblings.iter_mut();
+    let mut output_siblings = output.siblings.iter();
+    let mut changed = false;
+    while width > 1 {
+        if !first.is_multiple_of(2) {
+            range_siblings.next().ok_or("missing activation left sibling")?;
+        }
+        if !end.is_multiple_of(2) && end < width {
+            let right = range_siblings.next().ok_or("missing activation right sibling")?;
+            if end == position {
+                require(!changed && *right == before, "activation and output paths disagree on their shared subtree")?;
+                *right = after;
+                changed = true;
+            }
+        }
+        if position.is_multiple_of(2) && position + 1 == width {
+            // Odd tail promotion does not consume a sibling or change either digest.
+        } else {
+            let sibling = output_siblings.next().ok_or("missing output sibling")?;
+            (before, after) = if position.is_multiple_of(2) {
+                (step_merkle_node_v1(&before, sibling), step_merkle_node_v1(&after, sibling))
+            } else {
+                (step_merkle_node_v1(sibling, &before), step_merkle_node_v1(sibling, &after))
+            };
+        }
+        first /= 2;
+        end = end.div_ceil(2);
+        position /= 2;
+        width = width.div_ceil(2);
+    }
+    require(changed && range_siblings.next().is_none() && output_siblings.next().is_none(), "invalid activation or output path extent")
+}
+
+fn verify_counterfactual_projection(claim: &RootedClaim, path: &Path) -> Result<(), String> {
+    let target = target(claim, Relation::QueryProjection)?;
+    let (bytes, mut evidence) = read_evidence(path)?;
+    require(verdict(claim, &target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation, "original projection did not recompute")?;
+
+    let refutation = &mut evidence.refutation;
+    let binding = &mut refutation.binding;
+    let count = binding.step_leaf_count;
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let required = canonical_input_leaves_v1(&binding.shape_profile, &binding.job_context, &refutation.output_preimage.coord)
+        .ok_or("projection inputs cannot be derived")?;
+    let [required] = required.as_slice() else { return Err("expected a single activation row".into()) };
+    require(required.windows(2).all(|p| p[0].0 + 1 == p[1].0), "activation row is not contiguous")?;
+    let [input] = refutation.inputs.as_mut_slice() else { return Err("missing activation row".into()) };
+    let [siblings] = input.run_siblings.as_mut_slice() else { return Err("expected a single activation range opening".into()) };
+    let mut range = PalwStepRangeOpeningV1 {
+        first_leaf_index: required.first().ok_or("missing activation index")?.0,
+        leaf_hashes: input
+            .preimages
+            .iter()
+            .map(|leaf| step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, leaf))
+            .collect(),
+        siblings: siblings.clone(),
+    };
+    require(
+        step_range_opening_root_capped_v1(count, &range, MAX_STEP_LEAVES).map_err(|e| format!("{e:?}"))? == binding.step_merkle_root,
+        "activation row does not open against the original signed root",
+    )?;
+    let lane = refutation.output_preimage.values_le.get_mut(..4).ok_or("projection lane zero is absent")?;
+    let old = i32::from_le_bytes(lane.try_into().map_err(|_| "invalid projection lane bytes")?);
+    require((-32767..=32767).contains(&old), "original query lane is outside A16 code range")?;
+    let changed = if old < 32767 { old + 1 } else { old - 1 };
+    lane.copy_from_slice(&changed.to_le_bytes());
+    let new_hash = step_tile_leaf_hash_ctx_v1(&binding.job_context, &profile_hash, &refutation.output_preimage);
+    replace_later_range_sibling(count, &mut range, &refutation.output_opening, new_hash)?;
+    refutation.output_opening.leaf_hash = new_hash;
+    let synthetic_step =
+        step_opening_root_capped_v1(count, &refutation.output_opening, MAX_STEP_LEAVES).map_err(|e| format!("{e:?}"))?;
+    require(
+        synthetic_step != binding.step_merkle_root
+            && step_range_opening_root_capped_v1(count, &range, MAX_STEP_LEAVES).map_err(|e| format!("{e:?}"))? == synthetic_step,
+        "unchanged activation does not open against the synthetic step root",
+    )?;
+    *siblings = range.siblings;
+    binding.step_merkle_root = synthetic_step;
+    binding.committed_execution_root = binding_commitment_root_v1(binding);
+    let synthetic = PalwOneMoveClaimV2 { execution_root: binding.committed_execution_root, ..claim.expected };
+    let structural = PalwStepRefutationV1 {
+        binding: binding.clone(),
+        evidence: PalwStepEvidenceV1::StepTile {
+            opening: refutation.output_opening.clone(),
+            preimage: refutation.output_preimage.clone(),
+        },
+    };
+    require(
+        matches!(check_step_refutation_capped_v1(&structural, MAX_STEP_LEAVES), Err(PalwStepLegError::NoFaultFound)),
+        "counterfactual failed the native structural check",
+    )?;
+    let weights = PalwProvenOperandsV1::from_openings_v1(&evidence.artifact_openings, claim.expected.artifact_root)
+        .map_err(|e| format!("{e:?}"))?;
+    let arithmetic =
+        check_execution_step_refutation_opened_capped_v1(refutation, &weights, evidence.prompt_ids_opening.as_ref(), MAX_STEP_LEAVES)
+            .map_err(|e| format!("{e:?}"))?;
+    require(
+        arithmetic.fault == (PalwStepFaultV1::ComputationMismatch { value_index: 0 }),
+        "native arithmetic did not isolate lane zero",
+    )?;
+    require(
+        matches!(
+            evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true),
+            Err(PalwShardCourtError::NotTheClaimsExecution { .. })
+        ),
+        "synthetic root was not rejected under the original signed claim",
+    )?;
+    require(
+        matches!(evidence.verdict_at_v2(&synthetic, MAX_STEP_LEAVES, true), Ok(PalwShardCourtVerdictV1::ExecutorGuilty)),
+        "bound native court did not detect the counterfactual arithmetic mismatch",
+    )?;
+    println!(
+        "{}",
+        json!({
+            "scope": "local-unsigned-counterfactual-t12-a16-query-projection",
+            "originalClaimId": claim.observation.claim_id,
+            "originalEvidenceSha256": sha256(&bytes),
+            "originalExecutionRoot": claim.expected.execution_root,
+            "syntheticExecutionRoot": synthetic.execution_root,
+            "leaf": target.leaf,
+            "lane": 0,
+            "originalValue": old,
+            "counterfactualValue": changed,
+            "structuralChecksPassed": true,
+            "unchangedActivationAuthenticated": true,
+            "nativeArithmeticMismatch": true,
+            "originalClaimBindingRejected": true,
+            "counterfactualSigned": false,
+            "liveCarrierSubmitted": false,
+        })
+    );
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
@@ -562,7 +722,11 @@ fn run() -> Result<(), String> {
             let relation = if mode == "verify" { Relation::Embedding } else { Relation::QueryProjection };
             verify(&claim, &target(&claim, relation)?, Path::new(evidence))
         }
-        _ => Err("usage: check-t12-a16-source build|build-projection OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify|verify-projection OBSERVATION OBS_SHA256 EVIDENCE".into()),
+        [mode, input, sha, evidence] if mode == "verify-counterfactual-projection" => {
+            let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
+            verify_counterfactual_projection(&claim, Path::new(evidence))
+        }
+        _ => Err("usage: check-t12-a16-source build|build-projection OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify|verify-projection|verify-counterfactual-projection OBSERVATION OBS_SHA256 EVIDENCE".into()),
     }
 }
 
@@ -577,6 +741,29 @@ fn main() {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1, open_artifact_leaf_v1};
+    use kaspa_consensus_core::palw_step_leg::{step_merkle_range_siblings_v1, step_merkle_root_v1, step_opening_v1};
+
+    #[test]
+    fn changing_one_later_leaf_updates_only_its_range_sibling() {
+        let original: Vec<_> = (0..9).map(Hash64::from_u64_word).collect();
+        for (first, len, changed) in [(2, 3, 8), (0, 2, 3), (1, 5, 7)] {
+            let output = step_opening_v1(&original, changed as u64).unwrap();
+            let mut range = PalwStepRangeOpeningV1 {
+                first_leaf_index: first as u64,
+                leaf_hashes: original[first..first + len].to_vec(),
+                siblings: step_merkle_range_siblings_v1(&original, first, len).unwrap(),
+            };
+            let new_leaf = Hash64::from_u64_word(20);
+            let mut new = original.clone();
+            new[changed] = new_leaf;
+            replace_later_range_sibling(original.len() as u64, &mut range, &output, new_leaf).unwrap();
+            assert_eq!(range.siblings, step_merkle_range_siblings_v1(&new, first, len).unwrap());
+            assert_eq!(
+                step_range_opening_root_capped_v1(original.len() as u64, &range, MAX_STEP_LEAVES).unwrap(),
+                step_merkle_root_v1(&new).unwrap()
+            );
+        }
+    }
 
     #[test]
     fn streamed_single_row_matches_the_native_opening_including_odd_tail() {
