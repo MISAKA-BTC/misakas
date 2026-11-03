@@ -445,6 +445,73 @@ pub fn check_initial_assignment_relay_target_v2(
     Ok(())
 }
 
+fn relay_origin_precedes_v2(
+    accepted: misaka_palw_positive_contract::rows::AcceptedOrigin,
+    origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+) -> bool {
+    if accepted.accepting_block == origin.accepting_block {
+        accepted.accepted_daa == origin.accepted_daa
+            && accepted.accepted_blue_score == origin.accepted_blue_score
+            && (accepted.accepted_tx_ordinal, accepted.event_ordinal) < (origin.accepted_tx_ordinal, origin.event_ordinal)
+    } else {
+        accepted.accepted_daa <= origin.accepted_daa && accepted.accepted_blue_score < origin.accepted_blue_score
+    }
+}
+
+/// Checks a Case successor declaration at the original op14 prefix. The
+/// proposed output is still prospective. The spend must qualify it separately.
+pub fn check_case_relay_registration_continuation_v2(
+    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
+    assignment: &misaka_palw_positive_contract::assignment::rows::AssignmentRow,
+    funding: &misaka_palw_positive_contract::rows::FundingRow,
+    origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+) -> Result<(), ContractError> {
+    use misaka_palw_positive_contract::assignment::{
+        funding_relay::{RelayFundingPurposeV2, RelayTargetV2},
+        rows::AssignmentStatusV2,
+    };
+    terms.validate_shape()?;
+    assignment.validate_shape()?;
+    let RelayTargetV2::Continuation { original_funding, predecessor, original_contract, .. } = terms.target else {
+        return Err(ContractError::Identity);
+    };
+    let bundle = &assignment.bundle;
+    if terms.funding_purpose != RelayFundingPurposeV2::CaseC
+        || !matches!(assignment.status, AssignmentStatusV2::Consumed { case, .. } if case == funding.consent.case)
+        || terms.assignment != assignment.id()
+        || terms.contract_network != bundle.terms.network
+        || terms.contract_ruleset != bundle.terms.ruleset
+        || terms.contract_anchor != bundle.terms.branch_anchor
+        || terms.payer_bond != bundle.terms.poster
+        || terms.payer != bundle.future_case.payer
+        || terms.payer != funding.consent.payer
+        || terms.payer != principal(&funding.payer_key)
+        || terms.refund_payload != bundle.future_case.refund_payload
+        || terms.refund_payload != funding.consent.refund_payload
+        || original_funding != funding.original_outpoint
+        || original_contract != funding.consent.id().0
+        || funding.current_outpoint != Some(predecessor)
+    {
+        return Err(ContractError::Identity);
+    }
+    let previous = funding.last_settlement.map_or(funding.funding_origin, |material| material.origin);
+    if !relay_origin_precedes_v2(assignment.origin, origin)
+        || !relay_origin_precedes_v2(previous, origin)
+        || origin.accepted_daa >= terms.register_before_daa
+        || terms.funding_admission_before_daa > bundle.terms.reserve_until_daa
+    {
+        return Err(ContractError::Range);
+    }
+    let remaining = [funding.fee.remaining, funding.capital.remaining, funding.surplus.remaining]
+        .into_iter()
+        .try_fold(0u64, u64::checked_add)
+        .ok_or(ContractError::Budget)?;
+    if terms.expected_amount > remaining {
+        return Err(ContractError::Budget);
+    }
+    Ok(())
+}
+
 /// Checks the already accepted contract at the Case relay's own prefix.
 pub fn check_case_relay_registration_assignment_v2(
     terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
@@ -457,17 +524,9 @@ pub fn check_case_relay_registration_assignment_v2(
     };
     terms.validate_shape()?;
     assignment.validate_shape()?;
-    let accepted = assignment.origin;
-    let precedes = if accepted.accepting_block == origin.accepting_block {
-        accepted.accepted_daa == origin.accepted_daa
-            && accepted.accepted_blue_score == origin.accepted_blue_score
-            && (accepted.accepted_tx_ordinal, accepted.event_ordinal) < (origin.accepted_tx_ordinal, origin.event_ordinal)
-    } else {
-        accepted.accepted_daa <= origin.accepted_daa && accepted.accepted_blue_score < origin.accepted_blue_score
-    };
     let bundle = &assignment.bundle;
     let bounds = bundle.future_case;
-    if !precedes
+    if !relay_origin_precedes_v2(assignment.origin, origin)
         || assignment.status != AssignmentStatusV2::Open
         || origin.accepted_daa >= terms.register_before_daa
         || terms.funding_admission_before_daa > bounds.case_admission_before_daa

@@ -507,3 +507,88 @@ fn initial_case_relay_binds_the_exact_result_consent_and_case_coin() {
     let over_cap = FundingRelayTermsV2 { expected_amount: consent.max_locked + 1, ..terms };
     assert_eq!(check(&over_cap, result.id(), &consent, funding, over_cap.expected_amount, 120), Err(ContractError::Budget));
 }
+
+#[test]
+fn case_relay_continuation_registration_uses_the_actual_predecessor() {
+    use misaka_palw_positive_contract::{
+        ContractError,
+        assignment::funding_relay::{FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2, RelayTemplateV2},
+    };
+    let (mut assignment, _, key, _, _) = assigned();
+    let (result, _, basis, consent) = case_bundle(&assignment);
+    assignment.status = AssignmentStatusV2::Consumed { case: result.case_id(), result: result.id() };
+    let original = NativeOutpoint { transaction: NativeHash64([90; 64]), index: consent.funding_output_index };
+    let predecessor = NativeOutpoint { transaction: NativeHash64([91; 64]), index: 1 };
+    let successor = NativeOutpoint { transaction: NativeHash64([92; 64]), index: 2 };
+    let funding_origin = AcceptedOrigin {
+        accepting_block: NativeHash64([93; 64]),
+        carrier_transaction: original.transaction,
+        accepted_daa: 100,
+        accepted_blue_score: 100,
+        ..assignment.origin
+    };
+    let previous = AcceptedOrigin {
+        accepting_block: NativeHash64([94; 64]),
+        carrier_transaction: predecessor.transaction,
+        accepted_daa: 120,
+        accepted_blue_score: 120,
+        ..funding_origin
+    };
+    let registration = AcceptedOrigin { accepted_tx_ordinal: previous.accepted_tx_ordinal + 1, ..previous };
+    let account = FundingRow {
+        consent,
+        basis,
+        payer_key: key,
+        payer_signature: [0; SIGNATURE_BYTES],
+        funding_origin,
+        original_outpoint: original,
+        current_outpoint: Some(predecessor),
+        initial_locked: 90,
+        fee: BalanceLeg { initial: 30, remaining: 20, paid: 10, refunded: 0, burned: 0 },
+        capital: BalanceLeg { initial: 40, remaining: 40, paid: 0, refunded: 0, burned: 0 },
+        surplus: BalanceLeg { initial: 20, remaining: 20, paid: 0, refunded: 0, burned: 0 },
+        liability: AcceptedMaterial { origin: funding_origin, digest: support::d(95) },
+        last_settlement: Some(AcceptedMaterial { origin: previous, digest: support::d(96) }),
+    };
+    let signed = &assignment.bundle.terms;
+    let terms = FundingRelayTermsV2 {
+        version: 2,
+        revision: 1,
+        contract_network: signed.network,
+        contract_ruleset: signed.ruleset,
+        assignment: assignment.id(),
+        contract_anchor: signed.branch_anchor,
+        relay_ruleset: support::d(91),
+        relay_policy: support::d(92),
+        payer_bond: signed.poster,
+        payer: account.consent.payer,
+        refund_payload: account.consent.refund_payload,
+        funding_purpose: RelayFundingPurposeV2::CaseC,
+        target: RelayTargetV2::Continuation {
+            original_funding: original,
+            predecessor,
+            parent_spend: successor.transaction,
+            original_contract: account.consent.id().0,
+        },
+        funding_outpoint: successor,
+        expected_amount: 75,
+        template: RelayTemplateV2::NativeOp12NoCaseNoReceiptsV1,
+        register_before_daa: 150,
+        funding_admission_before_daa: 200,
+        custody_until_daa: 800,
+        metadata_fee_schedule: support::d(93),
+        physical_custody_profile: support::d(94),
+        max_metadata_fee: 1_000_000,
+    };
+    let check = |terms: &FundingRelayTermsV2, account: &FundingRow, at| {
+        check_case_relay_registration_continuation_v2(terms, &assignment, account, at)
+    };
+    assert_eq!(check(&terms, &account, registration), Ok(()));
+    assert_eq!(check(&terms, &account, previous), Err(ContractError::Range));
+    let stale = FundingRow { current_outpoint: Some(original), ..account.clone() };
+    assert_eq!(check(&terms, &stale, registration), Err(ContractError::Identity));
+    let overdraw = FundingRelayTermsV2 { expected_amount: 81, ..terms };
+    assert_eq!(check(&overdraw, &account, registration), Err(ContractError::Budget));
+    let other = FundingRelayTermsV2 { payer_bond: signed.prover, ..terms };
+    assert_eq!(check(&other, &account, registration), Err(ContractError::Identity));
+}

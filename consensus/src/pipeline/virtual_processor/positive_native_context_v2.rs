@@ -593,8 +593,9 @@ impl VirtualStateProcessor {
             },
         };
         let fault = |why| NativeCoverageV1::unsupported::<Self>("rooted relay archive", why);
-        use misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2;
-        let (case_contract_material, case_contract_work) = if matches!(auth.terms.target, RelayTargetV2::InitialCase { .. }) {
+        let (case_contract_material, case_contract_work) = if auth.terms.funding_purpose
+            == misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2::CaseC
+        {
             let (material, work) = self.case_relay_original_contract_v2(parent, state, &auth.terms, &auth.physical, workspace)
                 .map_err(|why| match why {
                     crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => why,
@@ -677,6 +678,9 @@ impl VirtualStateProcessor {
             // C's exact original contract is checked at R's actual accepted
             // prefix in the payer replay. Its registration uses R's own policy.
             misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2::InitialCase { .. } => true,
+            misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2::Continuation { .. } => {
+                auth.terms.funding_purpose == misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2::CaseC
+            }
             _ => false,
         };
         let profile = AssignmentFundingRelayProfileV2::capture_at_intake(params, origin.accepted_daa)
@@ -966,7 +970,12 @@ impl PositiveCarrierPhaseTwoV2 {
             let mut initial_c = None;
             let output = if let Some(physical) = relay_cap {
                 let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], physical.max_frame_bytes) else { continue };
-                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. }) {
+                let supported = match body.terms.target {
+                    RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. } => true,
+                    RelayTargetV2::Continuation { .. } => body.terms.funding_purpose == RelayFundingPurposeV2::CaseC,
+                    RelayTargetV2::InitialProver { .. } => false,
+                };
+                if !supported {
                     continue; // Other purposes need their own original account owner.
                 }
                 if let Some(state) = selected_parent_state {
@@ -983,7 +992,7 @@ impl PositiveCarrierPhaseTwoV2 {
                     continue;
                 }
                 if pending_relay.is_none() {
-                    if matches!(body.terms.target, RelayTargetV2::InitialCase { .. })
+                    if body.terms.funding_purpose == RelayFundingPurposeV2::CaseC
                         && let Some(state) = selected_parent_state
                     {
                         let original = processor.case_relay_original_contract_v2(

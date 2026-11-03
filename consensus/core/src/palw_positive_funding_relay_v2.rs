@@ -162,18 +162,21 @@ pub fn pending_funding_relay_archive_workspace_v2() -> u64 {
 
 /// Scratch for the bounded payer projection and its purpose-specific row.
 pub fn pending_funding_relay_payer_scratch_v2(
-    purpose: misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2,
+    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
 ) -> u64 {
     use misaka_palw_positive_contract::{
         assignment::{
-            funding_relay::RelayFundingPurposeV2,
+            funding_relay::{RelayFundingPurposeV2, RelayTargetV2},
             rows::{AssignmentNonceRow, AssignmentRow},
         },
-        rows::{MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES},
+        rows::{FundingRow, MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES},
     };
     let common = 4 * MAX_NATIVE_KEY_BYTES + 3 * size_of::<AssignmentNonceRow>();
     let case = MAX_NATIVE_ROW_BYTES + 4 * size_of::<AssignmentRow>();
-    (common + if purpose == RelayFundingPurposeV2::CaseC { case } else { 0 }) as u64
+    let successor = MAX_NATIVE_ROW_BYTES + 2 * size_of::<FundingRow>() + MAX_NATIVE_KEY_BYTES;
+    (common
+        + if terms.funding_purpose == RelayFundingPurposeV2::CaseC { case } else { 0 }
+        + if matches!(terms.target, RelayTargetV2::Continuation { .. }) { successor } else { 0 }) as u64
 }
 
 // Original archive lookup uses two rows, two ancestry checks, header,
@@ -228,7 +231,12 @@ pub fn check_case_relay_minimum_replay_v2(
         .and_then(|n| n.checked_add(2 * payload))
         .and_then(|n| n.checked_add(6 * aux))
         .ok_or(ContractError::Budget)?;
-    let minimum_reads = RELAY_ARCHIVE_LOOKUP_READS_V2 + CASE_RELAY_OPEN_LOOKUP_READS_V2 + MIN_RELAY_CARRIER_REPLAY_READS_V2;
+    let continuation_reads = u64::from(matches!(
+        terms.target,
+        misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2::Continuation { .. }
+    ));
+    let minimum_reads =
+        RELAY_ARCHIVE_LOOKUP_READS_V2 + CASE_RELAY_OPEN_LOOKUP_READS_V2 + MIN_RELAY_CARRIER_REPLAY_READS_V2 + continuation_reads;
     if physical.max_heap_bytes < minimum_heap || physical.max_replay_reads < minimum_reads || physical.max_replay_work <= minimum_work
     {
         return Err(ContractError::Budget);
@@ -258,7 +266,7 @@ pub(crate) fn minimum_pending_funding_relay_replay_heap_v2(
         .and_then(|n| n.checked_add((size_of::<PalwStateDeltaV2>() + 6 * size_of::<PalwDeltaEntryV2>()) as u64))
         .ok_or(ContractError::Budget)?;
     pending_funding_relay_archive_workspace_v2()
-        .checked_add(pending_funding_relay_payer_scratch_v2(terms.funding_purpose))
+        .checked_add(pending_funding_relay_payer_scratch_v2(terms))
         .and_then(|n| n.checked_add(delta))
         .ok_or(ContractError::Budget)
 }
