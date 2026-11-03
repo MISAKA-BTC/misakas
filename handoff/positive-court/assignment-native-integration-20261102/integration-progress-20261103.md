@@ -1783,3 +1783,22 @@ state. Its metadata typechecked. The linked run could not start because
 the older Core archives' transitive crate metadata no longer matched the
 shared build cache. It has not localized the Linux allocation mismatch.
 The earlier optimized macOS ingress run remains live on its source pin.
+
+### Literal Case service floor
+
+The [Case source floor candidate](case-source-floor-candidate-20261103.tar.gz)
+adds the missing lower bounds when op9 compares the literal miner service
+with the original Assignment envelope. It checks retained bytes, the
+original minimum retention horizon and the full reserved attempt count.
+Its exclusive source cutoff covers both Court checking and the last
+legal Gate C attestation from the actual Result acceptance clock. The
+installer also refuses a maturity outside the Case's accepted-to-reserved
+interval. Existing source-consent maxima and funding checks still apply.
+
+The exact-method probe passed at early and last-legal Result clocks and
+rejected short source cutoffs, insufficient storage/retention, reduced
+attempts and checked-arithmetic underflow. Core library and focused
+funding-relay test metadata passed. The patch reconciles with the prior
+provenance, expiry and scoped-prover patches. The A0 runtime build still
+pins the earlier source. An all-branch capacity owner, actual Case
+acceptance and the Linux heartbeat refusal remain unresolved.
