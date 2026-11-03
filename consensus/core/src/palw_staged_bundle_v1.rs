@@ -40,7 +40,10 @@ pub fn staged_context_resource_plan_v1(
         resident_ram_bytes: n(context * 24 + u128::from(semantic.resident_ram_bytes) * 8)?,
     })
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "camelCase")]
 pub enum PalwStagedFamilyV1 {
     PublicPrefix,
     Constraint,

@@ -4207,7 +4207,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(GetPalwTirOriginalQuoteResponse::default());
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_tir_public_original_quote_v1(commitment, header)).await;
+        let (answer, door_diagnostics) = session
+            .spawn_blocking(move |c| {
+                let mut diagnostics = None;
+                let answer = c.palw_tir_public_original_quote_with_diagnostics_v1(commitment, header, &mut diagnostics);
+                (answer, diagnostics)
+            })
+            .await;
         Ok(match answer {
             Ok(Some((quote_daa, plan))) => GetPalwTirOriginalQuoteResponse {
                 available: true,
@@ -4215,10 +4221,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 refusal: String::new(),
                 quote_daa,
                 plan_hex: faster_hex::hex_string(&borsh::to_vec(&plan).map_err(|e| RpcError::General(e.to_string()))?),
+                door_diagnostics: None,
             },
             // Below the fence (the node's quote is `None` there) or an original the frame route does not admit.
             Ok(None) => GetPalwTirOriginalQuoteResponse::default(),
-            Err(refusal) => GetPalwTirOriginalQuoteResponse { available: true, refusal, ..Default::default() },
+            Err(refusal) => GetPalwTirOriginalQuoteResponse { available: true, refusal, door_diagnostics, ..Default::default() },
         })
     }
 

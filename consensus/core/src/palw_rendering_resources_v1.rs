@@ -5,7 +5,8 @@
 //! existing reservations and their historic deadlines are never extended by this helper.
 use borsh::{BorshDeserialize, BorshSerialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PalwRenderingResourcePlanV1 {
     pub prefix_tokens: u32,
     pub vocab: u32,

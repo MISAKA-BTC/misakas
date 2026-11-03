@@ -1613,7 +1613,11 @@ impl VirtualStateProcessor {
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        mut diagnostics: Option<&mut Option<Box<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1>>>,
     ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        if let Some(out) = diagnostics.as_mut() {
+            **out = None;
+        }
         kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone()).check_wire_v1()?;
         if borsh::object_length(&original).map_err(|e| e.to_string())?
             > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
@@ -1628,13 +1632,14 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         let extras = self.palw_transition_extras_for(point);
-        let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_v1(
+        let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_with_diagnostics_v1(
             &state,
             params,
             &extras,
             point.daa_score,
             &original,
             &header,
+            diagnostics,
         )
         .map_err(|e| e.to_string())?;
         Ok(plan.map(|plan| (point.daa_score, plan)))

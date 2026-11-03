@@ -4014,7 +4014,16 @@ impl ConsensusApi for Consensus {
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
-        self.virtual_processor.palw_tir_public_original_quote_v1_impl(original, header)
+        self.virtual_processor.palw_tir_public_original_quote_v1_impl(original, header, None)
+    }
+
+    fn palw_tir_public_original_quote_with_diagnostics_v1(
+        &self,
+        original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        diagnostics: &mut Option<Box<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1>>,
+    ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        self.virtual_processor.palw_tir_public_original_quote_v1_impl(original, header, Some(diagnostics))
     }
 
     fn palw_staged_tir_prefix_leaf_index_v1(
