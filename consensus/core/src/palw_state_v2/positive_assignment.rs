@@ -1082,6 +1082,82 @@ impl TransitionBuilder<'_> {
     }
 
     #[inline(never)]
+    /// Recheck the same rooted registration at the current F checkpoint,
+    /// after qualifying F's actual output and current native payer key.
+    fn initial_f_relay_service_cutoff_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+        bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
+        funding: NativeOutpoint,
+        amount: u64,
+        payer_key: &[u8; PUBKEY_BYTES],
+    ) -> Result<u64, PalwStateV2Error> {
+        use crate::{
+            palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1},
+            palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2,
+            palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2},
+        };
+        use misaka_palw_positive_contract::{
+            CONTRACT_REVISION, CONTRACT_VERSION, assignment::funding_relay::FUNDING_RELAY_OPERATION_V2,
+        };
+        let replay = action.pending_relay_replay_v2().ok_or_else(|| refusal("missing matching relay in the selected parent"))?;
+        if replay.selected_parent != action.selected_parent() {
+            return Err(missing_assignment_history());
+        }
+        let mut requests = TirNativeRequestsV1::new();
+        requests.exact_v1::<NativeRowValue>(4).map_err(PalwStateV2Error::NativeResource)?;
+        requests.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
+        requests.exact_v1::<u8>(2 * 1024 + 2 * 74).map_err(PalwStateV2Error::NativeResource)?;
+        let workspace = requests.bytes_v1();
+        let _lease = reserve_native_requests_v1(workspace).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowValue>(
+                "initial Assignment relay replay",
+                "native owner is not armed",
+            ))
+        })?;
+        let mut budget = FundingRelayAuxScanBudgetV2::new(&replay.physical).map_err(refusal)?;
+        let purpose = RelayFundingPurposeV2::PosterA;
+        let Some(NativeRowBody::FundingRelayAuthorization(auth)) =
+            self.read_relay_occupancy_row_v2(NativeRowKey::FundingRelayAuthorization { funding, purpose }, &mut budget)?
+        else {
+            return Err(refusal("parent relay authorization is unavailable at this prefix"));
+        };
+        let Some(NativeRowBody::FundingRelayCustody(custody)) =
+            self.read_relay_occupancy_row_v2(NativeRowKey::FundingRelayCustody { funding, purpose }, &mut budget)?
+        else {
+            return Err(missing_assignment_history());
+        };
+        custody.check_pair(&auth).map_err(|_| missing_assignment_history())?;
+        if replay.reservation != custody.reservation
+            || replay.physical != auth.physical
+            || auth.carrier_charge_material(replay.fees).ok() != Some(auth.metadata_charge)
+        {
+            return Err(missing_assignment_history());
+        }
+        if custody.binding.is_some() || ctx.daa_score >= custody.retention_until_daa || auth.payer_key != *payer_key {
+            return Err(refusal("initial Assignment relay is bound, expired, or has a different payer"));
+        }
+        check_initial_assignment_relay_target_v2(&auth.terms, bundle, funding, amount, ctx.daa_score).map_err(refusal)?;
+        let body = FundingRelayRegistrationBodyV2 {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            operation: FUNDING_RELAY_OPERATION_V2,
+            terms: auth.terms,
+            purpose_signature: auth.purpose_signature,
+            relay_signature: custody.relay_signature,
+        };
+        let signature_workspace = auth.quote.usage.heap_bytes.checked_sub(workspace).ok_or_else(missing_assignment_history)?;
+        verify_funding_relay_package_signatures_v2(&body, payer_key, signature_workspace).map_err(|why| match why {
+            FundingRelayBodyErrorV2::Contract(_) => missing_assignment_history(),
+            FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+        })?;
+        // Preserve the rollback tail from the original authenticated R
+        // policy. It cannot also be sold as Assignment service time.
+        custody.retention_until_daa.checked_sub(auth.policy.rollback_margin_daa).ok_or_else(missing_assignment_history)
+    }
+
+    #[inline(never)]
     pub(super) fn install_initial_assignment_relay_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
@@ -1159,6 +1235,11 @@ impl TransitionBuilder<'_> {
                 || terms.expected_amount > crate::constants::MAX_SOMPI
             {
                 return Err(refusal("initial relay differs from the current contract or native relay scope"));
+            }
+            let minimum_replay =
+                crate::palw_positive_funding_relay_v2::minimum_pending_funding_relay_replay_heap_v2(terms).map_err(refusal)?;
+            if physical.max_heap_bytes < minimum_replay {
+                return Err(refusal("initial relay profile cannot replay its own registration delta"));
             }
             let registration = fees.registration_quote(policy, physical, terms, ctx.daa_score).map_err(refusal)?;
             if registration.usage.frame_bytes != reserved.quote().encoded_bytes {
@@ -1321,7 +1402,7 @@ impl TransitionBuilder<'_> {
                     let poster =
                         self.state.bond(&native_bond(bundle.terms.poster)).ok_or_else(|| refusal("missing current poster"))?;
                     let payer_key: &[u8; PUBKEY_BYTES] = poster.pubkey.as_slice().try_into().map_err(refusal)?;
-                    let (funding, _) = crate::palw_positive_assignment_funds_v2::check_assignment_funding_carriage_v2(
+                    let (funding, amount) = crate::palw_positive_assignment_funds_v2::check_assignment_funding_carriage_v2(
                         bundle,
                         tx,
                         payer_key,
@@ -1349,7 +1430,13 @@ impl TransitionBuilder<'_> {
                         return Err(refusal("independently derived native job/source catalog differs from signed bundle"));
                     }
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
-                    assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
+                    let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
+                    if rules.funding_relay_profile().requires_relay()
+                        && self.initial_f_relay_service_cutoff_v2(ctx, action, bundle, funding, amount, payer_key)?
+                            < horizon.retention_until_daa
+                    {
+                        return Err(refusal("initial Assignment relay does not cover the signed retention horizon"));
+                    }
                     let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
                     if anchor.as_bytes() != bundle.terms.branch_anchor.0 {
                         return Err(refusal("Assignment verifier bound uses a different signed ancestor"));

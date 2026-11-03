@@ -80,11 +80,11 @@ impl DbPalwStateV2Store {
     pub(crate) fn check_funding_relay_archive_v2(
         &self,
         auth: &FundingRelayAuthorizationRowV2,
-        expected_payload: &[u8],
+        matches_payload: impl FnOnce(&[u8]) -> bool,
     ) -> StoreResult<FundingRelayCarrierFeesV2> {
         let payload =
             self.db.get_pinned(key(auth.material.digest))?.ok_or_else(|| capacity("rooted literal relay payload unavailable"))?;
-        if payload.as_ref() != expected_payload {
+        if !matches_payload(payload.as_ref()) {
             return Err(invalid("archived literal relay payload differs"));
         }
         self.read_funding_relay_charge_v2(auth)?.ok_or_else(|| capacity("rooted relay charge unavailable"))

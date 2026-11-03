@@ -362,7 +362,7 @@ fn maximum_relay_rows_fit_exact_ceiling_with_continuation_and_binding() {
         original_contract: d(26),
     };
     let (auth, mut custody) = relay_pair(t);
-    let origin = row_origin(t.funding_outpoint.transaction, 150);
+    let origin = AcceptedOrigin { accepting_block: NativeHash64([43; 64]), ..row_origin(t.funding_outpoint.transaction, 150) };
     custody.binding = Some(FundingRelayBindingV2 {
         origin,
         original_funding: point(24),
@@ -395,14 +395,23 @@ fn maximum_relay_rows_fit_exact_ceiling_with_continuation_and_binding() {
         assert!(changed.check_pair(&auth).is_err());
     }
     let mut changed = custody;
-    changed.binding =
-        Some(FundingRelayBindingV2 { origin: row_origin(t.funding_outpoint.transaction, t.funding_admission_before_daa), ..binding });
+    let mut same_block = binding;
+    same_block.origin.accepting_block = auth.origin.accepting_block;
+    same_block.reservation.origin = same_block.origin;
+    changed.binding = Some(same_block);
+    assert!(changed.check_pair(&auth).is_err());
+
+    let mut expired = binding;
+    expired.origin.accepted_daa = t.funding_admission_before_daa;
+    expired.reservation.origin = expired.origin;
+    changed.binding = Some(expired);
     assert!(changed.check_pair(&auth).is_err());
 }
 #[test]
 fn pending_and_current_row_shapes_preserve_original_exclusive_clocks() {
     let (auth, mut custody) = relay_pair(terms());
-    let origin = row_origin(auth.terms.funding_outpoint.transaction, 150);
+    let origin =
+        AcceptedOrigin { accepting_block: NativeHash64([43; 64]), ..row_origin(auth.terms.funding_outpoint.transaction, 150) };
     custody.binding = Some(FundingRelayBindingV2 {
         origin,
         original_funding: auth.terms.funding_outpoint,
