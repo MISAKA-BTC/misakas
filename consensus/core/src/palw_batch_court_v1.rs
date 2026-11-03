@@ -3,6 +3,7 @@
 //! and the responder's authority. Transport completeness grants no credit.
 use crate::Hash64;
 use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA, shared_initial_notice_daa_in_window_v1};
+use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::blake2b_512_keyed;
 use std::io::{self, Read};
@@ -143,6 +144,7 @@ pub enum BatchCourtErrorV1 {
     Window,
     Opening,
     AuthenticationMode,
+    DeliveryCost,
     VerificationUnavailable,
     Checkpoint,
     Clock,
@@ -186,6 +188,65 @@ impl BatchDemandV1 {
         let bytes = borsh::to_vec(self).map_err(|_| BatchCourtErrorV1::Demand)?;
         Ok(blake2b_512_keyed(b"misaka-palw/batch-court/demand/v1", &bytes))
     }
+
+    /// Project one exact demand after its opening, with independent part
+    /// slots and one whole-body verification control per whole range. Costs
+    /// come from the native profile in canonical range/part order, including
+    /// outer framing, authentication and storage. The caller must reserve
+    /// later dependent rounds, terminal filing and recovery separately.
+    pub fn delivery_service_graph_v1(
+        &self,
+        part_costs: &[ServiceCost],
+        whole_range_costs: &[ServiceCost],
+    ) -> Result<Vec<CausalServicePacketV1>, BatchCourtErrorV1> {
+        const PART_HEADER_BYTES: u64 = 3 * 64 + 2 * 4;
+        use BatchCourtErrorV1::DeliveryCost;
+        let count = self.check()?;
+        let whole_count = self.ranges.iter().filter(|range| range.authentication == BatchRangeAuthenticationV1::WholeRange).count();
+        if part_costs.len() != count || whole_range_costs.len() != whole_count {
+            return Err(DeliveryCost);
+        }
+        let request_root = self.root()?;
+        let release_daa = self.opened_daa.checked_add(1).ok_or(BatchCourtErrorV1::Clock)?;
+        let service_before = self.response_deadline_daa;
+        let mut part_costs = part_costs.iter().copied();
+        let mut whole_range_costs = whole_range_costs.iter().copied();
+        let mut graph = Vec::with_capacity(count + whole_count);
+        for range in &self.ranges {
+            let part_count = range.bytes.div_ceil(self.part_bytes);
+            let first_part = graph.len();
+            for index in 0..part_count {
+                let payload_bytes = u64::from((range.bytes - index * self.part_bytes).min(self.part_bytes));
+                let cost = part_costs.next().expect("validated canonical part count");
+                if cost.bytes < PART_HEADER_BYTES + payload_bytes {
+                    return Err(DeliveryCost);
+                }
+                graph.push(CausalServicePacketV1 {
+                    packet: ServicePacket {
+                        id: delivery_packet_id(request_root, range.id, Some(index)),
+                        release_daa,
+                        service_before,
+                        cost,
+                    },
+                    predecessors: Vec::new(),
+                });
+            }
+            if range.authentication == BatchRangeAuthenticationV1::WholeRange {
+                let predecessors = graph[first_part..].iter().map(|part| part.packet.id).collect();
+                let cost = whole_range_costs.next().expect("validated canonical whole range count");
+                graph.push(CausalServicePacketV1 {
+                    packet: ServicePacket { id: delivery_packet_id(request_root, range.id, None), release_daa, service_before, cost },
+                    predecessors,
+                });
+            }
+        }
+        Ok(graph)
+    }
+}
+
+fn delivery_packet_id(request_root: Hash64, range: Hash64, index: Option<u32>) -> [u8; 64] {
+    let bytes = borsh::to_vec(&(request_root, range, index)).expect("fixed delivery identity encodes");
+    blake2b_512_keyed(b"misaka-palw/batch-court/delivery/v1", &bytes).as_bytes()
 }
 
 /// A bounded bitmap with a content digest per accepted slot. Evidence bytes
@@ -523,6 +584,48 @@ mod tests {
         assert_eq!(resumed.remaining_payload_bytes(), 0);
         assert_eq!(resumed.status(20), BatchProgressStatusV1::AllMaterialVerified);
         assert_eq!(progress.status(20), BatchProgressStatusV1::TimedOutUnverified);
+    }
+
+    #[test]
+    fn reserves_parallel_parts_and_a_causal_whole_body_check() {
+        use crate::palw_court_service_v1::{ServiceRefusal, ServiceReservations};
+        let mut request = demand();
+        let range = request.ranges.iter_mut().find(|range| range.id == Hash64::from_u64_word(1)).unwrap();
+        range.authentication = BatchRangeAuthenticationV1::WholeRange;
+        let range = range.id;
+        let capacity = ServiceCost { bytes: 610, work: 6, io: 3, controls: 3 };
+        let part = ServiceCost { bytes: 204, work: 2, io: 1, controls: 1 };
+        let finish = ServiceCost { bytes: 20, work: 6, io: 2, controls: 1 };
+        let mut book = ServiceReservations::new(capacity).unwrap();
+        let initial = book.clone();
+        // The first two parts use 204 and 202 bytes and the third 203.
+        let parts = request
+            .ranges
+            .iter()
+            .flat_map(|range| {
+                (0..range.bytes.div_ceil(request.part_bytes)).map(move |index| ServiceCost {
+                    bytes: 200 + u64::from((range.bytes - index * request.part_bytes).min(request.part_bytes)),
+                    ..part
+                })
+            })
+            .collect::<Vec<_>>();
+        let graph = request.delivery_service_graph_v1(&parts, &[finish]).unwrap();
+        book.reserve_causal_v1(&graph, request.response_deadline_daa).unwrap();
+        book.check_causal_v1(&graph).unwrap();
+        let root = request.root().unwrap();
+        assert_eq!(book.assigned_daa(&delivery_packet_id(root, range, Some(0))), Some(11));
+        assert_eq!(book.assigned_daa(&delivery_packet_id(root, range, Some(1))), Some(11));
+        assert_eq!(book.assigned_daa(&delivery_packet_id(root, range, None)), Some(12));
+
+        let mut refused = initial.clone();
+        request.response_deadline_daa = 12;
+        let graph = request.delivery_service_graph_v1(&parts, &[finish]).unwrap();
+        assert_eq!(book.check_causal_v1(&graph), Err(ServiceRefusal::InvalidState));
+        assert_eq!(refused.reserve_causal_v1(&graph, request.response_deadline_daa), Err(ServiceRefusal::DeadlineExhausted));
+        assert_eq!(refused, initial);
+        let mut underpriced = parts;
+        underpriced[0].bytes -= 1;
+        assert_eq!(request.delivery_service_graph_v1(&underpriced, &[finish]), Err(BatchCourtErrorV1::DeliveryCost));
     }
 
     #[test]

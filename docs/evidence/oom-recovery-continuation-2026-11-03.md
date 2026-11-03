@@ -2099,3 +2099,35 @@ The serial LLVM retry reached 69% reported host memory availability with
 zero swap growth, below its 70% guard. It stopped and detached its owned
 RAM disk before linking the all-root fixture. The build receipt is
 `/private/tmp/misaka-t12-oom-20261102/tfp1-stream-core-runtime-r4.vmql3jjq/result.json`.
+
+## Batch delivery slots and native source measurement
+
+The Batch candidate can project an exact demand into the existing causal
+service scheduler. Each part becomes an independently eligible packet.
+Whole-body verification depends on all parts of that range. The projection
+preserves a hard response boundary and refuses a declared part cost below
+its encoded body and inner header size. A full deadline, capacity, and
+storage admission still depends on the native caller's profile and funded
+service book. Subsequent adaptive turns and terminal filing require their
+own reservations. The existing public material intake still uses the
+serial accepted-offset cursor.
+
+Using the exact 2,019-byte SmolLM2 StepRun and two raw Batch carriers
+totalling 2,419 bytes, the illustrative service book placed both parts at
+3,222 and the verification control at 3,223. Adding the old serial
+dependency placed the second part at 3,223 and verification at 3,224
+under the same illustrative capacity. This is a single local topology
+comparison. Outer carrier bytes, actual per-DAA supply and the full Court
+path remain unmeasured. The exact native opening and checkpoint checks
+also passed. Thirteen focused Batch and causal service tests passed.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-real-batch-reservation.CWbqvK/run.stdout`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-reservation.DLPc3z/focused-final.log`.
+
+The exact Core metadata queue for the dynamic-input streaming change
+expired before invoking the compiler. The last admission sample was
+77% available memory with 8,281,407,488 bytes of other compiler RSS.
+The all-root runtime and new native fixture test remain unverified.
+At DAA 19,673 B0 and relay agreed on the selected chain. Qwen #82 was
+referenced by the selected mergeset and rejected at 20,607 of 20,608 DAA
+required retention. Both claim reads were absent. Raw evidence is in
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-service-live.zVWFZS`.
