@@ -756,14 +756,22 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
                     &fx.execution.prompt, tile * crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN,
                 ).unwrap(),
             ).unwrap(),
+            MaterialTargetV1::Unit { ordinal } => {
+                use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
+                let Q::StepLeaf { index } = set.request_at(ordinal).ok()? else { return None };
+                borsh::to_vec(&R::StepLeaf {
+                    preimage: fx.execution.step_leaf(index).unwrap(),
+                    opening: fx.execution.step_opening(index).unwrap(),
+                }).unwrap()
+            }
             _ => return None,
         };
-        Some((target, body))
-    }).expect("the selected demand contains prompt material");
+        (body.len() <= PART).then_some((target, body))
+    }).expect("the selected demand contains a fixture body that fits one part");
     assert!(body.len() <= PART);
     let hash = palw_tir_public_body_hash_v1(&body);
     let ordinal = 0;
-    // Only the selected prompt material is delivered in this fixture. The remaining signed
+    // Only the selected material is delivered in this fixture. The remaining signed
     // declarations exercise canonical target checks without filing bodies.
     let lengths = plan.ranges_v1().iter().map(|&(planned, _)| (planned, if planned == target { body.len() as u64 } else { 1 }))
         .collect::<Vec<_>>();
