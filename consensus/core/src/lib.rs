@@ -1012,6 +1012,8 @@ pub mod palw_tir_container_v1;
 pub mod palw_tir_designated_answers_v1;
 pub mod palw_tir_frame_cost_v1;
 pub mod palw_tir_history_bisection_v1;
+/// Prospective per-frame owner scheduling, unconnected to live Court rules.
+pub mod palw_tir_owner_schedule_v2;
 pub mod palw_tir_prefix_owned_v1;
 pub mod palw_tir_prefix_state_v1;
 pub mod palw_tir_public_allocation_v1;
