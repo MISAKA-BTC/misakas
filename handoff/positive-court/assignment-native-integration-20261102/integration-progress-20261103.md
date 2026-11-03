@@ -1619,3 +1619,20 @@ and rollback. The repository's Core unit regression has not run. The
 candidate is separate from the source pinned by the archive/custody
 checks. Kernel ledger reverse relationships and prospective ingress
 closure remain separate work.
+
+### Kernel Case alias cache
+
+The [Kernel alias candidate](kernel-case-alias-index-candidate-20261103.tar.gz)
+builds two ordered subject sets once from the existing checked native
+ledger projection. They cover all previous checks, including claims
+with no job holder and the reverse job-holder relationship. The shared
+cache owns a typed lease and is invalidated by the existing ledger
+write and delta replay/undo cache lifecycle. It is not persisted.
+A cold lookup still requires the authenticated ledger projection.
+
+The candidate Core library and focused Assignment funds metadata passed.
+The isolated membership regression matched all 289 old-predicate outcomes,
+including separate job and claim roles and seal key components. A Core
+cache lease/invalidation regression is included but has not run. The
+candidate is outside the guarded A0 source. Future ingress closure and
+the all-branch admission reservation are still required.
