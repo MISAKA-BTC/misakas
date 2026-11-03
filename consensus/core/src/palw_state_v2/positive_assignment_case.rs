@@ -1805,10 +1805,10 @@ impl TransitionBuilder<'_> {
             (key, response.as_ref()),
             work_before,
         )?;
-        let journal = source
-            .as_ref()
-            .filter(|update| update.changes_case())
-            .map(|_| {
+        let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
+        let expired = matches!(replayed.outcome, crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2::Expired);
+        let journal = (expired || source.as_ref().is_some_and(|update| update.changes_case()))
+            .then(|| {
                 self.prepare_assigned_case_journal_v2(
                     backing,
                     misaka_palw_positive_contract::journal::CaseJournalEventKind::NativeBody,
@@ -1816,7 +1816,6 @@ impl TransitionBuilder<'_> {
                 )
             })
             .transpose()?;
-        let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
         let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
             .map_err(refuse)?;
         if prior
@@ -1827,6 +1826,33 @@ impl TransitionBuilder<'_> {
             || prior.usage.witness_attempts.checked_add(delta.attempts).is_none_or(|n| n > prior.service.budget.witness_attempts)
         {
             return Err(refuse("current Court operation exceeds signed service usage"));
+        }
+        if expired {
+            use misaka_palw_positive_contract::{messages::WitnessStatus, rows::CoverageState};
+            let case = CaseRow {
+                status: replayed.after.status,
+                witness_status: replayed.after.last_attempt.map_or(WitnessStatus::Building, |attempt| attempt.status),
+                last_event: origin,
+                ..prior
+            };
+            let journal = journal.ok_or_else(missing)?;
+            let checkpoint = self.try_checkpoint()?;
+            let result = (|| {
+                if let Some(attempt) = replayed.before.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) {
+                    let NativeRowBody::Coverage(mut coverage) = required(&self.state, NativeRowKey::Coverage(attempt.witness))? else {
+                        return Err(refuse("expiry requires the active Coverage row"));
+                    };
+                    coverage.state = CoverageState::EndedUnverified;
+                    coverage.last_event = origin;
+                    self.write_assignment_aux_v2(NativeRowBody::Coverage(coverage))?;
+                }
+                self.write_assignment_aux_v2(NativeRowBody::Case(case))?;
+                self.write_prepared_assigned_case_journal_v2(journal)
+            })();
+            if result.is_err() {
+                self.restore(checkpoint);
+            }
+            return result;
         }
         if let Some(update) = source {
             if !update.changes_case() {
