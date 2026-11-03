@@ -131,14 +131,15 @@ async fn native_relay_worker() {
 #[inline(never)]
 fn run_relay() -> TestFuture<()> {
     Box::pin(async {
-        // Create the actual kernel route header through class registration
-        // before arming this child's local demand meter.
+        // Register the class below the fence, then arm the local demand meter
+        // before advancing into the active Assignment prefix.
         let mut world = World::on(relay_network()).await;
-        world.net.beat_to(RELAY_ACTIVATION_DAA + 2).await;
+        assert!(world.net.daa() < RELAY_ACTIVATION_DAA);
         let follower = Box::new(relay_network());
         let limit = 16 << 30;
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: limit }));
         let net = &mut world.net;
+        net.beat_to(RELAY_ACTIVATION_DAA + 2).await;
         let step = net.ttpb();
         let body = signed_relay(net);
         let mut payload = vec![1, 0, 176];
