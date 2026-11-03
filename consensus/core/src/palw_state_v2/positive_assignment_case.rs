@@ -151,7 +151,6 @@ pub(super) struct NativeAssignedCaseCacheV2 {
     pin: CaseJournalPinV2,
     checker: NativeAssignedCourtV2,
     source: CommonSourceReplayStateV2,
-    terminal_material: Option<AcceptedMaterial>,
     positive_final: Option<AcceptedOrigin>,
     _lease: NativeDemandLeaseV1,
 }
@@ -189,6 +188,7 @@ struct NativeAssignedCourtV2 {
     authority: NativeAssignedPanelAuthorityV2,
     court: ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
     facts: Vec<LocalCheckedCourtFactV2>,
+    accepted_finish: Option<AcceptedMaterial>,
     check_limits: crate::palw_positive_check_v2::CheckLimits,
     source: crate::palw_positive_assignment_resources_v2::ReservedAssignmentSourceGeometryV2,
     source_requests:
@@ -462,7 +462,7 @@ impl NativeAssignedCaseCacheV2 {
             return Err(refuse("actual replay before rows disagree"));
         }
         let terminal = self.checker.facts.last();
-        let material = self.terminal_material.ok_or_else(missing)?;
+        let material = self.checker.accepted_finish.ok_or_else(missing)?;
         let fact = terminal.ok_or_else(missing)?;
         if fact.case() != pin.case
             || fact.result() != pin.result
@@ -1375,6 +1375,7 @@ fn prepare_initial_case_checker_v2(
         authority,
         court,
         facts,
+        accepted_finish: None,
         check_limits,
         source,
         source_requests: BTreeMap::new(),
@@ -1713,6 +1714,41 @@ fn replay_assigned_court_history_v2(
                 LocalCourtOutcomeV2::Finished(TerminalKindV2::PositivePassed) => Some(CoverageState::Matched),
                 _ => None,
             };
+            if terminal_coverage == Some(CoverageState::Matched) {
+                use misaka_palw_positive_contract::journal::CaseJournalEventKind;
+                let policy = &material.positive_policy;
+                let finish = CaseJournalRecordView::decode(
+                    record.raw(),
+                    CaseJournalLimits {
+                        max_record_bytes: policy.max_case_journal_bytes,
+                        max_payload_bytes: policy.max_case_journal_bytes,
+                        max_aux_entries: 1,
+                        max_aux_preimage_bytes: crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2
+                            as u64,
+                        max_total_preimage_bytes: policy.max_case_journal_bytes,
+                        max_logical_heap_bytes: policy.max_case_heap_bytes,
+                    },
+                )
+                .map_err(refuse)?;
+                let after = match backing.records().get(index + 1) {
+                    Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                    None => state,
+                };
+                let NativeRowBody::JournalHead(head) = required(after, NativeRowKey::JournalHead(pin.case))? else {
+                    return Err(refuse("archived Finish lacks the accepted journal head"));
+                };
+                let history = finish.history();
+                if finish.header().kind != CaseJournalEventKind::NativeBody
+                    || finish.payload() != body_bytes
+                    || history.origin != carriage.origin()
+                    || head.sequence != frames
+                    || head.head != finish.head()
+                    || head.history != history
+                {
+                    return Err(refuse("archived Finish differs from accepted journal material"));
+                }
+                machine.accepted_finish = Some(history);
+            }
             if let Some(expected_state) = terminal_coverage
                 && let Some(attempt) = event.before.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking)
             {
