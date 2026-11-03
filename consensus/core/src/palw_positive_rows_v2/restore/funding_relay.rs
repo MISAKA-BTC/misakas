@@ -94,6 +94,7 @@ impl Reader<'_> {
             return Err(PositiveRowErrorV2::WrongRowKind);
         };
         let result = self.result(used.result)?;
+        let case = self.case(used.case)?;
         let NativeRowBody::Funding(account) = self.required(NativeRowKey::Funding(used.case))? else {
             return Err(PositiveRowErrorV2::WrongRowKind);
         };
@@ -114,6 +115,7 @@ impl Reader<'_> {
             || account.payer_key != auth.payer_key
             || account.consent.scope != result.funding_scope
             || binding.original_contract != account.consent.id().0
+            || binding.reservation != case.reservation
         {
             return inconsistent();
         }

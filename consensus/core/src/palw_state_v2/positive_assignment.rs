@@ -17,7 +17,9 @@ use misaka_palw_positive_contract::{
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2,
         funding_relay::{FundingRelayRegistrationBodyV2, FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2},
         funding_relay_policy::{FundingRelayAuxScanBudgetV2, FundingRelayPolicyV2},
-        funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCarrierFeesV2},
+        funding_relay_rows::{
+            FundingRelayAuthorizationRowV2, FundingRelayBindingV2, FundingRelayCarrierFeesV2, FundingRelayCustodyRowV2,
+        },
         journal::{AssignmentJournalEventKindV2, assignment_frame_v2},
         open_material::AssignmentOpenLimitsV2,
         rows::*,
@@ -97,6 +99,14 @@ pub(super) struct AssignedCaseInstallV2<'a> {
     pub result: ResultRow,
     pub case: CaseRow,
     pub funding: FundingRow,
+}
+
+/// Pending R authenticated against the selected parent and current prefix.
+/// The workspace stays admitted until the native writer drops the package.
+struct CheckedInitialFundingRelayV2 {
+    custody: FundingRelayCustodyRowV2,
+    service_cutoff: u64,
+    _lease: crate::palw_native_resource_v1::NativeDemandLeaseV1,
 }
 
 impl TransitionBuilder<'_> {
@@ -601,6 +611,14 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial Case funding differs from the actual funded carrier"));
         }
         self.require_assignment_output_unlocked_v2(output.outpoint())?;
+        // Recheck the exact actual C carrier and the original capital quote.
+        // The retained rows already own the pending slot. Their canonical
+        // update moves it under the Case reservation in the same checkpoint.
+        let relay = self.check_assigned_result_carriage_v2(ctx, &action, expected, &carried)?;
+        if relay.is_some() && (plan.case.reservation.origin != origin || plan.case.reservation.digest == Digest([0; 64])) {
+            return Err(refusal("initial Case relay requires the Case reservation at this acceptance point"));
+        }
+
         let head = self.assignment_head_v2(id)?;
         let policy = &plan.material.assignment_policy;
         self.check_assignment_next_journal_extent_v2(
@@ -640,6 +658,16 @@ impl TransitionBuilder<'_> {
             self.write_assignment_aux_v2(NativeRowBody::AssignmentUse(use_row))?;
             self.write_assignment_aux_v2(NativeRowBody::Result(plan.result))?;
             self.write_assignment_aux_v2(NativeRowBody::ClaimIndex(plan.index))?;
+            if let Some(CheckedInitialFundingRelayV2 { mut custody, _lease, .. }) = relay {
+                custody.binding = Some(FundingRelayBindingV2 {
+                    origin,
+                    original_funding: output.outpoint(),
+                    predecessor: None,
+                    original_contract: carried.consent.id().0,
+                    reservation: plan.case.reservation,
+                });
+                self.write_assignment_aux_v2(NativeRowBody::FundingRelayCustody(custody))?;
+            }
             self.write_assignment_aux_v2(NativeRowBody::Case(plan.case))?;
             self.write_assignment_aux_v2(NativeRowBody::Funding(plan.funding))?;
             self.begin_positive_certification_v2(ctx, id, plan.material)?;
@@ -1093,7 +1121,7 @@ impl TransitionBuilder<'_> {
     #[inline(never)]
     /// Recheck the same rooted registration at the current F checkpoint,
     /// after qualifying F's actual output and current native payer key.
-    fn initial_f_relay_service_cutoff_v2(
+    fn check_pending_initial_f_relay_v2(
         &self,
         ctx: &PalwBlockContextV2,
         action: &PositiveAssignmentRawActionV2,
@@ -1101,7 +1129,7 @@ impl TransitionBuilder<'_> {
         funding: NativeOutpoint,
         payer_key: &[u8; PUBKEY_BYTES],
         check_terms: &dyn Fn(&FundingRelayTermsV2) -> Result<(), misaka_palw_positive_contract::ContractError>,
-    ) -> Result<u64, PalwStateV2Error> {
+    ) -> Result<CheckedInitialFundingRelayV2, PalwStateV2Error> {
         use crate::{
             palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1},
             palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2},
@@ -1118,7 +1146,7 @@ impl TransitionBuilder<'_> {
         requests.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
         requests.exact_v1::<u8>(2 * 1024 + 2 * 74).map_err(PalwStateV2Error::NativeResource)?;
         let workspace = requests.bytes_v1();
-        let _lease = reserve_native_requests_v1(workspace).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+        let lease = reserve_native_requests_v1(workspace).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
             PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowValue>(
                 "initial funding relay replay",
                 "native owner is not armed",
@@ -1161,7 +1189,9 @@ impl TransitionBuilder<'_> {
         })?;
         // Preserve the rollback tail from the original authenticated R
         // policy. It cannot also be sold as Assignment service time.
-        custody.retention_until_daa.checked_sub(auth.policy.rollback_margin_daa).ok_or_else(missing_assignment_history)
+        let service_cutoff =
+            custody.retention_until_daa.checked_sub(auth.policy.rollback_margin_daa).ok_or_else(missing_assignment_history)?;
+        Ok(CheckedInitialFundingRelayV2 { custody, service_cutoff, _lease: lease })
     }
 
     fn same_block_case_relay_material_v2(
@@ -1535,7 +1565,7 @@ impl TransitionBuilder<'_> {
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
                     let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
                     if rules.funding_relay_profile().requires_relay() {
-                        let cutoff = self.initial_f_relay_service_cutoff_v2(
+                        let checked = self.check_pending_initial_f_relay_v2(
                             ctx,
                             action,
                             RelayFundingPurposeV2::PosterA,
@@ -1551,7 +1581,7 @@ impl TransitionBuilder<'_> {
                                 )
                             },
                         )?;
-                        if cutoff < horizon.retention_until_daa {
+                        if checked.service_cutoff < horizon.retention_until_daa {
                             return Err(refusal("initial Assignment relay does not cover the signed retention horizon"));
                         }
                     }
@@ -1605,7 +1635,7 @@ impl TransitionBuilder<'_> {
                     if row.status != AssignmentStatusV2::Open || ctx.daa_score >= row.bundle.terms.result_before_daa {
                         return Err(refusal("Assignment unavailable for single Result consumption"));
                     }
-                    self.check_assigned_result_carriage_v2(ctx, action, &row, payload)?;
+                    let _ = self.check_assigned_result_carriage_v2(ctx, action, &row, payload)?;
                     Err(refusal("native Case reservation owner is not yet resolved"))
                 }
                 O::CancelAssignment { .. } | O::ExpireAssignment { .. } => {
@@ -1634,7 +1664,7 @@ impl TransitionBuilder<'_> {
         action: &PositiveAssignmentRawActionV2,
         row: &AssignmentRow,
         payload: &crate::palw_positive_court_v2::coordinator::assignment_body::AssignedResultPayloadV2,
-    ) -> Result<(), PalwStateV2Error> {
+    ) -> Result<Option<CheckedInitialFundingRelayV2>, PalwStateV2Error> {
         use crate::{
             palw_native_resource_v1::reserve_native_requests_v1,
             palw_positive_assignment_funds_v2::qualify_assigned_case_funding_output_v2,
@@ -1749,8 +1779,8 @@ impl TransitionBuilder<'_> {
             return Err(refusal("Case relation count differs from the original registered program"));
         }
         let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
-        if rules.funding_relay_profile().requires_relay() {
-            let cutoff = self.initial_f_relay_service_cutoff_v2(
+        let relay = if rules.funding_relay_profile().requires_relay() {
+            let checked = self.check_pending_initial_f_relay_v2(
                 ctx,
                 action,
                 RelayFundingPurposeV2::CaseC,
@@ -1768,10 +1798,13 @@ impl TransitionBuilder<'_> {
                     )
                 },
             )?;
-            if cutoff < horizon.retention_until_daa {
+            if checked.service_cutoff < horizon.retention_until_daa {
                 return Err(refusal("initial Case relay does not cover the signed retention horizon"));
             }
-        }
+            Some(checked)
+        } else {
+            None
+        };
         if payload.basis.required_fee < horizon.case_money.fee
             || payload.basis.required_capital < horizon.case_money.capital
             || budget.rounds < horizon.minimum_source_rounds
@@ -1780,6 +1813,6 @@ impl TransitionBuilder<'_> {
         {
             return Err(refusal("Case funding or source budgets do not cover the original native quote"));
         }
-        Ok(())
+        Ok(relay)
     }
 }
