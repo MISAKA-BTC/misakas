@@ -1828,15 +1828,16 @@ impl TransitionBuilder<'_> {
         {
             return Err(refuse("current Court operation exceeds signed service usage"));
         }
-        if let crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::SourceRequest { .. } =
-            &body.operation
-        {
-            let update = source.ok_or_else(missing)?;
+        if let Some(update) = source {
             if !update.changes_case() {
                 return Ok(());
             }
-            if update.receipt().is_some() || update.fee_intent().is_some() {
-                return Err(refuse("a source request cannot publish a receipt or fee"));
+            let receipt = update.receipt().copied();
+            if receipt.is_some() != response.is_some()
+                || update.fee_intent().is_some() != response.is_some()
+                || receipt.is_some_and(|row| row.settlement.is_some())
+            {
+                return Err(refuse("source event receipt does not match a checked first response"));
             }
             let case = *update.case_row().ok_or_else(missing)?;
             let union = *update.union().ok_or_else(missing)?;
@@ -1845,6 +1846,9 @@ impl TransitionBuilder<'_> {
             let result = (|| {
                 self.write_assignment_aux_v2(NativeRowBody::Case(case))?;
                 self.write_assignment_aux_v2(NativeRowBody::SourceUnion(union))?;
+                if let Some(receipt) = receipt {
+                    self.write_assignment_aux_v2(NativeRowBody::ServiceReceipt(receipt))?;
+                }
                 self.write_prepared_assigned_case_journal_v2(journal)
             })();
             if result.is_err() {
