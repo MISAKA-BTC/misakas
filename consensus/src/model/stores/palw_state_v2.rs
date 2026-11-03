@@ -452,7 +452,7 @@ impl DbPalwStateV2Store {
         &self,
         block: BlockHash,
     ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1)> {
-        let (root, delta, _) = self.read_retained_delta_v2(block, None)?;
+        let (root, delta, _, _) = self.read_retained_delta_v2(block, None)?;
         Ok((root, delta))
     }
 
@@ -463,16 +463,16 @@ impl DbPalwStateV2Store {
         block: BlockHash,
         maximum_bytes: u64,
         maximum_heap: u64,
-    ) -> StoreResult<(kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64)> {
-        let (_, delta, bytes) = self.read_retained_delta_v2(block, Some((maximum_bytes, maximum_heap)))?;
-        Ok((delta, bytes))
+    ) -> StoreResult<(kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64, u64)> {
+        let (_, delta, bytes, heap) = self.read_retained_delta_v2(block, Some((maximum_bytes, maximum_heap)))?;
+        Ok((delta, bytes, heap))
     }
 
     fn read_retained_delta_v2(
         &self,
         block: BlockHash,
         limits: Option<(u64, u64)>,
-    ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64)> {
+    ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64, u64)> {
         let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Deltas.into();
         let key = kaspa_database::prelude::DbKey::new(&prefix, block);
         let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
@@ -481,7 +481,7 @@ impl DbPalwStateV2Store {
             return Err(StoreError::LocalResourceUnavailable(format!("PALW delta wire cap at {block}")));
         }
         let record: PalwDeltaRecordViewV1<'_> = bincode::deserialize(&bytes)?;
-        if let Some((_, maximum_heap)) = limits {
+        let heap = if let Some((_, maximum_heap)) = limits {
             let wire = record.delta_borsh;
             let preflight =
                 kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(wire, wire.len() as u64)
@@ -489,7 +489,10 @@ impl DbPalwStateV2Store {
             if preflight.logical_requests_v1() > maximum_heap {
                 return Err(StoreError::LocalResourceUnavailable(format!("PALW delta decode heap cap at {block}")));
             }
-        }
+            preflight.logical_requests_v1()
+        } else {
+            0
+        };
         let delta =
             kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_classified_v1(record.delta_borsh, || {
                 borsh::from_slice::<PalwStateDeltaV2>(record.delta_borsh)
@@ -502,7 +505,7 @@ impl DbPalwStateV2Store {
                     StoreError::DataInconsistency(format!("palw delta decode at {block}: {e}"))
                 }
             })?;
-        Ok((record.state_root, delta, extent))
+        Ok((record.state_root, delta, extent, heap))
     }
 
     fn with_pinned_tip_v1<T>(
@@ -1107,8 +1110,9 @@ mod tests {
         )
         .unwrap()
         .logical_requests_v1();
-        let (loaded, extent) = store.delta_of_retained_bounded_v2(point.block, u64::MAX, heap).unwrap();
+        let (loaded, extent, quoted_heap) = store.delta_of_retained_bounded_v2(point.block, u64::MAX, heap).unwrap();
         assert_eq!(*loaded, delta);
+        assert_eq!(quoted_heap, heap);
         assert!(store.delta_of_retained_bounded_v2(point.block, extent, heap).is_ok());
         assert!(matches!(
             store.delta_of_retained_bounded_v2(point.block, extent - 1, heap),

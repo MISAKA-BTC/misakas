@@ -12,15 +12,20 @@ use crate::{
 };
 use kaspa_consensus_core::{
     palw_native_resource_v1::{
-        NativeChainStateV1, NativeCoverageV1, NativeDecodeErrorV1, NativeStateDeltaV1, reserve_native_requests_v1,
+        NativeChainStateV1, NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, NativeStateDeltaV1,
+        native_delta_replay_requests_v1, reserve_native_requests_v1,
     },
     palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, assigned_case_native_carrier_matches_v2},
     palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2},
     palw_positive_funding_relay_v2::{pending_funding_relay_payer_scratch_v2, pending_funding_relay_row_images_match_v2},
+    palw_positive_journal_chain_v2::{
+        CaseJournalChainErrorV2, CaseJournalChainLimitsV2, CaseJournalLinkQuoteV2, CaseJournalPinV2, CaseJournalVisitErrorV2,
+        CheckedCaseJournalLinksV2, check_case_journal_links_v2,
+    },
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
     palw_state_v2::{
         AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignmentRulesV2,
-        PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
+        NativeCommittedCaseRecordV2, PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
     },
     tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
@@ -36,6 +41,7 @@ use misaka_palw_positive_contract::{
         open_material::AssignmentOpenLimitsV2,
         rows::AssignmentNonceRow,
     },
+    identity::Digest,
     journal::CaseJournalRecordView,
     native::{KERNEL_AUX_TABLE, NativeRowKey},
     rows::{AcceptedMaterial, AcceptedOrigin, MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES, NativeRowBody, NativeRowValue},
@@ -79,6 +85,51 @@ fn archive_store_fault_v2(error: StoreError, component: &'static str) -> NativeA
         }
         _ => E::Unavailable(component),
     }
+}
+
+/// Exact journal bytes in replay order. A native carriage owner must still
+/// authenticate the accepting transaction, fee, prefix and event effects.
+struct NativeCaseJournalBytesV2 {
+    records: Vec<Vec<u8>>,
+    work: u64,
+    heap: u64,
+    lease: NativeDemandLeaseV1,
+}
+
+pub(in crate::pipeline::virtual_processor) struct NativeCaseJournalCarriagesV2 {
+    pub records: Vec<NativeCommittedCaseRecordV2>,
+    pub work: u64,
+    pub heap: u64,
+    pub lease: NativeDemandLeaseV1,
+}
+
+struct NativeArchiveCarriageV2 {
+    carriage: NativeAcceptedCaseCarriageV2,
+    work: u64,
+    heap: u64,
+}
+
+fn case_journal_fault_v2(error: CaseJournalChainErrorV2<StoreError>) -> NativeAssignmentArchiveErrorV2 {
+    use NativeAssignmentArchiveErrorV2 as E;
+    match error {
+        CaseJournalChainErrorV2::Source(error) => archive_store_fault_v2(error, "rooted Case journal read"),
+        CaseJournalChainErrorV2::Invalid(_) => E::Invalid("rooted Case journal identity or links"),
+        CaseJournalChainErrorV2::LocalBudget(_) => E::Unavailable("rooted Case journal exceeds its original replay limits"),
+    }
+}
+
+fn case_journal_retained_quote_v2(quote: CaseJournalLinkQuoteV2) -> Option<(u64, u64)> {
+    let retained = quote
+        .events
+        .checked_mul(size_of::<Vec<u8>>() as u64)?
+        .checked_add(quote.total_record_bytes / 2)?
+        .checked_add(size_of::<NativeCaseJournalBytesV2>() as u64)?;
+    let work = quote
+        .record_reads
+        .checked_add(quote.total_record_bytes)?
+        .checked_add(quote.hash_bytes)?
+        .checked_add(quote.total_record_bytes / 2)?;
+    Some((retained, work))
 }
 
 /// The original relay registration pays for its bounded historical reads.
@@ -166,52 +217,154 @@ fn utxo_diff_scans_v2(inputs: u64) -> Result<u64, NativeAssignmentArchiveErrorV2
     inputs.checked_mul(2).and_then(|n| n.checked_add(1)).ok_or(NativeAssignmentArchiveErrorV2::Invalid("UTXO replay work overflow"))
 }
 
-impl VirtualStateProcessor {
-    /// Re-resolve one original accepted carriage and executed-prefix state.
-    /// Limits are the independently authenticated ORIGINAL physical/replay
-    /// limits, never counts or caps copied from this journal record.
-    pub(in crate::pipeline::virtual_processor) fn load_positive_case_carriage_v2(
-        &self,
-        current_selected_parent: BlockHash,
-        current_state: &PalwChainStateV2,
-        record: CaseJournalRecordView<'_>,
-        boundary: AssignmentCaseBoundaryV2,
-        maximum_heap: u64,
-        maximum_work: u64,
-    ) -> Result<NativeAcceptedCaseCarriageV2, NativeAssignmentArchiveErrorV2> {
-        use NativeAssignmentArchiveErrorV2 as E;
-        if [maximum_heap, maximum_work].into_iter().any(|n| n == 0 || n == u64::MAX) {
-            return Err(E::Invalid("original archive limits are not finite"));
-        }
-        let header = record.header();
-        if boundary.case != header.case || boundary.origin != header.origin {
-            return Err(E::Invalid("Case boundary scope/origin differs from literal record"));
-        }
-        // Exact fixed preimage and reference must be present ONCE, rather than
-        // accepting a caller-provided decoded boundary detached from the raw.
-        let mut boundary_count = 0u32;
-        for aux in record.aux() {
-            if aux.material() == boundary.material() {
-                if AssignmentCaseBoundaryV2::decode(aux.preimage()).ok() != Some(boundary) {
-                    return Err(E::Invalid("boundary preimage differs"));
-                }
-                boundary_count = boundary_count.checked_add(1).ok_or(E::Invalid("boundary count"))?;
+fn exact_case_boundary_v2(record: CaseJournalRecordView<'_>) -> Result<AssignmentCaseBoundaryV2, NativeAssignmentArchiveErrorV2> {
+    use NativeAssignmentArchiveErrorV2 as E;
+    let header = record.header();
+    let mut found = None;
+    for aux in record.aux() {
+        if let Ok(boundary) = AssignmentCaseBoundaryV2::decode(aux.preimage())
+            && boundary.material() == aux.material()
+        {
+            if boundary.case != header.case || boundary.origin != header.origin {
+                return Err(E::Invalid("Case boundary scope/origin differs from literal record"));
+            }
+            if found.replace(boundary).is_some() {
+                return Err(E::Invalid("duplicate actual Case boundary"));
             }
         }
-        if boundary_count != 1 {
-            return Err(E::Invalid("missing or duplicate actual boundary"));
+    }
+    found.ok_or(E::Invalid("missing actual Case boundary"))
+}
+
+impl VirtualStateProcessor {
+    /// Walk a rooted Case head backwards and copy its verified raw records in
+    /// execution order. Both reads are budgeted before hashing. Release the
+    /// store lock before any caller reconstructs the archived native prefixes.
+    fn load_rooted_case_journal_bytes_v2(
+        &self,
+        pin: CaseJournalPinV2,
+        mut limits: CaseJournalChainLimitsV2,
+        maximum_heap: u64,
+        maximum_work: u64,
+    ) -> Result<NativeCaseJournalBytesV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        if [maximum_heap, maximum_work].into_iter().any(|n| n == 0 || n == u64::MAX) {
+            return Err(E::Invalid("Case journal limits must be finite"));
         }
-        let (carriage, _) = self.load_positive_accepted_carriage_v2(
-            current_selected_parent,
-            current_state,
-            NativeArchiveBoundaryV2::Case(boundary),
-            maximum_heap,
-            maximum_work,
-        )?;
-        if !assigned_case_native_carrier_matches_v2(carriage.transaction(), record) {
-            return Err(E::Invalid("original actual Case carrier differs from journal"));
+        if pin.head.sequence == 0 || pin.head.sequence > limits.max_events {
+            return Err(E::Invalid("Case journal head sequence is outside its original bound"));
         }
-        Ok(carriage)
+        let reads = pin.head.sequence.checked_mul(2).ok_or(E::Invalid("Case journal read count overflow"))?;
+        // Two reads, four hash passes and one retained copy per unique byte.
+        // Cap the shared checker's two-pass raw input before the first lookup.
+        let unique_work = maximum_work.checked_sub(reads).ok_or(E::Unavailable("Case journal read work cap"))? / 7;
+        let byte_work = unique_work * 2;
+        limits.max_total_record_bytes = limits.max_total_record_bytes.min(byte_work);
+        let index = pin.head.sequence.checked_mul(size_of::<Digest>() as u64).ok_or(E::Invalid("Case journal index overflow"))?;
+        limits.max_index_bytes = limits.max_index_bytes.min(index);
+        let fixed = size_of::<CheckedCaseJournalLinksV2>() as u64
+            + kaspa_consensus_core::palw_native_resource_v1::positive_journal::POSITIVE_JOURNAL_DECODE_WORKSPACE_BYTES_V1 as u64;
+        let scratch = index.checked_add(fixed).ok_or(E::Invalid("Case journal workspace overflow"))?;
+        let remainder = maximum_heap.checked_sub(scratch).ok_or(E::Unavailable("Case journal index heap cap"))?;
+        let _scratch = reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("Case journal index lease"))?;
+        let store = self.palw_state_v2_store.read();
+        let checked = check_case_journal_links_v2(&*store, pin, limits).map_err(case_journal_fault_v2)?;
+        let (retained, work) =
+            case_journal_retained_quote_v2(checked.quote()).ok_or(E::Invalid("Case journal retained quote overflow"))?;
+        if retained > remainder || work > maximum_work {
+            return Err(E::Unavailable("Case journal retained heap or replay work cap"));
+        }
+        let lease =
+            reserve_native_requests_v1(retained).map_err(E::Resource)?.ok_or(E::Unavailable("Case journal raw records lease"))?;
+        let count = usize::try_from(pin.head.sequence).map_err(|_| E::Invalid("Case journal count address space"))?;
+        let mut records = Vec::new();
+        records.try_reserve_exact(count).map_err(|_| E::Unavailable("Case journal record vector allocation"))?;
+        if records.capacity() > count {
+            return Err(E::Unavailable("Case journal record vector exceeded its lease"));
+        }
+        checked
+            .visit_forward(&*store, |record| {
+                let raw = record.raw_bytes();
+                let mut copy = Vec::new();
+                copy.try_reserve_exact(raw.len()).map_err(|_| E::Unavailable("Case journal raw record allocation"))?;
+                if copy.capacity() > raw.len() {
+                    return Err(E::Unavailable("Case journal raw record allocation exceeded its lease"));
+                }
+                copy.extend_from_slice(raw);
+                records.push(copy);
+                Ok(())
+            })
+            .map_err(|error| match error {
+                CaseJournalVisitErrorV2::Chain(error) => case_journal_fault_v2(error),
+                CaseJournalVisitErrorV2::Visitor(error) => error,
+            })?;
+        Ok(NativeCaseJournalBytesV2 { records, work, heap: retained, lease })
+    }
+
+    /// Resolve the exact rooted records against original native acceptance.
+    /// The caller derives the pin and limits from the rooted Assignment/Case.
+    /// This returns retained data for the Case factory, without a verdict.
+    pub(in crate::pipeline::virtual_processor) fn load_rooted_case_journal_carriages_v2(
+        &self,
+        parent: BlockHash,
+        state: &PalwChainStateV2,
+        pin: CaseJournalPinV2,
+        limits: CaseJournalChainLimitsV2,
+        maximum_heap: u64,
+        maximum_work: u64,
+    ) -> Result<NativeCaseJournalCarriagesV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let NativeCaseJournalBytesV2 { records: raw_records, work, heap, mut lease } =
+            self.load_rooted_case_journal_bytes_v2(pin, limits, maximum_heap, maximum_work)?;
+        let count = raw_records.len();
+        let output_heap = (count as u64)
+            .checked_mul(size_of::<NativeCommittedCaseRecordV2>() as u64)
+            .and_then(|bytes| bytes.checked_add(size_of::<NativeCaseJournalCarriagesV2>() as u64))
+            .ok_or(E::Invalid("Case carriage vector heap overflow"))?;
+        let mut remaining_heap = maximum_heap
+            .checked_sub(heap)
+            .and_then(|n| n.checked_sub(output_heap))
+            .ok_or(E::Unavailable("Case carriage vector heap cap"))?;
+        let mut remaining_work = maximum_work.checked_sub(work).ok_or(E::Unavailable("Case carriage replay work cap"))?;
+        let scratch =
+            kaspa_consensus_core::palw_native_resource_v1::positive_journal::POSITIVE_JOURNAL_DECODE_WORKSPACE_BYTES_V1 as u64;
+        remaining_heap = remaining_heap.checked_sub(scratch).ok_or(E::Unavailable("Case carriage decode workspace cap"))?;
+        let _scratch =
+            reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("Case carriage decode workspace lease"))?;
+        lease.grow_memory_v1(output_heap).map_err(E::Resource)?;
+        let mut records = Vec::new();
+        records.try_reserve_exact(count).map_err(|_| E::Unavailable("Case carriage vector allocation"))?;
+        if records.capacity() > count {
+            return Err(E::Unavailable("Case carriage vector exceeded its lease"));
+        }
+        for raw in raw_records {
+            // Bound framing, aux boundary decoding/hashing and comparison of
+            // the literal journal payload to the accepted transaction.
+            let scan_work = (raw.len() as u64).checked_mul(4).ok_or(E::Invalid("Case carriage scan work overflow"))?;
+            charge_archive_work_v2(&mut remaining_work, scan_work)?;
+            let record =
+                CaseJournalRecordView::decode(&raw, limits.record_limits).map_err(|_| E::Invalid("Case journal record framing"))?;
+            let boundary = exact_case_boundary_v2(record)?;
+            let accepted = self.load_positive_accepted_carriage_v2(
+                parent,
+                state,
+                NativeArchiveBoundaryV2::Case(boundary),
+                remaining_heap,
+                remaining_work,
+            )?;
+            if !assigned_case_native_carrier_matches_v2(accepted.carriage.transaction(), record) {
+                return Err(E::Invalid("original actual Case carrier differs from journal"));
+            }
+            charge_archive_work_v2(&mut remaining_work, accepted.work)?;
+            remaining_heap = remaining_heap.checked_sub(accepted.heap).ok_or(E::Unavailable("retained Case carriage heap cap"))?;
+            records.push(NativeCommittedCaseRecordV2::from_native_history_v2(raw, accepted.carriage));
+        }
+        Ok(NativeCaseJournalCarriagesV2 {
+            records,
+            work: maximum_work - remaining_work,
+            heap: maximum_heap - remaining_heap - scratch,
+            lease,
+        })
     }
 
     /// Read original decode rules for a continuation against the actual walk's
@@ -430,21 +583,21 @@ impl VirtualStateProcessor {
         }
         let (boundary, native_body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, maximum_payload)
             .map_err(|_| E::Invalid("invalid original Assignment control carriage framing"))?;
-        let (carriage, work) = self.load_positive_accepted_carriage_v2(
+        let accepted = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
             current_state,
             NativeArchiveBoundaryV2::Assignment(boundary),
             maximum_heap,
             maximum_work,
         )?;
-        let tx = carriage.transaction();
+        let tx = accepted.carriage.transaction();
         if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
             || tx.payload.get(..3) != Some(&[1, 0, 176])
             || tx.payload.get(3..) != Some(native_body)
         {
             return Err(E::Invalid("original actual Assignment carrier differs from journal"));
         }
-        Ok((carriage, work))
+        Ok((accepted.carriage, accepted.work))
     }
 
     fn load_positive_accepted_carriage_v2(
@@ -454,7 +607,7 @@ impl VirtualStateProcessor {
         boundary: NativeArchiveBoundaryV2,
         maximum_heap: u64,
         maximum_work: u64,
-    ) -> Result<(NativeAcceptedCaseCarriageV2, u64), NativeAssignmentArchiveErrorV2> {
+    ) -> Result<NativeArchiveCarriageV2, NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
         if [maximum_heap, maximum_work].into_iter().any(|n| n == 0 || n == u64::MAX) {
             return Err(E::Invalid("original archive limits are not finite"));
@@ -549,7 +702,8 @@ impl VirtualStateProcessor {
         }
         let replay_heap =
             replay_heap.checked_sub(parent_heap).ok_or(E::Unavailable("restored parent exhausts the archive heap cap"))?;
-        let delta = self.read_archive_delta_v2(accepting, replay_heap, &mut remaining_work)?;
+        let (delta, delta_heap) = self.read_archive_delta_v2(accepting, replay_heap, &mut remaining_work)?;
+        let replay_heap = replay_heap.checked_sub(delta_heap).ok_or(E::Unavailable("original delta exhausts prefix heap"))?;
         if delta.point.block != accepting
             || delta.point.daa_score != origin.accepted_daa
             || delta.point.blue_score != origin.accepted_blue_score
@@ -558,10 +712,16 @@ impl VirtualStateProcessor {
         }
         let end = usize::try_from(before_delta_end).map_err(|_| E::Invalid("prefix position address space"))?;
         let root = Hash64::from_bytes(pre_event_root);
+        let prefix_heap = native_delta_replay_requests_v1(&parent, &delta).map_err(E::Resource)?;
         let prefix = parent.try_delta_prefix_v2(&delta, end, root, params, replay_heap).map_err(|e| match e {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(r) => E::Resource(r),
             _ => E::Invalid("original executed native prefix mismatch"),
         })?;
+        let heap = carrier
+            .heap
+            .checked_add(retained_heap)
+            .and_then(|n| n.checked_add(prefix_heap))
+            .ok_or(E::Invalid("retained carriage heap overflow"))?;
         let entries = populated.entries;
         let carriage = NativeAcceptedCaseCarriageV2::from_native_history_v2(
             carrier.transaction,
@@ -577,7 +737,7 @@ impl VirtualStateProcessor {
             NativeAssignedCaseBackingErrorV2::NativeResource(r) => E::Resource(r),
             _ => E::Invalid("actual prefix owner mismatch"),
         })?;
-        Ok((carriage, maximum_work - remaining_work))
+        Ok(NativeArchiveCarriageV2 { carriage, work: maximum_work - remaining_work, heap })
     }
 
     /// Start with the exact selected-parent view already held by the caller.
@@ -597,7 +757,8 @@ impl VirtualStateProcessor {
         while cursor != original_parent {
             charge_archive_work_v2(remaining_work, 1)?;
             let heap = maximum_heap.checked_sub(retained_heap).ok_or(E::Unavailable("archive parent walk heap cap"))?;
-            let delta = self.read_archive_delta_v2(cursor, heap, remaining_work)?;
+            let (delta, delta_heap) = self.read_archive_delta_v2(cursor, heap, remaining_work)?;
+            let heap = heap.checked_sub(delta_heap).ok_or(E::Unavailable("original delta exhausts parent walk heap"))?;
             let state = restored.as_deref().unwrap_or(current_state);
             if delta.point.block != cursor || state.last_point() != Some(&delta.point) {
                 return Err(E::Invalid("archive parent walk state and delta differ"));
@@ -625,14 +786,14 @@ impl VirtualStateProcessor {
         block: BlockHash,
         heap: u64,
         remaining_work: &mut u64,
-    ) -> Result<NativeStateDeltaV1, NativeAssignmentArchiveErrorV2> {
-        let (delta, bytes) = self
+    ) -> Result<(NativeStateDeltaV1, u64), NativeAssignmentArchiveErrorV2> {
+        let (delta, bytes, retained_heap) = self
             .palw_state_v2_store
             .read()
             .delta_of_retained_bounded_v2(block, *remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, heap)
             .map_err(|error| archive_store_fault_v2(error, "bounded original native delta"))?;
         charge_archive_work_v2(remaining_work, bytes * ARCHIVE_WORK_PER_DELTA_BYTE_V2)?;
-        Ok(delta)
+        Ok((delta, retained_heap))
     }
 
     /// Verify the historical outer op14 carrier with its real native inputs.
@@ -762,7 +923,7 @@ impl VirtualStateProcessor {
         // Account for the wire preflights, decode and projected entry walk.
         loop {
             replay.charge(1, 0)?;
-            let (delta, bytes) = self
+            let (delta, bytes, _) = self
                 .palw_state_v2_store
                 .read()
                 .delta_of_retained_bounded_v2(cursor, replay.remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, delta_heap)
@@ -978,6 +1139,75 @@ impl VirtualStateProcessor {
 #[cfg(test)]
 mod archive_fault_tests {
     use super::*;
+
+    #[test]
+    fn case_boundary_is_unique_and_scoped_to_the_literal_record() {
+        use misaka_palw_positive_contract::{
+            CONTRACT_REVISION, CONTRACT_VERSION,
+            identity::{CaseId, ChainScope, ResultId},
+            journal::{CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord},
+            rows::NativeHash64,
+        };
+
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64([1; 64]),
+            carrier_block: NativeHash64([2; 64]),
+            carrier_transaction: NativeHash64([3; 64]),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: 4,
+            accepted_blue_score: 5,
+        };
+        let case = CaseId(Digest([6; 64]));
+        let boundary = AssignmentCaseBoundaryV2 {
+            version: 2,
+            revision: 1,
+            case,
+            origin,
+            selected_parent: NativeHash64([7; 64]),
+            pre_event_root: Digest([8; 64]),
+            before_delta_end: 2,
+            populated_inputs: Digest([9; 64]),
+            input_count: 1,
+            fee: 10,
+        };
+        let limits = CaseJournalLimits {
+            max_record_bytes: 8192,
+            max_payload_bytes: 1024,
+            max_aux_entries: 4,
+            max_aux_preimage_bytes: 1024,
+            max_total_preimage_bytes: 4096,
+            max_logical_heap_bytes: 8192,
+        };
+        let header = CaseJournalHeader {
+            version: CONTRACT_VERSION,
+            revision: CONTRACT_REVISION,
+            scope: ChainScope { network: Digest([10; 64]), ruleset: Digest([11; 64]), branch: Digest([12; 64]) },
+            case,
+            result: ResultId(Digest([13; 64])),
+            sequence: 1,
+            previous: Digest([0; 64]),
+            origin,
+            kind: CaseJournalEventKind::NativeTransaction,
+        };
+        let material =
+            |value: AssignmentCaseBoundaryV2| CaseJournalAux { material: value.material(), preimage: borsh::to_vec(&value).unwrap() };
+        let raw = |mut aux: Vec<CaseJournalAux>| {
+            aux.sort_by_key(|value| borsh::to_vec(&value.material).unwrap());
+            CaseJournalRecord { header, payload: vec![9], aux }.encode(limits).unwrap()
+        };
+        let decode = |bytes: Vec<u8>| exact_case_boundary_v2(CaseJournalRecordView::decode(&bytes, limits).unwrap());
+        assert_eq!(decode(raw(vec![material(boundary)])).unwrap(), boundary);
+
+        let mut altered = material(boundary);
+        altered.preimage[4] ^= 1;
+        use NativeAssignmentArchiveErrorV2 as E;
+        assert!(matches!(decode(raw(vec![altered])), Err(E::Invalid("missing actual Case boundary"))));
+        let wrong_case = material(AssignmentCaseBoundaryV2 { case: CaseId(Digest([20; 64])), ..boundary });
+        assert!(matches!(decode(raw(vec![wrong_case])), Err(E::Invalid("Case boundary scope/origin differs from literal record"))));
+        let different_prefix = material(AssignmentCaseBoundaryV2 { before_delta_end: 3, ..boundary });
+        assert!(matches!(decode(raw(vec![material(boundary), different_prefix])), Err(E::Invalid("duplicate actual Case boundary"))));
+    }
 
     #[test]
     fn archive_store_faults_distinguish_corruption_capacity_and_missing_record() {
