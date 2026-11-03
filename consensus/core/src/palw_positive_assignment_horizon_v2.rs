@@ -86,6 +86,7 @@ pub struct AssignmentHorizonSpecV2 {
 pub(crate) struct AssignmentSourceLedgerFloorV2 {
     body_bytes: u64,
     journal_bytes: u64,
+    work: u64,
     first_receipt_fees: u64,
 }
 impl AssignmentSourceLedgerFloorV2 {
@@ -97,6 +98,7 @@ impl AssignmentSourceLedgerFloorV2 {
         case_fees: &AssignmentCaseFeeScheduleV2,
         max_case_journal_bytes: u64,
         max_case_history_frames: u32,
+        work_schedule: &crate::palw_positive_assignment_resources_v2::AssignmentWorkScheduleV2,
     ) -> Result<Self, AssignmentHorizonErrorV2> {
         let max_body = limits.max_native_body_bytes.min(max_case_journal_bytes).min(MAX_BODY_BYTES_V2);
         let largest_response = add(SOURCE_RESPONSE_BODY_OVERHEAD_V2, catalog.max_unit_bytes)?;
@@ -120,7 +122,8 @@ impl AssignmentSourceLedgerFloorV2 {
         {
             return Err(AssignmentHorizonErrorV2::Budget);
         }
-        Ok(Self { body_bytes, journal_bytes, first_receipt_fees: case_fees.source_catalog_due(catalog)? })
+        let work = add(work_schedule.court_body_work(body_bytes)?, mul(events.saturating_sub(1), work_schedule.per_control)?)?;
+        Ok(Self { body_bytes, journal_bytes, work, first_receipt_fees: case_fees.source_catalog_due(catalog)? })
     }
 
     /// The quoted source events and the actual op9 must fit the same Case
@@ -128,16 +131,17 @@ impl AssignmentSourceLedgerFloorV2 {
     pub(crate) fn check_initial_journal_v2(
         self,
         initial_transaction: &crate::tx::Transaction,
+        court_journal_floor: u64,
         max_case_journal_bytes: u64,
     ) -> Result<(), AssignmentHorizonErrorV2> {
         let payload = borsh::object_length(initial_transaction).map_err(|_| AssignmentHorizonErrorV2::Budget)? as u64;
         let initial = crate::palw_positive_assignment_case_material_v2::assigned_case_initial_journal_extent_v2(payload)
             .ok_or(AssignmentHorizonErrorV2::Overflow)?;
-        check_case_source_journal_space_v2(initial, self.journal_bytes, max_case_journal_bytes)
+        check_case_source_journal_space_v2(add(initial, court_journal_floor)?, self.journal_bytes, max_case_journal_bytes)
     }
 
     fn check_budget(self, budget: &AggregateBudget) -> Result<(), AssignmentHorizonErrorV2> {
-        if budget.retained_bytes < self.body_bytes || budget.fee < self.first_receipt_fees {
+        if budget.retained_bytes < self.journal_bytes || budget.additional_work < self.work || budget.fee < self.first_receipt_fees {
             return Err(AssignmentHorizonErrorV2::Budget);
         }
         Ok(())
@@ -320,6 +324,7 @@ impl AssignmentHorizonSpecV2 {
             case_fees,
             positive.max_case_journal_bytes,
             assignment.max_history_frames,
+            &source_policy.work,
         )?;
         source_ledger.check_budget(&source.budget)?;
         let minimum_source_rounds = mul(ranges, readers)?;

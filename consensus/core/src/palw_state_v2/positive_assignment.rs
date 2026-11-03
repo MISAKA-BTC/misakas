@@ -1825,7 +1825,15 @@ impl TransitionBuilder<'_> {
         }
         let (horizon, source_ledger) = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
         source_ledger
-            .check_initial_journal_v2(action.transaction(), rules.positive_policy().max_case_journal_bytes)
+            .check_initial_journal_v2(
+                action.transaction(),
+                resources
+                    .all_attempt_signed_frame_bytes_v2()
+                    .map_err(assignment_resource_error)?
+                    .checked_add(horizon.record_bytes_all_attempts)
+                    .ok_or_else(|| refusal("Case Court journal reserve"))?,
+                rules.positive_policy().max_case_journal_bytes,
+            )
             .map_err(refusal)?;
         let gate_c = rules.gate_c_clock(ctx.daa_score).map_err(refusal)?;
         horizon

@@ -170,6 +170,7 @@ struct NativeAssignedCourtV2 {
         BTreeMap<misaka_palw_positive_contract::identity::RequestId, crate::palw_positive_source_v2::RetainedSourceRequestV2>,
     source_fees: source::CaseSourceFeesV2,
     source_unions: source::ReplayedCaseSourceUnionsV2,
+    source_court_reserve: u64,
     source_responses: BTreeMap<Digest, source::CheckedAssignedSourceResponseV2>,
     derived_heap: u64,
     checker_heap: u64,
@@ -1121,7 +1122,14 @@ fn prepare_initial_case_checker_v2(
     }
     let (horizon, source_ledger) =
         super::positive_assignment::assignment_horizon_v2(&rules, signed, source, prover, resources, row.origin.accepted_daa)?;
-    source_ledger.check_initial_journal_v2(first.transaction(), positive.max_case_journal_bytes).map_err(refuse)?;
+    let source_court_reserve = resources
+        .all_attempt_signed_frame_bytes_v2()
+        .map_err(refuse)?
+        .checked_add(horizon.record_bytes_all_attempts)
+        .ok_or_else(capacity)?;
+    source_ledger
+        .check_initial_journal_v2(first.transaction(), source_court_reserve, positive.max_case_journal_bytes)
+        .map_err(refuse)?;
     let accepted_daa = first.origin().accepted_daa;
     let gate_c = rules.gate_c_clock(accepted_daa).map_err(refuse)?;
     horizon
@@ -1226,6 +1234,7 @@ fn prepare_initial_case_checker_v2(
         source_responses: BTreeMap::new(),
         source_fees: source::CaseSourceFeesV2::default(),
         source_unions: source::ReplayedCaseSourceUnionsV2::default(),
+        source_court_reserve,
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1461,7 +1470,10 @@ fn replay_assigned_court_history_v2(
     let material = backing.material();
     let pin = *backing.pin();
     let limits = case_replay_body_limits_v2(&material.positive_policy);
+    let mut retained_journal = backing.records().first().ok_or_else(missing)?.raw().len() as u64;
     for (index, record) in backing.records().iter().enumerate().skip(1) {
+        let prior_journal = retained_journal;
+        retained_journal = retained_journal.checked_add(record.raw().len() as u64).ok_or_else(source::capacity)?;
         let carriage = record.carriage();
         let prefix = carriage.prefix_state().map_err(|_| missing())?;
         let a = assignment(prefix, backing.assignment().id())?;
@@ -1482,7 +1494,7 @@ fn replay_assigned_court_history_v2(
                 Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
                 None => state,
             };
-            machine.replay_case_source_payment_v2(backing, prefix, after, &prior, carriage)?;
+            machine.replay_case_source_payment_v2(backing, prefix, after, &prior, carriage, (prior_journal, index as u64))?;
             continue;
         }
         let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
@@ -1500,25 +1512,20 @@ fn replay_assigned_court_history_v2(
                 Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
                 None => state,
             };
-            if matches!(&body.operation, Op::SourceRequest { .. }) {
-                machine.replay_source_request_union_v2(
+            let event = machine
+                .prepare_assigned_source_event_v2(
                     material,
                     prefix,
-                    after,
+                    &a,
                     &prior,
                     carriage.origin(),
                     &body,
+                    body_bytes.len() as u64,
+                    (prior_journal, index as u64),
                     _body.memory_v1(),
-                )?;
-                machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
-            } else {
-                let response = machine
-                    .check_source_response_v2(prefix, &a, material, &prior, carriage.origin(), &body, _body.memory_v1())?
-                    .ok_or_else(|| refuse("duplicate source delivery changed the rooted journal"))?;
-                response.check_committed(after, &prior)?;
-                machine.replay_source_response_union_v2(after, &response)?;
-                machine.remember_source_response_v2(material, response, _body.memory_v1())?;
-            }
+                )?
+                .ok_or_else(|| refuse("duplicate source event changed the rooted journal"))?;
+            event.check_committed(after)?;
         }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
@@ -1582,9 +1589,8 @@ fn recover_case_subject_v2(
     Ok((machine, bundle.case))
 }
 
-// The concrete archive/Remaining/service factory is still required. These raw
-// routes explicitly preserve unavailability instead of constructing a session
-// from rooted summaries or accepting a local cached positive verdict.
+// The raw source writer owns literal request/response rows and their journal.
+// Witness, verdict and attestation publication also require their role owners.
 impl TransitionBuilder<'_> {
     pub(super) fn apply_positive_assignment_case_raw_v2(
         &mut self,
@@ -1592,6 +1598,19 @@ impl TransitionBuilder<'_> {
         action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2 as Op;
+        let source_case = match &body.operation {
+            Op::SourceRequest { request, .. } => Some(request.case),
+            Op::SourceResponse { case, .. } => Some(*case),
+            _ => None,
+        };
+        if let Some(case) = source_case {
+            let row = PositiveRowsV2::new(&self.state).read(NativeRowKey::Case(case)).map_err(refuse)?;
+            match row.map(|row| row.body) {
+                Some(NativeRowBody::Case(row)) if row.last_event.accepting_block.0 != ctx.block.as_bytes() => {}
+                _ => return Err(refuse("source event requires a Case at the selected-parent frontier")),
+            }
+        }
         let (backing, mut machine, prior) = self.prepare_case_predecessor_v2(action, body)?;
         let origin = action.origin();
         if origin.accepting_block.0 != ctx.block.as_bytes()
@@ -1609,11 +1628,45 @@ impl TransitionBuilder<'_> {
         }
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
         machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
-        if matches!(
-            &body.operation,
-            crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::SourceResponse { .. }
-        ) {
-            machine.check_source_response_v2(&self.state, &current_assignment, material, &prior, origin, body, _body.memory_v1())?;
+        if source_case.is_some() {
+            let controls = self.extras.positive_assignment_actions.len() as u64;
+            let work = material.native_preimages.source_policy.work.court_operation_work(0, controls, 0, 0).map_err(refuse)?;
+            machine.remaining_work = machine.remaining_work.checked_sub(work).ok_or_else(source::capacity)?;
+            // op12 was independently accepted by the UTXO walk against this
+            // selected-parent funding. Preserve its atomic Case checkpoint.
+            if self.extras.positive_assignment_actions.iter().any(|scheduled| {
+                let other = &scheduled.action;
+                other.transaction().payload.get(7) == Some(&12)
+                    && matches!(other.case_backing(), Ok(NativeAssignedCaseBackingV2::Committed(case)) if case.pin().case == prior.case)
+            }) {
+                return Err(refuse("source event shares the Case with an accepted settlement"));
+            }
+            let prior_journal = backing
+                .records()
+                .iter()
+                .map(|record| record.raw().len() as u64)
+                .try_fold(0u64, u64::checked_add)
+                .ok_or_else(source::capacity)?;
+            let Some(event) = machine.prepare_assigned_source_event_v2(
+                material,
+                &self.state,
+                &current_assignment,
+                &prior,
+                origin,
+                body,
+                raw.len() as u64,
+                (prior_journal, backing.records().len() as u64),
+                _body.memory_v1(),
+            )?
+            else {
+                return Ok(());
+            };
+            self.write_positive_source_row_v2(NativeRowBody::Case(event.case))?;
+            self.write_positive_source_row_v2(NativeRowBody::SourceUnion(event.union))?;
+            if let Some(receipt) = event.receipt {
+                self.write_positive_source_row_v2(NativeRowBody::ServiceReceipt(receipt))?;
+            }
+            return self.write_assigned_case_followup_journal_v2(backing);
         }
         let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
         let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)

@@ -28,6 +28,39 @@ impl CaseSourceFeesV2 {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct SourceDeliveryReserveV2 {
+    units: u64,
+    body: u64,
+    work: u64,
+    journal: u64,
+}
+impl SourceDeliveryReserveV2 {
+    fn combine(self, other: Self, op: fn(u64, u64) -> Option<u64>) -> Option<Self> {
+        Some(Self {
+            units: op(self.units, other.units)?,
+            body: op(self.body, other.body)?,
+            work: op(self.work, other.work)?,
+            journal: op(self.journal, other.journal)?,
+        })
+    }
+    fn quote(
+        body: u64,
+        work: &crate::palw_positive_assignment_resources_v2::AssignmentWorkScheduleV2,
+    ) -> Result<Self, PalwStateV2Error> {
+        let journal =
+            crate::palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2(body).ok_or_else(capacity)?;
+        let work = work.court_body_work(body).map_err(refuse)?;
+        Ok(Self { units: 1, body, work, journal })
+    }
+}
+
+pub(super) struct PreparedAssignedSourceEventV2 {
+    pub(super) case: CaseRow,
+    pub(super) union: SourceUnionRow,
+    pub(super) receipt: Option<ServiceReceiptRow>,
+}
+
 #[derive(Default)]
 pub(super) struct ReplayedCaseSourceUnionsV2 {
     ranges: [Vec<(u64, u64)>; 2],
@@ -36,6 +69,8 @@ pub(super) struct ReplayedCaseSourceUnionsV2 {
     rounds: u64,
     unique_bytes: u64,
     pending_fee: u64,
+    pending: SourceDeliveryReserveV2,
+    used: SourceDeliveryReserveV2,
 }
 fn source_index(kind: SourceKind) -> usize {
     match kind {
@@ -61,28 +96,19 @@ pub(super) struct CheckedAssignedSourceResponseV2 {
     duty: AcceptedMaterial,
     data_bytes: u64,
     reserved_fee: u64,
+    reserved_delivery: SourceDeliveryReserveV2,
 }
 
-impl CheckedAssignedSourceResponseV2 {
-    pub(super) fn check_committed(&self, state: &PalwChainStateV2, prior: &CaseRow) -> Result<(), PalwStateV2Error> {
-        let NativeRowBody::ServiceReceipt(receipt) = required(state, self.fee.receipt_key)? else {
-            return Err(refuse("missing first native source receipt"));
-        };
-        let NativeRowBody::Case(after) = required(state, NativeRowKey::Case(prior.case))? else {
-            return Err(refuse("source response changed Case identity"));
-        };
-        if receipt.result != self.fee.result
-            || receipt.settlement.is_some()
-            || receipt.duty != self.duty
-            || receipt.response != self.fee.accepted_response
-            || receipt.provider != self.fee.provider
-            || receipt.bytes != self.data_bytes
-            || prior.usage.fee.checked_add(self.fee.amount) != Some(after.usage.fee)
-            || after.result != prior.result
-            || after.service != prior.service
-            || after.last_event != self.fee.accepted_response.origin
+impl PreparedAssignedSourceEventV2 {
+    pub(super) fn check_committed(&self, state: &PalwChainStateV2) -> Result<(), PalwStateV2Error> {
+        let matches = |body: NativeRowBody| -> Result<bool, PalwStateV2Error> { Ok(required(state, body.key())? == body) };
+        if !matches(NativeRowBody::Case(self.case))? || !matches(NativeRowBody::SourceUnion(self.union))? {
+            return Err(refuse("rooted source Case or union differs from the literal event"));
+        }
+        if let Some(receipt) = self.receipt
+            && !matches(NativeRowBody::ServiceReceipt(receipt))?
         {
-            return Err(refuse("rooted source receipt or fee differs from the actual response"));
+            return Err(refuse("rooted first receipt differs from the literal response"));
         }
         Ok(())
     }
@@ -95,7 +121,7 @@ fn source_material(origin: AcceptedOrigin) -> Result<AcceptedMaterial, PalwState
     Ok(AcceptedMaterial { origin, digest: Digest(origin.carrier_transaction.0) })
 }
 
-fn capacity() -> PalwStateV2Error {
+pub(super) fn capacity() -> PalwStateV2Error {
     PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable)
 }
 
@@ -125,16 +151,15 @@ impl NativeAssignedCourtV2 {
         Ok(())
     }
 
-    pub(super) fn replay_source_request_union_v2(
+    pub(super) fn prepare_source_request_union_v2(
         &mut self,
         material: &AssignmentAdmissionMaterialV2,
         prefix: &PalwChainStateV2,
-        after: &PalwChainStateV2,
         prior: &CaseRow,
         origin: AcceptedOrigin,
         body: &PositiveNativeBodyV2,
         body_heap: u64,
-    ) -> Result<(), PalwStateV2Error> {
+    ) -> Result<SourceUnionRow, PalwStateV2Error> {
         let PositiveNativeOperationV2::SourceRequest { request, .. } = &body.operation else {
             return Err(refuse("expected source request"));
         };
@@ -173,6 +198,7 @@ impl NativeAssignedCourtV2 {
             .ok_or_else(|| refuse("source union lost earlier requests"))?;
         let mut unique_bytes = self.source_unions.unique_bytes;
         let mut pending_fee = self.source_unions.pending_fee;
+        let mut pending = self.source_unions.pending;
         let fees = &material.native_preimages.case_fees;
         for unit in request.first..request.end {
             if !contains(previous, unit) {
@@ -180,6 +206,9 @@ impl NativeAssignedCourtV2 {
                 unique_bytes = unique_bytes.checked_add(bound.max_data_bytes).ok_or_else(capacity)?;
                 let fee = fees.source_unit_due(bound.max_unit_bytes).map_err(refuse)?;
                 pending_fee = pending_fee.checked_add(fee).ok_or_else(capacity)?;
+                let max_body = bound.max_unit_bytes.checked_add(SOURCE_RESPONSE_BODY_OVERHEAD_V2).ok_or_else(capacity)?;
+                let delivery = SourceDeliveryReserveV2::quote(max_body, &source_policy.work)?;
+                pending = pending.combine(delivery, u64::checked_add).ok_or_else(capacity)?;
             }
         }
         let NativeRowBody::Funding(funding) = required(prefix, NativeRowKey::Funding(prior.case))? else {
@@ -194,6 +223,7 @@ impl NativeAssignedCourtV2 {
             return Err(refuse("source request does not reserve all outstanding first-response fees"));
         }
         self.source_unions.pending_fee = pending_fee;
+        self.source_unions.pending = pending;
         self.source_unions.unique_bytes = unique_bytes;
         self.source_unions.rounds = self.source_unions.rounds.checked_add(u64::from(fresh_units != 0)).ok_or_else(capacity)?;
         if self.source_unions.unique_bytes > prior.service.budget.unique_source_bytes
@@ -201,7 +231,7 @@ impl NativeAssignedCourtV2 {
         {
             return Err(refuse("source request exceeds original source budget"));
         }
-        self.source_unions.rows[index] = Some(SourceUnionRow {
+        let union = SourceUnionRow {
             case: prior.case,
             kind,
             source: request.source,
@@ -209,26 +239,20 @@ impl NativeAssignedCourtV2 {
             requested_units,
             completed_units: self.source_unions.rows[index].map_or(0, |row| row.completed_units),
             union: source_material(origin)?,
-        });
+        };
+        self.source_unions.rows[index] = Some(union);
         self.source_unions.ranges[index] = ranges;
         let old = self.source_unions.range_leases[index].replace(range_lease);
         self.checker_heap = heap.checked_sub(old.as_ref().map_or(0, NativeDemandLeaseV1::memory_v1)).ok_or_else(capacity)?;
         drop(old);
-        let NativeRowBody::Case(case) = required(after, NativeRowKey::Case(prior.case))? else {
-            return Err(refuse("source request changed the Case subject"));
-        };
-        if case.last_event != origin || case.result != prior.result || case.service != prior.service {
-            return Err(refuse("source request differs from the committed Case identity or origin"));
-        }
-        self.check_source_union_projection_v2(after, &case)
+        Ok(union)
     }
 
-    pub(super) fn replay_source_response_union_v2(
+    fn prepare_source_response_union_v2(
         &mut self,
-        after: &PalwChainStateV2,
         response: &CheckedAssignedSourceResponseV2,
-    ) -> Result<(), PalwStateV2Error> {
-        let NativeRowKey::ServiceReceipt { case, kind, source, unit } = response.fee.receipt_key else {
+    ) -> Result<SourceUnionRow, PalwStateV2Error> {
+        let NativeRowKey::ServiceReceipt { kind, source, unit, .. } = response.fee.receipt_key else {
             return Err(refuse("source response receipt key"));
         };
         let index = source_index(kind);
@@ -246,10 +270,124 @@ impl NativeAssignedCourtV2 {
             .pending_fee
             .checked_sub(response.reserved_fee)
             .ok_or_else(|| refuse("source response has no reserved service fee"))?;
-        let NativeRowBody::Case(row) = required(after, NativeRowKey::Case(case))? else {
-            return Err(refuse("source response changed the Case subject"));
+        self.source_unions.pending = self
+            .source_unions
+            .pending
+            .combine(response.reserved_delivery, u64::checked_sub)
+            .ok_or_else(|| refuse("source response has no reserved service capacity"))?;
+        Ok(*union)
+    }
+
+    fn check_source_journal_reserve_v2(
+        &self,
+        material: &AssignmentAdmissionMaterialV2,
+        prior: (u64, u64),
+        next_bytes: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let pending = self.source_unions.pending;
+        if prior
+            .0
+            .checked_add(next_bytes)
+            .and_then(|n| n.checked_add(pending.journal))
+            .and_then(|n| n.checked_add(self.source_court_reserve))
+            .is_none_or(|n| n > material.positive_policy.max_case_journal_bytes)
+            || prior
+                .1
+                .checked_add(1)
+                .and_then(|n| n.checked_add(pending.units))
+                .is_none_or(|n| n > u64::from(material.assignment_policy.max_history_frames))
+        {
+            return Err(refuse("event consumes reserved source or Court history"));
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_assigned_source_event_v2(
+        &mut self,
+        material: &AssignmentAdmissionMaterialV2,
+        prefix: &PalwChainStateV2,
+        assignment: &AssignmentRow,
+        prior: &CaseRow,
+        origin: AcceptedOrigin,
+        body: &PositiveNativeBodyV2,
+        raw_bytes: u64,
+        prior_journal: (u64, u64),
+        body_heap: u64,
+    ) -> Result<Option<PreparedAssignedSourceEventV2>, PalwStateV2Error> {
+        let policy = &material.native_preimages.source_policy;
+        if raw_bytes > policy.max_native_body_bytes {
+            return Err(refuse("source carrier body exceeds original source policy"));
+        }
+        let cost = SourceDeliveryReserveV2::quote(raw_bytes, &policy.work)?;
+        let (union, receipt) = match &body.operation {
+            PositiveNativeOperationV2::SourceRequest { request, .. } => {
+                if self.source_requests.contains_key(&request.id()) {
+                    return Ok(None);
+                }
+                let union = self.prepare_source_request_union_v2(material, prefix, prior, origin, body, body_heap)?;
+                self.remember_source_request_v2(material, origin, body, body_heap)?;
+                (union, None)
+            }
+            PositiveNativeOperationV2::SourceResponse { .. } => {
+                let Some(response) = self.check_source_response_v2(prefix, assignment, material, prior, origin, body, body_heap)?
+                else {
+                    return Ok(None);
+                };
+                let union = self.prepare_source_response_union_v2(&response)?;
+                let NativeRowKey::ServiceReceipt { case, kind, source, unit } = response.fee.receipt_key else {
+                    return Err(refuse("source response receipt key"));
+                };
+                let receipt = ServiceReceiptRow {
+                    case,
+                    kind,
+                    source,
+                    unit,
+                    result: prior.result,
+                    duty: response.duty,
+                    response: response.fee.accepted_response,
+                    provider: response.fee.provider,
+                    bytes: response.data_bytes,
+                    additional_work: cost.work,
+                    settlement: None,
+                };
+                self.remember_source_response_v2(material, response, body_heap)?;
+                (union, Some(receipt))
+            }
+            _ => return Err(refuse("source event must be a literal request or response")),
         };
-        self.check_source_union_projection_v2(after, &row)
+        let used = self.source_unions.used.combine(cost, u64::checked_add).ok_or_else(capacity)?;
+        let full_source = used.combine(self.source_unions.pending, u64::checked_add).ok_or_else(capacity)?;
+        let court = self.source_court_reserve;
+        let budget = &prior.service.budget;
+        let pending = self.source_unions.pending;
+        if full_source.units > policy.max_history_events
+            || full_source.body > policy.max_history_bytes
+            || (self.source_responses.len() as u64).checked_add(pending.units).is_none_or(|n| n > policy.max_responses)
+            || full_source.body.checked_add(court).is_none_or(|n| n > budget.transmitted_bytes)
+        {
+            return Err(refuse("source event consumes reserved Case transport or history"));
+        }
+        self.check_source_journal_reserve_v2(material, prior_journal, cost.journal)?;
+        let mut next = *prior;
+        let usage = &mut next.usage;
+        usage.rounds = self.source_unions.rounds;
+        usage.unique_source_bytes = self.source_unions.unique_bytes;
+        usage.fee = self.source_fees.earned;
+        usage.transmitted_bytes = usage.transmitted_bytes.checked_add(cost.body).ok_or_else(capacity)?;
+        usage.additional_work = usage.additional_work.checked_add(cost.work).ok_or_else(capacity)?;
+        usage.retained_bytes = usage.retained_bytes.checked_add(cost.journal).ok_or_else(capacity)?;
+        misaka_palw_positive_contract::reservations::RemainingCapacity {
+            transmitted_bytes: pending.body,
+            additional_work: pending.work,
+            retained_bytes: pending.journal,
+        }
+        .check(usage, budget)
+        .map_err(refuse)?;
+        next.miner_data = self.source_unions.miner_data();
+        next.last_event = origin;
+        self.source_unions.used = used;
+        Ok(Some(PreparedAssignedSourceEventV2 { case: next, union, receipt }))
     }
 
     fn admit_source_index_entry_v2<K, V>(&mut self, body_heap: u64) -> Result<(), PalwStateV2Error> {
@@ -380,6 +518,9 @@ impl NativeAssignedCourtV2 {
         let fee = schedule.source_unit_due(opening_bytes).map_err(refuse)?;
         let reserved = self.source.geometry.unit_bound(duty.request.kind, unit).map_err(refuse)?;
         let reserved_fee = schedule.source_unit_due(reserved.max_unit_bytes).map_err(refuse)?;
+        let reserved_body = reserved.max_unit_bytes.checked_add(SOURCE_RESPONSE_BODY_OVERHEAD_V2).ok_or_else(capacity)?;
+        let reserved_delivery = SourceDeliveryReserveV2::quote(reserved_body, &source.work)?;
+
         let total_new_due = self
             .source_unions
             .pending_fee
@@ -412,6 +553,7 @@ impl NativeAssignedCourtV2 {
             duty: duty.material,
             data_bytes,
             reserved_fee,
+            reserved_delivery,
         }))
     }
 }
@@ -623,6 +765,18 @@ impl NativeAssignedCourtV2 {
         Ok((payment, receipts, decode_lease))
     }
 
+    fn check_case_payment_journal_reserve_v2(
+        &self,
+        backing: &NativeCommittedAssignedCaseV2,
+        tx: &crate::tx::Transaction,
+        prior: (u64, u64),
+    ) -> Result<(), PalwStateV2Error> {
+        let payload = borsh::object_length(tx).map_err(refuse)? as u64;
+        let bytes = crate::palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2(payload)
+            .ok_or_else(capacity)?;
+        self.check_source_journal_reserve_v2(backing.material(), prior, bytes)
+    }
+
     pub(super) fn replay_case_source_payment_v2(
         &mut self,
         backing: &NativeCommittedAssignedCaseV2,
@@ -630,7 +784,9 @@ impl NativeAssignedCourtV2 {
         after: &PalwChainStateV2,
         prior: &CaseRow,
         carriage: &NativeAcceptedCaseCarriageV2,
+        prior_journal: (u64, u64),
     ) -> Result<(), PalwStateV2Error> {
+        self.check_case_payment_journal_reserve_v2(backing, carriage.transaction(), prior_journal)?;
         let (mut payment, receipts, _decode) = self.qualify_literal_case_source_payment_v2(
             backing,
             prefix,
@@ -696,6 +852,13 @@ impl TransitionBuilder<'_> {
             return Err(refuse("actual settlement-once owner is dormant"));
         }
         let (backing, mut machine, mut prior) = self.prepare_case_subject_v2(action, case, None)?;
+        let prior_journal =
+            backing.records().iter().map(|record| record.raw().len() as u64).try_fold(0u64, u64::checked_add).ok_or_else(capacity)?;
+        machine.check_case_payment_journal_reserve_v2(
+            backing,
+            action.transaction(),
+            (prior_journal, backing.records().len() as u64),
+        )?;
         let origin = action.origin();
         let (mut payment, receipts, _decode) = machine.qualify_literal_case_source_payment_v2(
             backing,
@@ -780,6 +943,9 @@ pub fn qualify_case_source_spend_v2(
     }
     super::super::positive_assignment_materials::quote_assigned_case_payment_journal_v2(backing, transaction)?;
     let (mut machine, prior) = recover_case_subject_v2(state, backing, parent, backing.pin().case, None)?;
+    let prior_journal =
+        backing.records().iter().map(|record| record.raw().len() as u64).try_fold(0u64, u64::checked_add).ok_or_else(capacity)?;
+    machine.check_case_payment_journal_reserve_v2(backing, transaction, (prior_journal, backing.records().len() as u64))?;
     let fee = entries
         .iter()
         .map(|entry| entry.amount)
@@ -800,7 +966,18 @@ pub fn qualify_case_source_spend_v2(
 
 #[cfg(test)]
 mod source_fee_tests {
-    use super::CaseSourceFeesV2;
+    use super::{CaseSourceFeesV2, SourceDeliveryReserveV2};
+
+    #[test]
+    fn first_delivery_releases_only_its_own_capacity_in_every_dimension() {
+        let first = SourceDeliveryReserveV2 { units: 1, body: 15, work: 70, journal: 1120 };
+        let second = SourceDeliveryReserveV2 { units: 1, body: 20, work: 95, journal: 1125 };
+        let pending = first.combine(second, u64::checked_add).unwrap();
+        let remaining = pending.combine(first, u64::checked_sub).unwrap();
+        assert_eq!((remaining.units, remaining.body, remaining.work, remaining.journal), (1, 20, 95, 1125));
+        let oversized = SourceDeliveryReserveV2 { journal: 1126, ..second };
+        assert!(remaining.combine(oversized, u64::checked_sub).is_none());
+    }
 
     #[test]
     fn case_funding_covers_the_entire_unpaid_source_balance() {
