@@ -388,6 +388,10 @@ fn persist_attempt_material(path: &std::path::Path, bytes: &[u8]) -> std::io::Re
     publish_retained_file(path, bytes, RetainedPublication::DurableReplace).map(|_| ())
 }
 
+fn unbudgeted_attempt_storage_available(free: u64, total: u64, bytes: u64) -> bool {
+    crate::palw_retention::retention_reserve_bytes_v1(total).checked_add(bytes).is_some_and(|required| free >= required)
+}
+
 /// The wall-clock horizon of every retained capture that is not an attempt claim's: the bind +
 /// receipt windows at the frozen 120 s cadence are ~40 h, and two days of re-serving covers every
 /// claim that can still be licensed.
@@ -1050,11 +1054,18 @@ impl PalwProducerService {
         // written — a refusal here means no block promising them is published, so no liability is
         // taken on that the node has no room to keep. The reservation covers the write; once the
         // file exists the scan counts it.
-        let _storage = kaspa_utils::storage_budget::reserve_global(
+        let storage = kaspa_utils::storage_budget::reserve_global(
             kaspa_utils::storage_budget::StorageCategory::PalwRetained,
             material.len() as u64,
         )
         .map_err(|refusal| format!("not retaining {}: {refusal}", path.display()))?;
+        if storage.is_none() {
+            let (free, total) = crate::palw_retention::volume_space_v1(&self.config.retention_dir)
+                .ok_or_else(|| format!("cannot measure the retention volume for {}", path.display()))?;
+            if !unbudgeted_attempt_storage_available(free, total, material.len() as u64) {
+                return Err(format!("not retaining {}: the capture would consume the retention volume reserve", path.display()));
+            }
+        }
         persist_attempt_material(&path, material).map_err(|e| format!("cannot retain {}: {e}", path.display()))
     }
 
@@ -3239,6 +3250,16 @@ mod accepted_rider_tests {
 mod tests {
     use super::palw_da_court_in_force_v1;
 
+    #[test]
+    fn attempt_capture_preserves_the_unbudgeted_volume_reserve() {
+        let gib = 1 << 30;
+        let capture = 2_409_135;
+        for (total, reserve) in [(100 * gib, 8 * gib), (1_000 * gib, 50 * gib)] {
+            assert!(super::unbudgeted_attempt_storage_available(reserve + capture, total, capture));
+            assert!(!super::unbudgeted_attempt_storage_available(reserve + capture - 1, total, capture));
+        }
+        assert!(!super::unbudgeted_attempt_storage_available(u64::MAX, 100 * gib, u64::MAX));
+    }
     #[test]
     fn attempt_material_persist_is_atomic_and_retryable() {
         let root = tempfile::tempdir().unwrap();

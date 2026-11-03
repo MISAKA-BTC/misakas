@@ -1140,3 +1140,41 @@ checkpoint contains an active registrant bond for the DAA 508
 class. A prospective signed declaration would require an active
 rule and a later checkpoint that actually carries the declaration.
 Current signer authority was not inferred from the old snapshot.
+
+## Producer disk admission and historical registration — 05:54 UTC
+
+With no process storage budget, an ordinary producer now checks
+that the retention volume can hold its complete staged capture
+above the janitor's existing reserve before publishing an Attempt.
+The measured floor is the larger of 8 GiB and 5% of the volume.
+The focused test covered the boundary on both sides of that
+choice and checked overflow. The Kaspad test crate metadata passed
+with default and EVM features against cached dependencies.
+The change is source-only.
+
+The archived emission scan links a registration-size lifecycle
+transaction with ID prefix `dcfcb2536802` to DAA 507 carrier
+`e4da…f12f` and DAA 508 accepting candidate `998d…7fd0`.
+The B0, B1 and relay RPCs agreed on the headers and their Merkle
+roots. All three hold headers only for both blocks. The original
+transaction body and exact acceptance membership still need an
+archive to authenticate the historical class declaration.
+
+Seat5's existing immutable Qwen 8K artifact matched the
+1,799,359,436-byte B0/Mac SHA-256. The seat remained stopped
+through the read. Public95 had 18.72 GB free and 11.46 million
+KiB of available memory, below the existing independent trial
+guards. Seat5 also had a separate Cargo build running and its
+available root space was below its retention reserve at the
+latest preflight.
+
+B0 and the relay matched at virtual DAA 19,616. The exact Qwen
+#48 remained absent as a claim on both. B0 recorded refusal at
+20,607 remaining DAA against 20,608 required. The public index
+was current on recheck.
+
+The isolated Darwin Qwen #21 process entered the arithmetic
+comparison and ran for 474 seconds. The APFS free-space guard
+stopped it after a sample reported 939,098,112 bytes free.
+The measured peak RSS was 4.42 GB, scratch stayed empty, swap
+did not grow, and there was no arithmetic verdict.
