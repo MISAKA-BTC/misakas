@@ -1040,8 +1040,9 @@ impl TransitionBuilder<'_> {
         use crate::{
             config::params::AssignmentFundingRelayProfileV2,
             palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1},
-            palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, ReservedFundingRelayBodyV2},
-            palw_positive_relay_signature_v2::{ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2, FundingRelaySignatureTemplateV2},
+            palw_positive_funding_relay_v2::{
+                FundingRelayBodyErrorV2, ReservedFundingRelayBodyV2, verify_funding_relay_package_signatures_v2,
+            },
         };
 
         let rules = action.rules();
@@ -1108,9 +1109,6 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial relay poster cannot take new work"));
         }
         let key: &[u8; PUBKEY_BYTES] = bond.pubkey.as_slice().try_into().map_err(refusal)?;
-        if terms.refund_payload.0 != kaspa_hashes::blake2b_512_address_payload(key).as_bytes() {
-            return Err(refusal("initial relay refund script differs from poster"));
-        }
         let rows = PositiveRowsV2::new(&self.state);
         let nonce = match rows.read(NativeRowKey::AssignmentNonce(terms.payer_bond)).map_err(refusal)? {
             None => AssignmentNonceV2::default(),
@@ -1121,25 +1119,14 @@ impl TransitionBuilder<'_> {
         };
         nonce.after_accepting(poster_nonce).map_err(refusal)?;
 
-        let mut requests = TirNativeRequestsV1::new();
-        requests.exact_v1::<FundingRelaySignatureTemplateV2>(1).map_err(PalwStateV2Error::NativeResource)?;
-        requests.exact_v1::<crate::tx::TransactionInput>(1).map_err(PalwStateV2Error::NativeResource)?;
-        // The literal payload and the P2PKH script Vec plus ScriptVec copy.
-        requests.exact_v1::<u8>((ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2 + 2 * 69) as u64).map_err(PalwStateV2Error::NativeResource)?;
-        let template_bytes = requests.bytes_v1();
-        if reserved.quote().logical_decode_requests.checked_add(template_bytes).is_none_or(|n| n > physical.max_heap_bytes) {
-            return Err(refusal("initial relay signature template exceeds the native heap cap"));
-        }
-        let _lease = reserve_native_requests_v1(template_bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<FundingRelaySignatureTemplateV2>(
-                "initial relay signature template",
-                "native owner is not armed",
-            ))
-        })?;
-        terms.authenticate_purpose(key, &body.purpose_signature).map_err(refusal)?;
-        FundingRelaySignatureTemplateV2::new(terms.assignment, native_bond(terms.funding_outpoint).0, terms.expected_amount, *key)
-            .and_then(|template| template.verify(&body.relay_signature))
-            .map_err(refusal)
+        let signature_heap = physical
+            .max_heap_bytes
+            .checked_sub(reserved.quote().logical_decode_requests)
+            .ok_or_else(|| refusal("initial relay signature workspace overflow"))?;
+        verify_funding_relay_package_signatures_v2(body, key, signature_heap).map_err(|error| match error {
+            FundingRelayBodyErrorV2::Contract(why) => refusal(why),
+            FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+        })
     }
 }
 

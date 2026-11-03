@@ -435,7 +435,12 @@ impl VirtualStateProcessor {
         body: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayRegistrationBodyV2,
         payload: &[u8],
     ) -> Result<(), NativeCoverageV1> {
-        use kaspa_consensus_core::palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2};
+        use crate::model::stores::ghostdag::GhostdagStoreReader;
+        use kaspa_consensus_core::{
+            config::params::AssignmentFundingRelayProfileV2,
+            palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2},
+            palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
+        };
         use misaka_palw_positive_contract::{
             native::NativeRowKey,
             rows::{NativeRowBody, NativeRowValue},
@@ -469,10 +474,9 @@ impl VirtualStateProcessor {
             return Ok(()); // A different literal package cannot use the archive.
         }
         custody.check_pair(&auth).map_err(|_| fault("rooted relay rows disagree"))?;
-        // Two rooted rows, reachability, header, acceptance index and both
-        // material keys. Reserve the bytes for all four fixed records before
-        // assigning the remaining work to the variable acceptance record.
-        if auth.quote.usage.replay_reads < 7 || auth.quote.usage.heap_bytes < workspace {
+        // Two rooted rows, two reachability checks, header, selected parent,
+        // acceptance index and both material keys.
+        if auth.quote.usage.replay_reads < 9 || auth.quote.usage.heap_bytes < workspace {
             return Err(fault("original relay replay limits do not cover archive lookup"));
         }
         let auth_bytes = borsh::object_length(&auth).map_err(|_| fault("original relay authorization extent"))? as u64;
@@ -503,6 +507,36 @@ impl VirtualStateProcessor {
         if header.daa_score != origin.accepted_daa || header.blue_score != origin.accepted_blue_score {
             return Err(fault("original relay accepting header clock differs"));
         }
+        let original_parent =
+            self.ghostdag_store.get_selected_parent(accepting).map_err(|_| fault("original relay selected parent unavailable"))?;
+        let anchor = BlockHash::from_bytes(auth.terms.contract_anchor.0);
+        if !self
+            .reachability_service
+            .try_is_chain_ancestor_of(anchor, original_parent)
+            .map_err(|_| fault("original relay signed anchor reachability unavailable"))?
+        {
+            return Err(fault("original relay signed anchor is outside the original selected chain"));
+        }
+
+        let params = self.palw_positive_assignment_params_v2.as_ref().ok_or_else(|| fault("original relay parameters unavailable"))?;
+        let assignment = params
+            .palw_positive_assignment_rule_scope_v2_at(origin.accepted_daa)
+            .ok_or_else(|| fault("original Assignment intake scope unavailable"))?;
+        let profile = AssignmentFundingRelayProfileV2::capture_at_intake(params, origin.accepted_daa)
+            .map_err(|_| fault("original relay intake profile unavailable"))?;
+        let AssignmentFundingRelayProfileV2::RequiresRelayV2 { ruleset, policy, fees, physical, .. } = profile else {
+            return Err(fault("original relay intake fence was dormant"));
+        };
+        if auth.terms.contract_network.0 != self.palw_network_domain_v2().as_bytes()
+            || auth.terms.contract_ruleset.0 != assignment.ruleset().as_bytes()
+            || auth.terms.relay_ruleset != ruleset
+            || auth.policy != policy
+            || auth.fees != fees
+            || auth.physical != physical
+        {
+            return Err(fault("archived relay scope differs from original fired rules"));
+        }
+
         let (carrier_block, accepted) = self
             .acceptance_data_store
             .accepted_origin_at_bounded_v2(accepting, origin.accepted_tx_ordinal, maximum_bytes)
@@ -517,7 +551,13 @@ impl VirtualStateProcessor {
         self.palw_state_v2_store
             .read()
             .check_funding_relay_archive_v2(&auth, payload)
-            .map_err(|_| fault("rooted relay payload or charge unavailable"))
+            .map_err(|_| fault("rooted relay payload or charge unavailable"))?;
+        verify_funding_relay_package_signatures_v2(body, &auth.payer_key, auth.quote.usage.heap_bytes - workspace).map_err(|why| {
+            match why {
+                FundingRelayBodyErrorV2::Contract(_) => fault("original relay purpose or settlement signature invalid"),
+                FundingRelayBodyErrorV2::Native(why) => why,
+            }
+        })
     }
 }
 

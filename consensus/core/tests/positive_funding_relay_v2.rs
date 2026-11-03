@@ -33,7 +33,7 @@ fn fixture() -> (FundingRelayRegistrationBodyV2, [u8; PUBKEY_BYTES]) {
         relay_policy: d(6),
         payer_bond: NativeOutpoint { transaction: NativeHash64([7; 64]), index: 0 },
         payer: principal(&key),
-        refund_payload: d(8),
+        refund_payload: Digest(kaspa_hashes::blake2b_512_address_payload(&key).as_bytes()),
         funding_purpose: RelayFundingPurposeV2::PosterA,
         target: RelayTargetV2::InitialAssignment { bundle: d(9), poster_nonce: 0 },
         funding_outpoint: point,
@@ -73,7 +73,7 @@ fn fixture() -> (FundingRelayRegistrationBodyV2, [u8; PUBKEY_BYTES]) {
 }
 #[test]
 fn exact_body_and_real_typed_owner_enforce_both_frame_and_construction_limits() {
-    let (body, _) = fixture();
+    let (body, key) = fixture();
     let raw = borsh::to_vec(&body).unwrap();
     let q = quote_funding_relay_body_v2(&raw, raw.len() as u64).unwrap();
     assert_eq!(q.encoded_bytes, raw.len() as u64);
@@ -86,6 +86,16 @@ fn exact_body_and_real_typed_owner_enforce_both_frame_and_construction_limits() 
     let owned = ReservedFundingRelayBodyV2::decode(&raw, raw.len() as u64, q.logical_decode_requests).unwrap();
     assert_eq!(owned.body(), &body);
     assert_eq!(owned.quote(), q);
+    drop(owned);
+
+    verify_funding_relay_package_signatures_v2(&body, &key, 32_000).unwrap();
+    assert!(verify_funding_relay_package_signatures_v2(&body, &key, 1).is_err());
+    let mut wrong = body.clone();
+    wrong.purpose_signature[0] ^= 1;
+    assert!(verify_funding_relay_package_signatures_v2(&wrong, &key, 32_000).is_err());
+    let mut wrong = body;
+    wrong.relay_signature[0] ^= 1;
+    assert!(verify_funding_relay_package_signatures_v2(&wrong, &key, 32_000).is_err());
 }
 #[test]
 fn fixed_body_scan_rejects_every_cut_trailing_unknown_variant_and_wrong_operation() {

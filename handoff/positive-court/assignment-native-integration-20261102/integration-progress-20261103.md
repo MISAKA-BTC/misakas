@@ -748,3 +748,31 @@ Final-source Core and Consensus library Clippy passed with warnings
 denied. The isolated acceptance ordinal regression passed using the
 actual store module and matching cached dependencies. Documentation
 checking reported zero new issues against the existing 43.
+
+## Original relay rules and signature replay
+
+The exact-repeat archive path rederives the original Assignment and
+relay scopes at the recorded acceptance DAA using native Params. It
+compares the historical network, rule identities, policy, fees and
+physical profile, and checks the signed anchor against the accepting
+block's own selected parent. The two additional lineage reads are
+included in the replay bound.
+
+Fresh qualification and archival replay share one bounded verifier for
+the refund script, registration-purpose signature and standard op12
+settlement-template signature. Fresh qualification uses the current
+registered poster key. Archive replay uses the rooted authorization's
+original key and keeps its row workspace plus the template workspace
+within the stored limit. This authenticates the stored signed package
+and original rules. Historical bond qualification, the original outer
+op14 transaction's populated inputs, native custody and the actual
+pre-reward debit are separate pending owners.
+
+Final-source Core and Consensus Clippy passed with warnings denied,
+including the focused Core test target. All four native relay tests
+passed. The exercised signature case verifies the original signed
+package and refuses independent purpose- and relay-signature
+mutations and an insufficient workspace. This is a direct Core
+verifier test. The selected-chain archive path was typechecked and
+did not run as a full node restart. The documentation check found
+zero new issues against the existing 43.

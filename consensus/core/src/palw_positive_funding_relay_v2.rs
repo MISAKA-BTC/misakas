@@ -8,6 +8,7 @@ use crate::palw_native_resource_v1::{
 use misaka_palw_positive_contract::{
     ContractError,
     assignment::funding_relay::{FUNDING_RELAY_MAX_BODY_BYTES_V2, FundingRelayRegistrationBodyV2},
+    identity::PUBKEY_BYTES,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,4 +102,48 @@ impl ReservedFundingRelayBodyV2 {
     pub fn quote(&self) -> FundingRelayBodyQuoteV2 {
         self.quote
     }
+}
+
+/// Authenticate the purpose and the standard settlement template from the
+/// same literal registration. The key must be resolved by the caller's
+/// native state/lineage checks. This grants no admission or custody.
+pub fn verify_funding_relay_package_signatures_v2(
+    body: &FundingRelayRegistrationBodyV2,
+    payer_key: &[u8; PUBKEY_BYTES],
+    maximum_requests: u64,
+) -> Result<(), FundingRelayBodyErrorV2> {
+    use crate::{
+        palw_positive_relay_signature_v2::{ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2, FundingRelaySignatureTemplateV2},
+        tx::{TransactionInput, TransactionOutpoint},
+    };
+
+    let terms = &body.terms;
+    if terms.refund_payload.0 != kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes() {
+        return Err(FundingRelayBodyErrorV2::Contract(ContractError::Identity));
+    }
+    let mut requests = TirNativeRequestsV1::new();
+    requests.exact_v1::<FundingRelaySignatureTemplateV2>(1)?;
+    requests.exact_v1::<TransactionInput>(1)?;
+    // Literal payload and the P2PKH script Vec plus ScriptVec copy.
+    requests.exact_v1::<u8>((ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2 + 2 * 69) as u64)?;
+    let bytes = requests.bytes_v1();
+    if maximum_requests == u64::MAX || bytes > maximum_requests {
+        return Err(budget());
+    }
+    let _lease = reserve_native_requests_v1(bytes)?.ok_or_else(|| {
+        FundingRelayBodyErrorV2::Native(NativeCoverageV1::unsupported::<FundingRelaySignatureTemplateV2>(
+            "relay signature template",
+            "native owner is not armed",
+        ))
+    })?;
+    terms.authenticate_purpose(payer_key, &body.purpose_signature).map_err(FundingRelayBodyErrorV2::Contract)?;
+    let point = terms.funding_outpoint;
+    FundingRelaySignatureTemplateV2::new(
+        terms.assignment,
+        TransactionOutpoint::new(crate::Hash64::from_bytes(point.transaction.0), point.index),
+        terms.expected_amount,
+        *payer_key,
+    )
+    .and_then(|template| template.verify(&body.relay_signature))
+    .map_err(|_| FundingRelayBodyErrorV2::Contract(ContractError::Signature))
 }
