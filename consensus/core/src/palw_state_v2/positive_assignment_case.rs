@@ -163,6 +163,7 @@ struct NativeAssignedCourtV2 {
     court: ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
     facts: Vec<LocalCheckedCourtFactV2>,
     check_limits: crate::palw_positive_check_v2::CheckLimits,
+    source_units: [u64; 2],
     derived_heap: u64,
     checker_heap: u64,
     available_heap: u64,
@@ -497,17 +498,24 @@ fn assigned_prover_rows_v2(
         .map(|((_, key), bytes)| (key.as_slice(), bytes.as_slice()))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AssignedProverUseV2 {
+    Witness,
+    Frame,
+    SourceRequest,
+}
+
 /// Resolve the literal original or accepted funded op13 role in the ACTUAL
 /// prefix. Historical replay calls with carriage.prefix_state(), never a later
 /// state, and a retired actor cannot buy a replacement global Court budget.
-fn prover_step(
+fn find_prover_step(
     state: &PalwChainStateV2,
     a: &AssignmentRow,
     material: &AssignmentAdmissionMaterialV2,
     author: PrincipalId,
     origin: AcceptedOrigin,
-    new_candidate: bool,
-) -> Result<NativeAssignedPanelStepV2, PalwStateV2Error> {
+    purpose: AssignedProverUseV2,
+) -> Result<Option<NativeAssignedPanelStepV2>, PalwStateV2Error> {
     use misaka_palw_positive_contract::assignment::{AssignmentRoleV2, rows::AssignmentRoleAuthorizationV2};
     use misaka_palw_positive_contract::rows::NativeRowValue;
 
@@ -547,8 +555,14 @@ fn prover_step(
             continue;
         }
         role.authenticate(a).map_err(refuse)?;
-        if (new_candidate && role.retired) || role.origin.accepted_daa > origin.accepted_daa {
-            return Err(refuse("role absent/retired at actual event prefix"));
+        if role.origin.accepted_daa > origin.accepted_daa {
+            return Err(refuse("role begins after the actual event prefix"));
+        }
+        if role.retired && purpose != AssignedProverUseV2::Frame {
+            if purpose == AssignedProverUseV2::SourceRequest {
+                continue;
+            }
+            return Err(refuse("retired role cannot open a candidate"));
         }
         let registered = state
             .bond(&PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(role.bond.transaction.0), role.bond.index)))
@@ -582,6 +596,9 @@ fn prover_step(
             .checked_add(misaka_palw_positive_contract::identity::SIGNATURE_BYTES as u64)
             .filter(|n| *n <= max_submitted_bytes)
             .ok_or_else(|| refuse("original signed prover packet cap"))?;
+        if origin.accepted_daa >= before_daa && purpose == AssignedProverUseV2::SourceRequest {
+            continue;
+        }
         if origin.accepted_daa >= before_daa || resolved.is_some() {
             return Err(refuse("prover opportunity/ambiguous registered author"));
         }
@@ -597,7 +614,7 @@ fn prover_step(
             origin,
         });
     }
-    resolved.ok_or_else(missing)
+    Ok(resolved)
 }
 
 impl NativeAssignedCaseCacheV2 {
@@ -653,7 +670,8 @@ impl NativeAssignedCourtV2 {
         };
         let outcome = match &body.operation {
             Op::WitnessCommit { witness, panel_signature, .. } => {
-                let step = prover_step(state, assignment, material, witness.author, origin, true)?;
+                let step = find_prover_step(state, assignment, material, witness.author, origin, AssignedProverUseV2::Witness)?
+                    .ok_or_else(missing)?;
                 let key = step.key;
                 *self.authority.step.borrow_mut() = Some(step);
                 let limits = self.record_limits;
@@ -686,7 +704,8 @@ impl NativeAssignedCourtV2 {
                     return Err(refuse("actual witness row"));
                 };
                 witness.witness.authenticate(self.court.result(), &witness.panel_key, &witness.panel_signature).map_err(refuse)?;
-                let step = prover_step(state, assignment, material, witness.witness.author, origin, false)?;
+                let step = find_prover_step(state, assignment, material, witness.witness.author, origin, AssignedProverUseV2::Frame)?
+                    .ok_or_else(missing)?;
                 if step.key != witness.panel_key {
                     return Err(refuse("exact frame work key substitution"));
                 }
@@ -1160,6 +1179,10 @@ fn prepare_initial_case_checker_v2(
         court,
         facts,
         check_limits: resources.check_limits(),
+        source_units: [
+            resources.source().source_units(misaka_palw_positive_contract::messages::SourceKind::ArtifactInventory),
+            resources.source().source_units(misaka_palw_positive_contract::messages::SourceKind::Input),
+        ],
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1209,6 +1232,103 @@ fn check_replayed_court_projection_v2(
 }
 
 impl NativeAssignedCourtV2 {
+    /// Authenticate the source request against its exact Case and pre-event role.
+    fn check_source_request_v2(
+        &mut self,
+        backing: &NativeCommittedAssignedCaseV2,
+        state: &PalwChainStateV2,
+        assignment: &AssignmentRow,
+        prior: &CaseRow,
+        origin: AcceptedOrigin,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
+        use misaka_palw_positive_contract::{
+            assignment::{
+                control_material::AssignmentControlViewV2,
+                journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
+                open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
+            },
+            messages::SourceKind,
+        };
+
+        let PositiveNativeOperationV2::SourceRequest { request, requester, signature } = &body.operation else {
+            return Ok(());
+        };
+        let result = self.court.result();
+        let material = backing.material();
+        let (root, units) = match request.kind {
+            SourceKind::ArtifactInventory => (result.artifact, self.source_units[0]),
+            SourceKind::Input => (result.input, self.source_units[1]),
+        };
+        if prior.case != result.case_id()
+            || prior.result != result.id()
+            || prior.service.id() != result.service_contract
+            || request.case != prior.case
+            || request.contract != prior.service.id()
+            || request.source != root
+            || origin.accepted_daa >= prior.service.deadline.min(assignment.source_consent.service_before_daa)
+            || request.end.checked_sub(request.first).is_none_or(|n| n > material.native_preimages.source_policy.max_units_per_request)
+        {
+            return Err(refuse("source request differs from the accepted Case duty"));
+        }
+        request.validate(units).map_err(refuse)?;
+
+        let schedule = &material.native_preimages.source_policy.work;
+        let role_work =
+            schedule.court_operation_work(1, u64::from(material.assignment_policy.max_role_candidates), 0, 0).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(role_work).ok_or_else(|| refuse("source role lookup work"))?;
+        let key = if let Some(step) =
+            find_prover_step(state, assignment, material, *requester, origin, AssignedProverUseV2::SourceRequest)?
+        {
+            step.key
+        } else {
+            // The archive already authenticated this Open record against the
+            // selected parent and actual op8. Bound the second read and the
+            // verifier lookups before decoding the retained roster.
+            let raw = backing.open_raw();
+            let quote = schedule.court_body_work(raw.len() as u64).map_err(refuse)?;
+            let quote = quote.checked_mul(2).ok_or_else(|| refuse("source roster wire work overflow"))?;
+            self.remaining_work = self.remaining_work.checked_sub(quote).ok_or_else(|| refuse("source roster wire work"))?;
+            let open =
+                AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
+            let header = open.header();
+            if header.kind != AssignmentJournalEventKindV2::Open
+                || header.assignment != assignment.id()
+                || header.origin != assignment.origin
+            {
+                return Err(refuse("source roster must belong to the original Open"));
+            }
+            let cap = material.assignment_policy.max_frame_bytes;
+            let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
+            let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
+            let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
+            let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
+            if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
+                return Err(refuse("source requester roster differs from original custody"));
+            }
+            let roster = super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
+                roster,
+                schedule.per_control,
+                &mut self.remaining_work,
+            )?;
+            super::positive_assignment_certification::resolve_drawn_source_key_v2(
+                state,
+                assignment,
+                result,
+                material,
+                origin,
+                *requester,
+                roster,
+                &mut self.remaining_work,
+            )?
+        };
+        if misaka_palw_positive_contract::identity::principal(&key) != *requester {
+            return Err(refuse("actual source requester key"));
+        }
+        request.authenticate(units, &key, signature).map_err(refuse)
+    }
+
     /// Admit this exact operation before decoding or applying it. A candidate's
     /// allocation lease travels with the machine across cold and current steps.
     fn reserve_operation_v2(
@@ -1330,6 +1450,7 @@ fn replay_assigned_court_history_v2(
             return Err(refuse("archived pre-event Case row"));
         };
         check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
+        machine.check_source_request_v2(backing, prefix, &a, &prior, carriage.origin(), &body)?;
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
         }
@@ -1396,6 +1517,7 @@ impl TransitionBuilder<'_> {
             return Err(refuse("current Court operation differs from literal carrier"));
         }
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
+        machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
         let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
         let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
             .map_err(refuse)?;

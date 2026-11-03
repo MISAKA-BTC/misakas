@@ -57,6 +57,22 @@ impl<'a> AssignmentVerifierCandidatesV2<'a> {
         Ok(view)
     }
 
+    pub(super) fn decode_with_work_bound_v2(
+        preimage: &'a [u8],
+        per_control: u64,
+        remaining_work: &mut u64,
+    ) -> Result<Self, PalwStateV2Error> {
+        let roster = Self::decode_framing(preimage)?;
+        // Bound one order check, one bond lookup and the position comparisons.
+        let per_key = 2 + u64::from(crate::palw_positive_certification_v2::MAX_POSITIVE_DRAW_POSITIONS_V2);
+        let cost = (roster.0.len() as u64)
+            .checked_mul(per_key)
+            .and_then(|n| n.checked_mul(per_control))
+            .ok_or_else(|| refused("source requester roster work overflow"))?;
+        *remaining_work = remaining_work.checked_sub(cost).ok_or_else(|| refused("source requester roster work cap"))?;
+        Self::decode(preimage)
+    }
+
     pub(super) fn keys(&self) -> impl ExactSizeIterator<Item = PalwBondKeyV2> + '_ {
         self.0.iter().map(key_from_bytes)
     }

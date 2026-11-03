@@ -100,6 +100,9 @@ fn read(state: &PalwChainStateV2, subject: Digest, pool: u64) -> Result<OwnedP, 
     let bytes = positive_certification_row_bytes_v2(state, subject)
         .map_err(PalwStateV2Error::NativeResource)?
         .ok_or_else(|| refuse("missing P row"))?;
+    read_encoded(subject, bytes, pool)
+}
+fn read_encoded(subject: Digest, bytes: &[u8], pool: u64) -> Result<OwnedP, PalwStateV2Error> {
     if bytes.len() > MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2 {
         return Err(refuse("P codec bound"));
     }
@@ -206,6 +209,61 @@ fn case_live(state: &PalwChainStateV2, h: &PositiveCertificationHeaderV2) -> Res
     let NativeRowBody::Case(case) = value.body else { return Err(refuse("wrong native Case row")) };
     positive_certification_case_live_v2(h, &case).map_err(refuse)
 }
+/// Resolve a source requester against the draw rooted in this event's own
+/// pre-state. The original cohort bounds the scan; a later vote is irrelevant.
+pub(super) fn resolve_drawn_source_key_v2(
+    state: &PalwChainStateV2,
+    assignment: &AssignmentRow,
+    result: &misaka_palw_positive_contract::messages::MinerResultCommit,
+    material: &AssignmentAdmissionMaterialV2,
+    origin: AcceptedOrigin,
+    requester: PrincipalId,
+    roster: super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2<'_>,
+    remaining_work: &mut u64,
+) -> Result<[u8; PUBKEY_BYTES], PalwStateV2Error> {
+    let subject = certification_subject(result);
+    let bytes = positive_certification_row_bytes_v2(state, subject)
+        .map_err(PalwStateV2Error::NativeResource)?
+        .ok_or_else(|| refuse("missing source requester P row"))?;
+    let schedule = &material.native_preimages.source_policy.work;
+    let positions = u64::from(MAX_POSITIVE_DRAW_POSITIONS_V2);
+    let scan = schedule.court_body_work(bytes.len() as u64).map_err(refuse)?;
+    let votes = schedule.court_operation_work(positions, positions, 0, 0).map_err(refuse)?;
+    let cost = scan.checked_mul(3).and_then(|n| n.checked_add(votes)).ok_or_else(|| refuse("source requester P work overflow"))?;
+    *remaining_work = remaining_work.checked_sub(cost).ok_or_else(|| refuse("source requester P work cap"))?;
+    let owned = read_encoded(subject, bytes, 0)?;
+    let header = &owned.row.fixed.header;
+    let draw = owned.row.draw.as_ref().ok_or_else(|| refuse("source requester has no actual P draw"))?;
+    if header.assignment != assignment.id()
+        || header.case != result.case_id()
+        || header.result != result.id()
+        || header.claim != result.claim_id()
+        || header.scope != result.scope
+        || header.policy != material.certification_policy
+        || owned.row.fixed.outcome.is_some()
+        || draw.meta.origin.daa > origin.accepted_daa
+        || draw.meta.origin.blue_score > origin.accepted_blue_score
+        || origin.accepted_daa > draw.meta.deadline_daa
+    {
+        return Err(refuse("source requester differs from the actual active P draw"));
+    }
+    let mut found = None;
+    for key in roster.keys() {
+        if !draw.positions.contains(&Digest(palw_kernel_bond_id_v1(&key))) {
+            continue;
+        }
+        let Some(bond) = state.bond(&key) else { continue };
+        let Ok(key) = <&[u8; PUBKEY_BYTES]>::try_from(bond.pubkey.as_slice()) else { continue };
+        if principal(key) == requester {
+            if found.is_some_and(|prior| prior != *key) {
+                return Err(refuse("ambiguous drawn source requester"));
+            }
+            found = Some(*key);
+        }
+    }
+    found.ok_or_else(|| refuse("source requester is not a drawn verifier"))
+}
+
 pub(super) fn live_verifiers<'a>(
     state: &'a PalwChainStateV2,
     policy: &'a crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
