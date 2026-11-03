@@ -3585,3 +3585,24 @@ the scanned page. See
 `/private/tmp/misaka-t12-oom-20261102/g14-eog-derive-live.osM9DH/page.json`,
 `/private/tmp/misaka-t12-oom-20261102/tfp1-eog-derive.E67SXc/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-eog-cli.a45ROE/tests.log`.
+
+## Price the complete response at its Batch Finish slot
+
+The preclaim cost projection now receives the operation, demand
+position and original maximum body length as well as the signed carrier
+length. This lets a profile reserve authentication work and IO at
+Finish, where the whole response is checked. Open also requires one
+control and positive work before the graph can be reserved.
+
+The extracted suite passed 45 checks. Its latest-notice case still
+fits exactly 10,000 DAA with separately priced Finish work and IO.
+Increasing Finish work beyond a slot's capacity refuses the graph
+atomically. The fixture uses synthetic service costs. The production
+funded-original schedule resolver still returns typed-missing
+`Schedule`, so these results do not qualify the existing estimate or
+verify original admission for a real model.
+
+B0 and relay agreed at virtual DAA 19,724 on a newer selected tip.
+The scanned page contained no new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stage-cost-live.zijqG3/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stage-cost.LwBogh/tests.log`.

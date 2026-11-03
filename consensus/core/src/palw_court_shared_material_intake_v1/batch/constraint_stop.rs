@@ -425,7 +425,7 @@ mod tests {
         let mut book = ServiceReservations::new(cost(64 * 1024)).unwrap();
         let verify_id = verification.packet.id;
         let stop_id = stop.packet.id;
-        let (quote, graph) = plan.reserve_v1(&mut book, vec![terminal, stop, verification], storage, |bytes| Ok(cost(bytes))).unwrap();
+        let (quote, graph) = plan.reserve_v1(&mut book, vec![terminal, stop, verification], storage, |_, bytes| Ok(cost(bytes))).unwrap();
         let verify_daa = book.assigned_daa(&verify_id).unwrap();
         let stop_daa = book.assigned_daa(&stop_id).unwrap();
         let finish = graph.iter().find(|node| node.packet.id == verify_id).unwrap().predecessors[0];

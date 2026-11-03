@@ -1,5 +1,5 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
-use super::{BatchResponsePositionV1, MaterialIntakeScheduleV1, PART};
+use super::{BatchResponsePositionV1, MaterialIntakeScheduleV1, PART, Stage};
 use crate::{
     Hash64,
     palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1, MAX_BATCH_PARTS_V1, MAX_BATCH_RANGES_V1},
@@ -41,6 +41,14 @@ pub(crate) struct BatchRetainedControlV1 {
     pub payload_bytes: u64,
 }
 
+/// The work at Finish authenticates the complete response. Its carrier size
+/// alone cannot price that work. The profile sees the original range bound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BatchDeliveryV1 {
+    Open { ordinal: u64, range_count: usize },
+    Response { position: BatchResponsePositionV1, stage: Stage, maximum_body_bytes: u64 },
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct BatchAdmissionQuoteV1 {
     pub required_daa: u64,
@@ -60,7 +68,7 @@ impl BatchAdmissionV1<'_> {
         mut candidate: crate::palw_court_service_release_v1::CourtServiceRowV3,
         graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
-        cost: impl FnMut(u64) -> Result<ServiceCost, String>,
+        cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<(BatchAdmissionQuoteV1, crate::palw_court_service_release_v1::CourtServiceRowV3), BatchCourtErrorV1> {
         let binding = candidate.state.claims.get_mut(&self.claim).ok_or(BatchCourtErrorV1::CaseGraph)?;
         if binding.original_accepted_daa != self.window.claim_accepted_daa
@@ -90,7 +98,7 @@ impl BatchAdmissionV1<'_> {
         book: &mut ServiceReservations,
         graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
-        cost: impl FnMut(u64) -> Result<ServiceCost, String>,
+        cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         self.reserve_with_v1(book, graph, storage, cost, reserve_native_requests_v1)
     }
@@ -100,7 +108,7 @@ impl BatchAdmissionV1<'_> {
         book: &mut ServiceReservations,
         mut graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
-        mut cost: impl FnMut(u64) -> Result<ServiceCost, String>,
+        mut cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, Window};
@@ -175,8 +183,9 @@ impl BatchAdmissionV1<'_> {
                 .as_bytes();
             let bytes = crate::palw_batch_court_v1::carriage::batch_open_wire_bytes_v1(demand.range_maximums.len())
                 .map_err(|_| DeliveryCost)?;
-            let open_cost = cost(bytes).map_err(|_| DeliveryCost)?;
-            if open_cost.bytes < bytes {
+            let open_cost = cost(BatchDeliveryV1::Open { ordinal: demand.ordinal, range_count: demand.range_maximums.len() }, bytes)
+                .map_err(|_| DeliveryCost)?;
+            if open_cost.bytes < bytes || open_cost.work == 0 || open_cost.controls != 1 {
                 return Err(DeliveryCost);
             }
             graph.push(CausalServicePacketV1 {
@@ -188,7 +197,9 @@ impl BatchAdmissionV1<'_> {
             for (index, &maximum) in demand.range_maximums.iter().enumerate() {
                 let position = BatchResponsePositionV1 { demand_ordinal: demand.ordinal, range_index: index as u32 };
                 let mut response = position
-                    .reservation_graph_v1(self.claim, self.scope, maximum, first..before, &mut cost)
+                    .reservation_graph_v1(self.claim, self.scope, maximum, first..before, |stage, bytes| {
+                        cost(BatchDeliveryV1::Response { position, stage, maximum_body_bytes: maximum }, bytes)
+                    })
                     .map_err(|_| DeliveryCost)?;
                 response[0].predecessors.push(open);
                 let finish = response[response.len() - 1].packet.id;
@@ -328,7 +339,7 @@ mod tests {
             &mut book,
             graph(3_129),
             schedule,
-            |_| panic!("cost before capacity"),
+            |_, _| panic!("cost before capacity"),
             |bytes| {
                 assert!(bytes > 0);
                 Err(NativeCoverageV1::unsupported::<CausalServicePacketV1>("test", "quota exhausted"))
@@ -338,37 +349,60 @@ mod tests {
         assert_eq!(book, empty);
         let unbounded = BatchAdmissionV1 { window: BatchCourtWindowV1 { material_until_daa: u64::MAX, ..window }, ..plan };
         assert!(matches!(
-            unbounded.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))),
+            unbounded.reserve_v1(&mut book, graph(3_129), schedule, |_, bytes| Ok(cost(bytes))),
             Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
         ));
         assert_eq!(book, empty);
         let short = BatchAdmissionV1 { recovery_daa: plan.recovery_daa + 1, ..plan };
-        assert!(short.reserve_v1(&mut book, graph(3_128), schedule, |n| Ok(cost(n))).is_err());
+        assert!(short.reserve_v1(&mut book, graph(3_128), schedule, |_, bytes| Ok(cost(bytes))).is_err());
         assert_eq!(book, empty);
         let expired = MaterialIntakeScheduleV1 { draft_ttl_daa: 2, ..schedule };
-        assert!(plan.reserve_v1(&mut book, graph(3_129), expired, |n| Ok(cost(n))).is_err());
+        assert!(plan.reserve_v1(&mut book, graph(3_129), expired, |_, bytes| Ok(cost(bytes))).is_err());
         assert_eq!(book, empty);
         let unaffordable = MaterialIntakeScheduleV1 { sompi_per_byte: u64::MAX, ..schedule };
         assert!(matches!(
-            plan.reserve_v1(&mut book, graph(3_129), unaffordable, |n| Ok(cost(n))),
+            plan.reserve_v1(&mut book, graph(3_129), unaffordable, |_, bytes| Ok(cost(bytes))),
             Err(BatchCourtErrorV1::DeliveryCost)
         ));
         assert_eq!(book, empty);
         let capped = BatchAdmissionV1 { maximum_packets: 6, ..plan };
-        assert!(matches!(capped.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))), Err(BatchCourtErrorV1::CaseGraph)));
+        assert!(matches!(capped.reserve_v1(&mut book, graph(3_129), schedule, |_, bytes| Ok(cost(bytes))), Err(BatchCourtErrorV1::CaseGraph)));
         assert_eq!(book, empty);
         for invalid in [terminal, fallback_verification] {
             let demands = [MaximumBatchDemandV1 { verification: invalid, ..demands[0] }];
             let invalid_plan = BatchAdmissionV1 { demands: &demands, ..plan };
             assert!(matches!(
-                invalid_plan.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))),
+                invalid_plan.reserve_v1(&mut book, graph(3_129), schedule, |_, bytes| Ok(cost(bytes))),
                 Err(BatchCourtErrorV1::CaseGraph)
             ));
             assert_eq!(book, empty);
         }
-        let (quote, graph) = plan.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))).unwrap();
+        let bad_open = |delivery, bytes| match delivery {
+            BatchDeliveryV1::Open { .. } => Ok(ServiceCost { work: 0, ..cost(bytes) }),
+            _ => Ok(cost(bytes)),
+        };
+        assert!(matches!(
+            plan.reserve_v1(&mut book, graph(3_129), schedule, bad_open),
+            Err(BatchCourtErrorV1::DeliveryCost)
+        ));
+        assert_eq!(book, empty);
+        let project = |finish_work| {
+            move |delivery, bytes| match delivery {
+                BatchDeliveryV1::Response { position, stage: Stage::Finish, maximum_body_bytes } => {
+                    assert_eq!((position.demand_ordinal, position.range_index), (5, 0));
+                    assert_eq!(maximum_body_bytes, PART + 1);
+                    assert!(bytes < maximum_body_bytes);
+                    Ok(ServiceCost { work: finish_work, io: 2, ..cost(bytes) })
+                }
+                _ => Ok(cost(bytes)),
+            }
+        };
+        assert!(plan.reserve_v1(&mut book, graph(3_129), schedule, project(3)).is_err());
+        assert_eq!(book, empty);
+        let (quote, graph) = plan.reserve_v1(&mut book, graph(3_129), schedule, project(2)).unwrap();
         assert_eq!(quote.required_daa, 10_000);
         assert_eq!(quote.service.controls, 7);
+        assert_eq!((quote.service.work, quote.service.io), (8, 8));
         assert_eq!(quote.service.bytes, graph.iter().map(|node| node.packet.cost.bytes).sum::<u64>());
         assert_eq!(quote.retained_payload_bytes, PART + 1);
         assert_eq!(quote.carrier_storage_rent_sompi, (PART + 1) * 2);
@@ -391,10 +425,10 @@ mod tests {
         ];
         let fallback_plan = BatchAdmissionV1 { demands: &demands, recovery_daa: 1, maximum_packets: 11, ..plan };
         let terminal_graph = vec![node(terminal, 10_001), node(verification, 10_001), node(fallback_verification, 10_001)];
-        assert!(fallback_plan.reserve_v1(&mut book, terminal_graph.clone(), schedule, |n| Ok(cost(n))).is_err());
+        assert!(fallback_plan.reserve_v1(&mut book, terminal_graph.clone(), schedule, |_, bytes| Ok(cost(bytes))).is_err());
         assert_eq!(book, reserved);
         let mut book = empty;
-        fallback_plan.reserve_v1(&mut book, terminal_graph, schedule, |n| Ok(cost(n))).unwrap();
+        fallback_plan.reserve_v1(&mut book, terminal_graph, schedule, |_, bytes| Ok(cost(bytes))).unwrap();
         let fallback_open = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(h(1), h(2), 6).unwrap().as_bytes();
         assert!(book.assigned_daa(&verification).unwrap() > book.assigned_daa(&first_finish).unwrap());
         assert!(book.assigned_daa(&fallback_open).unwrap() > book.assigned_daa(&verification).unwrap());

@@ -254,7 +254,7 @@
                 };
                 assert_eq!(journal.causal, expected_edges);
                 let (quote, batch) = plan.reserve_for_original_v1(
-                    journal, graph, storage, |bytes| Ok(cost(bytes)),
+                    journal, graph, storage, |_, bytes| Ok(cost(bytes)),
                 ).unwrap();
                 assert!(quote.required_daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
                 assert!(expected_edges.iter().all(|(id, parents)| batch.causal.get(id) == Some(parents)));

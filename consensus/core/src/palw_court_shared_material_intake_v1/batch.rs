@@ -21,7 +21,7 @@ pub(crate) mod native_ranges;
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
-enum Stage {
+pub(crate) enum Stage {
     Begin,
     Part(u64),
     Finish,
@@ -49,7 +49,7 @@ impl BatchResponsePositionV1 {
         scope: Hash64,
         maximum_bytes: u64,
         service: std::ops::Range<u64>,
-        mut cost: impl FnMut(u64) -> Result<ServiceCost, String>,
+        mut cost: impl FnMut(Stage, u64) -> Result<ServiceCost, String>,
     ) -> Result<Vec<CausalServicePacketV1>, String> {
         if self.range_index as usize >= crate::palw_batch_court_v1::MAX_BATCH_RANGES_V1
             || claim == Hash64::default()
@@ -77,7 +77,7 @@ impl BatchResponsePositionV1 {
                 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64
                 + payload
                 + BATCH_RESPONSE_WIRE_OVERHEAD_V1;
-            let cost = cost(minimum)?;
+            let cost = cost(stage, minimum)?;
             if cost.bytes < minimum || cost.controls != 1 || cost.work == 0 {
                 return Err("Batch delivery service cost omits signed control".into());
             }
@@ -186,7 +186,7 @@ fn checked_response_span_v1(
     owned: &std::collections::BTreeSet<[u8; 64]>,
 ) -> Result<(u64, u64), String> {
     let graph = position
-        .reservation_graph_v1(claim, scope, bytes, service.clone(), |bytes| Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 }))?;
+        .reservation_graph_v1(claim, scope, bytes, service.clone(), |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 }))?;
     let slot = |id| {
         book.assigned_daa(&id)
             .filter(|daa| service.contains(daa))
@@ -445,12 +445,12 @@ impl MaterialBatchDeliveryV1 {
         &self,
         release_daa: u64,
         service_before: u64,
-        cost: impl FnMut(u64) -> Result<ServiceCost, String>,
+        mut cost: impl FnMut(u64) -> Result<ServiceCost, String>,
     ) -> Result<Vec<CausalServicePacketV1>, String> {
         if release_daa < self.release_daa || service_before > self.service_before {
             return Err("Batch delivery service interval is outside its accepted demand".into());
         }
-        self.position.reservation_graph_v1(self.claim, self.scope, self.total, release_daa..service_before, cost)
+        self.position.reservation_graph_v1(self.claim, self.scope, self.total, release_daa..service_before, |_, bytes| cost(bytes))
     }
 
     fn check_case_dependencies_v1(&self, nodes: &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal> {
@@ -1191,7 +1191,7 @@ mod tests {
             },
         };
         let cost = |bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
-        let graph = position.reservation_graph_v1(rooted.claim, rooted.scope_id, PART + 1, 11..15, cost).unwrap();
+        let graph = position.reservation_graph_v1(rooted.claim, rooted.scope_id, PART + 1, 11..15, |_, bytes| cost(bytes)).unwrap();
         let mut book = ServiceReservations::new(ServiceCost { bytes: PART * 2, work: 2, io: 2, controls: 2 }).unwrap();
         book.reserve_causal_v1(&graph, 15).unwrap();
         let mut owned = graph.iter().map(|node| node.packet.id).collect::<std::collections::BTreeSet<_>>();
@@ -1233,7 +1233,7 @@ mod tests {
         let position = BatchResponsePositionV1 { demand_ordinal: 7, range_index: 1 };
         let (claim, scope) = (h(1), h(2));
         let cost = |bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
-        let graph = position.reservation_graph_v1(claim, scope, PART + 1, 11..15, cost).unwrap();
+        let graph = position.reservation_graph_v1(claim, scope, PART + 1, 11..15, |_, bytes| cost(bytes)).unwrap();
         let mut book = ServiceReservations::new(ServiceCost { bytes: PART * 2, work: 2, io: 2, controls: 2 }).unwrap();
         book.reserve_causal_v1(&graph, 15).unwrap();
 
