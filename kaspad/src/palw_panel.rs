@@ -8578,7 +8578,7 @@ impl PalwPanelService {
         use std::io::Read;
         let own = crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim);
         let foreign = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
-        for path in [own, foreign, self.fp_retained_replay_path(claim)] {
+        for path in [own, foreign] {
             let Ok(mut file) = std::fs::File::open(&path) else { continue };
             let mut head = vec![0u8; 8192];
             let Ok(n) = file.read(&mut head) else { continue };
@@ -12303,10 +12303,18 @@ impl PalwPanelService {
             // Decision 1's persistence), and it is what an interval-lane seat needs.
             let own_answer = crate::palw_producer::palw_retained_answer_path(dir, &claim);
             let foreign_answer = dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
-            return std::fs::read(own_answer)
-                .ok()
-                .or_else(|| std::fs::read(foreign_answer).ok())
-                .or_else(|| std::fs::read(self.fp_retained_replay_path(&claim)).ok());
+            return std::fs::read(own_answer).ok().or_else(|| std::fs::read(foreign_answer).ok()).or_else(|| {
+                // Authorizing a request and resolving it use separate file
+                // reads. Private replay inputs stay on the local Court path.
+                use std::io::Read;
+                let file = std::fs::File::open(self.fp_retained_replay_path(&claim)).ok()?;
+                if file.metadata().ok()?.len() > PALW_MATERIAL_MAX_BYTES as u64 {
+                    return None;
+                }
+                let mut bytes = Vec::new();
+                file.take(PALW_MATERIAL_MAX_BYTES as u64 + 1).read_to_end(&mut bytes).ok()?;
+                (bytes.len() <= PALW_MATERIAL_MAX_BYTES && !kaspa_p2p_flows::palw_gossip::material_is_private(&bytes)).then_some(bytes)
+            });
         };
         let size = std::fs::metadata(&material_path).ok()?.len();
         // DRILL (ADR-0111): served as if no capture fit the cap, whatever its size.
