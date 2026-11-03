@@ -2554,3 +2554,29 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-range-envelope.p0ElGo/test
 B0 and relay agreed at DAA 19,690, with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-native-ranges-live.CtYRSX/page.json`.
+
+## Batch carrier UTXO-to-Court handoff
+
+The candidate decodes BCT1 from the literal validated transaction.
+It recomputes input minus output from the same populated UTXOs and
+checks the native fee. Existing allocations come out first. The
+resulting temporary handoff contains the decoded carrier, remaining
+budget and exact accepting point. Court can consume it after the UTXO
+entries are dropped. Begin derives its request root from the retained
+demand and can allocate storage rent once. A wrong accepting block,
+underpayment or mismatched request fails before writing material.
+
+The extracted suite passed 31 checks, including fee reconciliation,
+the same split for the decoded handoff and fee projection, rejecting a
+different accepting block at the same DAA, and the existing
+cross-request and underpayment cases. The seeded native test now
+constructs paid BCT1 transactions through signed notice, Open, Begin,
+Part and Finish, with one refused underpaid Begin. This native test has
+not run in the integrated Core. Public lifecycle routing, fee map
+collection and the virtual processor's coinbase call site still need
+a shared prospective gate and integration verification.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-carrier-fee.cqn1sP/tests.log`.
+
+B0 and relay agreed at DAA 19,692. The selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-fees-live.1Mjs9y/page.json`.

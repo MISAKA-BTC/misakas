@@ -33,7 +33,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub(crate) mod batch;
 mod storage_rent;
 pub use storage_rent::{
-    MaterialBatchCarrierFeeV1, MaterialBatchStorageDebitV1, material_batch_carrier_fee_v1, material_batch_storage_rent_v1,
+    MaterialBatchCarrierFeeV1, MaterialBatchStorageDebitV1, ValidatedBatchCarrierV1, material_batch_carrier_fee_v1, material_batch_storage_rent_v1,
 };
 
 pub const MATERIAL_INTAKE_CONTEXT_V1: &[u8] = b"misaka-palw/material-intake/v1/mldsa87";

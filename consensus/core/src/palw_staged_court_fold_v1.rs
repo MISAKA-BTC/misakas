@@ -1094,6 +1094,32 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
+    /// Consume the native UTXO handoff at the exact accepting point.
+    /// The caller owns the ruleset gate and uses the same fee projection
+    /// for Round, template and coinbase accounting.
+    pub(super) fn apply_batch_court_carrier_v1(
+        &mut self,
+        at: &PalwBlockContextV2,
+        carrier: crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_batch_court_v1::carriage::BatchCourtWireV1;
+        use crate::palw_court_shared_material_intake_v1::MaterialActionV1;
+
+        let wire = carrier.wire_at_v1(at).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let mut request_root = None;
+        if let BatchCourtWireV1::Respond(control) = wire
+            && matches!(control.intake.action, MaterialActionV1::Begin { .. })
+        {
+            let key = PalwStagedCourtKeyV1::CourtBatchDemand(control.intake.claim, control.demand_ordinal);
+            let Some(PalwStagedCourtRowV1::CourtBatchDemand(demand)) = self.state.staged_court_row_v1(&key) else {
+                return Err(PalwStateV2Error::CarriageInconsistent("Batch Begin has no accepted demand".into()));
+            };
+            request_root = Some(demand.request_root);
+        }
+        let (wire, debit) = carrier.into_fold_v1(request_root).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        self.apply_batch_court_wire_v1(at, &wire, debit.as_ref())
+    }
+
     /// Native candidate entry for an already accepted Batch carrier.
     pub(super) fn apply_batch_court_wire_v1(
         &mut self,

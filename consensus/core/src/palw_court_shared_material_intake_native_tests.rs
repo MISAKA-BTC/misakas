@@ -700,7 +700,7 @@ fn material_intake_measure_wall_time_and_retained_bytes() {
 #[test]
 fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     use crate::palw_batch_court_v1::carriage::{
-        BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1,
+        BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1,
     };
     use crate::palw_batch_court_v1::rooted::batch_case_id_v1;
     use crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
@@ -763,7 +763,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     use batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1};
     let window = open.demand.case_window;
     let terminal = Hash64::from_u64_word(997).as_bytes();
-    let storage = material_test_schedule();
+    let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
+    set_material_intake_test_schedule_v1(Some(storage));
     let mut service = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(state.court_service_state_v1().unwrap());
     service.state.book = ServiceReservations::new(cost(64 * 1024)).unwrap();
     service.state.claims.get_mut(&claim).unwrap().packet_ids.clear();
@@ -783,20 +784,41 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
 
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     super::super::palw_court_shared_tir_fold_v1::request(&mut b, &notice_at, claim, &notice).unwrap();
+    use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry, ValidatedTransaction};
+    let apply = |b: &mut TransitionBuilder<'_>, point: &PalwBlockContextV2, wire: &BatchCourtWireV1, fee, preceding| {
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(wire).unwrap());
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(TransactionOutpoint::new(point.block, 0), vec![], 0, 0)],
+            vec![TransactionOutput::new(1, ScriptPublicKey::default())],
+            0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload,
+        );
+        let entry = UtxoEntry::new(1 + fee, ScriptPublicKey::default(), 1, false);
+        let native = ValidatedTransaction::new(PopulatedTransaction::new(&tx, vec![entry]), fee);
+        let accepted = ValidatedBatchCarrierV1::prepare_v1(&native, preceding, *point).unwrap().unwrap();
+        let split = accepted.fee_v1();
+        assert_eq!(split, material_batch_carrier_fee_v1(&tx, fee - preceding).unwrap());
+        b.apply_batch_court_carrier_v1(point, accepted).map(|()| split)
+    };
     let opening = BatchCourtWireV1::Open(open);
-    b.apply_batch_court_wire_v1(&open_at, &opening, None).unwrap();
+    apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     let after_open = b.state.state_root();
-    b.apply_batch_court_wire_v1(&open_at, &opening, None).unwrap();
+    apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert_eq!(b.state.state_root(), after_open);
-    b.apply_batch_court_wire_v1(&begin_at, &begin, None).unwrap();
+    let rent = body.len() as u64 * storage.sompi_per_byte;
+    assert!(apply(&mut b, &begin_at, &begin, rent, 1).is_err());
+    assert_eq!(b.state.state_root(), after_open);
+    let fee = apply(&mut b, &begin_at, &begin, rent + 2, 1).unwrap();
+    assert_eq!((fee.withheld_storage_rent, fee.collectible_fee), (rent, 1));
     let after_begin = b.state.state_root();
-    b.apply_batch_court_wire_v1(&begin_at, &begin, None).unwrap();
+    apply(&mut b, &begin_at, &begin, rent + 2, 1).unwrap();
     let conflicting = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: Hash64::from_u64_word(999) });
-    assert!(b.apply_batch_court_wire_v1(&begin_at, &conflicting, None).is_err());
+    assert!(apply(&mut b, &begin_at, &conflicting, rent + 2, 1).is_err());
     assert_eq!(b.state.state_root(), after_begin);
     let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
-    b.apply_batch_court_wire_v1(&at(frame, NOTICE_WINDOW_DAA + 3), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), None).unwrap();
-    b.apply_batch_court_wire_v1(&at(frame, NOTICE_WINDOW_DAA + 4), &respond(MaterialActionV1::Finish { draft_id }), None).unwrap();
+    apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 3), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
+    apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 4), &respond(MaterialActionV1::Finish { draft_id }), 1, 0).unwrap();
     let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
     let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
     assert_eq!(material.bytes, body);

@@ -6,7 +6,10 @@ use super::{
 use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchMaterialControlV1, decode_batch_court_carrier_v1};
 use crate::palw_court_carrier_fee_v1::CarrierFeeBudgetV1;
 use crate::palw_state_v2::PalwBlockContextV2;
-use crate::{Hash64, tx::Transaction};
+use crate::{
+    Hash64,
+    tx::{Transaction, ValidatedTransaction},
+};
 
 /// Quote the existing per-byte storage rate for a V3 declaration only.
 pub fn material_batch_storage_rent_v1(intake: &SignedMaterialIntakeV1) -> Result<Option<u64>, String> {
@@ -41,14 +44,120 @@ impl MaterialBatchCarrierFeeV1 {
     }
 }
 
+/// Decoded once from a literal carrier. No state or acceptance is implied.
+struct PreparedBatchCarrierV1 {
+    carrier: crate::TransactionId,
+    wire: BatchCourtWireV1,
+    storage_rent: Option<u64>,
+}
+
+impl PreparedBatchCarrierV1 {
+    fn decode_v1(carrier: &Transaction) -> Result<Option<Self>, String> {
+        let Some(wire) = decode_batch_court_carrier_v1(carrier)? else { return Ok(None) };
+        if !carrier.id_is_current() {
+            return Err("Batch carrier transaction identity is stale".into());
+        }
+        let storage_rent = match &wire {
+            BatchCourtWireV1::Respond(control) => material_batch_storage_rent_v1(&control.intake)?,
+            BatchCourtWireV1::Open(_) => None,
+        };
+        Ok(Some(Self { carrier: carrier.id(), wire, storage_rent }))
+    }
+
+    fn wire_v1(&self) -> &BatchCourtWireV1 {
+        &self.wire
+    }
+
+    fn split_v1(&self, available_fee: u64) -> MaterialBatchCarrierFeeV1 {
+        MaterialBatchCarrierFeeV1::split(self.storage_rent.unwrap_or(0), available_fee)
+    }
+
+    fn allocate_v1(
+        &self,
+        budget: &mut CarrierFeeBudgetV1,
+        request_root: Hash64,
+        at: PalwBlockContextV2,
+    ) -> Result<Option<MaterialBatchStorageDebitV1>, String> {
+        if self.carrier != budget.carrier_v1() {
+            return Err("Batch storage rent budget belongs to another carrier".into());
+        }
+        let (Some(amount), BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal, intake })) =
+            (self.storage_rent, &self.wire)
+        else {
+            return Ok(None);
+        };
+        if !self.split_v1(budget.remaining_v1()).pays_storage_rent_v1() {
+            return Err("Batch storage rent carrier has insufficient available fee".into());
+        }
+        let declaration = declaration_id(intake, request_root, *demand_ordinal)?;
+        // One allocation per physical carrier, even if a caller supplies
+        // another request root for the same transaction.
+        let purpose =
+            crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-storage-fee-purpose/v1", &self.carrier)?;
+        budget.allocate_v1(purpose.as_bytes(), amount).map_err(|err| format!("Batch storage rent: {err:?}"))?;
+        Ok(Some(MaterialBatchStorageDebitV1 { at, declaration, amount }))
+    }
+}
+
+/// Ephemeral handoff for a ruleset that has accepted a Batch transaction.
+/// The UTXO walk constructs it before dropping the input view. The Court
+/// fold consumes it at the same accepting point without retaining UTXOs.
+pub struct ValidatedBatchCarrierV1 {
+    batch: PreparedBatchCarrierV1,
+    budget: CarrierFeeBudgetV1,
+    at: PalwBlockContextV2,
+}
+
+impl ValidatedBatchCarrierV1 {
+    pub fn prepare_v1(
+        validated: &ValidatedTransaction<'_>,
+        preceding_fee: u64,
+        at: PalwBlockContextV2,
+    ) -> Result<Option<Self>, String> {
+        let Some(batch) = PreparedBatchCarrierV1::decode_v1(validated.tx)? else { return Ok(None) };
+        let fee_error = |err| format!("Batch native carrier fee: {err:?}");
+        let mut budget = CarrierFeeBudgetV1::from_validated_v1(validated).map_err(fee_error)?;
+        if preceding_fee != 0 {
+            let identity =
+                crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-preceding-fee/v1", &validated.tx.id())?;
+            budget.allocate_v1(identity.as_bytes(), preceding_fee).map_err(fee_error)?;
+        }
+        Ok(Some(Self { batch, budget, at }))
+    }
+
+    pub fn fee_v1(&self) -> MaterialBatchCarrierFeeV1 {
+        self.batch.split_v1(self.budget.remaining_v1())
+    }
+
+    pub(crate) fn wire_at_v1(&self, at: &PalwBlockContextV2) -> Result<&BatchCourtWireV1, String> {
+        if self.at != *at {
+            return Err("Batch carrier accepting point differs from its UTXO handoff".into());
+        }
+        Ok(self.batch.wire_v1())
+    }
+
+    pub(crate) fn into_fold_v1(
+        mut self,
+        request_root: Option<Hash64>,
+    ) -> Result<(BatchCourtWireV1, Option<MaterialBatchStorageDebitV1>), String> {
+        if self.batch.storage_rent.is_some() != request_root.is_some() {
+            return Err("Batch storage rent handoff requires the accepted request root for Begin".into());
+        }
+        let debit = match request_root {
+            Some(root) => self.batch.allocate_v1(&mut self.budget, root, self.at)?,
+            None => None,
+        };
+        Ok((self.batch.wire, debit))
+    }
+}
+
 /// Shared fee accounting for an enabled V3 route. Callers supply the fee
 /// remaining after mandatory bond burn and all preceding fee allocations.
 pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) -> Result<MaterialBatchCarrierFeeV1, String> {
-    let rent = match decode_batch_court_carrier_v1(carrier)? {
-        Some(BatchCourtWireV1::Respond(control)) => material_batch_storage_rent_v1(&control.intake)?.unwrap_or(0),
-        _ => 0,
-    };
-    Ok(MaterialBatchCarrierFeeV1::split(rent, available_fee))
+    Ok(match PreparedBatchCarrierV1::decode_v1(carrier)? {
+        Some(batch) => batch.split_v1(available_fee),
+        None => MaterialBatchCarrierFeeV1::split(0, available_fee),
+    })
 }
 
 /// One storage debit allocated from the same native budget as other costs.
@@ -68,26 +177,8 @@ impl MaterialBatchStorageDebitV1 {
         request_root: Hash64,
         at: PalwBlockContextV2,
     ) -> Result<Self, String> {
-        if carrier.id() != budget.carrier_v1() || !carrier.id_is_current() {
-            return Err("Batch storage rent budget belongs to another carrier".into());
-        }
-        let Some(BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal, intake })) =
-            decode_batch_court_carrier_v1(carrier)?
-        else {
-            return Err("Batch storage rent carrier has another purpose".into());
-        };
-        let amount = material_batch_storage_rent_v1(&intake)?.ok_or("Batch storage rent carrier is not a V3 Begin")?;
-        let split = MaterialBatchCarrierFeeV1::split(amount, budget.remaining_v1());
-        if !split.pays_storage_rent_v1() {
-            return Err("Batch storage rent carrier has insufficient available fee".into());
-        }
-        let declaration = declaration_id(&intake, request_root, demand_ordinal)?;
-        // The same physical carrier has only one allocation for this purpose,
-        // even if a caller mistakenly supplies another request identity.
-        let purpose =
-            crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-storage-fee-purpose/v1", &carrier.id())?;
-        budget.allocate_v1(purpose.as_bytes(), amount).map_err(|err| format!("Batch storage rent: {err:?}"))?;
-        Ok(Self { at, declaration, amount })
+        let prepared = PreparedBatchCarrierV1::decode_v1(carrier)?.ok_or("Batch storage rent carrier has another purpose")?;
+        prepared.allocate_v1(budget, request_root, at)?.ok_or_else(|| "Batch storage rent carrier is not a V3 Begin".into())
     }
 
     pub fn amount_v1(&self) -> u64 {
@@ -126,7 +217,10 @@ mod tests {
     use crate::palw_court_shared_material_intake_v1::MaterialTargetV1;
     use crate::palw_state_v2::PalwBondKeyV2;
     use crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
-    use crate::tx::{PopulatedTransaction, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
+    use crate::tx::{
+        PopulatedTransaction, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
+        ValidatedTransaction,
+    };
 
     #[test]
     fn batch_storage_rent_uses_one_exact_accepted_carrier_allocation() {
@@ -157,9 +251,9 @@ mod tests {
             payload,
         );
         let budget = |fee| {
-            CarrierFeeBudgetV1::from_populated_v1(&PopulatedTransaction::new(
-                &tx,
-                vec![UtxoEntry::new(output + fee, ScriptPublicKey::default(), 1, false)],
+            CarrierFeeBudgetV1::from_validated_v1(&ValidatedTransaction::new(
+                PopulatedTransaction::new(&tx, vec![UtxoEntry::new(output + fee, ScriptPublicKey::default(), 1, false)]),
+                fee,
             ))
             .unwrap()
         };
@@ -172,16 +266,29 @@ mod tests {
         let full_split = material_batch_carrier_fee_v1(&tx, 2 * amount).unwrap();
         assert!(full_split.pays_storage_rent_v1());
         assert_eq!((full_split.withheld_storage_rent, full_split.collectible_fee), (amount, amount));
+        let native = ValidatedTransaction::new(
+            PopulatedTransaction::new(&tx, vec![UtxoEntry::new(output + 2 * amount + 1, ScriptPublicKey::default(), 1, false)]),
+            2 * amount + 1,
+        );
+        let handoff = ValidatedBatchCarrierV1::prepare_v1(&native, 1, at).unwrap().unwrap();
+        assert_eq!(handoff.fee_v1(), full_split);
+        assert!(handoff.wire_at_v1(&at).is_ok());
+        assert!(handoff.wire_at_v1(&PalwBlockContextV2 { block: other_request, ..at }).is_err());
+        assert!(handoff.into_fold_v1(None).is_err());
+        let handoff = ValidatedBatchCarrierV1::prepare_v1(&native, 1, at).unwrap().unwrap();
+        let (_, debit) = handoff.into_fold_v1(Some(request)).unwrap();
+        assert!(debit.unwrap().check_v1(&intake, request, demand_ordinal, &at, amount).is_ok());
+        let prepared = PreparedBatchCarrierV1::decode_v1(&tx).unwrap().unwrap();
         let mut short = budget(amount);
         short.allocate_v1([12; 64], 1).unwrap();
-        assert!(MaterialBatchStorageDebitV1::allocate_v1(&tx, &mut short, request, at).is_err());
+        assert!(prepared.allocate_v1(&mut short, request, at).is_err());
         assert_eq!(short.remaining_v1(), amount - 1);
         let mut fees = budget(2 * amount + 1);
         fees.allocate_v1([12; 64], 1).unwrap();
-        let paid = MaterialBatchStorageDebitV1::allocate_v1(&tx, &mut fees, request, at).unwrap();
+        let paid = prepared.allocate_v1(&mut fees, request, at).unwrap().unwrap();
         assert_eq!(paid.amount_v1(), amount);
         assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
-        assert!(MaterialBatchStorageDebitV1::allocate_v1(&tx, &mut fees, other_request, at).is_err());
+        assert!(prepared.allocate_v1(&mut fees, other_request, at).is_err());
         assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
         assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount).is_ok());
         assert!(paid.check_v1(&intake, other_request, demand_ordinal, &at, amount).is_err());
