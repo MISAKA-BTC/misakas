@@ -451,8 +451,14 @@ impl NativeAssignedCaseCacheV2 {
             .accepted_daa
             .checked_add(self.material.certification_policy.prosecution_window_daa)
             .ok_or_else(|| refuse("finite actual Final prosecution"))?;
-        if latest > a.bundle.terms.reserve_until_daa {
-            return Err(refuse("actual Final exceeds original liability owner"));
+        // The native release path starts strictly after the last decision.
+        // Preserve the entire original refund window after that point.
+        let refund_before = latest
+            .checked_add(1)
+            .and_then(|daa| daa.max(bundle.case.maturity_daa).checked_add(self.material.assignment_policy.refund_window_daa))
+            .ok_or_else(|| refuse("finite actual Final refund window"))?;
+        if refund_before > a.bundle.terms.reserve_until_daa {
+            return Err(refuse("actual Final exceeds original liability and refund reservation"));
         }
         let session = NativeAssignedCaseSessionV2 {
             root: self.root,
@@ -1125,8 +1131,8 @@ fn prepare_initial_case_checker_v2(
             source_ledger,
         )
         .map_err(refuse)?;
-    if bundle.case.maturity_daa < accepted_daa
-        || bundle.case.maturity_daa >= row.bundle.terms.reserve_until_daa
+    horizon.check_case_maturity_v2(accepted_daa, bundle.case.maturity_daa, policy.refund_window_daa).map_err(refuse)?;
+    if bundle.case.maturity_daa >= row.bundle.terms.reserve_until_daa
         || bundle.funding.basis != payload.basis
         || payload.basis.required_fee < horizon.case_money.fee
         || payload.basis.required_capital < horizon.case_money.capital

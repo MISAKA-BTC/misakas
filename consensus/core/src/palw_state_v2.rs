@@ -15210,9 +15210,6 @@ fn apply_palw_transition_v7_inner(
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    if !extras.assignment_settlements.is_empty() {
-        return Err(PalwStateV2Error::DeltaMismatch("tentative Assignment UTXO previews cannot drive rooted settlement"));
-    }
     if extras.positive_assignment_actions.is_empty() {
         for object in accepted_objects {
             apply_object(&mut builder, ctx, object)?;
@@ -15828,6 +15825,7 @@ fn apply_palw_transition_v7_inner(
     let materials =
         PositiveAssignmentMaterialOutcomeV2 { records: builder.assignment_materials, case_records: builder.assignment_case_materials };
     materials.validate_v2(&delta.entries)?;
+    materials.check_utxo_settlements_v2(&delta.entries, &extras.assignment_settlements)?;
     builder
         .native_reservation
         .finish_transition_with_assignment_materials_v2(builder.state, delta, merged_skips, materials)
@@ -20888,8 +20886,8 @@ pub struct PalwTransitionExtrasV1 {
     /// refuses the block). Empty below `palw_tir_public_conviction_v1` and wherever no row exists — every network today — so
     /// `Default` is byte-identical to the transition before the field existed.
     pub funded_escrow_settlements: Vec<crate::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
-    /// Actual ordinary UTXO spends qualified against current rooted Assignment
-    /// entitlements; the canonical writer CASes and journals these in the same batch.
+    /// Ordinary UTXO spends qualified by acceptance. After raw execution, the
+    /// fold checks that each has the same funding mutation and journal record.
     pub assignment_settlements: Vec<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
     /// Raw native actions replayed at exact positions in the accepted object
     /// fold. This is not a vector of prepared or previously accepted rows.
@@ -25557,7 +25555,7 @@ impl PalwStateCarriageV2 {
                         .map(|(key, row)| (key.clone(), row.clone()))
                         .collect(),
                     positive_job_owners_v2: route.positive_job_owners_v2.clone(),
-                    positive_draw_reservations_v2: route.positive_draw_reservations_v2.clone(),
+                    positive_gate_c_schedule_v2: route.positive_gate_c_schedule_v2.clone(),
                     ledger_cache: Default::default(),
                 }
             }),

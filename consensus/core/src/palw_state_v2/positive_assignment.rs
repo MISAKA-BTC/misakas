@@ -186,6 +186,11 @@ impl TransitionBuilder<'_> {
         }
         let key = key.encode();
         let value = NativeRowValue::new(body).map_err(refusal)?;
+        if let NativeRowBody::Case(case) = &value.body
+            && crate::palw_positive_certification_v2::positive_case_ends_certification_v2(case)
+        {
+            return self.write_terminal_assigned_case_and_withdraw_v2(&key, &value, case);
+        }
         self.write_kernel_row_encoded_v1(KERNEL_AUX_TABLE, &key, Some(&value))
     }
     pub(super) fn append_assignment_frame_v2(
@@ -218,7 +223,7 @@ impl TransitionBuilder<'_> {
             None => Err(refusal("missing accepted Assignment journal head")),
         }
     }
-    fn check_assignment_next_journal_extent_v2(
+    pub(super) fn check_assignment_next_journal_extent_v2(
         &self,
         row: &AssignmentRow,
         head: &AssignmentJournalHeadRow,
@@ -628,7 +633,10 @@ impl TransitionBuilder<'_> {
         // Recheck the exact actual C carrier and the original capital quote.
         // The retained rows already own the pending slot. Their canonical
         // update moves it under the Case reservation in the same checkpoint.
-        let relay = self.check_assigned_result_carriage_v2(ctx, &action, expected, &carried)?;
+        let (relay, horizon) = self.check_assigned_result_carriage_v2(ctx, &action, expected, &carried)?;
+        horizon
+            .check_case_maturity_v2(ctx.daa_score, plan.case.maturity_daa, plan.material.assignment_policy.refund_window_daa)
+            .map_err(refusal)?;
         if relay.is_some() && (plan.case.reservation.origin != origin || plan.case.reservation.digest == Digest([0; 64])) {
             return Err(refusal("initial Case relay requires the Case reservation at this acceptance point"));
         }
@@ -1688,7 +1696,10 @@ impl TransitionBuilder<'_> {
         action: &PositiveAssignmentRawActionV2,
         row: &AssignmentRow,
         payload: &crate::palw_positive_court_v2::coordinator::assignment_body::AssignedResultPayloadV2,
-    ) -> Result<Option<CheckedInitialFundingRelayV2>, PalwStateV2Error> {
+    ) -> Result<
+        (Option<CheckedInitialFundingRelayV2>, crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2),
+        PalwStateV2Error,
+    > {
         use crate::{
             palw_native_resource_v1::reserve_native_requests_v1,
             palw_positive_assignment_funds_v2::qualify_assigned_case_funding_output_v2,
@@ -1852,6 +1863,6 @@ impl TransitionBuilder<'_> {
         if payload.basis.required_fee < horizon.case_money.fee || payload.basis.required_capital < horizon.case_money.capital {
             return Err(refusal("Case funding does not cover the original native quote"));
         }
-        Ok(relay)
+        Ok((relay, horizon))
     }
 }
