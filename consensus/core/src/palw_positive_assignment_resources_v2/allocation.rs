@@ -172,9 +172,19 @@ fn prompt_requests(tokens: u64, form: PalwPromptIdsFormV1) -> Result<u64, Assign
     Ok(q.bytes_v1())
 }
 
-/// The real allocation lease stays alive until after EVERY owned derived
-/// output drops. No Deserialize, Clone, DerefMut, into_inner or lease extraction
-/// exists. Borrowing outputs cannot outlive this owner.
+/// The retained source catalog keeps its own share of the derived allocation lease.
+pub(crate) struct ReservedAssignmentSourceGeometryV2 {
+    pub(crate) geometry: crate::palw_positive_source_geometry_v2::TirSourceGeometryV2,
+    _lease: NativeDemandLeaseV1,
+}
+impl ReservedAssignmentSourceGeometryV2 {
+    pub(crate) fn heap_bytes(&self) -> u64 {
+        self._lease.memory_v1()
+    }
+}
+
+/// Borrowed derived outputs stay within this owner. Source geometry can be
+/// transferred into its own owner together with the reserved memory.
 pub struct ReservedAssignmentDerivedResourcesV2 {
     resources: AssignmentDerivedResourcesV2,
     quote: AssignmentDerivedAllocationQuoteV2,
@@ -205,6 +215,20 @@ impl ReservedAssignmentDerivedResourcesV2 {
     }
     pub fn resources(&self) -> &AssignmentDerivedResourcesV2 {
         &self.resources
+    }
+    pub(crate) fn into_source_geometry_v2(
+        mut self,
+        result: &misaka_palw_positive_contract::messages::MinerResultCommit,
+    ) -> Result<ReservedAssignmentSourceGeometryV2, AssignmentResourceErrorV2> {
+        self.resources.binding.check_result(result)?;
+        let retained = self
+            .quote
+            .source_program_and_validator
+            .checked_add(self.quote.retained_inventory_and_instance_analysis)
+            .ok_or(AssignmentResourceErrorV2::Budget)?;
+        let lease = self._lease.split_memory_v1(retained).map_err(native)?;
+        let geometry = crate::palw_positive_source_geometry_v2::TirSourceGeometryV2::bind_catalog_v2(result, self.resources.source)?;
+        Ok(ReservedAssignmentSourceGeometryV2 { geometry, _lease: lease })
     }
     pub fn allocation_quote(&self) -> AssignmentDerivedAllocationQuoteV2 {
         self.quote

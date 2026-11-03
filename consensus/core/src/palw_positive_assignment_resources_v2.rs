@@ -511,4 +511,5 @@ impl AssignmentDerivedResourcesV2 {
 }
 
 mod allocation;
+pub(crate) use allocation::ReservedAssignmentSourceGeometryV2;
 pub use allocation::{AssignmentDerivedAllocationQuoteV2, ReservedAssignmentDerivedResourcesV2};

@@ -172,6 +172,18 @@ impl TirSourceGeometryV2 {
             return Err(PositiveSourceGeometryErrorV2::Binding);
         }
         let catalog = TirSourceCatalogV2::derive(class, registered, registered_artifact, job, network_prompt_form, limits)?;
+        Self::bind_catalog_v2(result, catalog)
+    }
+
+    /// Bind a catalog already derived from the independently authenticated
+    /// Assignment job. The native caller must have checked the full Result.
+    pub(crate) fn bind_catalog_v2(
+        result: &MinerResultCommit,
+        catalog: TirSourceCatalogV2,
+    ) -> Result<Self, PositiveSourceGeometryErrorV2> {
+        if result.artifact != catalog.artifact || result.input != catalog.input || result.prefill != catalog.prefill {
+            return Err(PositiveSourceGeometryErrorV2::Binding);
+        }
         Ok(Self { result: result.id(), case: result.case_id(), service: result.service_contract, catalog })
     }
     pub fn result_id(&self) -> ResultId {

@@ -32,7 +32,9 @@ use misaka_palw_positive_contract::{
     native::NativeRowKey,
     rows::{AcceptedMaterial, AcceptedOrigin, CaseRow, JournalHeadRow, NativeRowBody},
 };
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
+
+mod source;
 
 fn refuse(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(format!("assigned Case: {why:?}"))
@@ -163,7 +165,9 @@ struct NativeAssignedCourtV2 {
     court: ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
     facts: Vec<LocalCheckedCourtFactV2>,
     check_limits: crate::palw_positive_check_v2::CheckLimits,
-    source_units: [u64; 2],
+    source: crate::palw_positive_assignment_resources_v2::ReservedAssignmentSourceGeometryV2,
+    source_requests:
+        BTreeMap<misaka_palw_positive_contract::identity::RequestId, crate::palw_positive_source_v2::RetainedSourceRequestV2>,
     derived_heap: u64,
     checker_heap: u64,
     available_heap: u64,
@@ -1172,17 +1176,18 @@ fn prepare_initial_case_checker_v2(
     if facts.capacity() > fact_count {
         return Err(capacity());
     }
+    let check_limits = resources.check_limits();
+    let source = reserved.into_source_geometry_v2(&payload.result).map_err(refuse)?;
+    let checker_heap = checker_heap.checked_add(source.heap_bytes()).ok_or_else(capacity)?;
     Ok(NativeAssignedCourtV2 {
         prepared,
         record_limits,
         authority,
         court,
         facts,
-        check_limits: resources.check_limits(),
-        source_units: [
-            resources.source().source_units(misaka_palw_positive_contract::messages::SourceKind::ArtifactInventory),
-            resources.source().source_units(misaka_palw_positive_contract::messages::SourceKind::Input),
-        ],
+        check_limits,
+        source,
+        source_requests: BTreeMap::new(),
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1243,13 +1248,10 @@ impl NativeAssignedCourtV2 {
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
-        use misaka_palw_positive_contract::{
-            assignment::{
-                control_material::AssignmentControlViewV2,
-                journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
-                open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
-            },
-            messages::SourceKind,
+        use misaka_palw_positive_contract::assignment::{
+            control_material::AssignmentControlViewV2,
+            journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
+            open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
         };
 
         let PositiveNativeOperationV2::SourceRequest { request, requester, signature } = &body.operation else {
@@ -1257,22 +1259,16 @@ impl NativeAssignedCourtV2 {
         };
         let result = self.court.result();
         let material = backing.material();
-        let (root, units) = match request.kind {
-            SourceKind::ArtifactInventory => (result.artifact, self.source_units[0]),
-            SourceKind::Input => (result.input, self.source_units[1]),
-        };
         if prior.case != result.case_id()
             || prior.result != result.id()
             || prior.service.id() != result.service_contract
-            || request.case != prior.case
-            || request.contract != prior.service.id()
-            || request.source != root
             || origin.accepted_daa >= prior.service.deadline.min(assignment.source_consent.service_before_daa)
-            || request.end.checked_sub(request.first).is_none_or(|n| n > material.native_preimages.source_policy.max_units_per_request)
         {
             return Err(refuse("source request differs from the accepted Case duty"));
         }
-        request.validate(units).map_err(refuse)?;
+        let geometry = &self.source.geometry;
+        geometry.validate_request(request).map_err(refuse)?;
+        let units = geometry.source_units(request.kind);
 
         let schedule = &material.native_preimages.source_policy.work;
         let role_work =
@@ -1427,7 +1423,7 @@ fn replay_assigned_court_history_v2(
     let material = backing.material();
     let pin = *backing.pin();
     let limits = case_replay_body_limits_v2(&material.positive_policy);
-    for record in backing.records().iter().skip(1) {
+    for (index, record) in backing.records().iter().enumerate().skip(1) {
         let carriage = record.carriage();
         let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
         let _body = machine.reserve_operation_v2(body_bytes, material)?;
@@ -1451,6 +1447,17 @@ fn replay_assigned_court_history_v2(
         };
         check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
         machine.check_source_request_v2(backing, prefix, &a, &prior, carriage.origin(), &body)?;
+        machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
+        if let Op::SourceResponse { .. } = &body.operation {
+            let response = machine
+                .check_source_response_v2(prefix, &a, material, &prior, carriage.origin(), &body, _body.memory_v1())?
+                .ok_or_else(|| refuse("duplicate source delivery changed the rooted journal"))?;
+            let after = match backing.records().get(index + 1) {
+                Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                None => state,
+            };
+            response.check_committed(after, &prior)?;
+        }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
         }
@@ -1518,6 +1525,12 @@ impl TransitionBuilder<'_> {
         }
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
         machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
+        if matches!(
+            &body.operation,
+            crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::SourceResponse { .. }
+        ) {
+            machine.check_source_response_v2(&self.state, &current_assignment, material, &prior, origin, body, _body.memory_v1())?;
+        }
         let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
         let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
             .map_err(refuse)?;
