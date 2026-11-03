@@ -27,6 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 type E = NativeDecodeErrorV1<String>;
 type RootRanges = NativeRetainedV1<BTreeMap<Hash64, (MaterialTargetV1, u64)>>;
+pub(crate) const MAX_BOOKED_NUMERICAL_RANGES_V1: usize = 4_096;
 
 /// Maximum byte cap per canonical range position across all numerical roots.
 /// This covers one selected root's inputs, including the root leaf. It does
@@ -72,6 +73,13 @@ impl NumericalBatchRootDemandV1 {
         &self.ranges
     }
 
+    pub(crate) fn check_signed_ranges_v1(&self, ranges: &[BatchRangeV1]) -> Result<(), String> {
+        check_declared_ranges_v1(
+            self.ranges.iter().map(|(target, bound)| Ok((target.id_v1(self.claim)?, *bound))),
+            ranges,
+        )
+    }
+
     /// Build the unsigned carrier for the accepted notice. Actual encoded
     /// body lengths come from the responder and must match the selected targets.
     pub(crate) fn quote_open_v1(
@@ -100,6 +108,24 @@ impl NumericalBatchRootDemandV1 {
         let open = quote_batch_open_v1(state, self.claim, notice, self.ordinal, ranges).map_err(E::Decode)?;
         Ok(NativeRetainedV1::from_owner_reserved_v1(open, lease))
     }
+}
+
+fn check_declared_ranges_v1(
+    planned: impl ExactSizeIterator<Item = Result<(Hash64, u64), String>>,
+    ranges: &[BatchRangeV1],
+) -> Result<(), String> {
+    if planned.len() != ranges.len() {
+        return Err("numerical Batch Open must name every booked target".into());
+    }
+    for (expected, range) in planned.zip(ranges) {
+        let (id, maximum) = expected?;
+        if id != range.id || range.bytes == 0 || u64::from(range.bytes) > maximum
+            || range.authentication != BatchRangeAuthenticationV1::WholeRange
+        {
+            return Err("numerical Batch Open substitutes a target, length or authentication".into());
+        }
+    }
+    Ok(())
 }
 
 fn check_material_lengths_v1<T: Eq>(planned: &[(T, u64)], actual: &[(T, u64)]) -> Result<(), String> {
@@ -157,6 +183,19 @@ pub fn quote_numerical_batch_open_v1(
         return Err(E::Decode("numerical Batch opening slot has passed".into()));
     }
 
+    let demand = numerical_demand_from_source_v1(state, context, &binding.packet_ids, leaf, demand_index, maximum_ranges)?;
+    demand.quote_open_v1(state, notice, lengths)
+}
+
+pub(crate) fn numerical_demand_from_source_v1(
+    state: &PalwChainStateV2,
+    context: &crate::palw_court_shared_tir_state_v1::SharedTirContextV1,
+    owned: &BTreeSet<[u8; 64]>,
+    leaf: u64,
+    demand_index: usize,
+    maximum_ranges: usize,
+) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
+    let claim = context.claim;
     let frame = super::super::frame_of(state, claim).map_err(E::Decode)?;
     let class = frame.original_v1().job.class_id;
     let record = state.tir_class_v1(&class).ok_or_else(|| E::Decode("numerical Batch class is absent".into()))?;
@@ -188,24 +227,24 @@ pub fn quote_numerical_batch_open_v1(
             NativeDecodeErrorV1::Decode(why) => E::Decode(why.to_string()),
             NativeDecodeErrorV1::Resource(why) => E::Resource(why),
         })?;
-    let demand = if context.batch_notice_only_v1() {
+    if context.batch_notice_only_v1() {
         let set = TirSharedRequestSetV1::new(frame, &source, context.profile_id).map_err(E::Decode)?;
         if set.scope_id().map_err(E::Decode)? != context.scope_id {
             return Err(E::Decode("numerical Batch source differs from its reserved scope".into()));
         }
+        let maximum_ranges = maximum_ranges.min(MAX_BOOKED_NUMERICAL_RANGES_V1);
         let ranges = selected_root_ranges_v1(frame, &source, &set, record, layout, &program, streaming, leaf, maximum_ranges)?;
         let span = booked_range_span_v1(ranges.len(), demand_index, |ordinal, index| {
             let position = super::BatchResponsePositionV1 { demand_ordinal: ordinal as u64, range_index: index as u32 };
-            Ok(binding.packet_ids.contains(&position.packet_id(claim, context.scope_id, super::Stage::Begin)?))
+            Ok(owned.contains(&position.packet_id(claim, context.scope_id, super::Stage::Begin)?))
         })
         .map_err(E::Decode)?;
-        retain_root_demand_v1(claim, context.scope_id, &ranges, demand_index, span)?
+        retain_root_demand_v1(claim, context.scope_id, &ranges, demand_index, span)
     } else {
         numerical_batch_streaming_demand_v1(
             frame, &source, record, layout, &program, context.profile_id, streaming, maximum_ranges, leaf, demand_index,
-        )?
-    };
-    demand.quote_open_v1(state, notice, lengths)
+        )
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -615,7 +654,25 @@ fn root_ranges_v1(
 
 #[cfg(test)]
 mod tests {
-    use super::{booked_range_span_v1, check_material_lengths_v1, fold_maximums, partition_maximums_v1, root_demand_span_v1};
+    use super::{booked_range_span_v1, check_declared_ranges_v1, check_material_lengths_v1, fold_maximums, partition_maximums_v1, root_demand_span_v1};
+
+    #[test]
+    fn signed_ranges_bind_the_target_identity_size_and_authentication() {
+        use crate::{Hash64, palw_batch_court_v1::{BatchRangeAuthenticationV1, BatchRangeV1}};
+        let id = Hash64::from_u64_word(1);
+        let good = BatchRangeV1 { id, bytes: 7, authentication: BatchRangeAuthenticationV1::WholeRange };
+        let check = |ranges: &[BatchRangeV1]| check_declared_ranges_v1([Ok((id, 8))].into_iter(), ranges);
+        assert!(check(&[good]).is_ok());
+        assert!(check(&[]).is_err());
+        for bad in [
+            BatchRangeV1 { id: Hash64::from_u64_word(2), ..good },
+            BatchRangeV1 { bytes: 0, ..good },
+            BatchRangeV1 { bytes: 9, ..good },
+            BatchRangeV1 { authentication: BatchRangeAuthenticationV1::IndependentParts, ..good },
+        ] {
+            assert!(check(&[bad]).is_err());
+        }
+    }
 
     #[test]
     fn exact_lengths_cannot_substitute_or_reorder_selected_targets() {

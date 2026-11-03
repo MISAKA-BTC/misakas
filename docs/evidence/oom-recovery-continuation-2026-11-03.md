@@ -3912,3 +3912,27 @@ B0 and relay agreed at virtual DAA 19,733. The two selected blocks
 contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-booked-leaf.xysTP1/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-booked-leaf-live.9yk7gS/page.json`.
+
+## Validate numerical Open targets in the accepting fold
+
+For the Batch-only context the accepting Node now reconstructs the
+selected numerical leaf's targets from the accepted notice, source
+and owned reservation. It checks the complete group of range IDs,
+body bounds, authentication modes and original collection deadline.
+The RPC quote and accepted carrier use the same selected-leaf
+projection. Local resource exhaustion is propagated as a native
+resource refusal. Retained response checks continue to use the
+already accepted immutable demand.
+
+The extracted suite passed 54 tests. The added test rejects a
+substituted or omitted target, zero or over-bound length, and a
+different authentication mode. The updated native fixture derives
+an actual numerical leaf and verifies that a directly signed foreign
+target is refused before the valid Open is applied. The integrated
+fixture has not run. Production admission, terminal numerical
+adjudication and the public same-claim path still need verification.
+
+B0 and relay agreed at virtual DAA 19,734. The one selected block
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-native-leaf-open.pIlDum/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-native-leaf-open-live.VSzttL/page.json`.

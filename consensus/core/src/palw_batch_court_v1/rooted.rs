@@ -169,6 +169,10 @@ impl RootedBatchDemandV1 {
     }
 
     pub(crate) fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        self.check_context_target_v1(state).map(|_| ())
+    }
+
+    fn check_context_target_v1(&self, state: &PalwChainStateV2) -> Result<Option<shared::BatchNoticeTargetV1>, String> {
         let context = shared::context(state, self.claim)?;
         let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(self.notice_id)) else {
             return Err("Batch demand lost its accepted notice".into());
@@ -181,6 +185,7 @@ impl RootedBatchDemandV1 {
             || context.original_accepted_daa != self.demand.case_window.claim_accepted_daa
             || context.material_until_daa != self.material_until()
             || self.demand.response_deadline_daa > context.hard_daa
+            || (target.is_some() && self.demand.case_window.collect_until_daa != context.hard_daa)
             || notice.opened_daa != self.demand.case_window.challenge_opened_daa
             || batch_case_id_v1(self.claim, self.scope_id, self.notice_id, notice.opened_block, notice.opened_daa, self.ordinal)?
                 != self.demand.case_id
@@ -188,23 +193,39 @@ impl RootedBatchDemandV1 {
             return Err("Batch demand substitutes its original or accepted notice".into());
         }
         check_notice_route_v1(state, self.claim, target, self.ordinal, &self.demand.ranges)?;
-        Ok(())
+        Ok(target)
     }
 
-    pub(crate) fn check_adoption(&self, state: &PalwChainStateV2, at: &PalwBlockContextV2, signed_bytes: u64) -> Result<(), String> {
-        self.check(&self.key())?;
-        self.check_context(state)?;
+    pub(crate) fn check_adoption(
+        &self, state: &PalwChainStateV2, at: &PalwBlockContextV2, signed_bytes: u64,
+    ) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1;
+        use crate::palw_state_v2::PalwStateV2Error::{CarriageInconsistent as Invalid, NativeResource};
+        self.check(&self.key()).map_err(Invalid)?;
+        let target = self.check_context_target_v1(state).map_err(Invalid)?;
         if (self.opened_block, self.demand.opened_daa) != (at.block, at.daa_score) {
-            return Err("Batch demand differs from the accepting point".into());
+            return Err(Invalid("Batch demand differs from the accepting point".into()));
         }
-        let (book, binding, opened_daa) = reserved_open_slot_v1(state, self.claim, self.scope_id, self.ordinal, signed_bytes)?;
+        let (book, binding, opened_daa) = reserved_open_slot_v1(state, self.claim, self.scope_id, self.ordinal, signed_bytes)
+            .map_err(Invalid)?;
         if opened_daa != at.daa_score {
-            return Err("Batch demand opening differs from its reserved DAA".into());
+            return Err(Invalid("Batch demand opening differs from its reserved DAA".into()));
         }
         use crate::palw_court_shared_material_intake_v1 as material;
-        let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
-        let phased = shared::context(state, self.claim)?.batch_notice_only_v1();
-        material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule, phased)
+        let schedule = material::material_intake_schedule_v1().map_err(|_| Invalid("Batch material storage schedule missing".into()))?;
+        material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule, target.is_some()).map_err(Invalid)?;
+        if let Some(shared::BatchNoticeTargetV1::Numerical { leaf }) = target {
+            use material::batch::native_ranges::{MAX_BOOKED_NUMERICAL_RANGES_V1, numerical_demand_from_source_v1};
+            let ordinal = usize::try_from(self.ordinal).map_err(|_| Invalid("numerical Batch demand ordinal overflows".into()))?;
+            let context = shared::context(state, self.claim).map_err(Invalid)?;
+            let expected = numerical_demand_from_source_v1(state, context, &binding.packet_ids, leaf, ordinal, MAX_BOOKED_NUMERICAL_RANGES_V1)
+                .map_err(|why| match why {
+                    NativeDecodeErrorV1::Decode(why) => Invalid(why),
+                    NativeDecodeErrorV1::Resource(why) => NativeResource(why),
+                })?;
+            expected.check_signed_ranges_v1(&self.demand.ranges).map_err(Invalid)?;
+        }
+        Ok(())
     }
 }
 

@@ -1304,7 +1304,7 @@ impl TransitionBuilder<'_> {
         };
         let signed_bytes = borsh::object_length(signed).map_err(|err| refused(&err.to_string()))? as u64
             + crate::palw_batch_court_v1::carriage::BATCH_OPEN_WIRE_OVERHEAD_V1;
-        demand.check_adoption(&self.state, at, signed_bytes).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        demand.check_adoption(&self.state, at, signed_bytes)?;
         let key = demand.key();
         if let Some(old) = self.state.staged_court_row_v1(&key) {
             return match old {

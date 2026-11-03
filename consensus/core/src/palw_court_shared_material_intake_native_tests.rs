@@ -724,7 +724,19 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     };
     let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, context.profile_id).unwrap();
-    let notice_ordinal = set.step_leaf_ordinal_v1(0).unwrap();
+    let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
+    set_material_intake_test_schedule_v1(Some(storage));
+    use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1;
+    use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
+    use batch::native_ranges::{NumericalBatchEnvelopeV1, numerical_batch_envelope_v1, numerical_batch_root_demand_v1};
+    let cover = PalwTirPublicSourceV1::root_input_cover_native_v1(&source, &fx.record, &fx.layout, storage.cover).unwrap();
+    let notice_leaf = cover.roots_v1().iter().find(|root| {
+        root.inputs.iter().any(|input| matches!(input, RootInputBoundaryV1::PromptPosition(_)))
+    }).unwrap().leaf;
+    let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(fx.record.program.as_slice()).unwrap();
+    let projected = numerical_batch_envelope_v1(frame, &source, &cover, &program, context.profile_id, 64).unwrap();
+    let plan = numerical_batch_root_demand_v1(frame, &source, &cover, &program, context.profile_id, &projected, notice_leaf, 0).unwrap();
+    let notice_ordinal = set.step_leaf_ordinal_v1(notice_leaf).unwrap();
     let notice_id = set.request_id(notice_ordinal).unwrap();
     let mut notice = SignedSharedRequestV1 {
         version: 1, scope: scope_id, ordinal: notice_ordinal, request_id: notice_id, signer: who, signature: vec![],
@@ -741,19 +753,23 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(body.len() <= PART);
     let hash = palw_tir_public_body_hash_v1(&body);
     let ordinal = 0;
-    let ranges = vec![BatchRangeV1 { id: target.id_v1(claim).unwrap(), bytes: body.len() as u32,
-        authentication: BatchRangeAuthenticationV1::WholeRange }];
+    // Only PromptFlat is delivered in this fixture. The remaining signed
+    // declarations exercise canonical target checks without filing bodies.
+    let lengths = plan.ranges_v1().iter().map(|&(planned, _)| (planned, if planned == target { body.len() as u64 } else { 1 }))
+        .collect::<Vec<_>>();
+    assert!(lengths.iter().any(|(planned, _)| *planned == target));
+    let ranges = lengths.iter().map(|&(planned, bytes)| BatchRangeV1 {
+        id: planned.id_v1(claim).unwrap(), bytes: bytes as u32, authentication: BatchRangeAuthenticationV1::WholeRange,
+    }).collect::<Vec<_>>();
+    let range_count = ranges.len();
     let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
     use batch::admission::{NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1, reserve_native_batch_delivery_v1};
-    use batch::native_ranges::NumericalBatchEnvelopeV1;
-    let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
-    set_material_intake_test_schedule_v1(Some(storage));
     let mut service = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(state.court_service_state_v1().unwrap());
-    service.state.book = ServiceReservations::new(cost(64 * 1024)).unwrap();
+    service.state.book = ServiceReservations::new(ServiceCost { bytes: 64 * 64 * 1024, work: 64, io: 64, controls: 64 }).unwrap();
     service.state.claims.get_mut(&claim).unwrap().packet_ids.clear();
-    let envelope = NumericalBatchEnvelopeV1::test_only_v1(claim, context.profile_id, scope_id, vec![PART as u64]);
+    let envelope = NumericalBatchEnvelopeV1::test_only_v1(claim, context.profile_id, scope_id, vec![PART as u64; range_count]);
     let costs = NativeBatchDeliveryCostsV1 {
-        numerical_verification: cost(1), terminal: cost(1), recovery_daa: 1, maximum_packets: 6,
+        numerical_verification: cost(1), terminal: cost(1), recovery_daa: 1, maximum_packets: 3 + 3 * range_count,
         timing: NativeBatchDeliveryTimingV1 {
             open_daa: 2, provider_wait_daa: 2, begin_daa: 2, parts_daa: 2,
             finish_daa: 3, verification_daa: 2, stop_daa: 1, terminal_daa: 1,
@@ -761,7 +777,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     };
     let (quote, service) = reserve_native_batch_delivery_v1(service, frame, &envelope, None, costs, storage, |_, bytes| Ok(cost(bytes))).unwrap();
     assert!(quote.required_daa <= 10_000);
-    assert_eq!(quote.carrier_storage_rent_sompi, PART as u64 * storage.sompi_per_byte);
+    assert_eq!(quote.carrier_storage_rent_sompi, range_count as u64 * PART as u64 * storage.sompi_per_byte);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
 
     let mut batch_context = context.clone();
@@ -769,7 +785,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     state.staged_courts.insert(Key::CourtSharedContext(claim), Row::CourtSharedContext(Box::new(batch_context)));
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).is_err());
-    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, 0, 0, 64, &[(target, body.len() as u64)]),
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 64, &lengths),
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch has no accepted notice"));
     use super::super::palw_court_shared_tir_fold_v1::request;
     use crate::palw_court_shared_tir_frontier_v1::SharedRequestEffectV1;
@@ -793,16 +809,19 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         quote_batch_open_v1(&b.state, claim, notice_id, BATCH_STOP_ORDINAL_V1, ranges.clone()).unwrap_err(),
         "Batch Open route differs from its initial notice",
     );
-    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, 1, 0, 64, &[(target, body.len() as u64)]),
+    let other_leaf = u64::from(notice_leaf == 0);
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, other_leaf, 0, 64, &lengths),
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch leaf differs from its initial notice"));
     let mut follow_up = notice.clone();
-    follow_up.ordinal = set.step_leaf_ordinal_v1(1).unwrap();
+    follow_up.ordinal = set.step_leaf_ordinal_v1(other_leaf).unwrap();
     follow_up.request_id = set.request_id(follow_up.ordinal).unwrap();
     follow_up.signature = sign(follow_up.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
     let after_notice = b.state.state_root();
     assert!(request(&mut b, &open_at, claim, &follow_up).is_err());
     assert_eq!(b.state.state_root(), after_notice);
     let mut open = quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).unwrap();
+    let operator_quote = quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 64, &lengths).unwrap();
+    assert_eq!(*operator_quote, open);
     assert_eq!((open.signer, open.demand.opened_daa, open.demand.response_deadline_daa), (who, open_at.daa_score, response_deadline));
     let request_root = open.demand.checked_request_root_v1().unwrap();
     open.signature = sign(open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
@@ -839,6 +858,12 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         folded.map(|()| split)
     };
     let before_open = b.state.state_root();
+    let mut foreign_open = open.clone();
+    foreign_open.demand.ranges[0].id = MaterialTargetV1::PromptTile { tile: u32::MAX }.id_v1(claim).unwrap();
+    foreign_open.demand.ranges.sort_unstable_by_key(|range| range.id);
+    foreign_open.signature = sign(foreign_open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
+    assert!(apply(&mut b, &open_at, &BatchCourtWireV1::Open(foreign_open), 0, 0).is_err());
+    assert_eq!(b.state.state_root(), before_open);
     let mut late_open = open.clone();
     late_open.demand.response_deadline_daa += 1;
     late_open.signature = sign(late_open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
@@ -866,7 +891,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     missed.observe_block(repair_at.daa_score, repair_at.block.as_bytes(), ServiceCost::default()).unwrap();
     let ids = &service.state.claims[&claim].packet_ids;
     let mut repaired = missed.clone();
-    assert_eq!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut repaired), Ok(1));
+    assert_eq!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut repaired), Ok(range_count));
     let finish_packet = ids.iter().find(|id| service.state.book.assigned_daa(id) == Some(finish_at.daa_score)).unwrap();
     assert_eq!(repaired.assigned_daa(finish_packet), Some(response_deadline - 1));
     let Some(Row::CourtBatchDemand(accepted)) = b.state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)) else {
@@ -886,7 +911,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(quote.parts, [BatchResponsePartSlotV1 {
         offset: 0, bytes: body.len() as u64, assigned_daa: part_at.daa_score, accepted_daa: None,
     }]);
-    assert!(quote_batch_response_v1(&b.state, claim, ordinal, MaterialTargetV1::FullIds).is_err());
+    assert!(quote_batch_response_v1(&b.state, claim, ordinal, MaterialTargetV1::PromptTile { tile: u32::MAX }).is_err());
     let after_open = b.state.state_root();
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert_eq!(b.state.state_root(), after_open);
