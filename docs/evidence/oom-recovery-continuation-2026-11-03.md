@@ -756,3 +756,12 @@ At DAA 19,602, the exact selected tip matched on B0, the relay, the
 primary remained unsynced at 19,389 and 19,224 respectively. B0
 still reported 40 real producer blocks and zero receipts or kernel
 Finals. The local fixes have yet to run on T12.
+
+The queued exact Qwen #21 arithmetic comparison exited with status
+124 after its 30-minute launch wait. Its last sample showed
+2,029,334,528 free bytes versus the 12 GiB launch floor, with another
+compiler still active. The corrected executable did not run and no
+arithmetic result was produced. The existing Linux ELF still
+matches the recorded digest for `707a95b88`, which predates the
+current fixes. The stopped unsigned seat5 trial had 21,206,155,264
+bytes free at 05:07 UTC, below its separate 21 GiB launch floor.
