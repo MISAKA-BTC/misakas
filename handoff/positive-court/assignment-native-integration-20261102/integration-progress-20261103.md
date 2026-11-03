@@ -1548,3 +1548,25 @@ truncation, invalid coinbase byte and duplicate queried outpoint. Full
 Consensus caller verification, bounded cold block-body reads and the
 native op9-to-settlement run remain open. This patch is kept outside the
 source pinned by the custody/index run.
+
+### Bounded archived carrier and creator transactions
+
+The [combined block archive candidate](assigned-case-bounded-block-candidate-20261103.tar.gz)
+reads the exact persisted block body with a wire limit, validates its
+framing and decodes only the requested transaction under a typed
+allocation reservation. The original carrier's lease travels with its
+retained Case carriage. Historical creator transactions use the heap
+remaining after both the carrier and, during the second pass, the owned
+input slots and scripts. Work is bounded by the persisted body extent
+for each scan and decode. The code still revalidates the transaction ID
+and runs ordinary Full validation against the reconstructed inputs.
+
+Core and the focused Assignment funds target passed isolated typechecking.
+The isolated block parser regression used the exact scanner with matching
+compact bincode wire fixtures. It covered the middle transaction, a
+nonzero stored mass, absent index, malformed tail and impossible count.
+The store and full Consensus archive caller were not run. The combined
+candidate includes the earlier accepted-data and UTXO pinned readers and
+applies cleanly to A0. It is separate from the running custody/index
+verification. The earlier Linux relay test moved past the RocksDB build
+to later Rust dependencies and has not reported a test verdict.
