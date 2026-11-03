@@ -1396,3 +1396,17 @@ The isolated Contract and Core metadata and focused Core relay test target
 typechecked. The candidate remains separate from the worktree undergoing
 integrated checks. It still requires a real all-branch Case reservation
 factory and real C binding, DB recovery and settlement runtime coverage.
+
+### Bounded staged alias lookup
+
+The [ordered lookup candidate](case-ordered-legacy-alias-candidate-20261103.tar.gz)
+replaces the staged-court key walk in the actual Case closure check with
+point and inclusive subject-prefix lookups. Kernel seal checks use tuple
+prefixes. The order-only isolated test exercises all 26 previously checked
+staged namespaces, their upper tail values, neighboring subjects and the
+four previously excluded namespaces. Candidate Core metadata passed.
+
+The candidate is separate from the source pinned by the bound-slot checks.
+The general claim/job and funded-escrow reverse lookups, plus proof of the
+future closed ingress and all-branch native reservation, remain open. The
+lookup result cannot authorize a Gate C decision by itself.
