@@ -428,13 +428,19 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
         end: usize,
         expected_root: crate::Hash64,
         params: &crate::palw_state_v2::PalwStateParamsV2,
+        maximum_heap: u64,
     ) -> Result<Self, NativeStateMutationErrorV1> {
         use crate::palw_state_v2::PalwStateV2Error;
         if end > delta.entries.len() {
             return Err(NativeDecodeErrorV1::Decode(PalwStateV2Error::DeltaMismatch("recorded event prefix exceeds actual delta")));
         }
-        let requests =
-            if enabled() { native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)? } else { 0 };
+        let requests = native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)?;
+        if requests > maximum_heap {
+            return Err(NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Self>(
+                "native executed prefix",
+                "quoted replay heap exceeds the original archive cap",
+            )));
+        }
         let lease = reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
         let value =
             crate::palw_state_v2::apply_delta_prefix_v2(&self.value, delta, end, params).map_err(NativeDecodeErrorV1::Decode)?;

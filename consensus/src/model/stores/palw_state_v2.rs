@@ -1275,9 +1275,19 @@ mod tests {
         assert_eq!(loaded_block, parent_block);
         assert_eq!(loaded_parent.state_root(), parent_root);
         assert_eq!(recorded_root, child_root);
-        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, parent_root, &params).is_ok());
-        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, recorded_root, &params).is_err());
-        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, retained_delta.entries.len(), recorded_root, &params).is_ok());
+        let replay_heap =
+            kaspa_consensus_core::palw_native_resource_v1::native_delta_replay_requests_v1(&loaded_parent, &retained_delta).unwrap();
+        assert!(matches!(
+            loaded_parent.try_delta_prefix_v2(&retained_delta, 0, parent_root, &params, replay_heap - 1),
+            Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+        ));
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, parent_root, &params, replay_heap).is_ok());
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, recorded_root, &params, replay_heap).is_err());
+        assert!(
+            loaded_parent
+                .try_delta_prefix_v2(&retained_delta, retained_delta.entries.len(), recorded_root, &params, replay_heap,)
+                .is_ok()
+        );
 
         let wire = borsh::to_vec(&delta).unwrap();
         let heap = kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(

@@ -3,13 +3,37 @@
 //! they never encode Full=true, a computation verdict, or an admission permit.
 //! The native loader still retrieves the actual accepted carrier and applies
 //! the real parent delta prefix. Ordinary transaction scripts remain mandatory.
-use crate::{Hash64, TransactionId, tx::UtxoEntry};
+use crate::{
+    Hash64, TransactionId,
+    palw_positive_funding_relay_v2::canonical_equal,
+    subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+    tx::{Transaction, UtxoEntry},
+};
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_positive_contract::{
     ContractError,
     identity::{CaseId, Digest},
+    journal::{CaseJournalEventKind, CaseJournalRecordView},
     rows::{AcceptedMaterial, AcceptedOrigin, NativeHash64},
 };
+
+/// Match the exact accepted native carrier to a Case journal event. The
+/// first event must carry the complete op9 transaction. Later events carry
+/// the original literal body; matching either form grants no Case authority.
+pub fn assigned_case_native_carrier_matches_v2(tx: &Transaction, record: CaseJournalRecordView<'_>) -> bool {
+    if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE || tx.payload.get(..3) != Some(&[1, 0, 176]) {
+        return false;
+    }
+    let header = record.header();
+    match header.kind {
+        CaseJournalEventKind::NativeBody => {
+            header.sequence > 1 && matches!(record.payload().get(4), Some(1..=7)) && tx.payload.get(3..) == Some(record.payload())
+        }
+        CaseJournalEventKind::NativeTransaction => {
+            header.sequence == 1 && tx.payload.get(7) == Some(&9) && canonical_equal(tx, record.payload())
+        }
+    }
+}
 
 pub const ASSIGNED_CASE_BOUNDARY_DOMAIN_V2: &[u8] = b"misaka/positive/assigned-case-native-boundary/v2/r1";
 pub const ASSIGNED_CASE_INPUTS_DOMAIN_V2: &[u8] = b"misaka/positive/assigned-case-populated-inputs/v2/r1";
