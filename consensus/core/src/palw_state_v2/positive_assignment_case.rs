@@ -1445,6 +1445,43 @@ fn check_replayed_court_projection_v2(
     Ok(())
 }
 
+fn original_verifier_roster_v2<'a>(
+    backing: &'a NativeCommittedAssignedCaseV2,
+    remaining_work: &mut u64,
+) -> Result<super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2<'a>, PalwStateV2Error> {
+    use misaka_palw_positive_contract::assignment::{
+        control_material::AssignmentControlViewV2,
+        journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
+        open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
+    };
+    let material = backing.material();
+    let assignment = backing.assignment();
+    let schedule = &material.native_preimages.source_policy.work;
+    let raw = backing.open_raw();
+    let quote = schedule.court_body_work(raw.len() as u64).map_err(refuse)?;
+    let quote = quote.checked_mul(2).ok_or_else(|| refuse("source roster wire work overflow"))?;
+    *remaining_work = remaining_work.checked_sub(quote).ok_or_else(|| refuse("source roster wire work"))?;
+    let open = AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
+    let header = open.header();
+    if header.kind != AssignmentJournalEventKindV2::Open || header.assignment != assignment.id() || header.origin != assignment.origin
+    {
+        return Err(refuse("source roster must belong to the original Open"));
+    }
+    let cap = material.assignment_policy.max_frame_bytes;
+    let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
+    let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
+    let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
+    let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
+    if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
+        return Err(refuse("source requester roster differs from original custody"));
+    }
+    super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
+        roster,
+        schedule.per_control,
+        remaining_work,
+    )
+}
+
 impl NativeAssignedCourtV2 {
     /// Authenticate the source request against its exact Case and pre-event role.
     fn check_source_request_v2(
@@ -1457,11 +1494,6 @@ impl NativeAssignedCourtV2 {
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<Option<[u8; PUBKEY_BYTES]>, PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
-        use misaka_palw_positive_contract::assignment::{
-            control_material::AssignmentControlViewV2,
-            journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
-            open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
-        };
 
         let PositiveNativeOperationV2::SourceRequest { request, requester, signature } = &body.operation else {
             return Ok(None);
@@ -1488,35 +1520,7 @@ impl NativeAssignedCourtV2 {
         {
             step.key
         } else {
-            // The archive already authenticated this Open record against the
-            // selected parent and actual op8. Bound the second read and the
-            // verifier lookups before decoding the retained roster.
-            let raw = backing.open_raw();
-            let quote = schedule.court_body_work(raw.len() as u64).map_err(refuse)?;
-            let quote = quote.checked_mul(2).ok_or_else(|| refuse("source roster wire work overflow"))?;
-            self.remaining_work = self.remaining_work.checked_sub(quote).ok_or_else(|| refuse("source roster wire work"))?;
-            let open =
-                AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
-            let header = open.header();
-            if header.kind != AssignmentJournalEventKindV2::Open
-                || header.assignment != assignment.id()
-                || header.origin != assignment.origin
-            {
-                return Err(refuse("source roster must belong to the original Open"));
-            }
-            let cap = material.assignment_policy.max_frame_bytes;
-            let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
-            let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
-            let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
-            let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
-            if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
-                return Err(refuse("source requester roster differs from original custody"));
-            }
-            let roster = super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
-                roster,
-                schedule.per_control,
-                &mut self.remaining_work,
-            )?;
+            let roster = original_verifier_roster_v2(backing, &mut self.remaining_work)?;
             super::positive_assignment_certification::resolve_drawn_source_key_v2(
                 state,
                 assignment,
@@ -1956,12 +1960,38 @@ impl TransitionBuilder<'_> {
     }
     pub(super) fn apply_positive_assignment_attestation_raw_v2(
         &mut self,
-        _ctx: &PalwBlockContextV2,
+        ctx: &PalwBlockContextV2,
         action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
-        self.prepare_case_predecessor_v2(action, body)?;
-        Err(missing())
+        use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
+        let PositiveNativeOperationV2::PositiveCourtAttestation { attestation, signature } = &body.operation else {
+            return Err(refuse("expected an assigned Court attestation"));
+        };
+        let (backing, mut machine, _) = self.prepare_case_predecessor_v2(action, body)?;
+        let roster = original_verifier_roster_v2(backing, &mut machine.remaining_work)?;
+        if machine.remaining_work < machine.source_reserve.work {
+            return Err(refuse("attestation must preserve outstanding source work"));
+        }
+        let mut signers =
+            roster.keys().filter(|key| Digest(crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(key)) == attestation.verifier_bond);
+        let signer = signers.next().ok_or_else(|| refuse("attestor absent from original verifier roster"))?;
+        if signers.next().is_some() {
+            return Err(refuse("ambiguous attestor in original verifier roster"));
+        }
+        let checkpoint = self.try_checkpoint()?;
+        let result = (|| {
+            let session = machine.certification_session(&self.state, ctx, backing)?;
+            self.advance_positive_certification_session_v2(ctx, &session)?;
+            let session = machine.certification_session(&self.state, ctx, backing)?;
+            self.attest_positive_certification_v2(ctx, &signer, attestation, signature, action.origin(), Some(&session))?;
+            let session = machine.certification_session(&self.state, ctx, backing)?;
+            self.advance_positive_certification_session_v2(ctx, &session)
+        })();
+        if result.is_err() {
+            self.restore(checkpoint);
+        }
+        result
     }
 }
 
