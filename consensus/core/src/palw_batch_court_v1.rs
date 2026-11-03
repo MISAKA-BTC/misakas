@@ -3,9 +3,10 @@
 //! and the responder's authority. Transport completeness grants no credit.
 use crate::Hash64;
 use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA, shared_initial_notice_daa_in_window_v1};
-use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
+use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::blake2b_512_keyed;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
 pub const MAX_BATCH_RANGES_V1: usize = 64;
@@ -41,6 +42,59 @@ impl BatchCourtWindowV1 {
             return Err(BatchCourtErrorV1::Window);
         }
         Ok(())
+    }
+
+    /// Reserve a complete native case graph at the last timely notice. The
+    /// coordinator derives the graph from all admitted branches and pays for
+    /// the graph/index/slot-search work. Every reserved packet must precede
+    /// the terminal filing, whose remaining interval includes a separate
+    /// recovery allowance and the T06 exclusive-boundary margin.
+    pub fn reserve_latest_notice_case_v1(
+        self,
+        book: &mut ServiceReservations,
+        graph: &[CausalServicePacketV1],
+        terminal: [u8; 64],
+        recovery_daa: u64,
+    ) -> Result<u64, BatchCourtErrorV1> {
+        use BatchCourtErrorV1::{CaseGraph, Clock, Reservation, Window};
+        self.check()?;
+        let latest_notice = self.claim_accepted_daa.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
+        let first_service = latest_notice.checked_add(1).ok_or(Clock)?;
+        let hard = self.claim_accepted_daa.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
+        let case_end = hard.min(self.collect_until_daa);
+        let service_before = case_end.checked_sub(recovery_daa).ok_or(Window)?;
+        if self.challenge_opened_daa != latest_notice || recovery_daa == 0 || first_service >= service_before {
+            return Err(Window);
+        }
+
+        let mut nodes = BTreeMap::new();
+        for node in graph {
+            if node.packet.release_daa < first_service || node.packet.service_before > service_before {
+                return Err(Window);
+            }
+            if nodes.insert(node.packet.id, node).is_some() {
+                return Err(CaseGraph);
+            }
+        }
+        let mut visited = BTreeSet::from([terminal]);
+        let mut pending = vec![terminal];
+        while let Some(id) = pending.pop() {
+            let node = nodes.get(&id).ok_or(CaseGraph)?;
+            for predecessor in &node.predecessors {
+                if visited.insert(*predecessor) {
+                    pending.push(*predecessor);
+                }
+            }
+        }
+        if visited.len() != nodes.len() {
+            return Err(CaseGraph);
+        }
+
+        book.reserve_causal_v1(graph, service_before).map_err(Reservation)?;
+        // The assigned slot is below service_before; the checked window
+        // proves these additions fit and cannot exceed the original hard end.
+        let terminal_daa = book.assigned_daa(&terminal).expect("successful case reservation assigns its terminal");
+        Ok(terminal_daa - self.claim_accepted_daa + recovery_daa + 1)
     }
 }
 
@@ -145,6 +199,8 @@ pub enum BatchCourtErrorV1 {
     Opening,
     AuthenticationMode,
     DeliveryCost,
+    CaseGraph,
+    Reservation(ServiceRefusal),
     VerificationUnavailable,
     Checkpoint,
     Clock,
@@ -626,6 +682,49 @@ mod tests {
         let mut underpriced = parts;
         underpriced[0].bytes -= 1;
         assert_eq!(request.delivery_service_graph_v1(&underpriced, &[finish]), Err(BatchCourtErrorV1::DeliveryCost));
+    }
+
+    #[test]
+    fn latest_notice_reserves_terminal_and_recovery_without_crossing_the_boundary() {
+        let accepted = 100;
+        let notice = accepted + NOTICE_WINDOW_DAA;
+        let hard = accepted + DISPUTE_WINDOW_DAA;
+        let case = BatchCourtWindowV1 {
+            claim_accepted_daa: accepted,
+            challenge_opened_daa: notice,
+            collect_until_daa: hard + 1,
+            material_until_daa: hard + 1,
+        };
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let node = |id, release_daa, service_before, predecessors| CausalServicePacketV1 {
+            packet: ServicePacket { id: [id; 64], release_daa, service_before, cost },
+            predecessors,
+        };
+        let terminal = [3; 64];
+        let recovery = 4;
+        let before = hard - recovery;
+        let mut graph = vec![
+            node(1, notice + 1, before, vec![]),
+            node(2, notice + 1, before, vec![]),
+            node(3, before - 1, before, vec![[1; 64], [2; 64]]),
+        ];
+        let initial = ServiceReservations::new(cost).unwrap();
+        let mut book = initial.clone();
+        assert_eq!(case.reserve_latest_notice_case_v1(&mut book, &graph, terminal, recovery), Ok(DISPUTE_WINDOW_DAA));
+        assert_eq!(book.assigned_daa(&terminal), Some(before - 1));
+        let mut refused = initial.clone();
+        let early = BatchCourtWindowV1 { challenge_opened_daa: notice - 1, ..case };
+        assert_eq!(early.reserve_latest_notice_case_v1(&mut refused, &graph, terminal, recovery), Err(BatchCourtErrorV1::Window));
+        assert_eq!(case.reserve_latest_notice_case_v1(&mut refused, &graph, terminal, recovery + 1), Err(BatchCourtErrorV1::Window));
+        graph[2].predecessors.pop();
+        assert_eq!(case.reserve_latest_notice_case_v1(&mut refused, &graph, terminal, recovery), Err(BatchCourtErrorV1::CaseGraph));
+        graph[2].predecessors.push([2; 64]);
+        graph[0].packet.release_daa = before - 1;
+        assert_eq!(
+            case.reserve_latest_notice_case_v1(&mut refused, &graph, terminal, recovery),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::DeadlineExhausted))
+        );
+        assert_eq!(refused, initial);
     }
 
     #[test]
