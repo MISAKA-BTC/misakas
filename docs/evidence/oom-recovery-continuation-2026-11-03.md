@@ -1292,3 +1292,10 @@ The offline snapshot reconstructed the exact PALW root committed
 by that child. The checkpoint's own header commits its parent's
 root, so comparing against that header gives a different value.
 The strict historical declaration refusal still reproduces.
+
+The complete archive path remains unverified. The first bounded
+walk reached its 90-second deadline after repeated RocksDB table
+reopens. With a bounded read-local cache it reached the 8,192-edge
+limit before the exact DAA 508 endpoint. Partial output was removed
+by the archive reader. The successful first hop and verified
+registration remain separate pieces of evidence.
