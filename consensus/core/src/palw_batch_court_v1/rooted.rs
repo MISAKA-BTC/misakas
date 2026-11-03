@@ -207,7 +207,7 @@ impl RootedBatchDemandV1 {
     }
 }
 
-fn reserved_open_slot_v1(
+pub(crate) fn reserved_open_slot_v1(
     state: &PalwChainStateV2,
     claim: Hash64,
     scope: Hash64,

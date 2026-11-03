@@ -1,6 +1,10 @@
 //! Native numerical input geometry for Batch admission.
 use crate::{
     Hash64,
+    palw_batch_court_v1::{
+        BatchRangeAuthenticationV1, BatchRangeV1, MAX_BATCH_RANGES_V1,
+        carriage::{SignedBatchDemandV1, quote_batch_open_v1},
+    },
     palw_court_shared_material_intake_v1::{
         MATERIAL_PIPELINED_MAX_BYTES, MaterialTargetV1, parameter_body_bound_v1, prompt_tile_bound,
     },
@@ -10,6 +14,7 @@ use crate::{
         reserve_native_requests_v1,
     },
     palw_prompt_ids_v1::{PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1},
+    palw_state_v2::PalwChainStateV2,
     palw_tir_court_v1::parameter_cover::RootInputBoundaryV1,
     palw_tir_public_claim_v1::PalwTirPublicClaimV1,
     palw_tir_public_source_v1::{
@@ -40,6 +45,126 @@ impl NumericalBatchEnvelopeV1 {
     pub(crate) fn demand_ranges_v1(&self) -> impl Iterator<Item = &[u64]> {
         partition_maximums_v1(&self.maximums)
     }
+}
+
+/// A selected numerical root's targets in one originally reserved demand.
+pub(crate) struct NumericalBatchRootDemandV1 {
+    claim: Hash64,
+    scope: Hash64,
+    ordinal: u64,
+    ranges: Vec<(MaterialTargetV1, u64)>,
+}
+
+impl NumericalBatchRootDemandV1 {
+    pub(crate) fn ranges_v1(&self) -> &[(MaterialTargetV1, u64)] {
+        &self.ranges
+    }
+
+    /// Build the unsigned carrier for the accepted notice. Actual encoded
+    /// body lengths come from the responder and must match the selected targets.
+    pub(crate) fn quote_open_v1(
+        &self,
+        state: &PalwChainStateV2,
+        notice: Hash64,
+        lengths: &[(MaterialTargetV1, u64)],
+    ) -> Result<NativeRetainedV1<SignedBatchDemandV1>, E> {
+        let context = crate::palw_court_shared_tir_state_v1::context(state, self.claim).map_err(E::Decode)?;
+        if context.scope_id != self.scope {
+            return Err(E::Decode("numerical Batch demand belongs to another scope".into()));
+        }
+        check_material_lengths_v1(&self.ranges, lengths).map_err(E::Decode)?;
+        let mut q = TirNativeRequestsV1::new();
+        q.vec_v1::<BatchRangeV1>(lengths.len() as u64).map_err(E::Resource)?;
+        q.exact_v1::<SignedBatchDemandV1>(1).map_err(E::Resource)?;
+        let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+        let mut ranges = Vec::with_capacity(lengths.len());
+        for &(target, bytes) in lengths {
+            ranges.push(BatchRangeV1 {
+                id: target.id_v1(self.claim).map_err(E::Decode)?,
+                bytes: bytes as u32,
+                authentication: BatchRangeAuthenticationV1::WholeRange,
+            });
+        }
+        let open = quote_batch_open_v1(state, self.claim, notice, self.ordinal, ranges).map_err(E::Decode)?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(open, lease))
+    }
+}
+
+fn check_material_lengths_v1<T: Eq>(planned: &[(T, u64)], actual: &[(T, u64)]) -> Result<(), String> {
+    if !(1..=MAX_BATCH_RANGES_V1).contains(&planned.len()) || planned.len() != actual.len() {
+        return Err("numerical Batch response must name every selected target".into());
+    }
+    if planned
+        .iter()
+        .zip(actual)
+        .any(|((expected, cap), (target, bytes))| expected != target || *bytes == 0 || *bytes > *cap || *bytes > u64::from(u32::MAX))
+    {
+        return Err("numerical Batch target or exact body length differs from its plan".into());
+    }
+    Ok(())
+}
+
+/// Build an unsigned numerical Open against one accepted branch snapshot.
+/// The caller supplies its profile's enumeration cap and actual encoded body
+/// lengths in canonical target order. The result carries no signing authority.
+pub fn quote_numerical_batch_open_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    notice: Hash64,
+    leaf: u64,
+    demand_index: usize,
+    maximum_ranges: usize,
+    lengths: &[(MaterialTargetV1, u64)],
+) -> Result<NativeRetainedV1<SignedBatchDemandV1>, NativeDecodeErrorV1<String>> {
+    use crate::palw_batch_court_v1::{carriage::batch_open_wire_bytes_v1, rooted::reserved_open_slot_v1};
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(E::Decode)?;
+    let notice_key = Key::CourtSharedQuery(notice);
+    let Some(Row::CourtSharedQuery(notice_row)) = state.staged_court_row_v1(&notice_key) else {
+        return Err(E::Decode("numerical Batch has no accepted notice".into()));
+    };
+    notice_row.check(&notice_key).map_err(E::Decode)?;
+    if notice_row.claim != claim
+        || notice_row.scope_id != context.scope_id
+        || notice_row.material_until_daa != context.material_until_daa
+        || state.court_shared_initial_notice_daa_v1(claim) != Some(notice_row.opened_daa)
+        || state.staged_court_row_v1(&Key::CourtBatchDemand(claim, demand_index as u64)).is_some()
+    {
+        return Err(E::Decode("numerical Batch notice or opening differs from the accepted case".into()));
+    }
+    let wire_bytes = batch_open_wire_bytes_v1(lengths.len()).map_err(E::Decode)?;
+    let (_, _, opened_daa) =
+        reserved_open_slot_v1(state, claim, context.scope_id, demand_index as u64, wire_bytes).map_err(E::Decode)?;
+    if state.last_point().is_some_and(|point| point.daa_score > opened_daa) {
+        return Err(E::Decode("numerical Batch opening slot has passed".into()));
+    }
+
+    let frame = super::super::frame_of(state, claim).map_err(E::Decode)?;
+    let class = frame.original_v1().job.class_id;
+    let record = state.tir_class_v1(&class).ok_or_else(|| E::Decode("numerical Batch class is absent".into()))?;
+    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, class)
+        .ok_or_else(|| E::Decode("numerical Batch layout is absent".into()))?;
+    let source = PalwTirPublicSourceV1::new_native_v1(
+        record,
+        layout,
+        frame.header_v1(),
+        frame.original_v1().execution_root,
+        frame.original_v1().trace_root,
+        frame.descriptor_v1().maximum_leaves,
+    )?;
+    let budget = super::super::material_intake_schedule_v1()
+        .map_err(|_| E::Decode("numerical Batch material schedule is absent".into()))?
+        .cover;
+    let cover = PalwTirPublicSourceV1::root_input_cover_native_v1(&source, record, layout, budget)?;
+    let program =
+        crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|err| match err {
+            NativeDecodeErrorV1::Decode(why) => E::Decode(why.to_string()),
+            NativeDecodeErrorV1::Resource(why) => E::Resource(why),
+        })?;
+    let profile = context.profile_id;
+    let envelope = numerical_batch_envelope_v1(frame, &source, &cover, &program, profile, maximum_ranges)?;
+    let demand = numerical_batch_root_demand_v1(frame, &source, &cover, &program, profile, &envelope, leaf, demand_index)?;
+    demand.quote_open_v1(state, notice, lengths)
 }
 
 fn partition_maximums_v1(mut remaining: &[u64]) -> impl Iterator<Item = &[u64]> {
@@ -132,7 +257,7 @@ pub(crate) fn numerical_batch_root_demand_v1(
     envelope: &NumericalBatchEnvelopeV1,
     leaf: u64,
     demand_index: usize,
-) -> Result<NativeRetainedV1<Vec<(MaterialTargetV1, u64)>>, E> {
+) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
     let set = TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
     let parameters = cover.parameters_v1();
     if parameters.source_id != set.source_id() || envelope.scope != set.scope_id().map_err(E::Decode)? {
@@ -151,10 +276,19 @@ pub(crate) fn numerical_batch_root_demand_v1(
     let span = root_demand_span_v1(&envelope.maximums, ranges.values().map(|(_, bytes)| *bytes), demand_index).map_err(E::Decode)?;
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<(MaterialTargetV1, u64)>(span.len() as u64).map_err(E::Resource)?;
+    q.exact_v1::<NumericalBatchRootDemandV1>(1).map_err(E::Resource)?;
     let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
     let mut demand = Vec::with_capacity(span.len());
     demand.extend(ranges.values().skip(span.start).take(span.len()).copied());
-    Ok(NativeRetainedV1::from_owner_reserved_v1(demand, lease))
+    Ok(NativeRetainedV1::from_owner_reserved_v1(
+        NumericalBatchRootDemandV1 {
+            claim: frame.plan_v1().original_claim,
+            scope: envelope.scope,
+            ordinal: demand_index as u64,
+            ranges: demand,
+        },
+        lease,
+    ))
 }
 
 fn root_demand_span_v1(
@@ -275,7 +409,18 @@ fn root_ranges_v1(
 
 #[cfg(test)]
 mod tests {
-    use super::{fold_maximums, partition_maximums_v1, root_demand_span_v1};
+    use super::{check_material_lengths_v1, fold_maximums, partition_maximums_v1, root_demand_span_v1};
+
+    #[test]
+    fn exact_lengths_cannot_substitute_or_reorder_selected_targets() {
+        let plan = [(1, 7), (2, 9)];
+        assert!(check_material_lengths_v1(&plan, &[(1, 3), (2, 9)]).is_ok());
+        assert!(check_material_lengths_v1(&plan, &[(2, 3), (1, 9)]).is_err());
+        assert!(check_material_lengths_v1(&plan, &[(1, 3), (1, 9)]).is_err());
+        assert!(check_material_lengths_v1(&plan, &[(1, 3), (2, 10)]).is_err());
+        assert!(check_material_lengths_v1(&plan, &[(1, 0), (2, 9)]).is_err());
+        assert!(check_material_lengths_v1(&plan, &[(1, 3)]).is_err());
+    }
 
     #[test]
     fn envelope_preserves_every_position_without_combining_root_material() {

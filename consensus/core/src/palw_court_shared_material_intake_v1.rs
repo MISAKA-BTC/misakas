@@ -34,6 +34,7 @@ use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Query, PalwTirP
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub(crate) mod batch;
+pub use batch::native_ranges::quote_numerical_batch_open_v1;
 pub use batch::{BatchResponsePartSlotV1, BatchResponseQuoteV1, quote_batch_response_v1};
 mod storage_rent;
 pub use storage_rent::{

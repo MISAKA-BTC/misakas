@@ -3282,3 +3282,25 @@ projection, before the full funded profile and automatic Panel path.
 B0 and relay agreed at virtual DAA 19,714 with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-root-demand-live.5dfpEU/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-demand-plan.ou51Q3/tests.log`.
+
+## Numerical Open from an accepted reservation
+
+Core now exposes an unsigned numerical Open quote. It first checks the
+accepted notice and the original's still-available opening slot on the
+supplied branch. It then derives the numerical envelope from that
+original's registered layout and program. The selected demand binds its
+claim, scope and ordinal. The supplied encoded body lengths must cover
+every selected material target in canonical order and fit its bound.
+The existing rooted quote derives the response window and names the
+notice issuer whose signature the accepting fold requires.
+
+Four extracted tests passed, including refusal of substituted, repeated,
+reordered, omitted, zero-length and oversized material declarations.
+The native fixture now exercises the unsigned entry point before notice
+acceptance. Whole-Core execution, Panel/RPC wiring, signed submission
+and the complete funded original profile remain unverified.
+
+B0 and relay still agreed at virtual DAA 19,714. The scanner found no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-root-open-live.ElMRSJ/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-open-plan.1HzgXg/tests.log`.

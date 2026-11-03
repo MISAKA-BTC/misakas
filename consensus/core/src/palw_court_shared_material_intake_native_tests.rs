@@ -768,6 +768,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
 
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).is_err());
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, 0, 0, 64, &[(target, body.len() as u64)]),
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch has no accepted notice"));
     super::super::palw_court_shared_tir_fold_v1::request(&mut b, &notice_at, claim, &notice).unwrap();
     let mut open = quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).unwrap();
     assert_eq!((open.signer, open.demand.opened_daa, open.demand.response_deadline_daa), (who, open_at.daa_score, response_deadline));

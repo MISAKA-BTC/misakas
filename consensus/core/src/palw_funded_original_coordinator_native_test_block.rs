@@ -203,6 +203,7 @@
                 let selected = numerical_batch_root_demand_v1(
                     req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, first_root, 0,
                 ).unwrap();
+                let selected = selected.ranges_v1();
                 assert!(!selected.is_empty());
                 assert!(selected.iter().zip(envelope.demand_ranges_v1().next().unwrap()).all(|((_, bytes), cap)| bytes <= cap));
                 assert!(selected.windows(2).all(|pair| pair[0].0.id_v1(claim).unwrap() < pair[1].0.id_v1(claim).unwrap()));
