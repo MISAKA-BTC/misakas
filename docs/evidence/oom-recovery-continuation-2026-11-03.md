@@ -2029,3 +2029,40 @@ narrow reservation commits stopped at the aggregate compiler RSS limit
 while another compiler was active. The focused batch tests do not
 validate the integrated native streaming run. No public deployment,
 schedule change, claim submission or push to main was made.
+
+## Native SmolLM2 range, arithmetic fault and batch recovery
+
+The exact historical worker capture supplied a 2,019-byte StepRun
+response for leaves 14,510–14,512. The native Source accepted it at
+the original execution root and rejected a modified sibling. The honest
+leaf 14,511 terminated with NoFaultFound. Its program-stripped verdict
+payload was 18,064 bytes before the outer signature and carrier framing.
+The exact class, artifact, worker and library hashes are recorded in
+`/private/tmp/misaka-t12-oom-20261102/tfp1-c-native-capture.zeKljT/receipt.json`.
+
+The isolated arithmetic test changed one in-range value at leaf 14,511
+and regenerated its step root, execution root and opening. The data
+authenticated at the rebuilt source and failed against the original
+source. Native independent evaluation returned ComputationMismatch at
+value index zero. The unmodified control still returned NoFaultFound.
+This is one exact local relation and does not include a signed live
+carrier, an independent drawn Panel, or the full branch budget.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-c-native-mismatch.7dkhHJ/receipt.json`.
+
+The Batch Court candidate advanced the exact honest 2,019-byte response
+as one authenticated range and recorded two 1,024-byte slots, the second
+one ragged. A native authentication rejection left the prior checkpoint
+unchanged. The encoded 134-byte checkpoint restored against its expected
+root and failed against a different root. The harness linked the cached
+Studio verifier and the exact new Batch source. It did not test storage
+atomicity in a running Node. Six focused tests also cover the classified
+resource refusal, conflicting data, and unchanged state.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-real-batch-checkpoint.5c7AEK/run.stdout`.
+
+At DAA 19,667 B0 and relay agreed on the chain and both lacked Qwen #78
+as a claim. B0 identified the exact retention refusal, 20,606 against
+20,608. The subsequent class readiness view at 19,668 had nine
+independently eligible seats and zero independently ready or assigned.
+No public claim or deployment was made. The second guarded Core build
+queue timed out waiting for existing rustc processes. It did not start
+a compiler. Full all-root measurement and native owner replay remain open.
