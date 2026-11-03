@@ -584,3 +584,29 @@ B0's producer invocation also showed zero restarts and zero OOM or
 OOM-kill events, with 7,289,430,016 bytes current and 9,459,302,400
 bytes peak under its 20 GiB limit. These are continuity samples under
 the currently observed traffic. They do not establish Panel capacity.
+
+## Retention replay qualification and seat5 IBD storage — 04:53 UTC
+
+The completed scoped suite ran 22 tests on `a4acffaab`, including
+concurrent stale FS and HTTP publication, provider restart, and
+loopback re-fetch of the original Qwen #32 capture under a test
+effective deadline. Compiler output was on a guarded RAM volume and
+sparse-file fixtures were on APFS. Peak allocated scratch was
+14,876,672 bytes with zero measured swap growth. Test log SHA256 is
+`9c679dfa00eb425e4ce19f6c52ea08cf1605b9f1144db9702a14b4343539d475`. Provider changes have yet to run on T12.
+
+The stopped seat5 unsigned IBD invocation exited normally on SIGINT.
+Its remaining APP occupied 376,832 bytes when rechecked. The old
+trial's uncommitted staging was not present to resume, consistent
+with the existing IBD cancellation and startup cleanup paths. No
+independent archive or spare mounted data volume was found for this
+trial. A fresh unsigned trial still needs an available compatible
+pruning snapshot source and the existing 21 GiB launch floor. The
+observed seat5 free space was about 0.85 GiB short.
+
+For the closed-donor alternative, the earlier IBM copy had 1,269
+files and 9,517,373,049 bytes, with disjoint inode pairs. Its saved
+estimate plus reserve required more than 22,678,691,840 bytes of
+free space at launch. The new IBM measurement was about 6.67 GB
+short of that earlier figure. This leaves the live Explorer relay in
+service and the old signer data preserved.
