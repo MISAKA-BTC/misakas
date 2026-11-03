@@ -60,8 +60,14 @@ async fn route_over(client: &KaspaRpcClient) -> (PalwKernelRouteStateV1, Hash64)
         };
     }
     assert_eq!(Some(seen), total, "every row exactly once");
-    let state = PalwKernelRouteStateV1 { header: header.unwrap(), rows, aux, ledger_cache: Default::default() };
     let (ledger_root, aux_root) = roots.unwrap();
+    let state = PalwKernelRouteStateV1::from_served_rows_v1(
+        &borsh::to_vec(&header.unwrap()).unwrap(),
+        rows.into_iter().chain(aux).map(|((table, key), row)| (table, key, row)),
+        &ledger_root.parse().expect("ledger root"),
+        &aux_root.parse().expect("aux root"),
+    )
+    .expect("rows match both served roots");
     assert_eq!(state.ledger_root().to_string(), ledger_root, "the rows root to the served ledger root");
     assert_eq!(state.aux_root().to_string(), aux_root, "the aux rows to the served aux root");
     (state, ledger_root.parse().expect("a Hash64"))
