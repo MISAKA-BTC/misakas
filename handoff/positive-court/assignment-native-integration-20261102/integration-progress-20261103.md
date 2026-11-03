@@ -1193,3 +1193,14 @@ worker payment, and the public activation fences are outside its scope.
 All Consensus test targets and the existing Core Assignment fence fixture
 typechecked. The guarded optimized native test command was building at
 this checkpoint. No registration or replay success is recorded yet.
+
+The first optimized runtime command exited during the `kaspa-wrpc-server`
+link. The externally supplied RocksDB archive had unresolved libc++ symbols,
+and the Rust link invocation omitted `-lc++`. The test binary did not run.
+The [first verification archive](funded-native-relay-first-verification-20261103.json.gz)
+pins the two successful static checks and this separate link failure.
+
+A repeat uses the same source, test command, optimized profile and normal
+stack. A private linker wrapper supplies libc++ for Rust's
+`-nodefaultlibs` links. The wRPC server link proceeded and the build reached
+the Consensus test target. Its runtime result is pending.
