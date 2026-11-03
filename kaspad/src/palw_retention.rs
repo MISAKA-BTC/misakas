@@ -587,23 +587,16 @@ impl PalwRetentionJanitor {
             if ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(claim) {
                 return Ok(true);
             }
-            if rcore {
-                session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
-            } else {
-                Ok(session.palw_material_income_hold_until_v1(*claim).is_some_and(|until| until == u64::MAX || now_daa < until))
-            }
+            session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
         };
         let (doomed, _) = retention_prune_plan_with_material_v1(&claims, chain, owed, self.attempt_horizon, free, reserve);
         let (removed, bytes) = prune_retained_claims_v1(&claims, doomed, |claim| {
-            // The selected branch or the active consensus can change while planning.
-            // Recheck the resident obligation just before deleting a file group.
-            if let Some(fence) = self.rcore_plus {
-                let current = self.consensus_manager.consensus().unguarded_session();
-                if rcore || fence.is_active(current.get_virtual_daa_score()) {
-                    return current.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim));
-                }
-            }
-            Ok(false)
+            // Planning can race a new income hold or DA obligation. The
+            // resident oracle checks both rules at the current branch and DAA.
+            self.consensus_manager
+                .consensus()
+                .unguarded_session()
+                .with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
         });
         (removed + removed_abandoned, bytes, reserve.saturating_sub(free.saturating_add(bytes)))
     }
@@ -726,7 +719,10 @@ mod tests {
         assert!(claims.iter().all(|claim| claim.files[0].path.is_file()));
 
         let (doomed, _) = plan(unowed);
-        assert_eq!(prune_retained_claims_v1(&claims, doomed, unowed), (3, 90));
+        let newly_owed = |claim: &Hash64| Ok(*claim == claims[0].claim);
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, newly_owed), (2, 50));
+        assert!(claims[0].files[0].path.is_file());
+        assert_eq!(prune_retained_claims_v1(&claims, vec![0], unowed), (1, 40));
         assert!(claims.iter().all(|claim| !claim.files[0].path.exists()));
     }
 
