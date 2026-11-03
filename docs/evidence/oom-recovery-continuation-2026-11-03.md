@@ -334,3 +334,25 @@ Panel and model-free Node checker. Its isolated three-process Pythia
 short job completed 213,298 relations with model access denied to the
 Node. Its native dispatch and the exact T12 Qwen A16 path remain open.
 That implementation is the reference for the remaining G3–G7 work.
+
+The Qwen cohort's attempt 21 provides an exact workload for the A16
+comparison. It drew at DAA 19,566 with 1,023 input tokens and one output
+token in the 8,192-position profile. Both the producer and the relay
+returned a header whose block hash, claim ID and execution anchor were
+recomputed independently. The anchor agreed with the saved answer and
+capture. This fixes the workload input without establishing admission or
+an independent Node verdict.
+
+For provider delivery, the integration branch now supports bounded
+numeric HTTP reads alongside the configured directory sources. A
+single-flight fetch runs outside the Panel duty loop, with a three-second
+deadline and 16 MiB material cap. Admission checks the current claim roots
+and effective retention before giving material to the verifier. Three
+scoped transport and admission tests passed. Full Node build and a live
+accepted claim are still required for deployment qualification.
+
+The producer now syncs its capture before publication and passes the
+original buffer through retention and announcement. The focused file
+test exercised atomic visibility, recovery after a failed publish, and
+cleanup of the failed temporary file. A process or host crash during the
+full accepted claim lifecycle remains a separate G7 test.
