@@ -48,10 +48,6 @@ fn created_relay_row(entry: &PalwDeltaEntryV2) -> Option<(&[u8], &[u8])> {
     }
 }
 
-pub(crate) fn has_new_funding_relay_rows_v2(delta: &PalwStateDeltaV2) -> bool {
-    delta.entries.iter().any(|entry| created_relay_row(entry).is_some())
-}
-
 enum StoredRelayValue<'a> {
     Payload(&'a [u8]),
     Charge([u8; FUNDING_RELAY_CHARGE_BYTES_V2]),
@@ -103,7 +99,14 @@ impl DbPalwStateV2Store {
         carriers: &[PositiveAssignmentScheduledActionV2],
     ) -> StoreResult<Option<NativeStoreWriteTicketV1>> {
         let count = delta.entries.iter().filter(|entry| created_relay_row(entry).is_some()).count();
+        let mut charged = carriers.iter().filter_map(|carrier| {
+            let fees = carrier.action.relay_carrier_fees_v2()?;
+            (fees.relay_charge() != 0).then_some((&carrier.action, fees))
+        });
         if count == 0 {
+            if charged.next().is_some() {
+                return Err(invalid("native relay debit has no registration rows"));
+            }
             return Ok(None);
         }
         if count % 2 != 0 || count / 2 > carriers.len() {
@@ -125,6 +128,7 @@ impl DbPalwStateV2Store {
             return Err(capacity("staging record slots exceeded reservation"));
         }
         let mut added = 0u64;
+        let mut previous_ordinal = None;
         let mut entries = delta.entries.iter();
         while let Some(entry) = entries.next() {
             let Some((auth_key, auth_bytes)) = created_relay_row(entry) else { continue };
@@ -150,10 +154,11 @@ impl DbPalwStateV2Store {
             {
                 return Err(invalid("new registration has an incorrect accepting point or binding"));
             }
-            let index = carriers
-                .binary_search_by_key(&origin.accepted_tx_ordinal, |carrier| carrier.action.origin().accepted_tx_ordinal)
-                .map_err(|_| invalid("missing actual carrier at registration ordinal"))?;
-            let action = &carriers[index].action;
+            let (action, fees) = charged.next().ok_or_else(|| invalid("registration has no observed native debit"))?;
+            if previous_ordinal.is_some_and(|previous| origin.accepted_tx_ordinal <= previous) {
+                return Err(invalid("registration ordinals are not strictly increasing"));
+            }
+            previous_ordinal = Some(origin.accepted_tx_ordinal);
             let tx = action.transaction();
             if action.origin() != origin
                 || tx.id().as_bytes() != origin.carrier_transaction.0
@@ -171,7 +176,6 @@ impl DbPalwStateV2Store {
             {
                 return Err(invalid("carrier differs from both retained signatures and terms"));
             }
-            let fees = action.relay_carrier_fees_v2().ok_or_else(|| invalid("missing actual carrier fee partition"))?;
             let charge =
                 auth.carrier_charge_material(fees).map_err(|_| invalid("credited tip does not account for the quoted charge"))?;
             if charge != auth.metadata_charge {
@@ -218,6 +222,9 @@ impl DbPalwStateV2Store {
                 added = added.checked_add(measured.charge_put_bytes).ok_or_else(|| capacity("batch extent overflow"))?;
                 pending.push((charge_key, StoredRelayValue::Charge(fees.archive_bytes())));
             }
+        }
+        if charged.next().is_some() {
+            return Err(invalid("native relay debit has no registration rows"));
         }
         if pending.is_empty() {
             return Ok(None);

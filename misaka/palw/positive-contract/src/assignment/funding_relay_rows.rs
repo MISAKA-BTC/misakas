@@ -49,7 +49,7 @@ impl FundingRelayCarrierFeesV2 {
         self.before_relay
     }
 
-    fn relay_charge(self) -> u64 {
+    pub fn relay_charge(self) -> u64 {
         self.before_relay - self.credited_tip
     }
 }

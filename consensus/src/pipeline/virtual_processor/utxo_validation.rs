@@ -1049,20 +1049,21 @@ impl VirtualStateProcessor {
                 // above the rent is ordinary carriage and stays with the miner, which is why an
                 // ordinary court move or a free-prompt commitment — objects no rule prices — burn
                 // nothing at all.
-                let collectible =
+                let before_relay =
                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
+                // No allocation is published until the pre-coinbase owner
+                // supplies a qualified debit for this exact accepted carrier.
+                let credited_tip = before_relay;
                 if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
                 {
-                    // A qualified relay debit must reduce the very same
-                    // credited tip once the earlier allocator is connected.
-                    ctx.positive_native_carriers.record_relay_carrier_fees_v2(validated_tx.id(), owed, collectible, collectible);
+                    ctx.positive_native_carriers.record_relay_carrier_fees_v2(validated_tx.id(), owed, before_relay, credited_tip);
                 }
-                block_fee += collectible;
+                block_fee += credited_tip;
                 // Finality classifies collectible fees, never destroyed bond/rent funds — past `palw_tir_public_conviction_v1` only
                 // (AUDIT-8b, 2026-10-27): below it the finality share reads the raw fee, exactly as the live chain does.
                 let finality_base = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score)) {
-                    collectible
+                    credited_tip
                 } else {
                     validated_tx.calculated_fee
                 };

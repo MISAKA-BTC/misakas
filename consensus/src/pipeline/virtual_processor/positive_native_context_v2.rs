@@ -198,8 +198,20 @@ impl PositiveCarrierCompanionsV2 {
         before_relay: u64,
         credited_tip: u64,
     ) {
-        let Some(carrier) = self.carriers.last_mut().filter(|carrier| carrier.transaction().id() == tx) else { return };
-        carrier.relay_carrier_fees = FundingRelayCarrierFeesV2::new(carrier.fee, mandatory_burn, before_relay, credited_tip).ok();
+        let carrier = self.carriers.last_mut().filter(|carrier| carrier.transaction().id() == tx);
+        if let Some(carrier) = carrier {
+            if carrier.relay_carrier_fees.is_none()
+                && let Ok(fees) = FundingRelayCarrierFeesV2::new(carrier.fee, mandatory_burn, before_relay, credited_tip)
+            {
+                carrier.relay_carrier_fees = Some(fees);
+                return;
+            }
+        } else if credited_tip == before_relay {
+            return;
+        }
+        self.resource_fault.get_or_insert_with(|| {
+            NativeCoverageV1::unsupported::<Self>("relay carrier fees", "duplicate, invalid or unsealed native fee partition")
+        });
     }
 
     pub(in crate::pipeline::virtual_processor) fn into_phase_two(
@@ -327,6 +339,38 @@ mod tests {
         let fault = NativeCoverageV1::overflow::<PositiveCarrierCompanionsV2>("native reservation");
         let refused: Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> = Err(fault.clone());
         assert_eq!(refused.and_then(require_positive_carrier_lease_v2).err(), Some(fault));
+    }
+    #[test]
+    fn relay_debit_requires_one_sealed_fee_observation() {
+        let (tx, _, entry) = fixture();
+        let id = tx.id();
+        let mut companions = PositiveCarrierCompanionsV2::default();
+        companions.record_relay_carrier_fees_v2(id, 2, 7, 7);
+        assert!(companions.take_resource_fault().is_none());
+        companions.record_relay_carrier_fees_v2(id, 2, 7, 4);
+        assert!(companions.take_resource_fault().is_some());
+
+        companions.carriers.push(OwnedPositiveCarrierV2 {
+            session: Session(1),
+            body: vec![tx].into(),
+            entries: vec![entry],
+            fee: 10,
+            relay_carrier_fees: None,
+            prefix: NativePrefixStampV2 {
+                accepting: PalwBlockContextV2 { block: Hash64::from_u64_word(3), daa_score: 8, blue_score: 9, subsidy: 0 },
+                selected_parent: Hash64::from_u64_word(2),
+                accepted_transactions: 1,
+                last_accepted_transaction: None,
+            },
+            carrier_block: Hash64::from_u64_word(4),
+            index_within_block: 0,
+            _lease: None,
+        });
+        companions.record_relay_carrier_fees_v2(id, 2, 7, 4);
+        assert!(companions.take_resource_fault().is_none());
+        companions.record_relay_carrier_fees_v2(id, 2, 7, 3);
+        assert!(companions.take_resource_fault().is_some());
+        assert_eq!(companions.carriers[0].relay_carrier_fees.unwrap().relay_charge(), 3);
     }
     #[test]
     fn public_validated_dto_cannot_substitute_actual_current_entries_fee_or_outputs() {
@@ -702,6 +746,8 @@ impl PositiveCarrierPhaseTwoV2 {
             max_exact_relations: MAX_EXACT_RELATIONS_V2,
             max_signatures: MAX_SIGNATURES_V2,
         };
+        let mut unforwarded_debits =
+            self.carriers.iter().filter(|carrier| carrier.relay_carrier_fees.is_some_and(|fees| fees.relay_charge() != 0)).count();
         let mut actions = Vec::new();
         for carrier in self.carriers {
             let tx = carrier.transaction();
@@ -879,6 +925,9 @@ impl PositiveCarrierPhaseTwoV2 {
                 let fees = carrier.relay_carrier_fees.ok_or_else(|| {
                     NativeCoverageV1::unsupported::<Self>("relay carrier fees", "accepted fee partition unavailable")
                 })?;
+                if fees.relay_charge() != 0 {
+                    unforwarded_debits -= 1;
+                }
                 action.with_relay_carrier_fees_v2(fees)?
             } else {
                 action
@@ -895,6 +944,12 @@ impl PositiveCarrierPhaseTwoV2 {
                 .try_reserve_exact(1)
                 .map_err(|_| NativeCoverageV1::unsupported::<Self>("native Positive raw actions", "allocation refused"))?;
             actions.push(action);
+        }
+        if unforwarded_debits != 0 {
+            return Err(NativeCoverageV1::unsupported::<Self>(
+                "relay carrier fees",
+                "native debit has no replayable registration action",
+            ));
         }
         Ok(actions)
     }

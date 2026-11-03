@@ -1230,5 +1230,29 @@
     "stored_sha256": "e156c580d6fcb223201da94fba3d7e137f90c6d5b0409718c84714372080626f",
     "raw_bytes": 341030,
     "stored_bytes": 23630
+  },
+  {
+    "raw_name": "relay-debit-conservation-clippy.log",
+    "stored_name": "relay-debit-conservation-clippy.log.gz",
+    "raw_sha256": "221d597d02250ef9de157db342d52146a8b627c5284723e2008db90a4e247414",
+    "stored_sha256": "3ba947e6b1ffac6c45ee3a258e20f4f20607da2f0ace85a508cc98ed00daff01",
+    "raw_bytes": 341860,
+    "stored_bytes": 23671
+  },
+  {
+    "raw_name": "relay-debit-conservation-contract.log",
+    "stored_name": "relay-debit-conservation-contract.log.gz",
+    "raw_sha256": "f2238017a6e08d812713989f89fd2a67fc1f3227991a4474eac7b78b5cec1c29",
+    "stored_sha256": "bfa76f09f71ded4ce78c7b38f3cb4c42c3d08936479c02d0431ba10107fbca74",
+    "raw_bytes": 53334,
+    "stored_bytes": 4303
+  },
+  {
+    "raw_name": "relay-debit-conservation-test-check.log",
+    "stored_name": "relay-debit-conservation-test-check.log.gz",
+    "raw_sha256": "e2e491337a48b6941bfe518fd859db687918c0a1e30f2445624f795f0e4c92f3",
+    "stored_sha256": "bafd1106f1ee0987f42822f436a3ef1a62497f042ab4b8719c8731374b79806e",
+    "raw_bytes": 546205,
+    "stored_bytes": 37376
   }
 ]

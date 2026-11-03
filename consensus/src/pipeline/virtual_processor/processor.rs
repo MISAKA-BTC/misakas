@@ -3051,14 +3051,9 @@ impl VirtualStateProcessor {
                                             );
                                         }
                                         let (delta, delta_lease) = delta.into_parts_v1();
-                                        let relay_carriers =
-                                            if crate::model::stores::palw_state_v2::funding_relay::has_new_funding_relay_rows_v2(
-                                                &delta,
-                                            ) {
-                                                transition_extras.into_assignment_actions_v2()
-                                            } else {
-                                                Vec::new()
-                                            };
+                                        // Keep the observed fee evidence even when the fold wrote
+                                        // no rows, so staging can detect a debit with no custody.
+                                        let relay_carriers = transition_extras.into_assignment_actions_v2();
                                         Some((state.state_root(), delta, delta_lease, assignment_materials, relay_carriers))
                                     }
                                     Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
@@ -3942,6 +3937,9 @@ impl VirtualStateProcessor {
 
         // Calc virtual UTXO state relative to selected parent
         self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score);
+        if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
+            return Err(RuleError::LocalNativeCapacityUnavailable(fault));
+        }
 
         // Update the accumulated diff
         accumulated_diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();

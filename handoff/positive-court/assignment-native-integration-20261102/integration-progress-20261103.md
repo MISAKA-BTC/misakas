@@ -899,3 +899,29 @@ passed with warnings denied. The Core relay integration target passed strict
 Clippy. The native fold and the combined RocksDB/UTXO commit were not run
 with an actually debited carrier. The exact commands and log hashes are
 retained in the relay-pending-writer verification archive.
+
+## Reconcile observed relay debits with canonical writes
+
+The UTXO fee sink now distinguishes the pre-relay collectible fee from the
+tip that feeds rewards. A debit observation requires a matching sealed carrier
+and cannot replace an earlier observation. The raw-action handoff rejects a
+charged carrier that would otherwise be filtered out. Candidate and virtual
+UTXO processing propagate the fee-provenance fault before publication.
+
+The UTXO commit retains the fee evidence even when the PALW fold writes no
+relay rows. Before appending any relay material to the RocksDB batch, staging
+matches charged carriers one for one, in accepted ordinal order, to fresh
+authorization/custody pairs. It rejects an orphan debit, an uncharged pair,
+or a repeated/reordered ordinal. The check also runs when the literal records
+already exist under their content addresses. Failed staging leaves the native
+UTXO/acceptance/coinbase transition unpublished.
+
+The UTXO sink still credits the full pre-relay collectible fee. This change
+protects the write boundary for the upcoming allocator and does not create an
+actual relay debit. The allocator and native end-to-end funded test remain.
+
+All 11 relay contract tests passed. Contract, Core and Consensus library
+Clippy passed with warnings denied. All Consensus test targets typechecked,
+including the synthetic missing-seal and duplicate-observation test, which
+was not executed. The commands, source map and logs are retained in the
+relay-debit-conservation verification archive.
