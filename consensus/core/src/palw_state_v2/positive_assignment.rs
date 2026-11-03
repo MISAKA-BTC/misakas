@@ -624,7 +624,10 @@ impl TransitionBuilder<'_> {
         // Recheck the exact actual C carrier and the original capital quote.
         // The retained rows already own the pending slot. Their canonical
         // update moves it under the Case reservation in the same checkpoint.
-        let relay = self.check_assigned_result_carriage_v2(ctx, &action, expected, &carried)?;
+        let (relay, horizon) = self.check_assigned_result_carriage_v2(ctx, &action, expected, &carried)?;
+        horizon
+            .check_case_maturity_v2(ctx.daa_score, plan.case.maturity_daa, plan.material.assignment_policy.refund_window_daa)
+            .map_err(refusal)?;
         if relay.is_some() && (plan.case.reservation.origin != origin || plan.case.reservation.digest == Digest([0; 64])) {
             return Err(refusal("initial Case relay requires the Case reservation at this acceptance point"));
         }
@@ -1682,7 +1685,10 @@ impl TransitionBuilder<'_> {
         action: &PositiveAssignmentRawActionV2,
         row: &AssignmentRow,
         payload: &crate::palw_positive_court_v2::coordinator::assignment_body::AssignedResultPayloadV2,
-    ) -> Result<Option<CheckedInitialFundingRelayV2>, PalwStateV2Error> {
+    ) -> Result<
+        (Option<CheckedInitialFundingRelayV2>, crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2),
+        PalwStateV2Error,
+    > {
         use crate::{
             palw_native_resource_v1::reserve_native_requests_v1,
             palw_positive_assignment_funds_v2::qualify_assigned_case_funding_output_v2,
@@ -1846,6 +1852,6 @@ impl TransitionBuilder<'_> {
         {
             return Err(refusal("Case funding does not cover the original native quote"));
         }
-        Ok(relay)
+        Ok((relay, horizon))
     }
 }
