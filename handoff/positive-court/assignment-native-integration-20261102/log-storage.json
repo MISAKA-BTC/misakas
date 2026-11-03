@@ -694,5 +694,37 @@
     "stored_sha256": "16750a8071cf898545d1f234497e3508e0b7a98256df36bf14e85437f7f44cd2",
     "raw_bytes": 357758,
     "stored_bytes": 24591
+  },
+  {
+    "raw_name": "assignment-open-writer-clippy-first.log",
+    "stored_name": "assignment-open-writer-clippy-first.log.gz",
+    "raw_sha256": "c31b08c71205ae6cce172df0c0309ca278a5e056f7d9683d34afec9906284ab9",
+    "stored_sha256": "168e5bdec729106e7b2dc18d7e6f58013f21edb471b635a4ff6d5873133358a0",
+    "raw_bytes": 293519,
+    "stored_bytes": 20904
+  },
+  {
+    "raw_name": "assignment-open-writer-clippy-second.log",
+    "stored_name": "assignment-open-writer-clippy-second.log.gz",
+    "raw_sha256": "129b16305ce0add6ce59ffb447e9b61ac3c89aeaadef24e4f68b502f15fda4b2",
+    "stored_sha256": "fcd2a7134ced08fb393991de4938c4a61d0d7256b191accadf3f925d4f68eb91",
+    "raw_bytes": 292926,
+    "stored_bytes": 20663
+  },
+  {
+    "raw_name": "assignment-open-writer-clippy-third.log",
+    "stored_name": "assignment-open-writer-clippy-third.log.gz",
+    "raw_sha256": "93571c3b231e9602dfd3894b30b7986eff789bb80583cd22f2d8fab38a826aac",
+    "stored_sha256": "aad3d3c72c20b5be1d4caea7dd5d7f20e7edfe01af49a4757ddea02b2c1c0466",
+    "raw_bytes": 341727,
+    "stored_bytes": 23637
+  },
+  {
+    "raw_name": "assignment-open-writer-runtime-third.log",
+    "stored_name": "assignment-open-writer-runtime-third.log.gz",
+    "raw_sha256": "e319463b53ae43c5b4de3e760caf8bef8cd413f7da884856e5177edcf7ec69f2",
+    "stored_sha256": "90940a1c784a98c3e43e6a9d7abd1633ce55745107743502c35a038c625a7d43",
+    "raw_bytes": 358900,
+    "stored_bytes": 24668
   }
 ]

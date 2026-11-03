@@ -213,6 +213,22 @@ impl AssignmentAdmissionMaterialV2 {
         let value = borsh::from_slice::<Self>(raw).map_err(|_| ContractError::NonCanonical)?;
         Ok(value)
     }
+    /// The framed native record includes the actual control envelope and
+    /// journal header. Both retention and replay must pay for those bytes.
+    pub fn check_native_open_record_extent_v2(&self, payload_bytes: u64) -> Result<(), ContractError> {
+        use misaka_palw_positive_contract::assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2;
+
+        let record_bytes = payload_bytes.checked_add(ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64).ok_or(ContractError::Budget)?;
+        if payload_bytes == 0
+            || payload_bytes > self.assignment_policy.max_frame_bytes
+            || record_bytes
+                > self.assignment_policy.max_history_bytes.min(self.money.usage.retained_bytes).min(self.money.usage.replay_bytes)
+        {
+            return Err(ContractError::Budget);
+        }
+        Ok(())
+    }
+
     pub fn check_row(&self, row: &AssignmentRow) -> Result<(), ContractError> {
         row.validate_shape()?;
         self.assignment_policy.check_terms(&row.bundle.terms, self.origin.accepted_daa)?;

@@ -312,3 +312,33 @@ the normal stack. The replay test exercises different registry states as
 fixtures. Actual native A acceptance, reorg, and closed-DB replay of that
 new row were outside this test. The documentation check found zero new
 issues against the 43 existing missing references.
+
+## Assignment Open material at the write checkpoint
+
+The private op8 install checkpoint now takes the actual Open bytes as its
+single source of retained material. It checks the active carrier and original
+delta boundary, matches the fixed bundle, consents and signatures to that
+carrier, and decodes the same wrapper that will be emitted. It compares the
+retained policy and Gate C cohort with the fired intake profile and exact
+registry prefix. The A account's initial balances and lock are checked
+against the payer's actual composed UTXO and the retained money quote.
+
+The checkpoint constructs the control envelope and journal frame from
+those bytes, writes the nonce, Assignment, roles, funding, frame and head,
+then emits the record through the existing native material outcome. Failure
+rolls back the shared checkpoint. The original frame cap, history cap and
+retention/replay quotes cover the control envelope and journal header as
+well as the inner Open payload. The Node archive loader applies the same
+extent check to the stored record.
+
+The actual dispatch still needs the all-branch service and funds reservation
+owners to create and call this install plan. The complete aggregate replay
+work quote, actual Open acceptance, BindResult publication and new UTXO
+settlement are still open.
+
+The final Core and Consensus library Clippy run passed with warnings
+denied. Seven Core material tests passed, including the new full-record
+extent checks. Both successful runs share the same source map. The prior
+Clippy runs stopped at a borrow error and a boolean-style lint. Neither
+executed tests. The documentation check found zero new issues against the
+43 existing missing references.

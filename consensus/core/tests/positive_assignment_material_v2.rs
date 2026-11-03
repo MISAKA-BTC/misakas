@@ -471,6 +471,33 @@ fn frozen_original_policy_survives_future_policy_change_and_rejects_substitution
     assert!(substituted.check_row(&row).is_err());
 }
 #[test]
+fn native_open_quote_covers_control_envelope_and_complete_journal_record() {
+    use misaka_palw_positive_contract::assignment::{
+        control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2, journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2,
+    };
+
+    let (_, mut material, _) = fixture();
+    let inner_bytes = payload(&material).len() as u64;
+    let payload_bytes = inner_bytes + ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64;
+    let record_bytes = payload_bytes + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+    assert!(material.check_native_open_record_extent_v2(payload_bytes).is_ok());
+    material.money.usage.retained_bytes = record_bytes - 1;
+    assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
+    material.money.usage.retained_bytes = record_bytes;
+    material.money.usage.replay_bytes = payload_bytes;
+    assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
+    material.money.usage.replay_bytes = record_bytes;
+    material.assignment_policy.max_frame_bytes = payload_bytes - 1;
+    assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
+    material.assignment_policy.max_frame_bytes = payload_bytes;
+    material.assignment_policy.max_history_bytes = record_bytes - 1;
+    assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
+    material.assignment_policy.max_history_bytes = record_bytes;
+    assert!(material.check_native_open_record_extent_v2(payload_bytes).is_ok());
+    assert!(material.check_native_open_record_extent_v2(u64::MAX).is_err());
+}
+
+#[test]
 fn custody_and_literal_transaction_cannot_be_replaced_or_missing() {
     let (row, material, _job) = fixture();
     let raw = payload(&material);

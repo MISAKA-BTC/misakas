@@ -173,6 +173,9 @@ impl VirtualStateProcessor {
             AssignmentOpenLimitsV2::within_payload(max_payload),
         )
         .map_err(|_| E::Invalid("original Open material differs from rooted Assignment"))?;
+        view.material
+            .check_native_open_record_extent_v2(max_payload)
+            .map_err(|_| E::Invalid("original Open record exceeds quoted history extent"))?;
         let rules = NativeAssignmentRulesV2::from_original_material_data_v2(&row, &view.material)
             .map_err(|_| E::Invalid("original Assignment rule scope"))?;
         let limits = rules.body_limits().map_err(|_| E::Invalid("original Assignment body limits"))?;

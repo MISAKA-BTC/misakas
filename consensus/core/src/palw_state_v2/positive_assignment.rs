@@ -5,19 +5,22 @@
 //! original rule scope and actual physical/service reservations before calling.
 //! No independent store or success flag is maintained here. Every row uses the
 //! existing KernelRouteRow delta, and rollback restores nonce and locks together.
-use super::positive_assignment_verifiers::LeasedAssignmentVerifierCandidatesV2;
 use super::*;
 use crate::{
-    palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, assignment_custody_bytes_id_v2},
+    palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2},
     palw_positive_assignment_v2::AssignmentJobBindingV2,
     palw_positive_rows_v2::PositiveRowsV2,
 };
 use misaka_palw_positive_contract::{
     assignment::{
-        AssignmentId, AssignmentNonceV2, AssignmentRoleV2, journal::AssignmentJournalEventKindV2,
-        open_material::AssignmentOpenPreimageKindV2, role_actions::AssignmentCancellationV2, rows::*,
+        AssignmentId, AssignmentNonceV2, AssignmentRoleV2,
+        control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2,
+        journal::{AssignmentJournalEventKindV2, assignment_frame_v2},
+        open_material::AssignmentOpenLimitsV2,
+        role_actions::AssignmentCancellationV2,
+        rows::*,
     },
-    identity::{PUBKEY_BYTES, SIGNATURE_BYTES},
+    identity::{Digest, PUBKEY_BYTES, SIGNATURE_BYTES},
     native::{KERNEL_AUX_TABLE, NativeRowKey},
     rows::{
         AcceptedOrigin, CaseRow, ClaimIndexRow, FundingRow, NativeOutpoint, NativeRowBody, NativeRowValue, ResultRow, validate_bundle,
@@ -72,14 +75,10 @@ fn native_bond(outpoint: NativeOutpoint) -> PalwBondKeyV2 {
 }
 
 pub(super) struct AssignmentInstallV2<'a> {
-    pub material: &'a AssignmentAdmissionMaterialV2,
-    pub reservation_preimage: &'a [u8],
-    pub verifier_candidates: &'a LeasedAssignmentVerifierCandidatesV2,
+    pub open: &'a [u8],
     pub assignment: AssignmentRow,
     pub funding: AssignmentFundingRow,
     pub roles: [AssignmentRoleRow; 3],
-    pub frame: AssignmentJournalFrameRow,
-    pub retention_until_daa: u64,
 }
 
 pub(super) struct AssignedCaseInstallV2<'a> {
@@ -205,6 +204,38 @@ impl TransitionBuilder<'_> {
         }
         Ok(())
     }
+    fn check_assignment_open_literal_v2(
+        action: &PositiveAssignmentRawActionV2,
+        row: &AssignmentRow,
+        roles: &[AssignmentRoleRow; 3],
+    ) -> Result<(), PalwStateV2Error> {
+        use borsh::BorshDeserialize;
+        use misaka_palw_positive_contract::assignment::{
+            AssignmentAdmissionBundleV2,
+            consents::{AssignmentProverConsentV2, AssignmentSourceConsentV2},
+        };
+
+        let body = &action.transaction().payload[3..];
+        let limits = action.rules().body_limits().map_err(refusal)?;
+        crate::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(body, limits).map_err(refusal)?;
+        // Read only the fixed signed fields, leaving the already scanned
+        // layout borrowed in the carrier.
+        let mut fixed = &body[5..];
+        let bundle = AssignmentAdmissionBundleV2::deserialize(&mut fixed).map_err(refusal)?;
+        let source = AssignmentSourceConsentV2::deserialize(&mut fixed).map_err(refusal)?;
+        let prover = AssignmentProverConsentV2::deserialize(&mut fixed).map_err(refusal)?;
+        if bundle != row.bundle || source != row.source_consent || prover != row.prover_consent {
+            return Err(refusal("Open rows do not match the literal carrier consents"));
+        }
+        for role in roles {
+            if fixed.get(..SIGNATURE_BYTES) != Some(role.signature.as_slice()) {
+                return Err(refusal("Open role signature differs from the literal carrier signature"));
+            }
+            fixed = &fixed[SIGNATURE_BYTES..];
+        }
+        Ok(())
+    }
+
     /// One admission checkpoint owns the permanent poster counter, all three
     /// role signatures, initial A lock, reservation/liability references and
     /// journal. A later error undoes every one of them.
@@ -214,22 +245,54 @@ impl TransitionBuilder<'_> {
         plan: AssignmentInstallV2<'_>,
     ) -> Result<(), PalwStateV2Error> {
         let row = &plan.assignment;
-        plan.material.check_row(row).map_err(refusal)?;
-        if plan.reservation_preimage.len() as u64
-            > plan.material.money.usage.retained_bytes.min(plan.material.money.usage.replay_bytes)
-            || !plan.reservation_preimage.starts_with(plan.verifier_candidates.bytes())
-            || assignment_custody_bytes_id_v2(plan.reservation_preimage)
-                != plan.material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize]
-        {
-            return Err(refusal("A reservation does not retain the actual prefix's verifier candidates"));
-        }
         let id = row.id();
         self.assignment_origin_v2(row.origin, ctx)?;
+        let action = self.assignment_active_raw.clone().ok_or_else(missing_assignment_history)?;
+        if action.origin() != row.origin
+            || action.transaction().payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 8])
+            || self.assignment_raw_boundary.is_none_or(|(_, end)| end != self.entries.len())
+        {
+            return Err(refusal("Open does not belong to the current pre-op8 boundary"));
+        }
+        Self::check_assignment_open_literal_v2(&action, row, &plan.roles)?;
+        let rules = action.rules();
+        let frame_cap = rules.assignment_policy().max_frame_bytes;
+        let payload_bytes = (plan.open.len() as u64)
+            .checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64)
+            .filter(|bytes| *bytes <= frame_cap)
+            .ok_or_else(|| refusal("Open exceeds the actual intake frame cap"))?;
+        let original = AssignmentAdmissionMaterialViewV2::decode(
+            row,
+            plan.open,
+            &action.transaction().payload[3..],
+            AssignmentOpenLimitsV2::within_payload(frame_cap),
+        )
+        .map_err(refusal)?;
+        let material = &original.material;
+        if material.network != rules.network()
+            || material.fired_rules != rules.rule_scope().fired_rules_digest()
+            || &material.assignment_policy != rules.assignment_policy()
+            || &material.positive_policy != rules.positive_policy()
+            || Some(&material.native_preimages) != rules.native_preimages()
+            || Some(&material.certification_policy) != rules.certification_policy()
+            || &material.funding_relay != rules.funding_relay_profile()
+            || material.network_prompt_form != rules.prompt_form()
+        {
+            return Err(refusal("Open material differs from the actual fired intake profile"));
+        }
+        material.check_native_open_record_extent_v2(payload_bytes).map_err(refusal)?;
+        let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
+        if anchor.as_bytes() != row.bundle.terms.branch_anchor.0 {
+            return Err(refusal("Open uses a different signed ancestor"));
+        }
+        self.state.check_original_assignment_verifier_candidates_v2(
+            &original,
+            anchor_daa,
+            row.bundle.terms.result_before_daa,
+            material.custody.replay_work,
+        )?;
         if row.status != AssignmentStatusV2::Open
             || row.last_event != row.origin
-            || plan.frame.header.assignment != id
-            || plan.frame.header.origin != row.origin
-            || plan.frame.header.kind != AssignmentJournalEventKindV2::Open
             || plan.funding.assignment != id
             || plan.funding.authorization != row.bundle.funding
             || plan.funding.funding_origin != row.origin
@@ -261,7 +324,25 @@ impl TransitionBuilder<'_> {
         if plan.funding.payer_key != plan.roles[0].key || plan.funding.payer_signature != plan.roles[0].signature {
             return Err(refusal("A funding does not use the literal poster-purpose consent"));
         }
-        self.require_assignment_output_unlocked_v2(plan.funding.original_outpoint)?;
+        let funding = crate::palw_positive_assignment_funds_v2::qualify_assignment_funding_output_v2(
+            &row.bundle,
+            action.transaction(),
+            &plan.funding.payer_key,
+            action.current_output(),
+            material.money.fee,
+            material.money.capital,
+            ctx.daa_score,
+        )
+        .map_err(refusal)?;
+        if plan.funding.original_outpoint != funding.outpoint()
+            || plan.funding.initial_locked != funding.amount()
+            || [plan.funding.worker, plan.funding.fee, plan.funding.capital, plan.funding.surplus] != funding.initial_legs()
+            || plan.funding.reservation != row.reservation
+            || plan.funding.liability != row.liability
+        {
+            return Err(refusal("initial Assignment funding differs from the actual funded quote"));
+        }
+        self.require_assignment_output_unlocked_v2(funding.outpoint())?;
         let nonce_key = NativeRowKey::AssignmentNonce(row.bundle.terms.poster);
         let previous = match PositiveRowsV2::new(&self.state).read(nonce_key).map_err(refusal)? {
             None => AssignmentNonceV2::default(),
@@ -272,15 +353,20 @@ impl TransitionBuilder<'_> {
         };
         let nonce = previous.after_accepting(row.bundle.terms.poster_nonce).map_err(refusal)?;
         let poster = row.bundle.terms.poster;
+        let origin = row.origin;
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
+            let payload = self.encode_assignment_control_payload_v2(id, plan.open, frame_cap)?;
+            let frame = assignment_frame_v2(id, 0, Digest([0; 64]), AssignmentJournalEventKindV2::Open, origin, &payload, frame_cap)
+                .map_err(refusal)?;
             self.write_assignment_aux_v2(NativeRowBody::AssignmentNonce(AssignmentNonceRow { poster, nonce }))?;
             self.write_assignment_aux_v2(NativeRowBody::Assignment(plan.assignment))?;
             self.write_assignment_aux_v2(NativeRowBody::AssignmentFunding(plan.funding))?;
             for role in plan.roles {
                 self.write_assignment_aux_v2(NativeRowBody::AssignmentRole(role))?;
             }
-            self.append_assignment_frame_v2(plan.frame, plan.retention_until_daa)
+            self.append_assignment_frame_v2(frame, material.custody.retention_until_daa)?;
+            self.emit_assignment_material_v2(&frame, &payload, frame_cap)
         })();
         if result.is_err() {
             self.restore(checkpoint);
