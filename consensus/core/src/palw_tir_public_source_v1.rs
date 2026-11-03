@@ -779,6 +779,54 @@ impl PalwTirPublicSourceV1 {
         }
         Ok(partitions)
     }
+
+    /// Visit the bounded StepRun queries needed by one native numerical root.
+    /// The inputs come from the original-bound root input cover. Prompt and
+    /// generated IDs have their own material routes. Calls are provisional
+    /// until a successful return, and the caller owns any retained results.
+    pub fn visit_batch_step_material_cover_v1(
+        &self,
+        boundaries: &std::collections::BTreeSet<crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1>,
+        max_parts_per_demand: usize,
+        max_demands: usize,
+        mut visit: impl FnMut(PalwTirPublicRequestV1, PalwTirPublicUnitBoundV1) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_requests_v1};
+        use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1::*;
+        let step_index = |boundary| match boundary {
+            CarryStepLeaf(index) | CommittedStepLeaf(index) | FixedCheckpointStepLeaf(index) | HistoryStepLeaf(index) => Some(index),
+            PromptPosition(_) | GeneratedId(_) => None,
+        };
+        let count = boundaries.iter().copied().filter_map(step_index).count();
+        if count == 0 {
+            return Ok(0);
+        }
+        let mut quote = TirNativeRequestsV1::new();
+        quote.exact_v1::<u64>(count as u64).map_err(|e| e.to_string())?;
+        quote.exact_v1::<(PalwTirPublicRequestV1, PalwTirPublicUnitBoundV1)>(RUN as u64).map_err(|e| e.to_string())?;
+        let _scratch = reserve_native_requests_v1(quote.bytes_v1()).map_err(|e| e.to_string())?;
+        let mut indices = Vec::new();
+        indices.try_reserve_exact(count).map_err(|_| "TIR Batch boundary allocation refused")?;
+        indices.extend(boundaries.iter().copied().filter_map(step_index));
+        indices.sort_unstable();
+        indices.dedup();
+
+        let (mut start, mut demands) = (0, 0usize);
+        while start < indices.len() {
+            let mut end = start + 1;
+            while end < indices.len() && end - start < RUN && indices[end - 1].checked_add(1) == Some(indices[end]) {
+                end += 1;
+            }
+            let partitions = self.batch_step_run_partitions_v1(indices[start], (end - start) as u32, max_parts_per_demand)?;
+            demands =
+                demands.checked_add(partitions.len()).filter(|n| *n <= max_demands).ok_or("TIR Batch demand budget exhausted")?;
+            for (request, bound) in partitions {
+                visit(request, bound)?;
+            }
+            start = end;
+        }
+        Ok(demands)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
