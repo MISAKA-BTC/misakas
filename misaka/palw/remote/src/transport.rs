@@ -90,6 +90,11 @@ pub trait EvidenceProvider: ChunkProvider {
     fn put_chunk(&self, manifest_id: Hash64, index: u32, bytes: &[u8]) -> Result<(), ProviderError>;
     /// Written LAST: a reader must never see a manifest whose chunks are not all there.
     fn put_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> Result<(), ProviderError>;
+    /// Optional fast path for a provider that can reuse its already retained chunks.
+    /// The caller still verifies the full read-back before relying on it.
+    fn try_reuse_manifest(&self, _claim_hex: &str, _manifest: &EvidenceManifestV1) -> bool {
+        false
+    }
 
     // ---- the redemption board (RFC-0009 stage C): where a miner leaves its `RDA4` authorizations and a builder finds them ----
 
@@ -120,12 +125,23 @@ impl EvidenceProvider for crate::evidence::fs::FsProvider {
     }
     fn put_chunk(&self, manifest_id: Hash64, index: u32, bytes: &[u8]) -> Result<(), ProviderError> {
         let path = crate::evidence::fs::chunk_path(&self.root, manifest_id, index);
-        crate::evidence::fs::write_provider_file(&path, bytes).map_err(|e| ProviderError(e.to_string()))
+        crate::evidence::fs::write_provider_chunk(&path, bytes).map_err(|e| ProviderError(e.to_string()))
     }
     fn put_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> Result<(), ProviderError> {
         let path = crate::evidence::fs::manifest_path(&self.root, claim_hex);
         crate::evidence::fs::write_provider_manifest(&path, manifest, &borsh::to_vec(manifest).expect("borsh-serializable"))
             .map_err(|e| ProviderError(e.to_string()))
+    }
+    fn try_reuse_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> bool {
+        crate::evidence::fs::try_extend_provider_manifest(
+            &self.root,
+            claim_hex,
+            manifest,
+            &ManifestLimits::default(),
+            |_| Ok(()),
+            || Ok(()),
+        )
+        .unwrap_or(false)
     }
     fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
         list_redemption_ids(&self.root, || Ok(())).map_err(|e| ProviderError(e.to_string()))
@@ -538,6 +554,13 @@ impl EvidenceProvider for HttpProvider {
         }
         Ok(())
     }
+    fn try_reuse_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> bool {
+        self.manifest_for(claim_hex).is_ok_and(|old| {
+            old.is_some_and(|old| {
+                crate::evidence::fs::is_retention_extension(old, manifest) && self.put_manifest(claim_hex, manifest).is_ok()
+            })
+        })
+    }
     fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
         let url = format!("{}/redemptions/index", self.base);
         let r = self.http.request("GET", &url, None, REDEMPTION_INDEX_CAP * 130).map_err(ProviderError)?;
@@ -664,7 +687,14 @@ pub fn publish_to_providers_v1(
     providers: &[&dyn EvidenceProvider],
     min_verified: usize,
 ) -> Result<PublishReportV1, PublishReportV1> {
-    let report = publish_with_reader(claim_hex, manifest, providers, chunks.len(), |i| Ok(chunks[i].as_slice()));
+    let report = publish_with_reader(
+        claim_hex,
+        manifest,
+        providers,
+        chunks.len(),
+        crate::evidence::fs::publish_chunks_match(manifest, chunks),
+        |i| Ok(chunks[i].as_slice()),
+    );
     if report.verified_copies() >= min_verified.max(1) { Ok(report) } else { Err(report) }
 }
 
@@ -688,7 +718,7 @@ pub fn publish_from_provider_v1(
     for i in 0..manifest.chunks.len() {
         read(i)?;
     }
-    Ok(publish_with_reader(claim_hex, manifest, providers, manifest.chunks.len(), read))
+    Ok(publish_with_reader(claim_hex, manifest, providers, manifest.chunks.len(), true, read))
 }
 
 fn publish_with_reader<B: AsRef<[u8]>>(
@@ -696,17 +726,13 @@ fn publish_with_reader<B: AsRef<[u8]>>(
     manifest: &EvidenceManifestV1,
     providers: &[&dyn EvidenceProvider],
     chunk_count: usize,
+    reuse_allowed: bool,
     read: impl Fn(usize) -> Result<B, String>,
 ) -> PublishReportV1 {
     let manifest_id = manifest_id_v1(manifest);
     let mut per_provider = Vec::new();
     for p in providers {
-        let result = (|| -> Result<(), String> {
-            for i in 0..chunk_count {
-                let bytes = read(i)?;
-                p.put_chunk(manifest_id, i as u32, bytes.as_ref()).map_err(|e| format!("chunk {i}: {e}"))?;
-            }
-            p.put_manifest(claim_hex, manifest).map_err(|e| format!("manifest: {e}"))?;
+        let read_back = || -> Result<(), String> {
             // Read back what the provider now serves.
             match p.manifest_for(claim_hex).map_err(|e| format!("read-back: {e}"))? {
                 Some(m) if manifest_id_v1(&m) == manifest_id => {}
@@ -720,6 +746,17 @@ fn publish_with_reader<B: AsRef<[u8]>>(
                 manifest.verify_chunk(entry.index, &bytes).map_err(|e| format!("read-back chunk {}: {e}", entry.index))?;
             }
             Ok(())
+        };
+        let result = (|| -> Result<(), String> {
+            if reuse_allowed && p.try_reuse_manifest(claim_hex, manifest) && read_back().is_ok() {
+                return Ok(());
+            }
+            for i in 0..chunk_count {
+                let bytes = read(i)?;
+                p.put_chunk(manifest_id, i as u32, bytes.as_ref()).map_err(|e| format!("chunk {i}: {e}"))?;
+            }
+            p.put_manifest(claim_hex, manifest).map_err(|e| format!("manifest: {e}"))?;
+            read_back()
         })();
         per_provider.push(PublishOutcomeV1 { provider: p.provider_id().to_string(), result });
     }
@@ -1150,7 +1187,10 @@ impl RetentionMonitor {
 
 pub mod server {
     use super::*;
-    use crate::evidence::fs::{BoundedFileError, open_bounded_file, read_bounded_file, write_provider_file, write_provider_manifest};
+    use crate::evidence::fs::{
+        BoundedFileError, open_bounded_file, read_bounded_file, try_extend_provider_manifest, write_provider_chunk,
+        write_provider_manifest,
+    };
 
     #[derive(Clone, Debug)]
     pub struct ServerConfig {
@@ -1456,19 +1496,41 @@ pub mod server {
                             Err(why) => respond(&mut stream, 409, why.as_bytes()),
                         }
                     }
-                    Target::Chunk(..) => match write_provider_file(&file, &body) {
+                    Target::Chunk(..) => match write_provider_chunk(&file, &body) {
                         Ok(()) => respond(&mut stream, 201, b"stored"),
                         Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
                     },
                     // The manifest is accepted only if it is well formed AND every chunk it names is already here and hashes to its entry: this
                     // provider never serves a manifest it cannot back.
-                    Target::Manifest(_) => {
+                    Target::Manifest(ref claim) => {
                         let manifest = match decode_manifest(&body) {
                             Ok(m) => m,
                             Err(e) => return respond(&mut stream, 400, e.0.as_bytes()),
                         };
                         if let Err(e) = manifest.validate_shape(&cfg.limits) {
                             return respond(&mut stream, 400, e.to_string().as_bytes());
+                        }
+                        let admit = |additional: u64| {
+                            if additional > 0
+                                && store_size(root, deadline)?.saturating_add(body.len() as u64).saturating_add(additional)
+                                    > cfg.max_store_bytes
+                            {
+                                return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "this provider is full"));
+                            }
+                            Ok(())
+                        };
+                        match try_extend_provider_manifest(root, claim, &manifest, &cfg.limits, admit, || {
+                            remaining_until(deadline).map(|_| ())
+                        }) {
+                            Ok(true) => return respond(&mut stream, 201, b"stored"),
+                            Ok(false) => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::StorageFull => {
+                                return respond(&mut stream, 507, e.to_string().as_bytes());
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                return respond(&mut stream, 409, e.to_string().as_bytes());
+                            }
+                            Err(e) => return respond(&mut stream, 400, e.to_string().as_bytes()),
                         }
                         let id = manifest_id_v1(&manifest);
                         for entry in &manifest.chunks {
@@ -1677,7 +1739,130 @@ mod tests {
         let (bytes, _) = fetch_claim_material_any(&[opened[0].as_ref()], &claim, &roots, &ManifestLimits::default(), h(7)).unwrap();
         assert_eq!(bytes, chunks.concat());
         assert_eq!(opened[0].manifest_for(&claim).unwrap().unwrap(), effective);
+        let raw_id = manifest_id_v1(&raw);
+        let effective_id = manifest_id_v1(&effective);
+        assert_ne!(raw_id, effective_id);
+        for (index, bytes) in chunks.iter().enumerate() {
+            let index = index as u32;
+            assert_eq!(opened[0].fetch_chunk(raw_id, index).unwrap(), *bytes);
+            assert_eq!(opened[0].fetch_chunk(effective_id, index).unwrap(), *bytes);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let before = std::fs::metadata(fs::chunk_path(&dir, raw_id, index)).unwrap();
+                let after = std::fs::metadata(fs::chunk_path(&dir, effective_id, index)).unwrap();
+                assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()), "HTTP extension reused the existing inode");
+            }
+        }
         drop(restarted);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_extension_reuses_chunks_and_a_replacement_cannot_change_the_other_namespace() {
+        use crate::evidence::fs;
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = scratch("retention-fs-links");
+        let claim = claim_hex();
+        let raw = manifest();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        let chunks = chunks();
+        let old = fs::chunk_path(&dir, manifest_id_v1(&raw), 0);
+        let new = fs::chunk_path(&dir, manifest_id_v1(&extended), 0);
+        fs::publish(&dir, &claim, &raw, &chunks).unwrap();
+        fs::publish(&dir, &claim, &extended, &chunks).unwrap();
+        fs::publish(&dir, &claim, &extended, &chunks).unwrap();
+        let inode = |p: &Path| {
+            let meta = std::fs::metadata(p).unwrap();
+            (meta.dev(), meta.ino())
+        };
+        assert_eq!(inode(&old), inode(&new));
+        FsProvider::new(&dir).put_chunk(manifest_id_v1(&raw), 0, b"another write").unwrap();
+        assert_ne!(inode(&old), inode(&new));
+        assert_eq!(std::fs::read(&new).unwrap(), chunks[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn http_retention_extension_falls_back_when_the_old_chunk_is_missing() {
+        let (handle, dir, provider) = up("retention-fallback");
+        let claim = claim_hex();
+        let raw = manifest();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        let chunks = chunks();
+        publish_to_providers_v1(&claim, &raw, &chunks, &[&provider], 1).unwrap();
+        let missing = crate::evidence::fs::chunk_path(&dir, manifest_id_v1(&raw), 1);
+        std::fs::remove_file(&missing).unwrap();
+        assert!(provider.put_manifest(&claim, &extended).unwrap_err().0.contains("409"));
+        assert_eq!(provider.manifest_for(&claim).unwrap(), Some(raw));
+        publish_to_providers_v1(&claim, &extended, &chunks, &[&provider], 1).unwrap();
+        assert_eq!(provider.manifest_for(&claim).unwrap(), Some(extended));
+        assert!(!missing.exists(), "fallback did not rewrite the older namespace");
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn http_retention_extension_reserves_the_existing_logical_quota_before_linking() {
+        use crate::evidence::fs;
+
+        let dir = scratch("retention-logical-cap");
+        let claim = claim_hex();
+        let raw = manifest();
+        let chunks = chunks();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        fs::publish(&dir, &claim, &raw, &chunks).unwrap();
+        let cfg = server::ServerConfig {
+            max_store_bytes: (chunks.iter().map(Vec::len).sum::<usize>() + 2 * borsh::to_vec(&raw).unwrap().len()) as u64,
+            ..Default::default()
+        };
+        let handle = server::start("127.0.0.1:0", dir.clone(), cfg).unwrap();
+        let providers = open_providers_v1(&[ProviderSpecV1::Http(handle.url())]);
+        let provider = providers[0].as_ref();
+        assert!(provider.put_manifest(&claim, &extended).unwrap_err().0.contains("507"));
+        assert_eq!(provider.manifest_for(&claim).unwrap(), Some(raw));
+        assert!(!fs::chunk_path(&dir, manifest_id_v1(&extended), 0).exists());
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_alias_staging_does_not_replace_a_concurrent_manifest() {
+        use crate::evidence::fs;
+
+        let dir = scratch("retention-manifest-cas");
+        let claim = claim_hex();
+        let raw = manifest();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        let mut later = extended.clone();
+        later.retention_until_daa += 1;
+        let chunks = chunks();
+        fs::publish(&dir, &claim, &raw, &chunks).unwrap();
+        let provider = FsProvider::new(&dir);
+        for (i, chunk) in chunks.iter().enumerate() {
+            provider.put_chunk(manifest_id_v1(&later), i as u32, chunk).unwrap();
+        }
+        let raced = fs::try_extend_provider_manifest(
+            &dir,
+            &claim,
+            &extended,
+            &ManifestLimits::default(),
+            |_| {
+                provider.put_manifest(&claim, &later).unwrap();
+                Ok(())
+            },
+            || Ok(()),
+        );
+        assert_eq!(raced.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(EvidenceProvider::manifest_for(&provider, &claim).unwrap(), Some(later));
+        assert_eq!(provider.fetch_chunk(manifest_id_v1(&raw), 0).unwrap(), chunks[0]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
