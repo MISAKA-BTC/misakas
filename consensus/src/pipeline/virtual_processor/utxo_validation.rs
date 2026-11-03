@@ -379,6 +379,36 @@ pub(super) struct PalwRoundVerdictsV1 {
 }
 
 impl<'a> UtxoProcessingContext<'a> {
+    pub(super) fn can_replay_relay_fees(&self) -> bool {
+        self.palw_round_verdicts.as_ref().is_none_or(|round| round.fee_budget.is_none() || round.permitted.is_empty())
+    }
+
+    /// Rewind the disposable acceptance pass before reapplying with fees.
+    /// This is available only when no Round fee budget can alter acceptance.
+    pub(super) fn restart_with_relay_fee_plan(
+        &mut self,
+        selected_parent_multiset: MuHash,
+        plan: NativeRelayFeePlanV2,
+    ) -> Result<kaspa_consensus_core::acceptance_data::AcceptanceData, NativeCoverageV1> {
+        if !self.can_replay_relay_fees() {
+            return Err(NativeCoverageV1::unsupported::<Self>("relay fee replay", "Round fee admission requires prefix replanning"));
+        }
+        self.multiset_hash = selected_parent_multiset;
+        self.mergeset_diff = UtxoDiff::default();
+        self.accepted_tx_ids.clear();
+        self.positive_native_carriers = Default::default();
+        self.mergeset_rewards.clear();
+        self.reserve_accrual = 0;
+        self.palw_v2_accepted_tx_fees.clear();
+        self.palw_v2_rent_available_fees.clear();
+        self.palw_round_fee_incomes.clear();
+        self.palw_escrow_locks.provisional.clear();
+        self.palw_escrow_settlements.clear();
+        self.palw_assignment_settlements.clear();
+        self.relay_fee_plan = Some(plan);
+        Ok(std::mem::take(&mut self.mergeset_acceptance_data))
+    }
+
     pub fn new(ghostdag_data: Refs<'a, GhostdagData>, selected_parent_multiset_hash: MuHash) -> Self {
         let mergeset_size = ghostdag_data.mergeset_size();
         Self {
@@ -416,6 +446,38 @@ impl<'a> UtxoProcessingContext<'a> {
     pub fn selected_parent(&self) -> BlockHash {
         self.ghostdag_data.selected_parent
     }
+}
+
+pub(super) fn relay_acceptance_matches(original: &[MergesetBlockAcceptanceData], replay: &[MergesetBlockAcceptanceData]) -> bool {
+    original.len() == replay.len()
+        && original.iter().zip(replay).all(|(before, after)| {
+            before.block_hash == after.block_hash
+                && before
+                    .accepted_transactions
+                    .iter()
+                    .map(|tx| (tx.transaction_id, tx.index_within_block))
+                    .eq(after.accepted_transactions.iter().map(|tx| (tx.transaction_id, tx.index_within_block)))
+        })
+}
+
+#[cfg(test)]
+#[test]
+fn relay_acceptance_replay_checks_carrier_block_index_and_order() {
+    let block =
+        |word, entries| MergesetBlockAcceptanceData { block_hash: BlockHash::from_u64_word(word), accepted_transactions: entries };
+    let tx = |word, index| AcceptedTxEntry { transaction_id: BlockHash::from_u64_word(word), index_within_block: index };
+    let original = vec![block(1, vec![tx(2, 0), tx(3, 1)]), block(4, vec![])];
+    assert!(relay_acceptance_matches(&original, &original.clone()));
+    let mut replay = original.clone();
+    replay[0].accepted_transactions[1].index_within_block = 2;
+    assert!(!relay_acceptance_matches(&original, &replay));
+    let mut replay = original.clone();
+    replay[0].accepted_transactions.swap(0, 1);
+    assert!(!relay_acceptance_matches(&original, &replay));
+    let mut replay = original.clone();
+    replay[1].block_hash = BlockHash::from_u64_word(5);
+    assert!(!relay_acceptance_matches(&original, &replay));
+    assert!(!relay_acceptance_matches(&original, &original[..1]));
 }
 
 /// **Audit C-08 part three: what `tx` must leave unclaimed, in total** — the sum over its inputs of

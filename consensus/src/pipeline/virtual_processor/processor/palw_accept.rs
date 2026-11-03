@@ -610,6 +610,60 @@ impl VirtualStateProcessor {
         })
     }
 
+    pub(super) fn preview_candidate_relay_fees_v2(
+        &self,
+        ctx: &UtxoProcessingContext<'_>,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        header: &Header,
+        actions: &[kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2],
+    ) -> Result<Option<NativeRelayFeePlanV2>, PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
+        if !ctx.can_replay_relay_fees()
+            || !actions.iter().any(|action| action.relay_carrier_fees_v2().is_some())
+            || self.palw_committed_root_v1(state) != header.palw_state_root
+        {
+            return Ok(None);
+        }
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        let bytes = (actions.len() as u64)
+            .checked_mul(size_of::<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>() as u64)
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("candidate relay preview actions"))?;
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("candidate relay preview actions", why);
+        let _lease = reserve_native_requests_v1(bytes)?.ok_or_else(|| fault("preview owner is not armed"))?;
+        let mut preview_actions = Vec::new();
+        preview_actions.try_reserve_exact(actions.len()).map_err(|_| fault("preview allocation refused"))?;
+        if preview_actions.capacity() > actions.len() {
+            return Err(fault("preview allocation exceeds reserved capacity").into());
+        }
+        preview_actions.extend_from_slice(actions);
+        let objects = self.palw_v2_objects_of_block(
+            &ctx.mergeset_acceptance_data,
+            state,
+            point.block,
+            point.daa_score,
+            &ctx.palw_v2_accepted_tx_fees,
+            &ctx.palw_v2_rent_available_fees,
+        )?;
+        let (_, NativeAssignmentRehearsalResultV2::Planned(plan)) = self.palw_v2_accepted_objects_and_raw_assignments_v2(
+            state,
+            state_params,
+            point,
+            objects,
+            point.block,
+            Self::palw_own_attempt_class_of_header_v1(header),
+            &ctx.palw_round_fee_incomes,
+            &ctx.palw_escrow_settlements,
+            preview_actions,
+            &ctx.accepted_tx_ids,
+            true,
+        )?
+        else {
+            return Err(fault("ordered preview returned an observed schedule").into());
+        };
+        Ok((plan.debit_count() != 0).then_some(plan))
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) fn palw_v2_accepted_objects_and_raw_assignments_v2(
         &self,

@@ -2541,29 +2541,43 @@ impl VirtualStateProcessor {
                         ctx.positive_accepting_point = Some(positive_point);
                     }
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
-                    if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
-                        return Err(fault.into());
-                    }
-                    // Retain actual UTXO provenance through the PALW phase. Its
-                    // native Court consumer is UNASSIGNED: no admission, lock,
-                    // row mutation or credit is created by this handoff.
-                    let positive_native_phase_two = std::mem::take(&mut ctx.positive_native_carriers)
-                        .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, positive_point, ctx.selected_parent())
-                        .map_err(|why| {
-                            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                                "Positive carrier phase-two provenance",
-                                &format!("{why:?}"),
+                    let take_assignment_actions = |ctx: &mut UtxoProcessingContext<'_>| {
+                        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+                        if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
+                            return Err(fault);
+                        }
+                        std::mem::take(&mut ctx.positive_native_carriers)
+                            .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, positive_point, ctx.selected_parent())
+                            .map_err(|why| {
+                                NativeCoverageV1::unsupported::<Self>("Positive carrier phase-two provenance", &format!("{why:?}"))
+                            })?
+                            .into_assignment_raw_actions_v2(
+                                self,
+                                &(&selected_parent_utxo_view).compose(&ctx.mergeset_diff),
+                                palw_state.as_deref(),
                             )
+                    };
+                    let mut assignment_raw_actions = take_assignment_actions(&mut ctx)?;
+                    if let Some(state) = palw_state.as_deref()
+                        && let Some(plan) =
+                            self.preview_candidate_relay_fees_v2(&ctx, state, &positive_point, &header, &assignment_raw_actions)?
+                    {
+                        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+                        drop(assignment_raw_actions);
+                        let parent_multiset = self.utxo_multisets_store.get(selected_parent).map_err(|why| {
+                            NativeCoverageV1::unsupported::<Self>("relay fee replay parent MuHash", &why.to_string())
                         })?;
-                    // These actual accepted carriers reach a separate bounded
-                    // Assignment decoder. Until the native complete reservation
-                    // owner exists, its precise prerequisite remains visible
-                    // and creates no Assignment/nonce/lock/credit mutation.
-                    let assignment_raw_actions = positive_native_phase_two.into_assignment_raw_actions_v2(
-                        self,
-                        &(&selected_parent_utxo_view).compose(&ctx.mergeset_diff),
-                        palw_state.as_deref(),
-                    )?;
+                        let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan)?;
+                        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
+                        if !super::utxo_validation::relay_acceptance_matches(&original, &ctx.mergeset_acceptance_data) {
+                            return Err(NativeCoverageV1::unsupported::<Self>(
+                                "relay fee replay",
+                                "accepted blocks, transactions or carrier positions changed",
+                            )
+                            .into());
+                        }
+                        assignment_raw_actions = take_assignment_actions(&mut ctx)?;
+                    }
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
                     // native (payment) transactions are counted apart from PALW carriers and the first

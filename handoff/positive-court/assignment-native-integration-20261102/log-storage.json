@@ -1366,5 +1366,29 @@
     "stored_sha256": "6c38c67b5104b1202bb129931e8a1fcff26e87e8c606160626499addc9f85b75",
     "raw_bytes": 542103,
     "stored_bytes": 36827
+  },
+  {
+    "raw_name": "relay-candidate-replay-clippy.log",
+    "stored_name": "relay-candidate-replay-clippy.log.gz",
+    "raw_sha256": "91c3ae6fc706dd78ed7b2b9cbf4cdb846ec1298d68b14daf254d903b8a4c6966",
+    "stored_sha256": "fe59fd78cef9385629fb87239bff2df5f672097afd781a04e012afa88ae23a72",
+    "raw_bytes": 340747,
+    "stored_bytes": 23534
+  },
+  {
+    "raw_name": "relay-candidate-replay-runtime.log",
+    "stored_name": "relay-candidate-replay-runtime.log.gz",
+    "raw_sha256": "83e3ea47f75e50157c0674a09b2bb7168706398d0acb24294a6e784184250383",
+    "stored_sha256": "45845e126d9f1cd8b4ec431d612ff3ad6a597a4a4c81cda9f8beadbe09e27827",
+    "raw_bytes": 192,
+    "stored_bytes": 152
+  },
+  {
+    "raw_name": "relay-candidate-replay-test-check.log",
+    "stored_name": "relay-candidate-replay-test-check.log.gz",
+    "raw_sha256": "670e55c1124538622aaef8e8ef75438fa45c04008ab0bc3dbcc39d9ef13b245e",
+    "stored_sha256": "a2102aeba59d171ca59df4214fa71c238fd3041539a12605329ced5c6b7d0956",
+    "raw_bytes": 542103,
+    "stored_bytes": 36830
   }
 ]

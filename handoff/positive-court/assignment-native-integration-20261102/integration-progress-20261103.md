@@ -1044,3 +1044,26 @@ typechecks passed. The isolated exact-source collector and UTXO carrier
 matcher ran two tests. They covered matched and mismatched prefixes,
 ordinal, and gross, mandatory and pre-relay fee mismatches. Full native
 UTXO, Round and coinbase execution with a plan was not run.
+
+## Candidate pre-coinbase relay debit replay
+
+Candidate validation now runs the ordered planner when it captures op14
+actions, the accepting header commits the actual parent state, and no active
+Round fee budget can change the accepted set. For a nonempty debit plan it
+discards the preliminary raw actions, resets the disposable UTXO acceptance
+outputs to the selected parent, and reruns the shared UTXO walk with the plan.
+The second pass must match every accepted block, transaction, carrier index
+and position before continuing. It rebuilds the observed native actions from
+that pass. The planned debit reaches the candidate's reward verification
+through the existing net-fee sink and observed-registration checks.
+
+This is the stable-acceptance candidate path. A Round reward budget that can
+change acceptance still needs ordered prefix replanning, and virtual/template
+construction still needs an equivalent fee preview using its own point.
+Published activation gates stay closed. No actual funded candidate or template
+was executed in this step.
+
+Strict Contract/Core/Consensus library Clippy and all Consensus test-target
+typechecks passed. The exact-source acceptance comparison ran one isolated
+test with changed carrier indices, transaction order, block identity and
+missing merged groups. No full candidate with a relay fee plan ran.
