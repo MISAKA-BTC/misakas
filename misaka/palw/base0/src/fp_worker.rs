@@ -394,6 +394,12 @@ pub struct FpWorkerFamilyV1 {
     pub artifact: Option<MappedArtifactV1>,
 }
 
+struct FpWorkerClassV1 {
+    facts: PalwFpClassFactsV3,
+    trace_scheme_id: Hash64,
+    n_ctx: u32,
+}
+
 /// **One mapped artifact, and everything derived from it once.**
 ///
 /// Held for the life of the process in `v3-serve` and for the life of one job in `v3-job`. The
@@ -407,6 +413,7 @@ pub struct FpWorkerRuntime<B: PalwExecutionBackendV1> {
     network_id: Vec<u8>,
     tokenizer: QwenTokenizer,
     manifest: PalwFpWorkerManifestV1,
+    class_facts: PalwFpClassFactsV3,
     retention_schema: &'static str,
     retention_family: &'static str,
     /// SA-6: re-verified before every job. See [`MappedArtifactV1`].
@@ -491,6 +498,54 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
         load_ms: u64,
         prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
     ) -> Result<Self, String> {
+        let class = FpWorkerClassV1 {
+            facts: PalwFpClassFactsV3 {
+                shape_profile_id: profile.shape_profile_id(),
+                model_profile_id: family.runtime_identity,
+                runtime_class_id: family.runtime_identity,
+                runtime_manifest_hash: Hash64::default(),
+                cu_ruleset_id: Hash64::default(),
+            },
+            trace_scheme_id: profile.logits_scheme_id,
+            n_ctx: profile.n_ctx,
+        };
+        let form = kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(prompt_ids_form, profile);
+        Self::new_with_class(backend, class, tokenizer, family, network_id, load_ms, form)
+    }
+
+    /// Serve the class facts used by the TIR backend, including any declared semantic identities.
+    pub fn new_tir(
+        backend: B,
+        context: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+        tokenizer: QwenTokenizer,
+        family: FpWorkerFamilyV1,
+        network_id: Vec<u8>,
+        load_ms: u64,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<Self, String> {
+        let class = FpWorkerClassV1 {
+            facts: PalwFpClassFactsV3 {
+                model_profile_id: context.model_profile_id,
+                runtime_manifest_hash: context.runtime_manifest_hash,
+                runtime_class_id: context.runtime_class_id,
+                shape_profile_id: context.shape_profile_id,
+                cu_ruleset_id: context.cu_ruleset_id,
+            },
+            trace_scheme_id: context.trace_scheme_id,
+            n_ctx: context.max_context_tokens,
+        };
+        Self::new_with_class(backend, class, tokenizer, family, network_id, load_ms, prompt_ids_form)
+    }
+
+    fn new_with_class(
+        backend: B,
+        class: FpWorkerClassV1,
+        tokenizer: QwenTokenizer,
+        family: FpWorkerFamilyV1,
+        network_id: Vec<u8>,
+        load_ms: u64,
+        prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+    ) -> Result<Self, String> {
         if network_id.is_empty() {
             return Err("the network id is empty: every committed root hangs off a context hash that absorbs it, and a seat \
                         derives that hash from its node's own network name"
@@ -519,7 +574,7 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
         // which close arm can adjudicate the class and which recomputation a seat runs, and it
         // sits inside `shape_profile_id`. Announcing a scheme the profile does not declare would
         // let a gateway build requests for a court arm this class cannot reach.
-        let trace_scheme_id = profile.logits_scheme_id;
+        let trace_scheme_id = class.trace_scheme_id;
         if trace_scheme_id != kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1() {
             return Err(format!(
                 "{} registers the logits scheme {} — the free-prompt worker path commits and opens the TILED scheme, and a \
@@ -542,23 +597,15 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
         let manifest = PalwFpWorkerManifestV1 {
             version: PALW_FP_WORKER_MANIFEST_V1_VERSION,
             model_id: family.model_id,
-            class_id: profile.shape_profile_id(),
-            model_profile_id: family.runtime_identity,
-            // Zero on both families today: neither runtime ships a manifest of its own binary, and
-            // the request pins it so the two sides agree about that rather than about nothing.
-            runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: family.runtime_identity,
-            shape_profile_id: profile.shape_profile_id(),
+            class_id: class.facts.shape_profile_id,
+            model_profile_id: class.facts.model_profile_id,
+            runtime_manifest_hash: class.facts.runtime_manifest_hash,
+            runtime_class_id: class.facts.runtime_class_id,
+            shape_profile_id: class.facts.shape_profile_id,
             trace_scheme_id,
             tokenizer_id: family.tokenizer_id,
-            // **The CLASS's registered width, read from the catalog row's profile — never the
-            // artifact's rotary span.** The dense artifact's table covers 512 positions and the
-            // class registers 16; a runtime that answered at 512 would be answering wider than
-            // the court admits, which is exactly the two-products split R0 exists to close. The
-            // width becomes practical by moving the class table (Phase B), not by widening the
-            // runtime.
-            n_ctx: profile.n_ctx,
-            prefill_single_batch_cap: profile.n_ctx,
+            n_ctx: class.n_ctx,
+            prefill_single_batch_cap: class.n_ctx,
             vocab: family.vocab,
             special_tokens,
             eog_token_ids,
@@ -568,11 +615,12 @@ impl<B: PalwExecutionBackendV1> FpWorkerRuntime<B> {
             network_id,
             tokenizer,
             manifest,
+            class_facts: class.facts,
             retention_schema: family.retention_schema,
             retention_family: family.retention_family,
             artifact: family.artifact,
             load_ms,
-            prompt_ids_form: kaspa_consensus_core::palw_prompt_ids_v1::palw_prompt_ids_form_of_class_v1(prompt_ids_form, profile),
+            prompt_ids_form,
             token_table: std::sync::OnceLock::new(),
         })
     }
@@ -1004,14 +1052,7 @@ pub fn run_one_job_v1<B: PalwExecutionBackendV1>(
 
     // The schedule root, derived exactly as `palw_fp_commitment_v3` derives it, so the gateway's
     // `to_commitment` equals the canonical assembly byte for byte.
-    let class_facts = PalwFpClassFactsV3 {
-        model_profile_id: rt.manifest.model_profile_id,
-        runtime_manifest_hash: rt.manifest.runtime_manifest_hash,
-        runtime_class_id: rt.manifest.runtime_class_id,
-        shape_profile_id: rt.manifest.shape_profile_id,
-        cu_ruleset_id: Hash64::default(),
-    };
-    let context = palw_fp_job_context_v3(&job, &class_facts, &run.facts, &rt.network_id)
+    let context = palw_fp_job_context_v3(&job, &rt.class_facts, &run.facts, &rt.network_id)
         .map_err(|e| format!("the finished run implies no context: {e:?}"))?;
     let (schedule_root, _calls) = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
         &context.context_hash(),

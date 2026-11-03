@@ -1601,6 +1601,55 @@ mod tests {
         ));
     }
     #[test]
+    fn public_t12_door_rejects_a_tokenizer_stage_even_with_minimal_inventory() {
+        use crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1;
+        let mut f = fixture(false, false);
+        let t12 = crate::config::params::palw_t12_shipped_params();
+        assert!(t12.palw_class_semantics_v1.is_none(), "the shipped tokenizer declaration is still dormant");
+        let cost = t12.palw_tir_frame_cost_v1.expect("the shipped public TFP1 cost");
+        f.rules.config = cost.config;
+        f.rules.clock = cost.clock;
+        f.semantics.raw_tokenizer_bytes = Some(2);
+        f.semantics.tokenizer_key_events = Some(0);
+        f.semantics.token_table_root = Some(Hash64::from_u64_word(0x72));
+        f.semantics.rendering_rule = Some(crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1);
+        let inventory = PalwTokenizerArtifactInventoryCertificateV1 {
+            artifact_hash: f.semantics.tokenizer_id,
+            actual_bytes: 2,
+            inventory_id: Hash64::from_u64_word(0x73),
+            opener: f.geometry.producer,
+            opened_daa: 98,
+            completed_daa: 99,
+        };
+        let minimum_table_daa = ((crate::palw_fp_constraint_job_v1::PALW_TOKEN_TABLE_MAX_FILE_BYTES_V1 as u64)
+            .div_ceil(u64::from(crate::palw_public_token_table_v1::PALW_PUBLIC_TABLE_PART_BYTES_V1))
+            + 2)
+            * cost.config.prices.inclusion_margin_daa;
+        let quoted = derive_tir_public_allocation_native_v2(
+            &f.geometry,
+            &f.original,
+            &f.header,
+            &f.record,
+            &f.layout,
+            Some(&f.semantics),
+            Some(&inventory),
+            f.rules,
+        )
+        .expect("the native quote computes a typed refusal");
+        match quoted {
+            PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => {
+                let [PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon { required, allowed }] = missing.as_slice() else {
+                    panic!("expected a horizon refusal, got {missing:?}");
+                };
+                assert_eq!(*allowed, 3_120);
+                assert!(*required >= minimum_table_daa && minimum_table_daa > *allowed);
+                eprintln!("public t12 TFP1 fixture: required {required} DAA, allowed {allowed}, table alone {minimum_table_daa}");
+            }
+            _ => panic!("the shipped cost unexpectedly admits the tokenizer stage"),
+        }
+    }
+
+    #[test]
     fn generic_native_tir_gets_real_sum_without_a_fourth_semantic_family() {
         let f = fixture(false, false);
         let plan = complete(&f, false);

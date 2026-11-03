@@ -646,8 +646,8 @@ pub fn palw_tir_dispute_door_fit_v1(
     let span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1.checked_add(block.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1))?;
     let rounds = rounds.checked_add(u64::from(levels))?.checked_mul(PALW_TIR_DISPUTE_ROUND_DAA_V1)?;
     let fixed = PALW_TIR_DISPUTE_PREP_DAA_V1.checked_add(PALW_TIR_DISPUTE_OUTPUT_DAA_V1)?;
-    let carriers = contenders.checked_add(1)?.checked_mul(span)?;
-    fixed.checked_add(rounds)?.checked_add(carriers)
+    let wait = crate::palw_tir_adjudication_slot_v1::palw_tir_adjudication_wait_v1(contenders, span)?;
+    fixed.checked_add(rounds)?.checked_add(wait)?.checked_add(span.checked_mul(2)?)
 }
 
 /// The extra levels in `0..=max_levels` that minimise the door, with the door (ties take the fewer levels).

@@ -94,6 +94,9 @@ USAGE:
     palw-class declare-layout --network <id> --out <path> [--max-context N] [--tile-len N] [--h-chunk N]
                          [--logits-scheme tiled|flat] [--logits-tile N] [--model-id <model-id>] [--metadata-profile legacy-build-v1|correctly-rounded-v16]
                          [--parent <the parent's declared .palwtir>] <lowered.palwtir>
+    palw-class tir-fp-setup --network <id> [--drill-salt <hex>] --artifact <class.palwtir>
+                         --container <index.palwart> --semantics <declaration.borsh>
+                         --key-file <registrant seed> --out <fresh-dir>
     palw-class improve <policy|hard-case|opt-in|setter-set|dataset|artifact|licence|candidate|adapter-list|rollback>
                          --network <id> [--drill-salt <hex>] --key-file <ml-dsa-87 seed> [--bond <txid:index>]
                          [--spec <json>] [--parent <parent.palwtir> --section <candidate.palwtirs> | --artifact <candidate.palwtir>]
@@ -360,6 +363,7 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     let network = take_flag(&mut args, "--network");
     match command.as_str() {
+        "tir-fp-setup" => tir_fp_setup(&mut args, network.as_deref()),
         "kernel-params" => {
             let limit = |value: Option<String>, name: &str| -> Result<u64, String> {
                 value
@@ -2356,6 +2360,86 @@ fn improve_eval(args: &mut Vec<String>) -> Result<(), String> {
 
 /// `composite`: a LoRA candidate's container checked against its parent's, its sections rooted, and
 /// (with `out`) written again with the record in its provenance.
+/// Prepare the class registrant's immutable tokenizer declaration and PALWART3 binding.
+fn tir_fp_setup(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> {
+    use kaspa_consensus_core::{
+        config::drill::{PalwDrillSaltV1, palw_chain_params_v1},
+        palw_attempt_v2::palw_network_domain_v2_for,
+        palw_class_semantics_v1::{
+            PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1, PalwClassSemanticsDeclarationV1, palw_class_semantics_message_v1,
+        },
+        palw_tir_admission_v1::palw_tir_class_record_v1,
+        palw_tir_container_v1::{
+            PALW_TIR_CONTAINER_BINDING_SIGNATURE_CONTEXT_V1, check_tir_container_binding_v1, palw_tir_container_binding_message_v1,
+        },
+    };
+    use kaspa_pq_validator_core::{MessageSigner, ValidatorKey, load_validator_seed};
+    use misaka_palw_sdk::{
+        lineages::tir::TirLineageV1,
+        tir_container::{tir_container_binding_object_v1, tir_container_binding_v1},
+    };
+    use misaka_palw_tir_artifact::palwart_v3::PalwArtV3;
+    use std::path::Path;
+
+    let network: NetworkId = network.ok_or("--network is required")?.parse().map_err(|why| format!("--network: {why}"))?;
+    let salt = take_flag(args, "--drill-salt").map(|s| PalwDrillSaltV1::from_hex(&s).map_err(|why| why.to_string())).transpose()?;
+    let params = palw_chain_params_v1(network, salt.as_ref())?;
+    let domain = palw_network_domain_v2_for(params.net.to_string().as_bytes(), Some(params.genesis.hash));
+    let mut require = |flag: &str| take_flag(args, flag).ok_or_else(|| format!("{flag} is required"));
+    let artifact = require("--artifact")?;
+    let container = require("--container")?;
+    let semantics = require("--semantics")?;
+    let key_file = require("--key-file")?;
+    let out = PathBuf::from(require("--out")?);
+    if !args.is_empty() || out.exists() {
+        return Err("tir-fp-setup requires a fresh output directory and recognized options".into());
+    }
+
+    let entry = TirLineageV1::open_entry(Path::new(&artifact))?;
+    let class_id = entry.class_id();
+    let (record, _) = palw_tir_class_record_v1(&entry.class, &entry.artifact_root).map_err(|why| why.to_string())?;
+    if std::fs::metadata(&semantics).map_err(|why| why.to_string())?.len() > 4096 {
+        return Err("the tokenizer declaration exceeds 4096 bytes".into());
+    }
+    let declaration: PalwClassSemanticsDeclarationV1 =
+        borsh::from_slice(&std::fs::read(&semantics).map_err(|why| why.to_string())?).map_err(|why| why.to_string())?;
+    declaration.check().map_err(str::to_owned)?;
+    if declaration.class_id != class_id
+        || declaration.artifact_root != entry.artifact_root
+        || declaration.tokenizer_id != record.tokenizer_id
+    {
+        return Err("the tokenizer declaration does not bind the selected TIR class and artifact".into());
+    }
+    let package = PalwArtV3::open(Path::new(&container)).map_err(|why| why.to_string())?;
+    let binding = tir_container_binding_v1(&package.header, class_id)?;
+    check_tir_container_binding_v1(&binding, &class_id, &entry.artifact_root, &record, 0).map_err(str::to_owned)?;
+
+    let key = ValidatorKey::from_seed(load_validator_seed(&key_file)?);
+    let semantics_signature = key.sign_message(
+        palw_class_semantics_message_v1(domain, &declaration).as_byte_slice(),
+        PALW_CLASS_SEMANTICS_SIGNATURE_CONTEXT_V1,
+    )?;
+    let container_signature = key.sign_message(
+        palw_tir_container_binding_message_v1(domain, &binding).as_byte_slice(),
+        PALW_TIR_CONTAINER_BINDING_SIGNATURE_CONTEXT_V1,
+    )?;
+    let files = [
+        (
+            "class-semantics.object",
+            PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { declaration: Box::new(declaration), signature: semantics_signature },
+        ),
+        ("container-binding.object", tir_container_binding_object_v1(binding, container_signature)),
+    ];
+    std::fs::create_dir(&out).map_err(|why| why.to_string())?;
+    for (name, object) in files {
+        let bytes = borsh::to_vec(&object).map_err(|why| why.to_string())?;
+        let path = out.join(name);
+        std::fs::write(&path, bytes).map_err(|why| format!("{}: {why}", path.display()))?;
+    }
+    println!("Prepared signed setup objects for {class_id} on {network} in {}", out.display());
+    Ok(())
+}
+
 /// **`improve <kind>`** (RFC-0004, A10): build and sign one of the Model Improvement Protocol's objects.
 fn improve(args: &mut Vec<String>, network: Option<&str>) -> Result<(), String> {
     use kaspa_consensus_core::palw_improve_artifact_v1::PalwTirArtifactRefV1;

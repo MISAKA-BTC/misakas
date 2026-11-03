@@ -596,6 +596,23 @@ pub fn palw_tir_public_original_quote_v1(
     if original.job.tail.is_some() && !params.family_supplier_active_at(now_daa) {
         return Ok(None);
     }
+    let class = original.job.class_id;
+    if base.tir_class_v1(&class).is_some() {
+        if extras.tir_container_identity_active && crate::palw_tir_container_v1::palw_tir_bound_container_v1(base, class).is_none() {
+            return Err(PalwStateV2Error::ClassNotRewardable {
+                class,
+                code: crate::palw_tir_container_v1::PALW_TIR_UNBOUND_CONTAINER_CODE_V1,
+                why: "the TIR class has no accepted PALWART3 container binding".into(),
+            });
+        }
+        let tokenizer_material =
+            base.class_semantics_v1(&class).is_some_and(|s| s.raw_tokenizer_bytes.is_some() && s.tokenizer_key_events.is_some());
+        if let Some((code, why)) =
+            crate::palw_g14_gates_v1::palw_g14_route_fp_refusal_v1(params, now_daa, Some(original), true, tokenizer_material)
+        {
+            return Err(PalwStateV2Error::ClassNotRewardable { class, code, why });
+        }
+    }
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
     let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header)?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);

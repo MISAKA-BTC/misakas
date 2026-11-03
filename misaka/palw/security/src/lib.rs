@@ -51,7 +51,9 @@ mod linux;
 /// | `MISAKA_PALW_GGUF` | `misaka-palw-worker` (`pinned_model_path_v2`), the Qwen3.6 FP worker's tokenizer source |
 /// | `MISAKA_PALW_GOLDEN` | `misaka-palw-worker`'s boot golden gate |
 /// | `MISAKA_PALW_ARTIFACT` | the A16 / Qwen3.6 free-prompt workers' pinned artifact |
-/// | `MISAKA_PALW_TOKENIZER` | the A16 free-prompt worker's tokenizer |
+/// | `MISAKA_PALW_TOKENIZER` | the free-prompt worker's tokenizer |
+/// | `MISAKA_PALW_TIR_CLASS_ID` | the selected TIR class's public ID |
+/// | `MISAKA_PALW_TIR_SEMANTICS` | the public tokenizer declaration file for that class |
 /// | `MISAKA_PALW_MODEL_ID` | the Qwen3.6 free-prompt worker's registered model id |
 /// | `MISAKA_PALW_NETWORK_ID` | BOTH free-prompt workers, as an INPUT to the context hash — and REQUIRED by both: they refuse to boot without it |
 ///
@@ -85,6 +87,8 @@ pub const PALW_WORKER_ENV_ALLOWLIST: &[&str] = &[
     "MISAKA_PALW_GOLDEN",
     "MISAKA_PALW_ARTIFACT",
     "MISAKA_PALW_TOKENIZER",
+    "MISAKA_PALW_TIR_CLASS_ID",
+    "MISAKA_PALW_TIR_SEMANTICS",
     "MISAKA_PALW_MODEL_ID",
     "MISAKA_PALW_NETWORK_ID",
 ];

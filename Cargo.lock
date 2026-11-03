@@ -6432,6 +6432,7 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-challenge",
  "misaka-palw-gen",
+ "misaka-palw-host-security",
  "misaka-palw-kernel",
  "misaka-palw-panel",
  "misaka-palw-tir",

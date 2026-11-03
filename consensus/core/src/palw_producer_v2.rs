@@ -681,8 +681,7 @@ pub fn palw_producer_facts_v4(
         real_attempts_refused: false,
         rider_pwu: Vec::new(),
         is_base_class: class_id == state_params.base_class_id(),
-        fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
-            || state.fp_lane_certification(&class_id).is_some(),
+        fp_certified: crate::palw_state_v2::palw_fp_lane_available_v1(state, state_params, &class_id, false),
         // Lane g14-court-capacity-r2: a court-demanding (fused-attention) class past `palw_court_capacity_v1` promises the longer
         // retention its court guarantee needs; every other class the minimum.
         min_trace_retention_daa: crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(

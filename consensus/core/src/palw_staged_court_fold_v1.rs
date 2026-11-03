@@ -1520,16 +1520,7 @@ impl TransitionBuilder<'_> {
                     .filter(|claim| self.state.claims.get(*claim).is_some_and(|c| c.phase.is_terminal()))
                     .copied()
                     .collect();
-                for claim in held_terminal {
-                    let operational = self
-                        .state
-                        .claims
-                        .get(&claim)
-                        .map(|row| super::terminal_operational_release_at_v1(row, self.params, None))
-                        .transpose()?
-                        .flatten();
-                    self.state.deadlines.retain(|(deadline, id)| *id != claim || operational == Some(*deadline));
-                }
+                self.state.deadlines.retain(|(_, claim)| !held_terminal.contains(claim));
             }
         }
         if old != new {

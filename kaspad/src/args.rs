@@ -306,6 +306,8 @@ pub struct Args {
     /// authorized claim into a receipt block of its OWN bond and keeps the authorization's builder fee; the miner leg is paid by the chain to
     /// the executor bond's registered payout. Inert (and the directory unread) while the fence is dormant — every shipped preset.
     pub palw_redemption_auth_dir: Option<String>,
+    /// Public RFC-0009 providers to mirror into the builder authorization directory.
+    pub palw_redemption_providers: Option<String>,
     /// **RFC-0009 stage B: evidence provider directories** (`--palw-evidence-provider-dir=<dir>[,<dir>...]`). The panel also answers a material pull from
     /// these (a manifest that agrees with the claim's on-chain roots, every chunk checked against it); the producer pull stays the fallback.
     pub palw_evidence_provider_dir: Option<String>,
@@ -1021,6 +1023,7 @@ impl Default for Args {
             palw_attempt_retention_minutes: 60,
             palw_riders: 0,
             palw_redemption_auth_dir: None,
+            palw_redemption_providers: None,
             palw_evidence_provider_dir: None,
             palw_register_class: None,
             palw_register_bond: false,
@@ -3139,6 +3142,13 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-redemption-providers")
+                .long("palw-redemption-providers")
+                .value_name("providers")
+                .require_equals(true)
+                .help("Comma-separated RFC09 directory or HTTP providers. Mirror signed RDA4 bundles into the builder directory after the V4 fence."),
+        )
+        .arg(
             Arg::new("palw-riders")
                 .long("palw-riders")
                 .value_name("riders")
@@ -4242,6 +4252,10 @@ impl Args {
             palw_class_resident_bytes: m.get_one::<u64>("palw-class-resident-bytes").copied().or(defaults.palw_class_resident_bytes),
             palw_riders: m.get_one::<u32>("palw-riders").copied().unwrap_or(defaults.palw_riders),
             palw_redemption_auth_dir: m.get_one::<String>("palw-redemption-auth-dir").cloned().or(defaults.palw_redemption_auth_dir),
+            palw_redemption_providers: m
+                .get_one::<String>("palw-redemption-providers")
+                .cloned()
+                .or(defaults.palw_redemption_providers),
             palw_evidence_provider_dir: m
                 .get_one::<String>("palw-evidence-provider-dir")
                 .cloned()

@@ -556,6 +556,37 @@ pub fn publish_to_providers_v1(
     if report.verified_copies() >= min_verified.max(1) { Ok(report) } else { Err(report) }
 }
 
+/// Offer an RFC09 attempt capture through the ordinary claim evidence transport.
+pub fn publish_attempt_capture_v1(
+    attempt: &kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+    material: &[u8],
+    providers: &[&dyn EvidenceProvider],
+) -> Result<PublishReportV1, String> {
+    let limits = ManifestLimits::default();
+    if material.is_empty() || material.len() as u64 > limits.max_total_bytes {
+        return Err("the attempt capture is empty or exceeds the evidence limit".into());
+    }
+    let claim = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(attempt);
+    // The attempt lane has no free-prompt job nonce. Its signed attempt ID
+    // supplies a deterministic transport nonce for the same claim on retry.
+    let nonce: [u8; 32] = claim.as_bytes()[..32].try_into().expect("Hash64 has 64 bytes");
+    let chunks = crate::evidence::fs::chunk_material(material, limits.max_chunk_bytes as usize);
+    let manifest = EvidenceManifestV1::build(
+        attempt.network_domain,
+        &attempt.executor_bond,
+        &nonce,
+        attempt.trace_root,
+        attempt.output_root,
+        attempt.execution_root,
+        attempt.trace_chunk_count,
+        attempt.trace_retention_daa,
+        &chunks,
+    );
+    manifest.validate_shape(&limits).map_err(|error| error.to_string())?;
+    publish_to_providers_v1(&claim.to_string(), &manifest, &chunks, providers, 1)
+        .map_err(|report| format!("no provider read back the attempt capture: {:?}", report.per_provider))
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Redemption authorizations: discovery and relay (RFC-0009 stage C)
 // ---------------------------------------------------------------------------------------------------------------------------------

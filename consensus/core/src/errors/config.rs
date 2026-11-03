@@ -27,6 +27,8 @@ pub enum ConfigError {
     #[error("Configuration: --addpeer and --connect cannot be used together")]
     MixedConnectAndAddPeers,
 
+    #[error("invalid --palw-redemption-providers: {0}")]
+    PalwRedemptionProviders(String),
     #[error("Configuration: --logdir and --nologfiles cannot be used together")]
     MixedLogDirAndNoLogFiles,
 

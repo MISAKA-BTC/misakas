@@ -3113,8 +3113,12 @@ impl VirtualStateProcessor {
                 is_base_class: *id == state_params.base_class_id(),
                 artifact_root: record.artifact_root,
                 // The producer facts' own derivation, so the two reads cannot disagree.
-                fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(id))
-                    || state.fp_lane_certification(id).is_some(),
+                fp_certified: kaspa_consensus_core::palw_state_v2::palw_fp_lane_available_v1(
+                    &state,
+                    state_params,
+                    id,
+                    self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa)),
+                ),
                 held: state.class_is_held_v1(id),
                 registered_daa: record.registered_daa,
             })
