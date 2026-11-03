@@ -26,7 +26,8 @@ use misaka_palw_positive_contract::{
     assignment::{
         AssignmentId,
         control_material::AssignmentControlViewV2,
-        funding_relay::RelayTargetV2,
+        funding_relay::{FundingRelayTermsV2, RelayTargetV2},
+        funding_relay_policy::FundingRelayPhysicalProfileV2,
         funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2},
         journal::{ASSIGNMENT_JOURNAL_HEADER_BYTES_V2, AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
         open_material::AssignmentOpenLimitsV2,
@@ -34,7 +35,7 @@ use misaka_palw_positive_contract::{
     },
     journal::CaseJournalRecordView,
     native::{KERNEL_AUX_TABLE, NativeRowKey},
-    rows::{AcceptedOrigin, MAX_NATIVE_KEY_BYTES, NativeRowBody, NativeRowValue},
+    rows::{AcceptedMaterial, AcceptedOrigin, MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES, NativeRowBody, NativeRowValue},
 };
 
 /// Private concrete boundary selection. This is not a successful replay or
@@ -79,6 +80,7 @@ pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
     pub state: &'a PalwChainStateV2,
     pub authorization: &'a FundingRelayAuthorizationRowV2,
     pub custody: &'a FundingRelayCustodyRowV2,
+    pub case_contract_material: Option<AcceptedMaterial>,
 }
 
 impl RelayCarrierReplayV2<'_> {
@@ -86,6 +88,41 @@ impl RelayCarrierReplayV2<'_> {
         use NativeAssignmentArchiveErrorV2 as E;
         self.remaining_reads = self.remaining_reads.checked_sub(reads).ok_or(E::Invalid("relay replay read cap"))?;
         self.remaining_work = self.remaining_work.checked_sub(work).ok_or(E::Invalid("relay replay work cap"))?;
+        Ok(())
+    }
+}
+
+/// Mutable projection of the one Case contract row, limited to the aux
+/// codec's maximum extent. Delta rows remain borrowed during comparison.
+struct RelayCaseHistoryRowV2 {
+    bytes: Vec<u8>,
+    present: bool,
+}
+
+impl RelayCaseHistoryRowV2 {
+    fn new(raw: Option<&[u8]>) -> Result<Self, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let mut row = Self { bytes: Vec::new(), present: false };
+        row.bytes.try_reserve_exact(MAX_NATIVE_ROW_BYTES).map_err(|_| E::Unavailable("Case relay row allocation"))?;
+        if row.bytes.capacity() > MAX_NATIVE_ROW_BYTES {
+            return Err(E::Unavailable("Case relay row allocation exceeds lease"));
+        }
+        row.replace(raw)?;
+        Ok(row)
+    }
+
+    fn raw(&self) -> Option<&[u8]> {
+        self.present.then_some(self.bytes.as_slice())
+    }
+
+    fn replace(&mut self, raw: Option<&[u8]>) -> Result<(), NativeAssignmentArchiveErrorV2> {
+        let bytes = raw.unwrap_or_default();
+        if bytes.len() > MAX_NATIVE_ROW_BYTES {
+            return Err(NativeAssignmentArchiveErrorV2::Invalid("Case relay Assignment row extent"));
+        }
+        self.bytes.clear();
+        self.bytes.extend_from_slice(bytes);
+        self.present = raw.is_some();
         Ok(())
     }
 }
@@ -235,6 +272,98 @@ impl VirtualStateProcessor {
             .check_original_assignment_verifier_candidates_v2(&view, anchor_daa, row.bundle.terms.result_before_daa, remaining_work)
             .map_err(|_| E::Invalid("original verifier candidates differ or exceed replay budget"))?;
         Ok(Some((rules, carriage)))
+    }
+
+    /// Resolve the original profile from the accepted Assignment's rooted
+    /// Open record. Registration cannot replace it with the current Params.
+    pub(in crate::pipeline::virtual_processor) fn case_relay_original_contract_v2(
+        &self,
+        parent: BlockHash,
+        state: &PalwChainStateV2,
+        terms: &FundingRelayTermsV2,
+        physical: &FundingRelayPhysicalProfileV2,
+        outer_heap: u64,
+    ) -> Result<Option<(AcceptedMaterial, u64)>, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::palw_positive_funding_relay_v2::{CASE_RELAY_OPEN_LOOKUP_READS_V2, CaseRelayOpenReplayQuoteV2};
+        let scratch = CaseRelayOpenReplayQuoteV2::scratch_bytes();
+        let Some(pin_heap) = physical.max_heap_bytes.checked_sub(outer_heap).and_then(|bytes| bytes.checked_sub(scratch)) else {
+            return Ok(None);
+        };
+        if physical.max_replay_reads < CASE_RELAY_OPEN_LOOKUP_READS_V2 {
+            return Ok(None);
+        }
+        let _lease =
+            reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("Case relay original scope workspace"))?;
+        let rows = PositiveRowsV2::new(state);
+        let row = match rows.read(NativeRowKey::Assignment(terms.assignment)) {
+            Ok(Some(value)) => match value.body {
+                NativeRowBody::Assignment(row) => row,
+                _ => return Err(E::Invalid("Case relay original Assignment kind")),
+            },
+            Ok(None) | Err(PositiveRowErrorV2::MissingKernelRoute) => return Ok(None),
+            Err(_) => return Err(E::Invalid("Case relay original Assignment codec")),
+        };
+        if row.bundle.terms.ruleset != terms.contract_ruleset
+            || row.bundle.terms.network != terms.contract_network
+            || row.bundle.terms.branch_anchor != terms.contract_anchor
+            || row.bundle.terms.poster != terms.payer_bond
+        {
+            return Ok(None);
+        }
+        if !self
+            .reachability_service
+            .try_is_chain_ancestor_of(BlockHash::from_bytes(row.origin.accepting_block.0), parent)
+            .map_err(|_| E::Unavailable("Case relay Assignment reachability"))?
+        {
+            return Err(E::Invalid("Case relay Assignment is outside the selected lineage"));
+        }
+        let frame = rows
+            .read(NativeRowKey::AssignmentJournalFrame { assignment: terms.assignment, ordinal: 0 })
+            .map_err(|_| E::Invalid("Case relay original Open frame codec"))?
+            .ok_or(E::Unavailable("Case relay original Open frame"))?;
+        let NativeRowBody::AssignmentJournalFrame(frame) = frame.body else {
+            return Err(E::Invalid("Case relay original Open frame kind"));
+        };
+        if frame.header.kind != AssignmentJournalEventKindV2::Open || frame.header.origin != row.origin {
+            return Err(E::Invalid("Case relay original Open frame differs from Assignment"));
+        }
+        let payload_bytes = u64::from(frame.header.payload_bytes);
+        let quote = CaseRelayOpenReplayQuoteV2::for_payload(frame.header.payload_bytes)
+            .map_err(|_| E::Invalid("Case relay original Open quote"))?;
+        let record_bytes = quote.record_bytes;
+        let work = quote.work;
+        if record_bytes > pin_heap || work > physical.max_replay_work {
+            return Ok(None);
+        }
+        let _record =
+            reserve_native_requests_v1(record_bytes).map_err(E::Resource)?.ok_or(E::Unavailable("Case relay original Open pin"))?;
+        self.palw_state_v2_store
+            .read()
+            .with_positive_assignment_journal_record_v2(frame.header.id(), record_bytes, |raw| {
+                let record = AssignmentJournalRecordViewV2::decode(raw, record_bytes)
+                    .map_err(|_| E::Invalid("Case relay original Open record"))?;
+                if record.frame() != frame {
+                    return Err(E::Invalid("Case relay original Open bytes differ from rooted frame"));
+                }
+                let envelope = AssignmentControlViewV2::decode(record.payload(), payload_bytes)
+                    .map_err(|_| E::Invalid("Case relay original Open envelope"))?;
+                let (_, body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, payload_bytes)
+                    .map_err(|_| E::Invalid("Case relay original Open carrier"))?;
+                let material = AssignmentAdmissionMaterialViewV2::decode(
+                    &row,
+                    envelope.inner(),
+                    body,
+                    AssignmentOpenLimitsV2::within_payload(payload_bytes),
+                )
+                .map_err(|_| E::Invalid("Case relay original Open material"))?
+                .material;
+                material
+                    .check_native_open_record_extent_v2(payload_bytes)
+                    .map_err(|_| E::Invalid("Case relay original Open extent"))?;
+                Ok(material.funding_relay.requires_relay().then_some((row.admission_material, work)))
+            })
+            .map_err(|_| E::Unavailable("Case relay original Open bytes"))?
     }
 
     /// Reconstruct a genuine Assignment control event from the original native
@@ -461,13 +590,17 @@ impl VirtualStateProcessor {
         let authorization = replay.authorization;
         let current_custody = replay.custody;
         let terms = &authorization.terms;
-        let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
-            return Err(E::Unavailable("original relay payer contract owner"));
+        let (contract_key, poster_nonce) = match terms.target {
+            RelayTargetV2::InitialAssignment { poster_nonce, .. } => {
+                (NativeRowKey::AssignmentNonce(terms.payer_bond), Some(poster_nonce))
+            }
+            RelayTargetV2::InitialCase { .. } => (NativeRowKey::Assignment(terms.assignment), None),
+            _ => return Err(E::Unavailable("original relay payer contract owner")),
         };
         // The rooted R rows remain under the outer lease. Compare them
         // directly with the delta's borrowed encodings. Only keys and the
         // small nonce projection need additional scratch.
-        let scratch = pending_funding_relay_payer_scratch_v2();
+        let scratch = pending_funding_relay_payer_scratch_v2(terms.funding_purpose);
         let delta_heap = replay.maximum_heap.checked_sub(scratch).ok_or(E::Invalid("relay payer replay heap cap"))?;
         let _lease =
             reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("relay payer replay workspace owner"))?;
@@ -475,7 +608,7 @@ impl VirtualStateProcessor {
         let purpose = terms.funding_purpose;
         let auth_key = NativeRowKey::FundingRelayAuthorization { funding, purpose }.encode();
         let custody_key = NativeRowKey::FundingRelayCustody { funding, purpose }.encode();
-        let nonce_key = (KERNEL_AUX_TABLE, NativeRowKey::AssignmentNonce(terms.payer_bond).encode());
+        let contract_key = (KERNEL_AUX_TABLE, contract_key.encode());
         let payer =
             PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(terms.payer_bond.transaction.0), terms.payer_bond.index));
         let floor = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("original relay bond floor"))?.min_collateral_sompi();
@@ -498,12 +631,13 @@ impl VirtualStateProcessor {
                 })
                 .transpose()
         };
-        replay.charge(2, (size_of::<PalwBondKeyV2>() + authorization.payer_key.len() + nonce_key.1.len()) as u64)?;
+        replay.charge(2, (size_of::<PalwBondKeyV2>() + authorization.payer_key.len() + contract_key.1.len()) as u64)?;
         let mut bond = project(replay.state.bond(&payer));
         let route = replay.state.kernel_route_state_v1().ok_or(E::Unavailable("rooted relay kernel route"))?;
-        let current_nonce = route.aux.get(&nonce_key).map(Vec::as_slice);
-        replay.charge(0, current_nonce.map_or(0, |bytes| bytes.len() as u64))?;
-        let mut nonce = read_nonce(current_nonce)?;
+        let raw = route.aux.get(&contract_key).map(Vec::as_slice);
+        replay.charge(0, raw.map_or(0, |bytes| bytes.len() as u64))?;
+        let (mut nonce, mut case_row) =
+            if poster_nonce.is_some() { (read_nonce(raw)?, None) } else { (None, Some(RelayCaseHistoryRowV2::new(raw)?)) };
         let accepting = BlockHash::from_bytes(replay.origin.accepting_block.0);
         let mut cursor = replay.selected_parent;
         // Account for the wire preflights, decode and projected entry walk.
@@ -532,11 +666,20 @@ impl VirtualStateProcessor {
                         }
                         bond = project(old.as_ref());
                     }
-                    PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } if *table == nonce_key.0 && *key == nonce_key.1 => {
-                        if nonce != read_nonce(new.as_deref())? {
-                            return Err(E::Invalid("relay payer nonce history differs"));
+                    PalwDeltaEntryV2::KernelRouteRow { table, key, old, new }
+                        if *table == contract_key.0 && *key == contract_key.1 =>
+                    {
+                        if let Some(row) = &mut case_row {
+                            if row.raw() != new.as_deref() {
+                                return Err(E::Invalid("Case relay Assignment history differs"));
+                            }
+                            row.replace(old.as_deref())?;
+                        } else {
+                            if nonce != read_nonce(new.as_deref())? {
+                                return Err(E::Invalid("relay payer nonce history differs"));
+                            }
+                            nonce = read_nonce(old.as_deref())?;
                         }
-                        nonce = read_nonce(old.as_deref())?;
                     }
                     PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(bytes) }
                         if cursor == accepting && *table == KERNEL_AUX_TABLE && *key == auth_key =>
@@ -553,10 +696,32 @@ impl VirtualStateProcessor {
                         {
                             return Err(E::Invalid("original relay row images or payer bond differ"));
                         }
-                        nonce
-                            .unwrap_or_default()
-                            .after_accepting(poster_nonce)
-                            .map_err(|_| E::Invalid("original relay payer nonce was ineligible"))?;
+                        if let Some(poster_nonce) = poster_nonce {
+                            nonce
+                                .unwrap_or_default()
+                                .after_accepting(poster_nonce)
+                                .map_err(|_| E::Invalid("original relay payer nonce was ineligible"))?;
+                        } else {
+                            let raw = case_row
+                                .as_ref()
+                                .and_then(RelayCaseHistoryRowV2::raw)
+                                .and_then(|row| row.strip_prefix(&[2, 0, 1, 0, 10]))
+                                .ok_or(E::Invalid("Case relay Assignment missing at original R event"))?;
+                            // Account for the bounded row decode and validation
+                            // passes over the fixed Assignment preimages.
+                            replay.charge(0, 8 * raw.len() as u64)?;
+                            let assignment: misaka_palw_positive_contract::assignment::rows::AssignmentRow =
+                                borsh::from_slice(raw).map_err(|_| E::Invalid("Case relay Assignment codec"))?;
+                            if replay.case_contract_material != Some(assignment.admission_material) {
+                                return Err(E::Invalid("Case relay original profile material differs at R event"));
+                            }
+                            kaspa_consensus_core::palw_positive_assignment_funds_v2::check_case_relay_registration_assignment_v2(
+                                terms,
+                                &assignment,
+                                replay.origin,
+                            )
+                            .map_err(|_| E::Invalid("Case relay original Assignment scope or payer"))?;
+                        }
                         return Ok(());
                     }
                     _ => {}

@@ -526,23 +526,19 @@ impl VirtualStateProcessor {
         parent: BlockHash,
         now: u64,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-        bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
+        purpose: misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2,
         funding: misaka_palw_positive_contract::rows::NativeOutpoint,
-        amount: u64,
+        matches_terms: impl FnOnce(&misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2) -> bool,
     ) -> Result<Option<kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2>, NativeCoverageV1> {
-        use kaspa_consensus_core::{
-            palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2,
-            palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
-        };
+        use kaspa_consensus_core::palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2};
         use misaka_palw_positive_contract::{
-            assignment::funding_relay::{FUNDING_RELAY_OPERATION_V2, FundingRelayRegistrationBodyV2, RelayFundingPurposeV2},
+            assignment::funding_relay::{FUNDING_RELAY_OPERATION_V2, FundingRelayRegistrationBodyV2},
             native::NativeRowKey,
             rows::NativeRowBody,
         };
-        let fault = |why| NativeCoverageV1::unsupported::<Self>("initial Assignment relay archive", why);
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("initial funding relay archive", why);
         let workspace = pending_funding_relay_archive_workspace_v2();
         let _lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(workspace)?)?;
-        let purpose = RelayFundingPurposeV2::PosterA;
         let rows = PositiveRowsV2::new(state);
         let row = match rows.read(NativeRowKey::FundingRelayAuthorization { funding, purpose }) {
             Ok(Some(row)) => row,
@@ -552,7 +548,7 @@ impl VirtualStateProcessor {
         let NativeRowBody::FundingRelayAuthorization(auth) = row.body else {
             return Err(fault("unexpected rooted relay authorization kind"));
         };
-        if check_initial_assignment_relay_target_v2(&auth.terms, bundle, funding, amount, now).is_err() {
+        if !matches_terms(&auth.terms) {
             return Ok(None);
         }
         let Some(NativeRowBody::FundingRelayCustody(custody)) = rows
@@ -592,13 +588,28 @@ impl VirtualStateProcessor {
         use kaspa_consensus_core::{
             config::params::AssignmentFundingRelayProfileV2,
             palw_positive_funding_relay_v2::{
-                FundingRelayBodyErrorV2, funding_relay_carrier_matches_v2, verify_funding_relay_package_signatures_v2,
+                CASE_RELAY_OPEN_LOOKUP_READS_V2, FundingRelayBodyErrorV2, RELAY_ARCHIVE_LOOKUP_READS_V2,
+                funding_relay_carrier_matches_v2, verify_funding_relay_package_signatures_v2,
             },
         };
         let fault = |why| NativeCoverageV1::unsupported::<Self>("rooted relay archive", why);
-        // Two rooted rows, two reachability checks, header, selected parent,
-        // acceptance index and both material keys.
-        if auth.quote.usage.replay_reads < 9 || auth.quote.usage.heap_bytes < workspace {
+        use misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2;
+        let (case_contract_material, case_contract_work) = if matches!(auth.terms.target, RelayTargetV2::InitialCase { .. }) {
+            let (material, work) = self.case_relay_original_contract_v2(parent, state, &auth.terms, &auth.physical, workspace)
+                .map_err(|why| match why {
+                    crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => why,
+                    why => NativeCoverageV1::unsupported::<Self>("rooted relay archive", &format!("{why:?}")),
+                })?
+                .ok_or_else(|| fault("original Case relay profile unavailable"))?;
+            (Some(material), work)
+        } else {
+            (None, 0)
+        };
+        // Two rooted relay rows, two reachability checks, header, selected
+        // parent, acceptance index and material keys. C resolves its Open.
+        let fixed_reads =
+            RELAY_ARCHIVE_LOOKUP_READS_V2 + if case_contract_material.is_some() { CASE_RELAY_OPEN_LOOKUP_READS_V2 } else { 0 };
+        if auth.quote.usage.replay_reads < fixed_reads || auth.quote.usage.heap_bytes < workspace {
             return Err(fault("original relay replay limits do not cover archive lookup"));
         }
         let payload_bytes = auth.quote.usage.frame_bytes.checked_add(3).ok_or_else(|| fault("relay frame extent overflow"))?;
@@ -621,6 +632,7 @@ impl VirtualStateProcessor {
             .and_then(|n| n.checked_add(payload_bytes))
             .and_then(|n| n.checked_add((FUNDING_RELAY_CHARGE_BYTES_V2 + 2 * (74 + 5)) as u64))
             .and_then(|n| n.checked_add(comparison_work))
+            .and_then(|n| n.checked_add(case_contract_work))
             .ok_or_else(|| fault("original relay fixed replay extent overflow"))?;
         let maximum_bytes = auth
             .quote
@@ -658,13 +670,22 @@ impl VirtualStateProcessor {
         let assignment = params
             .palw_positive_assignment_rule_scope_v2_at(origin.accepted_daa)
             .ok_or_else(|| fault("original Assignment intake scope unavailable"))?;
+        let contract_scope_matches = match auth.terms.target {
+            misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2::InitialAssignment { .. } => {
+                auth.terms.contract_ruleset.0 == assignment.ruleset().as_bytes()
+            }
+            // C's exact original contract is checked at R's actual accepted
+            // prefix in the payer replay. Its registration uses R's own policy.
+            misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2::InitialCase { .. } => true,
+            _ => false,
+        };
         let profile = AssignmentFundingRelayProfileV2::capture_at_intake(params, origin.accepted_daa)
             .map_err(|_| fault("original relay intake profile unavailable"))?;
         let AssignmentFundingRelayProfileV2::RequiresRelayV2 { ruleset, policy, fees, physical, .. } = profile else {
             return Err(fault("original relay intake fence was dormant"));
         };
         if auth.terms.contract_network.0 != self.palw_network_domain_v2().as_bytes()
-            || auth.terms.contract_ruleset.0 != assignment.ruleset().as_bytes()
+            || !contract_scope_matches
             || auth.terms.relay_ruleset != ruleset
             || auth.policy != policy
             || auth.fees != fees
@@ -698,7 +719,7 @@ impl VirtualStateProcessor {
             index: accepted.index_within_block,
             matches_payload: &matches_payload,
             gross_fee: observed_fees.gross_fee(),
-            remaining_reads: auth.quote.usage.replay_reads - 9,
+            remaining_reads: auth.quote.usage.replay_reads - fixed_reads,
             remaining_work: maximum_bytes - acceptance_bytes,
             maximum_heap: auth.quote.usage.heap_bytes - workspace,
             acceptance_bytes,
@@ -706,6 +727,7 @@ impl VirtualStateProcessor {
             state,
             authorization: auth,
             custody,
+            case_contract_material,
         })
         .map_err(|error| match error {
             NativeAssignmentArchiveErrorV2::Resource(why) => why,
@@ -836,8 +858,10 @@ impl PositiveCarrierPhaseTwoV2 {
         use kaspa_consensus_core::{
             config::params::AssignmentFundingRelayProfileV2, palw_positive_funding_relay_v2::quote_funding_relay_body_v2,
         };
-        use misaka_palw_positive_contract::assignment::funding_relay::{FundingRelayRegistrationBodyV2, RelayTargetV2};
-        use misaka_palw_positive_contract::rows::{AcceptedOrigin, NativeHash64};
+        use misaka_palw_positive_contract::assignment::funding_relay::{
+            FundingRelayRegistrationBodyV2, RelayFundingPurposeV2, RelayTargetV2,
+        };
+        use misaka_palw_positive_contract::rows::{AcceptedOrigin, NativeHash64, NativeOutpoint};
         let old_limits = NativeBodyLimitsV2 {
             max_body_bytes: MAX_BODY_BYTES_V2,
             max_opaque_bytes: MAX_OPAQUE_BYTES_V2,
@@ -936,10 +960,12 @@ impl PositiveCarrierPhaseTwoV2 {
             let decode = require_positive_carrier_lease_v2(reserve_native_requests_v1(bytes)?)?;
             let mut signed_anchor = None;
             let mut pending_relay = None;
-            let mut initial_f = None;
+            let mut case_relay_contract = None;
+            let mut initial_a = None;
+            let mut initial_c = None;
             let output = if let Some(physical) = relay_cap {
                 let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], physical.max_frame_bytes) else { continue };
-                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. }) {
+                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. }) {
                     continue; // Other purposes need their own original account owner.
                 }
                 if let Some(state) = selected_parent_state {
@@ -956,6 +982,17 @@ impl PositiveCarrierPhaseTwoV2 {
                     continue;
                 }
                 if pending_relay.is_none() {
+                    if matches!(body.terms.target, RelayTargetV2::InitialCase { .. })
+                        && let Some(state) = selected_parent_state
+                    {
+                        let original = processor.case_relay_original_contract_v2(
+                            carrier.prefix.selected_parent, state, &body.terms, &physical, bytes,
+                        ).map_err(|why| match why {
+                            crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => why,
+                            why => NativeCoverageV1::unsupported::<Self>("Case relay original contract", &format!("{why:?}")),
+                        })?;
+                        case_relay_contract = original.map(|(material, _)| material);
+                    }
                     let anchor = BlockHash::from_bytes(body.terms.contract_anchor.0);
                     if !processor
                         .reachability_service
@@ -1002,26 +1039,64 @@ impl PositiveCarrierPhaseTwoV2 {
                         })?;
                         signed_anchor = Some((anchor, anchor_daa));
                         if matches!(rules.funding_relay_profile(), AssignmentFundingRelayProfileV2::RequiresRelayV2 { .. }) {
-                            initial_f = Some(*bundle);
+                            initial_a = Some(*bundle);
                         }
                         Some(bundle.funding.funding_output_index)
                     }
-                    A::AdmitAssignedResult { payload, .. } => Some(payload.consent.funding_output_index),
+                    A::AdmitAssignedResult { assignment, payload } => {
+                        if rules.funding_relay_profile().requires_relay() {
+                            initial_c = Some((*assignment, payload.result.id(), payload.consent.clone()));
+                        }
+                        Some(payload.consent.funding_output_index)
+                    }
                     A::JoinAssignmentProver { consent, .. } => Some(consent.funding_output_index),
                     _ => None,
                 }
             };
             let current_output = output.and_then(|index| current_view.get(&TransactionOutpoint::new(tx.id(), index)));
-            if let (Some(bundle), Some(state), Some(entry)) = (initial_f, selected_parent_state, current_output.as_ref()) {
-                use misaka_palw_positive_contract::rows::NativeOutpoint;
-                pending_relay = processor.check_initial_f_relay_archive_v2(
-                    carrier.prefix.selected_parent,
-                    point.daa_score,
-                    state,
-                    &bundle,
-                    NativeOutpoint { transaction: NativeHash64(tx.id().as_bytes()), index: bundle.funding.funding_output_index },
-                    entry.amount,
-                )?;
+            if let (Some(index), Some(state), Some(entry)) = (output, selected_parent_state, current_output.as_ref()) {
+                let funding = NativeOutpoint { transaction: NativeHash64(tx.id().as_bytes()), index };
+                let now = point.daa_score;
+                if let Some(bundle) = initial_a {
+                    pending_relay = processor.check_initial_f_relay_archive_v2(
+                        carrier.prefix.selected_parent,
+                        now,
+                        state,
+                        RelayFundingPurposeV2::PosterA,
+                        funding,
+                        |terms| {
+                            kaspa_consensus_core::palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2(
+                                terms,
+                                &bundle,
+                                funding,
+                                entry.amount,
+                                now,
+                            )
+                            .is_ok()
+                        },
+                    )?;
+                }
+                if let Some((assignment, result, consent)) = initial_c {
+                    let target = RelayTargetV2::InitialCase { result, funding_scope: consent.scope, consent: consent.id() };
+                    pending_relay = processor.check_initial_f_relay_archive_v2(
+                        carrier.prefix.selected_parent,
+                        now,
+                        state,
+                        RelayFundingPurposeV2::CaseC,
+                        funding,
+                        |terms| {
+                            terms.target == target
+                                && terms.assignment == assignment
+                                && terms.contract_network == rules.network()
+                                && terms.contract_ruleset.0 == rules.rule_scope().ruleset().as_bytes()
+                                && terms.payer == consent.payer
+                                && terms.refund_payload == consent.refund_payload
+                                && terms.expected_amount == entry.amount
+                                && now < terms.funding_admission_before_daa
+                                && now < consent.admission_expiry
+                        },
+                    )?;
+                }
             }
 
             let origin = AcceptedOrigin {
@@ -1066,6 +1141,10 @@ impl PositiveCarrierPhaseTwoV2 {
             };
             let action = match pending_relay {
                 Some(archive) => action.with_pending_relay_replay_v2(archive)?,
+                None => action,
+            };
+            let action = match case_relay_contract {
+                Some(material) => action.with_case_relay_contract_material_v2(material)?,
                 None => action,
             };
             let action = match open_carriage {

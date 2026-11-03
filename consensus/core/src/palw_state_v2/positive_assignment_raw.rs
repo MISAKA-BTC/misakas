@@ -147,6 +147,7 @@ struct PositiveAssignmentRawDataV2 {
     signed_anchor: Option<(BlockHash, u64)>,
     relay_carrier_fees: Option<FundingRelayCarrierFeesV2>,
     pending_relay_replay: Option<NativePendingRelayReplayV2>,
+    case_relay_contract_material: Option<AcceptedMaterial>,
     _transport: Arc<NativeDemandLeaseV1>,
     _decode: Arc<NativeDemandLeaseV1>,
 }
@@ -185,6 +186,7 @@ impl PositiveAssignmentRawActionV2 {
             signed_anchor: None,
             relay_carrier_fees: None,
             pending_relay_replay: None,
+            case_relay_contract_material: None,
             _transport: Arc::new(transport),
             _decode: Arc::new(decode),
         })))
@@ -237,7 +239,7 @@ impl PositiveAssignmentRawActionV2 {
         let invalid = || NativeCoverageV1::unsupported::<Self>("pending relay replay", "wrong operation, selected parent or owner");
         let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
         if data.pending_relay_replay.is_some()
-            || !matches!(data.body[data.index as usize].payload.get(7), Some(8 | 14))
+            || !matches!(data.body[data.index as usize].payload.get(7), Some(8 | 9 | 14))
             || replay.selected_parent != data.selected_parent
             || replay.reservation.origin.accepting_block.0 == data.origin.accepting_block.0
         {
@@ -249,6 +251,21 @@ impl PositiveAssignmentRawActionV2 {
 
     pub(super) fn pending_relay_replay_v2(&self) -> Option<NativePendingRelayReplayV2> {
         self.0.pending_relay_replay
+    }
+
+    /// Attach the material resolved from the original rooted Open record.
+    /// Final registration compares it with the current accepted Assignment.
+    pub fn with_case_relay_contract_material_v2(mut self, material: AcceptedMaterial) -> Result<Self, NativeCoverageV1> {
+        let invalid = || NativeCoverageV1::unsupported::<Self>("Case relay contract material", "wrong operation or shared owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
+        if data.case_relay_contract_material.is_some() || data.body[data.index as usize].payload.get(7) != Some(&14) {
+            return Err(invalid());
+        }
+        data.case_relay_contract_material = Some(material);
+        Ok(self)
+    }
+    pub(super) fn case_relay_contract_material_v2(&self) -> Option<AcceptedMaterial> {
+        self.0.case_relay_contract_material
     }
 
     /// Retain the original accepted op8 and executed prefix for op9 replay.
@@ -432,6 +449,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             signed_anchor: _,
             relay_carrier_fees: _,
             pending_relay_replay: _,
+            case_relay_contract_material: _,
             _transport: _,
             _decode: _,
         } = &*self.0;

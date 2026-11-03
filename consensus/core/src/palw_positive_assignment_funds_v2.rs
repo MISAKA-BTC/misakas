@@ -441,6 +441,102 @@ pub fn check_initial_assignment_relay_target_v2(
     Ok(())
 }
 
+/// Checks the already accepted contract at the Case relay's own prefix.
+pub fn check_case_relay_registration_assignment_v2(
+    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
+    assignment: &misaka_palw_positive_contract::assignment::rows::AssignmentRow,
+    origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+) -> Result<(), ContractError> {
+    use misaka_palw_positive_contract::assignment::{
+        funding_relay::{RelayFundingPurposeV2, RelayTargetV2},
+        rows::AssignmentStatusV2,
+    };
+    terms.validate_shape()?;
+    assignment.validate_shape()?;
+    let accepted = assignment.origin;
+    let precedes = if accepted.accepting_block == origin.accepting_block {
+        accepted.accepted_daa == origin.accepted_daa
+            && accepted.accepted_blue_score == origin.accepted_blue_score
+            && (accepted.accepted_tx_ordinal, accepted.event_ordinal) < (origin.accepted_tx_ordinal, origin.event_ordinal)
+    } else {
+        accepted.accepted_daa <= origin.accepted_daa && accepted.accepted_blue_score < origin.accepted_blue_score
+    };
+    let bundle = &assignment.bundle;
+    let bounds = bundle.future_case;
+    if !precedes
+        || assignment.status != AssignmentStatusV2::Open
+        || origin.accepted_daa >= terms.register_before_daa
+        || terms.funding_admission_before_daa > bounds.case_admission_before_daa
+    {
+        return Err(ContractError::Range);
+    }
+    if terms.funding_purpose != RelayFundingPurposeV2::CaseC
+        || !matches!(terms.target, RelayTargetV2::InitialCase { .. })
+        || terms.assignment != assignment.id()
+        || terms.contract_network != bundle.terms.network
+        || terms.contract_ruleset != bundle.terms.ruleset
+        || terms.contract_anchor != bundle.terms.branch_anchor
+        || terms.payer_bond != bundle.terms.poster
+        || terms.payer != bounds.payer
+        || terms.refund_payload != bounds.refund_payload
+    {
+        return Err(ContractError::Identity);
+    }
+    if terms.expected_amount > bounds.max_case_locked {
+        return Err(ContractError::Budget);
+    }
+    Ok(())
+}
+
+/// Checks a pending C registration against the original accepted Assignment
+/// and the signed Case consent. The writer must qualify the real coin and
+/// authenticate the archived registration before it can bind either row.
+pub fn check_initial_case_relay_target_v2(
+    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
+    bundle: &AssignmentAdmissionBundleV2,
+    result: misaka_palw_positive_contract::identity::ResultId,
+    consent: &misaka_palw_positive_contract::funding::FundingConsent,
+    funding: NativeOutpoint,
+    amount: u64,
+    now: u64,
+) -> Result<(), ContractError> {
+    use misaka_palw_positive_contract::assignment::funding_relay::{RelayFundingPurposeV2, RelayTargetV2};
+    terms.validate_shape()?;
+    let bounds = bundle.future_case;
+    if now >= terms.funding_admission_before_daa
+        || now >= consent.admission_expiry
+        || now >= bounds.case_admission_before_daa
+        || now >= bundle.terms.result_before_daa
+    {
+        return Err(ContractError::Range);
+    }
+    let target = RelayTargetV2::InitialCase { result, funding_scope: consent.scope, consent: consent.id() };
+    if terms.funding_purpose != RelayFundingPurposeV2::CaseC
+        || terms.target != target
+        || terms.assignment != bundle.terms.id()
+        || terms.assignment != bounds.assignment
+        || terms.contract_network != bundle.terms.network
+        || terms.contract_ruleset != bundle.terms.ruleset
+        || terms.contract_anchor != bundle.terms.branch_anchor
+        || terms.payer_bond != bundle.terms.poster
+        || terms.payer != bundle.terms.payer
+        || terms.payer != bounds.payer
+        || terms.payer != consent.payer
+        || terms.refund_payload != bundle.terms.refund_payload
+        || terms.refund_payload != bounds.refund_payload
+        || terms.refund_payload != consent.refund_payload
+        || terms.funding_outpoint != funding
+        || funding.index != consent.funding_output_index
+        || terms.expected_amount != amount
+    {
+        return Err(ContractError::Identity);
+    }
+    if amount > consent.max_locked || amount > bounds.max_case_locked {
+        return Err(ContractError::Budget);
+    }
+    Ok(())
+}
+
 /// Reads the carrier's own output and the CURRENT composed UTXO entry for that
 /// same outpoint. A spent output, another transaction's entry, another payer,
 /// an incorrect native refund script, expired consent and cap overflow refuse.

@@ -391,3 +391,33 @@ fn native_fixed_row_scanner_matches_all_targets_and_optional_bound_package() {
         }
     }
 }
+
+#[test]
+fn case_relay_requires_original_open_and_registration_replay_budget() {
+    use misaka_palw_positive_contract::ContractError;
+
+    let (body, _) = fixture();
+    let mut terms = body.terms;
+    terms.funding_purpose = RelayFundingPurposeV2::CaseC;
+    terms.target =
+        RelayTargetV2::InitialCase { result: ResultId(d(20)), funding_scope: FundingScopeId(d(21)), consent: FundingConsentId(d(22)) };
+    let payload_bytes = 16_000;
+    let open = CaseRelayOpenReplayQuoteV2::for_payload(payload_bytes).unwrap();
+    let storage = FundingRelayStorageExtentV2::for_terms(&terms).unwrap();
+    let payload = storage.body_bytes + 3;
+    let aux = storage.retained_bytes - payload - FUNDING_RELAY_CHARGE_BYTES_V2 as u64;
+    let (_, mut physical, _) = metadata_preimages();
+    physical.max_heap_bytes =
+        pending_funding_relay_archive_workspace_v2() + CaseRelayOpenReplayQuoteV2::scratch_bytes() + open.record_bytes;
+    physical.max_replay_reads = 21;
+    physical.max_replay_work = open.work + storage.retained_bytes + 2 * payload + 6 * aux + 1;
+    assert_eq!(check_case_relay_minimum_replay_v2(&terms, &physical, payload_bytes), Ok(()));
+    for short in [
+        FundingRelayPhysicalProfileV2 { max_heap_bytes: physical.max_heap_bytes - 1, ..physical },
+        FundingRelayPhysicalProfileV2 { max_replay_reads: physical.max_replay_reads - 1, ..physical },
+        FundingRelayPhysicalProfileV2 { max_replay_work: physical.max_replay_work - 1, ..physical },
+    ] {
+        assert_eq!(check_case_relay_minimum_replay_v2(&terms, &short, payload_bytes), Err(ContractError::Budget));
+    }
+    assert_eq!(check_case_relay_minimum_replay_v2(&terms, &physical, 0), Err(ContractError::Budget));
+}
