@@ -3,8 +3,9 @@
 //! and the responder's authority. Transport completeness grants no credit.
 use crate::Hash64;
 use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA, shared_initial_notice_daa_in_window_v1};
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::blake2b_512_keyed;
+use std::io::{self, Read};
 
 pub const MAX_BATCH_RANGES_V1: usize = 64;
 pub const MAX_BATCH_PARTS_V1: usize = 256;
@@ -13,7 +14,7 @@ pub const MAX_BATCH_PART_BYTES_V1: u32 = 16_384;
 /// Prospective clocks for an admitted dispute. The accepting fold must check
 /// the opening's standing, bond, and actionable evidence before constructing
 /// this record. Clock validation alone does not admit a dispute.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BatchCourtWindowV1 {
     pub claim_accepted_daa: u64,
     pub challenge_opened_daa: u64,
@@ -42,7 +43,7 @@ impl BatchCourtWindowV1 {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct BatchRangeV1 {
     /// Canonical material identity, including its source root and coordinates.
     pub id: Hash64,
@@ -63,13 +64,53 @@ pub struct BatchDemandV1 {
     pub ranges: Vec<BatchRangeV1>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct BatchResponsePartV1<'a> {
     pub case_id: Hash64,
     pub request_root: Hash64,
     pub range_id: Hash64,
     pub part_index: u32,
     pub bytes: &'a [u8],
+}
+
+impl BorshDeserialize for BatchDemandV1 {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let case_id = Hash64::deserialize_reader(reader)?;
+        let case_window = BatchCourtWindowV1::deserialize_reader(reader)?;
+        let opened_daa = u64::deserialize_reader(reader)?;
+        let response_deadline_daa = u64::deserialize_reader(reader)?;
+        let maximum_bytes = u64::deserialize_reader(reader)?;
+        let part_bytes = u32::deserialize_reader(reader)?;
+        let count = u32::deserialize_reader(reader)? as usize;
+        if !(1..=MAX_BATCH_RANGES_V1).contains(&count) {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "batch Court demand range count"));
+        }
+        let mut ranges = Vec::new();
+        ranges.try_reserve_exact(count).map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "batch Court demand ranges"))?;
+        for _ in 0..count {
+            ranges.push(BatchRangeV1::deserialize_reader(reader)?);
+        }
+        let demand = Self { case_id, case_window, opened_daa, response_deadline_daa, maximum_bytes, part_bytes, ranges };
+        demand.check().map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "batch Court demand shape"))?;
+        Ok(demand)
+    }
+}
+
+impl<'a> BatchResponsePartV1<'a> {
+    /// Borrow the payload directly from an already-admitted outer carrier.
+    /// The Node still authenticates the envelope and the range opening.
+    pub fn decode_v1(mut carrier: &'a [u8]) -> Result<Self, BatchCourtErrorV1> {
+        use BatchCourtErrorV1::PartShape;
+        let case_id = Hash64::deserialize(&mut carrier).map_err(|_| PartShape)?;
+        let request_root = Hash64::deserialize(&mut carrier).map_err(|_| PartShape)?;
+        let range_id = Hash64::deserialize(&mut carrier).map_err(|_| PartShape)?;
+        let part_index = u32::deserialize(&mut carrier).map_err(|_| PartShape)?;
+        let count = u32::deserialize(&mut carrier).map_err(|_| PartShape)?;
+        if !(1..=MAX_BATCH_PART_BYTES_V1).contains(&count) || carrier.len() != count as usize {
+            return Err(PartShape);
+        }
+        Ok(Self { case_id, request_root, range_id, part_index, bytes: carrier })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,6 +220,35 @@ impl BatchProgressV1 {
         progress.accepted.copy_from_slice(accepted);
         if progress.checkpoint_root()? != expected_checkpoint_root {
             return Err(BatchCourtErrorV1::Checkpoint);
+        }
+        Ok(progress)
+    }
+
+    /// Encode only canonical slot digests. Evidence and its accounting are
+    /// separate branch-owned rows. Callers publish them atomically.
+    pub fn encode_checkpoint_v1(&self) -> Result<Vec<u8>, BatchCourtErrorV1> {
+        borsh::to_vec(&self.accepted).map_err(|_| BatchCourtErrorV1::Checkpoint)
+    }
+
+    /// Decode against the demand's slot count, so untrusted bytes cannot increase allocation.
+    /// A snapshot on its own cannot supply its expected branch commitment.
+    pub fn decode_checkpoint_v1(
+        demand: BatchDemandV1,
+        request_root: Hash64,
+        mut bytes: &[u8],
+        expected_checkpoint_root: Hash64,
+    ) -> Result<Self, BatchCourtErrorV1> {
+        use BatchCourtErrorV1::Checkpoint;
+        let mut progress = Self::new(demand)?;
+        let count = u32::deserialize(&mut bytes).map_err(|_| Checkpoint)? as usize;
+        if request_root != progress.request_root || count != progress.accepted.len() {
+            return Err(Checkpoint);
+        }
+        for slot in &mut progress.accepted {
+            *slot = Option::<Hash64>::deserialize(&mut bytes).map_err(|_| Checkpoint)?;
+        }
+        if !bytes.is_empty() || progress.checkpoint_root()? != expected_checkpoint_root {
+            return Err(Checkpoint);
         }
         Ok(progress)
     }
@@ -390,6 +460,32 @@ mod tests {
         let other = BatchResponsePartV1 { bytes: b"pqrs", ..a };
         assert_eq!(progress.accept(11, other, |_, _, _| true), Err(BatchCourtErrorV1::Conflict));
         assert_eq!(progress.remaining_payload_bytes(), 5);
+    }
+
+    #[test]
+    fn bounded_codec_reopens_the_exact_branch_checkpoint() {
+        let original = demand();
+        let encoded = borsh::to_vec(&original).unwrap();
+        assert_eq!(BatchDemandV1::try_from_slice(&encoded).unwrap(), original);
+        let mut oversized = encoded.clone();
+        let count_offset = encoded.len() - original.ranges.len() * (64 + 4) - 4;
+        oversized[count_offset..count_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(BatchDemandV1::try_from_slice(&oversized).is_err());
+
+        let mut progress = BatchProgressV1::new(original.clone()).unwrap();
+        let response = part(&progress, 1, 1, b"ef");
+        let mut carried = borsh::to_vec(&response).unwrap();
+        assert_eq!(BatchResponsePartV1::decode_v1(&carried), Ok(response));
+        carried.push(0);
+        assert_eq!(BatchResponsePartV1::decode_v1(&carried), Err(BatchCourtErrorV1::PartShape));
+
+        progress.accept(10, response, |_, _, _| true).unwrap();
+        let root = progress.checkpoint_root().unwrap();
+        let request = progress.request_root();
+        let mut checkpoint = progress.encode_checkpoint_v1().unwrap();
+        assert_eq!(BatchProgressV1::decode_checkpoint_v1(original.clone(), request, &checkpoint, root), Ok(progress));
+        checkpoint[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(BatchProgressV1::decode_checkpoint_v1(original, request, &checkpoint, root), Err(BatchCourtErrorV1::Checkpoint));
     }
 
     #[test]
