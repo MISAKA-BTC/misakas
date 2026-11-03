@@ -663,12 +663,47 @@ pub fn publish_to_providers_v1(
     providers: &[&dyn EvidenceProvider],
     min_verified: usize,
 ) -> Result<PublishReportV1, PublishReportV1> {
+    let report = publish_with_reader(claim_hex, manifest, providers, chunks.len(), |i| Ok(chunks[i].as_slice()));
+    if report.verified_copies() >= min_verified.max(1) { Ok(report) } else { Err(report) }
+}
+
+/// Publish an already-staged capture without loading all of its chunks into memory.
+/// The source is verified before writing anything. A changed chunk during upload
+/// aborts that copy before its manifest is published.
+pub fn publish_from_provider_v1(
+    claim_hex: &str,
+    manifest: &EvidenceManifestV1,
+    source: &dyn EvidenceProvider,
+    providers: &[&dyn EvidenceProvider],
+) -> Result<PublishReportV1, String> {
+    manifest.validate_shape(&ManifestLimits::default()).map_err(|e| e.to_string())?;
+    let id = manifest_id_v1(manifest);
+    let read = |i: usize| {
+        let entry = &manifest.chunks[i];
+        let bytes = source.fetch_chunk_expected(id, entry.index, entry.len).map_err(|e| format!("source chunk {i}: {e}"))?;
+        manifest.verify_chunk(entry.index, &bytes).map_err(|e| format!("source chunk {i}: {e}"))?;
+        Ok(bytes)
+    };
+    for i in 0..manifest.chunks.len() {
+        read(i)?;
+    }
+    Ok(publish_with_reader(claim_hex, manifest, providers, manifest.chunks.len(), read))
+}
+
+fn publish_with_reader<B: AsRef<[u8]>>(
+    claim_hex: &str,
+    manifest: &EvidenceManifestV1,
+    providers: &[&dyn EvidenceProvider],
+    chunk_count: usize,
+    read: impl Fn(usize) -> Result<B, String>,
+) -> PublishReportV1 {
     let manifest_id = manifest_id_v1(manifest);
     let mut per_provider = Vec::new();
     for p in providers {
         let result = (|| -> Result<(), String> {
-            for (i, bytes) in chunks.iter().enumerate() {
-                p.put_chunk(manifest_id, i as u32, bytes).map_err(|e| format!("chunk {i}: {e}"))?;
+            for i in 0..chunk_count {
+                let bytes = read(i)?;
+                p.put_chunk(manifest_id, i as u32, bytes.as_ref()).map_err(|e| format!("chunk {i}: {e}"))?;
             }
             p.put_manifest(claim_hex, manifest).map_err(|e| format!("manifest: {e}"))?;
             // Read back what the provider now serves.
@@ -687,8 +722,7 @@ pub fn publish_to_providers_v1(
         })();
         per_provider.push(PublishOutcomeV1 { provider: p.provider_id().to_string(), result });
     }
-    let report = PublishReportV1 { manifest_id, per_provider };
-    if report.verified_copies() >= min_verified.max(1) { Ok(report) } else { Err(report) }
+    PublishReportV1 { manifest_id, per_provider }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -1595,6 +1629,38 @@ mod tests {
             Err(fs::ClaimFetchError::NoAdmissibleManifest { offered: 1, .. })
         ));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn streaming_publish_preflights_shape_and_all_chunks_before_writing() {
+        use crate::evidence::fs;
+
+        let source_dir = scratch("stream-source");
+        let target_dir = scratch("stream-target");
+        let source = fs::FsProvider::new(&source_dir);
+        let target = fs::FsProvider::new(&target_dir);
+        let claim = claim_hex();
+        let manifest = manifest();
+        let chunks = chunks();
+        fs::publish(&source_dir, &claim, &manifest, &chunks).unwrap();
+
+        let mut oversized = manifest.clone();
+        oversized.max_expanded_bytes = ManifestLimits::default().max_total_bytes + 1;
+        assert!(publish_from_provider_v1(&claim, &oversized, &source, &[&target]).unwrap_err().contains("declares"));
+
+        let id = manifest_id_v1(&manifest);
+        let damaged = fs::chunk_path(&source_dir, id, 2);
+        std::fs::write(&damaged, b"bad").unwrap();
+        assert!(publish_from_provider_v1(&claim, &manifest, &source, &[&target]).unwrap_err().contains("source chunk 2"));
+        assert!(!fs::chunk_path(&target_dir, id, 0).exists());
+        assert!(target.manifest_for(&claim).is_none());
+
+        std::fs::write(&damaged, &chunks[2]).unwrap();
+        let report = publish_from_provider_v1(&claim, &manifest, &source, &[&target]).unwrap();
+        assert_eq!(report.verified_copies(), 1);
+        assert_eq!(target.manifest_for(&claim).unwrap(), manifest);
+        std::fs::remove_dir_all(source_dir).unwrap();
+        std::fs::remove_dir_all(target_dir).unwrap();
     }
 
     #[test]

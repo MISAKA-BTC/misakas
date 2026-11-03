@@ -38,10 +38,10 @@
 use std::path::{Path, PathBuf};
 
 use kaspa_hashes::Hash64;
-use misaka_palw_remote::evidence::{ClaimRoots, EvidenceManifestV1, ManifestLimits, manifest_id_v1};
+use misaka_palw_remote::evidence::{ClaimRoots, EvidenceManifestV1, ManifestLimits};
 use misaka_palw_remote::transport::{
     EvidenceProvider, ProbeMode, ProviderSpecV1, check_availability_v1, fetch_claim_material_any, open_providers_v1,
-    parse_provider_list_v1, publish_redemption_v1, publish_to_providers_v1, repair_v1, server, sync_redemptions_v1,
+    parse_provider_list_v1, publish_from_provider_v1, publish_redemption_v1, repair_v1, server, sync_redemptions_v1,
 };
 
 fn die(msg: impl std::fmt::Display) -> ! {
@@ -281,25 +281,11 @@ fn main() {
             let local = misaka_palw_remote::evidence::fs::FsProvider::new(from.clone());
             let manifest =
                 local.manifest_for(&claim).unwrap_or_else(|| die(format!("{} holds no manifest for claim {claim}", from.display())));
-            use misaka_palw_remote::evidence::ChunkProvider;
-            let id = manifest_id_v1(&manifest);
-            let mut chunks = Vec::new();
-            for entry in &manifest.chunks {
-                let bytes = local
-                    .fetch_chunk_expected(id, entry.index, entry.len)
-                    .unwrap_or_else(|e| die(format!("chunk {}: {e}", entry.index)));
-                manifest
-                    .verify_chunk(entry.index, &bytes)
-                    .unwrap_or_else(|e| die(format!("the local chunk {} does not match its manifest: {e}", entry.index)));
-                chunks.push(bytes);
-            }
             let specs = providers_of(&need(&providers, "--providers"));
             let opened = open_providers_v1(&specs);
             let refs: Vec<&dyn EvidenceProvider> = opened.iter().map(|b| b.as_ref()).collect();
-            let (ok, report) = match publish_to_providers_v1(&claim, &manifest, &chunks, &refs, min_verified) {
-                Ok(r) => (true, r),
-                Err(r) => (false, r),
-            };
+            let report = publish_from_provider_v1(&claim, &manifest, &local, &refs).unwrap_or_else(|e| die(e));
+            let ok = report.verified_copies() >= min_verified.max(1);
             println!(
                 "{}",
                 serde_json::json!({
