@@ -16,11 +16,24 @@ use kaspa_hashes::Hash64;
 #[error("{0}")]
 pub struct ProviderError(pub String);
 
+#[derive(Debug, thiserror::Error)]
+pub enum ChunkReadError {
+    #[error(transparent)]
+    Provider(#[from] ProviderError),
+    #[error("provider chunk is at least {0} bytes, larger than the expected length")]
+    TooLarge(usize),
+}
+
 /// One byte-serving provider. `Err` is a local failure (timeout, refusal, not found) and is NEVER evidence of anything beyond "this attempt
 /// failed".
 pub trait ChunkProvider {
     fn provider_id(&self) -> &str;
     fn fetch_chunk(&self, manifest_id: Hash64, index: u32) -> Result<Vec<u8>, ProviderError>;
+
+    /// The manifest supplies the expected length for transports that can preflight the object size.
+    fn fetch_chunk_expected(&self, manifest_id: Hash64, index: u32, _expected_len: u32) -> Result<Vec<u8>, ChunkReadError> {
+        Ok(self.fetch_chunk(manifest_id, index)?)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +91,11 @@ pub fn fetch_chunk_any(
     providers: &[&dyn ChunkProvider],
     order_seed: Hash64,
 ) -> Result<(Vec<u8>, String, Vec<ProviderFailure>), FetchFailure> {
+    let entry = manifest
+        .chunks
+        .get(index as usize)
+        .filter(|entry| entry.index == index)
+        .ok_or(FetchFailure::Manifest(EvidenceError::UnknownChunk { index }))?;
     let manifest_id = manifest_id_v1(manifest);
     let mut failures = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
@@ -86,7 +104,7 @@ pub fn fetch_chunk_any(
         if !seen.insert(provider.provider_id().to_string()) {
             continue;
         }
-        match provider.fetch_chunk(manifest_id, index) {
+        match provider.fetch_chunk_expected(manifest_id, index, entry.len) {
             Ok(bytes) => match manifest.verify_chunk(index, &bytes) {
                 Ok(()) => return Ok((bytes, provider.provider_id().to_string(), failures)),
                 Err(e) => failures.push(ProviderFailure {
@@ -95,7 +113,12 @@ pub fn fetch_chunk_any(
                     kind: FetchFailureKind::BadBytes(e),
                 }),
             },
-            Err(e) => failures.push(ProviderFailure {
+            Err(ChunkReadError::TooLarge(got)) => failures.push(ProviderFailure {
+                provider: provider.provider_id().to_string(),
+                index,
+                kind: FetchFailureKind::BadBytes(EvidenceError::ChunkLength { index, got, expected: entry.len }),
+            }),
+            Err(ChunkReadError::Provider(e)) => failures.push(ProviderFailure {
                 provider: provider.provider_id().to_string(),
                 index,
                 kind: FetchFailureKind::Unavailable(e.0),
@@ -137,7 +160,45 @@ pub fn fetch_material_any(
 
 pub mod fs {
     use super::*;
+    use std::fs::OpenOptions;
+    use std::io::{self, Read};
     use std::path::{Path, PathBuf};
+
+    #[derive(Debug, thiserror::Error)]
+    pub(crate) enum BoundedFileError {
+        #[error(transparent)]
+        Io(#[from] io::Error),
+        #[error("provider file is at least {0} bytes, above the read limit")]
+        TooLarge(u64),
+    }
+
+    /// Check the opened file before allocating, and never read a growing file to EOF.
+    pub(crate) fn read_bounded_file(path: &Path, max: usize) -> Result<Vec<u8>, BoundedFileError> {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NONBLOCK);
+        }
+        let mut file = options.open(path)?;
+        let meta = file.metadata()?;
+        if !meta.is_file() {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "provider path is not a regular file").into());
+        }
+        if meta.len() > max as u64 {
+            return Err(BoundedFileError::TooLarge(meta.len()));
+        }
+        let mut bytes = vec![0; meta.len() as usize];
+        file.read_exact(&mut bytes)?;
+        if file.read(&mut [0])? != 0 {
+            if bytes.len() == max {
+                return Err(BoundedFileError::TooLarge(meta.len().saturating_add(1)));
+            }
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "provider file grew during the read").into());
+        }
+        Ok(bytes)
+    }
 
     pub fn manifest_path(root: &Path, claim_hex: &str) -> PathBuf {
         root.join("claims").join(format!("{claim_hex}.manifest"))
@@ -217,10 +278,7 @@ pub mod fs {
 
         /// The manifest this provider holds for a claim, if any. NOT trusted: the caller validates it against the claim.
         pub fn manifest_for(&self, claim_hex: &str) -> Option<EvidenceManifestV1> {
-            let bytes = std::fs::read(manifest_path(&self.root, claim_hex)).ok()?;
-            let mut slice = bytes.as_slice();
-            let manifest = <EvidenceManifestV1 as borsh::BorshDeserialize>::deserialize(&mut slice).ok()?;
-            slice.is_empty().then_some(manifest)
+            crate::transport::EvidenceProvider::manifest_for(self, claim_hex).ok().flatten()
         }
     }
 
@@ -229,7 +287,18 @@ pub mod fs {
             &self.id
         }
         fn fetch_chunk(&self, manifest_id: Hash64, index: u32) -> Result<Vec<u8>, ProviderError> {
-            std::fs::read(chunk_path(&self.root, manifest_id, index)).map_err(|e| ProviderError(e.to_string()))
+            // Without a manifest length, the library's default is the only available size limit.
+            self.fetch_chunk_expected(manifest_id, index, ManifestLimits::default().max_chunk_bytes).map_err(|error| match error {
+                ChunkReadError::Provider(error) => error,
+                ChunkReadError::TooLarge(_) => ProviderError(error.to_string()),
+            })
+        }
+
+        fn fetch_chunk_expected(&self, manifest_id: Hash64, index: u32, expected_len: u32) -> Result<Vec<u8>, ChunkReadError> {
+            read_bounded_file(&chunk_path(&self.root, manifest_id, index), expected_len as usize).map_err(|e| match e {
+                BoundedFileError::TooLarge(got) => ChunkReadError::TooLarge(usize::try_from(got).unwrap_or(usize::MAX)),
+                BoundedFileError::Io(e) => ProviderError(e.to_string()).into(),
+            })
         }
     }
 
