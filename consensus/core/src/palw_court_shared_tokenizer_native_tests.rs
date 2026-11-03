@@ -233,3 +233,165 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     }
     assert_eq!(b.state.state_root(), before);
 }
+
+#[test]
+fn prospective_tokenizer_cache_rechecks_rooted_eof_and_claim_scope() {
+    use crate::palw_tokenizer_rendering_v2::{PalwTokenizerRenderingBudgetV2, PalwTokenizerRenderingCacheV2};
+
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut state, params, extras) = world(&fx, &fx.frame);
+    let claim = fx.frame.plan_v1().original_claim;
+    let class = semantics.class_id;
+    let accepted_daa = state.claim(&claim).unwrap().accepted_daa;
+    assert!(accepted_daa > eof.completed_daa);
+    state.class_semantics.insert(class, semantics.clone());
+    state.claim_semantics.insert(claim, semantics);
+    let eog = table.eog_opening().unwrap();
+    let token = table.opening_of(0).unwrap();
+    let limits = PalwTokenizerRenderingBudgetV2 {
+        raw_bytes: eof.actual_bytes,
+        vocab: table.vocab(),
+        key_events: eof.key_event_upper_bound_v1(),
+        eog_ids: 1,
+        total_rendering_bytes: 8,
+    };
+    let mut cache = PalwTokenizerRenderingCacheV2::default();
+    assert!(cache.prepare_class_v2(&state, &class, accepted_daa, &raw, &eog, limits).is_err());
+    assert_eq!(cache.verify_claim_token_v2(&state, &claim, 0, &token), None);
+
+    let inventory = Key::Inventory(eof.artifact_hash);
+    let mut accepted = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    accepted.write_staged_row_v1(inventory, Some(Row::ArtifactInventory(eof.clone()))).unwrap();
+    assert!(cache.prepare_class_v2(&accepted.state, &class, eof.completed_daa - 1, &raw, &eog, limits).is_err());
+    cache.prepare_class_v2(&accepted.state, &class, accepted_daa, &raw, &eog, limits).unwrap();
+    assert!(cache.class_is_prepared_v2(&accepted.state, &class, accepted_daa));
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), Some(true));
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 1, &token), Some(false));
+    assert_eq!(cache.lowest_eog_for_claim_v2(&accepted.state, &claim), Some(7));
+    assert_eq!(PalwTokenizerRenderingCacheV2::default().verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+
+    // No inventory on the sibling view, then a different native EOF identity.
+    assert!(!cache.class_is_prepared_v2(&state, &class, accepted_daa));
+    assert_eq!(cache.verify_claim_token_v2(&state, &claim, 0, &token), None);
+    let mut alternate = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let other_eof = crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1 {
+        inventory_id: h(8801),
+        ..eof.clone()
+    };
+    alternate.write_staged_row_v1(inventory, Some(Row::ArtifactInventory(other_eof))).unwrap();
+    assert_eq!(cache.verify_claim_token_v2(&alternate.state, &claim, 0, &token), None);
+
+    // A claim must still have its native original and output binding. A claim
+    // stamped at the EOF DAA cannot establish ordering from that DAA alone.
+    let original_output = accepted.state.claim(&claim).unwrap().output_root;
+    accepted.state.claims.get_mut(&claim).unwrap().output_root = h(8802);
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+    accepted.state.claims.get_mut(&claim).unwrap().output_root = original_output;
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), Some(true));
+    let original_frame = accepted.state.staged_courts.remove(&fx.frame.key_v1()).unwrap();
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+    accepted.state.staged_courts.insert(fx.frame.key_v1(), original_frame);
+    let mut same_daa_eof = eof.clone();
+    same_daa_eof.completed_daa = accepted_daa;
+    accepted.write_staged_row_v1(inventory, Some(Row::ArtifactInventory(same_daa_eof))).unwrap();
+    let mut same_daa_cache = PalwTokenizerRenderingCacheV2::default();
+    same_daa_cache.prepare_class_v2(&accepted.state, &class, accepted_daa, &raw, &eog, limits).unwrap();
+    assert_eq!(same_daa_cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+}
+
+#[test]
+fn tfp1_tokenizer_intake_pins_native_container_and_signed_eof_without_changing_quote() {
+    use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
+    use crate::palw_tokenizer_rendering_v2::{
+        PalwTfp1TokenizerIntakePinsV2 as Pins, PalwTfp1TokenizerIntakeQuoteErrorV2 as Error, PalwTokenizerRenderingBudgetV2,
+        PalwTokenizerRenderingCacheV2, PalwVerifiedTokenizerRegistrationV1,
+    };
+
+    // This fixture validates a real signed inventory offer, then drives the
+    // native exact EOF primitive; the native registration check binds PALWART3.
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut state, params, mut extras) = world(&fx, &fx.frame);
+    let claim = fx.frame.plan_v1().original_claim;
+    state.claims.remove(&claim);
+    state.staged_courts.remove(&fx.frame.key_v1());
+    state.last_point = Some(at(&fx.frame, 0));
+    let now = state.last_point().unwrap().daa_score + 1;
+    let class_id = semantics.class_id;
+    let binding = test_binding_v1(&fx.record, semantics.artifact_root, b"tfp1-intake");
+    let container = check_tir_container_binding_v1(&binding, &class_id, &semantics.artifact_root, &fx.record, 1).unwrap();
+    let pins = Pins {
+        class_id,
+        container_root: container.container_root,
+        semantics_id: semantics.commitment(),
+        inventory_id: eof.inventory_id,
+    };
+    state.class_semantics.insert(class_id, semantics);
+    let container_key = Key::TirContainer(class_id);
+    let eof_key = Key::Inventory(eof.artifact_hash);
+    let original = fx.frame.original_v1();
+    let header = fx.frame.header_v1();
+    let eog = table.eog_opening().unwrap();
+    let budget = PalwTokenizerRenderingBudgetV2 {
+        raw_bytes: eof.actual_bytes,
+        vocab: table.vocab(),
+        key_events: eof.key_event_upper_bound_v1(),
+        eog_ids: 1,
+        total_rendering_bytes: 8,
+    };
+    let mut cache = PalwTokenizerRenderingCacheV2::default();
+    let full_quote = |state: &PalwChainStateV2, extras: &PalwTransitionExtrasV1| {
+        super::palw_tir_public_original_quote_v1(state, &params, extras, now, original, header)
+    };
+    let preclaim_quote = |cache: &PalwTokenizerRenderingCacheV2, state: &PalwChainStateV2, extras: &PalwTransitionExtrasV1| {
+        cache.tfp1_intake_quote_v2(state, &params, extras, now, &pins, original, header)
+    };
+    let quote_outcome = |res| match res {
+        Ok(plan) => Ok(plan),
+        Err(Error::Native(error)) => Err(error),
+        Err(Error::Local(reason)) => panic!("unexpected local intake error {reason}"),
+    };
+    assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &[], &eog, budget), Ok(false));
+    assert_eq!(quote_outcome(preclaim_quote(&cache, &state, &extras)), full_quote(&state, &extras));
+
+    extras.class_semantics_active = true;
+    extras.tir_container_identity_active = true;
+    extras.tir_public_conviction_active = true;
+    extras.staged_public_court = Some(fx.rules.config);
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, budget).is_err());
+    state.staged_courts.insert(eof_key, Row::ArtifactInventory(eof));
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, budget).is_err());
+    state.staged_courts.insert(container_key, Row::TirContainer(Box::new(container)));
+    assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
+    for wrong in
+        [Pins { inventory_id: h(8804), ..pins }, Pins { container_root: h(8805), ..pins }, Pins { semantics_id: h(8806), ..pins }]
+    {
+        assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &wrong, &raw, &eog, budget).is_err());
+    }
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw[..raw.len() - 1], &eog, budget).is_err());
+    assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
+    assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, budget), Ok(true));
+    assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &[], &eog, budget), Ok(true));
+    let too_small = PalwTokenizerRenderingBudgetV2 { eog_ids: 0, ..budget };
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, too_small).is_err());
+    let derive =
+        |parent: &PalwChainStateV2, bytes: &[u8], eog_opening: &crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1| {
+            PalwVerifiedTokenizerRegistrationV1::derive_v1(parent, &extras, now, pins, bytes, eog_opening, budget)
+        };
+    let record = derive(&state, &raw, &eog).unwrap().unwrap();
+    let restored = derive(&state, &raw, &eog).unwrap().unwrap();
+    assert_eq!(record.commitment_v1(), restored.commitment_v1());
+    assert!(record.applies_to_parent_v1(&state, &extras, now, budget));
+    assert!(!record.applies_to_parent_v1(&state, &extras, now, PalwTokenizerRenderingBudgetV2 { eog_ids: 2, ..budget }));
+    let mut bad_eog = eog.clone();
+    bad_eog.ids[0] = 0;
+    assert!(derive(&state, &raw, &bad_eog).is_err());
+    assert!(derive(&state, &raw[..raw.len() - 1], &eog).is_err());
+    assert_eq!(quote_outcome(preclaim_quote(&cache, &state, &extras)), full_quote(&state, &extras));
+    let mut wrong_header = header.clone();
+    wrong_header.artifact_root = h(8807);
+    assert!(matches!(cache.tfp1_intake_quote_v2(&state, &params, &extras, now, &pins, original, &wrong_header), Err(Error::Local(_))));
+    state.staged_courts.remove(&container_key);
+    assert!(!record.applies_to_parent_v1(&state, &extras, now, budget));
+    assert!(derive(&state, &raw, &eog).is_err());
+    assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
+}

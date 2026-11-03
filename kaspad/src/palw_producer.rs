@@ -59,6 +59,67 @@ use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
 
+/// RDA4's canonical ML-DSA fields fit within the receipt commitment cap.
+/// Limit reads on the opened file, including files replaced or grown during a scan.
+fn read_redemption_bundle_v4(path: &std::path::Path) -> Option<Vec<u8>> {
+    use kaspa_consensus_core::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4 as CAP;
+    use std::io::Read;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > CAP as u64 {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(CAP as u64 + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() <= CAP).then_some(bytes)
+}
+
+/// Local attempt-only readiness. Peer safety comes from the existing
+/// PartitionWatch gate, never from one consensus-refusal record.
+fn palw_producer_view_guard_v1(
+    facts: (Hash64, u64),
+    template: (Hash64, u64),
+    expected_epoch: Option<u64>,
+    participation: bool,
+    same_instance: bool,
+    context: Result<u64, String>,
+) -> Result<u64, String> {
+    if facts != template {
+        return Err("holding: producer facts and template belong to different selected views".into());
+    }
+    palw_producer_epoch_guard_v1(expected_epoch, participation, same_instance, context)
+}
+
+/// Publication may follow ordinary parent advancement during a long draw.
+/// Active-instance replacement or a changed/incomplete import still invalidates
+/// the execution's local authority; it cannot be relabelled with the new epoch.
+fn palw_producer_epoch_guard_v1(
+    expected_epoch: Option<u64>,
+    participation: bool,
+    same_instance: bool,
+    context: Result<u64, String>,
+) -> Result<u64, String> {
+    if !participation {
+        return Err("holding: chain participation is closed".into());
+    }
+    if !same_instance {
+        return Err("holding: active consensus changed before inference/publication".into());
+    }
+    let epoch = context.map_err(|why| format!("holding: producer selected context unavailable: {why}"))?;
+    if expected_epoch.is_some_and(|expected| expected != epoch) {
+        return Err("holding: producer import generation changed before inference/publication".into());
+    }
+    Ok(epoch)
+}
+
 /// **DRILL ONLY (`--palw-drill-tamper-auto-leaf`, the G14 collusion drill): the sentinel `drill_tamper_leaf` value that picks the
 /// lie's leaf per draw** — the first step leaf in the second half of the honest run that the capture holds, that has canonical step
 /// coordinates and that is not a fused-attention leaf (the in-process E2E's choice, `lg14a_legacy_filer_e2e::real_attempt`), so the
@@ -344,6 +405,16 @@ pub(crate) fn palw_retained_material_path(dir: &std::path::Path, claim: &Hash64)
 /// suffix, so the two are siblings and a directory listing pairs them.
 pub(crate) fn palw_retained_answer_path(dir: &std::path::Path, claim: &Hash64) -> std::path::PathBuf {
     dir.join(format!("{claim}{PALW_RETAINED_ANSWER_SUFFIX}"))
+}
+
+/// Publish the capture before the producer makes a network commitment to it.
+fn persist_attempt_material(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use crate::palw_retention::{RetainedPublication, publish_retained_file};
+    publish_retained_file(path, bytes, RetainedPublication::DurableReplace).map(|_| ())
+}
+
+fn unbudgeted_attempt_storage_available(free: u64, total: u64, bytes: u64) -> bool {
+    crate::palw_retention::retention_reserve_bytes_v1(total).checked_add(bytes).is_some_and(|required| free >= required)
 }
 
 /// The wall-clock horizon of every retained capture that is not an attempt claim's: the bind +
@@ -1047,27 +1118,33 @@ impl PalwProducerService {
     /// because only the code that produced material knows how to write it. This function's job is
     /// the obligation — that the bytes are on disk before the block that promises them is
     /// published — and that is the backend's business either way.
-    fn retain_execution(&self, attempt_id: Hash64, material: &[u8]) -> Result<Vec<u8>, String> {
-        std::fs::create_dir_all(&self.config.retention_dir)
-            .map_err(|e| format!("cannot create the retention directory {}: {e}", self.config.retention_dir.display()))?;
+    fn retain_execution(&self, attempt_id: Hash64, material: &[u8]) -> Result<(), String> {
         let path = palw_retained_material_path(&self.config.retention_dir, &attempt_id);
         // Still the ONE codec — the retention file, the gossip broadcast and the seat's decode all
         // read these exact bytes — it is just applied one frame up now, where the backend is.
-        let bytes = material.to_vec();
         // G14 capacity lane: under a storage budget the bytes are reserved BEFORE the obligation is
         // written — a refusal here means no block promising them is published, so no liability is
         // taken on that the node has no room to keep. The reservation covers the write; once the
         // file exists the scan counts it.
-        let _storage = kaspa_utils::storage_budget::reserve_global(
-            kaspa_utils::storage_budget::StorageCategory::PalwRetained,
-            bytes.len() as u64,
-        )
-        .map_err(|refusal| format!("not retaining {}: {refusal}", path.display()))?;
-        let tmp = path.with_extension("material.partial");
-        std::fs::write(&tmp, &bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-        // Rename last: a reader never sees a half-written obligation.
-        std::fs::rename(&tmp, &path).map_err(|e| format!("cannot publish {}: {e}", path.display()))?;
-        Ok(bytes)
+        let _storage = self.reserve_attempt_retention_write_v1(&path, material.len() as u64)?;
+        persist_attempt_material(&path, material).map_err(|e| format!("cannot retain {}: {e}", path.display()))
+    }
+
+    fn reserve_attempt_retention_write_v1(
+        &self,
+        path: &std::path::Path,
+        bytes: u64,
+    ) -> Result<Option<kaspa_utils::storage_budget::StorageReservation>, String> {
+        let storage = kaspa_utils::storage_budget::reserve_global(kaspa_utils::storage_budget::StorageCategory::PalwRetained, bytes)
+            .map_err(|refusal| format!("not retaining {}: {refusal}", path.display()))?;
+        if storage.is_none() {
+            let (free, total) = crate::palw_retention::volume_space_v1(&self.config.retention_dir)
+                .ok_or_else(|| format!("cannot measure the retention volume for {}", path.display()))?;
+            if !unbudgeted_attempt_storage_available(free, total, bytes) {
+                return Err(format!("not retaining {}: the capture would consume the retention volume reserve", path.display()));
+            }
+        }
+        Ok(storage)
     }
 
     fn verification_key(&self) -> Vec<u8> {
@@ -1331,9 +1408,8 @@ impl PalwProducerService {
                     }
                 }
             }
-            // ADR-0135: the registry's class-local gate, read before a draw is built. Not a rule of
-            // this node's — the fold refuses what it refuses — but a draw for a HELD class or one at
-            // its inflight cap is a block the chain will not take, so it is not built.
+            // Registry holds constrain new attempts. Mature receipt and redemption
+            // rights were evaluated above against their own claim and bond rules.
             if let Some(detail) = self.registry_holds_class(&session, facts.daa_score) {
                 self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
                 let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
@@ -1678,6 +1754,26 @@ impl PalwProducerService {
         info!("[{PALW_PRODUCER}] stopping ({produced} blocks this run)");
     }
 
+    fn receipt_template_is_current_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        template: &kaspa_consensus_core::block::BlockTemplate,
+        quoted_parent: Hash64,
+        quoted_daa: u64,
+    ) -> bool {
+        let current = self.consensus_manager.consensus().unguarded_session();
+        self.flow_context.is_consensus_participation_allowed()
+            && template.selected_parent_hash == quoted_parent
+            && template.block.header.daa_score == quoted_daa
+            && session.with_consensus_api_v1(|observed| {
+                current.with_consensus_api_v1(|active| {
+                    std::ptr::eq(observed, active)
+                        && active.get_sink() == quoted_parent
+                        && active.get_virtual_daa_score() == quoted_daa
+                })
+            })
+    }
+
     /// **One receipt block, if a quantum wins right now.**
     ///
     /// Asks the chain for this bond's spendable quanta (`palw_fp_spendable_v3` — each row carries
@@ -1697,7 +1793,11 @@ impl PalwProducerService {
         miner_data: MinerData,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let seed = self.key_seed.ok_or("no signing key")?;
-        let spendable = session.palw_fp_spendable_v3(bond);
+        let Some((quoted_parent, spendable)) =
+            session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_with_parent_v3(bond)).await
+        else {
+            return Ok(None);
+        };
         // A win licenses a block only inside its use window (invariant F14), and the spendable
         // list does not filter on it — a quantum whose window closed stays in the list, unspent,
         // forever. Picking one built a template, signed it and had the chain refuse it on every
@@ -1715,6 +1815,11 @@ impl PalwProducerService {
             .get_block_template(session, miner_data)
             .await
             .map_err(|e| format!("no block template: {e}"))?;
+
+        if !self.receipt_template_is_current_v1(session, &template, quoted_parent, next_daa) {
+            trace!("[{PALW_PRODUCER}] receipt quote no longer matches its template or the active parent");
+            return Ok(None);
+        }
 
         // The header the spend binds is THIS one — its pre-pow hash, timestamp and nonce — so the
         // envelope is built after the template exists and re-bound if the template's fields change.
@@ -1773,7 +1878,7 @@ impl PalwProducerService {
         let mut names: Vec<std::path::PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
         names.sort();
         for path in names {
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Some(bytes) = read_redemption_bundle_v4(&path) else { continue };
             let Ok(bundle) = kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4::decode(&bytes) else { continue };
             // A bundle that fails its own checks is skipped, never believed: the chain would refuse the block anyway.
             if bundle
@@ -1788,7 +1893,12 @@ impl PalwProducerService {
             if next_daa > auth.expiry_daa {
                 continue;
             }
-            let spendable = session.palw_fp_spendable_v3(auth.executor_bond);
+            let executor_bond = auth.executor_bond;
+            let Some((quoted_parent, spendable)) =
+                session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_with_parent_v3(executor_bond)).await
+            else {
+                return Ok(None);
+            };
             let Some(win) = spendable.into_iter().find(|q| {
                 q.claim_id == auth.claim_id
                     && q.wins
@@ -1804,6 +1914,10 @@ impl PalwProducerService {
                 .get_block_template(session, miner_data.clone())
                 .await
                 .map_err(|e| format!("no block template: {e}"))?;
+            if !self.receipt_template_is_current_v1(session, &template, quoted_parent, next_daa) {
+                trace!("[{PALW_PRODUCER}] redemption quote no longer matches its template or the active parent");
+                return Ok(None);
+            }
             template.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
             let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
             let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
@@ -1829,6 +1943,10 @@ impl PalwProducerService {
                 .await
                 .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: redemption block {hash} was not submitted"))?
                 .map_err(|e| format!("the chain refused a redemption block this node produced: {e}"))?;
+            info!(
+                "[{PALW_PRODUCER}] PFS4 submitted block={hash} claim={} quantum={} parent={quoted_parent} daa={next_daa}",
+                win.claim_id, win.quantum_index
+            );
             return Ok(Some(hash));
         }
         Ok(None)
@@ -1887,6 +2005,65 @@ impl PalwProducerService {
         None
     }
 
+    /// This guard applies only to starting new inference. Existing material,
+    /// Court responders and the worker's earlier receipt lane remain running.
+    async fn checked_producer_context_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        facts: &PalwProducerFactsV2,
+        template: &kaspa_consensus_core::block::BlockTemplate,
+        expected_epoch: Option<u64>,
+    ) -> Result<u64, String> {
+        let facts_view = (facts.chain_point, facts.daa_score);
+        let template_view = (template.selected_parent_hash, template.block.header.daa_score);
+        if facts_view != template_view {
+            return Err("holding: producer facts and template belong to different selected views".into());
+        }
+        let root = template.block.header.palw_state_root;
+        // Strict state/history loading can block; it must not occupy the async
+        // runtime that also supplies existing Court and material duties.
+        let context =
+            session.clone().spawn_blocking(move |c| c.palw_producer_context_v1(template_view.0, template_view.1, root)).await;
+        let current = self.consensus_manager.consensus().unguarded_session();
+        let same_instance =
+            session.with_consensus_api_v1(|observed| current.with_consensus_api_v1(|active| std::ptr::eq(observed, active)));
+        palw_producer_view_guard_v1(
+            facts_view,
+            template_view,
+            expected_epoch,
+            self.flow_context.is_consensus_participation_allowed(),
+            same_instance,
+            context,
+        )
+    }
+
+    async fn checked_producer_publish_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        expected_epoch: u64,
+    ) -> Result<(), String> {
+        let context = session
+            .clone()
+            .spawn_blocking(|c| {
+                let (import, stable) = c.pruning_import_status().map_err(|why| why.to_string())?;
+                if !stable || import.active.is_some() {
+                    return Err("producer import is incomplete".into());
+                }
+                Ok(import.epoch)
+            })
+            .await;
+        let current = self.consensus_manager.consensus().unguarded_session();
+        let same_instance =
+            session.with_consensus_api_v1(|observed| current.with_consensus_api_v1(|active| std::ptr::eq(observed, active)));
+        palw_producer_epoch_guard_v1(
+            Some(expected_epoch),
+            self.flow_context.is_consensus_participation_allowed(),
+            same_instance,
+            context,
+        )?;
+        Ok(())
+    }
+
     async fn produce_one(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -1907,6 +2084,10 @@ impl PalwProducerService {
             .get_block_template(session, miner_data)
             .await
             .map_err(|e| format!("no block template: {e}"))?;
+        // Even isSynced=true can describe a stranded local branch. The
+        // existing PartitionWatch participation gate supplies the peer evidence;
+        // a single heavy refused candidate is never a new stopping condition.
+        let context_epoch = self.checked_producer_context_v1(session, facts, &template, None).await?;
         // DRILL (`--palw-drill-real-submit-delay-s`): the clock a REAL attempt's delay is counted from.
         let template_at = std::time::Instant::now();
         // **Either attempt id, because the template's id is the CHAIN's answer** (ADR-0072 SA-4).
@@ -2212,6 +2393,10 @@ impl PalwProducerService {
                 ));
             }
         };
+        // Backend preparation and resource admission may take time. Hold new
+        // inference if the selected parent/state/history/import or active
+        // consensus changed meanwhile; dropping this call releases its leases.
+        self.checked_producer_context_v1(session, facts, &template, Some(context_epoch)).await?;
         let (job_for_blocking, prompt_for_blocking) = (job.clone(), prompt.clone());
         let tamper = self.config.drill_tamper_leaf;
         let (drill_fault, drill_sparse_seed) = (self.config.drill_fault, self.config.drill_sparse_fault_seed);
@@ -2266,6 +2451,7 @@ impl PalwProducerService {
         .await
         .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: the draw in flight is abandoned"))?
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
+        self.checked_producer_publish_v1(session, context_epoch).await?;
         require_fresh_routing_v2()?;
         let storage_read_mib = crate::palw_backends::log_draw_storage_v1(PALW_PRODUCER, &storage_before, &self.class_holdings);
         let draw_millis = draw_started.elapsed().as_millis() as u64;
@@ -2317,13 +2503,14 @@ impl PalwProducerService {
             .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
             .as_ref()
             .to_vec();
-            let material = self.retain_execution(message, &run.material)?;
-            let announced = palw_attempt_announcement_v1(material, None);
+            let retention_pin = crate::palw_retention::pin_attempt_publication(message);
+            self.retain_execution(message, &run.material)?;
+            let announced = palw_attempt_announcement_v1(run.material, None);
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, announced)).await;
             riders_out
                 .as_mut()
                 .ok_or("rider destination absent")?
-                .push(PalwAttemptEnvelopeV2 { attempt, signature }, routing_work_v2.clone(), Some(&job))
+                .push(PalwAttemptEnvelopeV2 { attempt, signature }, routing_work_v2.clone(), Some(&job), retention_pin)
                 .map_err(|why| why.to_string())?;
             return Ok(None);
         }
@@ -2421,7 +2608,7 @@ impl PalwProducerService {
             // **RFC-0008 PAV3: the custody carriage, before anything is retained or announced** — the actual bundle, every roster
             // provider's signature (each after its durable publication) and this executor's seal. A refusal anywhere publishes
             // nothing: never a PAV2 fallback the chain refuses past the fence.
-            let commitment = match native_draw {
+            let (commitment, material) = match native_draw {
                 Some((row, provisional)) => {
                     let mut probe = template.block.header.clone();
                     probe.nonce = nonce;
@@ -2434,16 +2621,17 @@ impl PalwProducerService {
                         PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: signature.clone() },
                         anchor,
                         backend,
-                        run.material.clone(),
+                        run.material,
                         prompt.clone(),
                     )
                     .await?
                 }
-                None => PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire(),
+                None => (PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire(), run.material),
             };
             // The promise, kept before it is made. See `retain_execution`.
             require_fresh_routing_v2()?;
-            let material = self.retain_execution(message, &run.material)?;
+            let _retention_pin = crate::palw_retention::pin_attempt_publication(message);
+            self.retain_execution(message, &material)?;
             // **RFC-0007 Part II: the witness is the producer's obligation** (§II.7): a class whose attempts commit witness chunks keeps its
             // witness for the claim — the canonical serving set's `MatMul` outputs, in exactly the pinned number of chunks, with their
             // digests — before the block that promises it is published. A producer that cannot make it does not publish: a claim whose
@@ -2481,8 +2669,8 @@ impl PalwProducerService {
                 let answer = kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_encode_v1(anchor, &prompt_ids, ids);
                 envelope = self.config.drill_answer_only.then(|| answer.clone());
                 let path = palw_retained_answer_path(&self.config.retention_dir, &message);
-                let tmp = path.with_extension("answer.partial");
-                if let Err(e) = std::fs::write(&tmp, &answer).and_then(|()| std::fs::rename(&tmp, &path)) {
+                use crate::palw_retention::{RetainedPublication, publish_retained_file};
+                if let Err(e) = publish_retained_file(&path, &answer, RetainedPublication::Replace) {
                     warn!("[{PALW_PRODUCER}] cannot retain the answer envelope for attempt {message}: {e}");
                 }
             }
@@ -2517,6 +2705,24 @@ impl PalwProducerService {
             // block submitted into it waits forever on its validation result — the AsyncRuntime's
             // join, and the process, with it (8+ minutes at 0 % CPU on a graph-v7@2048 producer whose
             // 97 s draw finished after SIGINT). So the submit and the announcement both yield to it.
+            if !facts.is_base_class
+                && !self.config.attempt_retention.is_zero()
+                && self.consensus_config.params.palw_model_panel_one_retention_v1_fence().is_some()
+            {
+                use crate::palw_retention::{attempt_pressure_grace_disk_quote_v1, stage_attempt_pressure_grace_v1};
+                let carried = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&block.header.palw_commitment)
+                    .map_err(|e| format!("cannot identify the model attempt before publication: {e}"))?;
+                if carried.attempt != attempt || attempt_id_v2(&carried.attempt) != message {
+                    return Err("the model carrier does not bind its retained attempt".into());
+                }
+                let path = palw_retained_material_path(&self.config.retention_dir, &message);
+                let quote = attempt_pressure_grace_disk_quote_v1(&path)
+                    .map_err(|e| format!("cannot quote the local pressure grace for model attempt {message}: {e}"))?;
+                let _storage = self.reserve_attempt_retention_write_v1(&path, quote)?;
+                stage_attempt_pressure_grace_v1(&path, &_retention_pin, hash, material.len() as u64)
+                    .map_err(|e| format!("cannot retain the local pressure grace for model attempt {message}: {e}"))?;
+            }
+            self.checked_producer_publish_v1(session, context_epoch).await?;
             require_fresh_routing_v2()?;
             if !facts.is_base_class {
                 info!(
@@ -2557,7 +2763,7 @@ impl PalwProducerService {
         backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
         capture: Vec<u8>,
         prompt: Vec<usize>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(Vec<u8>, Vec<u8>), String> {
         use crate::palw_native_custody_v3::{
             PALW_NATIVE_READY_EXCHANGE_VERSION_V3, PalwNativeReadyRequestV3, palw_native_bundle_v3, palw_native_check_signatures_v3,
             palw_native_provisional_envelope_v3, palw_native_same_draw_v3,
@@ -2575,7 +2781,7 @@ impl PalwProducerService {
         let prefill_draw = self.consensus_config.params.palw_prefill_draw_active_at(header.daa_score);
         let (session, row, draw) = (session.clone(), row.clone(), provisional.clone());
         let described = exchange.0.describe();
-        let (ready, signatures, base) = palw_until_exit_v1(
+        let (ready, signatures, base, capture) = palw_until_exit_v1(
             &self.shutdown.listener,
             tokio::task::spawn_blocking(move || {
                 let attempt = base.attempt.clone();
@@ -2640,7 +2846,7 @@ impl PalwProducerService {
                 };
                 let signatures = exchange.0.request_signatures_authenticated(&request, &provider_keys)?;
                 palw_native_check_signatures_v3(&ready, &provider_keys, &signatures)?;
-                Ok::<_, String>((ready, signatures, request.envelope.base))
+                Ok::<_, String>((ready, signatures, request.envelope.base, request.capture))
             }),
         )
         .await
@@ -2661,7 +2867,7 @@ impl PalwProducerService {
             sealed.ready.session,
             sealed.ready.providers.len()
         );
-        Ok(sealed.encode_wire())
+        Ok((sealed.encode_wire(), capture))
     }
 }
 
@@ -3212,7 +3418,7 @@ mod accepted_rider_tests {
             .into_iter()
             .map(|kind| RetainedClaimV1 {
                 claim: Hash64::from_u64_word(1),
-                paths: vec![],
+                files: vec![],
                 bytes: 100,
                 age: Some(std::time::Duration::MAX),
                 kind,
@@ -3243,6 +3449,61 @@ mod accepted_rider_tests {
 mod tests {
     use super::palw_da_court_in_force_v1;
 
+    #[test]
+    fn attempt_capture_preserves_the_unbudgeted_volume_reserve() {
+        let gib = 1 << 30;
+        let capture = 2_409_135;
+        for (total, reserve) in [(100 * gib, 8 * gib), (1_000 * gib, 50 * gib)] {
+            assert!(super::unbudgeted_attempt_storage_available(reserve + capture, total, capture));
+            assert!(!super::unbudgeted_attempt_storage_available(reserve + capture - 1, total, capture));
+        }
+        assert!(!super::unbudgeted_attempt_storage_available(u64::MAX, 100 * gib, u64::MAX));
+    }
+    #[test]
+    fn attempt_material_persist_is_atomic_and_retryable() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("retention");
+        let path = dir.join("attempt.material");
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(super::persist_attempt_material(&path, b"first").is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir(&path).unwrap();
+
+        super::persist_attempt_material(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        super::persist_attempt_material(&path, b"third").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"third");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let baseline = root.path().join("ordinary-file");
+            std::fs::write(&baseline, b"").unwrap();
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode(),
+                std::fs::metadata(baseline).unwrap().permissions().mode()
+            );
+        }
+    }
+
+    #[test]
+    fn redemption_bundle_reads_are_bounded_to_regular_files() {
+        use super::read_redemption_bundle_v4;
+        use kaspa_consensus_core::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4 as CAP;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("authorization");
+        assert!(read_redemption_bundle_v4(&path).is_none());
+        assert!(read_redemption_bundle_v4(root.path()).is_none());
+
+        let valid_size = vec![1; CAP];
+        std::fs::write(&path, &valid_size).unwrap();
+        assert_eq!(read_redemption_bundle_v4(&path), Some(valid_size));
+
+        std::fs::write(&path, vec![1; CAP + 1]).unwrap();
+        assert!(read_redemption_bundle_v4(&path).is_none());
+    }
+
     /// **A producer misconfiguration never takes the node down** (the route-matrix re-audit's #11).
     /// The unproducible-class refusal called `process::exit(1)` from the constructor, which under
     /// systemd's `Restart=` is a crash loop of the whole kaspad — seat, RPC and public entry node with
@@ -3257,9 +3518,11 @@ mod tests {
         assert!(production.contains("--palw-producer-class: {why} — production disabled"), "the nodelog phrase");
         let worker = &production[production.find("pub async fn worker(").expect("the worker")..];
         let receipt = worker.find("self.produce_receipt(").expect("the receipt lane");
+        let redemption = worker.find("self.produce_redemption(").expect("the redemption lane");
+        let registry_hold = worker.find("self.registry_holds_class(").expect("the registry's attempt hold");
         let hold = worker.find("if let Some(why) = &self.class_refusal").expect("the attempt lane's hold");
         let attempt = worker.find("palw_producer_ready_v1(&facts,").expect("the attempt lane");
-        assert!(receipt < hold && hold < attempt, "the refusal holds the attempt lane after the receipt lane has run");
+        assert!(receipt < redemption && redemption < registry_hold && registry_hold < hold && hold < attempt);
     }
     use kaspa_consensus_core::config::Config;
     use kaspa_consensus_core::config::params::{devnet_shipped_params, palw_rc_shipped_params};
@@ -4099,3 +4362,7 @@ mod p6_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "palw_producer_context_tests.rs"]
+mod producer_context_tests;

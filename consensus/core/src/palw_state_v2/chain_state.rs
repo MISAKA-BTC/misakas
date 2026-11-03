@@ -2538,6 +2538,19 @@ impl PalwChainStateV2 {
         self.staged_courts.range(*from..=*to)
     }
 
+    /// Borrow every indexed native acquisition for the candidate frame.
+    pub(crate) fn tir_owner_schedule_acquisitions_v2(
+        &self,
+        claim: Hash64,
+    ) -> impl Iterator<Item = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1> + '_ {
+        use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
+        self.staged_tir_by_claim
+            .get(&claim)
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, key)| matches!(key, Key::TirAcquisition(..)).then_some(*key))
+    }
+
     /// Derived lifecycle consistency only, not proof of a new paid acquisition
     /// or raw-source grant. Admission remains disabled until the full native
     /// allocation and distinct custody pledge/grants are wired.
@@ -2560,6 +2573,7 @@ impl PalwChainStateV2 {
                     | Key::TirPreparation(..)
                     | Key::TirClaim(_)
                     | Key::TirWitness(..)
+                    | Key::TirOwnerSchedule(_)
             ) {
                 let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
                 due.insert((at, *key));
@@ -2609,6 +2623,7 @@ impl PalwChainStateV2 {
                         | Key::TirPreparation(..)
                         | Key::TirClaim(_)
                         | Key::TirWitness(..)
+                        | Key::TirOwnerSchedule(_)
                 )
             })
             .copied()
@@ -4426,6 +4441,11 @@ impl PalwChainStateV2 {
         self.assert_terminal_evidence_v1()?;
         for (key, row) in &self.staged_courts {
             row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(schedule) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < schedule.material_until()
+            {
+                schedule.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
         }
         let responders: BTreeSet<_> = self.staged_courts.values().flat_map(palw_staged_court_fold_v1::response_index_rows).collect();
         if responders != self.staged_prefix_responders {

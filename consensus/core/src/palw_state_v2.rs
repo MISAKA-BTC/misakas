@@ -23390,13 +23390,33 @@ pub(crate) fn replay_delta_owned_v1(
     revert: bool,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
     palw_claim_local_execution_cohort_census_v15::prepare_compact_replay_activity_v15(&mut state, params, delta.point);
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as CourtKey, PalwStagedCourtRowV1 as CourtRow};
+    let mut owner_schedule_changed = false;
+    let mut replay_entry = |entry: &PalwDeltaEntryV2| {
+        owner_schedule_changed |= matches!(entry, PalwDeltaEntryV2::StagedCourtSeed { key: CourtKey::TirOwnerSchedule(_), .. });
+        apply_delta_entry(&mut state, entry, revert)
+    };
     if revert {
         for entry in delta.entries.iter().rev() {
-            apply_delta_entry(&mut state, entry, true)?;
+            replay_entry(entry)?;
         }
     } else {
         for entry in &delta.entries {
-            apply_delta_entry(&mut state, entry, false)?;
+            replay_entry(entry)?;
+        }
+    }
+    // Candidate acquisition/response and roster rows must agree after the
+    // whole journal is applied, in either direction. Legacy deltas have no
+    // schedule key and do not pay for the second traversal.
+    if owner_schedule_changed {
+        let now = state.last_point().map_or(0, |point| point.daa_score);
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::StagedCourtSeed { key: key @ CourtKey::TirOwnerSchedule(_), .. } = entry
+                && let Some(CourtRow::TirOwnerSchedule(row)) = state.staged_court_row_v1(key)
+                && now < row.material_until()
+            {
+                row.check_context(&state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
         }
     }
     palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, revert, params)?;
@@ -23809,6 +23829,12 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::StagedCourtSeed { key, old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             expect_matches(&state.staged_courts.get(key).cloned(), expected)?;
+            if let Some(row) = install
+                && (matches!(key, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirOwnerSchedule(_))
+                    || matches!(row, crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(_)))
+            {
+                row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
             palw_staged_court_fold_v1::update_indices(state, *key, expected.as_ref(), install.as_ref());
             match install {
                 Some(row) => {

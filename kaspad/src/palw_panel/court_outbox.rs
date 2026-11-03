@@ -33,11 +33,17 @@ pub(super) fn rider_refusal_should_retry_v2(why: &kaspa_consensus_core::palw_rea
 pub(super) type CourtMoveKeyV1 = (Hash64, u32, bool);
 pub(super) type CourtMoveV1 = (Hash64, u32, bool, PalwConsensusObjectV2);
 
+#[derive(Clone, Copy)]
+struct CourtMoveStampV1 {
+    at: u64,
+    waiting_for_provider: bool,
+}
+
 #[derive(Default)]
 pub(crate) struct CourtOutboxV1 {
     pending: Vec<CourtMoveV1>,
     due: HashMap<CourtMoveKeyV1, u64>,
-    submitted: HashMap<CourtMoveKeyV1, u64>,
+    submitted: HashMap<CourtMoveKeyV1, CourtMoveStampV1>,
     // Pending payloads drop before the tickets that authorize their storage.
     payload_tickets: CourtPayloadTicketsV1,
     rider_guards: CourtRoutingV2,
@@ -305,7 +311,15 @@ impl CourtOutboxV1 {
         self.due.retain(keep);
     }
     pub(super) fn submitted_at(&self, key: &CourtMoveKeyV1) -> Option<&u64> {
-        self.submitted.get(key)
+        self.submitted.get(key).map(|stamp| &stamp.at)
+    }
+    pub(super) fn disclosure_waits_for_retry(&self, key: &CourtMoveKeyV1, now: u64, provider_ready: impl FnOnce() -> bool) -> bool {
+        self.submitted.get(key).is_some_and(|stamp| {
+            now < stamp.at.saturating_add(super::COURT_MOVE_REPLAN_DAA) && !(stamp.waiting_for_provider && provider_ready())
+        })
+    }
+    pub(super) fn mark_provider_material_miss(&mut self, key: CourtMoveKeyV1, at: u64) {
+        self.submitted.insert(key, CourtMoveStampV1 { at, waiting_for_provider: true });
     }
     pub(super) fn has_submitted(&self, key: &CourtMoveKeyV1) -> bool {
         self.submitted.contains_key(key)
@@ -313,13 +327,13 @@ impl CourtOutboxV1 {
     /// Historical move/debounce timestamp: never a Done/accepted transition.
     /// The carrier stamps successful submission; legacy eager sites still stamp queue attempts.
     pub(super) fn mark_submitted(&mut self, key: CourtMoveKeyV1, at: u64) -> Option<u64> {
-        self.submitted.insert(key, at)
+        self.submitted.insert(key, CourtMoveStampV1 { at, waiting_for_provider: false }).map(|stamp| stamp.at)
     }
     pub(super) fn forget_submitted(&mut self, key: &CourtMoveKeyV1) -> Option<u64> {
-        self.submitted.remove(key)
+        self.submitted.remove(key).map(|stamp| stamp.at)
     }
-    pub(super) fn retain_submitted(&mut self, keep: impl FnMut(&CourtMoveKeyV1, &mut u64) -> bool) {
-        self.submitted.retain(keep);
+    pub(super) fn retain_submitted(&mut self, mut keep: impl FnMut(&CourtMoveKeyV1, &mut u64) -> bool) {
+        self.submitted.retain(|key, stamp| keep(key, &mut stamp.at));
     }
     /// Prepare before draining or doing any funding/submission work. On local
     /// refusal the queue is untouched and the service can retry on a later tick.
@@ -395,7 +409,7 @@ impl CourtOutboxV1 {
         Self {
             pending,
             due,
-            submitted,
+            submitted: submitted.into_iter().map(|(key, at)| (key, CourtMoveStampV1 { at, waiting_for_provider: false })).collect(),
             payload_tickets: CourtPayloadTicketsV1::default(),
             rider_guards: CourtRoutingV2::default(),
             source_guards: CourtSourceResponsesV1::default(),
@@ -414,7 +428,7 @@ impl CourtOutboxV1 {
                 && self.flight_frame.as_ref().is_none_or(|f| !f.is_reserved()),
             "fixture extraction must not detach frame tickets"
         );
-        (self.pending, self.due, self.submitted)
+        (self.pending, self.due, self.submitted.into_iter().map(|(key, stamp)| (key, stamp.at)).collect())
     }
 }
 
@@ -452,7 +466,7 @@ mod tests {
             old_due.retain(|k, _| old_pending.iter().any(|item| key(item) == *k));
             owner.finish_fixture_flush(actual);
             assert_eq!(
-                (owner.pending.clone(), owner.due.clone(), owner.submitted.clone()),
+                (owner.pending.clone(), owner.due.clone(), owner.submitted.iter().map(|(&key, stamp)| (key, stamp.at)).collect()),
                 (old_pending.clone(), old_due.clone(), old_moved.clone())
             );
         }
@@ -467,7 +481,19 @@ mod tests {
         old_due.entry(lost).or_insert(140);
         palw_court_queue_edf_v1(&mut old_pending, &old_due);
         assert_eq!(owner.take_priority(), old_pending);
-        assert_eq!(owner.submitted, old_moved);
+        assert_eq!(owner.submitted.into_iter().map(|(key, stamp)| (key, stamp.at)).collect::<HashMap<_, _>>(), old_moved);
+    }
+
+    #[test]
+    fn provider_delivery_retries_a_material_miss_at_the_same_daa_but_preserves_submission_cooldown() {
+        let mut outbox = CourtOutboxV1::default();
+        let da = key(&item(1, 7));
+        outbox.mark_provider_material_miss(da, 100);
+        assert!(outbox.disclosure_waits_for_retry(&da, 100, || false));
+        assert!(!outbox.disclosure_waits_for_retry(&da, 100, || true));
+        outbox.mark_submitted(da, 100);
+        assert!(outbox.disclosure_waits_for_retry(&da, 100, || true));
+        assert!(!outbox.disclosure_waits_for_retry(&da, 100 + super::super::COURT_MOVE_REPLAN_DAA, || false));
     }
 
     #[test]
@@ -685,7 +711,10 @@ mod rider_handoff_tests {
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
         let lead = Hash64::from_u64_word(701);
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(rider_fixture_v2(lead, 0), None, None).unwrap();
+        use crate::palw_retention::attempt_publication_is_pinned;
+        let envelope = rider_fixture_v2(lead, 0);
+        let claim = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
+        batch.push_fixture(envelope, None, None).unwrap();
         // Fill exactly the remaining demand budget without assuming fixture sizes.
         let (mut lo, mut hi) = (0, memory);
         while lo < hi {
@@ -704,6 +733,7 @@ mod rider_handoff_tests {
         };
         assert!(outbox.pending().is_empty());
         assert_eq!(batch.len(), 1);
+        assert!(attempt_publication_is_pinned(claim));
         drop(blocker);
         assert!(outbox.try_push_rider_batch(batch, 1).is_ok());
         assert!(!outbox.rider_guards.is_empty());
@@ -711,18 +741,21 @@ mod rider_handoff_tests {
         let mut retry = outbox.try_retry_buffer().unwrap();
         let flight = outbox.try_take_priority().unwrap();
         outbox.retain_pending(|_| false);
+        assert!(attempt_publication_is_pinned(claim));
         assert!(!outbox.rider_guards.is_empty(), "async flight keeps original owner/ticket");
         for item in flight {
             retry.push(item);
         }
         outbox.finish_flush(retry);
         assert_eq!(outbox.pending().len(), 1);
+        assert!(attempt_publication_is_pinned(claim));
         assert!(!outbox.rider_guards.is_empty(), "refused carrier retains batch owner");
         let retry = outbox.try_retry_buffer().unwrap();
         drop(outbox.try_take_priority().unwrap());
         assert!(!outbox.rider_guards.is_empty(), "cancellation conservatively retains owner");
         outbox.finish_flush(retry);
         assert!(outbox.rider_guards.is_empty());
+        assert!(!attempt_publication_is_pinned(claim));
         assert!(reserve_native_requests_v1(memory).is_err(), "due map capacity remains owned after batch retirement");
         drop(outbox);
         assert!(reserve_native_requests_v1(memory).is_ok(), "last payload/guard/map/frame ticket released");
@@ -739,7 +772,7 @@ mod rider_native_owner_tests {
         let (original, envelope, job, lead) = crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
         let weak = std::sync::Arc::downgrade(&original);
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(envelope, Some(original), Some(&job)).unwrap();
+        batch.push_fixture(envelope, Some(original), Some(&job)).unwrap();
         palw_rider_outbox_push_v2(batch);
         assert!(weak.upgrade().is_some(), "actual original native owner retained in source queue");
         let mut outbox = CourtOutboxV1::default();
@@ -809,7 +842,7 @@ mod rider_disposition_tests {
         let (original, envelope, job, lead) = crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
         let weak = std::sync::Arc::downgrade(&original);
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(envelope, Some(original), Some(&job)).unwrap();
+        batch.push_fixture(envelope, Some(original), Some(&job)).unwrap();
         let mut outbox = CourtOutboxV1::default();
         assert!(outbox.try_push_rider_batch(batch, 11).is_ok());
         let key = (lead, crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1, false);
@@ -847,7 +880,7 @@ mod rider_disposition_tests {
     fn rider_guard_original_none_cannot_invent_routing_owner_or_wait_forever() {
         let (owner, envelope, job, lead) = crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(envelope, None, Some(&job)).unwrap();
+        batch.push_fixture(envelope, None, Some(&job)).unwrap();
         let object = batch.take_object();
         let mut guards = CourtRoutingV2::default();
         guards.insert(batch);

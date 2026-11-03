@@ -6601,6 +6601,7 @@ try_from!(item: &protowire::GetPalwTirOriginalQuoteResponseMessage, RpcResult<ka
         refusal: item.refusal.clone(),
         quote_daa: item.quote_daa,
         plan_hex: item.plan_hex.clone(),
+        door_diagnostics: None,
     }
 });
 

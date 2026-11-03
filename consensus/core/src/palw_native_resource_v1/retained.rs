@@ -78,6 +78,9 @@ impl<T> NativeRetainedV1<T> {
     /// Only Core schema owners may hand over a value whose construction was
     /// already reserved before allocation. The ticket is retained by Self.
     pub(crate) fn from_owner_reserved_v1(value: T, lease: Option<NativeDemandLeaseV1>) -> Self {
+        if let Some(lease) = &lease {
+            lease.materialized_v1();
+        }
         Self { value, _lease: lease }
     }
 
@@ -103,13 +106,17 @@ impl<T: NativeHeapV1> NativeRetainedV1<T> {
     /// its earlier construction; use retain_native_carriage_decode_v1 for disk.
     pub fn retain_existing_v1(value: T) -> Result<Self, NativeCoverageV1> {
         let lease = reserve_native_requests_v1(value_requests_v1(&value)?)?;
-        Ok(Self { value, _lease: lease })
+        Ok(Self::from_owner_reserved_v1(value, lease))
     }
     /// Reserve a separately owned payload before a fallible construction. The
     /// source's complete typed request is an explicit conservative copy bound.
     fn try_project_v1<U>(&self, f: impl FnOnce(&T) -> U) -> Result<NativeRetainedV1<U>, NativeCoverageV1> {
-        let lease = reserve_native_requests_v1(value_requests_v1(&self.value)?)?;
-        Ok(NativeRetainedV1 { value: f(&self.value), _lease: lease })
+        let lease = if enabled() || self._lease.is_some() {
+            reserve_native_pending_requests_v1(tracked_value_requests_v1(&self.value)?)?
+        } else {
+            None
+        };
+        Ok(NativeRetainedV1::from_owner_reserved_v1(f(&self.value), lease))
     }
 }
 impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
@@ -118,7 +125,14 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
     /// not later mutations or a larger derived projection of the input.
     pub fn try_from_clone_v1(source: &T) -> Result<Self, NativeCoverageV1> {
         let requests = value_requests_v1(source)?;
-        Self::clone_after_reservation_v1(source, requests, reserve_native_requests_v1)
+        // Bare-source clones have legacy consumers that flatten errors into
+        // semantic strings. Keep their default optional-capability semantics;
+        // a reviewed retained source uses try_project_v1 instead.
+        if enabled() {
+            Self::clone_after_reservation_v1(source, requests, reserve_native_pending_requests_v1)
+        } else {
+            Self::clone_after_reservation_v1(source, requests, reserve_native_requests_v1)
+        }
     }
     fn clone_after_reservation_v1(
         source: &T,
@@ -126,7 +140,7 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
     ) -> Result<Self, NativeCoverageV1> {
         let lease = reserve(requests)?;
-        Ok(Self { value: source.clone(), _lease: lease })
+        Ok(Self::from_owner_reserved_v1(source.clone(), lease))
     }
     /// Core-owned, reviewed mutation only. The specialized owner API derives
     /// `growth` from its actual typed inputs/codec scans and complete temporary
@@ -156,7 +170,7 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
         } else {
             0
         };
-        let lease = reserve_native_requests_v1(requests).map_err(M::TypedRam)?;
+        let lease = reserve_native_pending_requests_v1(requests).map_err(M::TypedRam)?;
         let mut value = self.value.clone();
         change(&mut value).map_err(M::Rejected)?;
         // Diagnostic postcondition catches an incorrect owner-bound derivation;
@@ -164,7 +178,7 @@ impl<T: Clone + NativeHeapV1> NativeRetainedV1<T> {
         if enabled() && value_requests_v1(&value).map_err(M::TypedRam)? > requests {
             return Err(M::Bound("owner mutation exceeded its audited pre-construction request bound".into()));
         }
-        Ok(Self { value, _lease: lease })
+        Ok(Self::from_owner_reserved_v1(value, lease))
     }
 
     pub fn try_clone_v1(&self) -> Result<Self, NativeCoverageV1> {
@@ -200,6 +214,9 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwStateCarriageV2> {
 fn enabled() -> bool {
     native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1()
 }
+/// Compatibility quote for optional-capability writers. An ordinary raw
+/// transition has no preconstruction ticket; changing its zero quote would
+/// make its final postcondition demand bytes no writer ever reserved.
 pub(crate) fn value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
     if !enabled() {
         return Ok(0);
@@ -209,6 +226,11 @@ pub(crate) fn value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, Nativ
 /// Always compute the audited typed request, including when the process-wide
 /// checker is dormant. Explicit local checkers use this same sizing path.
 pub(crate) fn typed_value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
+    tracked_value_requests_v1(value)
+}
+/// Actual typed quote only for an explicitly tracked owner/construction.
+/// This must not replace value_requests_v1 in legacy raw writer paths.
+pub(crate) fn tracked_value_requests_v1<T: NativeHeapV1>(value: &T) -> Result<u64, NativeCoverageV1> {
     let bound = value.native_heap_v1("native retained payload").add::<T>(
         NativeCoverageV1::Bounded { bytes: (size_of::<NativeRetainedV1<T>>() + size_of::<[usize; 3]>()) as u64 },
         "native retained Arc/owner",
@@ -234,7 +256,7 @@ pub fn retain_native_carriage_decode_v1<T, E: fmt::Display>(
     };
     let value =
         decode().map_err(|why| NativeCoverageV1::unsupported::<T>("cold native carriage decode/root validation", &why.to_string()))?;
-    Ok(NativeRetainedV1 { value, _lease: lease })
+    Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
 }
 
 /// Classified cold carriage form used by native storage.
@@ -275,10 +297,13 @@ fn retain_carriage_decode_with_mode_v1<T, E: fmt::Display>(
         let preflight = preflight_native_carriage_v1(canonical, canonical.len() as u64).map_err(preflight_error)?;
         reserve_native_wire_v1(point, &preflight).map_err(NativeDecodeErrorV1::Resource)?
     } else {
-        None
+        match preflight_native_carriage_v1(canonical, canonical.len() as u64) {
+            Ok(preflight) => reserve_native_wire_v1(point, &preflight).map_err(NativeDecodeErrorV1::Resource)?,
+            Err(_) => None,
+        }
     };
     let value = decode().map_err(NativeDecodeErrorV1::Decode)?;
-    Ok(NativeRetainedV1 { value, _lease: lease })
+    Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
 }
 
 #[cfg(test)]
@@ -351,6 +376,30 @@ mod tests {
         assert_eq!(checker.outstanding(), (0, 0));
     }
     #[test]
+    fn default_recognized_carriage_and_its_projection_keep_process_tickets_without_strict_capability() {
+        if enabled() {
+            return;
+        } // other explicit-capability test binaries cover the strict lane
+        let state = crate::palw_state_v2::PalwChainStateV2::genesis();
+        let carriage = crate::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+        let canonical = borsh::to_vec(&carriage).unwrap();
+        let retained =
+            retain_native_carriage_decode_classified_v1(crate::BlockHash::default(), &canonical, || Ok::<_, std::io::Error>(state))
+                .unwrap();
+        assert!(retained._lease.as_ref().unwrap().memory_v1() > 0);
+        let projected = retained.try_carriage_v1().unwrap();
+        assert!(projected._lease.as_ref().unwrap().memory_v1() > 0);
+        assert_eq!(borsh::to_vec(&projected).unwrap(), canonical);
+        // Unknown shapes preserve legacy decoder behaviour. The absence of a
+        // ticket is explicit; this path is covered only by cold-reader limits.
+        let legacy =
+            retain_native_carriage_decode_classified_v1(crate::BlockHash::default(), &[0xff], || Ok::<_, std::io::Error>(7u8))
+                .unwrap();
+        assert!(legacy._lease.is_none());
+        assert_eq!(*legacy, 7);
+    }
+
+    #[test]
     fn retained_encoding_is_exact_value_encoding() {
         let value = NativeRetainedV1 { value: vec![1u8, 2, 3], _lease: None };
         assert_eq!(borsh::to_vec(&value).unwrap(), borsh::to_vec(&vec![1u8, 2, 3]).unwrap());
@@ -403,16 +452,21 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
         params: &crate::palw_state_v2::PalwStateParamsV2,
         revert: bool,
     ) -> Result<Self, NativeStateMutationErrorV1> {
-        let requests =
-            if enabled() { native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)? } else { 0 };
-        let lease = reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
+        let requests = if enabled() {
+            native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)?
+        } else if self._lease.is_some() {
+            native_delta_replay_requests_v1(&self.value, delta).unwrap_or(0)
+        } else {
+            0
+        };
+        let lease = reserve_native_pending_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
         let value = if revert {
             crate::palw_state_v2::revert_delta_v2(&self.value, delta, params)
         } else {
             crate::palw_state_v2::apply_delta_v2(&self.value, delta, params)
         }
         .map_err(NativeDecodeErrorV1::Decode)?;
-        Ok(Self { value, _lease: lease })
+        Ok(Self::from_owner_reserved_v1(value, lease))
     }
 
     /// Replay consumes a private owner: on failure no partially changed value escapes. Keep the
@@ -423,9 +477,14 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
         params: &crate::palw_state_v2::PalwStateParamsV2,
         revert: bool,
     ) -> Result<Self, NativeStateMutationErrorV1> {
-        let requests =
-            if enabled() { native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)? } else { 0 };
-        self.into_delta_after_reservation_v1(delta, params, revert, requests, reserve_native_requests_v1)
+        let requests = if enabled() {
+            native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)?
+        } else if self._lease.is_some() {
+            native_delta_replay_requests_v1(&self.value, delta).unwrap_or(0)
+        } else {
+            0
+        };
+        self.into_delta_after_reservation_v1(delta, params, revert, requests, reserve_native_pending_requests_v1)
     }
 
     fn into_delta_after_reservation_v1(
@@ -442,7 +501,7 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
         let Self { value, _lease: source_lease } = self;
         let value = crate::palw_state_v2::replay_delta_owned_v1(value, delta, params, revert).map_err(NativeDecodeErrorV1::Decode)?;
         drop(source_lease);
-        Ok(Self { value, _lease: lease })
+        Ok(Self::from_owner_reserved_v1(value, lease))
     }
 }
 
@@ -539,12 +598,12 @@ pub fn retain_native_value_decode_v1<T: NativeWireScanV1, E: fmt::Display>(
     let lease = if enabled() {
         let shape = preflight_native_value_v1::<T>(canonical, canonical.len() as u64)
             .map_err(|e| NativeCoverageV1::unsupported::<T>("cold native typed value", &e.to_string()))?;
-        reserve_native_requests_v1(shape.logical_requests_v1())?
+        reserve_native_pending_requests_v1(shape.logical_requests_v1())?
     } else {
         None
     };
     let value = decode().map_err(|e| NativeCoverageV1::unsupported::<T>("cold native typed value decode", &e.to_string()))?;
-    Ok(NativeRetainedV1 { value, _lease: lease })
+    Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
 }
 
 /// Classified standalone cold value form used by native storage.
@@ -556,12 +615,15 @@ pub fn retain_native_value_decode_classified_v1<T: NativeWireScanV1, E: fmt::Dis
         let shape = preflight_native_value_v1::<T>(canonical, canonical.len() as u64).map_err(|e| {
             NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<T>("cold native typed value", &e.to_string()))
         })?;
-        reserve_native_requests_v1(shape.logical_requests_v1()).map_err(NativeDecodeErrorV1::Resource)?
+        reserve_native_pending_requests_v1(shape.logical_requests_v1()).map_err(NativeDecodeErrorV1::Resource)?
     } else {
-        None
+        match preflight_native_value_v1::<T>(canonical, canonical.len() as u64) {
+            Ok(shape) => reserve_native_pending_requests_v1(shape.logical_requests_v1()).map_err(NativeDecodeErrorV1::Resource)?,
+            Err(_) => None,
+        }
     };
     let value = decode().map_err(NativeDecodeErrorV1::Decode)?;
-    Ok(NativeRetainedV1 { value, _lease: lease })
+    Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
 }
 
 #[cfg(test)]

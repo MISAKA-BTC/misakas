@@ -41,7 +41,8 @@ use crate::{
 use super::cache_policy_builder::CachePolicyBuilder as PolicyBuilder;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::{BlockHashSet, blockstatus::BlockStatus};
-use kaspa_database::registry::DatabaseStorePrefixes;
+use kaspa_database::{prelude::CachePolicy, registry::DatabaseStorePrefixes};
+use kaspa_utils::mem_size::MemMode;
 use parking_lot::RwLock;
 use std::{ops::DerefMut, sync::Arc};
 
@@ -158,7 +159,7 @@ pub struct ConsensusStorage {
 
 /// **The consensus caches' declared budget, as a number an operator can put beside an RSS reading.**
 ///
-/// `ConsensusStorage::new` sizes fourteen caches from byte budgets scaled by `--ram-scale`, and the
+/// `ConsensusStorage::new` sizes fifteen caches from byte budgets scaled by `--ram-scale`, and the
 /// comment beside them has always said they "sum up to ~1GB". `~1GB` is not a figure anyone can
 /// subtract from a process's 11.5 GiB to find out what the other 10 were — which is exactly the
 /// position the testnet-12 fleet's operator was in. This gives the sum, at a stated scale, in bytes.
@@ -186,6 +187,7 @@ pub fn declared_cache_budget_bytes_v1(ram_scale: f64) -> u64 {
         + scaled(40_000_000) // utxo_diffs
         + scaled(200_000_000) * 2 // block_window: difficulty and median time
         + scaled(40_000_000) // acceptance_data
+        + scaled(40_000_000) // evm full-state snapshots (exact byte cap; no minimum entries)
 }
 
 impl ConsensusStorage {
@@ -216,6 +218,7 @@ impl ConsensusStorage {
         let utxo_diffs_budget = scaled(40_000_000);
         let block_window_budget = scaled(200_000_000); // x 2 for difficulty and median time
         let acceptance_data_budget = scaled(40_000_000);
+        let evm_state_budget = scaled(40_000_000);
 
         // Unit sizes in bytes
         let daa_excluded_bytes = size_of::<BlockHash>() + size_of::<BlockHashSet>(); // Expected empty sets
@@ -405,14 +408,19 @@ impl ConsensusStorage {
             Arc::new(DbReserveBalanceStore::new(db.clone(), PolicyBuilder::new().max_items(overlay_rows).untracked().build()));
 
         // kaspa-pq Selected-Parent EVM Lane (ADR-0020, v0.4). All values carry
-        // real byte estimators, but mirror the per-block stores above with an
-        // untracked item cap (the state snapshot is O(state) — keep the cache
-        // small; the DB row is the source of truth).
+        // real byte estimators. Most retain per-block item caps; full-state
+        // snapshots below need a byte ceiling because each generation is O(state).
         let evm_header_store = Arc::new(DbEvmHeaderStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
         ));
-        let evm_state_store = Arc::new(DbEvmStateStore::new(db.clone(), PolicyBuilder::new().max_items(64).untracked().build()));
+        // Exact cap: the generic byte-policy builder adds random positive
+        // noise. No minimum entry count may retain an oversized full state.
+        // This bounds cached ownership, not cold decode or a warm reader's clone.
+        let evm_state_store = Arc::new(DbEvmStateStore::new(
+            db.clone(),
+            CachePolicy::Tracked { max_size: evm_state_budget, min_items: 0, mem_mode: MemMode::Bytes },
+        ));
         let evm_payload_store = Arc::new(DbEvmPayloadStore::new(
             db.clone(),
             PolicyBuilder::new().max_items(perf_params.block_data_cache_size).untracked().build(),
@@ -548,16 +556,16 @@ mod declared_budget_tests {
         // source scan hit the same trap, from the other direction.
         let needle = format!("_budget {} scaled(", "=");
         let in_constructor = include_str!("storage.rs").matches(needle.as_str()).count();
-        assert_eq!(in_constructor, 14, "the constructor sizes {in_constructor} caches; update declared_cache_budget_bytes_v1");
+        assert_eq!(in_constructor, 15, "the constructor sizes {in_constructor} caches; update declared_cache_budget_bytes_v1");
     }
 
     /// The figure the constructor's own comment claims, and the scale it claims it at.
     #[test]
     fn the_budget_is_about_the_gigabyte_the_comment_promises() {
         let at_one = super::declared_cache_budget_bytes_v1(1.0);
-        assert_eq!(at_one, 1_440_000_000, "fourteen caches with their level multipliers");
+        assert_eq!(at_one, 1_480_000_000, "fifteen caches with their level multipliers");
         // And it follows the scale, which is what makes it usable beside a per-share --ram-scale.
-        assert_eq!(super::declared_cache_budget_bytes_v1(0.225), 324_000_000);
+        assert_eq!(super::declared_cache_budget_bytes_v1(0.225), 333_000_000);
         assert_eq!(super::declared_cache_budget_bytes_v1(0.0), 0);
     }
 }

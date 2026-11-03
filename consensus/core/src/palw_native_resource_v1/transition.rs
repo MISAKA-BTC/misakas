@@ -1,7 +1,7 @@
 //! Fresh transition construction owner. Every admitted growth request must be
 //! derived at its concrete writer before allocation. This module does not turn
 //! a post-construction measurement into permission to allocate.
-use super::retained::value_requests_v1;
+use super::retained::{tracked_value_requests_v1, value_requests_v1};
 use super::*;
 use crate::palw_state_v2::{PalwChainStateV2, PalwStateDeltaV2};
 
@@ -75,7 +75,7 @@ impl NativeTransitionReservationV1 {
         self.grow_v1(requests)
     }
     fn take_value_v1<T: NativeHeapV1>(&mut self, value: T) -> Result<NativeRetainedV1<T>, NativeCoverageV1> {
-        let requests = value_requests_v1(&value)?;
+        let requests = if self.is_tracking_v1() { tracked_value_requests_v1(&value)? } else { 0 };
         self.split_owner_v1(value, requests)
     }
     fn split_owner_v1<T>(&mut self, value: T, requests: u64) -> Result<NativeRetainedV1<T>, NativeCoverageV1> {
@@ -155,6 +155,24 @@ mod tests {
         drop(state);
         assert_eq!(checker.outstanding(), (0, 0));
     }
+    #[test]
+    fn default_raw_transition_keeps_zero_quotes_but_explicit_owner_requires_coverage() {
+        if native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1() {
+            return;
+        }
+        let state = PalwChainStateV2::genesis();
+        assert_eq!(value_requests_v1(&state).unwrap(), 0);
+        assert!(tracked_value_requests_v1(&state).unwrap() > 0);
+        let (copy, construction) = NativeTransitionReservationV1::copy_parent_v1(&state).unwrap();
+        assert!(!construction.is_tracking_v1());
+        let finished = construction.finish_state_v1(copy).unwrap();
+        assert_eq!(finished.state_root(), state.state_root());
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 1 << 20, database_bytes: 0 });
+        let tracked = NativeTransitionReservationV1::for_checker_v1(&checker);
+        assert!(tracked.finish_state_v1(state).is_err(), "a zero-sized explicit ticket cannot approve an unreserved output");
+        assert_eq!(checker.outstanding(), (0, 0));
+    }
+
     #[test]
     fn construction_growth_refusal_leaves_its_existing_ticket_unchanged() {
         let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 32, database_bytes: 0 });

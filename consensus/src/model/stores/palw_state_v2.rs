@@ -49,7 +49,9 @@ use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_native_resource_v1::{
     NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_with_preflight_error_v1,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2};
+use kaspa_consensus_core::palw_state_v2::{
+    PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
+};
 use kaspa_database::prelude::CachePolicy;
 use kaspa_database::prelude::DB;
 use kaspa_database::prelude::StoreError;
@@ -174,6 +176,9 @@ pub struct DbPalwStateV2Store {
     /// state. Shared through the `Arc` so a `clone()` of the store is the same cache, and holding
     /// the state itself in an `Arc` so a hit hands out a pointer rather than a copy of the tip.
     tip_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeChainStateV1>)>>>,
+    // Separate from the cache lock: only cold readers serialize, while hits
+    // and DB writers never wait for materialization under a cache mutex.
+    tip_load: Arc<parking_lot::Mutex<()>>,
     /// Carriage bytes this store has actually borsh-decoded for a tip read. A measurement, not a
     /// rule: it is what makes "the cache works" a number in a test rather than an assertion about
     /// code that was read.
@@ -194,6 +199,7 @@ pub struct DbPalwStateV2Store {
     /// misses, and the answer is re-materialized. Nothing invalidates this cache by hand, so
     /// nothing can forget to.
     pruning_snapshot_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeStateCarriageV1>)>>>,
+    pruning_snapshot_load: Arc<parking_lot::Mutex<()>>,
     /// Carriage bytes borsh-decoded for pruning-point snapshot serves. The same measurement as
     /// `tip_bytes_decoded`, for the lane that has no authentication in front of it at all.
     pruning_snapshot_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
@@ -243,8 +249,10 @@ impl DbPalwStateV2Store {
             native39_frontier_context: None,
             native39_checkpoint_params: None,
             tip_cache: Arc::new(parking_lot::Mutex::new(None)),
+            tip_load: Arc::new(parking_lot::Mutex::new(())),
             tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pruning_snapshot_cache: Arc::new(parking_lot::Mutex::new(None)),
+            pruning_snapshot_load: Arc::new(parking_lot::Mutex::new(())),
             pruning_snapshot_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -874,6 +882,25 @@ impl DbPalwStateV2Store {
         {
             return Ok(Some(Arc::clone(carriage)));
         }
+        let _load = self.pruning_snapshot_load.lock();
+        // Another cold reader may have populated the cache or the row may have
+        // moved while we waited. Re-read durable identity under the load gate.
+        let Some((block, root)) = self.pruning_snapshot_key()? else { return Ok(None) };
+        if block != pruning_point {
+            return Ok(None);
+        }
+        if let Some((cached_block, cached_root, carriage)) = self.pruning_snapshot_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some(Arc::clone(carriage)));
+        }
+        // Release an obsolete cache generation before allocating its
+        // replacement. External Arc readers keep their own ticket as needed.
+        // Keeping a cache-only predecessor here can otherwise permanently
+        // refuse the replacement even though it fits on its own.
+        let stale = self.pruning_snapshot_cache.lock().take();
+        drop(stale);
         self.with_pinned_tip_v1(true, |record| {
             if record.block != pruning_point {
                 return Ok(None);
@@ -980,6 +1007,19 @@ impl DbPalwStateV2Store {
         })
     }
 
+    /// Small durable identity + an already-authenticated resident Arc only.
+    /// Irreversible GC must not turn a cold allocation refusal into an absent claim.
+    pub(crate) fn load_tip_resident_v1(&self) -> StoreResult<Option<(BlockHash, Arc<NativeChainStateV1>)>> {
+        let Some((block, root)) = self.tip_key()? else { return Ok(None) };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
+        Err(StoreError::LocalResourceUnavailable("PALW GC snapshot is not resident; retry after the ordinary reader warms it".into()))
+    }
+
     /// **The tip, materialized ONCE per tip row** (audit M-7) — the read every `palw_*` RPC answer
     /// should take.
     ///
@@ -1003,6 +1043,16 @@ impl DbPalwStateV2Store {
         {
             return Ok(Some((block, Arc::clone(state))));
         }
+        let _load = self.tip_load.lock();
+        let Some((block, root)) = self.tip_key()? else { return Ok(None) };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
+        let stale = self.tip_cache.lock().take();
+        drop(stale);
         self.with_pinned_tip_v1(false, |record| {
             self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
             let state =
@@ -1067,6 +1117,9 @@ impl DbPalwStateV2Store {
                 carriage.into_state_v3(params, Some(root), armed, self.canonical_work_daa).map_err(|why| match why {
                     kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(resource) => {
                         StoreError::LocalResourceUnavailable(resource.to_string())
+                    }
+                    kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(reason) => {
+                        StoreError::LocalResourceUnavailable(reason.to_string())
                     }
                     other => StoreError::DataInconsistency(format!("palw v2 {label} refused: {other}")),
                 })
@@ -1278,6 +1331,8 @@ mod tests {
         let per_call = uncached.tip_bytes_decoded() / CALLS;
 
         let cached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        assert!(matches!(cached.load_tip_resident_v1(), Err(StoreError::LocalResourceUnavailable(_))));
+        assert_eq!(cached.tip_bytes_decoded(), 0, "GC does not trigger a cold materialization or turn its failure into absence");
         for _ in 0..CALLS {
             let (block, state) = cached.load_tip_cached(&p).unwrap().expect("the tip is there");
             assert_eq!(block, c1.block);
@@ -1290,6 +1345,12 @@ mod tests {
             cached.tip_bytes_decoded()
         );
         assert_eq!(cached.tip_bytes_decoded(), per_call, "the cache decoded the carriage more than once for one tip");
+        for _ in 0..CALLS {
+            let (at, resident) = cached.load_tip_resident_v1().unwrap().unwrap();
+            assert_eq!(at, c1.block);
+            assert_eq!(*resident, child);
+        }
+        assert_eq!(cached.tip_bytes_decoded(), per_call, "healthy GC borrows cached native state without decoding/cloning it");
         assert_eq!(uncached.tip_bytes_decoded(), per_call * CALLS, "the uncached path is the per-call cost this test measures");
 
         // **And it is keyed on the tip row, not on "we read once".** A second block moves the tip,
@@ -1305,6 +1366,176 @@ mod tests {
         let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
         assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
         assert_eq!(*state, grand);
+    }
+
+    #[test]
+    fn nested_native_pressure_child_preserves_local_resource_classification() {
+        if std::env::var_os("MISAKA_NATIVE_PRESSURE_CHILD").is_none() {
+            return;
+        }
+        use kaspa_consensus_core::palw_native_resource_v1::{preflight_native_carriage_v1, preflight_native_value_v1};
+        use kaspa_consensus_core::palw_reader_router_v2::{
+            PALW_READER_ROUTER_TABLE_V2, PalwReaderRouterDeclarationV2, PalwReaderRouterRowV2,
+        };
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        // The auxiliary declaration has valid Borsh shape. It intentionally has
+        // no owning class, so after pressure is released its distinct semantic
+        // error is also observable. No fixture bypasses root/consistency checks.
+        let class = Hash64::from_u64_word(500);
+        let row = PalwReaderRouterRowV2 {
+            declaration: PalwReaderRouterDeclarationV2 {
+                version: 2,
+                class_id: class,
+                artifact_root: Hash64::default(),
+                bindings: Vec::new(),
+            },
+            registrant: PalwBondKeyV2(Default::default()),
+            bound_from_daa: 0,
+        };
+        let row_bytes = borsh::to_vec(&row).unwrap();
+        let nested = preflight_native_value_v1::<PalwReaderRouterRowV2>(row_bytes.as_slice(), row_bytes.len() as u64)
+            .unwrap()
+            .logical_requests_v1();
+        assert!(nested > 1);
+        let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        let mut route = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
+            kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None,
+            None,
+            Default::default(),
+        );
+        route.aux.insert((PALW_READER_ROUTER_TABLE_V2, class.as_byte_slice().to_vec()), row_bytes);
+        carriage.kernel_route = Some(route);
+        let canonical = borsh::to_vec(&carriage).unwrap();
+        let outer = preflight_native_carriage_v1(canonical.as_slice(), canonical.len() as u64).unwrap().memory_requests_v1().unwrap();
+        let budget = global_memory_budget();
+        let total = budget.snapshot().limit_bytes;
+        let native_cap = total.saturating_sub((total / 8).min(128 << 20));
+        let occupied = native_cap.checked_sub(outer).unwrap().checked_sub(nested / 2).unwrap();
+        let pressure = budget.try_reserve_retained(MemoryClass::Native, occupied).unwrap();
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        let block = BlockHash::from_u64_word(501);
+        let mut batch = WriteBatch::default();
+        store
+            .set_tip_record_batch(
+                &mut batch,
+                PalwStateTipRecordV2 { block, state_root: Hash64::default(), carriage_borsh: canonical.clone() },
+            )
+            .unwrap();
+        db.write(batch).unwrap();
+        assert!(native_cap - occupied >= outer, "outer carriage fits before the nested row read");
+        match store.load_tip_cached(&params()) {
+            Err(StoreError::LocalResourceUnavailable(message)) => assert!(message.contains("byte budget"), "{message}"),
+            other => panic!("nested capacity must stay local, got {other:?}"),
+        }
+        // A small control message still fits while native admission is held.
+        let control = budget.try_reserve(MemoryClass::Transport, 1024).unwrap();
+        control.materialized();
+        drop(control);
+        drop(pressure);
+        assert!(
+            matches!(store.load_tip_cached(&params()), Err(StoreError::DataInconsistency(_))),
+            "the fixture's missing class remains a semantic consistency error after capacity returns"
+        );
+        let mut malformed = canonical;
+        malformed.truncate(2); // keep current version, corrupt payload
+        let mut batch = WriteBatch::default();
+        store
+            .set_tip_record_batch(&mut batch, PalwStateTipRecordV2 { block, state_root: Hash64::default(), carriage_borsh: malformed })
+            .unwrap();
+        db.write(batch).unwrap();
+        assert!(matches!(store.load_tip_cached(&params()), Err(StoreError::DataInconsistency(_))));
+        // A genuinely valid row can be loaded by the same store after repair.
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, block, &PalwChainStateV2::genesis()).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.load_tip_cached(&params()).unwrap().unwrap().0, block);
+        std::fs::write(std::env::var_os("MISAKA_NATIVE_PRESSURE_RESULT").unwrap(), b"passed").unwrap();
+    }
+
+    #[test]
+    fn nested_native_pressure_is_local_and_corrupt_frames_remain_data_errors() {
+        // Isolate the global bank and its optional capabilities from parallel
+        // tests. The child runs real storage, preflight and nested consistency.
+        let marker = std::env::temp_dir().join(format!(
+            "misaka-native-pressure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "model::stores::palw_state_v2::tests::nested_native_pressure_child_preserves_local_resource_classification",
+                "--nocapture",
+            ])
+            .env("MISAKA_NATIVE_PRESSURE_CHILD", "1")
+            .env("MISAKA_NATIVE_PRESSURE_RESULT", &marker)
+            .env("MISAKA_MEMORY_BUDGET_BYTES", (64u64 << 20).to_string())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read(&marker).unwrap(), b"passed", "the filtered child test must actually run");
+        std::fs::remove_file(marker).unwrap();
+    }
+
+    #[test]
+    fn concurrent_cold_readers_share_one_materialization_and_error_retries_progress() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut writer = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        writer.reindex_if_stale().unwrap();
+        let p = params();
+        let c = ctx(0xB1, 100, 100);
+        let (state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        writer.set_tip_batch(&mut batch, c.block, &state).unwrap();
+        writer.set_pruning_snapshot_batch(&mut batch, c.block, &state).unwrap();
+        db.write(batch).unwrap();
+        let store = Arc::new(DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16)));
+        let tip_len = store.tip_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        let snapshot_len = store.pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let answers: Vec<_> = std::thread::scope(|scope| {
+            let mut threads = Vec::new();
+            for _ in 0..8 {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                let p = &p;
+                threads.push(scope.spawn(move || {
+                    barrier.wait();
+                    (
+                        store.load_tip_cached(p).unwrap().unwrap().1,
+                        store.load_pruning_snapshot_carriage_cached(p, c.block).unwrap().unwrap(),
+                    )
+                }));
+            }
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert_eq!(store.tip_bytes_decoded(), tip_len);
+        assert_eq!(store.pruning_snapshot_bytes_decoded(), snapshot_len);
+        for answer in &answers {
+            assert!(Arc::ptr_eq(&answer.0, &answers[0].0));
+            assert!(Arc::ptr_eq(&answer.1, &answers[0].1));
+        }
+        // A failed cold decode must release the load gate. It is not cached;
+        // after the durable row is repaired, the same store makes progress.
+        let previous = Arc::downgrade(&answers[0].0);
+        drop(answers);
+        let mut record = writer.tip_record().unwrap().unwrap();
+        let good = record.clone();
+        record.state_root = Hash64::from_u64_word(0xBAD);
+        record.carriage_borsh.truncate(1);
+        let mut batch = WriteBatch::default();
+        writer.set_tip_record_batch(&mut batch, record).unwrap();
+        db.write(batch).unwrap();
+        assert!(store.load_tip_cached(&p).is_err());
+        assert!(previous.upgrade().is_none(), "cache-only predecessor is freed before the replacement decode");
+        assert!(store.load_tip_cached(&p).is_err());
+        let mut batch = WriteBatch::default();
+        writer.set_tip_record_batch(&mut batch, good).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.load_tip_cached(&p).unwrap().unwrap().0, c.block);
     }
 
     /// **A pruning-point snapshot serve costs one materialization per CAPTURED SNAPSHOT, and

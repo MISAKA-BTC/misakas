@@ -42,15 +42,20 @@
 //!   header's span chooses which row; the row, not the file, says how wide the runtime answers — the
 //!   two-products split ADR-0077 R0 exists to close.
 //!
+//! Set `MISAKA_PALW_MODEL_ID=Qwen/Qwen2.5-1.5B/graph-v7@8192` to serve the exact Testnet 12
+//! genesis artifact. With the selector unset, the artifact shape selects an unambiguous catalog row.
+//!
 //! The artifact and tokenizer arrive by environment (`MISAKA_PALW_ARTIFACT`,
 //! `MISAKA_PALW_TOKENIZER`) because the gateway spawns the worker with only the mode flags — the
 //! same shape as `palw-worker`'s pinned-model env.
 
+use kaspa_consensus_core::config::class_manifest_const_v1::{QWEN25_A16_8K_MANIFEST_V1, artifact_digest_of, class_id_of_class};
 use kaspa_consensus_core::palw_freeprompt_v3::{
     PALW_FP_WORKER_MODE_JOB_V3, PALW_FP_WORKER_MODE_MANIFEST_V3, PALW_FP_WORKER_MODE_SERVE_V3,
 };
+use kaspa_hashes::Hash64;
 use misaka_palw_base0::artifact::decode_artifact_file_v1;
-use misaka_palw_base0::classes::{a16_row_for_artifact_shape_v1, canonical_class_by_model_id_v1};
+use misaka_palw_base0::classes::{A16_GRAPH_V7_8K_MODEL_ID, a16_row_for_artifact_shape_v1, canonical_class_by_model_id_v1};
 use misaka_palw_base0::fp_worker::{FpWorkerFamilyV1, FpWorkerRuntime, MappedArtifactV1, QWEN_EOG_TOKEN_NAMES};
 use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 use misaka_palw_base0::tokenizer::QwenTokenizer;
@@ -91,6 +96,18 @@ const MODEL_ID_ENV: &str = "MISAKA_PALW_MODEL_ID";
 
 /// The catalog row this process resolved at boot, for the serve banner.
 static SERVED_MODEL_ID: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+/// The Testnet 12 class commits to one particular artifact, including its tokenizer commitment.
+fn check_genesis_8k_identity(class: Hash64, artifact: Hash64) -> Result<(), String> {
+    if class != class_id_of_class(QWEN25_A16_8K_MANIFEST_V1, 1) {
+        return Err(format!("the selected 8k profile resolves to {class}, which differs from the committed genesis class"));
+    }
+    let expected = artifact_digest_of(QWEN25_A16_8K_MANIFEST_V1);
+    if artifact != expected {
+        return Err(format!("the 8k artifact digest is {artifact}, expected the committed genesis artifact {expected}"));
+    }
+    Ok(())
+}
+
 /// The environment variable the operator sets to the network this worker produces for — the
 /// same string kaspad prints for `params.net` (e.g. `testnet-11`). No default: see the module doc.
 const NETWORK_ID_ENV: &str = "MISAKA_PALW_NETWORK_ID";
@@ -101,15 +118,14 @@ fn die(msg: String) -> ! {
 }
 
 /// Artifact + tokenizer + catalog row, refused loudly when any of the three disagree. There is no
-/// digest check against a constant here: the artifact IS the identity (the chain registers its
-/// digest as `artifact_root`), so what must agree is artifact-shape vs catalog-shape, which
-/// `Qwen25A16Backend`'s own probe enforces at execution.
+/// digest check for the default historical class. The 8k class checks the committed artifact
+/// digest and class id. Both modes retain the backend's profile and tokenizer checks.
 ///
 /// What IS pinned is that the file does not move under a resident process (ADR-0077 SA-6): the
 /// artifact's bytes are digested here, out of the buffer they were read into rather than by
 /// reading them twice, and [`misaka_palw_base0::fp_worker::MappedArtifactV1`] re-verifies before
 /// every job whenever the file's device, inode or size has changed.
-fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
+fn load(model_id: Option<&str>) -> FpWorkerRuntime<Qwen25A16Backend> {
     let network_id = std::env::var(NETWORK_ID_ENV).unwrap_or_else(|_| {
         die(format!(
             "{NETWORK_ID_ENV} is not set. It must be the network this worker produces for — the same string kaspad \
@@ -145,13 +161,15 @@ fn load() -> FpWorkerRuntime<Qwen25A16Backend> {
     let guard = MappedArtifactV1::verify_from_bytes(std::path::Path::new(&artifact_path), &bytes).unwrap_or_else(|e| die(e));
     let artifact = decode_artifact_file_v1(&bytes).unwrap_or_else(|e| die(format!("{artifact_path}: {e}")));
     // The row this file can serve on this network's catalog: family from the header, width from its rotary span.
-    let wanted = std::env::var(MODEL_ID_ENV).ok().filter(|m| !m.trim().is_empty());
-    let row = a16_row_for_artifact_shape_v1(&court, &artifact.shape, None, wanted.as_deref())
+    let row = a16_row_for_artifact_shape_v1(&court, &artifact.shape, None, model_id)
         .unwrap_or_else(|e| die(format!("{artifact_path}: no dense A16 class of {network_id} matches this artifact: {e}")));
     let entry = canonical_class_by_model_id_v1(&court, row.model_id)
         .unwrap_or_else(|| die(format!("this build's catalog has no {} row", row.model_id)));
     let _ = SERVED_MODEL_ID.set(entry.model_id);
     let digest = artifact.artifact_digest();
+    if entry.model_id == A16_GRAPH_V7_8K_MODEL_ID && network_id == "testnet-12" {
+        check_genesis_8k_identity(entry.profile.shape_profile_id(), digest).unwrap_or_else(|e| die(e));
+    }
     // **The pair is checked, not assumed.** The artifact's `tokenizer_commitment` is inside its
     // digest, so the artifact CAN name the tokenizer its ids belong to — but until the file this
     // process opened is hashed and compared, that naming decides nothing, and a wrong
@@ -302,6 +320,12 @@ fn main() {
         die(format!("refusing to run: cannot stack the execve denial: {why}"));
     }
     let args: Vec<String> = std::env::args().collect();
+    let configured_model = match std::env::var(MODEL_ID_ENV) {
+        Ok(model) => Some(model),
+        Err(std::env::VarError::NotPresent) => None,
+        Err(std::env::VarError::NotUnicode(_)) => die(format!("{MODEL_ID_ENV} must be UTF-8")),
+    };
+    let load = || load(configured_model.as_deref());
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned();
     let trace_out = || -> PathBuf {
         PathBuf::from(flag("--trace-out").unwrap_or_else(|| {
@@ -359,5 +383,22 @@ fn main() {
             "unsupported --mode {other:?} ({PALW_FP_WORKER_MODE_MANIFEST_V3} | {PALW_FP_WORKER_MODE_JOB_V3} | \
              {PALW_FP_WORKER_MODE_SERVE_V3})"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn t12_8k_profile_must_match_the_exact_committed_class_and_artifact() {
+        let court = misaka_palw_base0::fp_worker::fp_worker_court_params_v1("testnet-12").unwrap();
+        let row = canonical_class_by_model_id_v1(&court, A16_GRAPH_V7_8K_MODEL_ID).unwrap();
+        assert_eq!(row.profile.n_ctx, 8192);
+        let class = row.profile.shape_profile_id();
+        let artifact = artifact_digest_of(QWEN25_A16_8K_MANIFEST_V1);
+        assert!(check_genesis_8k_identity(class, artifact).is_ok());
+        assert!(check_genesis_8k_identity(Hash64::default(), artifact).is_err());
+        assert!(check_genesis_8k_identity(class, Hash64::default()).is_err());
     }
 }

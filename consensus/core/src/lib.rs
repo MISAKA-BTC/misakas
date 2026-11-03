@@ -839,6 +839,7 @@ pub mod palw_tir_v1;
 pub mod palw_tir_work_v1;
 pub mod palw_tokenizer_json_stream_v1;
 pub mod palw_tokenizer_rendering_v1;
+pub mod palw_tokenizer_rendering_v2;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
 /// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;
@@ -1044,8 +1045,11 @@ pub mod palw_staged_route_forms_v1;
 pub mod palw_tir_adjudication_slot_v1;
 pub mod palw_tir_container_v1;
 pub mod palw_tir_designated_answers_v1;
+pub mod palw_batch_court_v1;
 pub mod palw_tir_frame_cost_v1;
 pub mod palw_tir_history_bisection_v1;
+/// Prospective per-frame owner scheduling, unconnected to live Court rules.
+pub mod palw_tir_owner_schedule_v2;
 pub mod palw_tir_prefix_owned_v1;
 pub mod palw_tir_prefix_state_v1;
 // Native prospective geometry only; paid source/court admission is supplied by its owner.

@@ -114,7 +114,20 @@ pub struct PalwHostLedgerStateV1 {
 
 impl PalwHostLedgerStateV1 {
     pub fn reserved_bytes(&self) -> u64 {
-        self.reservations.iter().fold(0u64, |acc, r| acc.saturating_add(r.bytes))
+        self.reservations.iter().filter(|r| r.role != "node-audited-pending").fold(0u64, |acc, r| acc.saturating_add(r.bytes))
+    }
+
+    fn pending_bytes_v1(&self) -> u64 {
+        self.reservations.iter().filter(|r| r.role == "node-audited-pending").fold(0u64, |sum, r| sum.saturating_add(r.bytes))
+    }
+    /// Execution estimates have not necessarily materialized. Audited owner
+    /// rows are covered by a separate aggregate capacity bound and must not be
+    /// subtracted from MemAvailable a second time for every PALW start.
+    fn execution_reserved_bytes_v1(&self) -> u64 {
+        self.reservations
+            .iter()
+            .filter(|r| r.role != "node-audited-bytes" && r.role != "node-audited-pending")
+            .fold(0u64, |acc, r| acc.saturating_add(r.bytes))
     }
 
     /// The distinct pinned files on the host and their bytes — each counted ONCE, however many
@@ -411,7 +424,7 @@ impl PalwHostLedgerV1 {
         let (pid, start, instance) = (self.pid, self.start, self.instance);
         let outcome = self.with_state(|state| {
             if let Some(bound) = host_bound {
-                let reserved = state.reserved_bytes();
+                let reserved = state.execution_reserved_bytes_v1().saturating_add(state.pending_bytes_v1());
                 if bytes > bound.saturating_sub(reserved) {
                     let refusal = PalwHostRefusalV1 {
                         need_bytes: bytes,
@@ -420,6 +433,25 @@ impl PalwHostLedgerV1 {
                         holders: state.reserving(),
                     };
                     return (Err(refusal), false);
+                }
+            }
+            // The live check above excludes already-accounted resident owner
+            // rows. This separate capacity check still covers their aggregate
+            // alongside this new execution promise across all host processes.
+            if state.reservations.iter().any(|r| r.role == "node-audited-bytes") {
+                if let Some(cap) = audited_host_capacity_v1() {
+                    let reserved = state.reserved_bytes();
+                    if bytes > cap.saturating_sub(reserved) {
+                        return (
+                            Err(PalwHostRefusalV1 {
+                                need_bytes: bytes,
+                                host_bound_bytes: cap,
+                                host_reserved_bytes: reserved,
+                                holders: state.reserving(),
+                            }),
+                            false,
+                        );
+                    }
                 }
             }
             state.reservations.push(PalwHostReservationV1 {
@@ -442,11 +474,80 @@ impl PalwHostLedgerV1 {
         }
     }
 
+    /// Replace one process-wide audited-byte aggregate under the host lock.
+    /// Unlike a PALW execution estimate this row persists with decoded owners.
+    /// The bound is a fraction of physical host capacity, not MemAvailable:
+    /// the latter already excludes resident owners and must not subtract this
+    /// row a second time. Growth is fail-closed on host I/O failure; reductions
+    /// are always permitted and a later update replaces any stale own row.
+    pub fn replace_process_bytes_v1(&self, id: u64, bytes: u64, aggregate_bound: Option<u64>) -> Result<(), String> {
+        self.replace_process_memory_v1(id, bytes, 0, aggregate_bound, None)
+    }
+    pub fn replace_process_memory_v1(
+        &self,
+        id: u64,
+        bytes: u64,
+        pending: u64,
+        aggregate_bound: Option<u64>,
+        live: Option<u64>,
+    ) -> Result<(), String> {
+        if pending > bytes {
+            return Err("pending memory exceeds total bytes".into());
+        }
+        let (pid, start, instance) = (self.pid, self.start, self.instance);
+        let pending_id = id.checked_sub(1).ok_or("process byte aggregate ID has no pending slot")?;
+        self.with_state(|state| {
+            let mine = |r: &&PalwHostReservationV1| r.pid == pid && r.instance == instance && r.id == id;
+            let old = state.reservations.iter().find(mine).map_or(0, |r| r.bytes);
+            let old_pending = state
+                .reservations
+                .iter()
+                .find(|r| r.pid == pid && r.instance == instance && r.id == pending_id)
+                .map_or(0, |r| r.bytes);
+            let others = state.reserved_bytes().saturating_sub(old);
+            if bytes > old && aggregate_bound.is_some_and(|bound| bytes > bound.saturating_sub(others)) {
+                return (Err(format!("host audited byte capacity refused {bytes}: {others} held by other reservations")), false);
+            }
+            let other_pending = state
+                .reservations
+                .iter()
+                .filter(|r| r.role == "node-audited-pending")
+                .fold(0u64, |sum, r| sum.saturating_add(r.bytes))
+                .saturating_sub(old_pending);
+            let other_promises = other_pending.saturating_add(state.execution_reserved_bytes_v1());
+            if pending > old_pending && live.is_some_and(|free| pending > free.saturating_sub(other_promises)) {
+                return (
+                    Err(format!("host unmaterialized bytes refused {pending}: {other_pending} pending in other processes")),
+                    false,
+                );
+            }
+            if bytes == old && pending == old_pending {
+                return (Ok(()), false);
+            }
+            state.reservations.retain(|r| !(r.pid == pid && r.instance == instance && (r.id == id || r.id == pending_id)));
+            for (id, bytes, role) in [(id, bytes, "node-audited-bytes"), (pending_id, pending, "node-audited-pending")] {
+                if bytes != 0 {
+                    state.reservations.push(PalwHostReservationV1 {
+                        pid,
+                        start,
+                        instance,
+                        id,
+                        bytes,
+                        role: role.into(),
+                        since_unix: unix_now_secs(),
+                    });
+                }
+            }
+            (Ok(()), true)
+        })
+        .map_err(|e| format!("host audited byte ledger unavailable: {e}"))?
+    }
+
     /// **Whether `bytes` could be reserved on the host now** — the dry run; registers nothing.
     pub fn can_reserve(&self, bytes: u64, host_bound: Option<u64>) -> Result<(), PalwHostRefusalV1> {
         let Some(bound) = host_bound else { return Ok(()) };
         match self.with_state(|state| {
-            let reserved = state.reserved_bytes();
+            let reserved = state.execution_reserved_bytes_v1().saturating_add(state.pending_bytes_v1());
             let refusal = (bytes > bound.saturating_sub(reserved)).then(|| PalwHostRefusalV1 {
                 need_bytes: bytes,
                 host_bound_bytes: bound,
@@ -519,6 +620,18 @@ impl PalwHostLedgerV1 {
             ((), before != (state.members.len(), state.reservations.len(), state.pins.len()))
         });
     }
+}
+
+/// Shared audited owner and PALW estimate capacity, independent of live usage.
+/// A live probe already excludes allocated pages; it is checked separately.
+pub fn audited_host_capacity_v1() -> Option<u64> {
+    std::fs::read_to_string("/proc/meminfo")
+        .ok()
+        .and_then(|text| {
+            text.lines()
+                .find_map(|line| line.strip_prefix("MemTotal:")?.split_whitespace().next()?.parse::<u64>().ok()?.checked_mul(1024))
+        })
+        .map(|bytes| bytes / 10 * 7)
 }
 
 fn unix_now_secs() -> u64 {
@@ -623,6 +736,115 @@ pub fn host_ledger_status_v1() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_byte_replace_is_atomic_releases_and_recovers_from_io_failure() {
+        let dir = std::env::temp_dir().join(format!(
+            "misaka-byte-replace-{}-{}",
+            std::process::id(),
+            INSTANCES.fetch_add(1, Ordering::Relaxed)
+        ));
+        let a = PalwHostLedgerV1::open(&dir).unwrap();
+        let b = PalwHostLedgerV1::open(&dir).unwrap();
+        a.replace_process_bytes_v1(u64::MAX, 60, Some(100)).unwrap();
+        assert!(b.replace_process_bytes_v1(u64::MAX, 60, Some(100)).is_err());
+        assert_eq!(a.snapshot().unwrap().reserved_bytes(), 60);
+        a.replace_process_bytes_v1(u64::MAX, 30, Some(10)).unwrap(); // reductions never denied
+        b.replace_process_bytes_v1(u64::MAX, 60, Some(100)).unwrap();
+        assert_eq!(a.snapshot().unwrap().reserved_bytes(), 90);
+        a.replace_process_bytes_v1(u64::MAX, 0, Some(100)).unwrap();
+        assert_eq!(a.snapshot().unwrap().reserved_bytes(), 60);
+        let moved = dir.with_extension("unavailable");
+        std::fs::rename(&dir, &moved).unwrap();
+        assert!(b.replace_process_bytes_v1(u64::MAX, 70, Some(100)).is_err());
+        std::fs::rename(&moved, &dir).unwrap();
+        b.replace_process_bytes_v1(u64::MAX, 10, Some(100)).unwrap();
+        assert_eq!(a.snapshot().unwrap().reserved_bytes(), 10);
+        a.forget_mine();
+        b.forget_mine();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn execution_and_audited_pending_promises_share_live_headroom_in_both_orders() {
+        let dir = std::env::temp_dir().join(format!(
+            "misaka-mixed-promises-{}-{}",
+            std::process::id(),
+            INSTANCES.fetch_add(1, Ordering::Relaxed)
+        ));
+        let execution = PalwHostLedgerV1::open(&dir).unwrap();
+        let audited = PalwHostLedgerV1::open(&dir).unwrap();
+        execution.try_reserve(1, 60, "producer", Some(100)).unwrap();
+        assert!(audited.replace_process_memory_v1(u64::MAX, 60, 60, Some(1000), Some(100)).is_err());
+        execution.release(1);
+        audited.replace_process_memory_v1(u64::MAX, 60, 60, Some(1000), Some(100)).unwrap();
+        assert!(execution.try_reserve(2, 60, "court", Some(100)).is_err());
+        // Materialized owners are still capacity-accounted, but their bytes
+        // are already excluded from the separately observed live headroom.
+        audited.replace_process_memory_v1(u64::MAX, 60, 0, Some(1000), Some(100)).unwrap();
+        execution.try_reserve(3, 60, "court", Some(100)).unwrap();
+        assert_eq!(audited.snapshot().unwrap().reserved_bytes(), 120);
+        execution.release(3);
+        audited.forget_mine();
+        execution.forget_mine();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn process_byte_child() {
+        let Some(dir) = std::env::var_os("MISAKA_BYTE_TEST_CHILD_DIR") else { return };
+        let dir = PathBuf::from(dir);
+        let host = PalwHostLedgerV1::open(&dir).unwrap();
+        match std::env::var("MISAKA_BYTE_TEST_CHILD_MODE").unwrap().as_str() {
+            "hold" => {
+                host.replace_process_memory_v1(u64::MAX, 60, 60, Some(1000), Some(100)).unwrap();
+                std::fs::write(dir.join("held"), b"ready").unwrap();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                while !dir.join("release").exists() {
+                    assert!(std::time::Instant::now() < deadline, "parent must release child");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                host.replace_process_memory_v1(u64::MAX, 0, 0, Some(1000), Some(100)).unwrap();
+            }
+            "refuse" => assert!(host.replace_process_memory_v1(u64::MAX, 60, 60, Some(1000), Some(100)).is_err()),
+            "admit" => {
+                host.replace_process_memory_v1(u64::MAX, 60, 60, Some(1000), Some(100)).unwrap();
+                host.replace_process_memory_v1(u64::MAX, 0, 0, Some(1000), Some(100)).unwrap();
+            }
+            _ => panic!("unexpected child test mode"),
+        }
+    }
+
+    #[test]
+    fn separate_processes_cannot_promise_the_same_host_bytes_and_resume_after_release() {
+        let dir = std::env::temp_dir().join(format!(
+            "misaka-byte-processes-{}-{}",
+            std::process::id(),
+            INSTANCES.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let spawn = |mode: &str| {
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "palw_host_ledger::tests::process_byte_child", "--nocapture"])
+                .env("MISAKA_BYTE_TEST_CHILD_DIR", &dir)
+                .env("MISAKA_BYTE_TEST_CHILD_MODE", mode)
+                .spawn()
+                .unwrap()
+        };
+        let mut holder = spawn("hold");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !dir.join("held").exists() {
+            assert!(std::time::Instant::now() < deadline, "child did not publish reservation");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let refused = spawn("refuse").wait().unwrap().success();
+        // Release the holding process even when the assertion below fails.
+        std::fs::write(dir.join("release"), b"done").unwrap();
+        assert!(holder.wait().unwrap().success());
+        assert!(refused);
+        assert!(spawn("admit").wait().unwrap().success());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn identity(n: u64, len: u64) -> FileIdentityV1 {
         FileIdentityV1 { dev: 7, ino: n, len, mtime_sec: 1_759_300_000, mtime_nsec: 0 }

@@ -439,6 +439,14 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// Local pre-execution context for a new PALW Attempt. The selected parent,
+    /// candidate clock, committed native state and required bootstrap history
+    /// must belong to one stable import generation. No remote input supplies it.
+    /// Returns that generation for a second check immediately before inference.
+    fn palw_producer_context_v1(&self, _parent: BlockHash, _daa: u64, _root: Hash64) -> Result<u64, String> {
+        Err("local producer context is unavailable".into())
+    }
+
     /// **What the free-prompt lane would charge one commitment, before anyone pays to carry it**
     /// (ADR-0148; `GetPalwFreePromptPrice`): the fold's own price at the virtual's DAA, and the
     /// bond's room for it. `None` off `ConsensusV2` and where the node holds no PALW state.
@@ -472,6 +480,15 @@ pub trait ConsensusApi: Send + Sync {
     /// acts on what the admission will actually check rather than on its own re-derivation.
     fn palw_fp_spendable_v3(&self, _bond: crate::tx::TransactionOutpoint) -> Vec<crate::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
         Vec::new()
+    }
+
+    /// The receipt candidates and the immutable selected state they were read from.
+    /// A builder matches this parent against the template before it signs.
+    fn palw_fp_spendable_with_parent_v3(
+        &self,
+        _bond: crate::tx::TransactionOutpoint,
+    ) -> Option<(BlockHash, Vec<crate::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
+        None
     }
 
     /// **Every PALW V2 bond outpoint whose collateral may not be spent right now.**
@@ -538,6 +555,13 @@ pub trait ConsensusApi: Send + Sync {
     /// None means this dormant path owes no additional material hold.
     fn palw_material_income_hold_until_v1(&self, _claim: kaspa_hashes::Hash64) -> Option<u64> {
         None
+    }
+
+    /// GC authorization from the current accepted native snapshot. Missing/cold
+    /// state, read errors and changing import/branch generations are errors, never
+    /// evidence that a retained claim is absent or its DA/payment obligation ended.
+    fn palw_material_retention_owed_v1(&self, _claim: kaspa_hashes::Hash64) -> Result<bool, String> {
+        Err("this consensus cannot authorize material GC".into())
     }
 
     /// Coherent signed service terms, recovery state and native payment/tail
@@ -1783,6 +1807,17 @@ pub trait ConsensusApi: Send + Sync {
         Err("TIR public original quote unavailable".into())
     }
 
+    /// Same accepted-state quote with optional horizon-only diagnostics.
+    fn palw_tir_public_original_quote_with_diagnostics_v1(
+        &self,
+        original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        diagnostics: &mut Option<Box<crate::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1>>,
+    ) -> Result<Option<(u64, crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        *diagnostics = None;
+        self.palw_tir_public_original_quote_v1(original, header)
+    }
+
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
@@ -2672,6 +2707,19 @@ pub trait ConsensusApi: Send + Sync {
         ))
     }
 
+    /// Fallible shared read for serving diagnostics. Only a dormant lane or an
+    /// uncaptured/mismatching point is absence; local read failures remain errors.
+    /// Implementations without a checked read must not claim that a snapshot is absent.
+    fn try_pruning_point_palw_state_shared_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Result<
+        Option<std::sync::Arc<crate::palw_native_resource_v1::NativeStateCarriageV1>>,
+        crate::errors::pruning::PruningSnapshotReadErrorV1,
+    > {
+        Err(crate::errors::pruning::PruningSnapshotReadErrorV1::Unsupported)
+    }
+
     /// Snapshot-bound material, with explicit negotiated complete coverage.
     fn palw_class_carriages_for_snapshot_v1(
         &self,
@@ -2679,6 +2727,17 @@ pub trait ConsensusApi: Send + Sync {
         _complete: bool,
     ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
         Err("this consensus does not index snapshot declarations".into())
+    }
+
+    /// Limit canonical declaration bytes before creating independent carriage
+    /// clones. The caller separately admits encoded state and metadata storage.
+    fn palw_class_carriages_for_snapshot_bounded_v1(
+        &self,
+        _snapshot: &crate::palw_state_v2::PalwStateCarriageV2,
+        _complete: bool,
+        _max_declaration_bytes: u64,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        Err("this consensus cannot pre-bound snapshot declarations".into())
     }
 
     /// Read-only validation, performed before pruning-state installation.
@@ -2838,6 +2897,22 @@ pub trait ConsensusApi: Send + Sync {
         unimplemented!()
     }
 
+    /// Check a checkpoint on the applied pruning proof's level-0 GHOSTDAG chain.
+    /// Proof-only rows deliberately have no normal block status. Missing/incomplete
+    /// local proof context is an error, never an off-chain verdict against a peer.
+    fn pruning_proof_chain_contains_checkpoint(
+        &self,
+        point: BlockHash,
+        checkpoint: BlockHash,
+        daa_score: u64,
+    ) -> PruningImportResult<bool> {
+        let _ = (checkpoint, daa_score);
+        Err(crate::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+            point,
+            "pruning proof checkpoint chain inspection unsupported".into(),
+        ))
+    }
+
     fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         unimplemented!()
     }
@@ -2923,6 +2998,15 @@ pub trait ConsensusApi: Send + Sync {
 
     fn get_pruning_point_proof(&self) -> Arc<PruningPointProof> {
         unimplemented!()
+    }
+
+    /// Fallible local construction; unsupported implementations must not call an
+    /// infallible legacy getter and turn missing state into a process panic.
+    fn try_get_pruning_point_proof(&self) -> PruningImportResult<Arc<PruningPointProof>> {
+        Err(crate::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+            BlockHash::default(),
+            "fallible pruning proof construction unsupported".into(),
+        ))
     }
 
     fn create_virtual_selected_chain_block_locator(
@@ -3200,6 +3284,16 @@ pub trait ConsensusApi: Send + Sync {
     /// served body can reassemble into a valid v2 block on the requester.
     fn get_block_evm_payload(&self, hash: BlockHash) -> ConsensusResult<crate::evm::EvmExecutionPayload> {
         unimplemented!()
+    }
+
+    /// No-UTXO-body RPC projection. Implementations without the audited pinned
+    /// codec keep legacy behavior explicitly untracked; this is not cold-source
+    /// admission for header, metadata or EVM allocations.
+    fn get_block_rpc_projection_v1(&self, hash: BlockHash) -> ConsensusResult<crate::block::RpcBlockProjectionV1> {
+        let mut block = self.get_block_even_if_header_only(hash)?;
+        let ids = block.transactions.iter().map(|tx| tx.id()).collect();
+        block.transactions = Default::default();
+        Ok(crate::block::RpcBlockProjectionV1 { block, transaction_ids: crate::block::RetainedTransactionIdsV1 { ids, memory: None } })
     }
 
     fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {

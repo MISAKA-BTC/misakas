@@ -498,3 +498,34 @@ async fn pruning_capture_uses_shorter_verified_checkpoint_instead_of_far_live_ti
     assert_eq!(served.last_point.as_ref().unwrap().block, target);
     assert!(vp.block_transactions_store.get(target).is_ok());
 }
+
+#[tokio::test]
+async fn pruning_snapshot_checked_reader_preserves_absence_corruption_and_recovery() {
+    use kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1;
+    let ctx = context();
+    let vp = ctx.consensus.virtual_processor();
+    let point = ctx.consensus.params().genesis.hash;
+    assert!(ctx.consensus.try_pruning_point_palw_state_shared_v1(point).unwrap().is_none());
+    vp.capture_pruning_point_palw_state(point).unwrap();
+    let checked = ctx.consensus.try_pruning_point_palw_state_shared_v1(point).unwrap().unwrap();
+    let legacy = ctx.consensus.pruning_point_palw_state_shared_v1(point).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&checked, &legacy), "the checked reader retains the same shared snapshot owner");
+    let wrong = BlockHash::from_u64_word(0xBAD);
+    assert!(ctx.consensus.try_pruning_point_palw_state_shared_v1(wrong).unwrap().is_none());
+
+    // Force the real cold loader through the malformed persisted frame rather
+    // than answering from an already validated immutable carriage cache.
+    let cold = vp.palw_state_v2_store.read().clone_with_new_cache(CachePolicy::Empty);
+    *vp.palw_state_v2_store.write() = cold;
+    let key = DbKey::prefix_only(&Vec::<u8>::from(DatabaseStorePrefixes::PalwPruningPointState));
+    let fault = RestoreRow::corrupt(vp.db.clone(), key);
+    assert!(matches!(ctx.consensus.try_pruning_point_palw_state_shared_v1(point), Err(PruningSnapshotReadErrorV1::Corrupt)));
+    assert!(ctx.consensus.pruning_point_palw_state_shared_v1(point).is_none(), "the old API keeps its Option contract");
+    drop(fault);
+    let recovered = ctx.consensus.try_pruning_point_palw_state_shared_v1(point).unwrap().unwrap();
+    assert_eq!(&**recovered, &**checked);
+
+    let config = ConfigBuilder::new(MAINNET_PARAMS).build();
+    let inactive = TestContext::new(TestConsensus::new(&config));
+    assert!(inactive.consensus.try_pruning_point_palw_state_shared_v1(inactive.consensus.get_sink()).unwrap().is_none());
+}

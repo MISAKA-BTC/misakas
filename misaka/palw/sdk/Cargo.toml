@@ -138,3 +138,7 @@ required-features = ["native-rpc"]
 [[bin]]
 name = "palw-tir-fp-worker"
 path = "src/bin/palw-tir-fp-worker.rs"
+
+[[example]]
+name = "check-t12-a16-source"
+required-features = ["native-rpc"]

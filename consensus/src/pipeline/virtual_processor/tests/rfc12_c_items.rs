@@ -366,6 +366,15 @@ async fn rfc12_c2_a_pruned_join_with_evm_state_installs_the_sidecars_and_follows
     );
     assert!(joiner.vp().palw_class_carriage_store.read().get(unknown_class).is_none());
     let declarations = source.api().palw_class_carriages_for_snapshot_v1(&carriage, false).unwrap();
+    let declaration_bytes = declarations.iter().map(|(_, bytes)| 68 + bytes.len() as u64).sum::<u64>();
+    assert_eq!(
+        source.api().palw_class_carriages_for_snapshot_bounded_v1(&carriage, false, declaration_bytes).unwrap(),
+        declarations,
+        "the bounded getter preserves the existing declaration set at its exact canonical size"
+    );
+    if declaration_bytes != 0 {
+        assert!(source.api().palw_class_carriages_for_snapshot_bounded_v1(&carriage, false, declaration_bytes - 1).is_err());
+    }
     joiner
         .vp()
         .import_pruning_point_palw_snapshot(pp, carriage, Some((declarations, false)))

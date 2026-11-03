@@ -1,14 +1,81 @@
 use crate::{signals::Shutdown, task::service::AsyncServiceResult};
-use futures_util::future::{select_all, try_join_all};
+use futures_util::{
+    FutureExt,
+    future::{select_all, try_join_all},
+};
 use kaspa_core::core::Core;
 use kaspa_core::service::Service;
 use kaspa_core::task::service::AsyncService;
-use kaspa_core::trace;
+use kaspa_core::{info, trace, warn};
 use std::{
+    future::Future,
+    sync::atomic::{AtomicBool, Ordering},
     sync::{Arc, Mutex},
     thread::{self, JoinHandle as ThreadJoinHandle},
+    time::Duration,
 };
 use tokio::task::JoinHandle as TaskJoinHandle;
+
+type ServiceTaskResult = Result<AsyncServiceResult<()>, tokio::task::JoinError>;
+
+#[derive(Clone)]
+struct ServiceTaskProgress {
+    name: &'static str,
+    completed: Arc<AtomicBool>,
+}
+
+impl ServiceTaskProgress {
+    fn new(name: &'static str) -> Self {
+        Self { name, completed: Arc::new(AtomicBool::new(false)) }
+    }
+
+    fn track(self, task: TaskJoinHandle<AsyncServiceResult<()>>) -> impl Future<Output = (&'static str, ServiceTaskResult)> + Unpin {
+        task.map(move |result| {
+            self.completed.store(true, Ordering::Relaxed);
+            (self.name, result)
+        })
+    }
+}
+
+/// Observe the existing join; timers never cancel, stop or replace service work.
+async fn join_service_tasks<F>(
+    futures: Vec<F>,
+    progress: &[ServiceTaskProgress],
+    phase: &'static str,
+    core: &Core,
+) -> Result<Vec<AsyncServiceResult<()>>, tokio::task::JoinError>
+where
+    F: Future<Output = ServiceTaskResult>,
+{
+    let joined = try_join_all(futures);
+    tokio::pin!(joined);
+    // Some starts (e.g. TickService) complete normally while other services stay
+    // resident. Only start the diagnostic clock after Core signals shutdown.
+    let mut shutdown_started = if core.keep_running.load(Ordering::Relaxed) { None } else { Some(tokio::time::Instant::now()) };
+    let mut delay = Duration::from_secs(if shutdown_started.is_some() { 5 } else { 1 });
+    loop {
+        tokio::select! {
+            biased;
+            result = &mut joined => return result,
+            _ = tokio::time::sleep(delay) => {
+                let Some(started) = shutdown_started else {
+                    if !core.keep_running.load(Ordering::Relaxed) {
+                        shutdown_started = Some(tokio::time::Instant::now());
+                        delay = Duration::from_secs(5);
+                    }
+                    continue;
+                };
+                let pending = progress.iter().filter(|task| !task.completed.load(Ordering::Relaxed)).map(|task| task.name).collect::<Vec<_>>();
+                if delay == Duration::from_secs(5) {
+                    info!("async-runtime shutdown joining {phase} tasks for {}s; unfinished services: {}", started.elapsed().as_secs(), pending.join(", "));
+                } else {
+                    warn!("async-runtime shutdown still joining {phase} tasks for {}s; unfinished services: {}", started.elapsed().as_secs(), pending.join(", "));
+                }
+                delay = Duration::from_secs(30);
+            }
+        }
+    }
+}
 
 /// AsyncRuntime registers async services and provides
 /// a tokio Runtime to run them.
@@ -75,17 +142,22 @@ impl AsyncRuntime {
         // Start all async services
         // All services futures are spawned as tokio tasks to enable parallelism
         trace!("async-runtime worker starting");
+        let mut start_progress = Vec::new();
         let futures = self
             .services
             .lock()
             .unwrap()
             .iter()
-            .map(|x| tokio::spawn(x.clone().start()))
-            .collect::<Vec<TaskJoinHandle<AsyncServiceResult<()>>>>();
+            .map(|x| {
+                let progress = ServiceTaskProgress::new(x.clone().ident());
+                start_progress.push(progress.clone());
+                progress.track(tokio::spawn(x.clone().start()))
+            })
+            .collect::<Vec<_>>();
 
         // wait for at least one service to return
-        let (result, idx, remaining_futures) = select_all(futures).await;
-        trace!("async-runtime worker had service {} returning", self.services.lock().unwrap()[idx].clone().ident());
+        let ((name, result), _, remaining_futures) = select_all(futures).await;
+        trace!("async-runtime worker had service {} returning", name);
         // if at least one service yields an error, initiate global shutdown
         // this will cause signal_exit() to be executed externally (by Core invoking `stop()`)
         match result {
@@ -98,18 +170,30 @@ impl AsyncRuntime {
 
         // wait for remaining services to finish
         trace!("async-runtime worker joining remaining {} services", remaining_futures.len());
-        try_join_all(remaining_futures).await.unwrap();
+        join_service_tasks(
+            remaining_futures.into_iter().map(|future| future.map(|(_, result)| result)).collect(),
+            &start_progress,
+            "start",
+            &core,
+        )
+        .await
+        .unwrap();
 
         // Stop all async services
         // All services futures are spawned as tokio tasks to enable parallelism
+        let mut stop_progress = Vec::new();
         let futures = self
             .services
             .lock()
             .unwrap()
             .iter()
-            .map(|x| tokio::spawn(x.clone().stop()))
-            .collect::<Vec<TaskJoinHandle<AsyncServiceResult<()>>>>();
-        try_join_all(futures).await.unwrap();
+            .map(|x| {
+                let progress = ServiceTaskProgress::new(x.clone().ident());
+                stop_progress.push(progress.clone());
+                progress.track(tokio::spawn(x.clone().stop())).map(|(_, result)| result)
+            })
+            .collect::<Vec<_>>();
+        join_service_tasks(futures, &stop_progress, "stop", &core).await.unwrap();
 
         // Drop all services and cleanup
         self.services.lock().unwrap().clear();

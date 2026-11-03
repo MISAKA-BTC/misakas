@@ -5,6 +5,7 @@ pub mod chain_participation;
 pub mod console;
 pub mod kaspad_env;
 pub mod log;
+pub mod memory_budget;
 pub mod panic;
 pub mod time;
 

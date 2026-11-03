@@ -510,9 +510,14 @@ impl PruningProofManager {
 
         // Get the proof for the current consensus (the defender) and recreate the stores for it
         // This is expected to be fast because if a proof exists, it will be cached.
-        let defender_proof = self.get_pruning_point_proof();
+        let defender_proof = self.try_get_pruning_point_proof()?;
         let defender = ProofContext::from_proof(self, &defender_proof, false)
-            .expect("local")
+            .map_err(|error| {
+                PruningImportError::PruningPointImportContextUnavailable(
+                    self.genesis_hash,
+                    format!("local defender proof revalidation: {error}"),
+                )
+            })?
             .continue_value()
             .ok_or(PruningImportError::PruningValidationInterrupted)?;
 

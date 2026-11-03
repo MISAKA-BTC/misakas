@@ -22,12 +22,13 @@ use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kaspa_hashes::Hash64;
 
 use crate::evidence::{
-    ChunkProvider, ClaimRoots, EvidenceManifestV1, FetchReport, ManifestLimits, ProviderError, fetch_material_any, manifest_id_v1,
+    ChunkProvider, ChunkReadError, ClaimRoots, EvidenceManifestV1, FetchReport, ManifestLimits, ProviderError, fetch_material_any,
+    manifest_id_v1,
 };
 
 /// The word every availability line carries: what THIS machine saw, not something it can prove to anyone.
@@ -89,6 +90,11 @@ pub trait EvidenceProvider: ChunkProvider {
     fn put_chunk(&self, manifest_id: Hash64, index: u32, bytes: &[u8]) -> Result<(), ProviderError>;
     /// Written LAST: a reader must never see a manifest whose chunks are not all there.
     fn put_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> Result<(), ProviderError>;
+    /// Optional fast path for a provider that can reuse its already retained chunks.
+    /// The caller still verifies the full read-back before relying on it.
+    fn try_reuse_manifest(&self, _claim_hex: &str, _manifest: &EvidenceManifestV1) -> bool {
+        false
+    }
 
     // ---- the redemption board (RFC-0009 stage C): where a miner leaves its `RDA4` authorizations and a builder finds them ----
 
@@ -110,31 +116,35 @@ fn decode_manifest(bytes: &[u8]) -> Result<EvidenceManifestV1, ProviderError> {
 
 impl EvidenceProvider for crate::evidence::fs::FsProvider {
     fn manifest_for(&self, claim_hex: &str) -> Result<Option<EvidenceManifestV1>, ProviderError> {
-        match std::fs::read(crate::evidence::fs::manifest_path(&self.root, claim_hex)) {
+        use crate::evidence::fs::{BoundedFileError, manifest_path, read_bounded_file};
+        match read_bounded_file(&manifest_path(&self.root, claim_hex), MANIFEST_MAX_BYTES) {
             Ok(bytes) => decode_manifest(&bytes).map(Some),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(BoundedFileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(ProviderError(e.to_string())),
         }
     }
     fn put_chunk(&self, manifest_id: Hash64, index: u32, bytes: &[u8]) -> Result<(), ProviderError> {
         let path = crate::evidence::fs::chunk_path(&self.root, manifest_id, index);
-        write_atomic(&path, bytes).map_err(|e| ProviderError(e.to_string()))
+        crate::evidence::fs::write_provider_chunk(&path, bytes).map_err(|e| ProviderError(e.to_string()))
     }
     fn put_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> Result<(), ProviderError> {
         let path = crate::evidence::fs::manifest_path(&self.root, claim_hex);
-        write_atomic(&path, &borsh::to_vec(manifest).expect("borsh-serializable")).map_err(|e| ProviderError(e.to_string()))
+        crate::evidence::fs::write_provider_manifest(&path, manifest, &borsh::to_vec(manifest).expect("borsh-serializable"))
+            .map_err(|e| ProviderError(e.to_string()))
+    }
+    fn try_reuse_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> bool {
+        crate::evidence::fs::try_extend_provider_manifest(
+            &self.root,
+            claim_hex,
+            manifest,
+            &ManifestLimits::default(),
+            |_| Ok(()),
+            || Ok(()),
+        )
+        .unwrap_or(false)
     }
     fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
-        match std::fs::read_dir(self.root.join("redemptions")) {
-            Ok(entries) => Ok(entries
-                .flatten()
-                .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".rda4")).map(str::to_string))
-                .filter(|n| is_hex128_text(n))
-                .take(REDEMPTION_INDEX_CAP)
-                .collect()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(ProviderError(e.to_string())),
-        }
+        list_redemption_ids(&self.root, || Ok(())).map_err(|e| ProviderError(e.to_string()))
     }
     fn get_redemption(&self, claim_hex: &str) -> Result<Option<Vec<u8>>, ProviderError> {
         match std::fs::read(redemption_path(&self.root, claim_hex)) {
@@ -146,6 +156,27 @@ impl EvidenceProvider for crate::evidence::fs::FsProvider {
     fn put_redemption(&self, claim_hex: &str, bundle: &[u8]) -> Result<(), ProviderError> {
         write_atomic(&redemption_path(&self.root, claim_hex), bundle).map_err(|e| ProviderError(e.to_string()))
     }
+}
+
+fn list_redemption_ids(root: &Path, check: impl Fn() -> std::io::Result<()>) -> std::io::Result<Vec<String>> {
+    let entries = match std::fs::read_dir(root.join("redemptions")) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        check()?;
+        if let Ok(entry) = entry
+            && let Some(id) = entry.file_name().to_str().and_then(|n| n.strip_suffix(".rda4")).filter(|n| is_hex128_text(n))
+        {
+            ids.push(id.to_string());
+            if ids.len() == REDEMPTION_INDEX_CAP {
+                break;
+            }
+        }
+    }
+    Ok(ids)
 }
 
 const REDEMPTION_INDEX_CAP: usize = 10_000;
@@ -244,6 +275,124 @@ impl HttpTransport for StdHttp {
     }
 }
 
+/// A verifier's operator-configured HTTP endpoint. Numeric addresses avoid an
+/// unbounded blocking DNS lookup; request paths stay inside this origin.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NumericEvidenceEndpointV1 {
+    base: String,
+    address: SocketAddr,
+}
+
+impl NumericEvidenceEndpointV1 {
+    pub fn parse(base: &str) -> Result<Self, &'static str> {
+        if base.len() > 512 {
+            return Err("evidence provider URL is too long");
+        }
+        let base = base.trim_end_matches('/');
+        let rest = base.strip_prefix("http://").ok_or("evidence provider requires numeric http://")?;
+        let (authority, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+        if !prefix.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-._~".contains(&b)) {
+            return Err("invalid evidence provider URL path");
+        }
+        let address = authority
+            .parse::<SocketAddr>()
+            .or_else(|_| authority.parse::<std::net::Ipv4Addr>().map(|ip| SocketAddr::from((ip, 80))))
+            .or_else(|_| {
+                authority
+                    .strip_prefix('[')
+                    .and_then(|host| host.strip_suffix(']'))
+                    .unwrap_or("")
+                    .parse::<std::net::Ipv6Addr>()
+                    .map(|ip| SocketAddr::from((ip, 80)))
+            })
+            .map_err(|_| "evidence provider requires a numeric IP and optional port")?;
+        if address.port() == 0 {
+            return Err("invalid evidence provider port");
+        }
+        Ok(Self { base: base.to_owned(), address })
+    }
+
+    pub fn open(&self, deadline: std::time::Instant) -> HttpProvider {
+        HttpProvider::with_transport(self.base.clone(), Arc::new(NumericEvidenceGetV1 { endpoint: self.clone(), deadline }))
+    }
+}
+
+/// Split the historical comma-separated directory flag without interpreting
+/// '#' in directory names. Unsupported network entries do not disable FS.
+pub fn split_verifier_evidence_sources_v1(text: &str) -> (Vec<PathBuf>, Vec<NumericEvidenceEndpointV1>, usize) {
+    let (mut dirs, mut endpoints, mut rejected) = (Vec::new(), Vec::new(), 0);
+    for entry in text.split(',').map(str::trim).filter(|entry| !entry.is_empty()) {
+        if !entry.contains("://") {
+            dirs.push(PathBuf::from(entry));
+        } else {
+            match NumericEvidenceEndpointV1::parse(entry) {
+                Ok(endpoint) if endpoints.contains(&endpoint) => {}
+                Ok(endpoint) if endpoints.len() < 8 => endpoints.push(endpoint),
+                _ => rejected += 1,
+            }
+        }
+    }
+    (dirs, endpoints, rejected)
+}
+
+/// Read from an explicitly configured numeric HTTP origin. The caller
+/// supplies the one claim-wide deadline and an evidence size limit.
+pub fn fetch_verifier_http_material_v1(
+    endpoints: &[NumericEvidenceEndpointV1],
+    claim_id: Hash64,
+    roots: &ClaimRoots,
+    limits: &ManifestLimits,
+    deadline: std::time::Instant,
+) -> Result<(Vec<u8>, FetchReport), ClaimFetchErrorV1> {
+    let providers: Vec<_> = endpoints.iter().map(|endpoint| endpoint.open(deadline)).collect();
+    let providers: Vec<&dyn EvidenceProvider> = providers.iter().map(|p| p as &dyn EvidenceProvider).collect();
+    fetch_claim_material_any(&providers, &claim_id.to_string(), roots, limits, claim_id)
+}
+
+struct NumericEvidenceGetV1 {
+    endpoint: NumericEvidenceEndpointV1,
+    deadline: std::time::Instant,
+}
+
+impl HttpTransport for NumericEvidenceGetV1 {
+    fn request(&self, method: &str, url: &str, body: Option<&[u8]>, max_response: usize) -> Result<HttpResponse, String> {
+        let path = url
+            .strip_prefix(&self.endpoint.base)
+            .filter(|path| path.starts_with('/'))
+            .filter(|path| path.bytes().all(|b| b.is_ascii_alphanumeric() || b"/-._~".contains(&b)))
+            .ok_or("invalid verifier evidence request path")?;
+        if method != "GET" || body.is_some() {
+            return Err("verifier evidence transport is read-only".into());
+        }
+        let remaining = || {
+            let left = self.deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() { Err("verifier evidence fetch deadline reached".to_string()) } else { Ok(left) }
+        };
+        let host = self.endpoint.address;
+        let mut stream = TcpStream::connect_timeout(&host, remaining()?).map_err(|e| e.to_string())?;
+        stream.set_write_timeout(Some(remaining()?)).map_err(|e| e.to_string())?;
+        let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
+        let cap = max_response.saturating_add(16 * 1024);
+        let mut raw = Vec::new();
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            stream.set_read_timeout(Some(remaining()?)).map_err(|e| e.to_string())?;
+            let read = stream.read(&mut buffer).map_err(|e| e.to_string())?;
+            if read == 0 {
+                break;
+            }
+            if read > cap.saturating_sub(raw.len()) {
+                return Err("evidence provider response exceeds the requested limit".into());
+            }
+            raw.extend_from_slice(&buffer[..read]);
+        }
+        // HttpProvider checks the status. A 3xx is a failed provider, never a
+        // second network request, and no environment proxy or curl is used.
+        parse_response(&raw, max_response)
+    }
+}
+
 fn parse_response(raw: &[u8], max_body: usize) -> Result<HttpResponse, String> {
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").ok_or("the response has no header end")?;
     let head = std::str::from_utf8(&raw[..split]).map_err(|_| "the response header is not text")?;
@@ -276,11 +425,12 @@ fn dechunk(mut raw: &[u8]) -> Result<Vec<u8>, String> {
         if size == 0 {
             return Ok(out);
         }
-        if raw.len() < size + 2 {
-            return Err("a chunked body is truncated".into());
+        let end = size.checked_add(2).ok_or("a chunked body declares an impossible length")?;
+        if raw.len() < end || &raw[size..end] != b"\r\n" {
+            return Err("a chunked body is truncated or has an invalid delimiter".into());
         }
         out.extend_from_slice(&raw[..size]);
-        raw = &raw[size + 2..];
+        raw = &raw[end..];
     }
 }
 
@@ -359,7 +509,7 @@ impl HttpProvider {
     }
 }
 
-const MANIFEST_MAX_BYTES: usize = 2 << 20;
+pub(crate) const MANIFEST_MAX_BYTES: usize = 2 << 20;
 
 impl ChunkProvider for HttpProvider {
     fn provider_id(&self) -> &str {
@@ -403,6 +553,13 @@ impl EvidenceProvider for HttpProvider {
             return Err(ProviderError(format!("HTTP {}: {}", r.status, String::from_utf8_lossy(&r.body))));
         }
         Ok(())
+    }
+    fn try_reuse_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> bool {
+        self.manifest_for(claim_hex).is_ok_and(|old| {
+            old.is_some_and(|old| {
+                crate::evidence::fs::is_retention_extension(old, manifest) && self.put_manifest(claim_hex, manifest).is_ok()
+            })
+        })
     }
     fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
         let url = format!("{}/redemptions/index", self.base);
@@ -530,14 +687,52 @@ pub fn publish_to_providers_v1(
     providers: &[&dyn EvidenceProvider],
     min_verified: usize,
 ) -> Result<PublishReportV1, PublishReportV1> {
+    let report = publish_with_reader(
+        claim_hex,
+        manifest,
+        providers,
+        chunks.len(),
+        crate::evidence::fs::publish_chunks_match(manifest, chunks),
+        |i| Ok(chunks[i].as_slice()),
+    );
+    if report.verified_copies() >= min_verified.max(1) { Ok(report) } else { Err(report) }
+}
+
+/// Publish an already-staged capture without loading all of its chunks into memory.
+/// The source is verified before writing anything. A changed chunk during upload
+/// aborts that copy before its manifest is published.
+pub fn publish_from_provider_v1(
+    claim_hex: &str,
+    manifest: &EvidenceManifestV1,
+    source: &dyn EvidenceProvider,
+    providers: &[&dyn EvidenceProvider],
+) -> Result<PublishReportV1, String> {
+    manifest.validate_shape(&ManifestLimits::default()).map_err(|e| e.to_string())?;
+    let id = manifest_id_v1(manifest);
+    let read = |i: usize| {
+        let entry = &manifest.chunks[i];
+        let bytes = source.fetch_chunk_expected(id, entry.index, entry.len).map_err(|e| format!("source chunk {i}: {e}"))?;
+        manifest.verify_chunk(entry.index, &bytes).map_err(|e| format!("source chunk {i}: {e}"))?;
+        Ok(bytes)
+    };
+    for i in 0..manifest.chunks.len() {
+        read(i)?;
+    }
+    Ok(publish_with_reader(claim_hex, manifest, providers, manifest.chunks.len(), true, read))
+}
+
+fn publish_with_reader<B: AsRef<[u8]>>(
+    claim_hex: &str,
+    manifest: &EvidenceManifestV1,
+    providers: &[&dyn EvidenceProvider],
+    chunk_count: usize,
+    reuse_allowed: bool,
+    read: impl Fn(usize) -> Result<B, String>,
+) -> PublishReportV1 {
     let manifest_id = manifest_id_v1(manifest);
     let mut per_provider = Vec::new();
     for p in providers {
-        let result = (|| -> Result<(), String> {
-            for (i, bytes) in chunks.iter().enumerate() {
-                p.put_chunk(manifest_id, i as u32, bytes).map_err(|e| format!("chunk {i}: {e}"))?;
-            }
-            p.put_manifest(claim_hex, manifest).map_err(|e| format!("manifest: {e}"))?;
+        let read_back = || -> Result<(), String> {
             // Read back what the provider now serves.
             match p.manifest_for(claim_hex).map_err(|e| format!("read-back: {e}"))? {
                 Some(m) if manifest_id_v1(&m) == manifest_id => {}
@@ -545,15 +740,27 @@ pub fn publish_to_providers_v1(
                 None => return Err("read-back: the provider serves no manifest after accepting it".into()),
             }
             for entry in &manifest.chunks {
-                let bytes = p.fetch_chunk(manifest_id, entry.index).map_err(|e| format!("read-back chunk {}: {e}", entry.index))?;
+                let bytes = p
+                    .fetch_chunk_expected(manifest_id, entry.index, entry.len)
+                    .map_err(|e| format!("read-back chunk {}: {e}", entry.index))?;
                 manifest.verify_chunk(entry.index, &bytes).map_err(|e| format!("read-back chunk {}: {e}", entry.index))?;
             }
             Ok(())
+        };
+        let result = (|| -> Result<(), String> {
+            if reuse_allowed && p.try_reuse_manifest(claim_hex, manifest) && read_back().is_ok() {
+                return Ok(());
+            }
+            for i in 0..chunk_count {
+                let bytes = read(i)?;
+                p.put_chunk(manifest_id, i as u32, bytes.as_ref()).map_err(|e| format!("chunk {i}: {e}"))?;
+            }
+            p.put_manifest(claim_hex, manifest).map_err(|e| format!("manifest: {e}"))?;
+            read_back()
         })();
         per_provider.push(PublishOutcomeV1 { provider: p.provider_id().to_string(), result });
     }
-    let report = PublishReportV1 { manifest_id, per_provider };
-    if report.verified_copies() >= min_verified.max(1) { Ok(report) } else { Err(report) }
+    PublishReportV1 { manifest_id, per_provider }
 }
 
 /// Offer an RFC09 attempt capture through the ordinary claim evidence transport.
@@ -823,7 +1030,7 @@ pub fn check_availability_v1(
         let mut chunks = Vec::with_capacity(manifest.chunks.len());
         for (i, entry) in manifest.chunks.iter().enumerate() {
             // The chunk bytes are addressed by the manifest id, not by the provider's manifest: a provider may hold chunks without the manifest.
-            let state = match p.fetch_chunk(manifest_id, entry.index) {
+            let state = match p.fetch_chunk_expected(manifest_id, entry.index, entry.len) {
                 Ok(bytes) => match manifest.verify_chunk(entry.index, &bytes) {
                     Ok(()) => {
                         copies[i] += 1;
@@ -831,8 +1038,9 @@ pub fn check_availability_v1(
                     }
                     Err(_) => ChunkStateV1::Corrupt,
                 },
-                Err(e) if is_absence(&e.0) => ChunkStateV1::Missing,
-                Err(e) => ChunkStateV1::Unreachable(e.0),
+                Err(ChunkReadError::TooLarge(_)) => ChunkStateV1::Corrupt,
+                Err(ChunkReadError::Provider(e)) if is_absence(&e.0) => ChunkStateV1::Missing,
+                Err(ChunkReadError::Provider(e)) => ChunkStateV1::Unreachable(e.0),
             };
             chunks.push(state);
         }
@@ -892,7 +1100,7 @@ pub fn repair_v1(claim_hex: &str, manifest: &EvidenceManifestV1, providers: &[&d
         for pi in missing_on {
             let p = providers[pi];
             let outcome = p.put_chunk(manifest_id, entry.index, &bytes).map_err(|e| e.0).and_then(|()| {
-                let back = p.fetch_chunk(manifest_id, entry.index).map_err(|e| e.0)?;
+                let back = p.fetch_chunk_expected(manifest_id, entry.index, entry.len).map_err(|e| e.to_string())?;
                 manifest.verify_chunk(entry.index, &back).map_err(|e| e.to_string())
             });
             match outcome {
@@ -1010,6 +1218,10 @@ impl RetentionMonitor {
 
 pub mod server {
     use super::*;
+    use crate::evidence::fs::{
+        BoundedFileError, open_bounded_file, read_bounded_file, try_extend_provider_manifest, write_provider_chunk,
+        write_provider_manifest,
+    };
 
     #[derive(Clone, Debug)]
     pub struct ServerConfig {
@@ -1048,29 +1260,84 @@ pub mod server {
         }
     }
 
+    const MAX_ACTIVE_REQUESTS: usize = 4;
+    const CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
+    const OVERLOADED: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
     /// Serve `root` on `listen` until the handle is stopped.
     pub fn start(listen: &str, root: PathBuf, cfg: ServerConfig) -> std::io::Result<ServerHandle> {
+        start_bounded(listen, root, cfg, MAX_ACTIVE_REQUESTS, CONNECTION_TIMEOUT)
+    }
+
+    pub(super) fn start_bounded(
+        listen: &str,
+        root: PathBuf,
+        cfg: ServerConfig,
+        max_active: usize,
+        timeout: Duration,
+    ) -> std::io::Result<ServerHandle> {
         let listener = TcpListener::bind(listen)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let thread = std::thread::spawn(move || {
+        let thread = std::thread::Builder::new().spawn(move || {
+            let mut workers = Vec::<std::thread::JoinHandle<()>>::with_capacity(max_active);
             while !flag.load(Ordering::SeqCst) {
                 match listener.accept() {
-                    Ok((stream, _)) => {
+                    Ok((mut stream, _)) => {
+                        workers.retain(|worker| !worker.is_finished());
+                        if workers.len() == max_active {
+                            // The accept loop never waits for an overloaded client to read.
+                            if stream.set_nonblocking(true).is_ok() {
+                                let _ = stream.write(OVERLOADED);
+                            }
+                            continue;
+                        }
+                        let deadline = Instant::now() + timeout;
                         let (root, cfg) = (root.clone(), cfg.clone());
-                        std::thread::spawn(move || {
-                            let _ = stream.set_nonblocking(false);
-                            let _ = handle(stream, &root, &cfg);
-                        });
+                        if let Ok(worker) = std::thread::Builder::new().spawn(move || {
+                            if stream.set_nonblocking(false).is_ok() {
+                                let _ = handle(DeadlineStream { stream, deadline }, &root, &cfg);
+                            }
+                        }) {
+                            workers.push(worker);
+                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(5)),
                     Err(_) => break,
                 }
             }
-        });
+        })?;
         Ok(ServerHandle { addr, stop, thread: Some(thread) })
+    }
+
+    fn remaining_until(deadline: Instant) -> std::io::Result<Duration> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() { Err(std::io::ErrorKind::TimedOut.into()) } else { Ok(remaining) }
+    }
+
+    struct DeadlineStream {
+        stream: TcpStream,
+        deadline: Instant,
+    }
+
+    impl Read for DeadlineStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.stream.set_read_timeout(Some(remaining_until(self.deadline)?))?;
+            self.stream.read(buf)
+        }
+    }
+
+    impl Write for DeadlineStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.stream.set_write_timeout(Some(remaining_until(self.deadline)?))?;
+            self.stream.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.stream.flush()
+        }
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -1115,7 +1382,7 @@ pub mod server {
         Some(Target::Chunk(id.parse().ok()?, index.parse().ok()?))
     }
 
-    fn respond(stream: &mut TcpStream, status: u16, body: &[u8]) -> std::io::Result<()> {
+    fn respond(stream: &mut DeadlineStream, status: u16, body: &[u8]) -> std::io::Result<()> {
         let reason = match status {
             200 => "OK",
             201 => "Created",
@@ -1131,25 +1398,23 @@ pub mod server {
         stream.write_all(body)
     }
 
-    fn store_size(root: &Path) -> u64 {
-        fn walk(dir: &Path) -> u64 {
-            std::fs::read_dir(dir)
-                .map(|it| {
-                    it.flatten()
-                        .map(|e| match e.metadata() {
-                            Ok(m) if m.is_dir() => walk(&e.path()),
-                            Ok(m) => m.len(),
-                            Err(_) => 0,
-                        })
-                        .sum()
-                })
-                .unwrap_or(0)
+    fn store_size(root: &Path, deadline: Instant) -> std::io::Result<u64> {
+        let Ok(entries) = std::fs::read_dir(root) else { return Ok(0) };
+        let mut bytes = 0u64;
+        for entry in entries {
+            remaining_until(deadline)?;
+            if let Ok(entry) = entry
+                && let Ok(meta) = entry.metadata()
+            {
+                let size = if meta.is_dir() { store_size(&entry.path(), deadline)? } else { meta.len() };
+                bytes = bytes.saturating_add(size);
+            }
         }
-        walk(root)
+        Ok(bytes)
     }
 
-    fn handle(mut stream: TcpStream, root: &Path, cfg: &ServerConfig) -> std::io::Result<()> {
-        stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+    fn handle(mut stream: DeadlineStream, root: &Path, cfg: &ServerConfig) -> std::io::Result<()> {
+        let deadline = stream.deadline;
         // The head, bounded.
         let mut raw = Vec::new();
         let mut buf = [0u8; 4096];
@@ -1187,23 +1452,27 @@ pub mod server {
             if method != "GET" {
                 return respond(&mut stream, 405, b"GET only");
             }
-            let listing = crate::evidence::fs::FsProvider::new(root.to_path_buf()).list_redemptions().unwrap_or_default().join("\n");
+            let listing = list_redemption_ids(root, || remaining_until(deadline).map(|_| ())).unwrap_or_default().join("\n");
             return respond(&mut stream, 200, listing.as_bytes());
         }
+        let cap = match &target {
+            Target::Manifest(_) => MANIFEST_MAX_BYTES,
+            Target::Chunk(..) => cfg.limits.max_chunk_bytes as usize,
+            Target::Redemption(_) | Target::RedemptionIndex => REDEMPTION_MAX_BYTES,
+            Target::Material(path) if path.ends_with("manifest") => crate::public_material::MATERIAL_MANIFEST_MAX_BYTES,
+            Target::Material(_) => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
+        };
         match method {
-            "GET" | "HEAD" => match std::fs::read(&file) {
-                Ok(bytes) if method == "HEAD" => respond(&mut stream, 200, &[]).map(|_| drop(bytes)),
-                Ok(bytes) => respond(&mut stream, 200, &bytes),
-                Err(_) => respond(&mut stream, 404, b"not found"),
-            },
+            "GET" | "HEAD" => {
+                let stored =
+                    if method == "HEAD" { open_bounded_file(&file, cap).map(|_| Vec::new()) } else { read_bounded_file(&file, cap) };
+                match stored {
+                    Ok(bytes) => respond(&mut stream, 200, &bytes),
+                    Err(BoundedFileError::TooLarge(_)) => respond(&mut stream, 413, b"too large"),
+                    Err(_) => respond(&mut stream, 404, b"not found"),
+                }
+            }
             "PUT" => {
-                let cap = match &target {
-                    Target::Manifest(_) => MANIFEST_MAX_BYTES,
-                    Target::Chunk(..) => cfg.limits.max_chunk_bytes as usize,
-                    Target::Redemption(_) | Target::RedemptionIndex => REDEMPTION_MAX_BYTES,
-                    Target::Material(path) if path.ends_with("manifest") => crate::public_material::MATERIAL_MANIFEST_MAX_BYTES,
-                    Target::Material(_) => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
-                };
                 if content_length > cap {
                     // Drain (a bounded amount of) what the client is still sending before answering: closing on unread data resets the
                     // connection and the client would never see the 413.
@@ -1216,19 +1485,22 @@ pub mod server {
                     }
                     return respond(&mut stream, 413, b"too large");
                 }
-                let mut body = raw[split + 4..].to_vec();
+                let first_body = &raw[split + 4..];
+                let mut body = first_body[..first_body.len().min(content_length)].to_vec();
                 while body.len() < content_length {
-                    let n = stream.read(&mut buf)?;
+                    let remaining = (content_length - body.len()).min(buf.len());
+                    let n = stream.read(&mut buf[..remaining])?;
                     if n == 0 {
                         return respond(&mut stream, 400, b"short body");
                     }
-                    body.extend_from_slice(&buf[..n]);
-                    if body.len() > cap {
-                        return respond(&mut stream, 413, b"too large");
+                    let next_len = body.len() + n;
+                    if next_len > body.capacity() {
+                        let capacity = body.capacity().saturating_mul(2).max(next_len).min(content_length);
+                        body.reserve_exact(capacity - body.len());
                     }
+                    body.extend_from_slice(&buf[..n]);
                 }
-                body.truncate(content_length);
-                if store_size(root).saturating_add(body.len() as u64) > cfg.max_store_bytes {
+                if store_size(root, deadline)?.saturating_add(body.len() as u64) > cfg.max_store_bytes {
                     return respond(&mut stream, 507, b"this provider is full");
                 }
                 match target {
@@ -1244,20 +1516,24 @@ pub mod server {
                     Target::RedemptionIndex => respond(&mut stream, 405, b"GET only"),
                     // DA16: a manifest is stored only if every unit it names is already here and checks (this provider never serves a
                     // manifest it cannot back); units are stored as given and judged by every reader against the chain's roots.
-                    Target::Material(ref path) => match crate::public_material::server_accepts_material_v1(root, path, &body) {
-                        Ok(()) => match write_atomic(&file, &body) {
-                            Ok(()) => respond(&mut stream, 201, b"stored"),
-                            Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
-                        },
-                        Err(why) => respond(&mut stream, 409, why.as_bytes()),
-                    },
-                    Target::Chunk(..) => match write_atomic(&file, &body) {
+                    Target::Material(ref path) => {
+                        match crate::public_material::server_accepts_material_while_v1(root, path, &body, || {
+                            remaining_until(deadline).map(|_| ()).map_err(|error| error.to_string())
+                        }) {
+                            Ok(()) => match write_atomic(&file, &body) {
+                                Ok(()) => respond(&mut stream, 201, b"stored"),
+                                Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
+                            },
+                            Err(why) => respond(&mut stream, 409, why.as_bytes()),
+                        }
+                    }
+                    Target::Chunk(..) => match write_provider_chunk(&file, &body) {
                         Ok(()) => respond(&mut stream, 201, b"stored"),
                         Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
                     },
                     // The manifest is accepted only if it is well formed AND every chunk it names is already here and hashes to its entry: this
                     // provider never serves a manifest it cannot back.
-                    Target::Manifest(_) => {
+                    Target::Manifest(ref claim) => {
                         let manifest = match decode_manifest(&body) {
                             Ok(m) => m,
                             Err(e) => return respond(&mut stream, 400, e.0.as_bytes()),
@@ -1265,9 +1541,33 @@ pub mod server {
                         if let Err(e) = manifest.validate_shape(&cfg.limits) {
                             return respond(&mut stream, 400, e.to_string().as_bytes());
                         }
+                        let admit = |additional: u64| {
+                            if additional > 0
+                                && store_size(root, deadline)?.saturating_add(body.len() as u64).saturating_add(additional)
+                                    > cfg.max_store_bytes
+                            {
+                                return Err(std::io::Error::new(std::io::ErrorKind::StorageFull, "this provider is full"));
+                            }
+                            Ok(())
+                        };
+                        match try_extend_provider_manifest(root, claim, &manifest, &cfg.limits, admit, || {
+                            remaining_until(deadline).map(|_| ())
+                        }) {
+                            Ok(true) => return respond(&mut stream, 201, b"stored"),
+                            Ok(false) => {}
+                            Err(e) if e.kind() == std::io::ErrorKind::StorageFull => {
+                                return respond(&mut stream, 507, e.to_string().as_bytes());
+                            }
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                return respond(&mut stream, 409, e.to_string().as_bytes());
+                            }
+                            Err(e) => return respond(&mut stream, 400, e.to_string().as_bytes()),
+                        }
                         let id = manifest_id_v1(&manifest);
                         for entry in &manifest.chunks {
-                            let stored = std::fs::read(crate::evidence::fs::chunk_path(root, id, entry.index));
+                            remaining_until(deadline)?;
+                            let stored =
+                                read_bounded_file(&crate::evidence::fs::chunk_path(root, id, entry.index), entry.len as usize);
                             match stored {
                                 Ok(bytes) if manifest.verify_chunk(entry.index, &bytes).is_ok() => {}
                                 _ => {
@@ -1279,8 +1579,11 @@ pub mod server {
                                 }
                             }
                         }
-                        match write_atomic(&file, &body) {
+                        match write_provider_manifest(&file, &manifest, &body) {
                             Ok(()) => respond(&mut stream, 201, b"stored"),
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                respond(&mut stream, 409, e.to_string().as_bytes())
+                            }
                             Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
                         }
                     }
@@ -1343,6 +1646,318 @@ mod tests {
         let handle = server::start("127.0.0.1:0", dir.clone(), server::ServerConfig::default()).unwrap();
         let provider = HttpProvider::new(handle.url());
         (handle, dir, provider)
+    }
+
+    #[test]
+    fn directory_provider_rejects_sparse_overruns_and_repairs_from_another_copy() {
+        use crate::evidence::{EvidenceError, FetchFailureKind, fs};
+
+        let dir = scratch("bounded-files");
+        let good_dir = scratch("bounded-files-good");
+        let local = FsProvider::new(dir.clone());
+        let good = FsProvider::new(good_dir.clone());
+        let claim = claim_hex();
+        let chunks = chunks();
+        let manifest = manifest();
+        let id = manifest_id_v1(&manifest);
+        let sparse_len = 5u64 << 30;
+        fs::publish(&dir, &claim, &manifest, &chunks).unwrap();
+        fs::publish(&good_dir, &claim, &manifest, &chunks).unwrap();
+
+        let path = fs::manifest_path(&dir, &claim);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(sparse_len).unwrap();
+        assert!(local.manifest_for(&claim).is_none());
+        assert!(EvidenceProvider::manifest_for(&local, &claim).unwrap_err().0.contains("above the read limit"));
+        local.put_manifest(&claim, &manifest).unwrap();
+
+        let path = fs::chunk_path(&dir, id, 0);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(sparse_len).unwrap();
+        assert!(local.fetch_chunk(id, 0).unwrap_err().0.contains("larger than the expected length"));
+        let bad_only = [&local as &dyn ChunkProvider];
+        let Err(crate::evidence::FetchFailure::ChunkUnavailable { failures, .. }) =
+            crate::evidence::fetch_chunk_any(&manifest, 0, &bad_only, h(7))
+        else {
+            panic!("oversized file must be refused");
+        };
+        assert!(matches!(failures[0].kind, FetchFailureKind::BadBytes(EvidenceError::ChunkLength { index: 0, expected: 4000, .. })));
+        let repaired = repair_v1(&claim, &manifest, &[&local, &good]);
+        assert_eq!(repaired.copied, vec![(local.id.clone(), 0)]);
+        assert_eq!(std::fs::metadata(path).unwrap().len(), chunks[0].len() as u64);
+
+        let path = crate::public_material::material_manifest_path(&h(7));
+        let file = dir.join(&path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::File::create(&file).unwrap().set_len(sparse_len).unwrap();
+        assert!(crate::public_material::MaterialProvider::get(&local, &path, 2 << 20).is_err());
+
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(good_dir).unwrap();
+    }
+
+    #[test]
+    fn directory_provider_preserves_custom_chunk_limits_and_checks_total_before_chunks() {
+        use crate::evidence::fs;
+
+        let dir = scratch("bounded-custom");
+        let claim = claim_hex();
+        let roots = roots();
+        let chunks = [vec![0xa5; (1 << 20) + 1], Vec::new()];
+        let manifest = EvidenceManifestV1::build(
+            roots.network_domain,
+            &TransactionOutpoint::new(h(0xb0), 1),
+            &[5; 32],
+            roots.trace_root,
+            roots.output_root,
+            roots.execution_root,
+            roots.trace_chunk_count,
+            roots.retention_deadline,
+            &chunks,
+        );
+        let limits = ManifestLimits { max_chunk_bytes: 2 << 20, ..ManifestLimits::default() };
+        fs::publish(&dir, &claim, &manifest, &chunks).unwrap();
+        let (bytes, _) = fs::fetch_claim_material(&[dir.clone()], &claim, &roots, &limits, h(7)).unwrap();
+        assert_eq!(bytes, chunks[0]);
+
+        // A missing chunk cannot turn over-cap material into a fetch: the manifest must be refused first.
+        std::fs::remove_file(fs::chunk_path(&dir, manifest_id_v1(&manifest), 0)).unwrap();
+        let limits = ManifestLimits { max_total_bytes: 1 << 20, ..limits };
+        assert!(matches!(
+            fs::fetch_claim_material(&[dir.clone()], &claim, &roots, &limits, h(7)),
+            Err(fs::ClaimFetchError::NoAdmissibleManifest { offered: 1, .. })
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_provider_publication_cannot_replace_the_same_material_at_a_later_deadline() {
+        use crate::evidence::fs;
+
+        let dir = scratch("retention-replay");
+        let claim = claim_hex();
+        let raw = manifest();
+        let chunks = chunks();
+        let mut effective = raw.clone();
+        effective.retention_until_daa += 2;
+
+        let handle = server::start("127.0.0.1:0", dir.clone(), Default::default()).unwrap();
+        let url = handle.url();
+        let providers = open_providers_v1(&[ProviderSpecV1::Http(url.clone())]);
+        let provider = providers[0].as_ref();
+        publish_to_providers_v1(&claim, &raw, &chunks, &[provider], 1).unwrap();
+        publish_to_providers_v1(&claim, &effective, &chunks, &[provider], 1).unwrap();
+
+        let local = fs::FsProvider::new(&dir);
+        let start = std::sync::Barrier::new(3);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                let stale = open_providers_v1(&[ProviderSpecV1::Http(url.clone())]);
+                let refused = publish_to_providers_v1(&claim, &raw, &chunks, &[stale[0].as_ref()], 1).unwrap_err();
+                assert!(refused.per_provider[0].result.as_ref().unwrap_err().contains("409"));
+            });
+            scope.spawn(|| {
+                start.wait();
+                assert_eq!(fs::publish(&dir, &claim, &raw, &chunks).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+            });
+            start.wait();
+            local.put_manifest(&claim, &effective).unwrap();
+        });
+        drop(handle);
+
+        let restarted = server::start("127.0.0.1:0", dir.clone(), Default::default()).unwrap();
+        let opened = open_providers_v1(&[ProviderSpecV1::Http(restarted.url())]);
+        let roots = ClaimRoots { retention_deadline: effective.retention_until_daa, ..roots() };
+        let (bytes, _) = fetch_claim_material_any(&[opened[0].as_ref()], &claim, &roots, &ManifestLimits::default(), h(7)).unwrap();
+        assert_eq!(bytes, chunks.concat());
+        assert_eq!(opened[0].manifest_for(&claim).unwrap().unwrap(), effective);
+        let raw_id = manifest_id_v1(&raw);
+        let effective_id = manifest_id_v1(&effective);
+        assert_ne!(raw_id, effective_id);
+        for (index, bytes) in chunks.iter().enumerate() {
+            let index = index as u32;
+            assert_eq!(opened[0].fetch_chunk(raw_id, index).unwrap(), *bytes);
+            assert_eq!(opened[0].fetch_chunk(effective_id, index).unwrap(), *bytes);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                let before = std::fs::metadata(fs::chunk_path(&dir, raw_id, index)).unwrap();
+                let after = std::fs::metadata(fs::chunk_path(&dir, effective_id, index)).unwrap();
+                assert_eq!((before.dev(), before.ino()), (after.dev(), after.ino()), "HTTP extension reused the existing inode");
+            }
+        }
+        drop(restarted);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_extension_reuses_chunks_and_a_replacement_cannot_change_the_other_namespace() {
+        use crate::evidence::fs;
+        use std::os::unix::fs::MetadataExt;
+
+        let dir = scratch("retention-fs-links");
+        let claim = claim_hex();
+        let raw = manifest();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        let chunks = chunks();
+        let old = fs::chunk_path(&dir, manifest_id_v1(&raw), 0);
+        let new = fs::chunk_path(&dir, manifest_id_v1(&extended), 0);
+        fs::publish(&dir, &claim, &raw, &chunks).unwrap();
+        fs::publish(&dir, &claim, &extended, &chunks).unwrap();
+        fs::publish(&dir, &claim, &extended, &chunks).unwrap();
+        let inode = |p: &Path| {
+            let meta = std::fs::metadata(p).unwrap();
+            (meta.dev(), meta.ino())
+        };
+        assert_eq!(inode(&old), inode(&new));
+        FsProvider::new(&dir).put_chunk(manifest_id_v1(&raw), 0, b"another write").unwrap();
+        assert_ne!(inode(&old), inode(&new));
+        assert_eq!(std::fs::read(&new).unwrap(), chunks[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn http_retention_extension_falls_back_when_the_old_chunk_is_missing() {
+        let (handle, dir, provider) = up("retention-fallback");
+        let claim = claim_hex();
+        let raw = manifest();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        let chunks = chunks();
+        publish_to_providers_v1(&claim, &raw, &chunks, &[&provider], 1).unwrap();
+        let missing = crate::evidence::fs::chunk_path(&dir, manifest_id_v1(&raw), 1);
+        std::fs::remove_file(&missing).unwrap();
+        assert!(provider.put_manifest(&claim, &extended).unwrap_err().0.contains("409"));
+        assert_eq!(provider.manifest_for(&claim).unwrap(), Some(raw));
+        publish_to_providers_v1(&claim, &extended, &chunks, &[&provider], 1).unwrap();
+        assert_eq!(provider.manifest_for(&claim).unwrap(), Some(extended));
+        assert!(!missing.exists(), "fallback did not rewrite the older namespace");
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn http_retention_extension_reserves_the_existing_logical_quota_before_linking() {
+        use crate::evidence::fs;
+
+        let dir = scratch("retention-logical-cap");
+        let claim = claim_hex();
+        let raw = manifest();
+        let chunks = chunks();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        fs::publish(&dir, &claim, &raw, &chunks).unwrap();
+        let cfg = server::ServerConfig {
+            max_store_bytes: (chunks.iter().map(Vec::len).sum::<usize>() + 2 * borsh::to_vec(&raw).unwrap().len()) as u64,
+            ..Default::default()
+        };
+        let handle = server::start("127.0.0.1:0", dir.clone(), cfg).unwrap();
+        let providers = open_providers_v1(&[ProviderSpecV1::Http(handle.url())]);
+        let provider = providers[0].as_ref();
+        assert!(provider.put_manifest(&claim, &extended).unwrap_err().0.contains("507"));
+        assert_eq!(provider.manifest_for(&claim).unwrap(), Some(raw));
+        assert!(!fs::chunk_path(&dir, manifest_id_v1(&extended), 0).exists());
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_alias_staging_does_not_replace_a_concurrent_manifest() {
+        use crate::evidence::fs;
+
+        let dir = scratch("retention-manifest-cas");
+        let claim = claim_hex();
+        let raw = manifest();
+        let mut extended = raw.clone();
+        extended.retention_until_daa += 1;
+        let mut later = extended.clone();
+        later.retention_until_daa += 1;
+        let chunks = chunks();
+        fs::publish(&dir, &claim, &raw, &chunks).unwrap();
+        let provider = FsProvider::new(&dir);
+        for (i, chunk) in chunks.iter().enumerate() {
+            provider.put_chunk(manifest_id_v1(&later), i as u32, chunk).unwrap();
+        }
+        let raced = fs::try_extend_provider_manifest(
+            &dir,
+            &claim,
+            &extended,
+            &ManifestLimits::default(),
+            |_| {
+                provider.put_manifest(&claim, &later).unwrap();
+                Ok(())
+            },
+            || Ok(()),
+        );
+        assert_eq!(raced.unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(EvidenceProvider::manifest_for(&provider, &claim).unwrap(), Some(later));
+        assert_eq!(provider.fetch_chunk(manifest_id_v1(&raw), 0).unwrap(), chunks[0]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_publishers_can_retry_without_sharing_temporary_files() {
+        use crate::evidence::fs;
+
+        let dir = scratch("concurrent-publish");
+        let claim = claim_hex();
+        let manifest = manifest();
+        let chunks = chunks();
+        let id = manifest_id_v1(&manifest);
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    fs::publish(&dir, &claim, &manifest, &chunks).unwrap();
+                });
+            }
+        });
+        let target = fs::FsProvider::new(&dir);
+        assert_eq!(target.manifest_for(&claim).unwrap(), manifest);
+        let blocked = fs::chunk_path(&dir, id, 8);
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(target.put_chunk(id, 8, b"write interrupted").is_err());
+        let dir_entries = std::fs::read_dir(blocked.parent().unwrap()).unwrap();
+        assert!(dir_entries.into_iter().all(|entry| !entry.unwrap().file_name().to_string_lossy().ends_with(".partial")));
+        std::fs::remove_dir(&blocked).unwrap();
+        target.put_chunk(id, 8, b"retry").unwrap();
+        assert_eq!(std::fs::read(blocked).unwrap(), b"retry");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn streaming_publish_preflights_shape_and_all_chunks_before_writing() {
+        use crate::evidence::fs;
+
+        let source_dir = scratch("stream-source");
+        let target_dir = scratch("stream-target");
+        let source = fs::FsProvider::new(&source_dir);
+        let target = fs::FsProvider::new(&target_dir);
+        let claim = claim_hex();
+        let manifest = manifest();
+        let chunks = chunks();
+        fs::publish(&source_dir, &claim, &manifest, &chunks).unwrap();
+
+        let mut oversized = manifest.clone();
+        oversized.max_expanded_bytes = ManifestLimits::default().max_total_bytes + 1;
+        assert!(publish_from_provider_v1(&claim, &oversized, &source, &[&target]).unwrap_err().contains("declares"));
+
+        let id = manifest_id_v1(&manifest);
+        let damaged = fs::chunk_path(&source_dir, id, 2);
+        std::fs::write(&damaged, b"bad").unwrap();
+        assert!(publish_from_provider_v1(&claim, &manifest, &source, &[&target]).unwrap_err().contains("source chunk 2"));
+        assert!(!fs::chunk_path(&target_dir, id, 0).exists());
+        assert!(target.manifest_for(&claim).is_none());
+
+        std::fs::write(&damaged, &chunks[2]).unwrap();
+        let report = publish_from_provider_v1(&claim, &manifest, &source, &[&target]).unwrap();
+        assert_eq!(report.verified_copies(), 1);
+        assert_eq!(target.manifest_for(&claim).unwrap(), manifest);
+        std::fs::remove_dir_all(source_dir).unwrap();
+        std::fs::remove_dir_all(target_dir).unwrap();
     }
 
     #[test]
@@ -1432,8 +2047,259 @@ mod tests {
         h1.stop();
     }
 
+    #[test]
+    fn a_verifier_routes_numeric_http_and_preserves_directory_binding_and_retention() {
+        let (server, dir, writer) = up("verifier-route");
+        let claim = claim_hex().parse().unwrap();
+        let raw = manifest();
+        publish_to_providers_v1(&claim_hex(), &raw, &chunks(), &[&writer], 1).unwrap();
+
+        let configured =
+            format!(" {}, {}/, {}, https://127.0.0.1:443, http://localhost:8088", dir.display(), server.url(), server.url());
+        let (dirs, http, rejected) = split_verifier_evidence_sources_v1(&configured);
+        assert_eq!(dirs, [dir]);
+        assert_eq!(http.len(), 1);
+        assert_eq!(rejected, 2);
+        let (historical, _, _) = split_verifier_evidence_sources_v1("./dir#name, ./relative path");
+        assert_eq!(historical, [PathBuf::from("./dir#name"), PathBuf::from("./relative path")]);
+        let many = (1..=9).map(|port| format!("http://127.0.0.1:{port}")).collect::<Vec<_>>().join(",");
+        let (_, limited, rejected) = split_verifier_evidence_sources_v1(&many);
+        assert_eq!((limited.len(), rejected), (8, 1));
+        assert!(NumericEvidenceEndpointV1::parse("http://[::1]:8088/prefix").is_ok());
+        assert!(NumericEvidenceEndpointV1::parse("http://127.0.0.1:8088/\r\nInjected").is_err());
+        assert!(NumericEvidenceEndpointV1::parse("http://user@127.0.0.1:8088").is_err());
+        let deadline = || std::time::Instant::now() + Duration::from_secs(2);
+        let limits = ManifestLimits::default();
+        let (local, _) = crate::evidence::fs::fetch_claim_material(&dirs, &claim_hex(), &roots(), &limits, claim).unwrap();
+        assert_eq!(local, chunks().concat());
+        let (network, _) = fetch_verifier_http_material_v1(&http, claim, &roots(), &limits, deadline()).unwrap();
+        assert_eq!(network, local);
+        assert!(
+            fetch_verifier_http_material_v1(&http, claim, &roots(), &ManifestLimits { max_total_bytes: 1, ..limits }, deadline())
+                .is_err()
+        );
+
+        let extended_roots = ClaimRoots { retention_deadline: raw.retention_until_daa + 2, ..roots() };
+        let refusal = fetch_verifier_http_material_v1(&http, claim, &extended_roots, &limits, deadline()).unwrap_err();
+        assert!(matches!(refusal, ClaimFetchErrorV1::NoAdmissibleManifest { offered: 1, .. }));
+        assert!(crate::evidence::fs::fetch_claim_material(&dirs, &claim_hex(), &extended_roots, &limits, claim).is_err());
+
+        let mut extended = raw;
+        extended.retention_until_daa = extended_roots.retention_deadline;
+        publish_to_providers_v1(&claim_hex(), &extended, &chunks(), &[&writer], 1).unwrap();
+        assert_eq!(fetch_verifier_http_material_v1(&http, claim, &extended_roots, &limits, deadline()).unwrap().0, local);
+        assert!(
+            fetch_verifier_http_material_v1(&http, claim, &ClaimRoots { output_root: h(99), ..extended_roots }, &limits, deadline())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_verifier_http_origin_cannot_redirect_or_outlast_the_shared_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let redirect = TcpListener::bind("127.0.0.1:0").unwrap();
+        redirect.set_nonblocking(true).unwrap();
+        let destination = redirect.local_addr().unwrap();
+        let endpoint = NumericEvidenceEndpointV1::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let serve = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut request = [0; 512];
+            let mut read = 0;
+            while !request[..read].ends_with(b"\r\n\r\n") {
+                let n = stream.read(&mut request[read..]).unwrap();
+                assert!(n > 0);
+                read += n;
+            }
+            assert!(request[..read].starts_with(b"GET "));
+            write!(stream, "HTTP/1.1 302 Found\r\nLocation: http://{destination}/steal\r\nContent-Length: 0\r\n\r\n").unwrap();
+        });
+        let provider = endpoint.open(std::time::Instant::now() + Duration::from_secs(2));
+        assert!(provider.manifest_for(&claim_hex()).unwrap_err().0.contains("HTTP 302"));
+        serve.join().unwrap();
+        assert_eq!(redirect.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let endpoint = NumericEvidenceEndpointV1::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let serve = std::thread::spawn(move || {
+            let expires = std::time::Instant::now() + Duration::from_secs(2);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < expires => {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(_) => return,
+                }
+            };
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_millis(30));
+                if stream.write_all(b"x").is_err() {
+                    break;
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + Duration::from_millis(180);
+        let provider = endpoint.open(deadline);
+        assert!(provider.manifest_for(&claim_hex()).is_err());
+        // A second request shares the expired absolute deadline and cannot
+        // open another socket, even while a peer keeps writing small chunks.
+        std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+        assert!(provider.manifest_for(&claim_hex()).unwrap_err().0.contains("deadline"));
+        serve.join().unwrap();
+        let impossible = format!("{:x}\r\n", usize::MAX);
+        assert!(dechunk(impossible.as_bytes()).is_err());
+    }
+
     fn mixed_all<'a>(a: &'a HttpProvider, b: &'a HttpProvider, c: &'a FsProvider) -> Vec<&'a dyn EvidenceProvider> {
         vec![a, b, c]
+    }
+
+    #[test]
+    fn reference_provider_rejects_excess_connections_and_recovers_after_slow_peers_expire() {
+        let dir = scratch("provider-connection-limit");
+        let timeout = Duration::from_millis(700);
+        let handle = server::start_bounded("127.0.0.1:0", dir.clone(), server::ServerConfig::default(), 2, timeout).unwrap();
+        let mut slow_head = TcpStream::connect(handle.addr).unwrap();
+        slow_head.write_all(b"GET /redemptions/index HTTP/1.1\r\n").unwrap();
+        let mut slow_body = TcpStream::connect(handle.addr).unwrap();
+        let manifest = format!("PUT /chunks/{}/0.chunk HTTP/1.1\r\nContent-Length: 1024\r\n\r\n", h(7));
+        slow_body.write_all(manifest.as_bytes()).unwrap();
+
+        for _ in 0..12 {
+            let mut excess = TcpStream::connect(handle.addr).unwrap();
+            excess.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut bytes = Vec::new();
+            excess.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.starts_with(b"HTTP/1.1 503 Service Unavailable"), "{bytes:?}");
+        }
+
+        // Keep both requests unfinished and continually active, well past their total deadline.
+        let trickle = std::thread::spawn(move || {
+            for _ in 0..35 {
+                let _ = slow_head.write_all(b"x");
+                let _ = slow_body.write_all(b"x");
+                std::thread::sleep(Duration::from_millis(35));
+            }
+        });
+        let http = StdHttp { timeout: Duration::from_millis(250) };
+        let url = format!("{}/redemptions/index", handle.url());
+        let expires = Instant::now() + Duration::from_millis(1400);
+        loop {
+            if http.request("GET", &url, None, 4096).is_ok_and(|r| r.status == 200 && r.body.is_empty()) {
+                break;
+            }
+            assert!(Instant::now() < expires, "honest request was still refused after the slow peers' deadline");
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        trickle.join().unwrap();
+        assert!(!dir.join("chunks").exists(), "the unfinished PUT did not publish anything");
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reference_provider_write_deadline_releases_a_stalled_reader() {
+        let dir = scratch("provider-write-limit");
+        let handle =
+            server::start_bounded("127.0.0.1:0", dir.clone(), server::ServerConfig::default(), 1, Duration::from_millis(800)).unwrap();
+        let unit = crate::public_material::material_unit_path(&h(7), "held-leaf-1");
+        let file = dir.join(&unit);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::File::create(file).unwrap().set_len(16 << 20).unwrap();
+        let mut stalled = TcpStream::connect(handle.addr).unwrap();
+        stalled.write_all(format!("GET /{unit} HTTP/1.1\r\n\r\n").as_bytes()).unwrap();
+
+        let mut excess = TcpStream::connect(handle.addr).unwrap();
+        excess.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut bytes = Vec::new();
+        excess.read_to_end(&mut bytes).unwrap();
+        assert!(bytes.starts_with(b"HTTP/1.1 503 Service Unavailable"));
+        // Keep the stalled peer open and unread while the server releases its slot.
+        let http = StdHttp { timeout: Duration::from_millis(250) };
+        let url = format!("{}/redemptions/index", handle.url());
+        let expires = Instant::now() + Duration::from_millis(1700);
+        loop {
+            if http.request("GET", &url, None, 4096).is_ok_and(|r| r.status == 200 && r.body.is_empty()) {
+                break;
+            }
+            assert!(Instant::now() < expires, "the stalled response never released its request slot");
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        drop(stalled);
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reference_provider_bounds_existing_files_and_manifest_backing_reads() {
+        use crate::evidence::fs;
+        use crate::public_material::{MaterialEntryV1, MaterialManifestV1, material_manifest_path, material_unit_path, unit_hash_v1};
+
+        let dir = scratch("bounded-server");
+        let mut config = server::ServerConfig::default();
+        config.limits.max_chunk_bytes = 4000;
+        let handle = server::start("127.0.0.1:0", dir.clone(), config).unwrap();
+        let origin = handle.url();
+        let http = StdHttp::default();
+        let request = |method: &str, path: &str, body| http.request(method, &format!("{origin}/{path}"), body, 4096).unwrap();
+
+        let manifest = manifest();
+        let id = manifest_id_v1(&manifest);
+        let claim_hex = claim_hex();
+        let claim = h(7);
+        let chunk_rel = format!("chunks/{id}/0.chunk");
+        let manifest_rel = format!("claims/{claim_hex}.manifest");
+        let unit_rel = material_unit_path(&claim, "held-leaf-1");
+        let material_rel = material_manifest_path(&claim);
+        let chunks = chunks();
+        fs::publish(&dir, &claim_hex, &manifest, &chunks).unwrap();
+        let response = request("GET", &chunk_rel, None);
+        assert_eq!((response.status, response.body), (200, chunks[0].clone()));
+        let response = request("HEAD", &chunk_rel, None);
+        assert_eq!((response.status, response.body.len()), (200, 0));
+
+        for path in [&chunk_rel, &manifest_rel, &unit_rel, &material_rel] {
+            let file = dir.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::File::create(file).unwrap().set_len(5u64 << 30).unwrap();
+            for method in ["GET", "HEAD"] {
+                assert_eq!(request(method, path, None).status, 413, "{method} {path}");
+            }
+        }
+        let manifest_bytes = borsh::to_vec(&manifest).unwrap();
+        assert_eq!(request("PUT", &manifest_rel, Some(&manifest_bytes)).status, 409);
+        std::fs::write(dir.join(&chunk_rel), &chunks[0]).unwrap();
+        assert_eq!(request("PUT", &manifest_rel, Some(&manifest_bytes)).status, 201);
+
+        let material_bytes = b"unit";
+        let material_manifest = |stem: &str| {
+            borsh::to_vec(&MaterialManifestV1::KernelClaim {
+                version: 1,
+                network_domain: h(9),
+                claim,
+                positions: vec![(0, 1)],
+                entries: vec![MaterialEntryV1 {
+                    stem: stem.into(),
+                    len: material_bytes.len() as u32,
+                    hash: unit_hash_v1(material_bytes),
+                }],
+                retain_until_daa: 10_000,
+            })
+            .unwrap()
+        };
+        let unit_manifest = material_manifest("held-leaf-1");
+        assert_eq!(request("PUT", &material_rel, Some(&unit_manifest)).status, 409);
+        std::fs::write(dir.join(&unit_rel), material_bytes).unwrap();
+        assert_eq!(request("PUT", &material_rel, Some(&unit_manifest)).status, 201);
+
+        std::fs::write(dir.join("material/escaped.unit"), material_bytes).unwrap();
+        let escaping_manifest = material_manifest("../escaped");
+        assert_eq!(request("PUT", &material_rel, Some(&escaping_manifest)).status, 409);
+        assert_eq!(request("GET", &material_rel, None).body, unit_manifest);
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

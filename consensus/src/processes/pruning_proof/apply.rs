@@ -9,10 +9,11 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::BlockLevel;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
-    blockhash::{BlockHashes, ORIGIN},
+    blockhash::{BlockHashExtensions, BlockHashes, ORIGIN},
     errors::pruning::{PruningImportError, PruningImportResult},
     header::Header,
     pruning::PruningPointProof,
+    topological_order::{is_parent_first, stable_topological_order},
     trusted::TrustedBlock,
 };
 use kaspa_core::{debug, trace};
@@ -25,9 +26,9 @@ use crate::{
     model::{
         services::reachability::ReachabilityService,
         stores::{
-            ghostdag::{GhostdagData, GhostdagStore},
-            headers::HeaderStore,
-            pruning::PruningProofDescriptor,
+            ghostdag::{GhostdagData, GhostdagStore, GhostdagStoreReader},
+            headers::{HeaderStore, HeaderStoreReader},
+            pruning::{PruningProofDescriptor, PruningStoreReader},
             reachability::StagingReachabilityStore,
             relations::StagingRelationsStore,
             selected_chain::SelectedChainStore,
@@ -44,6 +45,75 @@ use crate::{
 use super::PruningProofManager;
 
 impl PruningProofManager {
+    /// Inspect only the applied proof's complete level-0 chain. The import
+    /// reachability tree spans the union of every proof level and is not the
+    /// GHOSTDAG selected-parent chain. Normal block statuses are not created by
+    /// proof import either, so neither public block-query gate is suitable here.
+    pub fn chain_contains_checkpoint(&self, point: BlockHash, checkpoint: BlockHash, daa_score: u64) -> PruningImportResult<bool> {
+        let unavailable = |message: String| PruningImportError::PruningPointImportContextUnavailable(point, message);
+        let pruning = self.pruning_point_store.read();
+        if pruning.pruning_point().map_err(|e| unavailable(format!("checkpoint target: {e}")))? != point {
+            return Err(unavailable("checkpoint target is not the applied pruning point".into()));
+        }
+        let descriptor = pruning.pruning_proof_descriptor().map_err(|e| unavailable(format!("checkpoint descriptor: {e}")))?;
+        let (Some(&root), Some(&tip), Some(&count)) = (descriptor.roots.first(), descriptor.tips.first(), descriptor.counts.first())
+        else {
+            return Err(unavailable("checkpoint proof has no level-0 descriptor".into()));
+        };
+        if descriptor.pruning_point != point || tip != point || count == 0 {
+            return Err(unavailable("checkpoint proof descriptor does not name the applied point".into()));
+        }
+        // A truncated proof may recompute GHOSTDAG on an incomplete history.
+        // Only a genesis-rooted level 0 has the complete DAG needed to judge
+        // historical selected-chain checkpoints (and exact work validation).
+        if root != self.genesis_hash {
+            return Err(unavailable(format!(
+                "historical checkpoint chain requires a genesis-rooted level-0 proof: observed root {root}, expected genesis {}",
+                self.genesis_hash
+            )));
+        }
+        let read_header =
+            |hash| self.headers_store.get_header(hash).map_err(|e| unavailable(format!("checkpoint header {hash}: {e}")));
+        let checkpoint_header = read_header(checkpoint)?;
+        if checkpoint_header.daa_score != daa_score {
+            return Err(unavailable("checkpoint header differs from its pre-checked DAA score".into()));
+        }
+        let root_header = read_header(root)?;
+        let point_header = read_header(point)?;
+        if checkpoint_header.daa_score < root_header.daa_score || checkpoint_header.daa_score > point_header.daa_score {
+            return Err(unavailable("checkpoint lies outside the applied proof's level-0 window".into()));
+        }
+        // The pre-check established checkpoint containment. Missing local data
+        // after import must not become a peer's checkpoint violation.
+        self.ghostdag_store
+            .get_selected_parent(checkpoint)
+            .map_err(|e| unavailable(format!("checkpoint ghostdag {checkpoint}: {e}")))?;
+        let mut seen = BlockHashSet::new();
+        let mut current = point;
+        let mut found = false;
+        loop {
+            if !seen.insert(current) || seen.len() as u64 > count {
+                return Err(unavailable("checkpoint selected-parent chain cycles or exceeds the proof's level-0 count".into()));
+            }
+            read_header(current)?;
+            let parent = self
+                .ghostdag_store
+                .get_selected_parent(current)
+                .map_err(|e| unavailable(format!("checkpoint chain {current}: {e}")))?;
+            found |= current == checkpoint;
+            if current == root {
+                if !parent.is_origin() {
+                    return Err(unavailable("checkpoint proof root has an out-of-window selected parent".into()));
+                }
+                return Ok(found);
+            }
+            if parent.is_origin() {
+                return Err(unavailable("checkpoint selected-parent chain ends before the proof root".into()));
+            }
+            current = parent;
+        }
+    }
+
     pub fn apply_proof(&self, proof: PruningPointProof, trusted_set: &[TrustedBlock]) -> PruningImportResult<()> {
         // Following validation of a pruning proof, various consensus storages must be updated
 
@@ -52,6 +122,12 @@ impl PruningProofManager {
 
         // Build the descriptor based on the new proof before modifying it
         let descriptor = PruningProofDescriptor::from_proof(&proof, pruning_point, true);
+        // Validation re-derives exact level-0 GHOSTDAG over the complete past
+        // when this proof starts at genesis. The trusted package is only a
+        // recent sub-DAG: its decoder removes out-of-package mergeset entries
+        // and replaces an out-of-package selected parent with ORIGIN, even
+        // when those blocks are present in this proof.
+        let complete_level_zero = proof[0].first().is_some_and(|header| header.hash == self.genesis_hash);
 
         // Create a copy of the proof, since we're going to be mutating the proof passed to us
         let proof_sets = (0..=self.max_block_level)
@@ -81,10 +157,10 @@ impl PruningProofManager {
                 expanded_proof[current_proof_level as usize].push(tb.block.header.clone());
             });
         }
-        // topologically sort every level in the proof
-        expanded_proof.iter_mut().for_each(|level_proof| {
-            level_proof.sort_by(|a, b| a.blue_work.cmp(&b.blue_work));
-        });
+        // Zero-weight PALW parents and children may tie on blue work. Sorting
+        // by work alone is not topological, especially after appending trusted
+        // headers. Do not let the level-0 ancestor filter silently omit a parent.
+        self.order_expanded_proof(&mut expanded_proof)?;
 
         self.populate_reachability_and_headers(&expanded_proof)?;
 
@@ -124,7 +200,9 @@ impl PruningProofManager {
             );
 
             self.relations_store.write().insert(header.hash, parents.clone()).unwrap();
-            let gd = if let Some(gd) = trusted_gd_map.get(&header.hash) {
+            let trusted_gd =
+                trusted_gd_map.get(&header.hash).filter(|_| !(complete_level_zero && proof_sets[0].contains(&header.hash)));
+            let gd = if let Some(gd) = trusted_gd {
                 gd.clone()
             } else {
                 let calculated_gd = self.ghostdag_manager.ghostdag(&parents);
@@ -176,6 +254,26 @@ impl PruningProofManager {
         Ok(())
     }
 
+    /// Preserve the existing work order wherever it already respects parent
+    /// dependencies. This changes import construction order, not GHOSTDAG order.
+    fn order_expanded_proof(&self, proof: &mut PruningPointProof) -> PruningImportResult<()> {
+        let point = proof.first().and_then(|level| level.last()).map_or(ORIGIN, |header| header.hash);
+        for (level, headers) in proof.iter_mut().enumerate() {
+            let mut ordered = std::mem::take(headers);
+            ordered.sort_by(|a, b| a.blue_work.cmp(&b.blue_work));
+            let parents = |header: &Arc<Header>| self.parents_manager.parents_at_level(header, level as BlockLevel).to_vec();
+            ordered = stable_topological_order(ordered, |header| header.hash, parents);
+            if !is_parent_first(&ordered, |header| header.hash, parents) {
+                return Err(PruningImportError::PruningPointImportContextUnavailable(
+                    point,
+                    format!("proof level {level} has cyclic parent dependencies"),
+                ));
+            }
+            *headers = ordered;
+        }
+        Ok(())
+    }
+
     /// Block levels for `headers`, in order, computed in bounded parallel batches.
     ///
     /// Callers must gate every header first to enforce the network's algorithm and shape rules.
@@ -223,9 +321,6 @@ impl PruningProofManager {
         let levels = self.gated_block_levels(proof)?;
         for header in proof.iter().flatten().cloned() {
             if let Vacant(e) = dag.entry(header.hash) {
-                let block_level = levels[&header.hash];
-                self.headers_store.insert(header.hash, header.clone(), block_level).unwrap();
-
                 let mut parents = BlockHashSet::with_capacity(header.direct_parents().len() * 2);
                 // We collect all available parent relations in order to maximize reachability information.
                 // By taking into account parents from all levels we ensure that the induced DAG has valid
@@ -249,10 +344,24 @@ impl PruningProofManager {
 
         debug!("Estimated proof size: {}, actual size: {}", capacity_estimate, dag.len());
 
-        for reverse_sortable_block in up_heap.into_sorted_iter() {
-            // TODO: Convert to into_iter_sorted once it gets stable
-            let hash = reverse_sortable_block.0.hash;
+        // The heap's (work, hash) order can put an equal-work child before its
+        // parent. Reachability queries require every in-proof parent to exist,
+        // including parent relations contributed by higher levels.
+        let ordered = stable_topological_order(
+            up_heap.into_sorted_iter().map(|block| block.0.hash).collect(),
+            |hash| *hash,
+            |hash| dag[hash].parents.iter().copied().collect::<Vec<_>>(),
+        );
+        if !is_parent_first(&ordered, |hash| *hash, |hash| dag[hash].parents.iter().copied().collect::<Vec<_>>()) {
+            return Err(PruningImportError::PruningPointImportContextUnavailable(
+                ordered.first().copied().unwrap_or(ORIGIN),
+                "proof reachability has cyclic parent dependencies".into(),
+            ));
+        }
+
+        for hash in ordered {
             let dag_entry = dag.get(&hash).unwrap();
+            self.headers_store.insert(hash, dag_entry.header.clone(), levels[&hash]).unwrap();
 
             // Filter only existing parents
             let parents_in_dag = BinaryHeap::from_iter(
@@ -266,13 +375,37 @@ impl PruningProofManager {
 
             let reachability_read = self.reachability_store.upgradable_read();
 
-            // Find the maximal parent antichain from the possibly redundant set of existing parents
+            // Find the maximal parent antichain. With equal work, hash order
+            // can visit an ancestor before its descendant, so remove previously
+            // visited ancestors too instead of assuming descendants arrive first.
+            let ancestor = |this, queried| {
+                reachability_read.try_is_dag_ancestor_of(this, queried).map_err(|error| {
+                    PruningImportError::PruningPointImportContextUnavailable(
+                        hash,
+                        format!("reachability parent query {this} -> {queried}: {error:?}"),
+                    )
+                })
+            };
             let mut reachability_parents: Vec<SortableBlock> = Vec::new();
             for parent in parents_in_dag.into_sorted_iter() {
-                if reachability_read.is_dag_ancestor_of_any(parent.hash, &mut reachability_parents.iter().map(|parent| parent.hash)) {
+                let mut covered = false;
+                for existing in &reachability_parents {
+                    if ancestor(parent.hash, existing.hash)? {
+                        covered = true;
+                        break;
+                    }
+                }
+                if covered {
                     continue;
                 }
-
+                let mut i = 0;
+                while i < reachability_parents.len() {
+                    if ancestor(reachability_parents[i].hash, parent.hash)? {
+                        reachability_parents.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
                 reachability_parents.push(parent);
             }
             let reachability_parents_hashes =
@@ -309,3 +442,7 @@ impl PruningProofManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "apply_parent_order_tests.rs"]
+mod parent_order_tests;

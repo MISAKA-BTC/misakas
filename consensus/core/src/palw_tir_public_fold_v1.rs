@@ -3,6 +3,7 @@
 //! Quotes, local Ready files and signature validation alone never buy standing.
 use super::*;
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+use crate::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1;
 use crate::palw_tir_public_claim_v1::{PalwTirPublicClaimV1 as Frame, palw_tir_public_claim_v1};
 use crate::palw_tir_public_owned_v1::{
     PalwTirPublicContractV1, PalwTirPublicOwnedActionV1 as Action, PalwTirPublicOwnedEffectV1 as Effect, PalwTirPublicOwnedV1,
@@ -490,7 +491,7 @@ fn original_plan_v1(
     ),
     PalwStateV2Error,
 > {
-    original_plan_mode_v4(b, now_daa, original, header, false)
+    original_plan_mode_v4(b, now_daa, original, header, false, None)
 }
 
 #[allow(clippy::type_complexity)]
@@ -500,6 +501,7 @@ fn original_plan_mode_v4(
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     historical_clock3: bool,
+    diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
 ) -> Result<
     (
         crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
@@ -509,7 +511,7 @@ fn original_plan_mode_v4(
     ),
     PalwStateV2Error,
 > {
-    use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_family_native_v2};
+    use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_native_mode_v3};
     let mut native = rules(b)?;
     native.maximum_leaves = b.state.class_step_ladder_v1(&original.job.class_id, native.maximum_leaves);
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
@@ -551,7 +553,7 @@ fn original_plan_mode_v4(
         } else {
             crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3
         };
-        derive_tir_public_allocation_family_native_v2(
+        derive_tir_public_allocation_native_mode_v3(
             &geometry,
             original,
             header,
@@ -561,10 +563,12 @@ fn original_plan_mode_v4(
             inventory,
             native,
             table.as_ref(),
+            true,
+            diagnostics,
         )
     } else {
-        crate::palw_tir_public_allocation_v1::derive_tir_public_allocation_native_v2(
-            &geometry, original, header, record, layout, semantics, inventory, native,
+        derive_tir_public_allocation_native_mode_v3(
+            &geometry, original, header, record, layout, semantics, inventory, native, None, false, diagnostics,
         )
     };
     let plan = match quoted.map_err(|why| match why {
@@ -593,6 +597,21 @@ pub fn palw_tir_public_original_quote_v1(
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
 ) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
+    palw_tir_public_original_quote_with_diagnostics_v1(base, params, extras, now_daa, original, header, None)
+}
+
+pub fn palw_tir_public_original_quote_with_diagnostics_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    mut diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
+) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
+    if let Some(out) = diagnostics.as_mut() {
+        **out = None;
+    }
     if original.job.tail.is_some() && !params.family_supplier_active_at(now_daa) {
         return Ok(None);
     }
@@ -614,7 +633,7 @@ pub fn palw_tir_public_original_quote_v1(
         }
     }
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
-    let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header)?;
+    let (plan, _, _, geometry) = original_plan_mode_v4(&builder, now_daa, original, header, false, diagnostics)?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
     let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
     // Mirrors `prepare_original_v1`: a semantic stage is framed only where its staged court can open (G-18).
@@ -778,7 +797,7 @@ pub(super) fn prepare_original_v1(
         // Replay/compatible pending consent: only an EXACT native old3 quote
         // that ALREADY covers adopted F07 may select old3. A carried horizon
         // or signature alone never supplies derivation/material authority.
-        let historical = original_plan_mode_v4(b, ctx.daa_score, original, header, true)?;
+        let historical = original_plan_mode_v4(b, ctx.daa_score, original, header, true, None)?;
         let need = crate::palw_court_clock_v2::palw_court_clock_v2_required_retention_with(
             ctx.daa_score,
             palw_da_disclose_window_daa_v1(b.params),
@@ -1916,11 +1935,12 @@ fn apply_witness_part_v1(
     }
     let key = Key::TirWitness(claim_id, filer);
     let existing = match b.state.staged_court_row_v1(&key) {
-        Some(Row::TirWitness(row)) => Some(row.as_ref().clone()),
+        Some(Row::TirWitness(row)) => Some(row.as_ref()),
         Some(_) => return Err(refused("TIR staged witness key holds another row")),
         None => None,
     };
-    let mut row = match (existing.clone(), part.offset) {
+    let had_prefix = existing.is_some();
+    let mut row = match (existing, part.offset) {
         (None, 0) => Witness {
             claim: claim_id,
             filer,
@@ -1930,14 +1950,30 @@ fn apply_witness_part_v1(
             until_daa: terms.collect_until_daa,
             received: Vec::new(),
         },
-        (Some(row), offset) if offset != 0 => row,
+        (Some(prefix), offset) if offset != 0 => {
+            if (prefix.total_bytes, prefix.digest, prefix.allocation_id, prefix.received.len() as u64)
+                != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, offset)
+            {
+                return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
+            }
+            // Keep the old committed prefix available for rollback, and copy
+            // it once into the exact-sized candidate assembly.
+            let length =
+                prefix.received.len().checked_add(part.bytes.len()).ok_or_else(|| refused("TIR staged witness length overflow"))?;
+            let mut received = Vec::with_capacity(length);
+            received.extend_from_slice(&prefix.received);
+            Witness {
+                claim: prefix.claim,
+                filer: prefix.filer,
+                allocation_id: prefix.allocation_id,
+                total_bytes: prefix.total_bytes,
+                digest: prefix.digest,
+                until_daa: prefix.until_daa,
+                received,
+            }
+        }
         _ => return Err(refused("TIR staged witness part is out of order (a witness opens once, at offset 0)")),
     };
-    if (row.total_bytes, row.digest, row.allocation_id, row.received.len() as u64)
-        != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, part.offset)
-    {
-        return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
-    }
     row.received.extend_from_slice(&part.bytes);
     if (row.received.len() as u64) < row.total_bytes {
         row.check_structure_v1(claim_id, filer).map_err(refused)?;
@@ -1950,7 +1986,7 @@ fn apply_witness_part_v1(
     }
     let evidence =
         crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1(&row.received).map_err(refused)?;
-    if existing.is_some() && !b.state.court_service_holds_material_v1(&key) {
+    if had_prefix && !b.state.court_service_holds_material_v1(&key) {
         b.write_staged_row_v1(key, None)?;
     }
     // A recovery hold retains the existing partial row, without changing the

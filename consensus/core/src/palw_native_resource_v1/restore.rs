@@ -141,7 +141,7 @@ fn restore_with_reservation_and_check_v1(
         let shape = preflight_native_carriage_v1(canonical.as_slice(), bytes as u64)
             .map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
         let restore = shape.memory_requests_v1().map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
-        ticket.grow_memory_v1(restore).map_err(NativeDecodeErrorV1::Resource)?;
+        ticket.grow_pending_memory_v1(restore).map_err(NativeDecodeErrorV1::Resource)?;
     }
     let state = carriage.into_state_v3(params, expected_root, uncertified_weightless, canonical_work_daa).map_err(|e| match e {
         PalwStateV2Error::NativeResource(why) => NativeDecodeErrorV1::Resource(why),

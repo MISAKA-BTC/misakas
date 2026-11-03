@@ -490,3 +490,50 @@ async fn template_parent_snapshot_non_palw_entry_keeps_baseline() {
     ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
     assert_ne!(ctx.consensus.get_sink(), old_sink);
 }
+
+#[tokio::test]
+async fn producer_context_requires_exact_parent_state_clock_and_stable_import() {
+    use crate::model::stores::{pruning::PruningStoreReader, virtual_state::VirtualStateStoreReader};
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor().clone();
+    let api = ctx.consensus.consensus_clone();
+    let actual = vp.virtual_stores.read().state.get().unwrap();
+    let sink = actual.ghostdag_data.selected_parent;
+    let (point, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().unwrap();
+    assert_eq!(point, sink);
+    let root = vp.palw_committed_root_v1(&state);
+    let epoch = api.palw_producer_context_v1(sink, actual.daa_score, root).unwrap();
+    assert_eq!(api.palw_producer_context_v1(sink, actual.daa_score, root).unwrap(), epoch);
+    let parent = vp.ghostdag_store.get_selected_parent(sink).unwrap();
+    assert!(api.palw_producer_context_v1(parent, actual.daa_score, root).is_err());
+    assert!(api.palw_producer_context_v1(sink, actual.daa_score + 1, root).is_err());
+    assert!(api.palw_producer_context_v1(sink, actual.daa_score, kaspa_consensus_core::Hash64::from_u64_word(0xBAD)).is_err());
+    let (_, delta) = vp.palw_state_v2_store.read().delta_of(sink).unwrap();
+    let parent_state = kaspa_consensus_core::palw_state_v2::revert_delta_v2(&state, &delta, &bundle.state).unwrap();
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store.set_tip_for_tests(parent, &parent_state).unwrap();
+        store.delete_delta_for_tests(sink).unwrap();
+    }
+    assert!(api.palw_producer_context_v1(sink, actual.daa_score, root).is_err(), "missing own state cannot authorize inference");
+    vp.palw_state_v2_store.write().set_tip_for_tests(sink, &state).unwrap();
+    assert_eq!(api.palw_producer_context_v1(sink, actual.daa_score, root).unwrap(), epoch, "restored checked context resumes");
+    let pp = vp.pruning_point_store.read().pruning_point().unwrap();
+    vp.begin_pruning_point_import(pp).unwrap();
+    assert!(
+        api.palw_producer_context_v1(sink, actual.daa_score, root).is_err(),
+        "an active import holds even an otherwise current template"
+    );
+}

@@ -13361,7 +13361,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     let _ = vp.palw_adopt_class_carriage_v1_impl(class_id, &[]);
     let _ = vp.palw_seat_duties_v2_impl(&mine);
     let _ = vp.palw_producer_facts_v2_impl(class_id, Some(bond_key.0));
-    let _ = vp.palw_fp_spendable_v3_impl(bond_key.0);
+    let _ = vp.palw_fp_spendable_with_parent_v3_impl(bond_key.0);
     let _ = vp.palw_locked_bond_outpoints_v2_impl();
     let _ = vp.palw_v2_receipt_quorum_assemble_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1), &[]);
     // ADR-0152 P2-10: claim row v3 and `getPalwVesting` (op 199) — every query shape, each a read

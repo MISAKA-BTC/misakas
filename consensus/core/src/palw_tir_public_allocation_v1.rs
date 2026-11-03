@@ -175,6 +175,47 @@ pub enum PalwTirPublicAllocationMissingV1 {
         allowed: u64,
     },
 }
+/// Read-only breakdown of a fully derived quote refused only by its horizon.
+/// The resource envelopes are quoted maxima, not observed use or allocations.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwTirDoorDiagnosticsV1 {
+    pub accepted_daa: u64,
+    pub preparation_daa: u64,
+    pub open_window_daa: u64,
+    pub owner_queue_wait_daa: u64,
+    pub acquisition_daa: u64,
+    pub semantic_daa: u64,
+    pub semantic_families: Vec<PalwTirSemanticFamilyDiagnosticsV1>,
+    pub semantic_inventory: Option<PalwRenderingResourcePlanV1>,
+    pub semantic_resources: Option<PalwRenderingResourcePlanV1>,
+    pub filing_daa: u64,
+    pub collection_daa: u64,
+    pub total_daa: u64,
+    pub limit_daa: u64,
+    pub reorg_replay_moves: u64,
+    pub reorg_reacquire_logical_units: u64,
+    pub maximum_fresh_logical_units: u64,
+    pub maximum_owner_turns: u64,
+    pub maximum_native_signature_checks: u64,
+    pub reorg_retention_daa: u64,
+    pub acquisition_resources: PalwRenderingResourcePlanV1,
+    pub total_resources: PalwRenderingResourcePlanV1,
+    pub prepared_disk_bytes: u64,
+    pub executor_disk_bytes: u64,
+    pub maximum_terminal_witness_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwTirSemanticFamilyDiagnosticsV1 {
+    pub family: crate::palw_staged_bundle_v1::PalwStagedFamilyV1,
+    pub open_until_daa: u64,
+    pub stream_until_daa: u64,
+    pub acquisition: Option<PalwRenderingResourcePlanV1>,
+    pub resources: PalwRenderingResourcePlanV1,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwTirPublicAllocationQuoteV1 {
     Complete(Box<PalwTirPublicAllocationPlanV1>),
@@ -616,7 +657,7 @@ pub fn derive_tir_public_allocation_v1(
     )?;
     let source =
         PalwTirPublicSourceV1::new_v1(record, layout, header, original.execution_root, original.trace_root, rules.maximum_leaves)?;
-    finish_allocation_source_v2(geometry, original, header, record, layout, semantics, inventory, rules, &source, None)
+    finish_allocation_source_v2(geometry, original, header, record, layout, semantics, inventory, rules, &source, None, None)
 }
 
 #[cfg(test)]
@@ -684,11 +725,28 @@ pub fn derive_tir_public_allocation_native_v2(
     inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
     rules: PalwTirPublicAllocationRulesV1,
 ) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-    derive_tir_public_allocation_native_mode_v3(geometry, original, header, record, layout, semantics, inventory, rules, None, false)
+    derive_tir_public_allocation_native_with_diagnostics_v2(
+        geometry, original, header, record, layout, semantics, inventory, rules, None,
+    )
 }
 
-/// New supplier contract allocation: exact table sizing is accepted only from
-/// the opaque native authenticator. Legacy callers retain their full-cap plan.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_tir_public_allocation_native_with_diagnostics_v2(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    rules: PalwTirPublicAllocationRulesV1,
+    diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
+) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    derive_tir_public_allocation_native_mode_v3(
+        geometry, original, header, record, layout, semantics, inventory, rules, None, false, diagnostics,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn derive_tir_public_allocation_family_native_v2(
     geometry: &PalwStagedClaimGeometryV1,
@@ -701,10 +759,10 @@ pub fn derive_tir_public_allocation_family_native_v2(
     rules: PalwTirPublicAllocationRulesV1,
     table: Option<&crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
 ) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-    derive_tir_public_allocation_native_mode_v3(geometry, original, header, record, layout, semantics, inventory, rules, table, true)
+    derive_tir_public_allocation_native_mode_v3(geometry, original, header, record, layout, semantics, inventory, rules, table, true, None)
 }
 #[allow(clippy::too_many_arguments)]
-fn derive_tir_public_allocation_native_mode_v3(
+pub(crate) fn derive_tir_public_allocation_native_mode_v3(
     geometry: &PalwStagedClaimGeometryV1,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
@@ -715,6 +773,7 @@ fn derive_tir_public_allocation_native_mode_v3(
     mut rules: PalwTirPublicAllocationRulesV1,
     table: Option<&crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
     family: bool,
+    mut diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
 ) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     if family {
         if rules.clock.version != crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4 {
@@ -724,6 +783,9 @@ fn derive_tir_public_allocation_native_mode_v3(
         return Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(
             "family clock cannot enter legacy native allocation".into(),
         ));
+    }
+    if let Some(out) = diagnostics.as_mut() {
+        **out = None;
     }
     #[cfg(test)]
     note_native_header_identity_v2(0);
@@ -766,7 +828,7 @@ fn derive_tir_public_allocation_native_mode_v3(
     )?;
     #[cfg(test)]
     note_allocation_source_v2(1);
-    let result = finish_allocation_source_v2(geometry, original, header, record, layout, semantics, inventory, rules, &source, table)
+    let result = finish_allocation_source_v2(geometry, original, header, record, layout, semantics, inventory, rules, &source, table, diagnostics)
         .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode);
     // source remains borrowed by the complete native derivation, including
     // its last source-ID field; this owner does not cover other geometry.
@@ -793,6 +855,7 @@ fn finish_allocation_source_v2(
     rules: PalwTirPublicAllocationRulesV1,
     source: &PalwTirPublicSourceV1,
     table: Option<&crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
+    diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
 ) -> Result<PalwTirPublicAllocationQuoteV1, String> {
     let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, rules.maximum_leaves)?;
     let binding = header.resolve_registered_layout_v1(record, layout, original.execution_root, rules.maximum_leaves)?;
@@ -970,14 +1033,14 @@ fn finish_allocation_source_v2(
     let preparation_until_daa = add(geometry.accepted_daa, preparation.preparation_daa)?;
     // §11: the Open window holds one response window AND the Open's own inclusion (an Open sent at the preparation door must be
     // includable before the window closes; the candidate's 1-DAA window was shorter than one inclusion margin).
-    let open = add(preparation_until_daa, add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?)?;
+    let open_window = add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?;
+    let open = add(preparation_until_daa, open_window)?;
     // **Audit §10 (the frame pricing fix): the stream door is the honest owner's critical path** — its localization turns plus
     // the restart turns, each at the span of the largest unit (`acquisition.envelope.inclusion_daa`); its own debits and the
     // custodians' ride inside those spans. Before the fix the door was every component's inclusion summed end to end (each
     // WorkDebit and each move one margin, each turn one `acquisition_daa`, the controls' writes and the executor's carriers after
     // Open too): 6e7–2.4e8 DAA at 6 custodians. Cold work and Ready stay before Open (the preparation door).
     // §11 (c): the owner queue's worst wait (the fair start admits a newcomer within ⌈(q + 1) / K_owner⌉ tenures) precedes it.
-    let open_window = add(rules.config.acquisition_daa, rules.config.prices.inclusion_margin_daa)?;
     let queue_wait = if crate::palw_tir_frame_cost_v1::is_family_clock_v3(rules.clock.version) {
         crate::palw_tir_frame_cost_v1::tir_public_owner_queue_wait_family_v3(open_window, &acquisition)?
     } else {
@@ -996,7 +1059,8 @@ fn finish_allocation_source_v2(
     // The collection door holds a filing that starts at the stream door: its witness parts and conviction at the measured capacity.
     let filing =
         crate::palw_tir_frame_cost_v1::tir_public_filing_daa_v1(terminal.envelope.maximum_moves, &rules.config, &rules.clock)?;
-    let collect = add(stream, rules.config.collection_daa.max(filing))?;
+    let collection = rules.config.collection_daa.max(filing);
+    let collect = add(stream, collection)?;
     // External audit 10-17 §7 P0(3): an accepted pursuit ends inside the liability horizon the record pins (validated at arming
     // against `window_challenge + window_court`); a longer door is refused, never accepted with an unbounded Final delay.
     let door = collect.checked_sub(geometry.accepted_daa).ok_or("native TIR door underflow")?;
@@ -1032,6 +1096,48 @@ fn finish_allocation_source_v2(
                     );
                 }
             }
+        }
+        if let Some(out) = diagnostics {
+            let bundle = semantic.as_ref().map(|quote| &quote.plan);
+            *out = Some(Box::new(PalwTirDoorDiagnosticsV1 {
+                accepted_daa: geometry.accepted_daa,
+                preparation_daa: preparation.preparation_daa,
+                open_window_daa: open_window,
+                owner_queue_wait_daa: queue_wait,
+                acquisition_daa: post_inclusion.max(1) - queue_wait,
+                // Rebase puts the semantic plan after the generic stream end.
+                semantic_daa: stream - generic_end,
+                semantic_families: bundle.map_or_else(Vec::new, |bundle| {
+                    bundle
+                        .stages
+                        .iter()
+                        .map(|stage| PalwTirSemanticFamilyDiagnosticsV1 {
+                            family: stage.family,
+                            open_until_daa: stage.terms.open_until_daa,
+                            stream_until_daa: stage.terms.stream_until_daa,
+                            acquisition: stage.acquisition,
+                            resources: stage.terms.plan,
+                        })
+                        .collect()
+                }),
+                semantic_inventory: bundle.and_then(|bundle| bundle.inventory.as_ref().map(|inventory| inventory.envelope)),
+                semantic_resources: bundle.map(|bundle| bundle.terms.plan),
+                filing_daa: filing,
+                collection_daa: collection,
+                total_daa: door,
+                limit_daa: rules.clock.maximum_door_daa,
+                reorg_replay_moves: rules.config.prices.reorg_replay_moves,
+                reorg_reacquire_logical_units: acquisition.maximum_reacquire_logical_units,
+                maximum_fresh_logical_units: acquisition.maximum_fresh_logical_units,
+                maximum_owner_turns: acquisition.maximum_turns,
+                maximum_native_signature_checks: control_footprint.maximum_native_signature_checks,
+                reorg_retention_daa: rules.config.reorg_retention_daa,
+                acquisition_resources: acquisition.envelope,
+                total_resources: sum,
+                prepared_disk_bytes: executor.prepared_disk_bytes,
+                executor_disk_bytes: executor.own_disk_bytes,
+                maximum_terminal_witness_bytes: terminal.maximum_witness_bytes,
+            }));
         }
         return incomplete(PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon {
             required: door,
@@ -1646,6 +1752,63 @@ mod tests {
                 eprintln!("public t12 TFP1 fixture: required {required} DAA, allowed {allowed}, table alone {minimum_table_daa}");
             }
             _ => panic!("the shipped cost unexpectedly admits the tokenizer stage"),
+        }
+    }
+
+    #[test]
+    fn horizon_diagnostics_match_the_native_plan_for_generic_and_semantic_jobs() {
+        for semantics in [false, true] {
+            let mut f = fixture(semantics, semantics);
+            let plan = complete(&f, semantics);
+            let derive = |f: &Fixture, diagnostics: &mut Option<Box<PalwTirDoorDiagnosticsV1>>| {
+                derive_tir_public_allocation_native_with_diagnostics_v2(
+                    &f.geometry,
+                    &f.original,
+                    &f.header,
+                    &f.record,
+                    &f.layout,
+                    semantics.then_some(&f.semantics),
+                    None,
+                    f.rules,
+                    Some(diagnostics),
+                )
+                .unwrap()
+            };
+            let door = plan.terms.collect_until_daa - plan.terms.accepted_daa;
+            f.rules.clock.maximum_door_daa = door - 1;
+            let mut diagnostics = None;
+            assert_eq!(derive(&f, &mut diagnostics), quote(&f, semantics));
+            let breakdown = diagnostics.as_ref().unwrap();
+            assert_eq!((breakdown.total_daa, breakdown.limit_daa), (door, door - 1));
+            assert_eq!(
+                breakdown.preparation_daa
+                    + breakdown.open_window_daa
+                    + breakdown.owner_queue_wait_daa
+                    + breakdown.acquisition_daa
+                    + breakdown.semantic_daa
+                    + breakdown.collection_daa,
+                door,
+            );
+            assert_eq!(breakdown.total_resources, plan.terms.plan);
+            assert_eq!(breakdown.acquisition_resources, plan.acquisition.envelope);
+            assert!(breakdown.collection_daa >= breakdown.filing_daa);
+            assert_eq!(breakdown.semantic_resources, plan.semantic.as_ref().map(|bundle| bundle.terms.plan));
+            if let Some(bundle) = &plan.semantic {
+                let family = &breakdown.semantic_families[0];
+                assert_eq!(family.family, bundle.stages[0].family);
+                assert_eq!(family.stream_until_daa, bundle.stages[0].terms.stream_until_daa);
+                assert!(breakdown.semantic_daa > 0);
+            } else {
+                assert!(breakdown.semantic_families.is_empty());
+                assert_eq!(breakdown.semantic_daa, 0);
+            }
+            let value = serde_json::to_value(breakdown).unwrap();
+            assert_eq!(value["ownerQueueWaitDaa"].as_u64(), Some(breakdown.owner_queue_wait_daa));
+            assert_eq!(serde_json::from_value::<PalwTirDoorDiagnosticsV1>(value).unwrap(), **breakdown);
+
+            f.rules.clock.maximum_door_daa = door;
+            assert_eq!(derive(&f, &mut diagnostics), quote(&f, semantics));
+            assert!(diagnostics.is_none());
         }
     }
 

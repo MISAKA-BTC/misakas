@@ -88,6 +88,9 @@ pub enum ProtocolError {
     #[error("local native transfer resource unavailable: {0}")]
     LocalNativeResourceUnavailable(String),
 
+    #[error("local transport byte capacity unavailable: {0}")]
+    LocalTransportCapacityUnavailable(String),
+
     #[error("misbehaving peer: {0}")]
     MisbehavingPeer(String),
 
@@ -130,8 +133,11 @@ impl ProtocolError {
             self,
             Self::LocalNativeCapacityUnavailable(_)
                 | Self::LocalNativeResourceUnavailable(_)
+                | Self::LocalTransportCapacityUnavailable(_)
+                | Self::OutgoingRouteCapacityReached(_)
                 | Self::RuleError(RuleError::LocalNativeCapacityUnavailable(_))
                 | Self::RuleError(RuleError::LocalNativeStateContextUnavailable(_))
+                | Self::PruningImportError(PruningImportError::PruningPointImportContextUnavailable(_, _))
                 | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeCapacityUnavailable(_)))
                 | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::LocalNativeStateContextUnavailable(
                     _
@@ -139,12 +145,21 @@ impl ProtocolError {
         )
     }
 
+    /// A local shutdown never judges a peer or its candidate chain.
+    pub fn is_local_consensus_exiting(&self) -> bool {
+        matches!(
+            self,
+            Self::RuleError(RuleError::ConsensusExiting)
+                | Self::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::ConsensusExiting))
+        )
+    }
+
     pub fn is_connection_closed_error(&self) -> bool {
-        matches!(self, Self::ConnectionClosed)
+        matches!(self, Self::ConnectionClosed) || self.is_local_consensus_exiting()
     }
 
     pub fn can_send_outgoing_message(&self) -> bool {
-        !matches!(self, Self::ConnectionClosed | Self::OutgoingRouteCapacityReached(_))
+        !matches!(self, Self::ConnectionClosed | Self::OutgoingRouteCapacityReached(_) | Self::LocalTransportCapacityUnavailable(_))
     }
 
     pub fn to_reject_message(&self) -> String {
@@ -293,7 +308,43 @@ macro_rules! dequeue_with_request_id {
 
 #[cfg(test)]
 mod reject_classification_tests {
+    #[test]
+    fn local_consensus_shutdown_is_quiet_and_distinct_from_block_invalidity() {
+        use super::*;
+        let stopped = ProtocolError::RuleError(RuleError::ConsensusExiting);
+        assert!(stopped.is_local_consensus_exiting());
+        assert!(stopped.is_connection_closed_error());
+        assert!(!stopped.is_local_native_resource_unavailable(), "shutdown must not invent a resource failure or retry");
+        let wrapped = ProtocolError::PruningImportError(PruningImportError::PruningImportRuleError(RuleError::ConsensusExiting));
+        assert!(wrapped.is_local_consensus_exiting());
+        assert!(wrapped.is_connection_closed_error());
+        assert!(!ProtocolError::Other("invalid block").is_local_consensus_exiting());
+    }
+
     use super::*;
+
+    #[test]
+    fn missing_checkpoint_proof_context_is_local_and_not_a_peer_verdict() {
+        let error: ProtocolError = PruningImportError::PruningPointImportContextUnavailable(
+            kaspa_consensus_core::BlockHash::default(),
+            "checkpoint proof row unavailable".into(),
+        )
+        .into();
+        assert!(matches!(error, ProtocolError::PruningImportError(PruningImportError::PruningPointImportContextUnavailable(_, _))));
+        assert!(error.is_local_native_resource_unavailable());
+        assert!(!matches!(error, ProtocolError::MisbehavingPeer(_)));
+    }
+
+    #[test]
+    fn local_transport_refusals_never_judge_candidate_chain_validity() {
+        for error in [
+            ProtocolError::LocalTransportCapacityUnavailable("byte budget".into()),
+            ProtocolError::OutgoingRouteCapacityReached("count budget".into()),
+        ] {
+            assert!(error.is_local_native_resource_unavailable());
+            assert!(!error.can_send_outgoing_message());
+        }
+    }
 
     /// **A reject is either about this node or about the peer, and the text has to say which.**
     ///

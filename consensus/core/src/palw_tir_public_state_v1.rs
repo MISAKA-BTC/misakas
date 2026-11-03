@@ -433,6 +433,8 @@ fn preparation_transition_source_v2(
     };
     next.check_structure_v1(&key)?;
     Ok(PalwTirPublicTransitionV1 {
+        accepted_daa: now,
+        signer,
         changes: vec![PalwTirPublicRowChangeV1 {
             key,
             old: Some(Row::TirPreparation(old.clone())),
@@ -1153,6 +1155,8 @@ pub struct PalwTirPublicRowChangeV1 {
     pub new: Option<Row>,
 }
 pub struct PalwTirPublicTransitionV1 {
+    accepted_daa: u64,
+    signer: PalwBondKeyV2,
     changes: Vec<PalwTirPublicRowChangeV1>,
     pub effect: PalwTirPublicOwnedEffectV1,
 }
@@ -1160,6 +1164,175 @@ impl PalwTirPublicTransitionV1 {
     pub fn changes_v1(&self) -> &[PalwTirPublicRowChangeV1] {
         &self.changes
     }
+
+    /// Candidate scheduler step derived from the native acquisition transition.
+    /// The caller must publish this value atomically with the verified row
+    /// changes and any native default attribution, against the same parent.
+    /// No existing fold calls this method.
+    pub fn stage_owner_schedule_v2(
+        &self,
+        schedule: &crate::palw_tir_owner_schedule_v2::OwnerScheduleV2<Key, Hash64>,
+    ) -> Result<Option<crate::palw_tir_owner_schedule_v2::OwnerScheduleV2<Key, Hash64>>, String> {
+        use crate::palw_tir_owner_schedule_v2::OwnerPhaseV2;
+        use PalwTirPublicOwnedEffectV1 as Effect;
+
+        if !matches!(&self.effect, Effect::Demanded(_) | Effect::Finished(_) | Effect::Default(_)) {
+            return Ok(None);
+        }
+        let (key, before, after) = self
+            .changes
+            .iter()
+            .find_map(|row| match (&row.old, &row.new) {
+                (Some(Row::TirAcquisition(before)), Some(Row::TirAcquisition(after))) => Some((row.key, &before.owned, &after.owned)),
+                _ => None,
+            })
+            .ok_or("owner scheduling effect lacks native acquisition rows")?;
+
+        let collect_until = after.contract_v1().terms.collect_until_daa;
+        let now = after.spent_v1().last_progress_daa;
+        let mut next;
+        match &self.effect {
+            Effect::Demanded(demand) => {
+                let pending = after.active_v1().ok_or("native demand has no pending acquisition")?;
+                if pending.demand_id != *demand || pending.opened_daa != now || before.unpaid_v1() || !after.unpaid_v1() {
+                    return Err("native demand changes its scheduling identity".into());
+                }
+                next = schedule.clone();
+                next.advance(now).map_err(|e| format!("owner scheduler clock: {e:?}"))?;
+                next.wait_for_response(key, pending.turn, *demand, pending.respond_until_daa, collect_until)
+                    .map_err(|e| format!("owner scheduler demand: {e:?}"))?;
+            }
+            effect => {
+                // An owner's own answer and a single custodian's answer may
+                // leave other literal custody duties outstanding.
+                if !before.unpaid_v1() || after.unpaid_v1() {
+                    return Ok(None);
+                }
+                let previous = before.active_v1().ok_or("native completion has no prior demand")?;
+                let pending = after.active_v1().ok_or("native completion has no matching acquisition")?;
+                let collected = match effect {
+                    Effect::Finished(finish) if finish.body.demand_id == pending.demand_id && finish.body.turn == pending.turn => {
+                        false
+                    }
+                    Effect::Default(default) if default.demand_id == pending.demand_id && !default.missing_custodians.is_empty() => {
+                        true
+                    }
+                    _ => return Err("native completion changes its scheduling identity".into()),
+                };
+                if pending.demand_id != previous.demand_id
+                    || pending.turn != previous.turn
+                    || pending.respond_until_daa != previous.respond_until_daa
+                    || pending.collected != collected
+                    || schedule.phase(key)
+                        != Some(OwnerPhaseV2::Waiting {
+                            turn: previous.turn,
+                            demand: previous.demand_id,
+                            respond_until: previous.respond_until_daa,
+                            collect_until,
+                        })
+                {
+                    return Err("owner scheduler belongs to another demand or frame clock".into());
+                }
+                next = schedule.clone();
+                next.advance(now).map_err(|e| format!("owner scheduler clock: {e:?}"))?;
+                next.resume(key, pending.turn, pending.demand_id, collected)
+                    .map_err(|e| format!("owner scheduler completion: {e:?}"))?;
+            }
+        }
+        Ok(Some(next))
+    }
+    fn stage_admitted_acquisition_schedule_v2(
+        &self,
+        schedule: &crate::palw_tir_owner_schedule_v2::OwnerScheduleV2<Key, Hash64>,
+        key: Key,
+        owner: &PalwTirPublicAcquisitionRowV1,
+    ) -> Result<crate::palw_tir_owner_schedule_v2::OwnerScheduleV2<Key, Hash64>, String> {
+        use crate::palw_tir_owner_schedule_v2::OwnerPhaseV2;
+        use crate::palw_tir_public_owned_v1::PalwTirPublicWorkPhaseV1;
+        use PalwTirPublicOwnedEffectV1 as Effect;
+
+        let mut at = schedule.clone();
+        at.advance(self.accepted_daa).map_err(|why| format!("TIR owner schedule action clock: {why:?}"))?;
+        let active = || matches!(at.phase(key), Some(OwnerPhaseV2::Active { .. }));
+        let waiting = || {
+            owner.owned.unpaid_v1()
+                && owner.owned.active_v1().is_some_and(|pending| {
+                    at.phase(key)
+                        == Some(OwnerPhaseV2::Waiting {
+                            turn: pending.turn,
+                            demand: pending.demand_id,
+                            respond_until: pending.respond_until_daa,
+                            collect_until: owner.owned.contract_v1().terms.collect_until_daa,
+                        })
+                })
+        };
+        let responding = || {
+            waiting()
+                || (self.signer == owner.owned.contract_v1().owner
+                    && !owner.owned.unpaid_v1()
+                    && active()
+                    && owner.owned.active_v1().is_some())
+        };
+        let admitted = match &self.effect {
+            Effect::Demanded(_) => active(),
+            Effect::Begun | Effect::Chunk(_) | Effect::Finished(_) => responding(),
+            Effect::Default(_) => waiting(),
+            Effect::WorkDebited(receipt) => {
+                let scope = &receipt.debit.scope;
+                if scope.actor != owner.owned.contract_v1().owner
+                    || matches!(
+                        scope.phase,
+                        PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response | PalwTirPublicWorkPhaseV1::Ids
+                    )
+                {
+                    responding()
+                } else {
+                    active()
+                }
+            }
+            Effect::PreparationReady(_) | Effect::PreparationDefault(_) => false,
+        };
+        if !admitted {
+            return Err("TIR action lacks its exact admitted owner slot or response reservation".into());
+        }
+        Ok(self.stage_owner_schedule_v2(&at)?.unwrap_or(at))
+    }
+
+    /// Add the candidate owner change to the same compare-and-swap batch
+    /// as the native acquisition and material rows. The future caller still
+    /// authenticates the carrier and applies native sanctions atomically.
+    pub fn with_rooted_owner_schedule_v2(
+        mut self,
+        frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+        previous: &crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2,
+    ) -> Result<Self, String> {
+        previous.check_frame(frame)?;
+        let mut owners = self.changes.iter().filter_map(|change| match (&change.old, &change.new) {
+            (Some(Row::TirAcquisition(before)), Some(Row::TirAcquisition(after))) => Some((change.key, before, after)),
+            _ => None,
+        });
+        let (owner_key, before, after) = owners.next().ok_or("TIR scheduled action has no existing native acquisition")?;
+        if owners.next().is_some() {
+            return Err("TIR scheduled action changes multiple acquisitions".into());
+        }
+        previous.check_owner(before)?;
+        previous.check_owner(after)?;
+        let next = self.stage_admitted_acquisition_schedule_v2(previous.schedule(), owner_key, before)?;
+        // Preserve the schedule's expected old row even for a same-DAA
+        // partial response that does not change scheduling metadata.
+        let key = previous.key();
+        if self.changes.iter().any(|change| change.key == key) {
+            return Err("TIR acquisition batch repeats its owner snapshot".into());
+        }
+        let next = previous.with_schedule(next)?;
+        self.changes.push(PalwTirPublicRowChangeV1 {
+            key,
+            old: Some(Row::TirOwnerSchedule(Box::new(previous.clone()))),
+            new: Some(Row::TirOwnerSchedule(Box::new(next))),
+        });
+        Ok(self)
+    }
+
     pub fn deltas_v1(&self) -> Vec<crate::palw_state_v2::PalwDeltaEntryV2> {
         self.changes
             .iter()
@@ -1446,7 +1619,7 @@ fn transition<'a>(
         }
     }
     changes.push(PalwTirPublicRowChangeV1 { key, old: Some(Row::TirAcquisition(old.clone())), new: Some(Row::TirAcquisition(next)) });
-    Ok(PalwTirPublicTransitionV1 { changes, effect })
+    Ok(PalwTirPublicTransitionV1 { accepted_daa: now, signer, changes, effect })
 }
 
 fn check_work_input<'a>(
@@ -1736,6 +1909,8 @@ mod tests {
         )
         .unwrap();
         let duplicate = PalwTirPublicTransitionV1 {
+            accepted_daa: step.accepted_daa,
+            signer: step.signer,
             changes: vec![step.changes_v1()[0].clone(), step.changes_v1()[0].clone()],
             effect: PalwTirPublicOwnedEffectV1::Begun,
         };
@@ -1761,6 +1936,116 @@ mod tests {
         let saved = borsh::to_vec(&stale).unwrap();
         assert!(step.apply_rows_v1(&mut stale, true).is_err());
         assert_eq!(borsh::to_vec(&stale).unwrap(), saved);
+    }
+
+    #[test]
+    fn candidate_owner_slot_uses_native_demand_and_all_literal_custody() {
+        use crate::palw_tir_owner_schedule_v2::{OwnerPhaseV2, OwnerScheduleV2};
+
+        let (source, mut rows, key, body) = fixture();
+        let Key::TirAcquisition(claim, _, _) = key else { panic!("native acquisition key") };
+        let queued = Key::TirAcquisition(claim, bond(8), Hash64::from_u64_word(42));
+        let mut schedule = OwnerScheduleV2::new(2, 1, 1, 4, 11).unwrap();
+        schedule.admit(key).unwrap();
+        schedule.admit(queued).unwrap();
+        let open = commit(
+            &source,
+            &mut rows,
+            key,
+            bond(7),
+            &PalwTirPublicOwnedActionV1::Demand { request: PalwTirPublicRequestV1::StepLeaf { index: wide_leaf() } },
+        );
+        let parked = open.stage_owner_schedule_v2(&schedule).unwrap().unwrap();
+        let pending = owned(&rows, key).owned.active_v1().unwrap();
+        let demand = pending.demand_id;
+        let (turn, respond_until) = (pending.turn, pending.respond_until_daa);
+        let collect_until = owned(&rows, key).owned.contract_v1().terms.collect_until_daa;
+        assert_eq!(parked.phase(key), Some(OwnerPhaseV2::Waiting { turn, demand, respond_until, collect_until }));
+        assert_eq!(parked.phase(queued), Some(OwnerPhaseV2::Active { until: 16 }));
+        assert_eq!(schedule.phase(key), Some(OwnerPhaseV2::Active { until: 15 }));
+
+        for actor in [bond(7), bond(1)] {
+            let owner_before_begin = owned(&rows, key).clone();
+            let begin = commit(
+                &source,
+                &mut rows,
+                key,
+                actor,
+                &PalwTirPublicOwnedActionV1::Begin {
+                    demand_id: demand,
+                    answerer: actor,
+                    total_bytes: body.len() as u64,
+                    body_hash: palw_tir_public_body_hash_v1(&body),
+                },
+            );
+            assert!(begin.stage_owner_schedule_v2(&parked).unwrap().is_none());
+            assert_eq!(begin.stage_admitted_acquisition_schedule_v2(&parked, key, &owner_before_begin).unwrap(), parked);
+            assert!(begin.stage_admitted_acquisition_schedule_v2(&schedule, key, &owner_before_begin).is_err());
+            let mut other = schedule.clone();
+            other.advance(12).unwrap();
+            other.wait_for_response(key, turn, Hash64::from_u64_word(99), respond_until, collect_until).unwrap();
+            assert!(begin.stage_admitted_acquisition_schedule_v2(&other, key, &owner_before_begin).is_err());
+            for (i, bytes) in body.chunks(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
+                commit(
+                    &source,
+                    &mut rows,
+                    key,
+                    actor,
+                    &PalwTirPublicOwnedActionV1::Part {
+                        demand_id: demand,
+                        answerer: actor,
+                        offset: (i * PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64,
+                        bytes: bytes.to_vec(),
+                    },
+                );
+            }
+            let finish =
+                commit(&source, &mut rows, key, actor, &PalwTirPublicOwnedActionV1::Finish { demand_id: demand, answerer: actor });
+            let next = finish.stage_owner_schedule_v2(&parked).unwrap();
+            if actor == bond(7) {
+                assert!(next.is_none(), "the owner's answer leaves the literal custodian due");
+            } else {
+                let ready = next.unwrap();
+                assert_eq!(ready.phase(key), Some(OwnerPhaseV2::Ready));
+                assert_eq!(ready.phase(queued), Some(OwnerPhaseV2::Active { until: 16 }));
+                let mut other = schedule.clone();
+                other.advance(12).unwrap();
+                other.wait_for_response(key, turn, Hash64::from_u64_word(99), respond_until, collect_until).unwrap();
+                assert!(finish.stage_owner_schedule_v2(&other).is_err());
+                assert!(finish.stage_owner_schedule_v2(&ready).is_err(), "completion cannot requeue twice");
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_owner_slot_resumes_on_native_default_at_response_boundary() {
+        use crate::palw_tir_owner_schedule_v2::{OwnerPhaseV2, OwnerScheduleV2};
+
+        let (source, mut rows, key, _) = fixture();
+        let mut schedule = OwnerScheduleV2::new(1, 1, 1, 4, 11).unwrap();
+        schedule.admit(key).unwrap();
+        let open = commit(
+            &source,
+            &mut rows,
+            key,
+            bond(7),
+            &PalwTirPublicOwnedActionV1::Demand { request: PalwTirPublicRequestV1::StepLeaf { index: wide_leaf() } },
+        );
+        let parked = open.stage_owner_schedule_v2(&schedule).unwrap().unwrap();
+        let pending = owned(&rows, key).owned.active_v1().unwrap();
+        let deadline = pending.respond_until_daa;
+        let collect = PalwTirPublicOwnedActionV1::Collect { demand_id: pending.demand_id };
+        assert!(act(&source, &rows, key, bond(7), deadline - 1, &collect).is_err());
+        let default = act(&source, &rows, key, bond(7), deadline, &collect).unwrap();
+        let resumed = default.stage_owner_schedule_v2(&parked).unwrap().unwrap();
+        assert_eq!(resumed.phase(key), Some(OwnerPhaseV2::Active { until: deadline + 4 }));
+        // The candidate output leaves the parent rows and their retention
+        // untouched until the ordinary native fold commits the transition.
+        assert!(!owned(&rows, key).owned.active_v1().unwrap().collected);
+        let original_terms = owned(&rows, key).owned.contract_v1().terms;
+        default.apply_rows_v1(&mut rows, true).unwrap();
+        assert!(owned(&rows, key).owned.active_v1().unwrap().collected);
+        assert_eq!(owned(&rows, key).owned.contract_v1().terms, original_terms);
     }
 
     #[test]

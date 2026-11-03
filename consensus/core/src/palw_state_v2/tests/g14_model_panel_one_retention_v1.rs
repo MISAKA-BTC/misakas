@@ -131,6 +131,12 @@ fn delayed_signed_attempt_extends_only_new_acceptance_and_survives_revert_and_co
     let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&accepted)).unwrap();
     let cold = borsh::from_slice::<PalwStateCarriageV2>(&carriage).unwrap().into_state(&p, Some(accepted.state_root())).unwrap();
     assert_eq!(cold.claim(&id).unwrap().trace_retention_daa, 104 + span);
+    let view = crate::palw_user_views_v1::palw_claim_detail_json_v1(&cold, &p, &id, &Default::default(), None).unwrap();
+    assert_eq!(view["tipBlock"], h64(3).to_string());
+    assert_eq!(view["claim"]["acceptedBlock"], claim.accepted_block.to_string());
+    assert_eq!(view["claim"]["acceptedDaa"], 104);
+    assert_eq!(view["claim"]["acceptedBlueScore"], 3);
+    assert_eq!(view["courtClocks"]["traceRetentionDaa"], 104 + span);
     let between = env.attempt.trace_retention_daa + 1;
     assert!(between < claim.trace_retention_daa);
     assert!(crate::palw_da_rcore_v1::palw_da_material_owed_v1(claim, between));
@@ -288,6 +294,77 @@ fn rider_signs_exact_accepted_lead_obligation_and_gets_its_own_full_guarantee() 
                     .to_string()
                     .contains("data-availability pins")
             );
+        }
+    }
+}
+
+#[test]
+fn actual_20000_boundary_keeps_signed_identity_after_long_merge_delay() {
+    let p = policy(Some(20_000));
+    let s = setup(&p);
+    for (accepted_daa, delay) in [19_999, 20_000, 20_001]
+        .into_iter()
+        .flat_map(|daa| [0, 1, 2, 10].into_iter().map(move |delay| (daa, delay)))
+        .chain([(20_011, 21)])
+    {
+        let header_daa = accepted_daa - delay;
+        let env = signed_attempt(&s, &p, header_daa);
+        let signed = borsh::to_vec(&env).unwrap();
+        let id = attempt_id_v2(&env.attempt);
+        let ticket = class_ticket_v3(&env.attempt, h64(0x100));
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&p, &env.attempt, header_daa).unwrap();
+        assert!(crate::palw_attempt_material_v3::verify_ready_signature_v3(
+            &env.attempt.executor_pubkey,
+            id.as_byte_slice(),
+            &env.signature,
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        ));
+        let folded = fold_round(&s, &p, &ctx(3, accepted_daa, 3), &[], Some((&env, h64(0x100))), &lane());
+        if accepted_daa < 20_000 && delay != 0 {
+            let old = folded.unwrap_err();
+            assert!(old.to_string().contains("COURT_RETENTION_BELOW_GUARANTEE"), "delay {delay}: {old}");
+            continue;
+        }
+        let (accepted, delta) = folded.unwrap();
+        let span = crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(&s, &p, &h64(2), accepted_daa);
+        let expected = if accepted_daa < 20_000 {
+            env.attempt.trace_retention_daa
+        } else {
+            env.attempt.trace_retention_daa.max(accepted_daa + span)
+        };
+        assert_eq!(accepted.claim(&id).unwrap().trace_retention_daa, expected, "DAA {accepted_daa}, delay {delay}");
+        let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&accepted)).unwrap();
+        let cold = borsh::from_slice::<PalwStateCarriageV2>(&carriage).unwrap().into_state(&p, Some(accepted.state_root())).unwrap();
+        assert_eq!(cold.claim(&id), accepted.claim(&id));
+        assert_eq!(revert_delta_v2(&cold, &delta, &p).unwrap().state_root(), s.state_root());
+        assert_eq!(borsh::to_vec(&env).unwrap(), signed);
+        assert_eq!(attempt_id_v2(&env.attempt), id);
+        assert_eq!(class_ticket_v3(&env.attempt, h64(0x100)), ticket);
+    }
+}
+
+/// Actual captured historical identities and acceptance positions. This is a
+/// retention-policy regression, not a substitute for a complete chain replay.
+#[test]
+fn future_20000_fence_preserves_all_29_captured_historical_retention_results() {
+    let p = policy(Some(20_000));
+    let s = setup(&p);
+    let audit: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../../docs/evidence/palw/t12-fork-2026-10-31/retention-18850-live-audit.json"))
+            .unwrap();
+    let attempts = audit["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 29);
+    let old = p.clone().with_model_panel_one_retention_v1(None);
+    let effective = crate::palw_model_panel_one_v1::model_panel_one_effective_attempt_retention_v1;
+    for attempt in attempts {
+        let class: Hash64 = attempt["classId"].as_str().unwrap().parse().unwrap();
+        let raw = attempt["rawRetentionDaa"].as_u64().unwrap();
+        let mut positions = vec![attempt["daa"].as_u64().unwrap()];
+        positions.extend(attempt["merges"].as_array().unwrap().iter().map(|merge| merge["acceptingDaa"].as_u64().unwrap()));
+        for accepted in positions {
+            assert!(accepted < 20_000);
+            assert_eq!(effective(&s, &p, &class, accepted, raw), effective(&s, &old, &class, accepted, raw));
+            assert_eq!(effective(&s, &p, &class, accepted, raw), raw);
         }
     }
 }

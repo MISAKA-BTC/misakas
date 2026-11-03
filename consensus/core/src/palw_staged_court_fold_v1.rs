@@ -3875,6 +3875,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtMaterialPart(p) => (p.expires_daa, Vec::new()),
         PalwStagedCourtRowV1::CourtMaterial(m) => (m.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::CourtMaterialLedger(l) => (l.material_until_daa, Vec::new()),
+        PalwStagedCourtRowV1::TirOwnerSchedule(row) => (row.material_until(), Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -4267,6 +4268,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtMaterialPart(row) => Some(row.expires_daa),
             PalwStagedCourtRowV1::CourtMaterial(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtMaterialLedger(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::TirOwnerSchedule(row) => Some(row.material_until()),
             _ => None,
         };
         if let Some(until) = tir_until {

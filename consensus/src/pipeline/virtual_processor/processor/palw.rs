@@ -56,6 +56,25 @@ fn tir_conviction_preflight_outcome_v2(
     }
 }
 
+fn pruning_snapshot_read_error_v1(
+    error: kaspa_database::prelude::StoreError,
+) -> kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1 {
+    use kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1 as ReadError;
+    use kaspa_database::prelude::StoreError;
+    match error {
+        StoreError::LocalResourceUnavailable(_) => ReadError::ResourceUnavailable,
+        StoreError::DbError(error) if error.kind() == rocksdb::ErrorKind::Corruption => ReadError::Corrupt,
+        StoreError::DbError(_) => ReadError::StorageUnavailable,
+        // The optional top-level snapshot/key has already been handled by the
+        // loader. A missing required nested row is not an uncaptured snapshot.
+        StoreError::KeyNotFound(_)
+        | StoreError::KeyAlreadyExists(_)
+        | StoreError::HashAlreadyExists(_)
+        | StoreError::DataInconsistency(_)
+        | StoreError::DeserializationError(_) => ReadError::Corrupt,
+    }
+}
+
 impl VirtualStateProcessor {
     /// **The 2026-09-23 Position route matrix, P-B3, at the mempool and at the template: the fold's
     /// market gate on a carrier before it relays and before it is mined.**
@@ -620,11 +639,21 @@ impl VirtualStateProcessor {
         Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>,
         kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
     > {
-        match self.palw_candidate_state_v2_checked(candidate) {
-            Ok(state) => Ok(Some(state)),
+        match self.palw_candidate_state_v2_checked_until(candidate, || self.is_consensus_exiting.load(Ordering::Acquire)) {
+            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(state)) => Ok(Some(state)),
+            Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting) => Err(Self::palw_selection_shutdown_v1()),
             Err(PalwWeighFaultV2::NativeCapacityUnavailable) => Err(Self::palw_selection_capacity_unavailable_v1()),
             Err(PalwWeighFaultV2::NoOpinion | PalwWeighFaultV2::StoreUnreadable) => Ok(None),
         }
+    }
+
+    // Existing selection APIs carry local unavailable coverage. Keep shutdown
+    // explicit in its cause; the virtual candidate boundary returns the typed
+    // ConsensusExiting result before interpreting this as a gate verdict.
+    fn palw_selection_shutdown_v1() -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
+        >("local consensus shutdown", "candidate reconstruction stopped at a delta boundary")
     }
 
     fn palw_selection_capacity_unavailable_v1() -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
@@ -701,24 +730,33 @@ impl VirtualStateProcessor {
         // pruned delta is genuinely an absence and still abstains, for the reason the horizon
         // paragraph above gives; a store that will not read is this node's own fault and the
         // honest answer to "may this reorg proceed" is no.
-        let (challenger_state, ancestor_state) =
-            match (self.palw_candidate_state_v2_checked(candidate), self.palw_candidate_state_v2_checked(ancestor)) {
-                (Ok(challenger), Ok(ancestor_state)) => (challenger, ancestor_state),
-                (Err(PalwWeighFaultV2::NativeCapacityUnavailable), _) | (_, Err(PalwWeighFaultV2::NativeCapacityUnavailable)) => {
-                    return Err(Self::palw_selection_capacity_unavailable_v1());
-                }
-                (Err(PalwWeighFaultV2::StoreUnreadable), _) | (_, Err(PalwWeighFaultV2::StoreUnreadable)) => {
-                    warn!(
-                        "deep reorg refused: this node's own PALW snapshot is unavailable, so ADR-0065 D2 cannot clear \
+        let (challenger_state, ancestor_state) = match (
+            self.palw_candidate_state_v2_checked_until(candidate, || self.is_consensus_exiting.load(Ordering::Acquire)),
+            self.palw_candidate_state_v2_checked_until(ancestor, || self.is_consensus_exiting.load(Ordering::Acquire)),
+        ) {
+            (
+                Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(challenger)),
+                Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(ancestor_state)),
+            ) => (challenger, ancestor_state),
+            (Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting), _)
+            | (_, Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting)) => {
+                return Err(Self::palw_selection_shutdown_v1());
+            }
+            (Err(PalwWeighFaultV2::NativeCapacityUnavailable), _) | (_, Err(PalwWeighFaultV2::NativeCapacityUnavailable)) => {
+                return Err(Self::palw_selection_capacity_unavailable_v1());
+            }
+            (Err(PalwWeighFaultV2::StoreUnreadable), _) | (_, Err(PalwWeighFaultV2::StoreUnreadable)) => {
+                warn!(
+                    "deep reorg refused: this node's own PALW snapshot is unavailable, so ADR-0065 D2 cannot clear \
                          candidate {candidate} — a veto that cannot read its evidence does not wave the reorg through"
-                    );
-                    return Ok(DnsReorgOutcome::FrontierProvenanceViolation);
-                }
-                _ => {
-                    warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
-                    return Ok(DnsReorgOutcome::GateInactive);
-                }
-            };
+                );
+                return Ok(DnsReorgOutcome::FrontierProvenanceViolation);
+            }
+            _ => {
+                warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
+                return Ok(DnsReorgOutcome::GateInactive);
+            }
+        };
 
         let minted: std::collections::BTreeSet<_> =
             challenger_state.bonds_iter().map(|(k, _)| *k).filter(|k| ancestor_state.bond(k).is_none()).collect();
@@ -800,6 +838,22 @@ impl VirtualStateProcessor {
         &self,
         candidate: BlockHash,
     ) -> Result<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1, PalwWeighFaultV2> {
+        match self.palw_candidate_state_v2_checked_until(candidate, || false)? {
+            crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::Complete(state) => Ok(state),
+            crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting => {
+                unreachable!("the ordinary reader does not request shutdown")
+            }
+        }
+    }
+
+    fn palw_candidate_state_v2_checked_until(
+        &self,
+        candidate: BlockHash,
+        mut should_stop: impl FnMut() -> bool,
+    ) -> Result<crate::processes::palw_state_walk::PalwStateWalkOutcomeV1, PalwWeighFaultV2> {
+        if should_stop() {
+            return Ok(crate::processes::palw_state_walk::PalwStateWalkOutcomeV1::ConsensusExiting);
+        }
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Err(PalwWeighFaultV2::NoOpinion) };
         let store = self.palw_state_v2_store.read();
         let (tip_block, tip_state) = match store.load_tip_retained_v1(state_params) {
@@ -851,30 +905,36 @@ impl VirtualStateProcessor {
         // reads back perfectly and whose delta rows are corrupt. A pruned or absent delta really
         // is an absence and still abstains; anything the STORE refused, and any delta of this
         // node's own that will not compose with this node's own state, is a fault.
-        crate::processes::palw_state_walk::walk_chain_path_retained_v1(&store, state_params, tip_state, &removed, &added).map_err(
-            |e| {
-                use crate::processes::palw_state_walk::PalwStateWalkError as W;
-                if e.native_capacity_v1().is_some() {
-                    warn!("PALW candidate walk awaits local native capacity: {e}");
-                    return PalwWeighFaultV2::NativeCapacityUnavailable;
-                }
-                if let Some(context) = e.native_context_v1() {
-                    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
-                    return match context {
-                        F::Capacity(_) | F::CapacityUnavailable => PalwWeighFaultV2::NativeCapacityUnavailable,
-                        F::HistoryUnavailable => PalwWeighFaultV2::NoOpinion,
-                        F::StoreUnreadable => PalwWeighFaultV2::StoreUnreadable,
-                    };
-                }
-                match e {
-                    W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
-                    W::Store(_) | W::State(_) | W::Resource(_) => {
-                        warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
-                        PalwWeighFaultV2::StoreUnreadable
-                    }
-                }
-            },
+        crate::processes::palw_state_walk::walk_chain_path_retained_until_v1(
+            &store,
+            state_params,
+            tip_state,
+            &removed,
+            &added,
+            should_stop,
         )
+        .map_err(|e| {
+            use crate::processes::palw_state_walk::PalwStateWalkError as W;
+            if e.native_capacity_v1().is_some() {
+                warn!("PALW candidate walk awaits local native capacity: {e}");
+                return PalwWeighFaultV2::NativeCapacityUnavailable;
+            }
+            if let Some(context) = e.native_context_v1() {
+                use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as F;
+                return match context {
+                    F::Capacity(_) | F::CapacityUnavailable => PalwWeighFaultV2::NativeCapacityUnavailable,
+                    F::HistoryUnavailable => PalwWeighFaultV2::NoOpinion,
+                    F::StoreUnreadable => PalwWeighFaultV2::StoreUnreadable,
+                };
+            }
+            match e {
+                W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
+                W::Store(_) | W::State(_) | W::Resource(_) => {
+                    warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
+                    PalwWeighFaultV2::StoreUnreadable
+                }
+            }
+        })
     }
 
     /// **The block whose PALW standing represents this consensus** — its virtual sink, normally.
@@ -1606,7 +1666,11 @@ impl VirtualStateProcessor {
         &self,
         original: kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
         header: kaspa_consensus_core::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        mut diagnostics: Option<&mut Option<Box<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1>>>,
     ) -> Result<Option<(u64, kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        if let Some(out) = diagnostics.as_mut() {
+            **out = None;
+        }
         kaspa_consensus_core::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1::Tir(header.clone()).check_wire_v1()?;
         if borsh::object_length(&original).map_err(|e| e.to_string())?
             > kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
@@ -1621,13 +1685,14 @@ impl VirtualStateProcessor {
             return Ok(None);
         }
         let extras = self.palw_transition_extras_for(point);
-        let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_v1(
+        let plan = kaspa_consensus_core::palw_state_v2::palw_tir_public_original_quote_with_diagnostics_v1(
             &state,
             params,
             &extras,
             point.daa_score,
             &original,
             &header,
+            diagnostics,
         )
         .map_err(|e| e.to_string())?;
         Ok(plan.map(|plan| (point.daa_score, plan)))
@@ -3365,8 +3430,18 @@ impl VirtualStateProcessor {
         &self,
         point: BlockHash,
     ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>> {
-        let params = self.palw_state_params_v2.as_ref()?;
-        self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, point).ok().flatten()
+        self.try_pruning_point_palw_state_shared_v1_impl(point).ok().flatten()
+    }
+
+    pub fn try_pruning_point_palw_state_shared_v1_impl(
+        &self,
+        point: BlockHash,
+    ) -> Result<
+        Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>>,
+        kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1,
+    > {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, point).map_err(pruning_snapshot_read_error_v1)
     }
 
     /// Declarations bound to the requested snapshot, never to this node's tip.
@@ -3378,8 +3453,18 @@ impl VirtualStateProcessor {
         snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
         complete: bool,
     ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        self.palw_class_carriages_for_snapshot_bounded_v1_impl(snapshot, complete, u64::MAX)
+    }
+
+    pub fn palw_class_carriages_for_snapshot_bounded_v1_impl(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        complete: bool,
+        max_declaration_bytes: u64,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
         let store = self.palw_class_carriage_store.read();
         let mut declarations = Vec::new();
+        let mut declaration_bytes = 0u64;
         for (id, class) in &snapshot.classes {
             if snapshot.tir_classes.contains_key(id) || snapshot.gen_classes.contains_key(id) {
                 continue; // These carry their IR/program records in the state itself.
@@ -3415,6 +3500,11 @@ impl VirtualStateProcessor {
                             &record.carriage,
                         )?;
                     }
+                    declaration_bytes = declaration_bytes
+                        .checked_add(68)
+                        .and_then(|n| n.checked_add(record.carriage.len() as u64))
+                        .filter(|n| *n <= max_declaration_bytes)
+                        .ok_or_else(|| "snapshot declarations exceed reserved canonical byte envelope".to_string())?;
                     declarations.push((*id, record.carriage.clone()));
                 }
                 Err(error) if complete => return Err(error),
@@ -4136,22 +4226,16 @@ impl VirtualStateProcessor {
     /// quantum), so a quantum either wins at its beacon or it never does. `wins: false` rows are
     /// returned too — an operator asking "why am I not producing receipt blocks" deserves to see
     /// the tickets that lost rather than an empty list that also means "no claims".
-    pub fn palw_fp_spendable_v3_impl(
+    pub fn palw_fp_spendable_with_parent_v3_impl(
         &self,
         bond: kaspa_consensus_core::tx::TransactionOutpoint,
-    ) -> Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
+    ) -> Option<(BlockHash, Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpSpendableQuantumV3, fp_draw_slot_v3, fp_quantum_ticket_v3};
         use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
 
-        let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
-            return Vec::new();
-        };
-        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
-            return Vec::new();
-        };
-        let Ok(Some((chain_point, state))) = self.palw_v2_reader_state(state_params) else {
-            return Vec::new();
-        };
+        let freeprompt = self.palw_freeprompt_params_v3.as_ref()?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -4223,7 +4307,7 @@ impl VirtualStateProcessor {
                 });
             }
         }
-        out
+        Some((chain_point, out))
     }
 
     /// **The bonds this block's own mergeset declares** — the half the parent state cannot hold.
@@ -4698,6 +4782,28 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
         }
+    }
+
+    /// Retention reads borrow only resident state; they never reconstruct or
+    /// deep-clone the complete native state to decide whether a file may be deleted.
+    pub(crate) fn palw_v2_gc_reader_state_v1(
+        &self,
+    ) -> kaspa_database::prelude::StoreResult<
+        Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>,
+    > {
+        let sink = self.lkg_virtual_state.load().ghostdag_data.selected_parent;
+        if let Some((at, state)) = self.palw_reader_snapshot.lock().as_ref()
+            && *at == sink
+        {
+            return Ok(Some((sink, Arc::clone(state))));
+        }
+        let snapshot = self.palw_state_v2_store.read().load_tip_resident_v1()?;
+        if snapshot.as_ref().is_some_and(|(at, _)| *at != sink) {
+            return Err(kaspa_database::prelude::StoreError::LocalResourceUnavailable(
+                "PALW GC tip and selected parent differ; retry".into(),
+            ));
+        }
+        Ok(snapshot)
     }
 
     /// **LIVE-R1 N3: the PALW state every `palw_*` reader answers from — the state AT the committed
@@ -12206,5 +12312,30 @@ mod tir_preflight_fault_tests_v2 {
         }
         assert!(matches!(tir_conviction_preflight_outcome_v2(Err(E::MissingClaim(Default::default()))), Ok(Some(Err(_)))));
         assert!(matches!(tir_conviction_preflight_outcome_v2(Ok(())), Ok(Some(Ok(())))));
+    }
+}
+
+#[cfg(test)]
+mod pruning_snapshot_read_fault_tests_v1 {
+    use super::pruning_snapshot_read_error_v1;
+    use kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1 as ReadError;
+    use kaspa_database::prelude::{DbKey, StoreError};
+
+    #[test]
+    fn snapshot_local_faults_preserve_category_without_store_payload() {
+        for (error, expected) in [
+            (StoreError::LocalResourceUnavailable("private diagnostic payload".into()), ReadError::ResourceUnavailable),
+            (StoreError::DataInconsistency("private row payload".into()), ReadError::Corrupt),
+            (StoreError::KeyNotFound(DbKey::prefix_only(&[0x81])), ReadError::Corrupt),
+            (
+                StoreError::DeserializationError(Box::new(bincode::ErrorKind::Custom("private codec payload".into()))),
+                ReadError::Corrupt,
+            ),
+        ] {
+            let classified = pruning_snapshot_read_error_v1(error);
+            assert_eq!(classified, expected);
+            assert!(!classified.to_string().contains("private"));
+            assert!(!format!("{classified:?}").contains("private"));
+        }
     }
 }

@@ -1666,16 +1666,124 @@ fn the_foreign_retention_keeps_a_live_claims_material_past_the_age_bound() {
     let pinned: HashSet<Hash64> = [live].into();
     let hours = |n: u64| std::time::Duration::from_secs(n * 3600);
     // 93 hours on: the 2M claim is still in its window.
-    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now() + hours(93), 4_096);
+    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now() + hours(93), 4_096, |_| Ok(false));
     assert!(dir.join(format!("{live}.material")).exists() && dir.join(format!("{live}.answer")).exists(), "a live claim's files stay");
     assert!(!dir.join(format!("{gone}.material")).exists() && !dir.join("junk").exists(), "the rest go by age, as before");
     // By count: the live claim's files do not count, and are never the ones evicted.
     for n in 0..3u64 {
         std::fs::write(dir.join(format!("{}.material", h(0x100 + n))), b"bytes").unwrap();
     }
-    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now(), 1);
+    prune_foreign_retention_v1(&dir, &pinned, std::time::SystemTime::now(), 1, |_| Ok(false));
     let left = std::fs::read_dir(&dir).unwrap().count();
     assert_eq!(left, 3, "the two live files, and one of the three others");
     assert!(dir.join(format!("{live}.material")).exists());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Cold duty caches and their finite capacity cannot release an accepted DA
+/// obligation. Re-read the selected claim for both the age and count sweeps.
+#[test]
+fn foreign_gc_rereads_accepted_retention_after_restart_and_branch_change() {
+    let dir = std::env::temp_dir().join(format!("seat-r-retention-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let claim = h(0x20608);
+    let material = dir.join(format!("{claim}.material"));
+    let answer = dir.join(format!("{claim}.answer"));
+    std::fs::write(&material, b"committed material").unwrap();
+    std::fs::write(&answer, b"answer").unwrap();
+    let old = std::time::SystemTime::now() + std::time::Duration::from_secs(100 * 3600);
+    // An empty cache represents cold startup or eviction. Both files exceed the
+    // age bound, and max_files=0 independently applies count pressure.
+    for now_daa in [20_605, 20_607, 20_608] {
+        let empty = HashSet::new();
+        prune_foreign_retention_v1(&dir, &empty, old, 0, |id| Ok(*id == claim && now_daa <= 20_608));
+        assert!(material.exists() && answer.exists(), "DAA {now_daa}: raw deadline 20604 cannot release accepted 20608");
+    }
+    // A different selected branch has a later acceptance. It must be re-read;
+    // neither the old cached horizon nor the raw manifest releases the files.
+    for now_daa in [20_609, 20_612] {
+        prune_foreign_retention_v1(&dir, &HashSet::new(), old, 0, |id| Ok(*id == claim && now_daa <= 20_612));
+        assert!(material.exists() && answer.exists());
+    }
+    prune_foreign_retention_v1(&dir, &HashSet::new(), old, 0, |_| Ok(false));
+    assert!(!material.exists() && !answer.exists(), "only the current chain's discharge permits GC");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn foreign_gc_count_candidates_require_a_fresh_discharge_before_unlink() {
+    let dir = std::env::temp_dir().join(format!("seat-r-count-retention-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let claim = h(0x20609);
+    let material = dir.join(format!("{claim}.material"));
+    std::fs::write(&material, b"accepted material").unwrap();
+    let now = std::time::SystemTime::now();
+    for after in [Ok(true), Err("branch snapshot changed".to_string())] {
+        let inspected = std::cell::Cell::new(false);
+        // A fresh file goes through the count sweep only. Its selected-chain
+        // obligation changes between the scan and the attempted unlink.
+        prune_foreign_retention_v1(&dir, &HashSet::new(), now, 0, |id| {
+            assert_eq!(*id, claim);
+            if inspected.replace(true) { after.clone() } else { Ok(false) }
+        });
+        assert!(material.exists(), "{after:?} cannot authorize deletion");
+    }
+    prune_foreign_retention_v1(&dir, &HashSet::new(), now, 0, |_| Ok(false));
+    assert!(!material.exists(), "a healthy discharge still permits reclamation");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn foreign_gc_skips_replaced_and_actively_published_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let claim = h(0x20610);
+    let material = dir.path().join(format!("{claim}.material"));
+    std::fs::write(&material, b"old").unwrap();
+    let inspected = std::cell::Cell::new(false);
+    let sweep = |chain_owed: &dyn Fn(&Hash64) -> Result<bool, String>| {
+        prune_foreign_retention_v1(dir.path(), &HashSet::new(), std::time::SystemTime::now(), 0, chain_owed);
+    };
+    sweep(&|id| {
+        assert_eq!(*id, claim);
+        if inspected.replace(true) {
+            let _pin = crate::palw_retention::pin_attempt_publication(claim);
+            let pending = dir.path().join("replacement");
+            std::fs::write(&pending, b"new").unwrap();
+            std::fs::rename(pending, &material).unwrap();
+        }
+        Ok(false)
+    });
+    assert_eq!(std::fs::read(&material).unwrap(), b"new");
+    let pin = crate::palw_retention::pin_attempt_publication(claim);
+    sweep(&|_| Ok(false));
+    assert!(material.exists());
+    drop(pin);
+    sweep(&|_| Ok(false));
+    assert!(!material.exists());
+}
+
+#[test]
+fn foreign_gc_read_failures_keep_material_but_healthy_absence_does_not_pin_forever() {
+    let dir = std::env::temp_dir().join(format!("seat-r-read-failure-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let claim = h(0x20A01);
+    let material = dir.join(format!("{claim}.material"));
+    let answer = dir.join(format!("{claim}.answer"));
+    std::fs::write(&material, b"accepted material").unwrap();
+    std::fs::write(&answer, b"accepted answer").unwrap();
+    let old = std::time::SystemTime::now() + std::time::Duration::from_secs(100 * 3600);
+    for why in ["native allocation refused", "DB read failed", "snapshot missing", "branch/import changed"] {
+        prune_foreign_retention_v1(&dir, &HashSet::new(), old, 0, |_| Err(why.into()));
+        assert!(material.exists() && answer.exists(), "{why}: unknown read must survive age AND count pressure");
+    }
+    prune_foreign_retention_v1(&dir, &HashSet::new(), old, 0, |_| Ok(true));
+    assert!(material.exists() && answer.exists());
+    // Same disk entries, empty duty cache: a later healthy authoritative absence
+    // is collectible. Unknown failures never create a permanent policy pin.
+    prune_foreign_retention_v1(&dir, &HashSet::new(), old, 0, |_| Ok(false));
+    assert!(!material.exists() && !answer.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
 }

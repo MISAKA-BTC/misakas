@@ -598,6 +598,11 @@ fn pools() -> &'static Mutex<Pools> {
 /// `arm_ram_scale_v1`, before any service can reserve. `None` leaves the live probe as the only
 /// bound. Arming twice keeps the first (a service cannot re-budget itself).
 pub fn arm_host_share_v1(share: Option<u64>) {
+    // All audited transport/native allocations see the same cgroup-aware live
+    // headroom, with LazyFree credited only while the sample is fresh.
+    let _ = kaspa_core::memory_budget::global_memory_budget().set_headroom_probe(Box::new(|| {
+        crate::palw_backends::host_available_bytes_v1().map(|available| available.saturating_sub(128 << 20))
+    }));
     let mut pools = pools().lock().unwrap_or_else(|p| p.into_inner());
     if pools.host.reserved_bytes() == 0 && pools.host.share.is_none() && share.is_some() {
         pools.host = PalwMemoryLedgerV1::new_with_proof_carve(
@@ -615,21 +620,71 @@ pub fn arm_host_share_v1(share: Option<u64>) {
 /// cannot be used (logged by `palw_host_ledger`), leaves the pool this process's alone. Returns whether
 /// the host ledger is armed.
 pub fn arm_host_ledger_v1(dir: Option<&std::path::Path>) -> bool {
-    let Some(host) = crate::palw_host_ledger::arm_shared_host_ledger_v1(dir, crate::palw_host_ledger::PALW_HOST_MEMBER_NODE_V1) else {
-        return false;
-    };
+    let host = crate::palw_host_ledger::arm_shared_host_ledger_v1(dir, crate::palw_host_ledger::PALW_HOST_MEMBER_NODE_V1);
     let mut pools = pools().lock().unwrap_or_else(|p| p.into_inner());
-    if pools.host.reserved_bytes() == 0 && pools.host.host.is_none() {
-        pools.host = PalwMemoryLedgerV1::new_with_host_v1(
-            PalwMemoryPoolV1::Host,
-            pools.host.share,
-            PALW_READINESS_PROOF_CARVE_BYTES_V1,
-            crate::palw_backends::host_headroom_v1,
-            host,
-            crate::palw_backends::host_wide_headroom_v1,
-        );
+    if let Some(host) = &host {
+        if pools.host.reserved_bytes() == 0 && pools.host.host.is_none() {
+            pools.host = PalwMemoryLedgerV1::new_with_host_v1(
+                PalwMemoryPoolV1::Host,
+                pools.host.share,
+                PALW_READINESS_PROOF_CARVE_BYTES_V1,
+                crate::palw_backends::host_headroom_v1,
+                Arc::clone(host),
+                crate::palw_backends::host_wide_headroom_v1,
+            );
+        }
     }
-    pools.host.host_ledger_armed()
+    let armed = pools.host.host_ledger_armed();
+    drop(pools);
+    // The new audited allocation bank needs cross-process pending accounting
+    // even on a plain node without optional PALW execution/host-ledger flags.
+    // Explicit PALW ledgers share the same file; otherwise only this byte bank
+    // uses a private per-user runtime directory, leaving PALW policy unchanged.
+    let byte_host = host.or_else(|| {
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: geteuid has no pointer arguments or side effects.
+            let uid = unsafe { libc::geteuid() };
+            let path = std::path::Path::new("/tmp").join(format!("misaka-node-memory-{uid}"));
+            crate::palw_host_ledger::PalwHostLedgerV1::open(&path)
+                .map_err(|why| {
+                    kaspa_core::warn!("[memory-budget] default host byte ledger unavailable: {why}");
+                })
+                .ok()
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
+    });
+    if let Some(host) = byte_host {
+        let result = kaspa_core::memory_budget::global_memory_budget().set_external_accounting(Box::new(move |classes, pending| {
+            let total = classes.into_iter().try_fold(0u64, |sum, n| sum.checked_add(n)).ok_or("process bytes overflow")?;
+            host.replace_process_memory_v1(
+                u64::MAX,
+                total,
+                pending,
+                crate::palw_host_ledger::audited_host_capacity_v1(),
+                crate::palw_backends::host_available_bytes_v1().map(|n| n.saturating_sub(128 << 20)),
+            )
+        }));
+        if let Err(why) = result {
+            kaspa_core::warn!("[memory-budget] host byte accounting bridge: {why}");
+        } else {
+            // Reconcile releases/materialization if a transient ledger I/O
+            // failure occurred when an owner stopped being pending. Otherwise
+            // another live process could wait forever on that stale promise.
+            if let Err(why) = std::thread::Builder::new().name("node-byte-accounting".into()).spawn(|| {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(5));
+                    let _ = kaspa_core::memory_budget::global_memory_budget().refresh_external_accounting();
+                }
+            }) {
+                kaspa_core::warn!("[memory-budget] host byte accounting reconciler did not start: {why}");
+            }
+        }
+    }
+    armed
 }
 
 /// The host pool's ledger.

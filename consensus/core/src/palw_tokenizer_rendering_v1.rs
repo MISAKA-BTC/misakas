@@ -81,6 +81,10 @@ pub struct PalwQwenRenderingMapV1 {
 impl PalwQwenRenderingMapV1 {
     pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {
         let root = palw_unique_json_v1(bytes)?;
+        Self::from_unique_json(&root)
+    }
+
+    pub(super) fn from_unique_json(root: &serde_json::Value) -> Result<Self, &'static str> {
         let model = root.get("model").ok_or("no model")?;
         let vocab = model.get("vocab").and_then(|v| v.as_object()).ok_or("no model.vocab")?;
         let mut tokens = BTreeMap::new();
@@ -118,6 +122,9 @@ impl PalwQwenRenderingMapV1 {
             }
         }
         Ok(Self { tokens, highest })
+    }
+    pub(super) fn highest_id(&self) -> u32 {
+        self.highest
     }
     pub fn rendering(&self, id: u32) -> Option<Vec<u8>> {
         if id > self.highest {
@@ -210,6 +217,10 @@ fn normalize_rendering_json_numbers(bytes: &[u8]) -> Result<Vec<u8>, &'static st
 /// metadata), plus each ordinary vocabulary id and added-token id. This descriptor builder
 /// is host-side; the court never trusts this count until the raw file hash authenticates.
 pub fn palw_tokenizer_key_events_v1(bytes: &[u8]) -> Result<u64, &'static str> {
+    tokenizer_key_events_from_unique_json(&palw_unique_json_v1(bytes)?)
+}
+
+pub(super) fn tokenizer_key_events_from_unique_json(value: &serde_json::Value) -> Result<u64, &'static str> {
     fn object_keys(value: &serde_json::Value) -> Result<u64, &'static str> {
         let mut count = 0u64;
         match value {
@@ -228,7 +239,6 @@ pub fn palw_tokenizer_key_events_v1(bytes: &[u8]) -> Result<u64, &'static str> {
         }
         Ok(count)
     }
-    let value = palw_unique_json_v1(bytes)?;
     let vocab = value.get("model").and_then(|v| v.get("vocab")).and_then(|v| v.as_object()).ok_or("missing model.vocab")?;
     let added = match value.get("added_tokens") {
         None => 0,
@@ -236,7 +246,7 @@ pub fn palw_tokenizer_key_events_v1(bytes: &[u8]) -> Result<u64, &'static str> {
             u64::try_from(list.as_array().ok_or("added_tokens is not an array")?.len()).map_err(|_| "key count overflows")?
         }
     };
-    object_keys(&value)?.checked_add(vocab.len() as u64).and_then(|n| n.checked_add(added)).ok_or("key count overflows")
+    object_keys(value)?.checked_add(vocab.len() as u64).and_then(|n| n.checked_add(added)).ok_or("key count overflows")
 }
 
 struct UniqueJson(serde_json::Value);
