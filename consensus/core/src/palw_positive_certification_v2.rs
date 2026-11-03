@@ -391,6 +391,29 @@ pub(crate) fn positive_certification_case_live_v2(
     Ok(!matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked | ClaimStatus::EndedUnverified))
 }
 
+/// Bind the certification header to the original accepted Result row and
+/// its current Case. The Case status is independent of identity here.
+pub(crate) fn check_positive_certification_result_links_v2(
+    header: &PositiveCertificationHeaderV2,
+    result: &ResultRow,
+    case: &CaseRow,
+) -> Result<(), ContractError> {
+    positive_certification_case_live_v2(header, case)?;
+    let commit = &result.result;
+    if header.commit_origin != result.origin
+        || header.assignment.0 != result.role_assignment.digest
+        || header.worker_key != result.miner_key
+        || header.subject != misaka_palw_positive_contract::native::certification_subject(commit)
+        || header.claim != commit.claim_id()
+        || header.result != commit.id()
+        || header.case != commit.case_id()
+        || header.scope != commit.scope
+    {
+        return Err(ContractError::Identity);
+    }
+    Ok(())
+}
+
 /// Failure-only pure projection. Positive certification requires the concrete
 /// current native checked/closed-fraud session and is never returned here.
 pub fn positive_certification_failure_v2(

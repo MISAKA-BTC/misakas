@@ -54,7 +54,8 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
 fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
     use crate::{
         palw_positive_certification_v2::{
-            PositiveCertificationHeaderV2, positive_certification_case_live_v2, positive_certification_policy_id_v2,
+            PositiveCertificationHeaderV2, check_positive_certification_result_links_v2, positive_certification_case_live_v2,
+            positive_certification_policy_id_v2,
         },
         palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
     };
@@ -77,7 +78,7 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
     let header = PositiveCertificationHeaderV2 {
         version: 2,
         revision: 1,
-        assignment: misaka_palw_positive_contract::assignment::AssignmentId(d(81)),
+        assignment: misaka_palw_positive_contract::assignment::AssignmentId(result.role_assignment.digest),
         subject: misaka_palw_positive_contract::native::certification_subject(r),
         claim: r.claim_id(),
         result: r.id(),
@@ -94,9 +95,23 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         liability: case.liability,
     };
     assert_eq!(positive_certification_case_live_v2(&header, &case), Ok(true));
+    assert_eq!(check_positive_certification_result_links_v2(&header, &result, &case), Ok(()));
+    let mut foreign = header.clone();
+    foreign.commit_origin.accepted_tx_ordinal += 1;
+    assert_eq!(check_positive_certification_result_links_v2(&foreign, &result, &case), Err(ContractError::Identity));
+    foreign = header.clone();
+    foreign.assignment = misaka_palw_positive_contract::assignment::AssignmentId(d(81));
+    assert_eq!(check_positive_certification_result_links_v2(&foreign, &result, &case), Err(ContractError::Identity));
+    foreign = header.clone();
+    foreign.worker_key[0] ^= 1;
+    assert_eq!(check_positive_certification_result_links_v2(&foreign, &result, &case), Err(ContractError::Identity));
+    foreign = header.clone();
+    foreign.subject = d(84);
+    assert_eq!(check_positive_certification_result_links_v2(&foreign, &result, &case), Err(ContractError::Identity));
     for status in [ClaimStatus::ClaimRefuted, ClaimStatus::Revoked, ClaimStatus::EndedUnverified] {
         case.status = status;
         assert_eq!(positive_certification_case_live_v2(&header, &case), Ok(false));
+        assert_eq!(check_positive_certification_result_links_v2(&header, &result, &case), Ok(()));
         let mut other_output = r.clone();
         other_output.output = d(85);
         assert_eq!(other_output.case_id(), r.case_id());

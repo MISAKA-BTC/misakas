@@ -218,7 +218,11 @@ pub(super) struct NativeAssignedCaseSessionV2<'a> {
     closed: ClosedAssignedFraudV2,
 }
 impl NativeAssignedCaseSessionV2<'_> {
-    pub(super) fn ensure_current(&self, state: &PalwChainStateV2, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    pub(super) fn ensure_current(
+        &self,
+        state: &PalwChainStateV2,
+        ctx: &PalwBlockContextV2,
+    ) -> Result<(AssignmentRow, PositiveRowBundleV2), PalwStateV2Error> {
         if state.state_root() != self.root || *ctx != self.context {
             return Err(refuse("stale native Case session"));
         }
@@ -232,7 +236,7 @@ impl NativeAssignedCaseSessionV2<'_> {
             return Err(refuse("native Case session lineage or before-row changed"));
         }
         reject_legacy_aliases(state, &a, self.result)?;
-        Ok(())
+        Ok((a, bundle))
     }
     pub(super) fn result(&self) -> &MinerResultCommit {
         self.result
