@@ -958,5 +958,21 @@
     "stored_sha256": "8ec3afc9495075cc33bc5533d802430f008d8dd82ae8d4336f459b37c2b595a3",
     "raw_bytes": 341860,
     "stored_bytes": 23666
+  },
+  {
+    "raw_name": "relay-extents-contract-first.log",
+    "stored_name": "relay-extents-contract-first.log.gz",
+    "raw_sha256": "5136c748b372f732953d5eee9eb15cfe30cd987691bf703da13c357dfb04f29c",
+    "stored_sha256": "fb3bd587aa20e6150a377f60054015e47c5b6c72246d5e00ecd5fd615e2d4508",
+    "raw_bytes": 53248,
+    "stored_bytes": 4277
+  },
+  {
+    "raw_name": "relay-extents-library-first.log",
+    "stored_name": "relay-extents-library-first.log.gz",
+    "raw_sha256": "4774292003ee87ed1727e66a58e16b488328e0eb878651d990406860ce4f228c",
+    "stored_sha256": "66307df563c8a8c17ae288841aaac0658e6a27af0b184855116cd2c45481f74a",
+    "raw_bytes": 341860,
+    "stored_bytes": 23655
   }
 ]

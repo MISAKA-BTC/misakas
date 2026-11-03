@@ -82,8 +82,9 @@ impl DbPalwStateV2Store {
         let mut entries = delta.entries.iter();
         while let Some(entry) = entries.next() {
             let Some((auth_key, auth_bytes)) = created_relay_row(entry) else { continue };
+            let custody_entry = entries.next().ok_or_else(|| invalid("new authorization lacks adjacent custody"))?;
             let (custody_key, custody_bytes) =
-                entries.next().and_then(created_relay_row).ok_or_else(|| invalid("new authorization lacks adjacent custody"))?;
+                created_relay_row(custody_entry).ok_or_else(|| invalid("new authorization lacks adjacent custody"))?;
             let NativeRowBody::FundingRelayAuthorization(auth) =
                 NativeRowValue::decode(auth_key, auth_bytes).map_err(|_| invalid("invalid authorization row"))?.body
             else {
@@ -131,19 +132,34 @@ impl DbPalwStateV2Store {
                 return Err(invalid("actual charge differs from the canonical registration reference"));
             }
             let key = key(auth.material.digest);
+            if payload.len() > FUNDING_RELAY_MAX_BODY_BYTES_V2 + 3 {
+                return Err(invalid("literal material exceeds maximum size"));
+            }
+            // Charge the contribution of both complete Borsh delta entries,
+            // including their length and option framing, in addition to the
+            // raw material key/value. The common delta wrapper already exists
+            // for this block. Up to four additional bytes can be needed to
+            // grow its RocksDB value-length varint.
+            let auth_extent = borsh::object_length(entry).map_err(|_| invalid("authorization delta size"))? as u64;
+            let custody_extent = borsh::object_length(custody_entry).map_err(|_| invalid("custody delta size"))? as u64;
+            let raw_extent = (payload.len() + key.len()) as u64;
+            let database_extent = raw_extent
+                .checked_add(auth_extent)
+                .and_then(|n| n.checked_add(custody_extent))
+                .ok_or_else(|| capacity("registration database extent overflow"))?;
+            let batch_extent = database_extent.checked_add(8).ok_or_else(|| capacity("registration batch extent overflow"))?;
+            if database_extent > auth.quote.usage.database_bytes || batch_extent > auth.quote.usage.batch_bytes {
+                return Err(invalid("registration exceeds its quoted database or batch extent"));
+            }
             if let Some(saved) = self.db.get_pinned(key)? {
                 if saved.as_ref() != payload {
                     return Err(invalid("content address already contains different bytes"));
                 }
                 continue;
             }
-            // RocksDB Put: type, one-byte key length, key, length varint,
-            // and value. A valid op14 payload takes exactly two varint bytes.
-            let bytes = (payload.len() + key.len() + 4) as u64;
-            if payload.len() > FUNDING_RELAY_MAX_BODY_BYTES_V2 + 3 || bytes > auth.quote.usage.batch_bytes {
-                return Err(invalid("literal material exceeds its quoted batch footprint"));
-            }
-            added = added.checked_add(bytes).ok_or_else(|| capacity("batch extent overflow"))?;
+            // RocksDB Put adds its type, one-byte key length and two-byte
+            // value length to this fixed-size relay key/value.
+            added = added.checked_add(raw_extent + 4).ok_or_else(|| capacity("batch extent overflow"))?;
             pending.push((key, payload));
         }
         if pending.is_empty() {

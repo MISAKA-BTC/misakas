@@ -521,3 +521,23 @@ fn metadata_charge_requires_exact_debit_from_the_observed_collectible_fee() {
     let different_prior_fee = FundingRelayCarrierFeesV2::new(gross, mandatory + 1, before_relay, 13).unwrap();
     assert_ne!(charged.digest, auth.carrier_charge_material(different_prior_fee).unwrap().digest);
 }
+
+#[test]
+fn relay_aux_scan_caps_cover_absent_probes_and_value_bytes_atomically() {
+    let mut physical = physical();
+    physical.max_replay_reads = 3;
+    physical.max_replay_work = 300;
+    let mut budget = FundingRelayAuxScanBudgetV2::new(&physical).unwrap();
+
+    budget.inspect(74, 0).unwrap();
+    assert!(budget.inspect(74, 153).is_err());
+    budget.inspect(74, 78).unwrap();
+    budget.inspect(74, 0).unwrap();
+    assert!(budget.inspect(1, 0).is_err());
+
+    physical.max_replay_work = 1000;
+    physical.max_replay_reads = 1;
+    let mut budget = FundingRelayAuxScanBudgetV2::new(&physical).unwrap();
+    budget.inspect(74, 0).unwrap();
+    assert!(budget.inspect(74, 0).is_err());
+}

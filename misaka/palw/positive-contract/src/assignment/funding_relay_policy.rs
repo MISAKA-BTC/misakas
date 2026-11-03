@@ -167,6 +167,31 @@ impl FundingRelayPhysicalProfileV2 {
     }
 }
 
+/// Per-operation cap for scanning rooted relay occupancy. A point probe
+/// counts even when absent. A range visit counts the key and any value it
+/// inspects. This meters encoded bytes, separately from signature and
+/// historical-ancestry work.
+pub struct FundingRelayAuxScanBudgetV2 {
+    remaining_reads: u64,
+    remaining_work: u64,
+}
+
+impl FundingRelayAuxScanBudgetV2 {
+    pub fn new(physical: &FundingRelayPhysicalProfileV2) -> Result<Self, ContractError> {
+        physical.validate()?;
+        Ok(Self { remaining_reads: physical.max_replay_reads, remaining_work: physical.max_replay_work })
+    }
+
+    pub fn inspect(&mut self, key_bytes: usize, value_bytes: usize) -> Result<(), ContractError> {
+        let bytes = (key_bytes as u64).checked_add(value_bytes as u64).ok_or(ContractError::Budget)?;
+        let remaining_reads = self.remaining_reads.checked_sub(1).ok_or(ContractError::Budget)?;
+        let remaining_work = self.remaining_work.checked_sub(bytes).ok_or(ContractError::Budget)?;
+        self.remaining_reads = remaining_reads;
+        self.remaining_work = remaining_work;
+        Ok(())
+    }
+}
+
 /// Counts from concrete native typed construction/staging, not remote caps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FundingRelayUsageV2 {

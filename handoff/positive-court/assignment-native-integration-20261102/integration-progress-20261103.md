@@ -638,3 +638,33 @@ and restore owners. No real op14 payment or registration ran.
 Core and Consensus library Clippy passed with warnings denied and all
 nine relay contract cases passed on the same source. The document
 check found zero new issues against the existing 43.
+
+## Bounded relay occupancy reads and full registration storage extents
+
+Initial Assignment relay qualification shares one signed physical
+budget across the six outpoint/purpose probes, each authorization
+range entry, its exact custody lookup and the reverse custody-key
+count. Missing point lookups consume a read. Work in this scan is
+the encoded key and value bytes inspected, charged before decode.
+Exclusive kind endpoints limit both range walks. No new
+authorization gets a slot if either physical limit is exhausted.
+Signature work and historical ancestry/replay need their own
+capacity owners.
+
+The RocksDB staging check measures both complete encoded canonical
+delta entries, including their framing, alongside the literal
+material key/value. The registration quote must cover this DB
+extent plus the additional batch framing bound. The check runs
+even when a different branch left an identical payload on disk,
+so local material reuse cannot relax the canonical reservation.
+The lower-bound quote alone still cannot stage an actual package.
+
+These checks do not install a fee allocation or create a live
+relay registration. The canonical pre-reward allocator and
+end-to-end custody recovery are still open.
+
+Core and Consensus library Clippy passed with warnings denied. All ten
+contract relay cases passed on the same source map, including atomic
+read/work boundary checks. The native occupancy and RocksDB staging
+paths were typechecked. Documentation checking found zero new issues
+against the existing 43.
