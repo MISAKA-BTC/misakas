@@ -594,19 +594,32 @@ struct PendingCaseRelaySuccessorV2 {
 
 impl PendingCaseRelaySuccessorV2 {
     fn bind(mut self, origin: AcceptedOrigin, case_reservation: AcceptedMaterial) -> (FundingRelayCustodyRowV2, NativeDemandLeaseV1) {
-        let reservation = crate::palw_positive_assignment_funds_v2::case_relay_rotation_reservation_v2(
+        self.custody.binding = Some(case_successor_relay_binding_v2(
             origin,
             case_reservation,
             self.custody.reservation,
-        );
-        self.custody.binding = Some(FundingRelayBindingV2 {
-            origin,
-            original_funding: self.original_funding,
-            predecessor: Some(self.predecessor),
-            original_contract: self.original_contract,
-            reservation,
-        });
+            self.original_funding,
+            self.predecessor,
+            self.original_contract,
+        ));
         (self.custody, self._lease)
+    }
+}
+
+fn case_successor_relay_binding_v2(
+    origin: AcceptedOrigin,
+    case_reservation: AcceptedMaterial,
+    pending: AcceptedMaterial,
+    original_funding: NativeOutpoint,
+    predecessor: NativeOutpoint,
+    original_contract: Digest,
+) -> FundingRelayBindingV2 {
+    FundingRelayBindingV2 {
+        origin,
+        original_funding,
+        predecessor: Some(predecessor),
+        original_contract,
+        reservation: crate::palw_positive_assignment_funds_v2::case_relay_rotation_reservation_v2(origin, case_reservation, pending),
     }
 }
 use crate::palw_settlement_once_v1::{
@@ -1080,6 +1093,7 @@ pub struct QualifiedCaseSourceSpendV2 {
     inputs: Digest,
     journal_carrier: Digest,
     case: CaseId,
+    case_reservation: AcceptedMaterial,
     locked: u64,
     paid: u64,
     debit: crate::tx::TransactionOutpoint,
@@ -1123,6 +1137,38 @@ impl QualifiedCaseSourceSpendV2 {
             && after.current_outpoint.map(native_assignment_outpoint_v2) == self.continuation
             && *after
                 == FundingRow { current_outpoint: after.current_outpoint, fee, last_settlement: Some(settlement), ..before.clone() }
+    }
+
+    pub(in crate::palw_state_v2) fn matches_successor_relay_delta_v2(
+        &self,
+        funding: &FundingRow,
+        delta: Option<(&FundingRelayCustodyRowV2, &FundingRelayCustodyRowV2)>,
+        origin: AcceptedOrigin,
+    ) -> bool {
+        use crate::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2;
+
+        let Some(reservation) = self.successor_relay else {
+            return delta.is_none();
+        };
+        let (Some((before, after)), Some(predecessor)) = (delta, funding.current_outpoint) else {
+            return false;
+        };
+        if before.purpose != RelayFundingPurposeV2::CaseC
+            || Some(native_assignment_outpoint_v2(before.funding_outpoint)) != self.continuation
+            || before.reservation != reservation
+            || before.binding.is_some()
+        {
+            return false;
+        }
+        let binding = case_successor_relay_binding_v2(
+            origin,
+            self.case_reservation,
+            reservation,
+            funding.original_outpoint,
+            predecessor,
+            funding.consent.id().0,
+        );
+        *after == FundingRelayCustodyRowV2 { binding: Some(binding), ..before.clone() }
     }
 
     pub fn matches_v2(&self, transaction: &crate::tx::Transaction, entries: &[crate::tx::UtxoEntry]) -> bool {
@@ -1179,6 +1225,7 @@ pub fn qualify_case_source_spend_v2(
             .map_err(refuse)?,
         journal_carrier: crate::palw_positive_assignment_case_material_v2::case_payment_carrier_digest_v2(transaction),
         case: prior.case,
+        case_reservation: prior.reservation,
         locked: entries[0].amount,
         paid: payment.amount,
         debit: native_assignment_outpoint_v2(payment.debit),
@@ -1222,6 +1269,7 @@ mod source_fee_tests {
             inputs: Digest([0; 64]),
             journal_carrier: case_payment_carrier_digest_v2(&tx),
             case: case.case,
+            case_reservation: case.reservation,
             locked: before.initial_locked,
             paid: 1,
             debit: native_assignment_outpoint_v2(before.original_outpoint),
@@ -1243,6 +1291,35 @@ mod source_fee_tests {
         after.fee.remaining -= 1;
         assert!(!proof.matches_funding_delta_v2(&before, &after, origin));
         assert!(!proof.matches_funding_delta_v2(&before, &before, origin));
+
+        let reservation = AcceptedMaterial { origin: before.funding_origin, digest: Digest([21; 64]) };
+        let pending = FundingRelayCustodyRowV2 {
+            funding_outpoint: next,
+            purpose: RelayFundingPurposeV2::CaseC,
+            terms: Digest([22; 64]),
+            relay_signature: [0; misaka_palw_positive_contract::identity::SIGNATURE_BYTES],
+            material: reservation,
+            reservation,
+            retention_until_daa: 100,
+            binding: None,
+        };
+        let binding = case_successor_relay_binding_v2(
+            origin,
+            case.reservation,
+            reservation,
+            before.original_outpoint,
+            before.original_outpoint,
+            before.consent.id().0,
+        );
+        let bound = FundingRelayCustodyRowV2 { binding: Some(binding), ..pending.clone() };
+        let relay_proof = QualifiedCaseSourceSpendV2 { successor_relay: Some(reservation), ..proof };
+        assert!(proof.matches_successor_relay_delta_v2(&before, None, origin));
+        assert!(!proof.matches_successor_relay_delta_v2(&before, Some((&pending, &bound)), origin));
+        assert!(relay_proof.matches_successor_relay_delta_v2(&before, Some((&pending, &bound)), origin));
+        assert!(!relay_proof.matches_successor_relay_delta_v2(&before, None, origin));
+        assert!(!relay_proof.matches_successor_relay_delta_v2(&before, Some((&pending, &pending)), origin));
+        let wrong = FundingRelayCustodyRowV2 { binding: Some(FundingRelayBindingV2 { predecessor: Some(next), ..binding }), ..bound };
+        assert!(!relay_proof.matches_successor_relay_delta_v2(&before, Some((&pending, &wrong)), origin));
     }
 
     #[test]

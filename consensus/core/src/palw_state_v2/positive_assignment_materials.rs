@@ -127,26 +127,56 @@ impl PositiveAssignmentMaterialOutcomeV2 {
             let boundary = AssignmentCaseBoundaryV2::decode(aux.preimage()).map_err(|_| mismatch())?;
             let start = usize::try_from(boundary.before_delta_end).map_err(|_| mismatch())?;
             let event = entries.get(start..record.delta_end).ok_or_else(mismatch)?;
-            let key = NativeRowKey::Funding(record.header.case).encode();
-            let mut found = false;
+            let funding_key = NativeRowKey::Funding(record.header.case).encode();
+            let relay_key = spend.continuation_v2().map(|point| {
+                use misaka_palw_positive_contract::{
+                    assignment::funding_relay::RelayFundingPurposeV2,
+                    rows::{NativeHash64, NativeOutpoint},
+                };
+                let funding = NativeOutpoint { transaction: NativeHash64(point.transaction_id.as_bytes()), index: point.index };
+                NativeRowKey::FundingRelayCustody { funding, purpose: RelayFundingPurposeV2::CaseC }.encode()
+            });
+            let mut funding = None;
+            let mut relay = None;
             for entry in event {
-                let PalwDeltaEntryV2::KernelRouteRow { table, key: delta_key, old, new } = entry else { continue };
-                if *table != KERNEL_AUX_TABLE || *delta_key != key {
+                let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else { continue };
+                if *table != KERNEL_AUX_TABLE {
                     continue;
                 }
+                let rows = if key == &funding_key {
+                    &mut funding
+                } else if Some(key) == relay_key.as_ref() {
+                    &mut relay
+                } else {
+                    continue;
+                };
                 let (Some(old), Some(new)) = (old.as_deref(), new.as_deref()) else { return Err(mismatch()) };
-                let NativeRowBody::Funding(before) = NativeRowValue::decode(&key, old).map_err(|_| mismatch())?.body else {
-                    return Err(mismatch());
-                };
-                let NativeRowBody::Funding(after) = NativeRowValue::decode(&key, new).map_err(|_| mismatch())?.body else {
-                    return Err(mismatch());
-                };
-                if found || !spend.matches_funding_delta_v2(&before, &after, record.header.origin) {
+                if rows.replace((key.as_slice(), old, new)).is_some() {
                     return Err(mismatch());
                 }
-                found = true;
             }
-            if !found {
+            let (key, old, new) = funding.ok_or_else(mismatch)?;
+            let NativeRowBody::Funding(before) = NativeRowValue::decode(key, old).map_err(|_| mismatch())?.body else {
+                return Err(mismatch());
+            };
+            let NativeRowBody::Funding(after) = NativeRowValue::decode(key, new).map_err(|_| mismatch())?.body else {
+                return Err(mismatch());
+            };
+            if !spend.matches_funding_delta_v2(&before, &after, record.header.origin) {
+                return Err(mismatch());
+            }
+            let relay = if let Some((key, old, new)) = relay {
+                let NativeRowBody::FundingRelayCustody(old) = NativeRowValue::decode(key, old).map_err(|_| mismatch())?.body else {
+                    return Err(mismatch());
+                };
+                let NativeRowBody::FundingRelayCustody(new) = NativeRowValue::decode(key, new).map_err(|_| mismatch())?.body else {
+                    return Err(mismatch());
+                };
+                Some((old, new))
+            } else {
+                None
+            };
+            if !spend.matches_successor_relay_delta_v2(&before, relay.as_ref().map(|(old, new)| (old, new)), record.header.origin) {
                 return Err(mismatch());
             }
         }
