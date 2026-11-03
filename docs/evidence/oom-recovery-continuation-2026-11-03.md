@@ -238,3 +238,37 @@ the successor UUID at DAA 19,557. The 113 primary remained inactive while
 its separate build proceeded. B1's original APP and service had not been
 changed. The newer Linux build was still running under its isolated
 8 GiB container limit.
+
+## Snapshot transfer and release gates — 02:59 UTC
+
+Two short-lived diagnostics negotiated protocol 108 with the B0 source
+and requested the same pruning point, `4dc9cebd…1ab9e`. The uncompressed
+request received the first 4,194,304-byte chunk of a 47,050,528-byte,
+12-chunk stream. The compressed request received a chunked `found: false`
+response. Both requests reached the application handler. The older
+serving build returned this response for multiple failures, so the
+result localizes the refusal to the compressed path without identifying
+the internal error. Neither diagnostic installed state.
+
+Both regenerated Court captures were copied to a separate private
+directory on the original seat host. The destination files matched the
+sizes and digests above. The old APP and signer remained closed.
+
+The isolated Linux amd64 build of `707a95b88` exited successfully under
+its 8 GiB limit with no OOM. The ELF SHA256 is
+`bc2a2d521a6f434225b50dbf15f7f93a0a488a960644d09d7f39d3b68f9bf404`.
+The binary was verified locally and has not been deployed.
+
+Public REST returned HTTP 200 and the WebSocket reported a synced relay
+at DAA 19,562. At 19,563, B0 had produced 18 REAL attempts since restart,
+with no accepted executor claim, receipt block, or kernel Final in the
+checked state. The ready bond on B0 matched the producer and was excluded
+from its own draw. The 8K model used by B0 was also distinct from the
+512-token model selected by the existing Qwen dialogue worker.
+
+Publication to `main` is gated on T12 convergence, a fresh live G14
+Final with the applicable receipt and Gate C evidence, sustained block
+generation and public indexing, and a real dialogue through the normal
+gateway. A local publication candidate excludes the private operational
+history. It passed all six fast CI gates. Full CI and the live release
+gates remain open.
