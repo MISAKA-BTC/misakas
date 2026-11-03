@@ -853,3 +853,24 @@ B0 and the relay and was publicly returned as a REAL carrier. Its
 claim was absent on B0, whose journal matched that carrier to a
 retention refusal at 20,606 remaining DAA against 20,608 required.
 B0 still had zero receipt blocks and zero kernel Finals.
+
+## Replay reuse under disk pressure — 05:16 UTC
+
+Commit `ec155af3f` reuses an exact verified replay without reserving
+a second copy. It compares the file in fixed-size chunks, rechecks
+file identity, and syncs the file and directory before reporting
+success. Missing or changed material requires space admission and
+atomic durable replacement. The old file remains when a different
+candidate cannot be staged. The scoped suite passed 21 tests,
+including reservation refusal, an equal-sized last-byte mismatch
+and a symlink. Log SHA256 is
+`3a942f28167e4bf4368e0dd4ee6192ffc1b75ccddfd832c6d3a03c9820da82eb`.
+Node default/EVM metadata compiled. The independent review found no
+new blocker. The publication pin remains in-process and ends before
+receipt handoff. The code has yet to run on T12.
+
+The B0, relay, 113 RPC tunnel and public REST/WebSocket tips still
+matched at virtual DAA 19,605. B1 and the 113 primary remained unsynced.
+B0 reported 42 producer blocks, zero receipts and zero kernel Finals.
+The earlier exact Qwen comparison remained terminal at preflight;
+the local filesystem was still below its guarded launch floor.
