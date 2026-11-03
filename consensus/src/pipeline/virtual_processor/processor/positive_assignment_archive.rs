@@ -11,6 +11,11 @@ use crate::{
     processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags,
 };
 use kaspa_consensus_core::{
+    palw_class_registration_origin_v1::{
+        PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1, PalwClassRegistrationDoorV1, palw_class_admission_bytes_digest_v1,
+        palw_class_registration_origin_row_v1,
+    },
+    palw_lifecycle_objects_v2::PALW_LIFECYCLE_TX_VERSION_V2,
     palw_native_resource_v1::{
         NativeChainStateV1, NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, NativeHeapV1, NativeStateDeltaV1,
         native_delta_replay_requests_v1, reserve_native_requests_v1,
@@ -18,7 +23,9 @@ use kaspa_consensus_core::{
     palw_positive_assignment_case_material_v2::{
         AssignmentCaseBoundaryV2, assigned_case_native_carrier_matches_v2, rooted_initial_assigned_case_bind_v2,
     },
-    palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2},
+    palw_positive_assignment_material_v2::{
+        AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2, AssignmentRegisteredDescriptorV2,
+    },
     palw_positive_funding_relay_v2::{pending_funding_relay_payer_scratch_v2, pending_funding_relay_row_images_match_v2},
     palw_positive_journal_chain_v2::{
         CaseJournalChainErrorV2, CaseJournalChainLimitsV2, CaseJournalLinkQuoteV2, CaseJournalPinV2, CaseJournalVisitErrorV2,
@@ -30,6 +37,7 @@ use kaspa_consensus_core::{
         NativeAssignmentRulesV2, NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2,
         PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
     },
+    subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
     tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
 use kaspa_database::prelude::StoreError;
@@ -214,6 +222,32 @@ const ARCHIVE_WORK_PER_DELTA_BYTE_V2: u64 = 6;
 fn charge_archive_work_v2(remaining: &mut u64, amount: u64) -> Result<(), NativeAssignmentArchiveErrorV2> {
     *remaining = remaining.checked_sub(amount).ok_or(NativeAssignmentArchiveErrorV2::Unavailable("native archive replay work cap"))?;
     Ok(())
+}
+
+// ClassRegisteredTirV1 is a single lifecycle object (Borsh tag 61). Its
+// admission is the final field. The rooted digest authenticates this suffix
+// against a previously folded typed carriage, so no wide object is allocated.
+pub(in crate::pipeline::virtual_processor) fn tir_registration_admission_bytes_v2(
+    payload: &[u8],
+    class: Digest,
+    artifact: Digest,
+) -> Option<&[u8]> {
+    use borsh::BorshDeserialize;
+    use kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2;
+    let mut bytes = payload;
+    if u16::deserialize(&mut bytes).ok()? != PALW_LIFECYCLE_TX_VERSION_V2
+        || u8::deserialize(&mut bytes).ok()? != 61
+        || <[u8; 64]>::deserialize(&mut bytes).ok()? != class.0
+        || <[u8; 64]>::deserialize(&mut bytes).ok()? != artifact.0
+    {
+        return None;
+    }
+    u64::deserialize(&mut bytes).ok()?; // slash_value_per_pwu
+    PalwPwuRuleV2::deserialize(&mut bytes).ok()?;
+    u128::deserialize(&mut bytes).ok()?; // initial_target
+    u16::deserialize(&mut bytes).ok()?; // share_permille
+    u64::deserialize(&mut bytes).ok()?; // activation_daa
+    Some(bytes)
 }
 
 fn original_input_replay_work_v2(acceptance_bytes: u64, inputs: u64) -> Result<u64, NativeAssignmentArchiveErrorV2> {
@@ -729,12 +763,13 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(body, limits)
                 .map_err(|_| E::InvalidContinuation)?;
         }
+        let replay_heap = view.material.custody.heap_bytes.min(view.material.native_preimages.physical.max_heap_bytes);
         let accepted = self.load_positive_assignment_carriage_v2(
             parent,
             state,
             record,
             max_payload,
-            view.material.custody.heap_bytes.min(view.material.native_preimages.physical.max_heap_bytes),
+            replay_heap,
             view.material.custody.replay_work,
         )?;
         let prefix = accepted.carriage.prefix_state().map_err(|_| E::Unavailable("original Open pre-event state"))?;
@@ -753,8 +788,16 @@ impl VirtualStateProcessor {
             return Err(E::Invalid("signed Assignment anchor is outside original selected chain"));
         }
         let anchor_daa = self.headers_store.get_daa_score(anchor).map_err(|_| E::Unavailable("original signed ancestor header"))?;
-        let remaining_work =
+        let mut remaining_work =
             view.material.custody.replay_work.checked_sub(accepted.work).ok_or(E::Invalid("original replay work cap"))?;
+        let registration_heap = replay_heap.checked_sub(accepted.heap).ok_or(E::Unavailable("original Open exhausted replay heap"))?;
+        self.check_original_tir_registration_archive_v2(
+            prefix,
+            &view.material.registered,
+            view.material.origin,
+            registration_heap,
+            &mut remaining_work,
+        )?;
         prefix
             .check_original_assignment_verifier_candidates_v2(&view, anchor_daa, row.bundle.terms.result_before_daa, remaining_work)
             .map_err(|_| E::Invalid("original verifier candidates differ or exceed replay budget"))?;
@@ -1358,6 +1401,78 @@ impl VirtualStateProcessor {
                 .get_selected_parent(cursor)
                 .map_err(|_| E::Unavailable("relay payer historical selected parent"))?;
         }
+    }
+
+    /// Resolve the registration reference against the original selected chain,
+    /// native acceptance archive, and the rooted admission digest.
+    fn check_original_tir_registration_archive_v2(
+        &self,
+        prefix: &PalwChainStateV2,
+        descriptor: &AssignmentRegisteredDescriptorV2,
+        before: AcceptedOrigin,
+        maximum_heap: u64,
+        remaining_work: &mut u64,
+    ) -> Result<(), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let registration = descriptor.registration;
+        let origin = registration.origin;
+        let class = Hash64::from_bytes(descriptor.class.0);
+        let rooted = palw_class_registration_origin_row_v1(prefix.kernel_route_state_v1(), &class)
+            .ok_or(E::Unavailable("original rooted TIR admission identity"))?;
+        if rooted.version != PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1
+            || rooted.door != PalwClassRegistrationDoorV1::Tir
+            || rooted.class_id != class
+            || rooted.block.as_bytes() != origin.accepting_block.0
+            || rooted.daa_score != origin.accepted_daa
+            || rooted.admission_digest != Some(Hash64::from_bytes(registration.digest.0))
+            || origin.event_ordinal != 0
+        {
+            return Err(E::Invalid("original rooted TIR admission identity"));
+        }
+        let accepting = BlockHash::from_bytes(origin.accepting_block.0);
+        if origin.accepting_block == before.accepting_block {
+            if origin.accepted_tx_ordinal >= before.accepted_tx_ordinal {
+                return Err(E::Invalid("registration did not precede the Open"));
+            }
+        } else if !self
+            .reachability_service
+            .try_is_chain_ancestor_of(accepting, BlockHash::from_bytes(before.accepting_block.0))
+            .map_err(|_| E::Unavailable("original TIR registration reachability"))?
+        {
+            return Err(E::Invalid("registration is outside the original selected chain"));
+        }
+        let header = self.headers_store.get_header(accepting).map_err(|_| E::Unavailable("original TIR registration header"))?;
+        if header.daa_score != origin.accepted_daa || header.blue_score != origin.accepted_blue_score {
+            return Err(E::Invalid("original TIR registration clock"));
+        }
+        let (block, entry, bytes) = self
+            .acceptance_data_store
+            .accepted_origin_at_bounded_v2(accepting, origin.accepted_tx_ordinal, *remaining_work / 2)
+            .map_err(|error| archive_store_fault_v2(error, "original TIR registration acceptance"))?
+            .ok_or(E::Invalid("original TIR registration ordinal"))?;
+        if block.as_bytes() != origin.carrier_block.0
+            || entry.transaction_id.as_bytes() != origin.carrier_transaction.0
+            || entry.index_within_block == 0
+        {
+            return Err(E::Invalid("original TIR registration acceptance identity"));
+        }
+        charge_archive_work_v2(remaining_work, bytes * 2)?;
+        let archived = self.read_archive_transaction_v2(block, entry.index_within_block, maximum_heap, remaining_work)?;
+        let tx = &archived.transaction;
+        if tx.is_coinbase()
+            || tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE
+            || !tx.id_is_current()
+            || tx.id() != entry.transaction_id
+        {
+            return Err(E::Invalid("original TIR registration transaction"));
+        }
+        let admission = tir_registration_admission_bytes_v2(&tx.payload, descriptor.class, descriptor.artifact)
+            .ok_or(E::Invalid("original TIR registration carrier fields"))?;
+        charge_archive_work_v2(remaining_work, admission.len() as u64)?;
+        if palw_class_admission_bytes_digest_v1(admission).as_bytes() != registration.digest.0 {
+            return Err(E::Invalid("original TIR registration admission bytes"));
+        }
+        Ok(())
     }
 
     fn read_archive_transaction_v2(
