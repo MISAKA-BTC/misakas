@@ -1658,9 +1658,13 @@ impl PalwPanelService {
                     palw_disclosure_queue_key_v1(duty)
                 };
                 disclosure_keys.insert((duty.claim_id, duty.unit), key);
-                if let Some(sent_daa) = court_outbox.submitted_at(&key)
-                    && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
-                {
+                if court_outbox.disclosure_waits_for_retry(&key, current_daa, || {
+                    self.pending_provider_http
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_some_and(|ready| ready.matches_court(duty.claim_id, duty.accepted_block))
+                }) {
                     continue;
                 }
                 if court_outbox.pending().iter().any(|(sid, round, responder, _)| (*sid, *round, *responder) == key) {
@@ -1731,8 +1735,19 @@ impl PalwPanelService {
                              {role:?}: {why}",
                             duties.len()
                         );
+                        let provider_requested = self
+                            .provider_court_request
+                            .lock()
+                            .unwrap()
+                            .as_ref()
+                            .is_some_and(|(requested, carrier, _)| *requested == claim && *carrier == duties[0].accepted_block);
                         for duty in &duties {
-                            court_outbox.mark_submitted(disclosure_keys[&(duty.claim_id, duty.unit)], current_daa);
+                            let key = disclosure_keys[&(duty.claim_id, duty.unit)];
+                            if provider_requested {
+                                court_outbox.mark_provider_material_miss(key, current_daa);
+                            } else {
+                                court_outbox.mark_submitted(key, current_daa);
+                            }
                         }
                         *court_stalls.entry("a data-availability unit cannot be answered from what this node holds").or_default() +=
                             duties.len();
