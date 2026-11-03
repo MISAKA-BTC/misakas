@@ -934,3 +934,23 @@ The guarded IBM build and dependent arithmetic unit retained their
 original invocation IDs. The build was compiling workspace
 dependencies after 238 seconds and had about 13.4 GiB free. The
 arithmetic unit was waiting for the build receipt.
+
+## Selected-chain cursor for the acceptance boundary — 05:26 UTC
+
+The paired read-only cursor scanner starts from a stored selected
+block, checks both nodes' sink, DAA and virtual parents before and
+after, and examines a page of selected additions. It checks both
+selected blocks and merged carriers, re-derives real attempt IDs and
+reads their exact claim rows. Reorg or conflicting views prevent
+cursor advance. An accepting fold is reported as a candidate only
+until it can be independently identified. The local fixture covered
+merged blue work, semantic red filtering and cursor rewind.
+
+The live six-block exercise from DAA 19,605 to 19,608 inspected eight
+unique carrier references and found the exact Qwen #43 and #44
+attempts even though neither was itself a selected-chain block.
+Neither had a claim on B0 or the relay. B0's #44 refusal recorded
+20,606 remaining DAA against 20,608 required, and the public
+WebSocket returned the same REAL carrier. The guarded build was
+still compiling workspace dependencies with about 13.3 GiB free,
+and the arithmetic unit retained its original waiting invocation.
