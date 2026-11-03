@@ -293,7 +293,7 @@ fn tfp1_tokenizer_intake_pins_native_container_and_signed_eof_without_changing_q
     use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
     use crate::palw_tokenizer_rendering_v2::{
         PalwTfp1TokenizerIntakePinsV2 as Pins, PalwTfp1TokenizerIntakeQuoteErrorV2 as Error, PalwTokenizerRenderingBudgetV2,
-        PalwTokenizerRenderingCacheV2,
+        PalwTokenizerRenderingCacheV2, PalwVerifiedTokenizerRegistrationV1,
     };
 
     // This fixture validates a real signed inventory offer, then drives the
@@ -359,10 +359,28 @@ fn tfp1_tokenizer_intake_pins_native_container_and_signed_eof_without_changing_q
     assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw[..raw.len() - 1], &eog, budget).is_err());
     assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
     assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, budget), Ok(true));
+    assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &[], &eog, budget), Ok(true));
+    let too_small = PalwTokenizerRenderingBudgetV2 { eog_ids: 0, ..budget };
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, too_small).is_err());
+    let derive =
+        |parent: &PalwChainStateV2, bytes: &[u8], eog_opening: &crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1| {
+            PalwVerifiedTokenizerRegistrationV1::derive_v1(parent, &extras, now, pins, bytes, eog_opening, budget)
+        };
+    let record = derive(&state, &raw, &eog).unwrap().unwrap();
+    let restored = derive(&state, &raw, &eog).unwrap().unwrap();
+    assert_eq!(record.commitment_v1(), restored.commitment_v1());
+    assert!(record.applies_to_parent_v1(&state, &extras, now, budget));
+    assert!(!record.applies_to_parent_v1(&state, &extras, now, PalwTokenizerRenderingBudgetV2 { eog_ids: 2, ..budget }));
+    let mut bad_eog = eog.clone();
+    bad_eog.ids[0] = 0;
+    assert!(derive(&state, &raw, &bad_eog).is_err());
+    assert!(derive(&state, &raw[..raw.len() - 1], &eog).is_err());
     assert_eq!(quote_outcome(preclaim_quote(&cache, &state, &extras)), full_quote(&state, &extras));
     let mut wrong_header = header.clone();
     wrong_header.artifact_root = h(8807);
     assert!(matches!(cache.tfp1_intake_quote_v2(&state, &params, &extras, now, &pins, original, &wrong_header), Err(Error::Local(_))));
     state.staged_courts.remove(&container_key);
+    assert!(!record.applies_to_parent_v1(&state, &extras, now, budget));
+    assert!(derive(&state, &raw, &eog).is_err());
     assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
 }
