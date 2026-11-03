@@ -1806,6 +1806,9 @@ impl<'a> TransitionBuilder<'a> {
         key: Hash64,
         new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
     ) -> Result<(), PalwStateV2Error> {
+        if new.is_some() {
+            self.reject_positive_claim_alias_v2(key)?;
+        }
         let requests = if self.native_reservation.is_tracking_v1() { self.panel_liability_copy_requests_v1(&key)? } else { 0 };
         self.reserve_mutation_sequence_v1(requests, 2)?;
         self.reserve_map_journal_v1(&key, &new, !self.state.panel_liabilities.contains_key(&key), "native panel_liabilities writer")?;
@@ -9034,6 +9037,9 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) -> Result<(), PalwStateV2Error> {
+        if new.is_some() {
+            self.reject_positive_claim_alias_v2(key)?;
+        }
         self.reserve_map_row_v1(&key, &new, |s| &s.panels, false, "native panels writer")?;
         if let Some(panel) = &new {
             self.record_staged_panel_v1(key, panel)?;
@@ -9047,8 +9053,14 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
-        if new.is_some() && self.state.court_end_archive_v1(key).is_some() {
-            return Err(PalwStateV2Error::DuplicateSession(key));
+        if let Some(record) = &new {
+            self.reject_positive_claim_alias_v2(key)?;
+            if record.claim != key {
+                self.reject_positive_claim_alias_v2(record.claim)?;
+            }
+            if self.state.court_end_archive_v1(key).is_some() {
+                return Err(PalwStateV2Error::DuplicateSession(key));
+            }
         }
         let archive = new.is_none()
             && self

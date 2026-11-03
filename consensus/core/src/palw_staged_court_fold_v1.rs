@@ -1094,11 +1094,19 @@ impl TransitionBuilder<'_> {
         key: PalwStagedCourtKeyV1,
         new: Option<PalwStagedCourtRowV1>,
     ) -> Result<(), PalwStateV2Error> {
-        if new.is_some()
-            && let Some(subject) = staged_legacy_alias_subject_v2(key)
-        {
-            self.reject_positive_claim_alias_v2(subject)?;
-            self.reject_positive_job_alias_v2(subject)?;
+        if let Some(row) = &new {
+            let subject = staged_legacy_alias_subject_v2(key);
+            if let Some(subject) = subject {
+                self.reject_positive_claim_alias_v2(subject)?;
+                self.reject_positive_job_alias_v2(subject)?;
+            }
+            // A duty/query can be keyed by its own identity. Check the same
+            // claim that the native service index will record for the row.
+            if let Some((claim, _)) = court_service_claim_index_entry_v1(key, row)
+                && Some(claim) != subject
+            {
+                self.reject_positive_claim_alias_v2(claim)?;
+            }
         }
         self.check_archive_progress_write_v1(&key, new.as_ref())?;
         self.check_material_intake_write_v1(&key, new.as_ref())?;

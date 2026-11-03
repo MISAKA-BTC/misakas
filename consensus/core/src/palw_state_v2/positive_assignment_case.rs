@@ -898,6 +898,59 @@ mod tests {
         assert!(builder.reject_positive_claim_alias_v2(other).is_ok());
         let row = <PalwClaimStateV2 as borsh::BorshDeserialize>::deserialize(&mut &[0u8; 8192][..]).unwrap();
         assert!(matches!(builder.write_claim(claim, Some(row)), Err(PalwStateV2Error::KernelRouteRefused(_))));
+        let panel = PalwPanelStateV2 { anchor: other, seats: Vec::new(), bound_daa: 12 };
+        assert!(matches!(builder.write_panel(claim, Some(panel)), Err(PalwStateV2Error::KernelRouteRefused(_))));
+        assert!(matches!(
+            builder.write_legacy_dispute(claim, Some(Default::default())),
+            Err(PalwStateV2Error::KernelRouteRefused(_))
+        ));
+
+        use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(other, 0));
+        let court = PalwCourtSessionStateV2 {
+            claim,
+            challenger_bond: bond,
+            opened_daa: 20,
+            deadline_daa: 120,
+            ladder: PalwBisectLadderV1::open(
+                &Hash64::from_u64_word(31),
+                &Hash64::from_u64_word(32),
+                &Hash64::from_u64_word(33),
+                &Hash64::from_u64_word(34),
+                PalwBisectSpaceV1::StepLeaves,
+                8,
+                20,
+                24,
+            )
+            .unwrap(),
+            dissection: None,
+        };
+        assert!(matches!(builder.write_court(other, Some(court)), Err(PalwStateV2Error::KernelRouteRefused(_))));
+
+        use crate::{palw_court_duty_clock_v1::CourtDutyClockV1, palw_staged_court_state_v1::PalwStagedCourtRowV1};
+        let duty = CourtDutyClockV1 {
+            version: 1,
+            profile_id: other,
+            duty_id: other,
+            claim,
+            allocation_id: other,
+            source_id: other,
+            acquisition: K::TirAcquisition(claim, bond, other),
+            answerer: bond,
+            demand_id: other,
+            turn: 0,
+            predecessor_block: other,
+            predecessor_daa: 20,
+            first_eligible_daa: 21,
+            response_deadline_daa: 24,
+            original_hard_daa: 25,
+            material_until_daa: 30,
+        };
+        assert!(matches!(
+            builder.write_staged_row_v1(K::CourtDutyClock(other), Some(PalwStagedCourtRowV1::CourtDutyClock(Box::new(duty)))),
+            Err(PalwStateV2Error::KernelRouteRefused(_))
+        ));
+
         for (table, key, value) in [
             (TABLE_CLAIMS_V1, claim.as_bytes().to_vec(), vec![1]),
             (TABLE_OPV_CLAIMS_V1, claim.as_bytes().to_vec(), vec![1]),
