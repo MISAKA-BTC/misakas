@@ -69,6 +69,21 @@ fn native_input_requests_v1(leaves: u64, edges: u64) -> Result<u64, crate::palw_
     q.exact_v1::<OriginalRootInputCoverV1>(1)?;
     Ok(q.bytes_v1())
 }
+fn grow_cover_memory_v1(
+    ticket: &mut crate::palw_native_resource_v1::NativeDemandLeaseV1,
+    additional: u64,
+) -> Result<(), crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::NativeCoverageV1;
+    let construction = ticket.memory_v1();
+    ticket.grow_pending_memory_v1(additional).map_err(|error| match error {
+        NativeCoverageV1::Unsupported { component, native_type, reason } => NativeCoverageV1::Unsupported {
+            component,
+            native_type,
+            reason: format!("{reason} (TIR all-root construction_bytes={construction}, additional_bytes={additional})"),
+        },
+        other => other,
+    })
+}
 fn add(a: u64, b: u64) -> Result<u64, CoverErrorV1> {
     a.checked_add(b).ok_or(CoverErrorV1::Local("original parameter cover counter overflow"))
 }
@@ -164,7 +179,7 @@ impl PalwTirPublicSourceV1 {
             budget,
         )?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
+            grow_cover_memory_v1(ticket, additional).map_err(E::Resource)?;
         }
         let prepared = PreparedParameterCoverV1::new(Box::new(verified), binding.job_context).map_err(E::Decode)?;
         let cover = source.parameter_cover_prepared_typed_v1(prepared, budget).map_err(CoverErrorV1::native)?;
@@ -240,7 +255,7 @@ impl PalwTirPublicSourceV1 {
                 ))
             })?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
+            grow_cover_memory_v1(ticket, additional).map_err(E::Resource)?;
         }
         let prepared = PreparedParameterCoverV1::new(Box::new(verified), binding.job_context).map_err(E::Decode)?;
         let mut roots = Vec::new();
@@ -391,6 +406,10 @@ mod native_owner_tests {
                 assert_eq!(*owned, legacy);
                 assert_eq!(checker.outstanding(), (total, 0));
                 drop(owned);
+            } else if quota == total - 1 {
+                use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
+                assert!(matches!(result, Err(NativeDecodeErrorV1::Resource(NativeCoverageV1::Unsupported { reason, .. }))
+                    if reason.contains(&format!("construction_bytes={prelude}, additional_bytes={additional}"))));
             } else {
                 assert!(matches!(result, Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))));
             }
