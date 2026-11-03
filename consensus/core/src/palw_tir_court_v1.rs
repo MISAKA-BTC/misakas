@@ -476,6 +476,18 @@ impl PalwTirInventoryIndexV1 {
         (base == leaf_count as u64).then_some(Self { params, leaf_count })
     }
 
+    /// Build an independently reserved index for offline response sizing.
+    pub fn new_native_v1(
+        program: &TirProgramV1,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>>
+    {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, reserve_native_requests_v1};
+        let requests = TirInventoryOpeningVerifierV1::index_requests(program).map_err(E::Resource)?;
+        let lease = reserve_native_requests_v1(requests).map_err(E::Resource)?;
+        let index = Self::new(program).ok_or_else(|| E::Decode("the original program has no usable inventory index".into()))?;
+        Ok(NativeRetainedV1::from_owner_reserved_v1(index, lease))
+    }
+
     /// Leaves of the inventory.
     pub fn leaf_count(&self) -> u32 {
         self.leaf_count
