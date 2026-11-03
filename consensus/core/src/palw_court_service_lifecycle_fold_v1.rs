@@ -304,6 +304,17 @@ pub(super) fn apply_shared_court_op_v1(
     if !shared_court_lifecycle_active_v1(b, ctx.daa_score) {
         return Err(PalwStateV2Error::ObjectiveOffenceDormant);
     }
+    let delivery_claim = match &op {
+        SharedCourtOpV1::Request { .. } => None,
+        SharedCourtOpV1::Body { claim, .. } | SharedCourtOpV1::Ids { claim, .. } => Some(*claim),
+        SharedCourtOpV1::Numerical { manifest, .. } => Some(manifest.claim),
+        SharedCourtOpV1::PositionBottom { control } => Some(control.control.claim),
+    };
+    if delivery_claim.is_some_and(|claim| {
+        crate::palw_court_shared_tir_state_v1::context(&b.state, claim).is_ok_and(|c| c.batch_notice_only_v1())
+    }) {
+        return Err(refused("Batch original requires its reserved delivery or terminal route"));
+    }
     let saved = b.try_checkpoint()?;
     let result = (|| match op {
         SharedCourtOpV1::Request { claim, intent } => fold::request(b, ctx, claim, intent).map(SharedCourtOpEffectV1::Request),

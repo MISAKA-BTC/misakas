@@ -40,6 +40,9 @@ pub(super) fn material_intake(
     if s.version != 1 {
         return Err(refused("material intake version is not active on this route"));
     }
+    if shared::context(&b.state, s.claim).is_ok_and(|c| c.batch_notice_only_v1()) {
+        return Err(refused("Batch original requires its reserved material route"));
+    }
     material_intake_atomic(b, ctx, s, None, None)
 }
 

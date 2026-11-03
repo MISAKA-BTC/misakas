@@ -768,11 +768,31 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(quote.carrier_storage_rent_sompi, PART as u64 * storage.sompi_per_byte);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
 
+    let mut batch_context = context.clone();
+    batch_context.version = crate::palw_court_shared_tir_state_v1::SharedTirContextV1::BATCH_NOTICE_ONLY_VERSION_V1;
+    state.staged_courts.insert(Key::CourtSharedContext(claim), Row::CourtSharedContext(Box::new(batch_context)));
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).is_err());
     assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, 0, 0, 64, &[(target, body.len() as u64)]),
         Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch has no accepted notice"));
-    super::super::palw_court_shared_tir_fold_v1::request(&mut b, &notice_at, claim, &notice).unwrap();
+    use super::super::palw_court_shared_tir_fold_v1::request;
+    use crate::palw_court_shared_tir_frontier_v1::SharedRequestEffectV1;
+    let before = b.state.state_root();
+    assert!(request(&mut b, &open_at, claim, &notice).is_err(), "a first notice one DAA late");
+    assert_eq!(b.state.state_root(), before);
+    assert!(matches!(request(&mut b, &notice_at, claim, &notice), Ok(SharedRequestEffectV1::Opened)));
+    assert!(matches!(request(&mut b, &notice_at, claim, &notice), Ok(SharedRequestEffectV1::Coalesced)));
+    let Some(Row::CourtSharedQuery(accepted)) = b.state.staged_court_row_v1(&Key::CourtSharedQuery(notice_id)) else {
+        panic!("Batch initial notice was not retained");
+    };
+    assert!(accepted.service.is_none() && accepted.body.is_none());
+    let mut follow_up = notice.clone();
+    follow_up.ordinal = 1;
+    follow_up.request_id = set.request_id(1).unwrap();
+    follow_up.signature = sign(follow_up.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
+    let after_notice = b.state.state_root();
+    assert!(request(&mut b, &open_at, claim, &follow_up).is_err());
+    assert_eq!(b.state.state_root(), after_notice);
     let mut open = quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).unwrap();
     assert_eq!((open.signer, open.demand.opened_daa, open.demand.response_deadline_daa), (who, open_at.daa_score, response_deadline));
     let request_root = open.demand.checked_request_root_v1().unwrap();

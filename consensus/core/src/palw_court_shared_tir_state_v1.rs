@@ -165,8 +165,15 @@ pub fn shared_body_digest_v1(bytes: &[u8]) -> Hash64 {
     )
 }
 impl SharedTirContextV1 {
+    /// Candidate originals whose material service comes from booked Batch slots.
+    pub(crate) const BATCH_NOTICE_ONLY_VERSION_V1: u16 = 2;
+
+    pub(crate) fn batch_notice_only_v1(&self) -> bool {
+        self.version == Self::BATCH_NOTICE_ONLY_VERSION_V1
+    }
+
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1
+        if !matches!(self.version, 1 | Self::BATCH_NOTICE_ONLY_VERSION_V1)
             || *key != Key::CourtSharedContext(self.claim)
             || self.queries == 0
             || self.original_accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) != Some(self.hard_daa)
@@ -356,6 +363,14 @@ impl SharedTirQueryV1 {
     pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
         self.check(&Key::CourtSharedQuery(self.request_id))?;
         let c = context(state, self.claim)?;
+        if c.batch_notice_only_v1()
+            && (self.version != 1
+                || self.body.is_some()
+                || !crate::palw_court_policy_v1::shared_initial_notice_daa_in_window_v1(c.original_accepted_daa, self.opened_daa)
+                    .map_err(|_| "Batch notice clock overflows")?)
+        {
+            return Err("Batch shared row must be an initial notice without legacy delivery".into());
+        }
         let source = c.source(state)?;
         let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, self.claim).ok_or("shared query lost frame")?;
         let set = TirSharedRequestSetV1::new(frame, &source, c.profile_id)?;

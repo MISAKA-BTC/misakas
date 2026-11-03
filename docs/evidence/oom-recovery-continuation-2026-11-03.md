@@ -3701,3 +3701,28 @@ B0 and relay agreed at virtual DAA 19,727 with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-frontier-count.t1Oqgm/result.json`,
 `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-reservation.GFHELe/scenario.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-smol-frontier-live.eR22Ff/page.json`.
+
+## Separate the Batch initial notice from legacy delivery
+
+The candidate shared context has a version for Batch originals. Under
+the Batch fence it accepts one signed initial notice inside the
+existing RFC-0031 window. The notice must find the original's own
+future numerical or Stop FullIds opening slot in the rooted service
+book. The notice carries no legacy delivery allocation. The old
+request replay remains idempotent, and a distinct follow-up cannot
+open a legacy slot. The legacy shared body, numerical and material
+ingress reject this context. An actual Batch Open and its subsequent
+responses still require their separately validated reservations.
+
+The extracted slot check passed for both opening kinds and rejected
+missing, foreign, stale, undersized and out-of-window bookings. It
+uses a stub for the service book. The native fixture now starts at
+the last valid notice DAA, checks rejection one DAA later, coalesces
+the replay and rejects a new legacy request before continuing through
+Open and Finish. That native fixture has not run. No production
+installer creates this context version yet. That requires the
+complete, funded Batch admission graph and its rule profile.
+
+B0 and relay agreed at virtual DAA 19,728 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-notice-live.Zm2tIg/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-notice-slot.gxG348/tests.log`.
