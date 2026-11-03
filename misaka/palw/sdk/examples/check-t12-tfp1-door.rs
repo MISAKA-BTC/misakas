@@ -3,6 +3,9 @@
 use kaspa_consensus_core::{
     Hash64,
     config::params::palw_t12_shipped_params,
+    palw_artifact::{
+        palw_artifact_multiproof_borsh_len_v1, palw_artifact_multiproof_sibling_count_v1, palw_artifact_operand_borsh_len_v1,
+    },
     palw_class_semantics_v1::PalwClassSemanticsDeclarationV1,
     palw_fp_execution_v3::palw_fp_job_pin_v1,
     palw_freeprompt_v3::PalwFpWorkerResultV3,
@@ -11,6 +14,10 @@ use kaspa_consensus_core::{
     palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,
     palw_state_v2::PalwBondKeyV2,
     palw_tir_admission_v1::palw_tir_class_record_v1,
+    palw_tir_court_v1::{
+        PalwTirInventoryIndexV1,
+        parameter_cover::{ParameterCoverBudgetV1, derive_parameter_cover_v1},
+    },
     palw_tir_frame_cost_v1::tir_public_owner_queue_wait_v1,
     palw_tir_public_allocation_v1::{
         PalwTirPublicAllocationQuoteV1, PalwTirPublicAllocationRulesV1, derive_tir_public_allocation_native_v2,
@@ -33,8 +40,13 @@ fn read(path: &Path, cap: u64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    let [artifact, tokenizer, result, binding, semantics, daa, custodians] = args.as_slice() else {
-        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper>".into());
+    let [artifact, tokenizer, result, binding, semantics, daa, custodians, rest @ ..] = args.as_slice() else {
+        return Err("usage: check-t12-tfp1-door <model.palwtir> <tokenizer.json> <worker-result.frame> <tir-public-binding.hex> <class-semantics.borsh> <DAA> <custodian-upper> [disputed-leaf]".into());
+    };
+    let disputed_leaf: Option<u64> = match rest {
+        [] => None,
+        [leaf] => Some(leaf.to_str().ok_or("disputed leaf must be text")?.parse()?),
+        _ => return Err("at most one disputed leaf can be measured per invocation".into()),
     };
     let daa: u64 = daa.to_str().ok_or("DAA must be text")?.parse()?;
     let maximum_custodians: u64 = custodians.to_str().ok_or("custodian upper must be text")?.parse()?;
@@ -136,6 +148,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }),
         PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => json!({"missing":format!("{missing:?}")}),
     };
+    let parameter_cover = if let Some(leaf) = disputed_leaf {
+        let binding =
+            header.resolve_registered_layout_v1(&record, &entry.class.layout, original.execution_root, rules.maximum_leaves)?;
+        let budget = ParameterCoverBudgetV1 {
+            max_edges: kaspa_consensus_core::palw_g14_values_v1::PALW_G14_PARAMETER_COVER_BUDGET_V1.max_total_edges,
+            max_coordinates: kaspa_consensus_core::palw_g14_values_v1::PALW_G14_PARAMETER_COVER_BUDGET_V1.max_total_coordinates,
+        };
+        match derive_parameter_cover_v1(&binding, leaf, budget) {
+            Err(why) => json!({"leaf":leaf,"refusal":why}),
+            Ok(cover) if cover.leaves.is_empty() => json!({"leaf":leaf,"inventory_leaves":0,"multiproof_bytes":0}),
+            Ok(cover) => {
+                let program = &entry.artifact.plan().program;
+                let index = PalwTirInventoryIndexV1::new(program).ok_or("the original program has no usable inventory index")?;
+                let siblings = palw_artifact_multiproof_sibling_count_v1(index.leaf_count(), &cover.leaves)
+                    .ok_or("the cover does not name a canonical set of inventory leaves")?;
+                let operands = cover
+                    .leaves
+                    .iter()
+                    .map(|&position| {
+                        let (param, layer, _, len) =
+                            index.piece_of(position).ok_or("cover position outside the original inventory")?;
+                        let name = &program.params.get(usize::from(param)).ok_or("cover parameter outside the program")?.name;
+                        Ok::<_, &str>(palw_artifact_operand_borsh_len_v1(name.len(), layer.is_some(), len as usize))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                json!({
+                    "leaf":leaf,"inventory_leaves":cover.leaves.len(),"siblings":siblings,
+                    "multiproof_bytes":palw_artifact_multiproof_borsh_len_v1(operands,siblings),
+                    "explored_edges":cover.explored_edges,"explored_coordinates":cover.explored_coordinates,
+                })
+            }
+        }
+    } else {
+        serde_json::Value::Null
+    };
     println!(
         "{}",
         serde_json::to_string_pretty(&json!({
@@ -147,6 +194,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "maximum_door_daa":cost.clock.maximum_door_daa,
             "public_cost_quote":public,
             "non_tokenizer_diagnostic":non_tokenizer,
+            "disputed_leaf_parameter_cover":parameter_cover,
         }))?
     );
     Ok(())
