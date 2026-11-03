@@ -2784,3 +2784,32 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-body-retry.gcSBn5/tests.log
 B0 and relay agreed at DAA 19,698 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-body-retry-live.j55Mpe/page.json`.
+
+## EOG-only constrained stop replay and work quote
+
+The signed constrained Stop adapter now selects an explicit EOG-only
+replay when the filing contains no renderings. It consumes the freshly
+built Court rather than cloning it. The route still checks signed
+intent, authenticated FullIds, the registered table and the original
+stop reason. A filing that includes renderings keeps the generic path.
+
+Replay now quotes and charges the whole EOG stage before the first
+mutation: four bytes per EOG ID and one call per native chunk plus
+one Finish. The rooted tokenizer diagnostic reports this call count
+alongside the exact EOG opening and FullIds body sizes. These terms
+do not price the original-ID scans, proof verification, carrier
+inclusion, I/O or recovery. They are inputs for the Batch service
+profile and do not constitute a DAA reservation.
+
+The extracted suite passed 11 checks. Its new fixture runs the actual
+EOG stream and replay code with a small Court adapter. It verifies
+the exact call and byte counts at one ID, the chunk limit, and one
+past the chunk limit. One fewer call refuses the replay before it
+starts. The native Stop fixture also compares the dedicated result
+to generic replay, but the integrated fixture and real model timing
+remain unrun. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-eog-stop-work.VvWUzG/test.log`.
+
+B0 and relay agreed on DAA 19,699 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-eog-stop-work-live.8raIHF/page.json`.

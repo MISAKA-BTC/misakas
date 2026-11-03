@@ -51,6 +51,18 @@ impl Candidate {
         self.work
     }
 }
+
+/// EOG-only stop replay charges the list itself, one call per native
+/// EOG chunk and one finish call. The caller separately prices the
+/// serialized opening and the bounded scan of the original ID sequence.
+pub(crate) fn eog_stop_work_v1(eog_ids: u32) -> Work {
+    let count = u64::from(eog_ids);
+    Work {
+        material_bytes: count * 4,
+        calls: count.div_ceil(crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1 as u64) + 1,
+    }
+}
+
 fn charge(work: &mut Work, budget: WorkBudget, bytes: u64, calls: u64) -> Result<(), Refusal> {
     let next = Work {
         material_bytes: work.material_bytes.checked_add(bytes).ok_or(Refusal::Budget)?,
@@ -69,22 +81,40 @@ fn native<T>(v: Result<T, String>) -> Result<T, Refusal> {
 /// adapter. This function does NOT authenticate a caller's base as chain state.
 /// It always leaves base/material untouched, including on Need/error/budget.
 /// Material is fully authenticated before a local finding is exposed.
-pub(crate) fn build(base: &Court, material: &impl Material, budget: WorkBudget) -> Result<Candidate, Refusal> {
+fn prepare_eog<'a>(base: &Court, ids: Option<&'a [u32]>, budget: WorkBudget) -> Result<(&'a [u32], Work), Refusal> {
     if base.phase() != Phase::Eog || base.eog_offset_v1() != Some(0) || base.rendering.is_some() {
         return Err(Refusal::InitialState);
     }
-    let ids = material.eog().ok_or(Refusal::NeedEog)?;
+    let ids = ids.ok_or(Refusal::NeedEog)?;
+    let eog = eog_stop_work_v1(u32::try_from(ids.len()).map_err(|_| Refusal::Budget)?);
     let mut work = Work::default();
-    charge(&mut work, budget, u64::try_from(ids.len()).map_err(|_| Refusal::Budget)?.checked_mul(4).ok_or(Refusal::Budget)?, 0)?;
-    let mut c = base.clone();
+    charge(&mut work, budget, eog.material_bytes, eog.calls)?;
+    Ok((ids, work))
+}
+
+fn replay_eog(c: &mut Court, ids: &[u32]) -> Result<(), Refusal> {
     let context = c.seed_id();
     for part in ids.chunks(crate::palw_eog_stream_v1::PALW_EOG_STREAM_PART_IDS_V1) {
-        charge(&mut work, budget, 0, 1)?;
         let offset = c.eog_offset_v1().ok_or(Refusal::InitialState)?;
         native(c.push_eog(context, offset, part))?;
     }
-    charge(&mut work, budget, 0, 1)?;
-    native(c.finish_eog())?;
+    native(c.finish_eog())
+}
+
+pub(crate) fn build_eog_stop_v1(mut c: Court, ids: &[u32], budget: WorkBudget) -> Result<Candidate, Refusal> {
+    let (ids, work) = prepare_eog(&c, Some(ids), budget)?;
+    replay_eog(&mut c, ids)?;
+    if c.phase() != Phase::Complete {
+        return Err(Refusal::InitialState);
+    }
+    finish_candidate(c, work)
+}
+
+pub(crate) fn build(base: &Court, material: &impl Material, budget: WorkBudget) -> Result<Candidate, Refusal> {
+    let (ids, mut work) = prepare_eog(base, material.eog(), budget)?;
+    let mut c = base.clone();
+    replay_eog(&mut c, ids)?;
+    let context = c.seed_id();
     while c.phase() != Phase::Complete {
         let id = native(c.next_rendering_id())?;
         if c.is_eog(id) {
@@ -108,6 +138,10 @@ pub(crate) fn build(base: &Court, material: &impl Material, budget: WorkBudget) 
         charge(&mut work, budget, 0, 1)?;
         native(c.finish_rendering())?;
     }
+    finish_candidate(c, work)
+}
+
+fn finish_candidate(c: Court, work: Work) -> Result<Candidate, Refusal> {
     let finding = native(c.fault())?;
-    Ok(Candidate { context, execution_root: c.execution_root_v1(), table_root: c.table_root, job: c.job_id, finding, work })
+    Ok(Candidate { context: c.seed_id(), execution_root: c.execution_root_v1(), table_root: c.table_root, job: c.job_id, finding, work })
 }

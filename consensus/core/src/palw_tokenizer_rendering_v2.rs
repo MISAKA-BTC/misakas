@@ -614,6 +614,7 @@ mod tests {
         let bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(registration, &facts);
         assert_eq!(bounds.registration_id, registration);
         assert_eq!(bounds.eog_opening_bytes, borsh::object_length(&eog).unwrap() as u64);
+        assert_eq!(bounds.eog_replay_calls, 2);
         let openings = (0..statement.vocab).map(|id| table.opening_of(id).unwrap());
         let actual = openings.map(|opening| borsh::object_length(&opening).unwrap() as u64).max().unwrap();
         assert_eq!(bounds.maximum_rendering_opening_bytes, actual);
@@ -1074,6 +1075,9 @@ pub struct PalwRootedTokenizerOpeningBoundsV1 {
     pub registration_id: Hash64,
     pub maximum_rendering_opening_bytes: u64,
     pub eog_opening_bytes: u64,
+    /// Native EOG stream calls, including the finish call.
+    #[serde(default)]
+    pub eog_replay_calls: u64,
     /// Complete native ID response body before Batch carrier framing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub full_ids_body_bytes: Option<u64>,
@@ -1092,6 +1096,7 @@ impl PalwRootedTokenizerOpeningBoundsV1 {
             // ID, Some discriminant, Vec length, rendering bytes and opening.
             maximum_rendering_opening_bytes: 4 + 1 + 4 + facts.maximum_rendering_bytes + step_opening_bytes(rendering_siblings),
             eog_opening_bytes: 4 + 4 * u64::from(facts.eog_count) + step_opening_bytes(eog_siblings),
+            eog_replay_calls: crate::palw_constraint_stream_court_v1::canonical_replay::eog_stop_work_v1(facts.eog_count).calls,
             full_ids_body_bytes: None,
         }
     }

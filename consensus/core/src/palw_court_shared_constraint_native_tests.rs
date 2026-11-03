@@ -449,6 +449,16 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     assert_eq!(only.rendering_calls.get(),0,"stop path must never enter grammar/rendering");
     assert_eq!(terminal.work().material_bytes,eog.ids.len() as u64*4);
     assert_eq!(terminal.work().calls,2,"one EOG part and finish only");
+    let planned=stop_replay::eog_stop_work_v1(eog.ids.len() as u32);
+    assert_eq!(planned,terminal.work());
+    let exact=WorkBudget{max_material_bytes:planned.material_bytes,max_calls:planned.calls};
+    let dedicated=stop_replay::build_eog_stop_v1(base.clone(),&eog.ids,exact).unwrap();
+    assert_eq!(dedicated.identity(),terminal.identity());
+    assert_eq!(dedicated.finding(),terminal.finding());
+    assert!(matches!(
+        stop_replay::build_eog_stop_v1(base.clone(),&eog.ids,WorkBudget{max_calls:exact.max_calls-1,..exact}),
+        Err(stop_replay::Refusal::Budget),
+    ));
     assert_eq!(terminal.finding().is_some(),fault);
     if let Some(found)=terminal.finding(){
         assert_eq!(found.position,if stop==Stop::ExactBudgetReached{0}else{source.decode_count_v1()-1});

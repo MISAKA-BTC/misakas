@@ -200,10 +200,15 @@ impl Store<'_> {
             &material.eog.opening,
             intent.signing_message(rules.network_domain)?,
         )?;
-        match rooted_material {
-            Some(material) => replay::build(&base, &material, budget),
-            None => replay::build(&base, &material, budget),
-        }
-        .map_err(|e| format!("constraint stop replay: {e:?}"))
+        let replayed = if material.renderings.is_empty() {
+            let eog = rooted_material.as_ref().map_or(material.eog.ids.as_slice(), |rooted| rooted.eog);
+            replay::build_eog_stop_v1(base, eog, budget)
+        } else {
+            match rooted_material {
+                Some(material) => replay::build(&base, &material, budget),
+                None => replay::build(&base, &material, budget),
+            }
+        };
+        replayed.map_err(|e| format!("constraint stop replay: {e:?}"))
     }
 }
