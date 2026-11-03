@@ -748,12 +748,22 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let part_at = at(frame, NOTICE_WINDOW_DAA + 7);
     let finish_at = at(frame, NOTICE_WINDOW_DAA + 9);
     let response_deadline = at(frame, NOTICE_WINDOW_DAA + 12).daa_score;
-    let target = MaterialTargetV1::PromptFlat;
-    let body = borsh::to_vec(&fx.execution.prompt).unwrap();
+    let (target, body) = plan.ranges_v1().iter().find_map(|&(target, _)| {
+        let body = match target {
+            MaterialTargetV1::PromptFlat => borsh::to_vec(&fx.execution.prompt).unwrap(),
+            MaterialTargetV1::PromptTile { tile } => borsh::to_vec(
+                &crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                    &fx.execution.prompt, tile * crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN,
+                ).unwrap(),
+            ).unwrap(),
+            _ => return None,
+        };
+        Some((target, body))
+    }).expect("the selected demand contains prompt material");
     assert!(body.len() <= PART);
     let hash = palw_tir_public_body_hash_v1(&body);
     let ordinal = 0;
-    // Only PromptFlat is delivered in this fixture. The remaining signed
+    // Only the selected prompt material is delivered in this fixture. The remaining signed
     // declarations exercise canonical target checks without filing bodies.
     let lengths = plan.ranges_v1().iter().map(|&(planned, _)| (planned, if planned == target { body.len() as u64 } else { 1 }))
         .collect::<Vec<_>>();

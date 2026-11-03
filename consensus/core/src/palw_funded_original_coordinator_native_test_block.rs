@@ -188,9 +188,9 @@
                 let roots = &req.inputs_v1().parameters_v1().roots;
                 let streaming_budget = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
                     total: budgets.1,
-                    per_root_edges: roots.iter().map(|root| root.explored_edges).max().unwrap(),
-                    per_root_coordinates: roots.iter().map(|root| root.explored_coordinates).max().unwrap(),
-                    per_root_memberships: roots.iter().map(|root| root.parameters.len() as u64).max().unwrap(),
+                    per_root_edges: roots.iter().map(|root| root.explored_edges).max().unwrap_or(1).max(1),
+                    per_root_coordinates: roots.iter().map(|root| root.explored_coordinates).max().unwrap_or(1).max(1),
+                    per_root_memberships: roots.iter().map(|root| root.parameters.len() as u64).max().unwrap_or(1).max(1),
                     max_workspace_bytes: 128 << 20,
                 };
                 let streamed_envelope = req.geometry.streaming_batch_envelope_v1(&b, &ctx, streaming_budget, 4_096).unwrap();
@@ -224,9 +224,9 @@
                 let input_roots = &req.inputs_v1().parameters_v1().roots;
                 let streaming = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
                     total: budgets.1,
-                    per_root_edges: input_roots.iter().map(|root| root.explored_edges).max().unwrap(),
-                    per_root_coordinates: input_roots.iter().map(|root| root.explored_coordinates).max().unwrap(),
-                    per_root_memberships: input_roots.iter().map(|root| root.parameters.len() as u64).max().unwrap(),
+                    per_root_edges: input_roots.iter().map(|root| root.explored_edges).max().unwrap_or(1).max(1),
+                    per_root_coordinates: input_roots.iter().map(|root| root.explored_coordinates).max().unwrap_or(1).max(1),
+                    per_root_memberships: input_roots.iter().map(|root| root.parameters.len() as u64).max().unwrap_or(1).max(1),
                     max_workspace_bytes: 128 << 20,
                 };
                 let streamed = numerical_batch_streaming_demand_v1(
