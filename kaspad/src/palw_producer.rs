@@ -1655,11 +1655,15 @@ impl PalwProducerService {
     ) -> bool {
         let current = self.consensus_manager.consensus().unguarded_session();
         self.flow_context.is_consensus_participation_allowed()
-            && session.with_consensus_api_v1(|observed| current.with_consensus_api_v1(|active| std::ptr::eq(observed, active)))
             && template.selected_parent_hash == quoted_parent
             && template.block.header.daa_score == quoted_daa
-            && current.get_sink() == quoted_parent
-            && current.get_virtual_daa_score() == quoted_daa
+            && session.with_consensus_api_v1(|observed| {
+                current.with_consensus_api_v1(|active| {
+                    std::ptr::eq(observed, active)
+                        && active.get_sink() == quoted_parent
+                        && active.get_virtual_daa_score() == quoted_daa
+                })
+            })
     }
 
     /// **One receipt block, if a quantum wins right now.**
@@ -1681,7 +1685,9 @@ impl PalwProducerService {
         miner_data: MinerData,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let seed = self.key_seed.ok_or("no signing key")?;
-        let Some((quoted_parent, spendable)) = session.palw_fp_spendable_with_parent_v3(bond) else {
+        let Some((quoted_parent, spendable)) =
+            session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_with_parent_v3(bond)).await
+        else {
             return Ok(None);
         };
         // A win licenses a block only inside its use window (invariant F14), and the spendable
@@ -1775,7 +1781,10 @@ impl PalwProducerService {
             if next_daa > auth.expiry_daa {
                 continue;
             }
-            let Some((quoted_parent, spendable)) = session.palw_fp_spendable_with_parent_v3(auth.executor_bond) else {
+            let executor_bond = auth.executor_bond;
+            let Some((quoted_parent, spendable)) =
+                session.clone().spawn_blocking(move |consensus| consensus.palw_fp_spendable_with_parent_v3(executor_bond)).await
+            else {
                 return Ok(None);
             };
             let Some(win) = spendable.into_iter().find(|q| {
@@ -3367,6 +3376,7 @@ mod tests {
 
     #[test]
     fn redemption_bundle_reads_are_bounded_to_regular_files() {
+        use super::read_redemption_bundle_v4;
         use kaspa_consensus_core::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4 as CAP;
 
         let root = tempfile::tempdir().unwrap();
