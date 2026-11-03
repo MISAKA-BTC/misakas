@@ -1233,6 +1233,7 @@ impl TransitionBuilder<'_> {
         }
         let context = crate::palw_court_shared_tir_state_v1::context(&self.state, signed.claim)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let (source, material_until_daa) = (context.source_id, context.material_until_daa);
         let mut quote = super::native_writers::NativeWriteQuoteV1::new("numerical Batch receipt row");
         quote.exact::<RootedBatchNumericalReceiptV1>(1)?;
         if let Some((_, bytes)) = &finding.fault {
@@ -1250,12 +1251,12 @@ impl TransitionBuilder<'_> {
             version: 2,
             claim: finding.claim,
             scope: finding.scope,
-            source: context.source_id,
+            source,
             notice: finding.notice,
             leaf: finding.leaf,
             intent_digest: digest,
             at: finding.at,
-            material_until_daa: context.material_until_daa,
+            material_until_daa,
             fault_evidence,
             fault_bytes,
         };
