@@ -1285,9 +1285,15 @@ refuses a new registration before its debit when its heap cap cannot cover
 even the two inserted rows and the mandatory final point. The extracted
 floor matched the actual fixture-shaped native wire preflight at 120,190
 bytes. It was integrated as `45927210f` after the macOS run finished.
-Warnings-denied Core and Consensus library Clippy passed on the integrated
-source. The cold reopen, independent replay and competing-branch assertions
-still require the full node test on Linux.
+On the integrated source, warnings-denied Core and Consensus library Clippy,
+all Consensus test targets, and the two focused Core test targets passed
+their static checks. Eleven relay Contract tests passed. All four commands
+share one unchanged source map. The
+[run records](initial-f-integrated-verification-20261103.json.gz)
+and [raw logs](initial-f-integrated-logs-20261103.tar.gz) preserve the
+commands, results and resource observations. The cold reopen, independent
+replay and competing-branch assertions still require the full node test
+on Linux.
 
 ## Enforced XFS quota prerequisite
 
@@ -1300,3 +1306,10 @@ a write, close and reopen, observed reduced headroom, and rejected the
 unscoped parent. This probe used system RocksDB and exercised the quota
 reader independently of the consensus node. The [probe archive](native-relay-xfs-prerequisite-probes-20261103.tar.gz)
 contains the executed scripts and their output.
+
+The [Linux node runner](native-relay-linux-xfs-runner-20261103.tar.gz)
+starts an isolated container with a 128 MiB XFS project for node test databases.
+It builds commit `45927210f` from a Git archive, uses the existing optimized
+test profile with debug symbols disabled and EVM off, and monitors host
+free space. At this checkpoint Cargo was compiling the node test dependencies.
+The runner has no native registration, fee or recovery result yet.
