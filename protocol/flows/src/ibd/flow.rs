@@ -2819,8 +2819,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // decompressed payload that borsh expands into a huge nested allocation.
         // These are generous ceilings for the real pruning-point state (the current
         // nets are far smaller); a chunked/streamed manifest is the deeper follow-up.
-        const MAX_EVM_HEADER_BYTES: usize = 1 << 20; // 1 MiB (the header is tiny)
-        const MAX_EVM_STATE_SNAPSHOT_BYTES: usize = 256 << 20; // 256 MiB
+        use crate::snapshot_memory::{MAX_EVM_HEADER_BYTES, MAX_EVM_STATE_SNAPSHOT_BYTES};
         if msg.evm_header.len() > MAX_EVM_HEADER_BYTES {
             return Err(ProtocolError::Other("PruningPointEvmState header exceeds the accepted size cap"));
         }
@@ -2866,7 +2865,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
         // Audit H-03: bound the accepted overlay snapshot bytes before deserializing
         // (bonds + reward windows are far smaller than the EVM state).
-        const MAX_OVERLAY_SNAPSHOT_BYTES: usize = 64 << 20; // 64 MiB
+        use crate::snapshot_memory::MAX_OVERLAY_SNAPSHOT_BYTES;
         if msg.overlay_snapshot.len() > MAX_OVERLAY_SNAPSHOT_BYTES {
             return Err(ProtocolError::Other("PruningPointOverlaySnapshot exceeds the accepted size cap"));
         }

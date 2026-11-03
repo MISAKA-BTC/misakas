@@ -4,19 +4,26 @@
 //! snapshot (overlay/EVM dormant or not yet captured), which the requester treats
 //! as "peer cannot serve pruned-IBD on this network".
 
-use crate::{flow_context::FlowContext, flow_trait::Flow};
+use crate::{
+    flow_context::FlowContext,
+    flow_trait::Flow,
+    snapshot_memory::{
+        MAX_EVM_HEADER_BYTES, MAX_EVM_STATE_SNAPSHOT_BYTES, MAX_OVERLAY_SNAPSHOT_BYTES, encode_exact, encode_sidecar, encoded_size,
+    },
+};
 use kaspa_consensus_core::BlockHash;
-use kaspa_core::debug;
+use kaspa_core::{debug, memory_budget::global_memory_budget};
 use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
     dequeue, make_message,
     pb::{
-        PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, PruningPointPalwStateMessage,
+        KaspadMessage, PruningPointEvmStateMessage, PruningPointOverlaySnapshotMessage, PruningPointPalwStateMessage,
         RequestPruningPointPalwStateMessage, kaspad_message::Payload,
     },
 };
 use std::{
+    mem::size_of,
     sync::{Arc, Mutex, OnceLock},
     time::Instant,
 };
@@ -82,18 +89,45 @@ impl RequestPruningPointEvmStateFlow {
                 continue;
             }
             let session = self.ctx.consensus().unguarded_session();
-            let evm = session.spawn_blocking(move |c| c.pruning_point_evm_state(pp)).await;
-            let reply = match evm {
-                Some((header, snapshot)) => PruningPointEvmStateMessage {
-                    found: true,
-                    evm_header: borsh::to_vec(&header).expect("EvmExecutionHeader borsh is infallible"),
-                    evm_state_snapshot: borsh::to_vec(&snapshot).expect("EvmStateSnapshot borsh is infallible"),
-                },
-                None => PruningPointEvmStateMessage { found: false, evm_header: vec![], evm_state_snapshot: vec![] },
-            };
-            let served = (reply.evm_header.len() + reply.evm_state_snapshot.len()) as u64;
-            self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
-            self.router.enqueue(make_message!(Payload::PruningPointEvmState, reply)).await?;
+            // The getter can still materialize a cold source snapshot. This
+            // admission covers the separate Borsh reply buffers and their owner.
+            let encoded = session
+                .spawn_blocking(move |c| {
+                    let Some((header, snapshot)) = c.pruning_point_evm_state(pp) else {
+                        return Ok(None);
+                    };
+                    let header_bytes = encoded_size(&header, MAX_EVM_HEADER_BYTES as u64)?;
+                    let snapshot_bytes = encoded_size(&snapshot, MAX_EVM_STATE_SNAPSHOT_BYTES as u64)?;
+                    encode_sidecar(global_memory_budget(), size_of::<KaspadMessage>(), &[header_bytes, snapshot_bytes], || {
+                        Ok(PruningPointEvmStateMessage {
+                            found: true,
+                            evm_header: encode_exact(&header, header_bytes)?,
+                            evm_state_snapshot: encode_exact(&snapshot, snapshot_bytes)?,
+                        })
+                    })
+                    .map(Some)
+                })
+                .await;
+            match encoded {
+                Ok(Some((reply, lease))) => {
+                    let served = (reply.evm_header.len() + reply.evm_state_snapshot.len()) as u64;
+                    self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
+                    match self
+                        .router
+                        .enqueue_preallocated(make_message!(Payload::PruningPointEvmState, reply), lease, Vec::new())
+                        .await
+                    {
+                        Err(ProtocolError::LocalTransportCapacityUnavailable(_)) => {}
+                        result => {
+                            result?;
+                            continue;
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => debug!("[palw-sidecar] EVM reply construction refused point={pp} kind={:?}", error.kind()),
+            }
+            self.router.enqueue(make_message!(Payload::PruningPointEvmState, PruningPointEvmStateMessage::default())).await?;
         }
     }
 }
@@ -136,17 +170,39 @@ impl RequestPruningPointOverlaySnapshotFlow {
             let session = self.ctx.consensus().unguarded_session();
             // The persisted snapshot is the as-of-current-pruning-point one; only serve it when
             // it matches the requested pruning point (otherwise the requester's c==v would fail).
-            let snap = session.spawn_blocking(move |c| c.pruning_point_overlay_snapshot()).await;
-            let reply = match snap {
-                Some(s) if s.pruning_point == pp => PruningPointOverlaySnapshotMessage {
-                    found: true,
-                    overlay_snapshot: borsh::to_vec(&s.snapshot).expect("OverlaySnapshot borsh is infallible"),
-                },
-                _ => PruningPointOverlaySnapshotMessage { found: false, overlay_snapshot: vec![] },
-            };
-            let served = reply.overlay_snapshot.len() as u64;
-            self.ctx.palw_gossip().charge_sidecar_serve(peer, served);
-            self.router.enqueue(make_message!(Payload::PruningPointOverlaySnapshot, reply)).await?;
+            let encoded = session
+                .spawn_blocking(move |c| {
+                    let Some(s) = c.pruning_point_overlay_snapshot().filter(|s| s.pruning_point == pp) else {
+                        return Ok(None);
+                    };
+                    let bytes = encoded_size(&s.snapshot, MAX_OVERLAY_SNAPSHOT_BYTES as u64)?;
+                    encode_sidecar(global_memory_budget(), size_of::<KaspadMessage>(), &[bytes], || {
+                        Ok(PruningPointOverlaySnapshotMessage { found: true, overlay_snapshot: encode_exact(&s.snapshot, bytes)? })
+                    })
+                    .map(Some)
+                })
+                .await;
+            match encoded {
+                Ok(Some((reply, lease))) => {
+                    self.ctx.palw_gossip().charge_sidecar_serve(peer, reply.overlay_snapshot.len() as u64);
+                    match self
+                        .router
+                        .enqueue_preallocated(make_message!(Payload::PruningPointOverlaySnapshot, reply), lease, Vec::new())
+                        .await
+                    {
+                        Err(ProtocolError::LocalTransportCapacityUnavailable(_)) => {}
+                        result => {
+                            result?;
+                            continue;
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => debug!("[palw-sidecar] overlay reply construction refused point={pp} kind={:?}", error.kind()),
+            }
+            self.router
+                .enqueue(make_message!(Payload::PruningPointOverlaySnapshot, PruningPointOverlaySnapshotMessage::default()))
+                .await?;
         }
     }
 }
