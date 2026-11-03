@@ -484,6 +484,16 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial Assignment funding differs from the actual funded quote"));
         }
         self.require_assignment_output_unlocked_v2(funding.outpoint())?;
+        let relay = self.check_initial_assignment_relay_v2(
+            ctx,
+            &action,
+            &row.bundle,
+            (funding.outpoint(), funding.amount()),
+            &plan.funding.payer_key,
+        )?;
+        if relay.is_some() && (row.reservation.origin != row.origin || row.reservation.digest == Digest([0; 64])) {
+            return Err(refusal("initial Assignment relay requires the reservation at this acceptance point"));
+        }
         let nonce_key = NativeRowKey::AssignmentNonce(row.bundle.terms.poster);
         let previous = match PositiveRowsV2::new(&self.state).read(nonce_key).map_err(refusal)? {
             None => AssignmentNonceV2::default(),
@@ -505,6 +515,16 @@ impl TransitionBuilder<'_> {
             self.write_assignment_aux_v2(NativeRowBody::AssignmentFunding(plan.funding))?;
             for role in plan.roles {
                 self.write_assignment_aux_v2(NativeRowBody::AssignmentRole(role))?;
+            }
+            if let Some(CheckedInitialFundingRelayV2 { mut custody, _lease, .. }) = relay {
+                custody.binding = Some(FundingRelayBindingV2 {
+                    origin,
+                    original_funding: funding.outpoint(),
+                    predecessor: None,
+                    original_contract: original.material.unsigned_bundle,
+                    reservation: material.custody.reservation,
+                });
+                self.write_assignment_aux_v2(NativeRowBody::FundingRelayCustody(custody))?;
             }
             self.append_assignment_frame_v2(frame, material.custody.retention_until_daa)?;
             self.emit_assignment_material_v2(&frame, &payload, frame_cap)
@@ -1219,6 +1239,33 @@ impl TransitionBuilder<'_> {
         Ok(CheckedInitialFundingRelayV2 { custody, service_cutoff, _lease: lease })
     }
 
+    fn check_initial_assignment_relay_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+        bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
+        (funding, amount): (NativeOutpoint, u64),
+        payer_key: &[u8; PUBKEY_BYTES],
+    ) -> Result<Option<CheckedInitialFundingRelayV2>, PalwStateV2Error> {
+        if !action.rules().funding_relay_profile().requires_relay() {
+            return Ok(None);
+        }
+        let checked =
+            self.check_pending_initial_f_relay_v2(ctx, action, RelayFundingPurposeV2::PosterA, funding, payer_key, &|terms| {
+                crate::palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2(
+                    terms,
+                    bundle,
+                    funding,
+                    amount,
+                    ctx.daa_score,
+                )
+            })?;
+        if checked.service_cutoff < bundle.terms.reserve_until_daa {
+            return Err(refusal("initial Assignment relay does not cover the signed reservation"));
+        }
+        Ok(Some(checked))
+    }
+
     fn same_block_case_relay_material_v2(
         &self,
         assignment: &AssignmentRow,
@@ -1589,28 +1636,8 @@ impl TransitionBuilder<'_> {
                         return Err(refusal("independently derived native job/source catalog differs from signed bundle"));
                     }
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
-                    let (horizon, _) = assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
-                    if rules.funding_relay_profile().requires_relay() {
-                        let checked = self.check_pending_initial_f_relay_v2(
-                            ctx,
-                            action,
-                            RelayFundingPurposeV2::PosterA,
-                            funding,
-                            payer_key,
-                            &|terms| {
-                                crate::palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2(
-                                    terms,
-                                    bundle,
-                                    funding,
-                                    amount,
-                                    ctx.daa_score,
-                                )
-                            },
-                        )?;
-                        if checked.service_cutoff < horizon.retention_until_daa {
-                            return Err(refusal("initial Assignment relay does not cover the signed retention horizon"));
-                        }
-                    }
+                    assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
+                    self.check_initial_assignment_relay_v2(ctx, action, bundle, (funding, amount), payer_key)?;
                     let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
                     if anchor.as_bytes() != bundle.terms.branch_anchor.0 {
                         return Err(refusal("Assignment verifier bound uses a different signed ancestor"));

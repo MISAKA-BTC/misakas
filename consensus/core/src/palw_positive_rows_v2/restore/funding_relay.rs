@@ -76,7 +76,17 @@ impl Reader<'_> {
         )?;
         // Original F and its initial amount remain stable across partial and
         // terminal settlement. Its live cursor is validated by its own owner.
-        if assignment.origin != binding.origin || account.funding_origin != binding.origin || account.payer_key != auth.payer_key {
+        if assignment.origin != binding.origin
+            || account.funding_origin != binding.origin
+            || account.payer_key != auth.payer_key
+            || binding.reservation != assignment.reservation
+            || binding.reservation != account.reservation
+            || auth
+                .terms
+                .custody_until_daa
+                .checked_sub(auth.policy.rollback_margin_daa)
+                .is_none_or(|service_cutoff| service_cutoff < assignment.bundle.terms.reserve_until_daa)
+        {
             return inconsistent();
         }
         Ok(())
