@@ -1010,6 +1010,7 @@ pub mod palw_staged_route_forms_v1;
 pub mod palw_tir_adjudication_slot_v1;
 pub mod palw_tir_container_v1;
 pub mod palw_tir_designated_answers_v1;
+pub mod palw_batch_court_v1;
 pub mod palw_tir_frame_cost_v1;
 pub mod palw_tir_history_bisection_v1;
 pub mod palw_tir_prefix_owned_v1;
