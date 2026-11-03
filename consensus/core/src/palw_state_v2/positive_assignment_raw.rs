@@ -12,7 +12,8 @@ use crate::{
 };
 use misaka_palw_positive_contract::{
     assignment::{
-        funding_relay_policy::FundingRelayPhysicalProfileV2, funding_relay_rows::FundingRelayCarrierFeesV2, policy::AssignmentPolicyV2,
+        AssignmentId, funding_relay_policy::FundingRelayPhysicalProfileV2, funding_relay_rows::FundingRelayCarrierFeesV2,
+        policy::AssignmentPolicyV2,
     },
     identity::Digest,
     rows::{AcceptedMaterial, AcceptedOrigin},
@@ -84,7 +85,7 @@ impl NativeAssignmentRulesV2 {
             gate_c: Some(material.certification_policy),
         })
     }
-    pub(super) fn original_material(&self) -> Option<AcceptedMaterial> {
+    pub fn original_material(&self) -> Option<AcceptedMaterial> {
         self.original_material.map(|(material, _)| material)
     }
     pub(super) fn original_history_storage_limit_v2(&self) -> Option<u64> {
@@ -147,6 +148,7 @@ struct PositiveAssignmentRawDataV2 {
     signed_anchor: Option<(BlockHash, u64)>,
     relay_carrier_fees: Option<FundingRelayCarrierFeesV2>,
     pending_relay_replay: Option<NativePendingRelayReplayV2>,
+    case_relay_contract: Option<(AssignmentId, AcceptedMaterial)>,
     _transport: Arc<NativeDemandLeaseV1>,
     _decode: Arc<NativeDemandLeaseV1>,
 }
@@ -185,6 +187,7 @@ impl PositiveAssignmentRawActionV2 {
             signed_anchor: None,
             relay_carrier_fees: None,
             pending_relay_replay: None,
+            case_relay_contract: None,
             _transport: Arc::new(transport),
             _decode: Arc::new(decode),
         })))
@@ -237,7 +240,7 @@ impl PositiveAssignmentRawActionV2 {
         let invalid = || NativeCoverageV1::unsupported::<Self>("pending relay replay", "wrong operation, selected parent or owner");
         let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
         if data.pending_relay_replay.is_some()
-            || !matches!(data.body[data.index as usize].payload.get(7), Some(8 | 14))
+            || !matches!(data.body[data.index as usize].payload.get(7), Some(8 | 9 | 14))
             || replay.selected_parent != data.selected_parent
             || replay.reservation.origin.accepting_block.0 == data.origin.accepting_block.0
         {
@@ -249,6 +252,29 @@ impl PositiveAssignmentRawActionV2 {
 
     pub(super) fn pending_relay_replay_v2(&self) -> Option<NativePendingRelayReplayV2> {
         self.0.pending_relay_replay
+    }
+
+    /// Transport the contract pin recovered from the selected parent's
+    /// authenticated Open. The fold compares it with the live Assignment.
+    pub fn with_case_relay_contract_v2(
+        mut self,
+        assignment: AssignmentId,
+        material: AcceptedMaterial,
+    ) -> Result<Self, NativeCoverageV1> {
+        let invalid = || NativeCoverageV1::unsupported::<Self>("Case relay contract", "wrong operation, clock or owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
+        if data.case_relay_contract.is_some()
+            || data.body[data.index as usize].payload.get(7) != Some(&14)
+            || material.origin.accepted_blue_score >= data.origin.accepted_blue_score
+        {
+            return Err(invalid());
+        }
+        data.case_relay_contract = Some((assignment, material));
+        Ok(self)
+    }
+
+    pub(super) fn case_relay_contract_v2(&self) -> Option<(AssignmentId, AcceptedMaterial)> {
+        self.0.case_relay_contract
     }
 
     /// Retain the original accepted op8 and executed prefix for op9 replay.
@@ -432,6 +458,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             signed_anchor: _,
             relay_carrier_fees: _,
             pending_relay_replay: _,
+            case_relay_contract: _,
             _transport: _,
             _decode: _,
         } = &*self.0;

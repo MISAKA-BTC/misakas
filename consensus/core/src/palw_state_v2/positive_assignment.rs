@@ -1009,7 +1009,6 @@ impl TransitionBuilder<'_> {
     fn check_initial_relay_slots_v2(
         &self,
         terms: &FundingRelayTermsV2,
-        poster_nonce: u64,
         policy: &FundingRelayPolicyV2,
         budget: &mut FundingRelayAuxScanBudgetV2,
     ) -> Result<(), PalwStateV2Error> {
@@ -1031,7 +1030,7 @@ impl TransitionBuilder<'_> {
         let mut total = 0;
         let mut pending = 0;
         let mut poster_pending = 0;
-        let mut nonce_pending = 0;
+        let mut account_pending = 0;
         for ((_, key), bytes) in route.aux.range(auth_range) {
             budget.inspect(key.len(), bytes.len()).map_err(refusal)?;
             if total == available_pairs {
@@ -1057,14 +1056,21 @@ impl TransitionBuilder<'_> {
                 pending += 1;
                 if auth.terms.payer_bond == terms.payer_bond && auth.terms.funding_purpose != RelayFundingPurposeV2::ProverJoin {
                     poster_pending += 1;
-                    if matches!(auth.terms.target, RelayTargetV2::InitialAssignment { poster_nonce: nonce, .. } if nonce == poster_nonce)
-                    {
-                        nonce_pending += 1;
-                    }
+                    let same_account = match (terms.target, auth.terms.target) {
+                        (
+                            RelayTargetV2::InitialAssignment { poster_nonce, .. },
+                            RelayTargetV2::InitialAssignment { poster_nonce: existing_nonce, .. },
+                        ) => poster_nonce == existing_nonce,
+                        (RelayTargetV2::InitialCase { .. }, RelayTargetV2::InitialCase { .. }) => {
+                            terms.assignment == auth.terms.assignment
+                        }
+                        _ => false,
+                    };
+                    account_pending += u32::from(same_account);
                 }
                 if pending >= policy.max_pending_global
                     || poster_pending >= policy.max_pending_per_poster
-                    || nonce_pending >= policy.max_account_candidates
+                    || account_pending >= policy.max_account_candidates
                 {
                     return Err(refusal("relay pending registration cap exhausted"));
                 }
@@ -1088,14 +1094,13 @@ impl TransitionBuilder<'_> {
         &self,
         ctx: &PalwBlockContextV2,
         action: &PositiveAssignmentRawActionV2,
-        bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
+        purpose: RelayFundingPurposeV2,
         funding: NativeOutpoint,
-        amount: u64,
         payer_key: &[u8; PUBKEY_BYTES],
+        check_terms: &dyn Fn(&FundingRelayTermsV2) -> Result<(), misaka_palw_positive_contract::ContractError>,
     ) -> Result<u64, PalwStateV2Error> {
         use crate::{
             palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1},
-            palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2,
             palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2},
         };
         use misaka_palw_positive_contract::{
@@ -1112,12 +1117,11 @@ impl TransitionBuilder<'_> {
         let workspace = requests.bytes_v1();
         let _lease = reserve_native_requests_v1(workspace).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
             PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowValue>(
-                "initial Assignment relay replay",
+                "initial funding relay replay",
                 "native owner is not armed",
             ))
         })?;
         let mut budget = FundingRelayAuxScanBudgetV2::new(&replay.physical).map_err(refusal)?;
-        let purpose = RelayFundingPurposeV2::PosterA;
         let Some(NativeRowBody::FundingRelayAuthorization(auth)) =
             self.read_relay_occupancy_row_v2(NativeRowKey::FundingRelayAuthorization { funding, purpose }, &mut budget)?
         else {
@@ -1136,9 +1140,9 @@ impl TransitionBuilder<'_> {
             return Err(missing_assignment_history());
         }
         if custody.binding.is_some() || ctx.daa_score >= custody.retention_until_daa || auth.payer_key != *payer_key {
-            return Err(refusal("initial Assignment relay is bound, expired, or has a different payer"));
+            return Err(refusal("initial funding relay is bound, expired, or has a different payer"));
         }
-        check_initial_assignment_relay_target_v2(&auth.terms, bundle, funding, amount, ctx.daa_score).map_err(refusal)?;
+        check_terms(&auth.terms).map_err(refusal)?;
         let body = FundingRelayRegistrationBodyV2 {
             version: CONTRACT_VERSION,
             revision: CONTRACT_REVISION,
@@ -1158,7 +1162,7 @@ impl TransitionBuilder<'_> {
     }
 
     #[inline(never)]
-    pub(super) fn install_initial_assignment_relay_v2(
+    pub(super) fn install_initial_funding_relay_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
         action: &PositiveAssignmentRawActionV2,
@@ -1195,9 +1199,9 @@ impl TransitionBuilder<'_> {
             InitialRelayFeeStageV2::Preview => observed.before_registration(),
             InitialRelayFeeStageV2::Observed => observed,
         };
-        let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
+        if !matches!(terms.target, RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. }) {
             return Err(refusal("relay target needs the original Case, join or continuation owner"));
-        };
+        }
         if reserved.quote().decoded_inline_bytes > decode_profile.max_decoded_bytes {
             return Err(refusal("initial relay exceeds the decoded size cap"));
         }
@@ -1229,12 +1233,41 @@ impl TransitionBuilder<'_> {
             }
             let (anchor, _) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
             if terms.contract_network != rules.network()
-                || terms.contract_ruleset.0 != rules.rule_scope().ruleset().as_bytes()
                 || terms.relay_ruleset != *ruleset
                 || terms.contract_anchor.0 != anchor.as_bytes()
                 || terms.expected_amount > crate::constants::MAX_SOMPI
             {
                 return Err(refusal("initial relay differs from the current contract or native relay scope"));
+            }
+            match terms.target {
+                RelayTargetV2::InitialAssignment { poster_nonce, .. } => {
+                    if terms.contract_ruleset.0 != rules.rule_scope().ruleset().as_bytes() {
+                        return Err(refusal("initial Assignment relay differs from the current contract scope"));
+                    }
+                    let nonce = match self.read_relay_occupancy_row_v2(NativeRowKey::AssignmentNonce(terms.payer_bond), &mut budget)? {
+                        None => AssignmentNonceV2::default(),
+                        Some(NativeRowBody::AssignmentNonce(row)) => row.nonce,
+                        _ => return Err(missing_assignment_history()),
+                    };
+                    nonce.after_accepting(poster_nonce).map_err(refusal)?;
+                }
+                RelayTargetV2::InitialCase { .. } => {
+                    let Some(NativeRowBody::Assignment(row)) =
+                        self.read_relay_occupancy_row_v2(NativeRowKey::Assignment(terms.assignment), &mut budget)?
+                    else {
+                        return Err(refusal("Case relay requires a live accepted Assignment"));
+                    };
+                    if action.case_relay_contract_v2() != Some((terms.assignment, row.admission_material)) {
+                        return Err(refusal("Case relay original Assignment material changed at the current prefix"));
+                    }
+                    crate::palw_positive_assignment_funds_v2::check_case_relay_registration_assignment_v2(
+                        terms,
+                        &row,
+                        action.origin(),
+                    )
+                    .map_err(refusal)?;
+                }
+                _ => return Err(refusal("unsupported initial relay target")),
             }
             let minimum_replay =
                 crate::palw_positive_funding_relay_v2::minimum_pending_funding_relay_replay_heap_v2(terms).map_err(refusal)?;
@@ -1249,7 +1282,7 @@ impl TransitionBuilder<'_> {
                 return Err(refusal("initial relay cannot fund the full registration fee after mandatory burns"));
             }
 
-            self.check_initial_relay_slots_v2(terms, poster_nonce, policy, &mut budget)?;
+            self.check_initial_relay_slots_v2(terms, policy, &mut budget)?;
             registration
         };
         let native_key = native_bond(terms.payer_bond);
@@ -1258,15 +1291,6 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial relay poster cannot take new work"));
         }
         let key: [u8; PUBKEY_BYTES] = bond.pubkey.as_slice().try_into().map_err(refusal)?;
-        let rows = PositiveRowsV2::new(&self.state);
-        let nonce = match rows.read(NativeRowKey::AssignmentNonce(terms.payer_bond)).map_err(refusal)? {
-            None => AssignmentNonceV2::default(),
-            Some(row) => match row.body {
-                NativeRowBody::AssignmentNonce(row) => row.nonce,
-                _ => return Err(refusal("wrong initial relay poster nonce row")),
-            },
-        };
-        nonce.after_accepting(poster_nonce).map_err(refusal)?;
 
         let signature_heap = physical
             .max_heap_bytes
@@ -1330,7 +1354,7 @@ impl TransitionBuilder<'_> {
             let tx = action.transaction();
             let rules = action.rules();
             if tx.payload.get(7) == Some(&14) {
-                return self.install_initial_assignment_relay_v2(ctx, action, InitialRelayFeeStageV2::Observed).map(|_| ());
+                return self.install_initial_funding_relay_v2(ctx, action, InitialRelayFeeStageV2::Observed).map(|_| ());
             }
             if matches!(tx.payload.get(7), Some(0..=7)) {
                 let old_limits = crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {
@@ -1431,11 +1455,26 @@ impl TransitionBuilder<'_> {
                     }
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
                     let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
-                    if rules.funding_relay_profile().requires_relay()
-                        && self.initial_f_relay_service_cutoff_v2(ctx, action, bundle, funding, amount, payer_key)?
-                            < horizon.retention_until_daa
-                    {
-                        return Err(refusal("initial Assignment relay does not cover the signed retention horizon"));
+                    if rules.funding_relay_profile().requires_relay() {
+                        let cutoff = self.initial_f_relay_service_cutoff_v2(
+                            ctx,
+                            action,
+                            RelayFundingPurposeV2::PosterA,
+                            funding,
+                            payer_key,
+                            &|terms| {
+                                crate::palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2(
+                                    terms,
+                                    bundle,
+                                    funding,
+                                    amount,
+                                    ctx.daa_score,
+                                )
+                            },
+                        )?;
+                        if cutoff < horizon.retention_until_daa {
+                            return Err(refusal("initial Assignment relay does not cover the signed retention horizon"));
+                        }
                     }
                     let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
                     if anchor.as_bytes() != bundle.terms.branch_anchor.0 {
@@ -1631,6 +1670,29 @@ impl TransitionBuilder<'_> {
             return Err(refusal("Case relation count differs from the original registered program"));
         }
         let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
+        if rules.funding_relay_profile().requires_relay() {
+            let cutoff = self.initial_f_relay_service_cutoff_v2(
+                ctx,
+                action,
+                RelayFundingPurposeV2::CaseC,
+                output.outpoint(),
+                &funding.payer_key,
+                &|terms| {
+                    crate::palw_positive_assignment_funds_v2::check_initial_case_relay_target_v2(
+                        terms,
+                        bundle,
+                        payload.result.id(),
+                        &payload.consent,
+                        output.outpoint(),
+                        output.amount(),
+                        ctx.daa_score,
+                    )
+                },
+            )?;
+            if cutoff < horizon.retention_until_daa {
+                return Err(refusal("initial Case relay does not cover the signed retention horizon"));
+            }
+        }
         if payload.basis.required_fee < horizon.case_money.fee
             || payload.basis.required_capital < horizon.case_money.capital
             || budget.rounds < horizon.minimum_source_rounds

@@ -14938,7 +14938,7 @@ pub fn palw_v2_preview_initial_relay_fee_v2(
     if action.transaction().payload.get(7) != Some(&14) {
         return Err(PalwStateV2Error::KernelRouteRefused("relay fee preview requires op14".into()));
     }
-    let fees = builder.install_initial_assignment_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
+    let fees = builder.install_initial_funding_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
     let state = builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)?;
     Ok((state, fees))
 }

@@ -160,10 +160,20 @@ pub fn pending_funding_relay_archive_workspace_v2() -> u64 {
     (4 * size_of::<NativeRowValue>() + 2 * size_of::<FundingRelayRegistrationBodyV2>() + 2 * 1024 + 2 * 74) as u64
 }
 
-/// Scratch for the bounded payer projection's keys and nonce records.
-pub fn pending_funding_relay_payer_scratch_v2() -> u64 {
-    use misaka_palw_positive_contract::{assignment::rows::AssignmentNonceRow, rows::MAX_NATIVE_KEY_BYTES};
-    (4 * MAX_NATIVE_KEY_BYTES + 3 * size_of::<AssignmentNonceRow>()) as u64
+/// Scratch for the bounded payer projection and its purpose-specific row.
+pub fn pending_funding_relay_payer_scratch_v2(
+    purpose: misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2,
+) -> u64 {
+    use misaka_palw_positive_contract::{
+        assignment::{
+            funding_relay::RelayFundingPurposeV2,
+            rows::{AssignmentNonceRow, AssignmentRow},
+        },
+        rows::{MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES},
+    };
+    let common = 4 * MAX_NATIVE_KEY_BYTES + 3 * size_of::<AssignmentNonceRow>();
+    let case = MAX_NATIVE_ROW_BYTES + 4 * size_of::<AssignmentRow>();
+    (common + if purpose == RelayFundingPurposeV2::CaseC { case } else { 0 }) as u64
 }
 
 /// Minimum for the two new R rows and mandatory final point. Every actual
@@ -188,7 +198,7 @@ pub(crate) fn minimum_pending_funding_relay_replay_heap_v2(
         .and_then(|n| n.checked_add((size_of::<PalwStateDeltaV2>() + 6 * size_of::<PalwDeltaEntryV2>()) as u64))
         .ok_or(ContractError::Budget)?;
     pending_funding_relay_archive_workspace_v2()
-        .checked_add(pending_funding_relay_payer_scratch_v2())
+        .checked_add(pending_funding_relay_payer_scratch_v2(terms.funding_purpose))
         .and_then(|n| n.checked_add(delta))
         .ok_or(ContractError::Budget)
 }
