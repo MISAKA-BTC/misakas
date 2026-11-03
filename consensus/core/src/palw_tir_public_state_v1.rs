@@ -433,6 +433,8 @@ fn preparation_transition_source_v2(
     };
     next.check_structure_v1(&key)?;
     Ok(PalwTirPublicTransitionV1 {
+        accepted_daa: now,
+        signer,
         changes: vec![PalwTirPublicRowChangeV1 {
             key,
             old: Some(Row::TirPreparation(old.clone())),
@@ -1153,6 +1155,8 @@ pub struct PalwTirPublicRowChangeV1 {
     pub new: Option<Row>,
 }
 pub struct PalwTirPublicTransitionV1 {
+    accepted_daa: u64,
+    signer: PalwBondKeyV2,
     changes: Vec<PalwTirPublicRowChangeV1>,
     pub effect: PalwTirPublicOwnedEffectV1,
 }
@@ -1237,6 +1241,63 @@ impl PalwTirPublicTransitionV1 {
         }
         Ok(Some(next))
     }
+    fn stage_admitted_acquisition_schedule_v2(
+        &self,
+        schedule: &crate::palw_tir_owner_schedule_v2::OwnerScheduleV2<Key, Hash64>,
+        key: Key,
+        owner: &PalwTirPublicAcquisitionRowV1,
+    ) -> Result<crate::palw_tir_owner_schedule_v2::OwnerScheduleV2<Key, Hash64>, String> {
+        use crate::palw_tir_owner_schedule_v2::OwnerPhaseV2;
+        use crate::palw_tir_public_owned_v1::PalwTirPublicWorkPhaseV1;
+        use PalwTirPublicOwnedEffectV1 as Effect;
+
+        let mut at = schedule.clone();
+        at.advance(self.accepted_daa).map_err(|why| format!("TIR owner schedule action clock: {why:?}"))?;
+        let active = || matches!(at.phase(key), Some(OwnerPhaseV2::Active { .. }));
+        let waiting = || {
+            owner.owned.unpaid_v1()
+                && owner.owned.active_v1().is_some_and(|pending| {
+                    at.phase(key)
+                        == Some(OwnerPhaseV2::Waiting {
+                            turn: pending.turn,
+                            demand: pending.demand_id,
+                            respond_until: pending.respond_until_daa,
+                            collect_until: owner.owned.contract_v1().terms.collect_until_daa,
+                        })
+                })
+        };
+        let responding = || {
+            waiting()
+                || (self.signer == owner.owned.contract_v1().owner
+                    && !owner.owned.unpaid_v1()
+                    && active()
+                    && owner.owned.active_v1().is_some())
+        };
+        let admitted = match &self.effect {
+            Effect::Demanded(_) => active(),
+            Effect::Begun | Effect::Chunk(_) | Effect::Finished(_) => responding(),
+            Effect::Default(_) => waiting(),
+            Effect::WorkDebited(receipt) => {
+                let scope = &receipt.debit.scope;
+                if scope.actor != owner.owned.contract_v1().owner
+                    || matches!(
+                        scope.phase,
+                        PalwTirPublicWorkPhaseV1::Capture | PalwTirPublicWorkPhaseV1::Response | PalwTirPublicWorkPhaseV1::Ids
+                    )
+                {
+                    responding()
+                } else {
+                    active()
+                }
+            }
+            Effect::PreparationReady(_) | Effect::PreparationDefault(_) => false,
+        };
+        if !admitted {
+            return Err("TIR action lacks its exact admitted owner slot or response reservation".into());
+        }
+        Ok(self.stage_owner_schedule_v2(&at)?.unwrap_or(at))
+    }
+
     /// Add the candidate owner change to the same compare-and-swap batch
     /// as the native acquisition and material rows. The future caller still
     /// authenticates the carrier and applies native sanctions atomically.
@@ -1246,15 +1307,22 @@ impl PalwTirPublicTransitionV1 {
         previous: &crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2,
     ) -> Result<Self, String> {
         previous.check_frame(frame)?;
-        let Some(next) = self.stage_owner_schedule_v2(previous.schedule())? else { return Ok(self) };
+        let mut owners = self.changes.iter().filter_map(|change| match (&change.old, &change.new) {
+            (Some(Row::TirAcquisition(before)), Some(Row::TirAcquisition(after))) => Some((change.key, before, after)),
+            _ => None,
+        });
+        let (owner_key, before, after) = owners.next().ok_or("TIR scheduled action has no existing native acquisition")?;
+        if owners.next().is_some() {
+            return Err("TIR scheduled action changes multiple acquisitions".into());
+        }
+        previous.check_owner(before)?;
+        previous.check_owner(after)?;
+        let next = self.stage_admitted_acquisition_schedule_v2(previous.schedule(), owner_key, before)?;
+        // Preserve the schedule's expected old row even for a same-DAA
+        // partial response that does not change scheduling metadata.
         let key = previous.key();
         if self.changes.iter().any(|change| change.key == key) {
             return Err("TIR acquisition batch repeats its owner snapshot".into());
-        }
-        for change in &self.changes {
-            if let Some(Row::TirAcquisition(row)) = &change.new {
-                previous.check_owner(row)?;
-            }
         }
         let next = previous.with_schedule(next)?;
         self.changes.push(PalwTirPublicRowChangeV1 {
@@ -1551,7 +1619,7 @@ fn transition<'a>(
         }
     }
     changes.push(PalwTirPublicRowChangeV1 { key, old: Some(Row::TirAcquisition(old.clone())), new: Some(Row::TirAcquisition(next)) });
-    Ok(PalwTirPublicTransitionV1 { changes, effect })
+    Ok(PalwTirPublicTransitionV1 { accepted_daa: now, signer, changes, effect })
 }
 
 fn check_work_input<'a>(
@@ -1841,6 +1909,8 @@ mod tests {
         )
         .unwrap();
         let duplicate = PalwTirPublicTransitionV1 {
+            accepted_daa: step.accepted_daa,
+            signer: step.signer,
             changes: vec![step.changes_v1()[0].clone(), step.changes_v1()[0].clone()],
             effect: PalwTirPublicOwnedEffectV1::Begun,
         };
@@ -1895,6 +1965,7 @@ mod tests {
         assert_eq!(schedule.phase(key), Some(OwnerPhaseV2::Active { until: 15 }));
 
         for actor in [bond(7), bond(1)] {
+            let owner_before_begin = owned(&rows, key).clone();
             let begin = commit(
                 &source,
                 &mut rows,
@@ -1908,6 +1979,12 @@ mod tests {
                 },
             );
             assert!(begin.stage_owner_schedule_v2(&parked).unwrap().is_none());
+            assert_eq!(begin.stage_admitted_acquisition_schedule_v2(&parked, key, &owner_before_begin).unwrap(), parked);
+            assert!(begin.stage_admitted_acquisition_schedule_v2(&schedule, key, &owner_before_begin).is_err());
+            let mut other = schedule.clone();
+            other.advance(12).unwrap();
+            other.wait_for_response(key, turn, Hash64::from_u64_word(99), respond_until, collect_until).unwrap();
+            assert!(begin.stage_admitted_acquisition_schedule_v2(&other, key, &owner_before_begin).is_err());
             for (i, bytes) in body.chunks(PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1).enumerate() {
                 commit(
                     &source,

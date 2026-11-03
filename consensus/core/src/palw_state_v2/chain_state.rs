@@ -2517,6 +2517,19 @@ impl PalwChainStateV2 {
         self.staged_courts.range(*from..=*to)
     }
 
+    /// Borrow every indexed native acquisition for the candidate frame.
+    pub(crate) fn tir_owner_schedule_acquisitions_v2(
+        &self,
+        claim: Hash64,
+    ) -> impl Iterator<Item = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1> + '_ {
+        use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
+        self.staged_tir_by_claim
+            .get(&claim)
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, key)| matches!(key, Key::TirAcquisition(..)).then_some(*key))
+    }
+
     /// Derived lifecycle consistency only, not proof of a new paid acquisition
     /// or raw-source grant. Admission remains disabled until the full native
     /// allocation and distinct custody pledge/grants are wired.
