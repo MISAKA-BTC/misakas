@@ -8049,7 +8049,7 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         ghostdag_data: &GhostdagData,
         daa_score: u64,
-    ) -> Option<super::super::utxo_validation::PalwRoundVerdictsV1> {
+    ) -> Result<Option<super::super::utxo_validation::PalwRoundVerdictsV1>, PalwLocalTransitionFaultV1> {
         self.palw_round_verdicts_at_v1(state, ghostdag_data, daa_score, Default::default())
     }
 
@@ -8059,17 +8059,34 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         daa_score: u64,
         accepting_block: BlockHash,
-    ) -> Option<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeAdmissionV1> {
-        state.round_fee_admission_v1(
-            self.palw_state_params_v2.as_ref()?,
-            &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
-                block: Default::default(),
-                daa_score,
-                blue_score: ghostdag_data.blue_score,
-                subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
-            },
-            self.palw_escrow_for_carrier_at(accepting_block, daa_score, daa_score),
-        )
+    ) -> Result<Option<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeAdmissionV1>, PalwLocalTransitionFaultV1> {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        state
+            .round_fee_admission_v1(
+                params,
+                &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                    block: Default::default(),
+                    daa_score,
+                    blue_score: ghostdag_data.blue_score,
+                    subsidy: self.coinbase_manager.calc_block_subsidy(daa_score),
+                },
+                self.palw_escrow_for_carrier_at(accepting_block, daa_score, daa_score),
+            )
+            .map_err(Self::palw_round_fee_admission_fault_v1)
+    }
+
+    pub(super) fn palw_round_fee_admission_fault_v1(
+        why: kaspa_consensus_core::palw_state_v2::PalwStateV2Error,
+    ) -> PalwLocalTransitionFaultV1 {
+        use kaspa_consensus_core::{palw_native_resource_v1::NativeCoverageV1, palw_state_v2::PalwStateV2Error};
+        match why {
+            PalwStateV2Error::NativeResource(coverage) => coverage.into(),
+            PalwStateV2Error::NativeContextUnavailable(context) => PalwLocalTransitionFaultV1::Context(context),
+            // The budget is built solely from the selected parent, before
+            // accepting any candidate transaction. Defer if that state cannot
+            // supply a budget; do not judge the candidate by this failure.
+            why => NativeCoverageV1::unsupported::<Self>("Round fee budget preparation", &why.to_string()).into(),
+        }
     }
 
     pub(super) fn palw_round_verdicts_at_v1(
@@ -8078,19 +8095,19 @@ impl VirtualStateProcessor {
         ghostdag_data: &GhostdagData,
         daa_score: u64,
         accepting_block: BlockHash,
-    ) -> Option<super::super::utxo_validation::PalwRoundVerdictsV1> {
+    ) -> Result<Option<super::super::utxo_validation::PalwRoundVerdictsV1>, PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_exec_v2::PalwExecV2Envelope;
         use kaspa_consensus_core::palw_execution_lane_v1::{
             PalwExecEnvelopeV1, PalwExecPermitUseV1, palw_execution_permit_of_v2, palw_execution_span_v1,
         };
-        let lane = self.palw_execution_lane_at(daa_score)?;
+        let Some(lane) = self.palw_execution_lane_at(daa_score) else { return Ok(None) };
         // Route-matrix #2: past ADR-0151's bundle with the quanta armed, a permit is a ticket.
         let tickets_only = self.palw_round_permits_are_tickets_at(daa_score);
         let span_daa = lane.schedule_span_daa_at(daa_score);
         let span_now = palw_execution_span_v1(daa_score, span_daa);
         let mut verdicts = super::super::utxo_validation::PalwRoundVerdictsV1 {
             round_blocks: self.palw_round_blocks_of(ghostdag_data),
-            fee_budget: self.palw_round_fee_admission_at_v1(state, ghostdag_data, daa_score, accepting_block),
+            fee_budget: self.palw_round_fee_admission_at_v1(state, ghostdag_data, daa_score, accepting_block)?,
             ..Default::default()
         };
         // **RFC-0008 v2: the covered set is judged in the canonical order — `(round, permit index, hash)` — so two blocks of one permit,
@@ -8232,7 +8249,7 @@ impl VirtualStateProcessor {
             }
         }
         verdicts.uses.sort();
-        Some(verdicts)
+        Ok(Some(verdicts))
     }
 
     /// **Lane SCAN: write each round block's verdict into the node's telemetry ledger.** Node-local

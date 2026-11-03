@@ -2521,7 +2521,9 @@ impl VirtualStateProcessor {
                     // ADR-0125: which merged round blocks hold their permit, from the same parent state.
                     ctx.palw_round_verdicts = palw_state
                         .as_ref()
-                        .and_then(|s| self.palw_round_verdicts_at_v1(s, &ctx.ghostdag_data, pov_daa_score, current));
+                        .map(|s| self.palw_round_verdicts_at_v1(s, &ctx.ghostdag_data, pov_daa_score, current))
+                        .transpose()?
+                        .flatten();
                     // Lane SCAN: node-local telemetry of each judged round block (never read by consensus).
                     if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
                         self.palw_record_round_verdicts(verdicts);
@@ -3860,15 +3862,15 @@ impl VirtualStateProcessor {
         parent_state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         parent_multiset: MuHash,
         plan: palw_accept::NativeRelayFeePlanV2,
-    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+    ) -> Result<(), PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
-        let fault = |why| NativeCoverageV1::unsupported::<Self>("relay fee replay", why);
+        let fault = |why| PalwLocalTransitionFaultV1::Resource(NativeCoverageV1::unsupported::<Self>("relay fee replay", why));
         if let Some(round) = ctx.palw_round_verdicts.as_mut().filter(|round| round.has_fee_gated_body()) {
             if round.relay_plan_changes_fee_admission(&plan) {
                 return Err(fault("fee-gated Round carrier requires prefix replanning"));
             }
             round.fee_budget = Some(
-                self.palw_round_fee_admission_at_v1(parent_state, &ctx.ghostdag_data, point.daa_score, point.block)
+                self.palw_round_fee_admission_at_v1(parent_state, &ctx.ghostdag_data, point.daa_score, point.block)?
                     .ok_or_else(|| fault("original Round fee budget unavailable"))?,
             );
         }
@@ -3879,10 +3881,7 @@ impl VirtualStateProcessor {
             return Err(fault("Round income changed during replay"));
         }
         if !super::utxo_validation::relay_acceptance_matches(&original, &ctx.mergeset_acceptance_data) {
-            return Err(NativeCoverageV1::unsupported::<Self>(
-                "relay fee replay",
-                "accepted blocks, transactions or carrier positions changed",
-            ));
+            return Err(fault("accepted blocks, transactions or carrier positions changed"));
         }
         Ok(())
     }
@@ -4003,7 +4002,10 @@ impl VirtualStateProcessor {
         // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
         ctx.palw_round_verdicts = virtual_palw_state
             .as_ref()
-            .and_then(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score));
+            .map(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score))
+            .transpose()
+            .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
+            .flatten();
 
         let daa = virtual_daa_window.daa_score;
         // The reserved origin distinguishes scratch records from every real block.
@@ -4049,7 +4051,7 @@ impl VirtualStateProcessor {
                     parent_multiset,
                     plan,
                 )
-                .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
             }
         }
         if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {

@@ -1111,3 +1111,21 @@ Strict Contract/Core/Consensus library Clippy and all Consensus test targets
 typechecked. Three isolated tests ran from the source, covering the plan
 matcher and Round gate intersection as well as exact acceptance comparison.
 No funded Round candidate was executed in this step.
+
+## Active Round budget preparation failures
+
+The Core admission preview now returns a preparation error separately from
+a dormant budget. Candidate and virtual acceptance propagate native resource
+or context failures as local deferrals. The relay replay and existing
+execution-lane template consumers use the same failure mapping. A node that
+cannot construct the active book cannot proceed with an unbudgeted Round body.
+
+The regression holds the local demand limit at capacity, checks the dormant
+and active outcomes, releases the lease, and retries from the same parent.
+The virtual selected-parent PALW tip loader still needs to propagate its own
+preparation failures. Fee changes within budget-gated Round bodies still
+require prefix replanning.
+
+Strict Core/Consensus library Clippy and native and EVM-enabled test-target
+typechecks passed. The regression's standalone runtime command was building
+the default optimized Core library when this static checkpoint was recorded.

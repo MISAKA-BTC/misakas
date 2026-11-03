@@ -1454,5 +1454,29 @@
     "stored_sha256": "1595b5f0dec82a4fa75fad5621b1c72c7df930455d569e917c512c7c71f3cc68",
     "raw_bytes": 1430,
     "stored_bytes": 627
+  },
+  {
+    "raw_name": "round-budget-native-check.log",
+    "stored_name": "round-budget-native-check.log.gz",
+    "raw_sha256": "e3b04d6df5bf76513ff573b316328d53f9703545809d94c0a1b367ad0f1dc728",
+    "stored_sha256": "4de42778181dfda1fee9ebf215901fef75f0bf7b5edca4c295972de5aaf6c7c5",
+    "raw_bytes": 869963,
+    "stored_bytes": 52290
+  },
+  {
+    "raw_name": "round-budget-native-clippy.log",
+    "stored_name": "round-budget-native-clippy.log.gz",
+    "raw_sha256": "cbb921ff6e5ed7a5183cdf2d3849ba898511ae620b5bea04339ab5854bef950d",
+    "stored_sha256": "45882131be76d854fb650abe6e06ee382bb97b2865a595a835951c5abadaaafc",
+    "raw_bytes": 341715,
+    "stored_bytes": 23653
+  },
+  {
+    "raw_name": "round-budget-evm-check.log",
+    "stored_name": "round-budget-evm-check.log.gz",
+    "raw_sha256": "55be77e8894fa587ef60f1901155382cd99961ff62f4d356b322f46912c86b99",
+    "stored_sha256": "c3d2d562cdddfed617a459dfac8fc78791251ca489bd9d6b080a796025dea3ee",
+    "raw_bytes": 596531,
+    "stored_bytes": 42136
   }
 ]

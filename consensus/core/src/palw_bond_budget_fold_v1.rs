@@ -92,23 +92,26 @@ impl PalwBudgetGrowthV1 {
 impl PalwChainStateV2 {
     /// UTXO validation and producer preflight use the same first-fence legacy
     /// seeds and clock release as the native fold, before any fee is collected.
+    /// Only a dormant budget returns `Ok(None)`.
     pub fn round_fee_admission_v1(
         &self,
         params: &PalwStateParamsV2,
         ctx: &PalwBlockContextV2,
         escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
-    ) -> Option<PalwRoundFeeAdmissionV1> {
-        let mirror = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score))?;
+    ) -> Result<Option<PalwRoundFeeAdmissionV1>, PalwStateV2Error> {
+        let Some(mirror) = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score)) else {
+            return Ok(None);
+        };
         let extras = PalwTransitionExtrasV1 { escrow_carve, ..PalwTransitionExtrasV1::default() };
-        // `new` is the tests' panicking constructor; a native-resource refusal here is simply no admission view.
-        let mut builder = TransitionBuilder::try_new(self, params, false, false, false, false, &extras).ok()?;
-        tick_bond_budget_v1(&mut builder, ctx).ok()?;
-        Some(PalwRoundFeeAdmissionV1 {
+        let mut builder = TransitionBuilder::try_new(self, params, false, false, false, false, &extras)?;
+        tick_bond_budget_v1(&mut builder, ctx)?;
+        let book = builder.state.bond_budget.take().ok_or(PalwStateV2Error::DeltaMismatch("active Round fee budget is missing"))?;
+        Ok(Some(PalwRoundFeeAdmissionV1 {
             policy: mirror.policy.clone(),
-            book: builder.state.bond_budget.take().expect("active tick creates the budget"),
+            book,
             capital: self.bonds.iter().map(|(bond, row)| (*bond, row.collateral)).collect(),
             daa_score: ctx.daa_score,
-        })
+        }))
     }
 
     /// **Lane BUDGET: the bond budget's engine**, once the fence's first block has folded.
