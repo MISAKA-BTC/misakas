@@ -1734,3 +1734,33 @@ funding-relay test metadata compiled. The new common session path has yet
 to run in integrated Consensus. The candidate remains separate from the
 pinned claim/job ingress runtime and does not establish the prospective
 reservation owner or actual native Case admission.
+
+### Actual expiry and native Linux capacity refusal
+
+The [expiry and capacity candidate](assigned-case-expiry-capacity-candidate-20261103.tar.gz)
+requires a pending Case to cross its actual deadline before op6 can
+produce an Expired journal event. Native dispatch and cold replay call
+the same method. The isolated exact-method regression passed for early
+and out-of-order attempts, the exact deadline, duplicate expiry and
+already terminal Passed/Refuted/Revoked Cases. It also checked disposal
+of the incomplete candidate's progress and packet receipts. The Core
+library and focused test metadata compiled on the candidate.
+
+The [first Linux runtime log](native-relay-linux-xfs-first-runtime-20261103.log.gz)
+shows the EVM-off build of `45927210f` completed and ran against enforced
+XFS project quota. The node refused a heartbeat because its actual
+output exceeded the pre-construction reservation. The registration,
+fee, recovery and branch assertions did not run. The candidate adds the
+required and available byte counts and distinguishes pre-object,
+single-object, Assignment rehearsal and relay preview failures from
+the final transition. It does not enlarge a quote or approve an
+under-reserved output. A second Linux trial pins the recorded A0 base
+and exact patch and is compiling. The running macOS ingress suite
+still uses its separate source pin.
+
+The [second Linux trial log](native-relay-linux-xfs-capacity-retry-20261103.log.gz)
+records a host free-space guard stop during environment preparation,
+before compilation or test execution. Temporary metadata from seven
+completed scratch checks was released. The remaining headroom was
+insufficient for another guarded Linux build at that point. The first
+runtime failure and the second environment stop are separate outcomes.
