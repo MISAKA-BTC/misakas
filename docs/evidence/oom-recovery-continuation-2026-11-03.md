@@ -1602,3 +1602,14 @@ Compiler output stayed in the owned RAM stage, the fixture
 files were removed, and the RAM volume was detached. The
 exact-source harness therefore has 26 passing cases across
 the two environments. This is transport-level coverage.
+
+The isolated provider outbox provenance candidate
+`a202ebb57` retained the exact duty, claim roots and packet
+identity through carrier preparation. It compiled with
+Kaspad test-crate metadata after correcting the fixture
+types. It remains outside the integration branch. Its
+rechecks currently rebuild all obligations for a seat at
+each carrier checkpoint. A bounded one-claim, one-unit
+resident read with the same deadline, signer and multipart
+rules is required before adoption. No full carrier process
+test or live signature was produced.
