@@ -1542,5 +1542,13 @@
     "stored_sha256": "a2628e229da3a8de283b49bc97898fd6ef4ba23d2719236e05018d8a6d5897a8",
     "raw_bytes": 341715,
     "stored_bytes": 23633
+  },
+  {
+    "raw_name": "round-budget-quote-runtime.log",
+    "stored_name": "round-budget-quote-runtime.log.gz",
+    "raw_sha256": "5e3accea9944e0f12271670575049f8d721b19730a4c1fcc8458ecce828904ae",
+    "stored_sha256": "818c06990a5b870e97e658fa633e621ad86a643499d631bb3ac3c4b569b84dbc",
+    "raw_bytes": 358325,
+    "stored_bytes": 24424
   }
 ]

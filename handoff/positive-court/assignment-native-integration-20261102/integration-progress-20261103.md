@@ -1169,3 +1169,8 @@ preview with no allocation policy. The regression restores its 16 MiB
 logical cap and holds that entire cap before retrying. Strict Core and
 Consensus library Clippy passed. The guarded runtime command was compiling
 the default optimized Core library at this checkpoint.
+
+The optimized Core run passed the Round budget regression with the 16 MiB
+logical cap. It exercised the inactive case, the typed capacity refusal
+with the entire cap held, and successful retry after release from the same
+parent. The runtime archive pins its command and source.
