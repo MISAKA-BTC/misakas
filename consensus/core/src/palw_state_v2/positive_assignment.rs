@@ -436,6 +436,7 @@ impl TransitionBuilder<'_> {
         }
         self.require_absent_assignment_key_v2(NativeRowKey::Assignment(id))?;
         self.require_unowned_assignment_job_v2(Hash64::from_bytes(row.job.0))?;
+        self.require_new_positive_draw_slot_v2(&material.certification_policy, ctx.daa_score)?;
         self.check_assignment_live_slots_v2(row.bundle.terms.prover, Some(&row.bundle.terms), rules)?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentFunding(id))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentUse(id))?;

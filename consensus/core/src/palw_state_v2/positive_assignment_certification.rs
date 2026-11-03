@@ -165,8 +165,26 @@ fn shared_network_draws_v2(
 }
 
 impl TransitionBuilder<'_> {
-    /// Read the live N owner while deriving the bounded epoch interval. Later
-    /// reservation must still account for other live contracts in each epoch.
+    pub(super) fn require_new_positive_draw_slot_v2(
+        &self,
+        policy: &crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+        now: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        queue_policy(self, policy, now)?;
+        let route = self.state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
+        // N uses the ordinary certification prefix plus a 64-byte ID.
+        let _key = reserve_p_workspace((1 + size_of::<[u8; 64]>()) as u64)?;
+        let key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
+        let used = shared_network_draws_v2(&self.state, &key, now / policy.epoch_daa, policy.draws_per_epoch)?;
+        let reserved = route.positive_draw_slots_v2(now, policy.draws_per_epoch);
+        if u64::from(used) + reserved >= u64::from(policy.draws_per_epoch) {
+            return Err(refuse("no unreserved capacity in the actual shared N queue"));
+        }
+        Ok(())
+    }
+
+    /// Check both the original finite calendar and the capacity at the actual
+    /// intake prefix. The Open row then holds one slot through Result intake.
     pub(super) fn check_assignment_draw_calendar_v2(
         &self,
         policy: &crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
@@ -174,14 +192,9 @@ impl TransitionBuilder<'_> {
         result_before_daa: u64,
         max_epochs: u64,
     ) -> Result<u64, PalwStateV2Error> {
-        queue_policy(self, policy, intake_daa)?;
         let calendar =
             AssignmentGateCDrawEpochsV2::from_result_window(policy, intake_daa, result_before_daa, max_epochs).map_err(refuse)?;
-        // N uses the ordinary certification prefix plus a 64-byte ID.
-        // The P row workspace covers this same lookup at draw time.
-        let _key = reserve_p_workspace((1 + size_of::<[u8; 64]>()) as u64)?;
-        let key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
-        shared_network_draws_v2(&self.state, &key, *calendar.epochs().start(), policy.draws_per_epoch)?;
+        self.require_new_positive_draw_slot_v2(policy, intake_daa)?;
         Ok(calendar.epoch_count())
     }
 }
@@ -273,7 +286,9 @@ impl TransitionBuilder<'_> {
             liability: bundle.case.liability,
         };
         h.validate().map_err(refuse)?;
-        queue_policy(self, &h.policy, ctx.daa_score)?;
+        // The same Case-install checkpoint already changed A to Consumed.
+        // Replacing that slot with the new undrawn P cannot book a second one.
+        self.require_new_positive_draw_slot_v2(&h.policy, ctx.daa_score)?;
         let _owner = lease(h.policy.m, 0)?;
         write(
             self,
@@ -305,9 +320,8 @@ impl TransitionBuilder<'_> {
         }
         let h = &row.fixed.header;
         queue_policy(self, &h.policy, ctx.daa_score)?;
-        if ctx.daa_score
-            > h.commit_origin.accepted_daa.checked_add(h.policy.certify_by_daa).ok_or_else(|| refuse("draw clock overflow"))?
-        {
+        let last = h.commit_origin.accepted_daa.checked_add(h.policy.certify_by_daa).ok_or_else(|| refuse("draw clock overflow"))?;
+        if ctx.daa_score > last {
             return Err(refuse("P draw deadline elapsed"));
         }
         let anchor = self.state.round_seed_anchor.ok_or_else(|| refuse("actual later execution seed unavailable"))?;
@@ -322,8 +336,12 @@ impl TransitionBuilder<'_> {
         let network_key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
         let epoch = ctx.daa_score / h.policy.epoch_daa;
         let draws = shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?;
-        if draws == h.policy.draws_per_epoch {
-            return Err(refuse("actual shared N queue full"));
+        let route = self.state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
+        let reserved = route.positive_draw_slots_v2(ctx.daa_score, h.policy.draws_per_epoch);
+        if !route.owns_undrawn_p_slot_v2(last, Hash64::from_bytes(subject.0))
+            || u64::from(draws) + reserved > u64::from(h.policy.draws_per_epoch)
+        {
+            return Err(refuse("P draw requires its protected shared N slot"));
         }
         let network = PalwCertificationNetworkRowV1 { epoch, draws: draws + 1 };
         let a = assignment(&self.state, h.assignment)?;

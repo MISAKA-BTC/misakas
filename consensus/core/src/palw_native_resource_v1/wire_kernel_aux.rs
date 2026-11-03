@@ -232,7 +232,8 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         {
             <(u64, [u8; 64]) as NativeWireScanV1>::scan_native_wire_v1(frame)?
         }
-        136 if key_bytes == 65 && prefix == b'P' => super::positive_certification::scan_positive_certification_row_v2(k, frame)?,
+        136 if key_bytes == 65 && prefix == b'P' => super::positive_certification::scan_positive_certification_row_v2(k, frame)?
+            .allocation(1, size_of::<typed::BTreeNodeEnvelopeV1<(u64, u8, crate::Hash64), ()>>())?,
         136 if key_bytes == 65
             && matches!(
                 prefix,
@@ -1197,10 +1198,15 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         150 => crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1::scan_native_wire_v1(frame)?,
         misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => {
             let shape = super::positive_rows::scan_positive_aux_row_v1(key, frame)?;
-            shape.allocation(
-                u64::from(crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table, key)),
-                size_of::<typed::BTreeNodeEnvelopeV1<(kaspa_hashes::Hash64, u8, kaspa_hashes::Hash64), ()>>(),
-            )?
+            shape
+                .allocation(
+                    u64::from(crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table, key)),
+                    size_of::<typed::BTreeNodeEnvelopeV1<(kaspa_hashes::Hash64, u8, kaspa_hashes::Hash64), ()>>(),
+                )?
+                .allocation(
+                    u64::from(crate::palw_kernel_route_v1::is_positive_draw_slot_row_v2(table, key)),
+                    size_of::<typed::BTreeNodeEnvelopeV1<(u64, u8, crate::Hash64), ()>>(),
+                )?
         }
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),
         _ => {

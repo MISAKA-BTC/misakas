@@ -415,6 +415,10 @@ pub struct PalwKernelRouteStateV1 {
     /// aux rows alone are serialized and hashed.
     #[borsh(skip)]
     pub(crate) positive_job_owners_v2: std::collections::BTreeSet<(Hash64, u8, Hash64)>,
+    /// Inclusive last draw DAA, row kind and subject. The rooted Open or
+    /// undrawn P row owns the slot; this index is rebuilt from those rows.
+    #[borsh(skip)]
+    pub(crate) positive_draw_reservations_v2: std::collections::BTreeSet<(u64, u8, Hash64)>,
     /// **GAP 8: the ledger the rows describe, cached** — never state: not hashed, not encoded, not in a delta, equal for every
     /// comparison. Set by the fold's flush to exactly what [`KernelLedgerV1::from_rows`] would rebuild
     /// ([`KernelLedgerV1::as_rebuilt_from_v1`]); cleared by every other write of a ledger row or of the header (a delta applied or
@@ -468,6 +472,45 @@ fn positive_job_owner_v2(body: &misaka_palw_positive_contract::rows::NativeRowBo
     }
 }
 
+fn open_assignment_draw_slot_v2(body: &misaka_palw_positive_contract::rows::NativeRowBody) -> Option<(u64, u8, Hash64)> {
+    use misaka_palw_positive_contract::{assignment::rows::AssignmentStatusV2, rows::NativeRowBody};
+    let NativeRowBody::Assignment(row) = body else { return None };
+    if row.status != AssignmentStatusV2::Open {
+        return None;
+    }
+    let last = row.bundle.terms.result_before_daa.checked_sub(1)?;
+    Some((last, b'A', Hash64::from_bytes(row.id().0.0)))
+}
+
+pub(crate) fn is_positive_draw_slot_row_v2(table: u8, key: &[u8]) -> bool {
+    use crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2;
+    (table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE && key.get(4) == Some(&OPEN_ASSIGNMENT_JOB_OWNER_V2))
+        || (table == POSITIVE_CERTIFICATION_TABLE_V2 && key.first() == Some(&b'P'))
+}
+
+fn undrawn_p_slot_v2(key: &[u8], mut raw: &[u8]) -> Result<Option<(u64, u8, Hash64)>, misaka_palw_positive_contract::ContractError> {
+    use crate::palw_positive_certification_v2::{MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2, PositiveCertificationFixedV2};
+    use misaka_palw_positive_contract::ContractError as E;
+    if key.len() != 65 || raw.len() > MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2 {
+        return Err(E::Budget);
+    }
+    let fixed = PositiveCertificationFixedV2::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
+    if key[1..] != fixed.header.subject.0 {
+        return Err(E::Identity);
+    }
+    match raw.first() {
+        Some(1) => Ok(None), // The draw already debited N.
+        Some(0) if raw == [0; 5] => {
+            if fixed.outcome.is_some() {
+                return Ok(None);
+            }
+            let last = fixed.header.commit_origin.accepted_daa.checked_add(fixed.header.policy.certify_by_daa).ok_or(E::Range)?;
+            Ok(Some((last, b'P', Hash64::from_bytes(fixed.header.subject.0))))
+        }
+        _ => Err(E::NonCanonical),
+    }
+}
+
 impl PalwKernelRouteStateV1 {
     fn positive_job_owners_for_kind_v2(&self, job: Hash64, kind: u8) -> impl Iterator<Item = &(Hash64, u8, Hash64)> {
         self.positive_job_owners_v2.range((job, kind, Hash64::default())..=(job, kind, Hash64::from_bytes([u8::MAX; 64])))
@@ -486,32 +529,58 @@ impl PalwKernelRouteStateV1 {
         owners.next().is_some_and(|(_, _, owner)| *owner == id) && owners.next().is_none()
     }
 
-    pub(crate) fn update_positive_job_index_v2(
+    pub(crate) fn positive_draw_slots_v2(&self, now: u64, capacity: u32) -> u64 {
+        // Every active interval starts in an already accepted prefix. This
+        // live set only shrinks in the future until another admission.
+        // Counting one extra detects a state that exceeds the shared cap.
+        let probe = usize::try_from(u64::from(capacity) + 1).unwrap_or(usize::MAX);
+        self.positive_draw_reservations_v2.range((now, 0, Hash64::default())..).take(probe).count() as u64
+    }
+
+    pub(crate) fn owns_undrawn_p_slot_v2(&self, last: u64, subject: Hash64) -> bool {
+        self.positive_draw_reservations_v2.contains(&(last, b'P', subject))
+    }
+
+    pub(crate) fn update_positive_aux_indexes_v2(
         &mut self,
         key: &(u8, Vec<u8>),
         next: Option<&[u8]>,
     ) -> Result<(), misaka_palw_positive_contract::ContractError> {
         use misaka_palw_positive_contract::rows::NativeRowValue;
-
-        if !is_positive_job_owner_row_v2(key.0, &key.1) {
+        let is_job = is_positive_job_owner_row_v2(key.0, &key.1);
+        let is_slot = is_positive_draw_slot_row_v2(key.0, &key.1);
+        if !is_job && !is_slot {
             return Ok(());
         }
         let previous = self.aux.get(key).map(Vec::as_slice);
         if previous == next {
             return Ok(());
         }
-        let decode = |bytes: &[u8]| NativeRowValue::decode(&key.1, bytes).map(|row| positive_job_owner_v2(&row.body));
-        let previous = previous.map(decode).transpose()?.flatten();
-        let next = next.map(decode).transpose()?.flatten();
-        if previous != next {
-            if let Some(previous) = previous {
-                self.positive_job_owners_v2.remove(&previous);
+        let decode = |bytes: Option<&[u8]>| {
+            let Some(bytes) = bytes else { return Ok((None, None)) };
+            if is_job {
+                let row = NativeRowValue::decode(&key.1, bytes)?;
+                Ok((positive_job_owner_v2(&row.body), open_assignment_draw_slot_v2(&row.body)))
+            } else {
+                Ok((None, undrawn_p_slot_v2(&key.1, bytes)?))
             }
-            if let Some(next) = next {
-                self.positive_job_owners_v2.insert(next);
-            }
-        }
+        };
+        let (old_job, old_slot) = decode(previous)?;
+        let (new_job, new_slot) = decode(next)?;
+        update_positive_index_v2(&mut self.positive_job_owners_v2, old_job, new_job);
+        update_positive_index_v2(&mut self.positive_draw_reservations_v2, old_slot, new_slot);
         Ok(())
+    }
+}
+
+fn update_positive_index_v2<T: Ord>(index: &mut std::collections::BTreeSet<T>, previous: Option<T>, next: Option<T>) {
+    if previous != next {
+        if let Some(previous) = previous {
+            index.remove(&previous);
+        }
+        if let Some(next) = next {
+            index.insert(next);
+        }
     }
 }
 
@@ -535,6 +604,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
         let count = u32::deserialize_reader(reader)?;
         let mut aux = BTreeMap::new();
         let mut positive_job_owners_v2 = std::collections::BTreeSet::new();
+        let mut positive_draw_reservations_v2 = std::collections::BTreeSet::new();
         // Positive keys must be canonical BEFORE BTreeMap can sort/collapse
         // them. Other aux tables retain their legacy ordering semantics.
         let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
@@ -554,6 +624,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 if let Some(owner) = positive_job_owner_v2(&row.body) {
                     positive_job_owners_v2.insert(owner);
                 }
+                positive_draw_reservations_v2.extend(open_assignment_draw_slot_v2(&row.body));
                 (key, value)
             } else if table == crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2 {
                 // Preserve every old136 key/value byte. Only reserved prefix P
@@ -565,11 +636,10 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                         crate::palw_positive_certification_v2::PositiveCertificationRowV2,
                     >(value.as_slice(), value.len() as u64)
                     .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid native P frame"))?;
-                    let mut fixed_bytes = value.as_slice();
-                    let fixed = crate::palw_positive_certification_v2::PositiveCertificationFixedV2::deserialize(&mut fixed_bytes)?;
-                    if key[1..] != fixed.header.subject.0 {
-                        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "P key/subject mismatch"));
-                    }
+                    positive_draw_reservations_v2.extend(
+                        undrawn_p_slot_v2(&key, &value)
+                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid P draw reservation"))?,
+                    );
                     value
                 } else {
                     Vec::<u8>::deserialize_reader(reader)?
@@ -582,7 +652,14 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "duplicate kernel aux key"));
             }
         }
-        Ok(Self { header, rows, aux, positive_job_owners_v2, ledger_cache: KernelLedgerCacheV1::default() })
+        Ok(Self {
+            header,
+            rows,
+            aux,
+            positive_job_owners_v2,
+            positive_draw_reservations_v2,
+            ledger_cache: KernelLedgerCacheV1::default(),
+        })
     }
 }
 
@@ -740,6 +817,7 @@ impl PalwKernelRouteStateV1 {
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
             positive_job_owners_v2: Default::default(),
+            positive_draw_reservations_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
@@ -753,6 +831,7 @@ impl PalwKernelRouteStateV1 {
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
             positive_job_owners_v2: Default::default(),
+            positive_draw_reservations_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
@@ -1393,6 +1472,7 @@ impl PalwKernelRouteStateV1 {
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
             positive_job_owners_v2: Default::default(),
+            positive_draw_reservations_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         };
         for (table, key, row) in rows {
@@ -1401,8 +1481,8 @@ impl PalwKernelRouteStateV1 {
             } else {
                 let key = (table, key);
                 route
-                    .update_positive_job_index_v2(&key, Some(&row))
-                    .map_err(|error| format!("invalid Positive job owner row: {error:?}"))?;
+                    .update_positive_aux_indexes_v2(&key, Some(&row))
+                    .map_err(|error| format!("invalid Positive indexed row: {error:?}"))?;
                 route.aux.insert(key, row).is_some()
             };
             if twice {
