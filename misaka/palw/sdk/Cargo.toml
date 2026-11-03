@@ -133,3 +133,7 @@ path = "src/bin/palw-native-redemption39.rs"
 name = "palw-native-receipt-live39"
 path = "src/bin/palw-native-receipt-live39.rs"
 required-features = ["native-rpc"]
+
+[[example]]
+name = "check-t12-a16-source"
+required-features = ["native-rpc"]

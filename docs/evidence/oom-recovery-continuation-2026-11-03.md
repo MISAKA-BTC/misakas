@@ -1224,3 +1224,59 @@ build binary and logs, with only Cargo manifests checked out. This
 recovered about 760 MiB. The exact Darwin Qwen #21 replay was
 relaunched in private scratch under the existing APFS, RSS and
 swap guards. No verdict was available during this observation.
+
+## Original Qwen tile and historical class declaration — 06:13 UTC
+
+B0, the relay and the public Explorer index matched at DAA 19,620.
+Explorer served Qwen #50 as a REAL merged-blue block. B0 and the
+relay both lacked its exact claim row. B0's native journal recorded
+20,606 remaining DAA against the required 20,608. The merged block
+remained valid. The public retention rule at DAA 20,000 was still
+unarmed, with nine independently eligible Qwen bonds, zero
+independently ready and zero assigned. That inventory is separate
+from a claim-specific draw.
+
+The original B1 and 113 primary remained unsynced at DAA 19,389 and
+19,224 respectively. The separate Explorer relay and the 113 tunnel
+matched B0. The unsigned seat5 IBD trial was closed, with 20.03 GB
+of root space available against its 22.55 GB launch floor. A separate
+build was already active on that host.
+
+In the integration source, `7ec1d67eb` pins each rebuilt Panel
+capture during storage admission and durable publication. Exact
+durable copies are reused without reserving space for a duplicate.
+A local storage refusal leaves the already built Court response
+available. Kaspad test-crate metadata passed with default and EVM
+features. The patch is source-only.
+
+For exact Qwen #45, the isolated SDK builder used the ordinary 8K
+artifact and original signed 1,023-input, one-output capture. It
+replayed a folded A16 embedding tile and constructed its registered
+artifact row opening. The distinct verifier process had OS-enforced
+read denial for both model files and original capture. Native
+adjudication matched the original tile, deferred a withheld operand
+and refused an altered operand. The evidence was 10,827 bytes.
+The final source rerun produced the same evidence SHA-256,
+`cb590e8ef93865ccbd8efc31d2487441aeb4fbd5ba5a4bd207815fcba92cec3c`,
+in 74.0 seconds including compilation, with a sampled builder peak
+RSS of 1.91 GB and zero swap growth.
+This is one original rooted arithmetic relation. Independent live
+assignment, full-job normal evidence, carrier fold, credit and payment
+remain open.
+
+The closed B1 partial archive held the 111,994-byte transaction
+body and 624-byte acceptance row for DAA 507/508. An exact-key
+RocksDB 10.4.2 reader was tested on a synthetic fixture and ran
+against the archive in a private read-only mount. Native Rust
+rehashed both paired RPC headers, the transaction Merkle root and
+the accepting ID root, then matched the full registration tx ID
+`dcfcb2536802…1c33b` at its accepted carrier index. Its artifact
+root and admission digest match the original, authenticated codec 0
+snapshot's declaration for class `7d7e…922fc`. The archive and live
+services were preserved.
+
+The paired current-chain ancestry RPC refused from DAA 508 because
+the query was below the retained root. The authenticated registration
+bytes establish the declaration's historical origin at DAA 508.
+They do not install a native origin row or qualify the codec 0
+capture for strict fresh IBD. The live import remains blocked.
