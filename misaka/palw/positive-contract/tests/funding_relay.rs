@@ -463,12 +463,14 @@ fn registration_fee_floor_matches_literal_payload_and_pending_row_images() {
             // Same Borsh field layout as a fresh KernelRouteRow delta entry.
             delta_bytes += borsh::object_length(&(0u8, 151u8, key, None::<Vec<u8>>, Some(value))).unwrap() as u64;
         }
-        let retained_bytes = frame_bytes + 3 + aux_bytes;
-        let database_bytes = frame_bytes + 3 + 66 + delta_bytes;
-        let batch_bytes = database_bytes + 8;
+        let charge_bytes = FUNDING_RELAY_CHARGE_BYTES_V2 as u64;
+        let retained_bytes = frame_bytes + 3 + aux_bytes + charge_bytes;
+        let database_bytes = frame_bytes + 3 + 2 * 66 + delta_bytes + charge_bytes;
+        let batch_bytes = database_bytes + 11;
         let storage = FundingRelayStorageExtentV2::for_terms(&terms).unwrap();
         assert_eq!(storage, FundingRelayStorageExtentV2::from_encoded(frame_bytes + 3, aux_bytes, delta_bytes).unwrap());
         assert_eq!(storage.material_put_bytes, frame_bytes + 3 + 66 + 4);
+        assert_eq!(storage.charge_put_bytes, charge_bytes + 66 + 3);
         let usage = FundingRelayUsageV2 {
             frame_bytes,
             decoded_bytes: size_of::<FundingRelayRegistrationBodyV2>() as u64,
@@ -512,7 +514,15 @@ fn metadata_charge_requires_exact_debit_from_the_observed_collectible_fee() {
     let gross = before_relay + mandatory + earlier_rent;
     let partition = |credited_tip| FundingRelayCarrierFeesV2::new(gross, mandatory, before_relay, credited_tip).unwrap();
 
-    let charged = auth.carrier_charge_material(partition(13)).unwrap();
+    let actual = partition(13);
+    let raw = actual.archive_bytes();
+    assert_eq!(raw.as_slice(), borsh::to_vec(&actual).unwrap());
+    assert_eq!(FundingRelayCarrierFeesV2::from_archive_bytes(&raw).unwrap(), actual);
+    assert!(FundingRelayCarrierFeesV2::from_archive_bytes(&raw[..31]).is_err());
+    let mut invalid = raw;
+    invalid[24..32].copy_from_slice(&(before_relay + 1).to_le_bytes());
+    assert!(FundingRelayCarrierFeesV2::from_archive_bytes(&invalid).is_err());
+    let charged = auth.carrier_charge_material(actual).unwrap();
     assert_eq!(charged.origin, auth.origin);
     assert!(auth.carrier_charge_material(partition(before_relay)).is_err());
     assert!(auth.carrier_charge_material(partition(12)).is_err());

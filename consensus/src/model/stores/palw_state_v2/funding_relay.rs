@@ -11,6 +11,7 @@ use misaka_palw_positive_contract::{
     assignment::{
         funding_relay::FundingRelayRegistrationBodyV2,
         funding_relay_policy::{FUNDING_RELAY_MATERIAL_KEY_BYTES_V2, FundingRelayStorageExtentV2},
+        funding_relay_rows::{FUNDING_RELAY_CHARGE_BYTES_V2, FundingRelayAuthorizationRowV2, FundingRelayCarrierFeesV2},
     },
     identity::Digest,
     native::KERNEL_AUX_TABLE,
@@ -51,7 +52,32 @@ pub(crate) fn has_new_funding_relay_rows_v2(delta: &PalwStateDeltaV2) -> bool {
     delta.entries.iter().any(|entry| created_relay_row(entry).is_some())
 }
 
+enum StoredRelayValue<'a> {
+    Payload(&'a [u8]),
+    Charge([u8; FUNDING_RELAY_CHARGE_BYTES_V2]),
+}
+
+impl StoredRelayValue<'_> {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Payload(raw) => raw,
+            Self::Charge(raw) => raw,
+        }
+    }
+}
+
 impl DbPalwStateV2Store {
+    /// Verify the archived fee partition against the rooted authorization.
+    /// The caller must separately establish accepted ancestry and custody.
+    fn read_funding_relay_charge_v2(&self, auth: &FundingRelayAuthorizationRowV2) -> StoreResult<Option<FundingRelayCarrierFeesV2>> {
+        let Some(raw) = self.db.get_pinned(key(auth.metadata_charge.digest))? else { return Ok(None) };
+        let fees = FundingRelayCarrierFeesV2::from_archive_bytes(&raw).map_err(|_| invalid("invalid archived fee partition"))?;
+        if auth.carrier_charge_material(fees).ok() != Some(auth.metadata_charge) {
+            return Err(invalid("archived charge does not match authorization"));
+        }
+        Ok(Some(fees))
+    }
+
     /// The caller holds the PALW archive lock and the admitted carrier owner
     /// through the enclosing batch commit. Reads and checks precede all puts.
     pub(crate) fn stage_funding_relay_material_v2(
@@ -67,8 +93,9 @@ impl DbPalwStateV2Store {
         if count % 2 != 0 || count / 2 > carriers.len() {
             return Err(invalid("new rows lack complete carrier pairs"));
         }
-        type Record<'a> = ([u8; FUNDING_RELAY_MATERIAL_KEY_BYTES_V2], &'a [u8]);
-        let count = count / 2;
+        type Record<'a> = ([u8; FUNDING_RELAY_MATERIAL_KEY_BYTES_V2], StoredRelayValue<'a>);
+        // Two created canonical rows correspond to at most two archive puts.
+
         let scratch = (size_of::<Record<'_>>() as u64)
             .checked_mul(count as u64)
             .and_then(|n| n.checked_add((4 * size_of::<NativeRowValue>() + 2 * size_of::<FundingRelayRegistrationBodyV2>()) as u64))
@@ -134,7 +161,11 @@ impl DbPalwStateV2Store {
             if charge != auth.metadata_charge {
                 return Err(invalid("actual charge differs from the canonical registration reference"));
             }
-            let key = key(auth.material.digest);
+            let material_key = key(auth.material.digest);
+            let charge_key = key(charge.digest);
+            if material_key == charge_key {
+                return Err(invalid("charge and payload share a content address"));
+            }
             let auth_extent = borsh::object_length(entry).map_err(|_| invalid("authorization delta size"))? as u64;
             let custody_extent = borsh::object_length(custody_entry).map_err(|_| invalid("custody delta size"))? as u64;
             let aux_extent = (auth_key.len() + auth_bytes.len() + custody_key.len() + custody_bytes.len()) as u64;
@@ -148,14 +179,23 @@ impl DbPalwStateV2Store {
                 return Err(invalid("encoded registration extent differs from preflight"));
             }
             measured.check_usage(&auth.quote.usage).map_err(|_| invalid("registration exceeds its quoted storage extent"))?;
-            if let Some(saved) = self.db.get_pinned(key)? {
+            if let Some(saved) = self.db.get_pinned(material_key)? {
                 if saved.as_ref() != payload {
                     return Err(invalid("content address already contains different bytes"));
                 }
-                continue;
+            } else {
+                added = added.checked_add(measured.material_put_bytes).ok_or_else(|| capacity("batch extent overflow"))?;
+                pending.push((material_key, StoredRelayValue::Payload(payload)));
             }
-            added = added.checked_add(measured.material_put_bytes).ok_or_else(|| capacity("batch extent overflow"))?;
-            pending.push((key, payload));
+
+            if let Some(saved) = self.read_funding_relay_charge_v2(&auth)? {
+                if saved != fees {
+                    return Err(invalid("observed carrier fees differ from archived partition"));
+                }
+            } else {
+                added = added.checked_add(measured.charge_put_bytes).ok_or_else(|| capacity("batch extent overflow"))?;
+                pending.push((charge_key, StoredRelayValue::Charge(fees.archive_bytes())));
+            }
         }
         if pending.is_empty() {
             return Ok(None);
@@ -175,8 +215,8 @@ impl DbPalwStateV2Store {
         let before = batch.size_in_bytes() as u64;
         let total = before.checked_add(added).ok_or_else(|| capacity("total batch extent overflow"))?;
         lease.grow_memory_v1(total).map_err(|why| capacity(&why.to_string()))?;
-        for (key, payload) in pending {
-            batch.put(key, payload);
+        for (key, value) in pending {
+            batch.put(key, value.as_bytes());
         }
         debug_assert_eq!(batch.size_in_bytes() as u64, total);
         Ok(Some(NativeStoreWriteTicketV1 { _lease: Some(lease) }))

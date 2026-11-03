@@ -9,6 +9,8 @@ use crate::{
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 
+pub const FUNDING_RELAY_CHARGE_BYTES_V2: usize = 4 * size_of::<u64>();
+
 /// Observed transaction fee partition. Construction checks arithmetic only;
 /// the UTXO fee owner must supply the amounts that reward calculation used.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
@@ -24,6 +26,19 @@ impl FundingRelayCarrierFeesV2 {
             return Err(ContractError::Budget);
         }
         Ok(Self { gross_fee, mandatory_burn, before_relay, credited_tip })
+    }
+
+    /// Canonical preimage archived under the accepted charge digest.
+    pub fn archive_bytes(self) -> [u8; FUNDING_RELAY_CHARGE_BYTES_V2] {
+        let mut raw = [0; FUNDING_RELAY_CHARGE_BYTES_V2];
+        borsh::to_writer(raw.as_mut_slice(), &self).expect("four fixed-width carrier fee fields");
+        raw
+    }
+
+    pub fn from_archive_bytes(raw: &[u8]) -> Result<Self, ContractError> {
+        let (gross, mandatory, before_relay, credited): (u64, u64, u64, u64) =
+            borsh::from_slice(raw).map_err(|_| ContractError::NonCanonical)?;
+        Self::new(gross, mandatory, before_relay, credited)
     }
 
     pub fn gross_fee(self) -> u64 {

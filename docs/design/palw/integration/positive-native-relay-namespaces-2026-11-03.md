@@ -21,7 +21,7 @@ The pair reconstructs and hashes the exact full literal body, including both sig
 
 Binding is absent at R registration. Only actual F/S acceptance may install its actual origin, original funding outpoint/contract, predecessor and account-slot reservation. A DTO with these fields supplies no such capability. No registration deadline automatically removes a current package or unlocks its account.
 
-The raw-material key uses suffix `0x4c` under `DatabaseStorePrefixes::PalwStateV2Tip`, followed by the 64-byte relay material digest. The UTXO commit stages the literal lifecycle payload at that key when the final delta and actual admitted carrier supply a matching new registration. Accepted origin is scoped to the canonical rows and acceptance record. Cold replay still requires an authenticated branch and custody reader.
+The raw-material key uses suffix `0x4c` under `DatabaseStorePrefixes::PalwStateV2Tip`, followed by a 64-byte material digest. A new registration stages the literal lifecycle payload at the payload digest and its fixed 32-byte fee partition at the separate charge digest. The rooted authorization selects both records. The payload can be shared across branches, while the charge digest commits to the original accepting point through the payload and quote references. The UTXO commit stages both records in the same batch as the canonical delta and acceptance record. Cold replay still requires an authenticated branch and custody reader.
 
 ## Data identity domains
 

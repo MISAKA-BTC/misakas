@@ -990,5 +990,37 @@
     "stored_sha256": "e0434a8ad554a0f167ffbbd37d78b6ba0c924f8df38a60edf7f8023533a484c2",
     "raw_bytes": 341860,
     "stored_bytes": 23624
+  },
+  {
+    "raw_name": "relay-charge-archive-contract-first.log",
+    "stored_name": "relay-charge-archive-contract-first.log.gz",
+    "raw_sha256": "ba3c99c9f9e2d2fc37461b7a1b88f48d86e1d569e69a724fd4d361f252874161",
+    "stored_sha256": "c12264cc8405a8b95550b52a64bee147c40aff3a6c55432c85ce336da6c071b5",
+    "raw_bytes": 53248,
+    "stored_bytes": 4276
+  },
+  {
+    "raw_name": "relay-charge-archive-contract-second.log",
+    "stored_name": "relay-charge-archive-contract-second.log.gz",
+    "raw_sha256": "a00caf7c824defeec6e59918af4af5860977f3d5b4c795aca5c6e625f7902959",
+    "stored_sha256": "581d46933e9d3d25d078019e15662fd9f55b9edba41f7767cae5c8d112cb1abc",
+    "raw_bytes": 53248,
+    "stored_bytes": 4280
+  },
+  {
+    "raw_name": "relay-charge-archive-library-first.log",
+    "stored_name": "relay-charge-archive-library-first.log.gz",
+    "raw_sha256": "09648362c73eef8e6f5c9d27904974f5be65615570aa6605c7b43718f6e65a09",
+    "stored_sha256": "e5b1bac6729ae041505c5da363898aa94a8a8f4599399fe6646f0df6da76e8b0",
+    "raw_bytes": 283643,
+    "stored_bytes": 20100
+  },
+  {
+    "raw_name": "relay-charge-archive-library-second.log",
+    "stored_name": "relay-charge-archive-library-second.log.gz",
+    "raw_sha256": "7351f3a6b48ae42b0f7c4c506eb32ea262729191de72c8145ebbbc4851fef3f1",
+    "stored_sha256": "d4549ba7e6ddbf183376f9fad1648f8a75a14baa3e1ceb8226c466afea2d9822",
+    "raw_bytes": 341860,
+    "stored_bytes": 23666
   }
 ]

@@ -691,3 +691,32 @@ All ten contract relay cases and Core/Consensus library Clippy passed
 on one frozen source map. The RocksDB path was typechecked. No live
 registration or debit was executed. Documentation checking found
 zero new issues against the existing 43.
+
+## Archived relay fee partition
+
+The native staging path now persists the actual four-field UTXO fee
+partition alongside the literal lifecycle payload, canonical
+registration delta and acceptance record. The fixed 32-byte charge
+preimage uses the existing 0x4c material namespace under its
+independent, origin-bound charge digest. This permits payload reuse
+across branches while retaining the observed fee split separately for
+each accepting origin. The charge reader rejects malformed partitions
+and references that do not match the rooted authorization.
+
+The shared price, storage and batch extent now include the charge
+record. Allocation and hard-quota checks include both actual puts.
+An identical local record can avoid its put while the canonical
+extent and registration charge still use the original bounds. The
+regression checks the charge preimage against canonical Borsh and
+rejects truncated or arithmetically impossible fee partitions.
+
+This supplies data needed to reconstruct the charge on restart. The
+branch-authenticated custody reader, actual pre-reward fee debit, and
+live op14 registration remain unverified.
+
+Final-source relay contract tests passed 10/10 and the Core and
+Consensus library Clippy checks passed with warnings denied. The
+first Clippy run found an unnecessary reference in the fixed-buffer
+encoder and was rerun after correction. The native archive path
+was typechecked. Documentation checking reported zero new issues
+against the existing 43.

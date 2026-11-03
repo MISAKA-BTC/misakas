@@ -1,5 +1,8 @@
 //! Explicit finite RFC-0046 preimages; no network defaults and no native lease.
-use super::funding_relay::{FUNDING_RELAY_MAX_BODY_BYTES_V2, FundingRelayTermsV2};
+use super::{
+    funding_relay::{FUNDING_RELAY_MAX_BODY_BYTES_V2, FundingRelayTermsV2},
+    funding_relay_rows::FUNDING_RELAY_CHARGE_BYTES_V2,
+};
 use crate::{
     ContractError,
     identity::{Digest, hash},
@@ -331,6 +334,7 @@ pub struct FundingRelayStorageExtentV2 {
     pub database_bytes: u64,
     pub batch_bytes: u64,
     pub material_put_bytes: u64,
+    pub charge_put_bytes: u64,
 }
 
 impl FundingRelayStorageExtentV2 {
@@ -361,15 +365,18 @@ impl FundingRelayStorageExtentV2 {
         if !(128..16_384).contains(&payload_bytes) || body_bytes > FUNDING_RELAY_MAX_BODY_BYTES_V2 as u64 || delta_bytes < aux_bytes {
             return Err(ContractError::Budget);
         }
-        let retained_bytes = sum([payload_bytes, aux_bytes])?;
+        let charge_bytes = FUNDING_RELAY_CHARGE_BYTES_V2 as u64;
+        let retained_bytes = sum([payload_bytes, aux_bytes, charge_bytes])?;
         let raw_extent = sum([payload_bytes, FUNDING_RELAY_MATERIAL_KEY_BYTES_V2 as u64])?;
-        let database_bytes = sum([raw_extent, delta_bytes])?;
-        // Raw Put type + one-byte key length + two-byte value length.
+        let charge_extent = sum([charge_bytes, FUNDING_RELAY_MATERIAL_KEY_BYTES_V2 as u64])?;
+        let database_bytes = sum([raw_extent, charge_extent, delta_bytes])?;
+        // Put type, one-byte key length, and the respective value lengths.
         let material_put_bytes = sum([raw_extent, 4])?;
+        let charge_put_bytes = sum([charge_extent, 3])?;
         // The existing block delta Put's value-length varint can grow by up to
         // four bytes as its u32 value size increases.
-        let batch_bytes = sum([database_bytes, 4, 4])?;
-        Ok(Self { body_bytes, retained_bytes, database_bytes, batch_bytes, material_put_bytes })
+        let batch_bytes = sum([database_bytes, 4, 3, 4])?;
+        Ok(Self { body_bytes, retained_bytes, database_bytes, batch_bytes, material_put_bytes, charge_put_bytes })
     }
 
     pub fn check_usage(self, usage: &FundingRelayUsageV2) -> Result<(), ContractError> {
