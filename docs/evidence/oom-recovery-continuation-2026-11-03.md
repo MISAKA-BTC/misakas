@@ -395,3 +395,45 @@ A provider manifest covering 40,195 returned byte-identical material.
 Wrong roots and a corrupted chunk were rejected. The original signed
 envelope and capture were retained byte for byte. The provider test
 does not establish real chain acceptance or an arithmetic verdict.
+
+## Bounded provider reads and live acceptance probe — 04:33 UTC
+
+The directory client now opens regular evidence files and checks their
+size before allocation. Manifest-declared chunk lengths bound reads, and
+ordinary Panel fallback uses the existing 16 MiB material limit. The
+reference provider applies its configured object limits when serving
+existing files and validates the backing files before accepting a
+manifest. HEAD checks the opened file without reading its body. These
+changes are in `37b87340f` and `d3064de61`.
+
+Seventeen scoped tests on the updated provider modules passed. They
+covered byte-identical delivery of the real Qwen #32 capture, recovery
+using another copy after corruption, and refusal of oversized existing
+files before allocation. The test log SHA256 is
+`7a219eb02ee9aa6c4291cfacd93ea6b2b390c17cd51827ba07fe1c23f20aa011`. The tests measure per-object bounds. Aggregate
+server admission and live deployment are separate.
+
+A bounded read-only probe brackets the selected frontier on B0 and the
+relay and checks a single claim's signed expiry, accepted block,
+effective expiry, assigned seats, valid receipts, Final and Gate C.
+Thirteen local boundary and negative cases passed. In the live sample at
+DAA 19,590 the Qwen #32 carrier was visible on both nodes. The claim and
+assignment were absent. A separate limited query found 15 older voided
+claims across ten class bonds. Five bond responses were truncated, so
+that query is not a complete claim inventory.
+
+At the later public sample, REST returned 200 with the selected-chain
+cursor current. WebSocket matched the configured synced relay at DAA
+19,592. The sampled eight selected blocks were legacy heartbeats and
+the relay's receipt-block counter was zero. Panel throughput cannot be
+measured from these samples.
+
+At 04:33 UTC B0, the relay, and the Explorer tunnel on 113 returned
+the same selected tip at DAA 19,592. B1 reported unsynced at 19,389
+and the separate 113 primary reported unsynced at 19,224. The producer
+reported 34 draws and 34 produced blocks in its process. The journal
+matched attempt #34 to another refusal with 20,606 DAA remaining
+against 20,608 required. The class view showed zero assignments and
+zero valid receipt seats. Scoped Node test metadata with default and
+EVM features compiled on the provider changes. Full linkage and live
+qualification remain pending.
