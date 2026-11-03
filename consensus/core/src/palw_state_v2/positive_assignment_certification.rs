@@ -550,11 +550,11 @@ impl TransitionBuilder<'_> {
         }
         write(self, row)
     }
-    /// The block tick can expire undrawn subjects from rooted state alone.
-    /// Releasing a draw slot needs neither the retained roster nor a draw seed.
-    pub(super) fn expire_undrawn_positive_certifications_v2(&mut self, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    /// Draw expiry, insufficient votes and veto are decided from rooted P
+    /// and Case rows. A k-positive subject still needs its native session.
+    pub(super) fn decide_due_positive_certification_failures_v2(&mut self, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
         while let Some(subject) =
-            self.state.kernel_route.as_ref().and_then(|route| route.expired_positive_draw_subjects_v2(ctx.daa_score).next())
+            self.state.kernel_route.as_ref().and_then(|route| route.due_positive_certification_subjects_v2(ctx.daa_score).next())
         {
             // The canonical P write removes this subject from the index.
             self.fail_positive_certification_v2(ctx, Digest(subject.as_bytes()))?;

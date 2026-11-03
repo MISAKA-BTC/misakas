@@ -25557,7 +25557,7 @@ impl PalwStateCarriageV2 {
                         .map(|(key, row)| (key.clone(), row.clone()))
                         .collect(),
                     positive_job_owners_v2: route.positive_job_owners_v2.clone(),
-                    positive_draw_reservations_v2: route.positive_draw_reservations_v2.clone(),
+                    positive_gate_c_schedule_v2: route.positive_gate_c_schedule_v2.clone(),
                     ledger_cache: Default::default(),
                 }
             }),

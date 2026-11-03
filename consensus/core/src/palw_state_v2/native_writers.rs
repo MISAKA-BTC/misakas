@@ -254,7 +254,9 @@ impl<'a> TransitionBuilder<'a> {
         q.member_if::<(Hash64, u8, Hash64), ()>(
             new.is_some() && crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table, key),
         )?;
-        q.member_if::<(u8, u64, Hash64), ()>(new.is_some() && crate::palw_kernel_route_v1::is_positive_draw_slot_row_v2(table, key))?;
+        q.member_if::<(u8, u64, Hash64), ()>(
+            new.is_some() && crate::palw_kernel_route_v1::is_positive_gate_c_schedule_row_v2(table, key),
+        )?;
         if retained_caller_buffers {
             q.exact::<u8>(key_len)?.exact::<u8>(value_len)?;
         }

@@ -114,8 +114,8 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         assert_eq!(route.positive_draw_slots_v2(last, 4), 1);
         assert_eq!(route.positive_draw_slots_v2(last + 1, 4), 0);
         let subject = crate::Hash64::from_bytes(header.subject.0);
-        assert_eq!(route.expired_positive_draw_subjects_v2(last).next(), None);
-        assert!(route.expired_positive_draw_subjects_v2(last + 1).eq([subject]));
+        assert_eq!(route.due_positive_certification_subjects_v2(last).next(), None);
+        assert!(route.due_positive_certification_subjects_v2(last + 1).eq([subject]));
         let bytes = borsh::to_vec(&route).unwrap();
         let mut restored: crate::palw_kernel_route_v1::PalwKernelRouteStateV1 = borsh::from_slice(&bytes).unwrap();
         assert_eq!(restored.positive_draw_slots_v2(last, 4), 1);
@@ -124,12 +124,116 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         restored.update_positive_aux_indexes_v2(&key, Some(&expired)).unwrap();
         restored.aux.insert(key.clone(), expired);
         assert_eq!(restored.positive_draw_slots_v2(last, 4), 0);
-        assert_eq!(restored.expired_positive_draw_subjects_v2(last + 1).next(), None);
+        assert_eq!(restored.due_positive_certification_subjects_v2(last + 1).next(), None);
         restored.update_positive_aux_indexes_v2(&key, Some(&pending)).unwrap();
         restored.aux.insert(key, pending);
         assert_eq!(borsh::to_vec(&restored).unwrap(), bytes);
         assert_eq!(restored.positive_draw_slots_v2(last, 4), 1);
-        assert!(restored.expired_positive_draw_subjects_v2(last + 1).eq([subject]));
+        assert!(restored.due_positive_certification_subjects_v2(last + 1).eq([subject]));
+    }
+    {
+        use crate::{
+            palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1,
+            palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},
+            palw_positive_certification_v2::*,
+            palw_security_certification_v1::palw_certification_seed_v1,
+            palw_state_v2::PalwBondKeyV2,
+            tx::TransactionOutpoint,
+        };
+        use misaka_palw_positive_contract::certification::{PositiveCourtAttestationV2, PositiveCourtVerdictV2};
+        let mut h = header.clone();
+        h.policy.m = 3;
+        h.policy.k = 2;
+        h.policy.veto = 2;
+        h.policy_id = positive_certification_policy_id_v2(&h.policy);
+        let at = h.commit_origin.accepted_daa;
+        let deadline = at + h.policy.attest_window_daa;
+        let anchor_span = h.committed_span.unwrap() + h.policy.anchor_delay_spans;
+        let verifier_bond = PalwBondKeyV2(TransactionOutpoint::new(crate::Hash64::from_bytes([86; 64]), 0));
+        let verifier = Digest(palw_kernel_bond_id_v1(&verifier_bond));
+        let execution_key = NativeHash64([88; 64]);
+        let mut draw = PositiveCertificationDrawV2 {
+            meta: PositiveCertificationDrawMetaV2 {
+                roster: d(87),
+                roster_count: 1,
+                roster_stake: 1,
+                seed: Digest(palw_certification_seed_v1(&h.subject.0, anchor_span, &execution_key.0)),
+                anchor_span,
+                anchor_block: NativeHash64([89; 64]),
+                execution_key,
+                origin: PositiveCertificationDrawOriginV2 { block: h.commit_origin.accepting_block, daa: at, blue_score: 7 },
+                deadline_daa: deadline,
+                id: d(0),
+            },
+            positions: vec![verifier; 3],
+        };
+        draw.meta.id = draw.expected_id(&h);
+        let finality = PositiveCertificationFinalV2 { origin: origin(), witness: WitnessId(d(90)), material: material() };
+        let key = (POSITIVE_CERTIFICATION_TABLE_V2, positive_certification_key_v2(h.subject));
+        let mut p = PositiveCertificationRowV2 {
+            fixed: PositiveCertificationFixedV2 {
+                header: h.clone(),
+                finality: Some(finality),
+                outcome: None,
+                liability_release: None,
+            },
+            draw: Some(draw),
+            votes: Vec::new(),
+        };
+        let install = |route: &mut PalwKernelRouteStateV1, p: &PositiveCertificationRowV2| {
+            p.validate_shape().unwrap();
+            let bytes = borsh::to_vec(p).unwrap();
+            route.update_positive_aux_indexes_v2(&key, Some(&bytes)).unwrap();
+            route.aux.insert(key.clone(), bytes);
+        };
+        let mut route = empty_route();
+        let subject = crate::Hash64::from_bytes(h.subject.0);
+        install(&mut route, &p);
+        assert_eq!(route.positive_draw_slots_v2(at, 4), 0);
+        assert_eq!(route.due_positive_certification_subjects_v2(deadline).next(), None);
+        let before_vote = borsh::to_vec(&route).unwrap();
+        let restored: PalwKernelRouteStateV1 = borsh::from_slice(&before_vote).unwrap();
+        assert!(restored.due_positive_certification_subjects_v2(deadline + 1).eq([subject]));
+        assert_eq!(positive_certification_failure_v2(&p, deadline + 1, true), Some(PositiveCertificationOutcomeV2::NotCertified));
+        let voter_key = [0; PUBKEY_BYTES];
+        p.votes.push(PositiveCertificationVoteV2 {
+            bond: NativeOutpoint { transaction: NativeHash64([86; 64]), index: 0 },
+            key: voter_key,
+            statement: PositiveCourtAttestationV2 {
+                version: 2,
+                revision: 1,
+                scope: h.scope,
+                claim: h.claim,
+                result: h.result,
+                case: h.case,
+                subject: h.subject,
+                policy: h.policy_id,
+                draw_anchor: p.draw.as_ref().unwrap().meta.id,
+                witness: finality.witness,
+                verifier_bond: verifier,
+                verifier: principal(&voter_key),
+                verdict: PositiveCourtVerdictV2::PositiveChecked,
+                checked_material: finality.material.digest,
+            },
+            signature: [0; SIGNATURE_BYTES],
+            origin: origin(),
+            liability_amount: palw_kernel_signer_lock_amount_v1(h.worker_gain, h.policy.k as u8),
+        });
+        install(&mut route, &p);
+        assert_eq!(p.positive_positions(), 3);
+        assert_eq!(route.due_positive_certification_subjects_v2(deadline + 1).next(), None);
+        assert_eq!(positive_certification_failure_v2(&p, deadline + 1, true), None);
+
+        p.votes[0].statement.verdict = PositiveCourtVerdictV2::NotReproducible;
+        p.votes[0].liability_amount = 0;
+        install(&mut route, &p);
+        assert_eq!(route.due_positive_certification_subjects_v2(at - 1).next(), None);
+        assert!(route.due_positive_certification_subjects_v2(at).eq([subject]));
+        assert_eq!(positive_certification_failure_v2(&p, at, true), Some(PositiveCertificationOutcomeV2::Vetoed));
+        p.votes.clear();
+        install(&mut route, &p);
+        assert_eq!(borsh::to_vec(&route).unwrap(), before_vote);
+        assert!(route.due_positive_certification_subjects_v2(deadline + 1).eq([subject]));
     }
     assert_eq!(positive_certification_case_live_v2(&header, &case), Ok(true));
     assert_eq!(check_positive_certification_result_links_v2(&header, &result, &case), Ok(()));

@@ -415,10 +415,10 @@ pub struct PalwKernelRouteStateV1 {
     /// aux rows alone are serialized and hashed.
     #[borsh(skip)]
     pub(crate) positive_job_owners_v2: std::collections::BTreeSet<(Hash64, u8, Hash64)>,
-    /// Row kind, inclusive last draw DAA and subject. The rooted Open or
-    /// undrawn P row owns the slot; this index is rebuilt from those rows.
+    /// Row kind, DAA and subject. Open A and undrawn P hold a draw slot.
+    /// Drawn P rows can instead have a pending attestation decision.
     #[borsh(skip)]
-    pub(crate) positive_draw_reservations_v2: std::collections::BTreeSet<(u8, u64, Hash64)>,
+    pub(crate) positive_gate_c_schedule_v2: std::collections::BTreeSet<(u8, u64, Hash64)>,
     /// **GAP 8: the ledger the rows describe, cached** — never state: not hashed, not encoded, not in a delta, equal for every
     /// comparison. Set by the fold's flush to exactly what [`KernelLedgerV1::from_rows`] would rebuild
     /// ([`KernelLedgerV1::as_rebuilt_from_v1`]); cleared by every other write of a ledger row or of the header (a delta applied or
@@ -482,15 +482,22 @@ fn open_assignment_draw_slot_v2(body: &misaka_palw_positive_contract::rows::Nati
     Some((b'A', last, Hash64::from_bytes(row.id().0.0)))
 }
 
-pub(crate) fn is_positive_draw_slot_row_v2(table: u8, key: &[u8]) -> bool {
+pub(crate) fn is_positive_gate_c_schedule_row_v2(table: u8, key: &[u8]) -> bool {
     use crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2;
     (table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE && key.get(4) == Some(&OPEN_ASSIGNMENT_JOB_OWNER_V2))
         || (table == POSITIVE_CERTIFICATION_TABLE_V2 && key.first() == Some(&b'P'))
 }
 
-fn undrawn_p_slot_v2(key: &[u8], mut raw: &[u8]) -> Result<Option<(u8, u64, Hash64)>, misaka_palw_positive_contract::ContractError> {
-    use crate::palw_positive_certification_v2::{MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2, PositiveCertificationFixedV2};
-    use misaka_palw_positive_contract::ContractError as E;
+fn positive_p_schedule_v2(
+    key: &[u8],
+    mut raw: &[u8],
+) -> Result<Option<(u8, u64, Hash64)>, misaka_palw_positive_contract::ContractError> {
+    use crate::palw_positive_certification_v2::{
+        MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2, MAX_POSITIVE_DRAW_POSITIONS_V2, PositiveCertificationDrawMetaV2,
+        PositiveCertificationFixedV2, PositiveCertificationVoteV2,
+    };
+    use misaka_palw_positive_contract::{ContractError as E, certification::PositiveCourtVerdictV2};
+    const _: () = assert!(MAX_POSITIVE_DRAW_POSITIONS_V2 <= u128::BITS as u16);
     if key.len() != 65 || raw.len() > MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2 {
         return Err(E::Budget);
     }
@@ -498,17 +505,62 @@ fn undrawn_p_slot_v2(key: &[u8], mut raw: &[u8]) -> Result<Option<(u8, u64, Hash
     if key[1..] != fixed.header.subject.0 {
         return Err(E::Identity);
     }
-    match raw.first() {
-        Some(1) => Ok(None), // The draw already debited N.
-        Some(0) if raw == [0; 5] => {
-            if fixed.outcome.is_some() {
-                return Ok(None);
-            }
-            let last = fixed.header.commit_origin.accepted_daa.checked_add(fixed.header.policy.certify_by_daa).ok_or(E::Range)?;
-            Ok(Some((b'P', last, Hash64::from_bytes(fixed.header.subject.0))))
-        }
-        _ => Err(E::NonCanonical),
+    let h = &fixed.header;
+    let subject = Hash64::from_bytes(h.subject.0);
+    let tag = u8::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
+    if tag == 0 && raw == [0; 4] {
+        let last = h.commit_origin.accepted_daa.checked_add(h.policy.certify_by_daa).ok_or(E::Range)?;
+        return Ok(fixed.outcome.is_none().then_some((b'P', last, subject)));
     }
+    if tag != 1 {
+        return Err(E::NonCanonical);
+    }
+    if fixed.outcome.is_some() {
+        return Ok(None);
+    }
+
+    let draw = PositiveCertificationDrawMetaV2::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
+    let position_count = u32::deserialize(&mut raw).map_err(|_| E::NonCanonical)?;
+    let max = u32::from(h.policy.m.min(MAX_POSITIVE_DRAW_POSITIONS_V2));
+    if position_count > max {
+        return Err(E::Budget);
+    }
+    let (positions, mut votes) = raw.split_at_checked(position_count as usize * 64).ok_or(E::NonCanonical)?;
+    let vote_count = u32::deserialize(&mut votes).map_err(|_| E::NonCanonical)?;
+    if vote_count > max {
+        return Err(E::Budget);
+    }
+
+    // Mark draw positions, including repeated positions for one selected bond,
+    // exactly as the typed certification fold does. No vote or roster Vec is
+    // allocated on this projection or when reconstructing the derived index.
+    let mut positive = 0u128;
+    let mut negative = 0u128;
+    let mut last_negative = draw.origin.daa;
+    for _ in 0..vote_count {
+        let vote = PositiveCertificationVoteV2::deserialize(&mut votes).map_err(|_| E::NonCanonical)?;
+        let tally = match vote.statement.verdict {
+            PositiveCourtVerdictV2::PositiveChecked => &mut positive,
+            PositiveCourtVerdictV2::NotReproducible => {
+                last_negative = last_negative.max(vote.origin.accepted_daa);
+                &mut negative
+            }
+            PositiveCourtVerdictV2::Unavailable => continue,
+        };
+        for (i, position) in positions.chunks_exact(64).enumerate() {
+            if position == vote.statement.verifier_bond.0 {
+                *tally |= 1u128 << i;
+            }
+        }
+    }
+    if !votes.is_empty() {
+        return Err(E::NonCanonical);
+    }
+    if draw.roster_count == 0 || (h.policy.veto > 0 && negative.count_ones() >= u32::from(h.policy.veto)) {
+        // A veto or an empty draw is due in this block, including equal DAA.
+        return Ok(Some((b'V', last_negative, subject)));
+    }
+    Ok((positive.count_ones() < u32::from(h.policy.k)).then_some((b'D', draw.deadline_daa, subject)))
 }
 
 impl PalwKernelRouteStateV1 {
@@ -534,20 +586,21 @@ impl PalwKernelRouteStateV1 {
         // live set only shrinks in the future until another admission.
         // Counting one extra detects a state that exceeds the shared cap.
         let probe = usize::try_from(u64::from(capacity) + 1).unwrap_or(usize::MAX);
-        let active = |kind| self.positive_draw_reservations_v2.range((kind, now, Hash64::default())..(kind + 1, 0, Hash64::default()));
+        let active = |kind| self.positive_gate_c_schedule_v2.range((kind, now, Hash64::default())..(kind + 1, 0, Hash64::default()));
         active(b'A').chain(active(b'P')).take(probe).count() as u64
     }
 
     pub(crate) fn owns_undrawn_p_slot_v2(&self, last: u64, subject: Hash64) -> bool {
-        self.positive_draw_reservations_v2.contains(&(b'P', last, subject))
+        self.positive_gate_c_schedule_v2.contains(&(b'P', last, subject))
     }
 
-    /// Only undrawn P rows whose inclusive draw deadline has elapsed.
-    /// Assignment clocks and already decided history are outside this range.
-    pub(crate) fn expired_positive_draw_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
-        self.positive_draw_reservations_v2
-            .range((b'P', 0, Hash64::default())..(b'P', now, Hash64::default()))
-            .map(|&(_, _, subject)| subject)
+    /// Draw and attestation deadlines are inclusive. A veto is due as
+    /// soon as its signed votes are in the accepted prefix.
+    pub(crate) fn due_positive_certification_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
+        let elapsed = |kind| self.positive_gate_c_schedule_v2.range((kind, 0, Hash64::default())..(kind, now, Hash64::default()));
+        let veto =
+            self.positive_gate_c_schedule_v2.range((b'V', 0, Hash64::default())..=(b'V', now, Hash64::from_bytes([u8::MAX; 64])));
+        elapsed(b'P').chain(elapsed(b'D')).chain(veto).map(|&(_, _, subject)| subject)
     }
 
     pub(crate) fn update_positive_aux_indexes_v2(
@@ -557,7 +610,7 @@ impl PalwKernelRouteStateV1 {
     ) -> Result<(), misaka_palw_positive_contract::ContractError> {
         use misaka_palw_positive_contract::rows::NativeRowValue;
         let is_job = is_positive_job_owner_row_v2(key.0, &key.1);
-        let is_slot = is_positive_draw_slot_row_v2(key.0, &key.1);
+        let is_slot = is_positive_gate_c_schedule_row_v2(key.0, &key.1);
         if !is_job && !is_slot {
             return Ok(());
         }
@@ -571,13 +624,13 @@ impl PalwKernelRouteStateV1 {
                 let row = NativeRowValue::decode(&key.1, bytes)?;
                 Ok((positive_job_owner_v2(&row.body), open_assignment_draw_slot_v2(&row.body)))
             } else {
-                Ok((None, undrawn_p_slot_v2(&key.1, bytes)?))
+                Ok((None, positive_p_schedule_v2(&key.1, bytes)?))
             }
         };
         let (old_job, old_slot) = decode(previous)?;
         let (new_job, new_slot) = decode(next)?;
         update_positive_index_v2(&mut self.positive_job_owners_v2, old_job, new_job);
-        update_positive_index_v2(&mut self.positive_draw_reservations_v2, old_slot, new_slot);
+        update_positive_index_v2(&mut self.positive_gate_c_schedule_v2, old_slot, new_slot);
         Ok(())
     }
 }
@@ -613,7 +666,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
         let count = u32::deserialize_reader(reader)?;
         let mut aux = BTreeMap::new();
         let mut positive_job_owners_v2 = std::collections::BTreeSet::new();
-        let mut positive_draw_reservations_v2 = std::collections::BTreeSet::new();
+        let mut positive_gate_c_schedule_v2 = std::collections::BTreeSet::new();
         // Positive keys must be canonical BEFORE BTreeMap can sort/collapse
         // them. Other aux tables retain their legacy ordering semantics.
         let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
@@ -633,7 +686,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 if let Some(owner) = positive_job_owner_v2(&row.body) {
                     positive_job_owners_v2.insert(owner);
                 }
-                positive_draw_reservations_v2.extend(open_assignment_draw_slot_v2(&row.body));
+                positive_gate_c_schedule_v2.extend(open_assignment_draw_slot_v2(&row.body));
                 (key, value)
             } else if table == crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2 {
                 // Preserve every old136 key/value byte. Only reserved prefix P
@@ -645,9 +698,9 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                         crate::palw_positive_certification_v2::PositiveCertificationRowV2,
                     >(value.as_slice(), value.len() as u64)
                     .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid native P frame"))?;
-                    positive_draw_reservations_v2.extend(
-                        undrawn_p_slot_v2(&key, &value)
-                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid P draw reservation"))?,
+                    positive_gate_c_schedule_v2.extend(
+                        positive_p_schedule_v2(&key, &value)
+                            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid P certification schedule"))?,
                     );
                     value
                 } else {
@@ -666,7 +719,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
             rows,
             aux,
             positive_job_owners_v2,
-            positive_draw_reservations_v2,
+            positive_gate_c_schedule_v2,
             ledger_cache: KernelLedgerCacheV1::default(),
         })
     }
@@ -826,7 +879,7 @@ impl PalwKernelRouteStateV1 {
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
             positive_job_owners_v2: Default::default(),
-            positive_draw_reservations_v2: Default::default(),
+            positive_gate_c_schedule_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
@@ -840,7 +893,7 @@ impl PalwKernelRouteStateV1 {
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
             positive_job_owners_v2: Default::default(),
-            positive_draw_reservations_v2: Default::default(),
+            positive_gate_c_schedule_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
@@ -1481,7 +1534,7 @@ impl PalwKernelRouteStateV1 {
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
             positive_job_owners_v2: Default::default(),
-            positive_draw_reservations_v2: Default::default(),
+            positive_gate_c_schedule_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         };
         for (table, key, row) in rows {
