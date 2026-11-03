@@ -26,7 +26,7 @@ pub struct NativeAssignmentRulesV2 {
     positive: crate::config::params::PositiveCourtPolicyV2,
     preimages: Option<AssignmentNativePreimagesV2>,
     funding_relay_profile: AssignmentFundingRelayProfileV2,
-    original_material: Option<AcceptedMaterial>,
+    original_material: Option<(AcceptedMaterial, u64)>,
     network: Digest,
     prompt_form: PalwPromptIdsFormV1,
     gate_c: Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>,
@@ -66,14 +66,17 @@ impl NativeAssignmentRulesV2 {
             positive: material.positive_policy.clone(),
             preimages: Some(material.native_preimages.clone()),
             funding_relay_profile: material.funding_relay,
-            original_material: Some(row.admission_material),
+            original_material: Some((row.admission_material, material.native_assignment_journal_storage_limit_v2())),
             network: material.network,
             prompt_form: material.network_prompt_form,
             gate_c: Some(material.certification_policy),
         })
     }
     pub(super) fn original_material(&self) -> Option<AcceptedMaterial> {
-        self.original_material
+        self.original_material.map(|(material, _)| material)
+    }
+    pub(super) fn original_history_storage_limit_v2(&self) -> Option<u64> {
+        self.original_material.map(|(_, bytes)| bytes)
     }
     pub fn rule_scope(&self) -> PositiveAssignmentRuleScopeV2 {
         self.scope

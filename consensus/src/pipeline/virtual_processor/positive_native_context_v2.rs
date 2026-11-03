@@ -424,7 +424,7 @@ impl PositiveCarrierPhaseTwoV2 {
         for carrier in &self.carriers {
             let tx = carrier.transaction();
             if !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload)
-                || !matches!(tx.payload.get(7), Some(8..=13))
+                || !matches!(tx.payload.get(7), Some(8 | 9 | 12 | 13))
             {
                 continue;
             }

@@ -401,3 +401,29 @@ exercises that rejection and accepts the exact two-read boundary. Seven
 external material cases and one rooted extent unit case passed on the
 final source. Only the external fixture changed after Clippy. No new
 documentation issues were reported against 43 existing missing links.
+
+## Native cancel and expiry events
+
+The raw fold now dispatches op10 and op11 for an existing Open
+Assignment. It uses the original material and its cumulative journal
+limits. Cancel verifies the actual poster and worker keys and both
+literal purpose signatures under the original preserve-earnings policy.
+Expiry compares the actual accepting DAA with the original exclusive
+Result cutoff. Both operations verify the three original roles and all
+joined role/funding pairs, including retired roles. The role and funding
+walks use bounded Assignment-specific key ranges.
+
+The raw checkpoint writes the terminal Assignment state, journal frame
+and head and retains the literal accepted carrier record together. The
+change leaves existing funds, duties, roles, reservations, liabilities
+and nonce intact. Cancel and expiry do not authorize payments or release
+a lock. Native admission of the original Open, liability/receipt replay
+for terminal settlement, funding release, and the end-to-end reorg and
+recovery exercises remain open.
+
+Core and Consensus library Clippy passed with warnings denied. The 76
+contract cases passed on the same source map, including cancellation
+signature contexts, joined accounts, and journal links. The new native
+close dispatch was typechecked. No accepted op8-to-op10/op11 block
+history was executed. The documentation check found zero new issues
+against 43 existing missing references.

@@ -774,5 +774,21 @@
     "stored_sha256": "ea005fdeb8780f0ea17123d462b72bc499de497038f3e82ae7c53a175c05ea07",
     "raw_bytes": 357251,
     "stored_bytes": 24461
+  },
+  {
+    "raw_name": "assignment-close-clippy-first.log",
+    "stored_name": "assignment-close-clippy-first.log.gz",
+    "raw_sha256": "306f2e48568462ee31e87d75a4c99c429b90325ec1f906f7c22639b43a11369f",
+    "stored_sha256": "e5d6c9bd5826c0ab3eebb199c71c79c822372ffaaf294590d75819f01900598e",
+    "raw_bytes": 341727,
+    "stored_bytes": 23645
+  },
+  {
+    "raw_name": "assignment-close-contract-first.log",
+    "stored_name": "assignment-close-contract-first.log.gz",
+    "raw_sha256": "637fbd3bc3726b362e70c9a300ecb63eba2ef3c6a8bb1311e0cb65fb42e086a0",
+    "stored_sha256": "11705d0733f1c71fe8f75aa09fb1e1893985b7697b03151ac2e8ef4b38554fec",
+    "raw_bytes": 74777,
+    "stored_bytes": 6979
   }
 ]

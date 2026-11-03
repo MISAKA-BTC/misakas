@@ -17,7 +17,6 @@ use misaka_palw_positive_contract::{
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2,
         journal::{AssignmentJournalEventKindV2, assignment_frame_v2},
         open_material::AssignmentOpenLimitsV2,
-        role_actions::AssignmentCancellationV2,
         rows::*,
     },
     identity::{Digest, PUBKEY_BYTES, SIGNATURE_BYTES},
@@ -175,6 +174,34 @@ impl TransitionBuilder<'_> {
             None => Err(refusal("missing accepted Assignment journal head")),
         }
     }
+    fn check_assignment_next_journal_extent_v2(
+        &self,
+        row: &AssignmentRow,
+        head: &AssignmentJournalHeadRow,
+        policy: &misaka_palw_positive_contract::assignment::policy::AssignmentPolicyV2,
+        storage_limit: u64,
+        native_body_bytes: usize,
+    ) -> Result<(), PalwStateV2Error> {
+        let max_frames_before = u64::from(policy.max_history_frames).checked_sub(1).ok_or_else(|| refusal("empty history policy"))?;
+        let header_bytes = misaka_palw_positive_contract::assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+        let proposed = (native_body_bytes as u64)
+            .checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64)
+            .filter(|n| *n <= policy.max_frame_bytes)
+            .and_then(|n| n.checked_add(header_bytes))
+            .ok_or_else(|| refusal("Assignment control exceeds the original frame cap"))?;
+        let remaining = storage_limit.checked_sub(proposed).ok_or_else(|| refusal("Assignment history budget exhausted"))?;
+        let max_record_bytes = policy.max_frame_bytes.checked_add(header_bytes).ok_or_else(|| refusal("original frame cap"))?;
+        PositiveRowsV2::new(&self.state)
+            .assignment_journal_extent_v2(head, row.origin, max_frames_before, max_record_bytes, remaining)
+            .map_err(|error| match error {
+                crate::palw_positive_rows_v2::PositiveRowErrorV2::Contract(misaka_palw_positive_contract::ContractError::Budget) => {
+                    refusal("Assignment control exceeds the original cumulative history budget")
+                }
+                _ => missing_assignment_history(),
+            })?;
+        Ok(())
+    }
+
     /// All purpose accounts share one ordinary native UTXO namespace. An
     /// output cannot simultaneously back a bond, legacy escrow, A or C.
     pub(super) fn require_assignment_output_unlocked_v2(&self, point: NativeOutpoint) -> Result<(), PalwStateV2Error> {
@@ -486,27 +513,13 @@ impl TransitionBuilder<'_> {
         self.require_assignment_output_unlocked_v2(output.outpoint())?;
         let head = self.assignment_head_v2(id)?;
         let policy = &plan.material.assignment_policy;
-        let max_frames_before = u64::from(policy.max_history_frames).checked_sub(1).ok_or_else(|| refusal("empty history policy"))?;
-        let header_bytes = misaka_palw_positive_contract::assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
-        let proposed_payload_bytes = (literal.len() as u64)
-            .checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64)
-            .filter(|n| *n <= policy.max_frame_bytes)
-            .ok_or_else(|| refusal("BindResult exceeds the original frame cap"))?;
-        let proposed_record_bytes = proposed_payload_bytes.checked_add(header_bytes).ok_or_else(|| refusal("BindResult extent"))?;
-        let remaining = plan
-            .material
-            .native_assignment_journal_storage_limit_v2()
-            .checked_sub(proposed_record_bytes)
-            .ok_or_else(|| refusal("BindResult exceeds the original history budget"))?;
-        let max_record_bytes = policy.max_frame_bytes.checked_add(header_bytes).ok_or_else(|| refusal("original frame cap"))?;
-        PositiveRowsV2::new(&self.state)
-            .assignment_journal_extent_v2(&head, expected.origin, max_frames_before, max_record_bytes, remaining)
-            .map_err(|error| match error {
-                crate::palw_positive_rows_v2::PositiveRowErrorV2::Contract(misaka_palw_positive_contract::ContractError::Budget) => {
-                    refusal("BindResult exceeds the original cumulative history budget")
-                }
-                _ => missing_assignment_history(),
-            })?;
+        self.check_assignment_next_journal_extent_v2(
+            expected,
+            &head,
+            policy,
+            plan.material.native_assignment_journal_storage_limit_v2(),
+            literal.len(),
+        )?;
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
             let payload = self.encode_assignment_control_payload_v2(id, literal, policy.max_frame_bytes)?;
@@ -551,98 +564,148 @@ impl TransitionBuilder<'_> {
     }
 }
 
-pub(super) enum AssignmentCloseV2 {
-    Cancel { consent: AssignmentCancellationV2, poster_signature: [u8; SIGNATURE_BYTES], worker_signature: [u8; SIGNATURE_BYTES] },
-    Expire,
-}
 impl TransitionBuilder<'_> {
-    /// Stops new tasks only. Existing service claims, capital, funds, role
-    /// preimages and liabilities remain in place for their independent clocks.
-    /// Cancellation/expiry never resets the permanent nonce or deletes a join.
-    pub(super) fn close_positive_assignment_v2(
+    /// Check original and joined roles by bounded Assignment-specific keys.
+    /// Closing changes no existing duty, earned balance, capital or lease.
+    fn check_assignment_close_roles_v2(&self, row: &AssignmentRow, max_roles: u32, max_joins: u32) -> Result<(), PalwStateV2Error> {
+        let id = row.id();
+        let rows = PositiveRowsV2::new(&self.state);
+        let route = self.state.kernel_route.as_ref().ok_or_else(missing_assignment_history)?;
+        let mut role_start =
+            NativeRowKey::AssignmentRole { assignment: id, role: AssignmentRoleV2::Poster, bond: row.bundle.terms.poster }.encode();
+        role_start.truncate(role_start.len() - (1 + 64 + 4));
+        let role_start = (KERNEL_AUX_TABLE, role_start);
+        let mut initial = 0u8;
+        let mut roles = 0u32;
+        let mut joins = 0u32;
+        for ((table, key), raw) in route.aux.range(role_start.clone()..) {
+            if *table != KERNEL_AUX_TABLE || !key.starts_with(&role_start.1) {
+                break;
+            }
+            roles = roles.checked_add(1).ok_or_else(|| refusal("Assignment role count overflow"))?;
+            if roles > max_roles {
+                return Err(refusal("all-role close scan exceeds original role cap"));
+            }
+            let NativeRowBody::AssignmentRole(role) = NativeRowValue::decode(key, raw).map_err(refusal)?.body else {
+                return Err(refusal("wrong Assignment role row kind"));
+            };
+            role.authenticate(row).map_err(refusal)?;
+            match role.authorization {
+                AssignmentRoleAuthorizationV2::Initial => initial |= 1 << (role.role as u8),
+                AssignmentRoleAuthorizationV2::Joined(join) => {
+                    joins = joins.checked_add(1).ok_or_else(|| refusal("Assignment join count overflow"))?;
+                    if joins > max_joins || join.case.is_some() || join.cancellation_policy != row.bundle.cancellation_policy {
+                        return Err(refusal("joined role does not meet original pre-Case cancellation scope"));
+                    }
+                    let funding = rows
+                        .read(NativeRowKey::AssignmentProverFunding { assignment: id, prover: role.bond })
+                        .map_err(refusal)?
+                        .ok_or_else(missing_assignment_history)?;
+                    let NativeRowBody::AssignmentProverFunding(funds) = funding.body else {
+                        return Err(refusal("wrong joined funding row kind"));
+                    };
+                    funds.validate_shape().map_err(refusal)?;
+                    if funds.consent != join
+                        || funds.payer_key != role.key
+                        || funds.payer_signature != role.signature
+                        || funds.funding_origin != role.origin
+                        || funds.reservation != role.lease
+                        || role.funding.is_none_or(|r| r.digest != join.id() || r.origin != funds.funding_origin)
+                    {
+                        return Err(refusal("joined role and outstanding funding differ"));
+                    }
+                }
+            }
+        }
+        if initial != 0b111 {
+            return Err(missing_assignment_history());
+        }
+        // Each matched joined role names its own unique funding key. The
+        // reverse count catches any orphan account without another decode.
+        let mut funding_start = NativeRowKey::AssignmentProverFunding { assignment: id, prover: row.bundle.terms.prover }.encode();
+        funding_start.truncate(funding_start.len() - (64 + 4));
+        let funding_start = (KERNEL_AUX_TABLE, funding_start);
+        let funding_count = route
+            .aux
+            .range(funding_start.clone()..)
+            .take_while(|((table, key), _)| *table == KERNEL_AUX_TABLE && key.starts_with(&funding_start.1))
+            .take(joins as usize + 1)
+            .count();
+        if funding_count != joins as usize {
+            return Err(refusal("unmatched joined Assignment funding account"));
+        }
+        Ok(())
+    }
+
+    /// A native close only stops new work. A later independent settlement
+    /// must derive all eligible dues, current coins and remaining liabilities.
+    fn close_positive_assignment_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
-        expected: &AssignmentRow,
-        event: AssignmentCloseV2,
-        frame: AssignmentJournalFrameRow,
-        max_roles: u32,
+        action: &PositiveAssignmentRawActionV2,
+        operation: &crate::palw_positive_court_v2::coordinator::assignment_body::PositiveAssignmentNativeOperationV2,
     ) -> Result<(), PalwStateV2Error> {
-        let id = expected.id();
-        if self.assignment_row_v2(id)?.as_ref() != Some(expected)
-            || expected.status != AssignmentStatusV2::Open
-            || frame.header.assignment != id
-            || max_roles < 3
-            || max_roles == u32::MAX
-        {
+        use crate::palw_positive_court_v2::coordinator::assignment_body::PositiveAssignmentNativeOperationV2 as O;
+
+        let (id, kind, status) = match operation {
+            O::CancelAssignment { cancellation, .. } => {
+                (cancellation.assignment, AssignmentJournalEventKindV2::Cancel, AssignmentStatusV2::Cancelled)
+            }
+            O::ExpireAssignment { assignment } => {
+                (*assignment, AssignmentJournalEventKindV2::Expire, AssignmentStatusV2::ExpiredUnconsumed)
+            }
+            _ => return Err(refusal("wrong Assignment close operation")),
+        };
+        let rooted = PositiveRowsV2::new(&self.state).assignment(id).map_err(refusal)?;
+        let mut row = rooted.assignment;
+        if row.status != AssignmentStatusV2::Open {
             return Err(refusal("only the current unconsumed Assignment can close"));
         }
-        self.assignment_origin_v2(frame.header.origin, ctx)?;
-        let mut roles = 0u32;
-        let route = self.state.kernel_route.as_ref().ok_or_else(|| refusal("missing kernel route"))?;
-        for ((table, key), bytes) in &route.aux {
-            if *table != KERNEL_AUX_TABLE || key.get(4) != Some(&15) {
-                continue;
-            }
-            let value = NativeRowValue::decode(key, bytes).map_err(refusal)?;
-            let NativeRowBody::AssignmentRole(role) = value.body else {
-                return Err(refusal("wrong role row kind"));
-            };
-            if role.assignment != id {
-                continue;
-            }
-            roles = roles.checked_add(1).ok_or_else(|| refusal("role count overflow"))?;
-            if roles > max_roles {
-                return Err(refusal("all-role close scan exceeds original finite role policy"));
-            }
-            role.authenticate(expected).map_err(refusal)?;
-            if let AssignmentRoleAuthorizationV2::Joined(join) = role.authorization
-                && join.cancellation_policy != expected.bundle.cancellation_policy
-            {
-                return Err(refusal("joined prover did not consent to the original cancellation policy"));
-            }
+        let rules = action.rules();
+        if rules.original_material() != Some(row.admission_material) {
+            return Err(missing_assignment_history());
         }
-        if roles < 3 {
-            return Err(refusal("missing original role obligations"));
-        }
-        let status = match event {
-            AssignmentCloseV2::Cancel { consent, poster_signature, worker_signature } => {
-                if frame.header.kind != AssignmentJournalEventKindV2::Cancel {
-                    return Err(refusal("wrong cancellation journal kind"));
+        let storage_limit = rules.original_history_storage_limit_v2().ok_or_else(missing_assignment_history)?;
+        let policy = rules.assignment_policy();
+        let head = rooted.journal;
+        let literal = &action.transaction().payload[3..];
+        let origin = action.origin();
+        self.assignment_origin_v2(origin, ctx)?;
+        self.check_assignment_next_journal_extent_v2(&row, &head, policy, storage_limit, literal.len())?;
+        match operation {
+            O::CancelAssignment { cancellation, poster_signature, worker_signature } => {
+                let native = rules.native_preimages().ok_or_else(missing_assignment_history)?;
+                native.cancellation.validate().map_err(refusal)?;
+                if native.cancellation.id() != row.bundle.cancellation_policy {
+                    return Err(refusal("actual original cancellation policy differs"));
                 }
                 let poster =
-                    self.state.bond(&native_bond(expected.bundle.terms.poster)).ok_or_else(|| refusal("missing registered poster"))?;
-                let poster_key: &[u8; PUBKEY_BYTES] = poster.pubkey.as_slice().try_into().map_err(refusal)?;
+                    self.state.bond(&native_bond(row.bundle.terms.poster)).ok_or_else(|| refusal("missing registered poster"))?;
                 let worker =
-                    self.state.bond(&native_bond(expected.bundle.terms.worker)).ok_or_else(|| refusal("missing registered worker"))?;
-                let worker_key: &[u8; PUBKEY_BYTES] = worker.pubkey.as_slice().try_into().map_err(refusal)?;
-                if worker_key != &expected.worker_key {
-                    return Err(refusal("worker changed since original admission"));
+                    self.state.bond(&native_bond(row.bundle.terms.worker)).ok_or_else(|| refusal("missing registered worker"))?;
+                if poster.pubkey.as_slice() != rooted.funding.payer_key || worker.pubkey.as_slice() != row.worker_key {
+                    return Err(refusal("cancellation role keys differ from original acceptance"));
                 }
-                consent.authenticate_poster(&expected.bundle, poster_key, &poster_signature, ctx.daa_score).map_err(refusal)?;
-                consent.authenticate_worker(&expected.bundle, worker_key, &worker_signature, ctx.daa_score).map_err(refusal)?;
-                AssignmentStatusV2::Cancelled
+                cancellation
+                    .authenticate_poster(&row.bundle, &rooted.funding.payer_key, poster_signature, ctx.daa_score)
+                    .map_err(refusal)?;
+                cancellation.authenticate_worker(&row.bundle, &row.worker_key, worker_signature, ctx.daa_score).map_err(refusal)?;
             }
-            AssignmentCloseV2::Expire => {
-                if frame.header.kind != AssignmentJournalEventKindV2::Expire || ctx.daa_score < expected.bundle.terms.result_before_daa
-                {
-                    return Err(refusal("expiry needs the original result cutoff"));
-                }
-                AssignmentStatusV2::ExpiredUnconsumed
+            O::ExpireAssignment { .. } if ctx.daa_score < row.bundle.terms.result_before_daa => {
+                return Err(refusal("expiry needs the original result cutoff"));
             }
-        };
-        let retention = self.assignment_head_v2(id)?.retention_until_daa;
-        let checkpoint = self.try_checkpoint()?;
-        let result = (|| {
-            let mut next = expected.clone();
-            next.status = status;
-            next.last_event = frame.header.origin;
-            self.write_assignment_aux_v2(NativeRowBody::Assignment(next))?;
-            self.append_assignment_frame_v2(frame, retention)
-        })();
-        if result.is_err() {
-            self.restore(checkpoint);
+            _ => {}
         }
-        result
+        self.check_assignment_close_roles_v2(&row, policy.max_role_candidates, policy.max_prover_joins)?;
+        // The enclosing raw checkpoint rolls back both rows and retained bytes.
+        let payload = self.encode_assignment_control_payload_v2(id, literal, policy.max_frame_bytes)?;
+        let frame = assignment_frame_v2(id, head.next_ordinal, head.last_frame, kind, origin, &payload, policy.max_frame_bytes)
+            .map_err(refusal)?;
+        row.status = status;
+        row.last_event = origin;
+        self.write_assignment_aux_v2(NativeRowBody::Assignment(row))?;
+        self.append_assignment_frame_v2(frame, head.retention_until_daa)?;
+        self.emit_assignment_material_v2(&frame, &payload, policy.max_frame_bytes)
     }
 }
 
@@ -863,21 +926,8 @@ impl TransitionBuilder<'_> {
                     self.check_assigned_result_carriage_v2(ctx, action, &row, payload)?;
                     Err(refusal("native Case reservation owner is not yet resolved"))
                 }
-                O::CancelAssignment { cancellation, .. } => {
-                    let row =
-                        self.assignment_row_v2(cancellation.assignment)?.ok_or_else(|| refusal("missing accepted Assignment"))?;
-                    cancellation.check(&row.bundle, ctx.daa_score).map_err(refusal)?;
-                    if row.status != AssignmentStatusV2::Open {
-                        return Err(refusal("consumed or terminal Assignment cannot cancel"));
-                    }
-                    Err(refusal("native joined-rights/liability/material close owner is not yet resolved"))
-                }
-                O::ExpireAssignment { assignment } => {
-                    let row = self.assignment_row_v2(*assignment)?.ok_or_else(|| refusal("missing accepted Assignment"))?;
-                    if row.status != AssignmentStatusV2::Open || ctx.daa_score < row.bundle.terms.result_before_daa {
-                        return Err(refusal("Assignment cannot expire at this clock"));
-                    }
-                    Err(refusal("native joined-rights/liability/material expiry owner is not yet resolved"))
+                O::CancelAssignment { .. } | O::ExpireAssignment { .. } => {
+                    self.close_positive_assignment_v2(ctx, action, &body.operation)
                 }
                 O::JoinAssignmentProver { consent, signature } => {
                     let row = self.assignment_row_v2(consent.assignment)?.ok_or_else(|| refusal("missing accepted Assignment"))?;

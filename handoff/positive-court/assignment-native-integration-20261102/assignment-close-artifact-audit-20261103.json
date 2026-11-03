@@ -1,0 +1,10 @@
+{
+  "base_commit": "723855d6e",
+  "passing_runs": [
+    "assignment-close-clippy-first",
+    "assignment-close-contract-first"
+  ],
+  "source_maps_match": true,
+  "executed_contract_cases": 76,
+  "native_close_end_to_end_execution": false
+}
