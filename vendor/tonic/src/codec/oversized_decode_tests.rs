@@ -128,6 +128,7 @@ fn assert_error_once_and_empty(s: &mut Streaming<Bytes>, code: Code) {
     }
     assert_eq!(s.inner.buf.capacity(), 0);
     assert_eq!(s.inner.decompress_buf.capacity(), 0);
+    assert!(s.inner.unread_data.is_empty());
     assert!(matches!(poll(s), Poll::Ready(None)));
 }
 
@@ -296,4 +297,130 @@ fn negotiated_gzip_stream_preserves_mixed_plain_and_compressed_frames() {
     assert_eq!(&held[..], large);
     drop(held);
     assert_no_large_scratch(&mut s, large.len());
+}
+
+#[test]
+fn largest_length_prefix_waits_without_reserving_wire_or_gzip_scratch() {
+    let limit = 320 << 20;
+    for gzip in [false, true] {
+        let mut header = vec![u8::from(gzip)];
+        header.extend_from_slice(&(limit as u32).to_be_bytes());
+        let body = PausableBody::new(header);
+        let mut s = paused(body.clone(), gzip);
+        assert!(matches!(poll(&mut s), Poll::Pending));
+        assert!(matches!(s.inner.state, State::ReadBody { len, .. } if len == limit));
+        assert!(s.inner.buf.capacity() <= RawDecoder.buffer_settings().buffer_size);
+        assert_eq!(s.inner.decompress_buf.capacity(), 0);
+        body.push(Ok(http_body::Frame::data(Bytes::from_static(b"partial"))));
+        assert!(matches!(poll(&mut s), Poll::Pending));
+        assert_eq!(s.inner.buf.as_ref(), b"partial");
+        assert!(s.inner.buf.capacity() <= RawDecoder.buffer_settings().buffer_size);
+        body.push(Ok(http_body::Frame::trailers(HeaderMap::new())));
+        assert_error_once_and_empty(&mut s, Code::Internal);
+    }
+}
+
+#[test]
+fn length_above_limit_is_still_rejected_before_payload() {
+    let mut header = vec![0];
+    header.extend_from_slice(&((320u32 << 20) + 1).to_be_bytes());
+    let mut s = paused(PausableBody::new(header), false);
+    assert_error_once_and_empty(&mut s, Code::OutOfRange);
+}
+
+fn fragmented_plain_frame(total: usize, fragment: usize) {
+    let mut header = vec![0];
+    header.extend_from_slice(&(total as u32).to_be_bytes());
+    let body = PausableBody::new(header);
+    let mut s = paused(body.clone(), false);
+    assert!(matches!(poll(&mut s), Poll::Pending));
+    let mut received = 0;
+    let mut max_capacity = 0;
+    let mut max_growth_overlap = 0;
+    let mut expected = 0u64;
+    while received < total {
+        let count = (total - received).min(fragment);
+        let value = (received / fragment) as u8;
+        let mut next_fragment = vec![value; count];
+        expected += u64::from(value) * count as u64;
+        received += count;
+        let before = s.inner.buf.capacity();
+        if received == total {
+            next_fragment.extend(frame(b"coalesced next", false));
+        }
+        body.push(Ok(http_body::Frame::data(Bytes::from(next_fragment))));
+        if received < total {
+            assert!(matches!(poll(&mut s), Poll::Pending));
+            let capacity = s.inner.buf.capacity();
+            assert_eq!(s.inner.buf.len(), received);
+            assert!(capacity >= received && capacity <= total && capacity < 2 * received);
+            max_capacity = max_capacity.max(capacity);
+            if capacity != before {
+                max_growth_overlap = max_growth_overlap.max(before + capacity);
+            }
+        } else {
+            let held = next(&mut s);
+            let alias = held.slice(total - fragment..);
+            assert_eq!(held.len(), total);
+            assert_eq!(s.inner.unread_data.as_ref(), &frame(b"coalesced next", false));
+            assert_eq!(held.iter().map(|byte| u64::from(*byte)).sum::<u64>(), expected);
+            assert_eq!(&next(&mut s)[..], b"coalesced next");
+            assert!(matches!(poll(&mut s), Poll::Pending));
+            assert_no_large_scratch(&mut s, total);
+            assert_eq!(&alias[..], &held[total - fragment..]);
+        }
+    }
+    assert_eq!(max_capacity, total);
+    assert!(max_growth_overlap <= total + total / 2);
+    eprintln!("fragmented frame {total} bytes: max observed scratch {max_capacity}, max replacement overlap {max_growth_overlap}");
+}
+
+#[test]
+fn fragmented_large_frame_growth_is_capped_and_preserves_unread_suffix() {
+    fragmented_plain_frame(5 << 20, 192 << 10);
+}
+
+#[test]
+#[ignore = "allocates a real 320 MiB fragmented frame; run in isolation"]
+fn fragmented_p2p_maximum_frame_stays_usable() {
+    fragmented_plain_frame(320 << 20, 1 << 20);
+}
+
+#[test]
+fn fragmented_incompressible_gzip_keeps_its_coalesced_suffix() {
+    let mut word = 0x71368cc9u32;
+    let expected: Vec<_> = (0..(2 << 20))
+        .map(|_| {
+            word ^= word << 13;
+            word ^= word >> 17;
+            word ^= word << 5;
+            word as u8
+        })
+        .collect();
+    let wire = frame(&expected, true);
+    let total = wire.len() - HEADER_SIZE;
+    assert!(total > MAX_RETAINED_DECODER_BUFFER_SIZE);
+    let body = PausableBody::new(wire[..HEADER_SIZE].to_vec());
+    let mut s = paused(body.clone(), true);
+    assert!(matches!(poll(&mut s), Poll::Pending));
+    let suffix = frame(b"after gzip fragments", false);
+    let mut fragments = wire[HEADER_SIZE..].chunks(192 << 10).peekable();
+    while let Some(bytes) = fragments.next() {
+        let mut fragment = bytes.to_vec();
+        if fragments.peek().is_none() {
+            fragment.extend_from_slice(&suffix);
+            body.push(Ok(http_body::Frame::data(Bytes::from(fragment))));
+            let held = next(&mut s);
+            assert_eq!(s.inner.unread_data.as_ref(), suffix);
+            assert_eq!(&next(&mut s)[..], b"after gzip fragments");
+            assert!(matches!(poll(&mut s), Poll::Pending));
+            assert_eq!(&held[..], expected);
+        } else {
+            body.push(Ok(http_body::Frame::data(Bytes::from(fragment))));
+            assert!(matches!(poll(&mut s), Poll::Pending));
+            assert!(s.inner.buf.capacity() <= total);
+            assert_eq!(s.inner.decompress_buf.capacity(), 0);
+        }
+    }
+    assert_no_large_scratch(&mut s, total);
 }

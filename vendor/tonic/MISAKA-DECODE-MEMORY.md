@@ -10,10 +10,17 @@ configured scratch threshold (1 MiB, or a larger decoder buffer setting) of
 unread wire suffix. A larger unread next frame stays intact until a later
 completed boundary. A `ReadHeader`/HTTP-body `Pending` boundary may also release
 oversized scratch while preserving partial next-header bytes. A partially read
-message is not treated as idle and is not cleared. In particular, tonic still
-reserves the announced message length after its five-byte header; an incomplete
-`ReadBody` can retain that capacity while waiting for more input. This change
-does not impose a connection-wide or process-wide admission limit on that path.
+message is not treated as idle and is not cleared.
+
+A five-byte header records the declared length without reserving it. Scratch
+grows when actual HTTP DATA arrives. For a fragmented large body, geometric
+growth aligns its last step to the validated length instead of rounding beyond
+it. The old and replacement allocations can coexist during a copy. In the
+320 MiB test the largest observed scratch is 320 MiB and the largest calculated
+replacement overlap is 480 MiB. The final HTTP DATA suffix stays in its existing
+`Bytes` allocation until the current frame finishes. A suffix can therefore
+keep that DATA frame's backing alive. This change leaves actual received bytes,
+decompression and decoded values outside a process admission budget.
 
 The decompression buffer contains only the current message, never subsequent
 wire frames. After the decoder returns a completed item, oversized decompression
