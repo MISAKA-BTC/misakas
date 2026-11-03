@@ -1382,3 +1382,17 @@ including both original archive key/value records. An isolated encoding
 check matched the initial and successor quote to the complete literal bytes.
 These follow-ups are applied for integrated checks. Actual F binding still
 requires the live native storage owner and atomic native account writer.
+
+### Case relay custody transfer candidate
+
+The [checkpoint candidate](case-relay-atomic-binding-candidate-20261103.tar.gz)
+keeps the authenticated pending package under its native workspace ticket
+through the Case writer. It rechecks the actual C carrier, original capital
+and custody horizon and stages the bound custody update with Case, funding,
+AssignmentUse and journal rows. Restore additionally matches the binding to
+the Case reservation. An error restores the enclosing canonical checkpoint.
+
+The isolated Contract and Core metadata and focused Core relay test target
+typechecked. The candidate remains separate from the worktree undergoing
+integrated checks. It still requires a real all-branch Case reservation
+factory and real C binding, DB recovery and settlement runtime coverage.
