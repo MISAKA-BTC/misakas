@@ -54,6 +54,9 @@ pub(crate) enum BatchDeliveryV1 {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct BatchAdmissionQuoteV1 {
+    /// Canonical work and retention terms to bind into the payer's scope.
+    /// Assigned DAA values are excluded because legal repair may move them.
+    pub relative_graph_id: Hash64,
     pub required_daa: u64,
     pub service: ServiceCost,
     pub retained_payload_bytes: u64,
@@ -64,6 +67,44 @@ pub(crate) struct BatchAdmissionQuoteV1 {
     pub retained_numerical_fault_bytes: u64,
     pub retained_numerical_fault_byte_daa: u64,
     pub numerical_fault_storage_rent_sompi: u64,
+}
+
+struct BatchRelativeGraphV1<'a> {
+    plan: &'a BatchAdmissionV1<'a>,
+    nodes: &'a [CausalServicePacketV1],
+    ranks: &'a BTreeMap<[u8; 64], u64>,
+    storage: MaterialIntakeScheduleV1,
+}
+
+impl borsh::BorshSerialize for BatchRelativeGraphV1<'_> {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        let plan = self.plan;
+        let a = plan.window.claim_accepted_daa;
+        let relative = |daa: u64| daa.checked_sub(a).ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidData, "Batch packet predates its original",
+        ));
+        let rank = |packet| self.ranks.get(packet).copied().ok_or_else(|| std::io::Error::new(
+            std::io::ErrorKind::InvalidData, "Batch funding edge has no relative node",
+        ));
+        (plan.claim, rank(&plan.terminal)?, plan.recovery_daa, relative(plan.window.collect_until_daa)?,
+            self.storage.sompi_per_byte, self.storage.draft_ttl_daa).serialize(writer)?;
+        (plan.demands.len() as u64).serialize(writer)?;
+        for demand in plan.demands {
+            (demand.ordinal, demand.range_maximums, rank(&demand.verification)?).serialize(writer)?;
+        }
+        (self.nodes.len() as u64).serialize(writer)?;
+        for node in self.nodes {
+            let packet = &node.packet;
+            let retained = plan.retained_controls.binary_search_by_key(&packet.id, |control| control.packet).ok()
+                .map_or(0, |index| plan.retained_controls[index].payload_bytes);
+            (relative(packet.release_daa)?, relative(packet.service_before)?, packet.cost, retained).serialize(writer)?;
+            (node.predecessors.len() as u64).serialize(writer)?;
+            for parent in &node.predecessors {
+                rank(parent)?.serialize(writer)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Costs supplied by the versioned native profile. A reservation covers
@@ -437,6 +478,17 @@ impl BatchAdmissionV1<'_> {
             verifications.remove(predecessor);
         }
         terminal_predecessors.extend(verifications);
+        // Packet IDs contain the actual accepted allocation. Use the
+        // native compiler's stage/range expansion order as relative ranks.
+        let ranks = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index as u64)).collect::<BTreeMap<_, _>>();
+        for node in &mut graph {
+            node.predecessors.sort_unstable_by_key(|parent| ranks.get(parent).copied().unwrap_or(u64::MAX));
+        }
+        let relative_graph_id = crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/batch-funding-graph/v1",
+            &BatchRelativeGraphV1 { plan: self, nodes: &graph, ranks: &ranks, storage },
+        ).map_err(|_| CaseGraph)?;
+        drop(ranks);
         let service = graph.iter().try_fold(ServiceCost::default(), |sum, node| {
             let cost = node.packet.cost;
             Ok::<_, BatchCourtErrorV1>(ServiceCost {
@@ -473,6 +525,7 @@ impl BatchAdmissionV1<'_> {
                 Ok::<_, ServiceRefusal>(())
             })?;
         let quote = BatchAdmissionQuoteV1 {
+            relative_graph_id,
             required_daa,
             service,
             retained_payload_bytes,
@@ -500,6 +553,7 @@ fn expansion_workspace_v1(
         demands.iter().try_fold(0u64, |n, demand| n.checked_add(demand.predecessors.len() as u64)).ok_or_else(overflow)?;
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<CausalServicePacketV1>(packets as u64)?; // original, expanded and one response during append
+    q.add_v1((packets as u64).checked_mul(btree_node_envelope_bytes_v1::<Id, u64>() as u64).ok_or_else(overflow)?)?;
     q.exact_v1::<(Id, Id, u64)>(ranges as u64)?;
     q.add_v1((graph.len() as u64).checked_mul(btree_node_envelope_bytes_v1::<Id, usize>() as u64).ok_or_else(overflow)?)?;
     let per_demand = btree_node_envelope_bytes_v1::<u64, ()>() + btree_node_envelope_bytes_v1::<Id, ()>();
@@ -629,6 +683,40 @@ mod tests {
         assert_eq!(book, empty);
         let (quote, graph) = plan.reserve_v1(&mut book, graph(3_129), schedule, project(2)).unwrap();
         assert_eq!(quote.required_daa, 10_000);
+        let graph_id = |plan: &BatchAdmissionV1<'_>, graph: &[CausalServicePacketV1]| {
+            let ranks = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index as u64)).collect();
+            crate::palw_court_shared_tir_stream_v1::stream_digest(
+                b"misaka-palw/batch-funding-graph/v1",
+                &BatchRelativeGraphV1 { plan, nodes: graph, ranks: &ranks, storage: schedule },
+            ).unwrap()
+        };
+        assert_eq!(quote.relative_graph_id, graph_id(&plan, &graph));
+        let mut shifted = graph.to_vec();
+        let rename = |mut packet: [u8; 64]| { packet[0] ^= 1; packet };
+        for node in &mut shifted {
+            node.packet.release_daa += 100;
+            node.packet.service_before += 100;
+            node.packet.id = rename(node.packet.id);
+            for parent in &mut node.predecessors {
+                *parent = rename(*parent);
+            }
+        }
+        let shifted_demands = [MaximumBatchDemandV1 { verification: rename(verification), ..demands[0] }];
+        let later = BatchAdmissionV1 {
+            scope: h(99),
+            terminal: rename(terminal),
+            demands: &shifted_demands,
+            window: BatchCourtWindowV1 {
+                claim_accepted_daa: window.claim_accepted_daa + 100,
+                challenge_opened_daa: window.challenge_opened_daa + 100,
+                collect_until_daa: window.collect_until_daa + 100,
+                material_until_daa: window.material_until_daa + 100,
+            },
+            ..plan
+        };
+        assert_eq!(quote.relative_graph_id, graph_id(&later, &shifted));
+        shifted[0].packet.cost.io += 1;
+        assert_ne!(quote.relative_graph_id, graph_id(&later, &shifted));
         assert_eq!(quote.service.controls, 7);
         assert_eq!((quote.service.work, quote.service.io), (8, 8));
         assert_eq!(quote.service.bytes, graph.iter().map(|node| node.packet.cost.bytes).sum::<u64>());

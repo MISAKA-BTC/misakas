@@ -4298,3 +4298,25 @@ Rust parsing and whitespace checks passed. The RPC selector and
 native missing-profile/missing-material assertions have not run.
 The earlier isolated Linux check remains active on its original
 `587a1808c` snapshot. No carrier was submitted.
+
+## Commit the relative Batch funding graph
+
+The admission quote now commits the actual bounded Batch graph.
+It includes the original, relative windows, recovery, service
+costs, target size ceilings, retained control bytes, storage
+schedule and dependencies. It uses the native expansion's stage
+and range order to number nodes. Actual packet IDs include the
+accepted allocation and are excluded, as are assigned DAA values.
+The rooted book still validates and retains the actual packet IDs.
+
+The extracted suite passed 55 tests. The 10,000 DAA reservation
+fixture checked that a shifted acceptance and renamed packet IDs
+produce the same relative digest, and a changed IO price changes
+the digest. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-funding-graph.qZagCs/tests.log`.
+The production payer's signature, role consents and complete graph
+are not yet bound to this quote.
+
+The existing isolated Linux check of `587a1808c` continued under
+invocation `460e5e2f1da647b784dd040aab7462cf`. It was observed
+compiling RocksDB objects in the same cgroup.
