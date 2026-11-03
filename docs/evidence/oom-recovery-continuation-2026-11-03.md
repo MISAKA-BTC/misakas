@@ -1979,3 +1979,51 @@ At 08:16 UTC Explorer REST and WebSocket agreed on the selected
 tip at DAA 19,661. REST returned HTTP 200 with a current index.
 This was a single synchronized sample. The last three selected
 blocks were heartbeats and the serving relay counted no PFS4 spends.
+
+## Batch Court clock and exact T12 recheck
+
+The candidate opens the detection and actionable challenge window at
+claim acceptance. It accepts an opening before accepted DAA + 3,120.
+An eligible, admitted case may collect through a separate deadline
+bounded by accepted DAA + 10,000, with material retained after
+collection. A later batch cannot restart the case clock. This is a
+prospective interpretation. The running TFP1 route still includes
+acquisition and final filing in its existing 3,120 DAA admission ceiling.
+An opening must have independently authenticated standing and actionable
+grounds. The transport cannot establish a verdict or settlement credit.
+
+The candidate gate adds the opening delay to measured service, with
+independent wire, Node service and recovery terms. It conservatively
+assumes no overlap between these terms. The example 9,000 DAA service
+budget fits only with an opening by elapsed DAA 1,000. It would need
+12,119 DAA at the latest permissible opening. To qualify every timely
+opening, a profile needs a post-opening budget at most 6,881 DAA under
+this interpretation. The new code refuses over-target and overflow.
+
+The dormant batch progress contract caps ranges, part count and exact
+payload. It accepts independently authenticated parts in canonical
+slots, does not debit a duplicate again, and binds the checkpoint to the
+case request and the accepted branch's expected checkpoint root. Missing
+parts at timeout stay unverified. Four focused tests exercised the two
+clock boundaries, conflicting or malformed data, the incomplete deadline,
+reordered delivery, and resumption from a branch-authenticated checkpoint.
+Transport queues, native opening verification, atomic archive/fold
+persistence and claim-local Gate C and settlement remain separate.
+
+Two paired selected-chain pages at DAA 19,662 show Qwen #72 to #75
+referenced by selected mergesets and absent as claims on both nodes.
+The four exact B0 journal lines show 20,606 DAA remaining against
+20,608 required. The 20,000 retention fence remained unarmed on B0
+and the serving relay. Both also agreed on 9 independently eligible,
+0 independently ready, and 0 assigned seats in the class readiness
+view. This was not a claim-specific draw. Raw evidence is under
+`/private/tmp/misaka-t12-oom-20261102/g14-paired-tfp-followup.iuV43m`.
+
+The integration branch includes the narrower native all-root workspace
+estimate, typed refusal diagnostics and one-root-at-a-time parameter
+sizing. The exact native SmolLM2 fixture was exported separately from
+the historical worker result. The first guarded metadata run on the
+narrow reservation commits stopped at the aggregate compiler RSS limit
+while another compiler was active. The focused batch tests do not
+validate the integrated native streaming run. No public deployment,
+schedule change, claim submission or push to main was made.
