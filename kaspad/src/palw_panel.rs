@@ -2220,29 +2220,40 @@ fn prune_foreign_retention_v1(
     };
     // Cached duties assist the chain read. A missing/changed snapshot cannot
     // discharge an obligation, and a later healthy read can still release it.
-    let reclaimable = |path: &std::path::Path| {
-        claim_of(path).is_none_or(|claim| !pinned.contains(&claim) && matches!(chain_owed(&claim), Ok(false)))
+    let reclaimable = |claim: Option<Hash64>| {
+        claim.is_none_or(|claim| !pinned.contains(&claim) && matches!(chain_owed(&claim), Ok(false)))
     };
-    let mut kept: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    let mut kept = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         let Ok(meta) = entry.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
         let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-        if !reclaimable(&path) {
+        let claim = claim_of(&path);
+        if !reclaimable(claim) {
             continue;
         }
+        let file = crate::palw_retention::RetainedFileV1::new(path, &meta);
         if modified < cutoff {
-            let _ = std::fs::remove_file(&path);
+            file.unlink_if_current(claim);
             continue;
         }
-        kept.push((modified, path));
+        kept.push((modified, claim, file));
     }
-    if kept.len() > max_files {
-        kept.sort_by_key(|(at, _)| *at);
-        // Acceptance can change while reading and sorting the directory.
-        // Check each count candidate again immediately before unlinking it.
-        for (_, path) in kept.iter().filter(|(_, path)| reclaimable(path)).take(kept.len() - max_files) {
-            let _ = std::fs::remove_file(path);
+    let excess = kept.len().saturating_sub(max_files);
+    if excess > 0 {
+        kept.sort_by_key(|(at, _, _)| *at);
+        // Recheck the chain and the inventoried file before each unlink.
+        let mut removed = 0;
+        for (_, claim, file) in kept {
+            if reclaimable(claim) && file.unlink_if_current(claim) {
+                removed += 1;
+                if removed == excess {
+                    break;
+                }
+            }
         }
     }
 }
@@ -2955,6 +2966,7 @@ pub(crate) fn palw_da_claim_answers_v1(
 /// space rule takes a copy an R-core session can still demand last. Best-effort: on a failed write the
 /// answers built from it still go, and the next session re-makes it.
 fn palw_da_keep_remade_v1(dir: &std::path::Path, claim: &Hash64, bytes: &[u8]) {
+    let _publication = crate::palw_retention::pin_attempt_publication(*claim);
     let path = dir.join(format!("{claim}.material"));
     let partial = dir.join(format!("{claim}.material.partial"));
     if let Err(e) =
@@ -7783,6 +7795,7 @@ impl PalwPanelService {
     /// whether a copy for the claim is on disk — written now or before — and that seat abstains
     /// rather than sign what it holds nothing to answer from.
     fn persist_foreign_material(&self, claim: &Hash64, bytes: &[u8]) -> bool {
+        let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}.material"));
         if path.exists() {
@@ -8529,6 +8542,7 @@ impl PalwPanelService {
     /// Retain this node's own free-prompt material under the claim id, where the resolver serves
     /// it — written whole then renamed, so a reader never sees a half file.
     fn retain_own_material(&self, claim: &Hash64, bytes: &[u8]) {
+        let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let path = crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim);
         let partial = path.with_extension("material.partial");
         if let Err(e) = std::fs::create_dir_all(&self.config.retention_dir) {
@@ -12161,6 +12175,7 @@ impl PalwPanelService {
     /// few kilobytes proven the claim's (its ids recompute the committed `output_root`), so this
     /// node can serve the next seat's pull for the claim.
     fn persist_foreign_answer(&self, claim: &Hash64, bytes: &[u8]) {
+        let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
         if path.exists() {
@@ -12290,6 +12305,7 @@ impl PalwPanelService {
         // Cached beside the material, written whole then renamed, so the next pull costs a read
         // of kilobytes and a reader never sees a half file. Best-effort: a failed cache is a
         // slower serve, not a refused one.
+        let _publication = crate::palw_retention::pin_attempt_publication(claim);
         let partial = answer_path.with_extension("answer.partial");
         if let Err(e) = std::fs::write(&partial, &answer).and_then(|()| std::fs::rename(&partial, &answer_path)) {
             warn!("[{PALW_PANEL}] cannot cache the answer envelope for claim {claim}: {e}");
@@ -14929,6 +14945,7 @@ impl PalwPanelService {
         }
         let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
+            let _publication = crate::palw_retention::pin_attempt_publication(claim);
             let parent = target.parent().ok_or("retention path has no parent")?;
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             let partial = target.with_extension("material.partial");

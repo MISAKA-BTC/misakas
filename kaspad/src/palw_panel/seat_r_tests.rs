@@ -1736,6 +1736,35 @@ fn foreign_gc_count_candidates_require_a_fresh_discharge_before_unlink() {
 }
 
 #[test]
+fn foreign_gc_skips_replaced_and_actively_published_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let claim = h(0x20610);
+    let material = dir.path().join(format!("{claim}.material"));
+    std::fs::write(&material, b"old").unwrap();
+    let inspected = std::cell::Cell::new(false);
+    let sweep = |chain_owed: &dyn Fn(&Hash64) -> Result<bool, String>| {
+        prune_foreign_retention_v1(dir.path(), &HashSet::new(), std::time::SystemTime::now(), 0, chain_owed);
+    };
+    sweep(&|id| {
+        assert_eq!(*id, claim);
+        if inspected.replace(true) {
+            let _pin = crate::palw_retention::pin_attempt_publication(claim);
+            let pending = dir.path().join("replacement");
+            std::fs::write(&pending, b"new").unwrap();
+            std::fs::rename(pending, &material).unwrap();
+        }
+        Ok(false)
+    });
+    assert_eq!(std::fs::read(&material).unwrap(), b"new");
+    let pin = crate::palw_retention::pin_attempt_publication(claim);
+    sweep(&|_| Ok(false));
+    assert!(material.exists());
+    drop(pin);
+    sweep(&|_| Ok(false));
+    assert!(!material.exists());
+}
+
+#[test]
 fn foreign_gc_read_failures_keep_material_but_healthy_absence_does_not_pin_forever() {
     let dir = std::env::temp_dir().join(format!("seat-r-read-failure-{}-{:?}", std::process::id(), std::thread::current().id()));
     let _ = std::fs::remove_dir_all(&dir);

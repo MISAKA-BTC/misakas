@@ -124,8 +124,17 @@ impl RetainedFileV1 {
         }
     }
 
-    fn new(path: PathBuf, meta: &std::fs::Metadata) -> Self {
+    pub(crate) fn new(path: PathBuf, meta: &std::fs::Metadata) -> Self {
         Self { path, bytes: meta.len(), version: Self::version(meta) }
+    }
+
+    /// Serialize the final file check with in-process publishers.
+    pub(crate) fn unlink_if_current(&self, claim: Option<Hash64>) -> bool {
+        let active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
+        if claim.is_some_and(|claim| active.contains_key(&claim)) {
+            return false;
+        }
+        std::fs::symlink_metadata(&self.path).is_ok_and(|meta| self.matches(&meta)) && std::fs::remove_file(&self.path).is_ok()
     }
 
     fn matches(&self, meta: &std::fs::Metadata) -> bool {
