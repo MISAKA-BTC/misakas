@@ -480,3 +480,85 @@ fn verified_tokenizer_registration_root_replay_and_carriage_require_native_conte
     orphan.staged_courts.remove(&eof_key);
     assert!(orphan.into_state(&params, None).is_err());
 }
+
+#[test]
+fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
+    use crate::palw_constraint_stream_court_v1::canonical_replay::Material as _;
+    use crate::palw_court_shared_tir_builder_store_v1::{
+        constraint_stop::RootedStopMaterialV1, constraint_terminal::ConstraintMaterialV1,
+    };
+    use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
+    use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, palw_rooted_claim_tokenizer_v1};
+
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut accepted, params, mut extras) = world(&fx, &fx.frame);
+    let claim = fx.frame.plan_v1().original_claim;
+    let class = semantics.class_id;
+    let binding = test_binding_v1(&fx.record, semantics.artifact_root, b"rooted-tokenizer-original-ids");
+    let container = check_tir_container_binding_v1(&binding, &class, &semantics.artifact_root, &fx.record, 1).unwrap();
+    let pins = PalwTfp1TokenizerIntakePinsV2 {
+        class_id: class,
+        container_root: container.container_root,
+        semantics_id: semantics.commitment(),
+        inventory_id: eof.inventory_id,
+    };
+    let eof_key = Key::Inventory(eof.artifact_hash);
+    accepted.class_semantics.insert(class, semantics.clone());
+    accepted.claim_semantics.insert(claim, semantics);
+    accepted.staged_courts.insert(eof_key, Row::ArtifactInventory(eof));
+    accepted.staged_courts.insert(Key::TirContainer(class), Row::TirContainer(Box::new(container)));
+    accepted.last_point = Some(at(&fx.frame, 0));
+    let mut registration_parent = accepted.clone();
+    registration_parent.claims.remove(&claim);
+    registration_parent.claim_semantics.remove(&claim);
+    registration_parent.staged_courts.remove(&fx.frame.key_v1());
+    registration_parent.last_point =
+        Some(PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(8810), daa_score: 10, blue_score: 10, subsidy: 0 });
+    let registration_point =
+        PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(8811), daa_score: 11, blue_score: 11, subsidy: 0 };
+    extras.class_semantics_active = true;
+    extras.tir_container_identity_active = true;
+    extras.tir_public_conviction_active = true;
+    extras.staged_public_court = Some(fx.rules.config);
+    let mut b = TransitionBuilder::new(&registration_parent, &params, false, false, false, false, &extras);
+    let eog = table.eog_opening().unwrap();
+    b.install_verified_tokenizer_registration_v1(&registration_parent, registration_point, pins, &raw, &eog).unwrap();
+    let key = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
+    let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let rows = crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+    let ids = source.retain_complete_ids_v1(rows, &fx.execution.generated).unwrap();
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());
+    accepted.staged_courts.insert(key, b.state.staged_court_row_v1(&key).unwrap().clone());
+
+    let verifier = palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().unwrap();
+    let id = ids.ids_v1()[0];
+    let opening = table.opening_of(id).unwrap();
+    let wrong_id = table.opening_of((id + 1) % table.vocab()).unwrap();
+    assert_eq!(verifier.committed_rendering_at(0, &opening), Some(opening.rendering.as_deref()));
+    assert_eq!(verifier.committed_rendering_at(0, &wrong_id), None);
+    assert_eq!(verifier.committed_rendering_at(source.decode_count_v1(), &opening), None);
+    let material = ConstraintMaterialV1 { eog: &eog, renderings: std::slice::from_ref(&opening) };
+    let replay_view = RootedStopMaterialV1::new(material, &verifier).unwrap();
+    assert_eq!(replay_view.eog(), Some(eog.ids.as_slice()));
+    assert_eq!(replay_view.rendering(id).unwrap().bytes, opening.rendering.as_deref());
+    assert!(replay_view.rendering(wrong_id.id).is_none());
+    let mut bad_eog = eog.clone();
+    bad_eog.ids[0] = 0;
+    assert!(RootedStopMaterialV1::new(ConstraintMaterialV1 { eog: &bad_eog, ..material }, &verifier).is_err());
+    let mut bad_rendering = opening;
+    bad_rendering.rendering = Some(b"unregistered".to_vec());
+    assert!(RootedStopMaterialV1::new(ConstraintMaterialV1 { eog: &eog, renderings: &[bad_rendering] }, &verifier).is_err());
+
+    let other = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
+    let other_source = other.frame.source_v1(&other.record, &other.layout, other.rules.maximum_leaves).unwrap();
+    let other_rows =
+        crate::palw_step_refute::tiled_logits_rows_root_v1(&other.execution.binding.job_context, &other.execution.rows).unwrap();
+    let other_ids = other_source.retain_complete_ids_v1(other_rows, &other.execution.generated).unwrap();
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &other_ids).is_err());
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &other_source, &ids).is_err());
+    accepted.claims.get_mut(&claim).unwrap().accepted_daa = registration_point.daa_score;
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());
+    accepted.claims.get_mut(&claim).unwrap().accepted_daa = fx.frame.plan_v1().terms.accepted_daa;
+    accepted.staged_courts.remove(&eof_key);
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).is_err());
+}

@@ -6,6 +6,7 @@ use crate::palw_constraint_stream_court_v1::{
 };
 use crate::palw_court_close_receipt_v1::NativeCourtRulesV1;
 use crate::palw_freeprompt_v3::PalwFpStopReasonV3;
+use crate::palw_tokenizer_rendering_v2::{PalwRootedClaimTokenizerV1, palw_rooted_claim_tokenizer_v1};
 use crate::{
     Hash64,
     palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwStateParamsV2},
@@ -69,6 +70,32 @@ impl ConstraintStopEvidenceV1<'_> {
         Ok(result.finding().cloned())
     }
 }
+// The replay cursor supplies each expected ID from the verified original
+// sequence. Preserve ordered begin/finish verification and budget charging.
+pub(crate) struct RootedStopMaterialV1<'a> {
+    material: Material<'a>,
+    eog: &'a [u32],
+}
+impl<'a> RootedStopMaterialV1<'a> {
+    pub(crate) fn new(material: Material<'a>, tokenizer: &PalwRootedClaimTokenizerV1<'_>) -> Result<Self, String> {
+        let eog = tokenizer.verified_eog(material.eog).ok_or("constraint stop registered EOG opening mismatch")?;
+        if material.renderings.iter().any(|opening| !tokenizer.verifies_rendering(opening.id, opening)) {
+            return Err("constraint stop registered rendering opening mismatch".into());
+        }
+        Ok(Self { material, eog })
+    }
+}
+impl replay::Material for RootedStopMaterialV1<'_> {
+    fn eog(&self) -> Option<&[u32]> {
+        Some(self.eog)
+    }
+    fn rendering(&self, id: u32) -> Option<replay::RenderingMaterial<'_>> {
+        // Same exact-ID search used by the ordinary path. `id` is the
+        // native replay's next ID; a material entry cannot choose it.
+        self.material.rendering(id)
+    }
+}
+
 impl Store<'_> {
     /// Native caller resolves actual rules and separately admits source, parser,
     /// body proof/hash, actor signature, Court clone and evidence ownership.
@@ -150,7 +177,11 @@ impl Store<'_> {
         let view =
             crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(header, record, frame.descriptor_v1().maximum_leaves)?;
         let table = semantics.token_table_root.ok_or("constraint stop table missing")?;
-        if !material.eog.verifies(&table, view.vocab_size) || material.renderings.iter().any(|r| !r.verifies(&table, view.vocab_size))
+        let rooted = self.ids.map(|ids| palw_rooted_claim_tokenizer_v1(state, intent.claim, &source, ids)).transpose()?.flatten();
+        let rooted_material = rooted.as_ref().map(|tokenizer| RootedStopMaterialV1::new(material, tokenizer)).transpose()?;
+        if rooted_material.is_none()
+            && (!material.eog.verifies(&table, view.vocab_size)
+                || material.renderings.iter().any(|r| !r.verifies(&table, view.vocab_size)))
         {
             return Err("constraint stop actual material opening mismatch".into());
         }
@@ -169,6 +200,10 @@ impl Store<'_> {
             &material.eog.opening,
             intent.signing_message(rules.network_domain)?,
         )?;
-        replay::build(&base, &material, budget).map_err(|e| format!("constraint stop replay: {e:?}"))
+        match rooted_material {
+            Some(material) => replay::build(&base, &material, budget),
+            None => replay::build(&base, &material, budget),
+        }
+        .map_err(|e| format!("constraint stop replay: {e:?}"))
     }
 }
