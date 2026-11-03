@@ -388,7 +388,15 @@ fn persist_attempt_material(path: &std::path::Path, bytes: &[u8]) -> std::io::Re
 
     let dir = path.parent().ok_or_else(|| std::io::Error::other("retention directory absent"))?;
     std::fs::create_dir_all(dir)?;
-    let mut pending = tempfile::Builder::new().prefix(".attempt-").suffix(".partial").tempfile_in(dir)?;
+    let mut temp = tempfile::Builder::new();
+    temp.prefix(".attempt-").suffix(".partial");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // Keep the daemon's existing umask-governed provider access.
+        temp.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut pending = temp.tempfile_in(dir)?;
     pending.write_all(bytes)?;
     pending.as_file().sync_all()?;
     pending.persist(path).map_err(|error| error.error)?;
@@ -3266,6 +3274,16 @@ mod tests {
         super::persist_attempt_material(&path, b"third").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"third");
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let baseline = root.path().join("ordinary-file");
+            std::fs::write(&baseline, b"").unwrap();
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode(),
+                std::fs::metadata(baseline).unwrap().permissions().mode()
+            );
+        }
     }
 
     /// **A producer misconfiguration never takes the node down** (the route-matrix re-audit's #11).
