@@ -822,3 +822,34 @@ At virtual DAA 19,604, B0, the Explorer relay, public REST/WebSocket
 and the 113 RPC tunnel agreed on the selected tip. B1 and the 113
 primary were still unsynced at 19,389 and 19,224. B0 reported 41 real
 producer blocks, zero receipts and zero kernel Finals.
+
+## Verified replay inputs before a Panel licence — 05:15 UTC
+
+Commit `134ae8fcd` requires a durably saved verified replay input
+before the active R-core replay branch can issue Valid. The input is
+kept under its own claim-scoped foreign path, so old captures and
+answer envelopes remain available. The existing Court candidate list
+includes the new copy. The configured storage budget covers its staging,
+and the claim retention oracle governs both GC paths. Nineteen scoped
+tests passed, including a legacy truncated capture, a separate replay
+copy, and release after discharge. Log SHA256 is
+`86462a1bc705ca561de3798f14696c9b6b85b2fd490e6cd08daf8a21be77de20`.
+
+The independent review identified a privacy gap in the draft whole
+material resolver. The final response gate in `e27e8ec15` requires an
+explicit PublicDa declaration on the actual bounded bytes. Private
+inputs and unknown encodings remain available to the typed local
+Court readers. The focused serve test covered PublicDa, PanelDa,
+unknown tensor encoding, malformed input and an over-limit file.
+Log SHA256 is
+`4a517601c53784efbf284ad9cbbbfeb5cece9b1491e078c3d6c38158cfc9c1d1`.
+Node default/EVM metadata compiled on the final source. These changes
+remain undeployed. Retrying an already persisted replay can still
+reserve space for a second stage.
+
+At virtual DAA 19,605, B0, the relay and public REST/WebSocket
+agreed on the selected tip. The same Qwen #42 attempt was present on
+B0 and the relay and was publicly returned as a REAL carrier. Its
+claim was absent on B0, whose journal matched that carrier to a
+retention refusal at 20,606 remaining DAA against 20,608 required.
+B0 still had zero receipt blocks and zero kernel Finals.
