@@ -1410,3 +1410,23 @@ The candidate is separate from the source pinned by the bound-slot checks.
 The general claim/job and funded-escrow reverse lookups, plus proof of the
 future closed ingress and all-branch native reservation, remain open. The
 lookup result cannot authorize a Gate C decision by itself.
+
+### Funded escrow lookup by claim
+
+The [funded escrow index candidate](case-funded-escrow-claim-index-candidate-20261103.tar.gz)
+changes the actual Case closure check to an ordered lookup by claim. The
+derived index has one member per retained contract, including settled
+contracts awaiting retirement. The native row writer and forward/reverse
+delta apply share the index update. Carriage restore derives it from the
+existing rows. The candidate includes native write and restore heap charges
+for the new index. Its patch leaves the rooted escrow map and carriage
+encoding in place.
+
+Core library and focused test-target metadata passed against a copy with
+the bound-slot follow-ups. A standalone regression using the extracted
+lookup and update methods passed for two contracts on one claim, settlement,
+removal, re-insertion and a neighboring claim. The existing Core escrow
+regressions now also assert lookup results after replay, undo and carriage
+restore, including the original serialized bytes. Those Core regressions
+have yet to execute. The candidate remains outside the source pinned by the
+bound-slot verification.
