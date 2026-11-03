@@ -145,6 +145,7 @@ struct OriginalAssignmentOpenArchiveV2 {
     carriage: NativeAcceptedCaseCarriageV2,
     lease: NativeDemandLeaseV1,
     heap: u64,
+    work: u64,
 }
 /// The original relay registration pays for its bounded historical reads.
 pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
@@ -658,9 +659,65 @@ impl VirtualStateProcessor {
         assignment: AssignmentId,
         continuation_body: &[u8],
     ) -> Result<Option<(NativeAssignmentRulesV2, NativeAcceptedCaseCarriageV2)>, NativeAssignmentArchiveErrorV2> {
-        Ok(self
-            .load_original_assignment_open_v2(parent, state, assignment, Some(continuation_body))?
-            .map(|open| (open.rules, open.carriage)))
+        use NativeAssignmentArchiveErrorV2 as E;
+        let Some(open) = self.load_original_assignment_open_v2(parent, state, assignment, Some(continuation_body))? else {
+            return Ok(None);
+        };
+        if continuation_body.get(4) == Some(&12)
+            && matches!(open.assignment.status, AssignmentStatusV2::Cancelled | AssignmentStatusV2::ExpiredUnconsumed)
+        {
+            let first_settlement = {
+                let rooted = PositiveRowsV2::new(state).assignment(assignment).map_err(|_| E::Invalid("closed Assignment rows"))?;
+                rooted.funding.last_settlement.is_none() && rooted.funding.current_outpoint.is_some()
+            };
+            // Future post-close partial spends require a replay of their own
+            // accounting chain. This checks the first settlement boundary.
+            if first_settlement {
+                let retained = open
+                    .assignment
+                    .native_heap_v1("retained closed Assignment")
+                    .add::<OriginalAssignmentOpenArchiveV2>(open.material.native_heap_v1("retained original material"), "closed Open");
+                let retained = retained.bytes().ok_or(E::Resource(retained))?;
+                let maximum_heap = open
+                    .material
+                    .custody
+                    .heap_bytes
+                    .min(open.material.native_preimages.physical.max_heap_bytes)
+                    .min(open.rules.assignment_policy().max_heap_bytes);
+                let mut remaining_heap = maximum_heap
+                    .checked_sub(open.heap)
+                    .and_then(|heap| heap.checked_sub(open.raw.capacity() as u64))
+                    .and_then(|heap| heap.checked_sub(retained))
+                    .ok_or(E::Unavailable("original Open exhausts closed Assignment archive heap"))?;
+                let mut remaining_work = open
+                    .material
+                    .custody
+                    .replay_work
+                    .min(open.rules.assignment_policy().max_replay_work)
+                    .checked_sub(open.work)
+                    .ok_or(E::Unavailable("original Open exhausts closed Assignment archive work"))?;
+                let mut lease =
+                    reserve_native_requests_v1(0).map_err(E::Resource)?.ok_or(E::Unavailable("closed Assignment archive owner"))?;
+                let records = self.load_assignment_control_history_v2(
+                    (parent, state),
+                    &open,
+                    &mut lease,
+                    &mut remaining_heap,
+                    &mut remaining_work,
+                )?;
+                let record = records.last().ok_or(E::Invalid("closed Assignment has no archived closing event"))?;
+                state
+                    .check_archived_unconsumed_assignment_close_v2(assignment, &open.rules, record, (remaining_heap, remaining_work))
+                    .map_err(|why| match why {
+                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => E::Resource(why),
+                        kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(_) => {
+                            E::Unavailable("closed Assignment semantic replay unavailable")
+                        }
+                        _ => E::Invalid("archived Assignment closure differs from the executed state"),
+                    })?;
+            }
+        }
+        Ok(Some((open.rules, open.carriage)))
     }
 
     fn load_original_assignment_open_v2(
@@ -761,6 +818,7 @@ impl VirtualStateProcessor {
             carriage: accepted.carriage,
             lease,
             heap: accepted.heap,
+            work: accepted.work,
         }))
     }
 
