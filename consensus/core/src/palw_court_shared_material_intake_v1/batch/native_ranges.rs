@@ -297,7 +297,7 @@ pub(crate) struct NumericalBatchFindingV1 {
     pub scope: Hash64,
     pub notice: Hash64,
     pub at: crate::palw_state_v2::PalwBlockContextV2,
-    pub fault: Option<crate::palw_step_leg::PalwStepRefutationVerdictV1>,
+    pub fault: Option<(Hash64, NativeRetainedV1<Vec<u8>>)>,
 }
 
 /// Read-only native replay at the booked verification point. The terminal
@@ -337,9 +337,25 @@ pub(crate) fn replay_numerical_batch_v1(
         prompt_form,
         limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court),
     };
-    let fault = replay_tir_cone_from_store_v1(
+    let finding = replay_tir_cone_from_store_v1(
         &binding, prepared.leaf, &store, &court, budget.work, rules.court.max_close_bytes(),
     ).map_err(E::Decode)?;
+    let fault = if let Some((fault, mut cone)) = finding {
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut cone.binding);
+        let len = borsh::object_length(&cone).map_err(|why| E::Decode(why.to_string()))?;
+        if len == 0 || len > crate::palw_batch_court_v1::rooted::MAX_NUMERICAL_FAULT_BYTES_V1 {
+            return Err(E::Decode("numerical Batch fault exceeds its retained byte cap".into()));
+        }
+        let lease = reserve_native_requests_v1(len as u64).map_err(E::Resource)?;
+        let mut bytes = Vec::new();
+        bytes.try_reserve_exact(len).map_err(|why| E::Resource(
+            NativeCoverageV1::unsupported::<Vec<u8>>("retain numerical Batch fault", &why.to_string()),
+        ))?;
+        borsh::BorshSerialize::serialize(&cone, &mut bytes).map_err(|why| E::Decode(why.to_string()))?;
+        Some((fault.evidence_id, NativeRetainedV1::from_owner_reserved_v1(bytes, lease)))
+    } else {
+        None
+    };
     Ok(NumericalBatchFindingV1 { claim, leaf: prepared.leaf, scope: prepared.scope, notice: prepared.notice, at: rules.at, fault })
 }
 

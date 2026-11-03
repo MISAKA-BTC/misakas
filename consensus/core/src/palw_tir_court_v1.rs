@@ -1595,7 +1595,7 @@ pub(crate) fn replay_tir_cone_from_store_v1(
     rules: &PalwTirCourtRulesV1,
     work: PalwTirBuilderWorkLimitsV1,
     close_bytes: u64,
-) -> Result<Option<PalwStepRefutationVerdictV1>, String> {
+) -> Result<Option<(PalwStepRefutationVerdictV1, PalwTirConeRefutationV1)>, String> {
     let (carriage, _) = build_tir_cone_refutation_bounded_v1(binding, leaf, store, rules, work).map_err(|err| err.to_string())?;
     let bytes = borsh::object_length(&carriage).map_err(|err| err.to_string())? as u64;
     if bytes >= close_bytes {
@@ -1609,7 +1609,7 @@ pub(crate) fn replay_tir_cone_from_store_v1(
         ..*rules
     };
     match check_tir_cone_refutation_v1(&carriage, &checked_rules) {
-        Ok(fault) => Ok(Some(fault)),
+        Ok(fault) => Ok(Some((fault, carriage))),
         Err(PalwStepRefuteError::NoFaultFound) => Ok(None),
         Err(err) => Err(err.to_string()),
     }
@@ -4136,7 +4136,9 @@ pub(crate) mod test_support {
         let old = build_tir_cone_refutation_v1(&forged.binding, leaf, &forged, &rules).unwrap();
         let expected = check_tir_cone_refutation_v1(&old, &rules).unwrap();
         let got = replay_tir_cone_from_store_v1(&forged.binding, leaf, &forged, &rules, work, bytes + 1).unwrap();
-        assert_eq!(got, Some(expected));
+        let (fault, replayed) = got.unwrap();
+        assert_eq!(fault, expected);
+        assert_eq!(replayed, old);
         let blocked = PalwTirBuilderWorkLimitsV1 { max_target_requests: 0, ..work };
         assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, blocked, bytes + 1).is_err());
     }

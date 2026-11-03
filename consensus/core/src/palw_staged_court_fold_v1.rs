@@ -1184,8 +1184,21 @@ impl TransitionBuilder<'_> {
         }
         let context = crate::palw_court_shared_tir_state_v1::context(&self.state, signed.claim)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("numerical Batch receipt row");
+        quote.exact::<RootedBatchNumericalReceiptV1>(1)?;
+        if let Some((_, bytes)) = &finding.fault {
+            quote.exact::<Vec<u8>>(2)?.exact::<usize>(3)?.exact::<u8>(bytes.len() as u64)?;
+        }
+        self.admit_native_write_v1(quote)?;
+        let (fault_evidence, fault_bytes, _fault_lease) = match finding.fault {
+            Some((id, retained)) => {
+                let (bytes, lease) = retained.into_parts_v1();
+                (Some(id), Some(Box::new(bytes).into()), lease)
+            }
+            None => (None, None, None),
+        };
         let receipt = RootedBatchNumericalReceiptV1 {
-            version: 1,
+            version: 2,
             claim: finding.claim,
             scope: finding.scope,
             source: context.source_id,
@@ -1194,12 +1207,10 @@ impl TransitionBuilder<'_> {
             intent_digest: digest,
             at: finding.at,
             material_until_daa: context.material_until_daa,
-            fault_evidence: finding.fault.map(|fault| fault.evidence_id),
+            fault_evidence,
+            fault_bytes,
         };
         receipt.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        let mut quote = super::native_writers::NativeWriteQuoteV1::new("numerical Batch receipt row");
-        quote.exact::<RootedBatchNumericalReceiptV1>(1)?;
-        self.admit_native_write_v1(quote)?;
         let new = Some(PalwStagedCourtRowV1::CourtBatchNumericalReceipt(Box::new(receipt)));
         self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "native numerical Batch receipt writer")?;
         self.reserve_staged_indices_v1(&key, &new)?;

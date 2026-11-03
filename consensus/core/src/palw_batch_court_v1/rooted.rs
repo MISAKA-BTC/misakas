@@ -11,7 +11,7 @@ use std::io;
 
 /// Numerical result of one reserved verification slot. The terminal operation
 /// consumes this finding separately from claim credit and accounting.
-#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RootedBatchNumericalReceiptV1 {
     pub version: u16,
     pub claim: Hash64,
@@ -23,7 +23,13 @@ pub struct RootedBatchNumericalReceiptV1 {
     pub at: PalwBlockContextV2,
     pub material_until_daa: u64,
     pub fault_evidence: Option<Hash64>,
+    /// V2 retains the canonical TIR operands without the registered program.
+    pub fault_bytes: Option<PalwSharedCourtV1<Vec<u8>>>,
 }
+
+pub(crate) const MAX_NUMERICAL_FAULT_BYTES_V1: usize = crate::palw_mode_v2::palw_close_bytes_for_chunks_v1(
+    crate::palw_state_v2::PALW_COURT_CLOSE_MAX_CHUNKS as u64,
+) as usize;
 
 impl RootedBatchNumericalReceiptV1 {
     pub(crate) fn digest_v1(&self) -> Result<Hash64, String> {
@@ -31,7 +37,13 @@ impl RootedBatchNumericalReceiptV1 {
     }
 
     pub(crate) fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1
+        let valid_fault_shape = match self.version {
+            1 => self.fault_bytes.is_none(),
+            2 => self.fault_evidence.is_some() == self.fault_bytes.is_some()
+                && self.fault_bytes.as_ref().is_none_or(|bytes| !bytes.is_empty() && bytes.len() <= MAX_NUMERICAL_FAULT_BYTES_V1),
+            _ => false,
+        };
+        if !valid_fault_shape
             || *key != Key::CourtBatchNumericalReceipt(self.claim)
             || [self.claim, self.scope, self.source, self.notice, self.intent_digest, self.at.block].contains(&Hash64::default())
             || self.at.daa_score >= self.material_until_daa
@@ -77,6 +89,9 @@ pub(crate) fn reserved_numerical_terminal_v1<'a>(
         return Err("numerical terminal has no accepted verification receipt".into());
     };
     receipt.check(&key)?;
+    if receipt.fault_evidence.is_some() && receipt.fault_bytes.is_none() {
+        return Err("numerical terminal fault has no retained adjudication material".into());
+    }
     let context = shared::context(state, claim)?;
     let service = state.court_service_row_v3_v1().ok_or("numerical terminal has no causal service book")?;
     context.check_binding(&service.state)?;
@@ -99,10 +114,53 @@ pub(crate) fn reserved_numerical_terminal_v1<'a>(
     Ok(receipt)
 }
 
+impl BorshSerialize for RootedBatchNumericalReceiptV1 {
+    fn serialize<W: io::Write>(&self, writer: &mut W) -> io::Result<()> {
+        self.check(&Key::CourtBatchNumericalReceipt(self.claim)).map_err(|why| wire_bad(&why))?;
+        (self.version, self.claim, self.scope, self.source, self.notice, self.leaf, self.intent_digest, self.at,
+            self.material_until_daa, self.fault_evidence).serialize(writer)?;
+        if self.version == 2 {
+            self.fault_bytes.as_ref().map_or(&[][..], |bytes| bytes.as_slice()).serialize(writer)?;
+        }
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for RootedBatchNumericalReceiptV1 {
+    fn deserialize_reader<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+        let version = u16::deserialize_reader(reader)?;
+        if !matches!(version, 1 | 2) {
+            return Err(wire_bad("unknown numerical Batch receipt version"));
+        }
+        let mut receipt = Self {
+            version,
+            claim: Hash64::deserialize_reader(reader)?,
+            scope: Hash64::deserialize_reader(reader)?,
+            source: Hash64::deserialize_reader(reader)?,
+            notice: Hash64::deserialize_reader(reader)?,
+            leaf: u64::deserialize_reader(reader)?,
+            intent_digest: Hash64::deserialize_reader(reader)?,
+            at: PalwBlockContextV2::deserialize_reader(reader)?,
+            material_until_daa: u64::deserialize_reader(reader)?,
+            fault_evidence: Option::<Hash64>::deserialize_reader(reader)?,
+            fault_bytes: None,
+        };
+        if version == 2 {
+            let bytes = crate::palw_public_binding_v1::read_bounded_bytes_v1(reader, MAX_NUMERICAL_FAULT_BYTES_V1)?;
+            if !bytes.is_empty() {
+                receipt.fault_bytes = Some(Box::new(bytes).into());
+            }
+        }
+        receipt.check(&Key::CourtBatchNumericalReceipt(receipt.claim)).map_err(|why| wire_bad(&why))?;
+        Ok(receipt)
+    }
+}
+
 impl NativeWireScanV1 for RootedBatchNumericalReceiptV1 {
     fn scan_native_wire_v1<R: io::Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
-        if reader.short()? != 1 {
+        let version = reader.short()?;
+        if !matches!(version, 1 | 2) {
             return Err(wire_bad("unknown numerical Batch receipt version"));
         }
         let mut shape = NativeWireShapeV1::default();
@@ -113,7 +171,21 @@ impl NativeWireScanV1 for RootedBatchNumericalReceiptV1 {
         shape = shape.merge(Hash64::scan_native_wire_v1(reader)?)?;
         shape = shape.merge(PalwBlockContextV2::scan_native_wire_v1(reader)?)?;
         shape = shape.merge(u64::scan_native_wire_v1(reader)?)?;
-        shape.merge(Option::<Hash64>::scan_native_wire_v1(reader)?)
+        shape = shape.merge(Option::<Hash64>::scan_native_wire_v1(reader)?)?;
+        if version == 2 {
+            reader.step()?;
+            let bytes = u64::from(reader.word()?);
+            if bytes > MAX_NUMERICAL_FAULT_BYTES_V1 as u64 {
+                return Err(wire_bad("numerical Batch fault exceeds its retained byte cap"));
+            }
+            reader.skip(bytes)?;
+            shape = shape.merge(NativeWireShapeV1 { byte_entries: bytes, ..Default::default() }.allocation(bytes, 1)?)?;
+            if bytes != 0 {
+                // Box-to-Arc conversion and the shared Vec header.
+                shape = shape.allocation(1, 2 * size_of::<Vec<u8>>() + 3 * size_of::<usize>())?;
+            }
+        }
+        Ok(shape)
     }
 }
 
@@ -521,13 +593,17 @@ mod tests {
             version: 1, claim: h(1), scope: h(2), source: h(3), notice: h(4),
             leaf: 7, intent_digest: h(5),
             at: PalwBlockContextV2 { block: h(6), daa_score: 4_000, blue_score: 5_000, subsidy: 0 },
-            material_until_daa: 12_000, fault_evidence: Some(h(8)),
+            material_until_daa: 12_000, fault_evidence: Some(h(8)), fault_bytes: None,
         };
         let key = Key::CourtBatchNumericalReceipt(receipt.claim);
         assert_eq!(borsh::to_vec(&key).unwrap()[0], 34);
         let row = Row::CourtBatchNumericalReceipt(Box::new(receipt.clone()));
         let bytes = borsh::to_vec(&row).unwrap();
         assert_eq!(bytes[0], 41);
+        assert_eq!(&bytes[1..], borsh::to_vec(&(
+            1u16, receipt.claim, receipt.scope, receipt.source, receipt.notice, receipt.leaf, receipt.intent_digest,
+            receipt.at, receipt.material_until_daa, receipt.fault_evidence,
+        )).unwrap());
         assert_eq!(borsh::from_slice::<Row>(&bytes).unwrap(), row);
         assert!(receipt.check(&key).is_ok());
         assert!(receipt.check(&Key::CourtBatchNumericalReceipt(h(9))).is_err());
@@ -536,11 +612,24 @@ mod tests {
         assert_eq!(reader.remaining(), 0);
         assert_eq!(shape.collection_entries, 0);
         let mut unsupported = bytes.clone();
-        unsupported[1] = 2;
+        unsupported[1] = 3;
         for malformed in [&unsupported[..], &bytes[..bytes.len() - 1]] {
             let mut reader = NativeWireReaderV1::new(malformed, malformed.len() as u64);
             assert!(Row::scan_native_wire_v1(&mut reader).is_err());
         }
+        let receipt = RootedBatchNumericalReceiptV1 { version: 2, fault_bytes: Some(Box::new(vec![7, 8]).into()), ..receipt };
+        let stored = Row::CourtBatchNumericalReceipt(Box::new(receipt.clone()));
+        let mut bytes = borsh::to_vec(&stored).unwrap();
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        assert_eq!(Row::scan_native_wire_v1(&mut reader).unwrap().byte_entries, 2);
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(borsh::from_slice::<Row>(&bytes).unwrap(), stored);
+        let length = bytes.len() - 2 - size_of::<u32>();
+        bytes[length..length + size_of::<u32>()].copy_from_slice(&u32::MAX.to_le_bytes());
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        assert!(Row::scan_native_wire_v1(&mut reader).is_err());
+        assert!(borsh::from_slice::<Row>(&bytes).is_err());
+        assert!(RootedBatchNumericalReceiptV1 { fault_bytes: None, ..receipt }.check(&key).is_err());
     }
 
     #[test]

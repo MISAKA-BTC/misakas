@@ -4156,3 +4156,30 @@ At the user status check, remote main was
 `4128e4d85aad2a88fc0c7a27d8e5bd95bd33913a` and did not contain the
 Batch verification candidate. B0 and relay still agreed at virtual
 DAA 19,742 with no additional selected blocks.
+
+## Retain the bounded numerical fault material
+
+A confirmed local fault now returns the actual checked TIR cone and
+its evidence ID. The Batch adapter strips the registered program,
+reserves the encoded memory, and retains the canonical bytes with the
+finding. The V2 receipt caps bytes at the native maximum close size,
+uses shared ownership across journal copies, and refuses a fault
+without material. V1 receipt bytes remain readable. The terminal
+reader refuses to use a V1 fault with only an ID.
+
+Two extracted tests passed. The replay test distinguished an honest
+leaf from a forged leaf and returned exactly the cone the checker
+used. The receipt test checked V1 byte compatibility, V2 round trip
+and oversized-length refusal in both scanner and decoder. Logs:
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-fault-retain.l4GMpu/replay-tests.log`
+and
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-fault-retain.l4GMpu/receipt-tests.log`.
+Rust parsing and whitespace checks passed. Native verification and
+journal integration still need execution. The production profile must
+price retained bytes and archive lifetime, and the terminal must
+consume verified material through the existing accounting and archive
+rules. The candidate remains dormant.
+
+B0 and relay agreed at virtual DAA 19,743. The two additional selected
+blocks had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-fault-live.YwNJb8/page.json`.

@@ -1043,7 +1043,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let receipt = RootedBatchNumericalReceiptV1 {
         version: 1, claim, scope: scope_id, source: context.source_id, notice: notice_id, leaf: notice_leaf,
         intent_digest: Hash64::from_u64_word(812), at: point, material_until_daa: context.material_until_daa,
-        fault_evidence: None,
+        fault_evidence: None, fault_bytes: None,
     };
     let digest = receipt.digest_v1().unwrap();
     assert!(reserved_numerical_terminal_v1(&b.state, claim, digest, &terminal_at).is_err());
@@ -1054,5 +1054,10 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(reserved_numerical_terminal_v1(&verified, claim, digest, &terminal_at).unwrap(), &receipt);
     assert!(reserved_numerical_terminal_v1(&verified, claim, digest, &point).is_err());
     assert!(reserved_numerical_terminal_v1(&verified, claim, Hash64::from_u64_word(999), &terminal_at).is_err());
+    let old_fault = RootedBatchNumericalReceiptV1 { fault_evidence: Some(Hash64::from_u64_word(9)), ..receipt };
+    let digest = old_fault.digest_v1().unwrap();
+    verified.staged_courts.insert(Key::CourtBatchNumericalReceipt(claim), Row::CourtBatchNumericalReceipt(Box::new(old_fault)));
+    assert!(matches!(reserved_numerical_terminal_v1(&verified, claim, digest, &terminal_at),
+        Err(why) if why == "numerical terminal fault has no retained adjudication material"));
     set_material_intake_test_schedule_v1(None);
 }
