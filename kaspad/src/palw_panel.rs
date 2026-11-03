@@ -26,6 +26,7 @@
 //! The operator funds one address once; the bond key — which the node already holds to sign
 //! receipts — signs the spends. No second key, no key material beyond what a bonded node has.
 
+use crate::palw_retention::{RetainedPublication, publish_retained_file};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2967,10 +2968,7 @@ pub(crate) fn palw_da_claim_answers_v1(
 fn palw_da_keep_remade_v1(dir: &std::path::Path, claim: &Hash64, bytes: &[u8]) {
     let _publication = crate::palw_retention::pin_attempt_publication(*claim);
     let path = dir.join(format!("{claim}.material"));
-    let partial = dir.join(format!("{claim}.material.partial"));
-    if let Err(e) =
-        std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&partial, bytes)).and_then(|()| std::fs::rename(&partial, &path))
-    {
+    if let Err(e) = publish_retained_file(&path, bytes, RetainedPublication::Replace) {
         warn!("[{PALW_PANEL}] claim {claim}: cannot keep the re-made capture ({e}); the next data-availability session re-makes it");
     }
 }
@@ -7797,23 +7795,15 @@ impl PalwPanelService {
         let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}.material"));
-        if path.exists() {
-            return true;
+        // A complete copy must be on disk before the seat can rely on it.
+        match publish_retained_file(&path, bytes, RetainedPublication::KeepExisting) {
+            Ok(true) => self.prune_foreign_retention(&dir),
+            Ok(false) => {}
+            Err(e) => {
+                warn!("[{PALW_PANEL}] cannot retain material for claim {claim}: {e}");
+                return false;
+            }
         }
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            warn!("[{PALW_PANEL}] cannot create the foreign retention directory {}: {e}", dir.display());
-            return false;
-        }
-        // **A write failure is reported.** Swallowing it (`let _ =`) left the panel believing it
-        // was retaining while a full volume dropped every byte — the node then answers no pull and
-        // is charged for the silence (audit M2-2).
-        if let Err(e) = std::fs::write(&path, bytes) {
-            warn!("[{PALW_PANEL}] cannot retain material for claim {claim}: {e}");
-            // A half-written file would read as kept on the next call.
-            let _ = std::fs::remove_file(&path);
-            return false;
-        }
-        self.prune_foreign_retention(&dir);
         true
     }
 
@@ -8545,12 +8535,7 @@ impl PalwPanelService {
     fn retain_own_material(&self, claim: &Hash64, bytes: &[u8]) {
         let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let path = crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim);
-        let partial = path.with_extension("material.partial");
-        if let Err(e) = std::fs::create_dir_all(&self.config.retention_dir) {
-            warn!("[{PALW_PANEL}] cannot create the retention directory: {e}");
-            return;
-        }
-        if let Err(e) = std::fs::write(&partial, bytes).and_then(|()| std::fs::rename(&partial, &path)) {
+        if let Err(e) = publish_retained_file(&path, bytes, RetainedPublication::Replace) {
             warn!("[{PALW_PANEL}] cannot retain the material for claim {claim}: {e}");
         }
     }
@@ -12179,10 +12164,7 @@ impl PalwPanelService {
         let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
-        if path.exists() {
-            return;
-        }
-        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes)) {
+        if let Err(e) = publish_retained_file(&path, bytes, RetainedPublication::KeepExisting) {
             warn!("[{PALW_PANEL}] cannot retain the answer envelope for claim {claim}: {e}");
         }
     }
@@ -12307,8 +12289,7 @@ impl PalwPanelService {
         // of kilobytes and a reader never sees a half file. Best-effort: a failed cache is a
         // slower serve, not a refused one.
         let _publication = crate::palw_retention::pin_attempt_publication(claim);
-        let partial = answer_path.with_extension("answer.partial");
-        if let Err(e) = std::fs::write(&partial, &answer).and_then(|()| std::fs::rename(&partial, &answer_path)) {
+        if let Err(e) = publish_retained_file(&answer_path, &answer, RetainedPublication::Replace) {
             warn!("[{PALW_PANEL}] cannot cache the answer envelope for claim {claim}: {e}");
         } else {
             info!(
@@ -14947,10 +14928,7 @@ impl PalwPanelService {
         let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
             let _publication = crate::palw_retention::pin_attempt_publication(claim);
-            let parent = target.parent().ok_or("retention path has no parent")?;
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            let partial = target.with_extension("material.partial");
-            std::fs::write(&partial, &material.bytes).and_then(|()| std::fs::rename(&partial, &target)).map_err(|e| e.to_string())?;
+            publish_retained_file(&target, &material.bytes, RetainedPublication::Replace).map_err(|e| e.to_string())?;
             info!(
                 "[{PALW_PANEL}] claim {claim}: TIR frame original ({} B) from evidence provider(s) {:?}",
                 material.bytes.len(),

@@ -83,6 +83,59 @@ impl Drop for AttemptPublicationGuard {
     }
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum RetainedPublication {
+    Replace,
+    KeepExisting,
+    DurableReplace,
+}
+
+/// Publish complete bytes from a private staging name in the same directory.
+/// Callers retain their claim pin for the full write and publication.
+pub(crate) fn publish_retained_file(path: &Path, bytes: &[u8], mode: RetainedPublication) -> std::io::Result<bool> {
+    use std::io::{Error, ErrorKind, Write};
+    let dir = path.parent().ok_or_else(|| Error::other("retention directory absent"))?;
+    let name = path.file_name().ok_or_else(|| Error::other("retention filename absent"))?;
+    let existing = || std::fs::symlink_metadata(path).map(|meta| meta.is_file());
+    if matches!(mode, RetainedPublication::KeepExisting) {
+        match existing() {
+            Ok(true) => return Ok(false),
+            Ok(false) => return Err(Error::new(ErrorKind::AlreadyExists, "retained path is not a regular file")),
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    std::fs::create_dir_all(dir)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(name).suffix(".partial");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut pending = builder.tempfile_in(dir)?;
+    pending.write_all(bytes)?;
+    if matches!(mode, RetainedPublication::DurableReplace) {
+        pending.as_file().sync_all()?;
+    }
+    if matches!(mode, RetainedPublication::KeepExisting) {
+        return match pending.persist_noclobber(path) {
+            Ok(_) => Ok(true),
+            Err(e) if e.error.kind() == ErrorKind::AlreadyExists && matches!(existing(), Ok(true)) => Ok(false),
+            Err(e) => Err(e.error),
+        };
+    }
+    pending.persist(path).map_err(|e| e.error)?;
+    #[cfg(unix)]
+    if matches!(mode, RetainedPublication::DurableReplace) {
+        std::fs::File::open(dir)?.sync_all()?;
+        if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    Ok(true)
+}
+
 /// **The free space the space rule keeps**: `max(8 GiB, 5 % of the volume)`.
 pub(crate) fn retention_reserve_bytes_v1(total_bytes: u64) -> u64 {
     PALW_RETENTION_MIN_FREE_BYTES.max(total_bytes / 1000 * PALW_RETENTION_MIN_FREE_PERMILLE)
@@ -665,6 +718,34 @@ mod tests {
         };
         assert_eq!(retention_prune_plan_with_material_v1(&claims, chain, owed, 60 * MIN, 0, 40), (vec![3, 1, 2, 4], 0));
         assert_eq!((chain_reads.get(), obligation_reads.get()), (claims.len(), claims.len()));
+    }
+
+    #[test]
+    fn retained_publishers_never_expose_partial_or_overwrite_a_write_once_copy() {
+        use std::sync::Barrier;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claim.material");
+        let start = Barrier::new(8);
+        let results = std::thread::scope(|scope| {
+            let writers: Vec<_> = (0u8..8)
+                .map(|byte| {
+                    let (path, start) = (&path, &start);
+                    scope.spawn(move || {
+                        let bytes = vec![byte; 64 * 1024];
+                        start.wait();
+                        publish_retained_file(path, &bytes, RetainedPublication::KeepExisting).unwrap().then_some(byte)
+                    })
+                })
+                .collect();
+            writers.into_iter().filter_map(|writer| writer.join().unwrap()).collect::<Vec<_>>()
+        });
+        assert_eq!(results.len(), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), vec![results[0]; 64 * 1024]);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+        assert!(publish_retained_file(&path, b"replacement", RetainedPublication::Replace).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
     }
 
     #[test]

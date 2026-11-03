@@ -384,30 +384,8 @@ pub(crate) fn palw_retained_answer_path(dir: &std::path::Path, claim: &Hash64) -
 
 /// Publish the capture before the producer makes a network commitment to it.
 fn persist_attempt_material(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write;
-
-    let dir = path.parent().ok_or_else(|| std::io::Error::other("retention directory absent"))?;
-    std::fs::create_dir_all(dir)?;
-    let mut temp = tempfile::Builder::new();
-    temp.prefix(".attempt-").suffix(".partial");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        // Keep the daemon's existing umask-governed provider access.
-        temp.permissions(std::fs::Permissions::from_mode(0o666));
-    }
-    let mut pending = temp.tempfile_in(dir)?;
-    pending.write_all(bytes)?;
-    pending.as_file().sync_all()?;
-    pending.persist(path).map_err(|error| error.error)?;
-    #[cfg(unix)]
-    {
-        std::fs::File::open(dir)?.sync_all()?;
-        if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
-            std::fs::File::open(parent)?.sync_all()?;
-        }
-    }
-    Ok(())
+    use crate::palw_retention::{RetainedPublication, publish_retained_file};
+    publish_retained_file(path, bytes, RetainedPublication::DurableReplace).map(|_| ())
 }
 
 /// The wall-clock horizon of every retained capture that is not an attempt claim's: the bind +
@@ -2498,8 +2476,8 @@ impl PalwProducerService {
                 let answer = kaspa_consensus_core::palw_attempt_v2::palw_attempt_answer_encode_v1(anchor, &prompt_ids, ids);
                 envelope = self.config.drill_answer_only.then(|| answer.clone());
                 let path = palw_retained_answer_path(&self.config.retention_dir, &message);
-                let tmp = path.with_extension("answer.partial");
-                if let Err(e) = std::fs::write(&tmp, &answer).and_then(|()| std::fs::rename(&tmp, &path)) {
+                use crate::palw_retention::{RetainedPublication, publish_retained_file};
+                if let Err(e) = publish_retained_file(&path, &answer, RetainedPublication::Replace) {
                     warn!("[{PALW_PRODUCER}] cannot retain the answer envelope for attempt {message}: {e}");
                 }
             }
