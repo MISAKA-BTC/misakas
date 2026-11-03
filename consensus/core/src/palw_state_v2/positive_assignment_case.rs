@@ -1805,7 +1805,7 @@ impl TransitionBuilder<'_> {
             (key, response.as_ref()),
             work_before,
         )?;
-        let _journal = source
+        let journal = source
             .as_ref()
             .filter(|update| update.changes_case())
             .map(|_| {
@@ -1828,8 +1828,30 @@ impl TransitionBuilder<'_> {
         {
             return Err(refuse("current Court operation exceeds signed service usage"));
         }
-        // The source and retained-duty owners still have to authorize the
-        // complete proposed usage before the checkpoint can publish it.
+        if let crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::SourceRequest { .. } =
+            &body.operation
+        {
+            let update = source.ok_or_else(missing)?;
+            if !update.changes_case() {
+                return Ok(());
+            }
+            if update.receipt().is_some() || update.fee_intent().is_some() {
+                return Err(refuse("a source request cannot publish a receipt or fee"));
+            }
+            let case = *update.case_row().ok_or_else(missing)?;
+            let union = *update.union().ok_or_else(missing)?;
+            let journal = journal.ok_or_else(missing)?;
+            let checkpoint = self.try_checkpoint()?;
+            let result = (|| {
+                self.write_assignment_aux_v2(NativeRowBody::Case(case))?;
+                self.write_assignment_aux_v2(NativeRowBody::SourceUnion(union))?;
+                self.write_prepared_assigned_case_journal_v2(journal)
+            })();
+            if result.is_err() {
+                self.restore(checkpoint);
+            }
+            return result;
+        }
         Err(missing())
     }
     pub(super) fn apply_positive_assignment_attestation_raw_v2(

@@ -711,6 +711,13 @@ impl TransitionBuilder<'_> {
             misaka_palw_positive_contract::journal::CaseJournalEventKind::NativeTransaction,
             source_reserve,
         )?;
+        self.write_prepared_assigned_case_journal_v2(prepared)
+    }
+
+    pub(super) fn write_prepared_assigned_case_journal_v2(
+        &mut self,
+        prepared: PreparedAssignedCaseJournalV2,
+    ) -> Result<(), PalwStateV2Error> {
         self.write_and_emit_positive_case_material_v2(&prepared.record, prepared.limits)
     }
 
