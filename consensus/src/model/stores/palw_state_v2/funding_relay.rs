@@ -85,14 +85,13 @@ impl DbPalwStateV2Store {
         &self,
         auth: &FundingRelayAuthorizationRowV2,
         expected_payload: &[u8],
-    ) -> StoreResult<()> {
+    ) -> StoreResult<FundingRelayCarrierFeesV2> {
         let payload =
             self.db.get_pinned(key(auth.material.digest))?.ok_or_else(|| capacity("rooted literal relay payload unavailable"))?;
         if payload.as_ref() != expected_payload {
             return Err(invalid("archived literal relay payload differs"));
         }
-        self.read_funding_relay_charge_v2(auth)?.ok_or_else(|| capacity("rooted relay charge unavailable"))?;
-        Ok(())
+        self.read_funding_relay_charge_v2(auth)?.ok_or_else(|| capacity("rooted relay charge unavailable"))
     }
 
     /// The caller holds the PALW archive lock and the admitted carrier owner

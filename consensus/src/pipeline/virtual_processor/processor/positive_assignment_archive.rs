@@ -61,6 +61,18 @@ pub(in crate::pipeline::virtual_processor) enum NativeAssignmentArchiveErrorV2 {
     Invalid(&'static str),
     Resource(NativeCoverageV1),
 }
+/// The original relay registration pays for its bounded historical reads.
+pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
+    pub origin: AcceptedOrigin,
+    pub index: u32,
+    pub payload: &'a [u8],
+    pub gross_fee: u64,
+    pub remaining_reads: u64,
+    pub remaining_work: u64,
+    pub maximum_heap: u64,
+    pub acceptance_bytes: u64,
+}
+
 impl VirtualStateProcessor {
     /// Re-resolve one original accepted carriage and executed-prefix state.
     /// Limits are the independently authenticated ORIGINAL physical/replay
@@ -307,50 +319,14 @@ impl VirtualStateProcessor {
         if work > maximum_work {
             return Err(E::Invalid("original archive work cap"));
         }
-        let diff = self.utxo_diffs_store.get(accepting).map_err(|_| E::Unavailable("original accepted UTXO delta"))?;
-        // First pass borrows actual originals and prices every clone before
-        // constructing the populated input vector or validation scratch.
-        let mut heap = (std::mem::size_of::<NativeAcceptedCaseCarriageV2>() + std::mem::size_of::<[usize; 2]>()) as u64;
-        heap = heap
-            .checked_add(
-                (tx.inputs.len() as u64)
-                    .checked_mul(std::mem::size_of::<UtxoEntry>() as u64)
-                    .ok_or(E::Invalid("input slots overflow"))?,
-            )
-            .ok_or(E::Invalid("input heap overflow"))?;
-        for (position, input) in tx.inputs.iter().enumerate() {
-            if tx.inputs[..position].iter().any(|prior| prior.previous_outpoint == input.previous_outpoint) {
-                return Err(E::Invalid("duplicate original input"));
-            }
-            let bytes = if let Some(entry) = diff.remove.get(&input.previous_outpoint) {
-                entry.script_public_key.script().len() as u64
-            } else {
-                self.with_prior_assignment_output_v2(&acceptance, origin, input.previous_outpoint, |output, _| {
-                    output.script_public_key.script().len() as u64
-                })?
-                .ok_or(E::Unavailable("original populated input or same-prefix creator"))?
-            };
-            heap = heap.checked_add(bytes).ok_or(E::Invalid("input script heap overflow"))?;
-        }
-        // Full validator scratch is owned by its actual native implementation;
-        // these retained inputs and owner remain separately reserved.
-        if heap > maximum_heap {
-            return Err(E::Invalid("original archive retained heap cap"));
-        }
-        let lease = reserve_native_requests_v1(heap).map_err(E::Resource)?.ok_or(E::Unavailable("actual archive allocation lease"))?;
-        let mut entries = Vec::new();
-        entries.try_reserve_exact(tx.inputs.len()).map_err(|_| E::Unavailable("pre-admitted input allocation"))?;
-        for input in &tx.inputs {
-            let entry = if let Some(entry) = diff.remove.get(&input.previous_outpoint) {
-                entry.clone()
-            } else {
-                self.with_prior_assignment_output_v2(&acceptance, origin, input.previous_outpoint, |output, coinbase| {
-                    UtxoEntry::new(output.value, output.script_public_key.clone(), origin.accepted_daa, coinbase)
-                })?
-                .ok_or(E::Unavailable("same-prefix original creator disappeared"))?
-            };
-            entries.push(entry);
-        }
+        let (entries, lease) = self.restore_original_archive_inputs_v2(
+            &acceptance,
+            origin,
+            tx,
+            maximum_heap,
+            (size_of::<NativeAcceptedCaseCarriageV2>() + size_of::<[usize; 2]>()) as u64,
+            |_| Ok(()),
+        )?;
         if !boundary.check_populated_data(tx, &entries, expected_fee) {
             return Err(E::Invalid("actual original populated input/fee identity"));
         }
@@ -393,6 +369,136 @@ impl VirtualStateProcessor {
         Ok((carriage, work))
     }
 
+    /// Verify the historical outer op14 carrier with its real native inputs.
+    /// This replays ordinary Full validation, separate from the two package
+    /// signatures and from the custody/budget decision.
+    pub(in crate::pipeline::virtual_processor) fn replay_original_relay_carrier_v2(
+        &self,
+        mut replay: RelayCarrierReplayV2<'_>,
+    ) -> Result<(), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_database::{prelude::DbKey, registry::DatabaseStorePrefixes};
+
+        let accepting = BlockHash::from_bytes(replay.origin.accepting_block.0);
+        let carrier = BlockHash::from_bytes(replay.origin.carrier_block.0);
+        let charge = |replay: &mut RelayCarrierReplayV2<'_>, reads: u64, work: u64| {
+            replay.remaining_reads = replay.remaining_reads.checked_sub(reads).ok_or(E::Invalid("relay replay read cap"))?;
+            replay.remaining_work = replay.remaining_work.checked_sub(work).ok_or(E::Invalid("relay replay work cap"))?;
+            Ok::<_, E>(())
+        };
+        let record = |replay: &mut RelayCarrierReplayV2<'_>, prefix, block| {
+            // One pin to measure the stored extent and a second possible
+            // read through the ordinary cache owner.
+            charge(replay, 2, 0)?;
+            let prefix = [u8::from(prefix)];
+            let key = DbKey::new(&prefix, block);
+            let raw = self
+                .db
+                .get_pinned(key)
+                .map_err(|_| E::Unavailable("historical relay record read"))?
+                .ok_or(E::Unavailable("historical relay record missing"))?;
+            charge(replay, 0, raw.len() as u64)
+        };
+        record(&mut replay, DatabaseStorePrefixes::BlockTransactions, carrier)?;
+        let body = self.block_transactions_store.get(carrier).map_err(|_| E::Unavailable("original relay block body"))?;
+        let tx = body.get(replay.index as usize).ok_or(E::Invalid("original relay carrier index"))?;
+        if tx.is_coinbase()
+            || !tx.id_is_current()
+            || tx.id().as_bytes() != replay.origin.carrier_transaction.0
+            || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            || tx.payload != replay.payload
+        {
+            return Err(E::Invalid("original relay carrier differs from literal archive"));
+        }
+
+        let acceptance_bytes = replay.acceptance_bytes;
+        charge(&mut replay, 1, acceptance_bytes)?;
+        let acceptance = self.acceptance_data_store.get(accepting).map_err(|_| E::Unavailable("original relay acceptance data"))?;
+        let inputs = tx.inputs.len() as u64;
+        let input_work = u64::from(replay.origin.accepted_tx_ordinal)
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(inputs))
+            .and_then(|n| n.checked_mul(inputs))
+            .ok_or(E::Invalid("relay input replay work overflow"))?;
+        charge(&mut replay, 0, input_work)?;
+        record(&mut replay, DatabaseStorePrefixes::UtxoDiffs, accepting)?;
+        let (entries, _lease) =
+            self.restore_original_archive_inputs_v2(&acceptance, replay.origin, tx, replay.maximum_heap, 0, |creator| {
+                record(&mut replay, DatabaseStorePrefixes::BlockTransactions, creator)
+            })?;
+        let populated = PopulatedTransaction::new(tx, entries);
+        let actual_fee = self
+            .transaction_validator
+            .validate_populated_transaction_and_get_fee(&populated, replay.origin.accepted_daa, TxValidationFlags::Full, None, None)
+            .map_err(|_| E::Invalid("original relay ordinary transaction Full validation"))?;
+        if actual_fee != replay.gross_fee {
+            return Err(E::Invalid("original relay Full fee differs from archived gross fee"));
+        }
+        Ok(())
+    }
+
+    fn restore_original_archive_inputs_v2(
+        &self,
+        acceptance: &kaspa_consensus_core::acceptance_data::AcceptanceData,
+        origin: AcceptedOrigin,
+        tx: &kaspa_consensus_core::tx::Transaction,
+        maximum_heap: u64,
+        owner_heap: u64,
+        mut before_creator: impl FnMut(BlockHash) -> Result<(), NativeAssignmentArchiveErrorV2>,
+    ) -> Result<(Vec<UtxoEntry>, kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1), NativeAssignmentArchiveErrorV2>
+    {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let accepting = BlockHash::from_bytes(origin.accepting_block.0);
+        let diff = self.utxo_diffs_store.get(accepting).map_err(|_| E::Unavailable("original accepted UTXO delta"))?;
+        // First pass borrows actual originals and prices every clone before
+        // constructing the populated input vector or validation scratch.
+        let mut heap = owner_heap
+            .checked_add(
+                (tx.inputs.len() as u64)
+                    .checked_mul(std::mem::size_of::<UtxoEntry>() as u64)
+                    .ok_or(E::Invalid("input slots overflow"))?,
+            )
+            .ok_or(E::Invalid("input heap overflow"))?;
+        for (position, input) in tx.inputs.iter().enumerate() {
+            if tx.inputs[..position].iter().any(|prior| prior.previous_outpoint == input.previous_outpoint) {
+                return Err(E::Invalid("duplicate original input"));
+            }
+            let bytes = if let Some(entry) = diff.remove.get(&input.previous_outpoint) {
+                entry.script_public_key.script().len() as u64
+            } else {
+                self.with_prior_assignment_output_v2(acceptance, origin, input.previous_outpoint, &mut before_creator, |output, _| {
+                    output.script_public_key.script().len() as u64
+                })?
+                .ok_or(E::Unavailable("original populated input or same-prefix creator"))?
+            };
+            heap = heap.checked_add(bytes).ok_or(E::Invalid("input script heap overflow"))?;
+        }
+        // Full validator scratch is owned by its actual native implementation;
+        // these retained inputs and owner remain separately reserved.
+        if heap > maximum_heap {
+            return Err(E::Invalid("original archive retained heap cap"));
+        }
+        let lease = reserve_native_requests_v1(heap).map_err(E::Resource)?.ok_or(E::Unavailable("actual archive allocation lease"))?;
+        let mut entries = Vec::new();
+        entries.try_reserve_exact(tx.inputs.len()).map_err(|_| E::Unavailable("pre-admitted input allocation"))?;
+        for input in &tx.inputs {
+            let entry = if let Some(entry) = diff.remove.get(&input.previous_outpoint) {
+                entry.clone()
+            } else {
+                self.with_prior_assignment_output_v2(
+                    acceptance,
+                    origin,
+                    input.previous_outpoint,
+                    &mut before_creator,
+                    |output, coinbase| UtxoEntry::new(output.value, output.script_public_key.clone(), origin.accepted_daa, coinbase),
+                )?
+                .ok_or(E::Unavailable("same-prefix original creator disappeared"))?
+            };
+            entries.push(entry);
+        }
+        Ok((entries, lease))
+    }
+
     /// Same accepting-prefix creator outputs disappear from net UTXO diffs;
     /// resolve them only from ACTUAL earlier accepted transaction bodies.
     fn with_prior_assignment_output_v2<T>(
@@ -400,6 +506,7 @@ impl VirtualStateProcessor {
         acceptance: &kaspa_consensus_core::acceptance_data::AcceptanceData,
         origin: AcceptedOrigin,
         outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
+        before_read: &mut impl FnMut(BlockHash) -> Result<(), NativeAssignmentArchiveErrorV2>,
         mut visit: impl FnMut(&kaspa_consensus_core::tx::TransactionOutput, bool) -> T,
     ) -> Result<Option<T>, NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
@@ -410,6 +517,7 @@ impl VirtualStateProcessor {
                     return Ok(None);
                 }
                 if entry.transaction_id == outpoint.transaction_id {
+                    before_read(block.block_hash)?;
                     let body = self
                         .block_transactions_store
                         .get(block.block_hash)

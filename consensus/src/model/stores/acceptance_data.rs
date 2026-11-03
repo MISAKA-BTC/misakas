@@ -59,14 +59,14 @@ impl DbAcceptanceDataStore {
         accepting: BlockHash,
         ordinal: u32,
         maximum_bytes: u64,
-    ) -> Result<Option<(BlockHash, AcceptedTxEntry)>, StoreError> {
+    ) -> Result<Option<(BlockHash, AcceptedTxEntry, u64)>, StoreError> {
         let prefix = [u8::from(DatabaseStorePrefixes::AcceptanceData)];
         let key = kaspa_database::prelude::DbKey::new(&prefix, accepting);
         let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
         if bytes.len() as u64 > maximum_bytes {
             return Err(StoreError::LocalResourceUnavailable("accepted origin exceeds replay byte limit".into()));
         }
-        accepted_origin_from_bytes_v2(&bytes, ordinal)
+        Ok(accepted_origin_from_bytes_v2(&bytes, ordinal)?.map(|(block, entry)| (block, entry, bytes.len() as u64)))
     }
 
     pub fn insert_batch(
@@ -183,6 +183,27 @@ mod tests {
         }
         assert!(accepted_origin_from_bytes_v2(&raw, 3).unwrap().is_none());
         assert!(accepted_origin_from_bytes_v2(&raw[..raw.len() - 1], 0).is_err());
+        let dir = kaspa_database::utils::get_kaspa_tempdir();
+        let open = |create| {
+            kaspa_database::prelude::ConnBuilder::default()
+                .with_files_limit(10)
+                .with_db_path(dir.path().to_path_buf())
+                .with_create_if_missing(create)
+                .build()
+                .unwrap()
+        };
+        let accepting = block(9);
+        let store = DbAcceptanceDataStore::new(open(true), CachePolicy::Empty);
+        store.insert(accepting, body.0).unwrap();
+        drop(store);
+        let store = DbAcceptanceDataStore::new(open(false), CachePolicy::Empty);
+        assert!(store.accepted_origin_at_bounded_v2(accepting, 2, raw.len() as u64 - 1).is_err());
+        let (carrier, accepted, stored_bytes) = store.accepted_origin_at_bounded_v2(accepting, 2, raw.len() as u64).unwrap().unwrap();
+        assert_eq!(
+            (carrier, accepted.transaction_id, accepted.index_within_block, stored_bytes),
+            (block(5), block(6), 3, raw.len() as u64)
+        );
+
         let mut bad = raw;
         let first_entry_offset = 8 + 2 * (8 + 64 + 8);
         bad[first_entry_offset] = 63;

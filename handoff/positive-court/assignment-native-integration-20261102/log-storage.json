@@ -1070,5 +1070,53 @@
     "stored_sha256": "d1b69d0233da71ea6df37d4912b54fa5109c3f87a0232979ec79c4926e50af69",
     "raw_bytes": 359237,
     "stored_bytes": 24698
+  },
+  {
+    "raw_name": "relay-original-carrier-clippy-first.log",
+    "stored_name": "relay-original-carrier-clippy-first.log.gz",
+    "raw_sha256": "fed1afb3df1ea2ed4d2daa186c416183b88f202daa31159e2747e00854afc092",
+    "stored_sha256": "7d4fefbcdc95b089535f27531139eece67422b827e6e50532f9e3bd7fa11dddb",
+    "raw_bytes": 341867,
+    "stored_bytes": 24015
+  },
+  {
+    "raw_name": "relay-original-carrier-clippy-second.log",
+    "stored_name": "relay-original-carrier-clippy-second.log.gz",
+    "raw_sha256": "3b602c6c34609a9b0961ccacb0d559c9f250f7173caa1a7f1a91ab5697689fcd",
+    "stored_sha256": "e7272a153c75fd601df1295237bc2a481133ef842d04048c48eef2981ff4d1e8",
+    "raw_bytes": 340747,
+    "stored_bytes": 23522
+  },
+  {
+    "raw_name": "relay-original-carrier-reopen-first.log",
+    "stored_name": "relay-original-carrier-reopen-first.log.gz",
+    "raw_sha256": "7b76348e45ea7a9d45578d829e35faa7176c3826f0328e5cfa03a71ecf306809",
+    "stored_sha256": "92393531685b916439c9ed94c0ed185fe7f25420dc978a0849caf8da8212cd6c",
+    "raw_bytes": 3614,
+    "stored_bytes": 1117
+  },
+  {
+    "raw_name": "relay-original-carrier-reopen-fourth.log",
+    "stored_name": "relay-original-carrier-reopen-fourth.log.gz",
+    "raw_sha256": "4d409c170d01e17a80a1d67dac4d6407a8bfaeb0b179c23c5f4295e80179d24e",
+    "stored_sha256": "c29f7db32b12f7475dafd7affe9b57df012791638abfc21859e3994464484842",
+    "raw_bytes": 209,
+    "stored_bytes": 158
+  },
+  {
+    "raw_name": "relay-original-carrier-reopen-second.log",
+    "stored_name": "relay-original-carrier-reopen-second.log.gz",
+    "raw_sha256": "8c996f0711870ad89d92866ed5ee2a0bced59b0e8caa226b08730742f6cbc2e1",
+    "stored_sha256": "2d1124eff2dce98a0944629e3f4af7c4c71dc9c1825f943cb640e152c4a10bc9",
+    "raw_bytes": 19110,
+    "stored_bytes": 2178
+  },
+  {
+    "raw_name": "relay-original-carrier-reopen-third.log",
+    "stored_name": "relay-original-carrier-reopen-third.log.gz",
+    "raw_sha256": "b7ad10297b59c00778799985a3c3dfd31f92d350f4e3195d7756a2e456302a30",
+    "stored_sha256": "9326e08b80fd41372760598564aa1351897574b68c9f2f83740ae4d0f222e92a",
+    "raw_bytes": 322407,
+    "stored_bytes": 23501
   }
 ]

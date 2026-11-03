@@ -776,3 +776,32 @@ mutations and an insufficient workspace. This is a direct Core
 verifier test. The selected-chain archive path was typechecked and
 did not run as a full node restart. The documentation check found
 zero new issues against the existing 43.
+
+## Historical outer relay carrier and gross fee replay
+
+Exact-repeat validation now opens the original accepted carrier block
+at the indexed transaction position and checks its native identity
+and literal op14 bytes. It reconstructs the populated inputs with the
+same helper as Assignment and Case replay, using the accepted UTXO
+diff and earlier accepted creators for intra-acceptance spends. It
+reruns ordinary Full transaction validation at the original DAA and
+compares the resulting gross fee with the archived partition.
+
+The path charges the stored record extents and read count before
+opening the historical body, UTXO diff and any same-acceptance creator
+body through their ordinary store owners. It also bounds the two
+prefix walks and duplicate-input checks and leases the populated input
+copies. These are replay-specific bounds. The existing store owners
+retain their whole-record decode and cache behavior.
+
+This replay authenticates the outer carrier and gross fee. The
+historical bond and native custody decision, actual debit scheduling,
+and end-to-end native relay acceptance remain open.
+
+Final-source Core and Consensus library Clippy passed with warnings
+denied. A focused acceptance-store regression closed and reopened a
+real RocksDB database, checked the exact byte boundary, and recovered
+the stored carrier ordinal using the production store method. The Full
+relay replay path was typechecked without a native relay history
+execution. Initial verification attempts and their setup failures are
+retained. Documentation checking found zero new issues against 43.

@@ -537,7 +537,7 @@ impl VirtualStateProcessor {
             return Err(fault("archived relay scope differs from original fired rules"));
         }
 
-        let (carrier_block, accepted) = self
+        let (carrier_block, accepted, acceptance_bytes) = self
             .acceptance_data_store
             .accepted_origin_at_bounded_v2(accepting, origin.accepted_tx_ordinal, maximum_bytes)
             .map_err(|_| fault("bounded original relay acceptance unavailable"))?
@@ -548,10 +548,28 @@ impl VirtualStateProcessor {
         {
             return Err(fault("original relay accepted carrier differs"));
         }
-        self.palw_state_v2_store
+        let observed_fees = self
+            .palw_state_v2_store
             .read()
             .check_funding_relay_archive_v2(&auth, payload)
             .map_err(|_| fault("rooted relay payload or charge unavailable"))?;
+        use crate::pipeline::virtual_processor::processor::positive_assignment_archive::{
+            NativeAssignmentArchiveErrorV2, RelayCarrierReplayV2,
+        };
+        self.replay_original_relay_carrier_v2(RelayCarrierReplayV2 {
+            origin,
+            index: accepted.index_within_block,
+            payload,
+            gross_fee: observed_fees.gross_fee(),
+            remaining_reads: auth.quote.usage.replay_reads - 9,
+            remaining_work: maximum_bytes - acceptance_bytes,
+            maximum_heap: auth.quote.usage.heap_bytes - workspace,
+            acceptance_bytes,
+        })
+        .map_err(|error| match error {
+            NativeAssignmentArchiveErrorV2::Resource(why) => why,
+            why => NativeCoverageV1::unsupported::<Self>("rooted relay archive", &format!("{why:?}")),
+        })?;
         verify_funding_relay_package_signatures_v2(body, &auth.payer_key, auth.quote.usage.heap_bytes - workspace).map_err(|why| {
             match why {
                 FundingRelayBodyErrorV2::Contract(_) => fault("original relay purpose or settlement signature invalid"),
