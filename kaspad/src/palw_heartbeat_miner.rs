@@ -405,8 +405,7 @@ impl PalwHeartbeatMinerService {
                         HeartbeatRoleV1::Stepped { daa } => {
                             stepped += 1;
                             info!(
-                                "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — granted: it merges the beat that held the slot \
-                                 and advanced the clock to DAA {daa}"
+                                "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — granted: its mergeset advanced the clock to DAA {daa}"
                             );
                         }
                         HeartbeatRoleV1::HoldsSlot { daa } => {
