@@ -3,16 +3,18 @@
 //! independently resolve them. Missing/pruned originals never become empty
 //! history or the current P state.
 use super::*;
+use crate::model::stores::{
+    acceptance_data::AcceptanceArchiveViewV2, block_transactions::ArchivedTransactionV2, utxo_diffs::UtxoArchiveViewV2,
+};
 use crate::{
-    model::stores::{
-        acceptance_data::AcceptanceDataStoreReader, block_transactions::BlockTransactionsStoreReader, ghostdag::GhostdagStoreReader,
-        headers::HeaderStoreReader, utxo_diffs::UtxoDiffsStoreReader,
-    },
+    model::stores::{ghostdag::GhostdagStoreReader, headers::HeaderStoreReader},
     processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags,
 };
 use kaspa_consensus_core::{
-    palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1},
-    palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2,
+    palw_native_resource_v1::{
+        NativeChainStateV1, NativeCoverageV1, NativeDecodeErrorV1, NativeStateDeltaV1, reserve_native_requests_v1,
+    },
+    palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, assigned_case_native_carrier_matches_v2},
     palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2},
     palw_positive_funding_relay_v2::{pending_funding_relay_payer_scratch_v2, pending_funding_relay_row_images_match_v2},
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
@@ -127,6 +129,28 @@ impl RelayCaseHistoryRowV2 {
     }
 }
 
+const ARCHIVE_WORK_PER_DELTA_BYTE_V2: u64 = 6;
+
+fn charge_archive_work_v2(remaining: &mut u64, amount: u64) -> Result<(), NativeAssignmentArchiveErrorV2> {
+    *remaining = remaining.checked_sub(amount).ok_or(NativeAssignmentArchiveErrorV2::Unavailable("native archive replay work cap"))?;
+    Ok(())
+}
+
+fn original_input_replay_work_v2(acceptance_bytes: u64, inputs: u64) -> Result<u64, NativeAssignmentArchiveErrorV2> {
+    // Each input may walk the pinned record twice. Count empty mergeset
+    // blocks as well as accepted entries, plus the duplicate input check.
+    acceptance_bytes
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(inputs))
+        .and_then(|n| n.checked_mul(inputs))
+        .ok_or(NativeAssignmentArchiveErrorV2::Invalid("native input replay work overflow"))
+}
+
+fn utxo_diff_scans_v2(inputs: u64) -> Result<u64, NativeAssignmentArchiveErrorV2> {
+    // Validate once, then price both passes for every requested outpoint.
+    inputs.checked_mul(2).and_then(|n| n.checked_add(1)).ok_or(NativeAssignmentArchiveErrorV2::Invalid("UTXO replay work overflow"))
+}
+
 impl VirtualStateProcessor {
     /// Re-resolve one original accepted carriage and executed-prefix state.
     /// Limits are the independently authenticated ORIGINAL physical/replay
@@ -134,6 +158,7 @@ impl VirtualStateProcessor {
     pub(in crate::pipeline::virtual_processor) fn load_positive_case_carriage_v2(
         &self,
         current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
         record: CaseJournalRecordView<'_>,
         boundary: AssignmentCaseBoundaryV2,
         maximum_heap: u64,
@@ -161,13 +186,17 @@ impl VirtualStateProcessor {
         if boundary_count != 1 {
             return Err(E::Invalid("missing or duplicate actual boundary"));
         }
-        self.load_positive_accepted_carriage_v2(
+        let (carriage, _) = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
+            current_state,
             NativeArchiveBoundaryV2::Case(boundary),
             maximum_heap,
             maximum_work,
-        )
-        .map(|(carriage, _)| carriage)
+        )?;
+        if !assigned_case_native_carrier_matches_v2(carriage.transaction(), record) {
+            return Err(E::Invalid("original actual Case carrier differs from journal"));
+        }
+        Ok(carriage)
     }
 
     /// Read original decode rules for a continuation against the actual walk's
@@ -249,6 +278,7 @@ impl VirtualStateProcessor {
             .map_err(|_| E::InvalidContinuation)?;
         let (carriage, work) = self.load_positive_assignment_carriage_v2(
             parent,
+            state,
             record,
             max_payload,
             view.material.custody.heap_bytes.min(view.material.native_preimages.physical.max_heap_bytes),
@@ -373,6 +403,7 @@ impl VirtualStateProcessor {
     fn load_positive_assignment_carriage_v2(
         &self,
         current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
         record: AssignmentJournalRecordViewV2<'_>,
         maximum_payload: u64,
         maximum_heap: u64,
@@ -386,6 +417,7 @@ impl VirtualStateProcessor {
             .map_err(|_| E::Invalid("invalid original Assignment control carriage framing"))?;
         let (carriage, work) = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
+            current_state,
             NativeArchiveBoundaryV2::Assignment(boundary),
             maximum_heap,
             maximum_work,
@@ -403,6 +435,7 @@ impl VirtualStateProcessor {
     fn load_positive_accepted_carriage_v2(
         &self,
         current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
         boundary: NativeArchiveBoundaryV2,
         maximum_heap: u64,
         maximum_work: u64,
@@ -431,48 +464,50 @@ impl VirtualStateProcessor {
         {
             return Err(E::Invalid("original header/parent/clock differs"));
         }
-        let acceptance = self.acceptance_data_store.get(accepting).map_err(|_| E::Unavailable("original acceptance data"))?;
-        let count = acceptance
-            .iter()
-            .try_fold(0u64, |n, b| n.checked_add(b.accepted_transactions.len() as u64))
-            .ok_or(E::Invalid("acceptance length overflow"))?;
-        if u64::from(origin.accepted_tx_ordinal) >= count {
-            return Err(E::Invalid("accepted ordinal outside original acceptance"));
+        let mut remaining_work = maximum_work;
+        let (accepted_carrier, accepted, acceptance_bytes) = self
+            .acceptance_data_store
+            .accepted_origin_at_bounded_v2(accepting, origin.accepted_tx_ordinal, remaining_work / 2)
+            .map_err(|_| E::Unavailable("bounded original acceptance data"))?
+            .ok_or(E::Invalid("accepted ordinal outside original acceptance"))?;
+        if accepted_carrier != carrier_block
+            || accepted.index_within_block == 0
+            || accepted.transaction_id.as_bytes() != origin.carrier_transaction.0
+        {
+            return Err(E::Invalid("actual accepted ordinal/carrier differs"));
         }
-        let mut ordinal = 0u64;
-        let mut target = None;
-        for block in acceptance.iter() {
-            for tx in &block.accepted_transactions {
-                if ordinal == u64::from(origin.accepted_tx_ordinal) {
-                    if block.block_hash != carrier_block || tx.transaction_id.as_bytes() != origin.carrier_transaction.0 {
-                        return Err(E::Invalid("actual accepted ordinal/carrier differs"));
-                    }
-                    target = Some(tx.index_within_block);
-                }
-                ordinal += 1;
-            }
-        }
-        let index = target.ok_or(E::Invalid("no original accepted carrier"))?;
-        let body = self.block_transactions_store.get(carrier_block).map_err(|_| E::Unavailable("original carrier block body"))?;
-        let tx = body.get(index as usize).ok_or(E::Invalid("original carrier transaction index"))?;
+        // The bounded ordinal lookup and the pinned input view each
+        // validate the complete encoding. Per-input scans are charged below.
+        charge_archive_work_v2(&mut remaining_work, acceptance_bytes * 2)?;
+        let carrier =
+            self.read_archive_transaction_v2(carrier_block, accepted.index_within_block, maximum_heap, &mut remaining_work)?;
+        let maximum_heap = maximum_heap.checked_sub(carrier.heap).ok_or(E::Unavailable("archived carrier exhausted replay heap"))?;
+        let tx = &carrier.transaction;
         if tx.is_coinbase() || !tx.id_is_current() || tx.id().as_bytes() != origin.carrier_transaction.0 {
             return Err(E::Invalid("original actual transaction identity"));
         }
-        let work = count
-            .checked_mul(tx.inputs.len() as u64)
-            .and_then(|n| n.checked_add(tx.payload.len() as u64))
-            .ok_or(E::Invalid("archive work overflow"))?;
-        if work > maximum_work {
-            return Err(E::Invalid("original archive work cap"));
-        }
-        let (entries, lease) = self.restore_original_archive_inputs_v2(
-            &acceptance,
-            origin,
-            tx,
-            maximum_heap,
-            (size_of::<NativeAcceptedCaseCarriageV2>() + size_of::<[usize; 2]>()) as u64,
-            |_| Ok(()),
-        )?;
+        // Bound both scans for same-prefix creators, plus the duplicate-input
+        // check, before calling the shared populated-input reconstruction.
+        charge_archive_work_v2(&mut remaining_work, original_input_replay_work_v2(acceptance_bytes, tx.inputs.len() as u64)?)?;
+        let scans = utxo_diff_scans_v2(tx.inputs.len() as u64)?;
+        let (entries, lease, retained_heap) = self
+            .utxo_diffs_store
+            .with_utxo_archive_v2(accepting, remaining_work / scans, |diff, diff_bytes| {
+                charge_archive_work_v2(&mut remaining_work, diff_bytes * scans)?;
+                self.acceptance_data_store
+                    .with_accepted_archive_v2(accepting, acceptance_bytes, |acceptance| {
+                        self.restore_original_archive_inputs_v2(
+                            (&acceptance, &diff),
+                            origin,
+                            tx,
+                            maximum_heap,
+                            (size_of::<NativeAcceptedCaseCarriageV2>() + size_of::<[usize; 2]>()) as u64,
+                            |creator, index, heap| self.read_archive_transaction_v2(creator, index, heap, &mut remaining_work),
+                        )
+                    })
+                    .map_err(|_| E::Unavailable("bounded original acceptance archive"))?
+            })
+            .map_err(|_| E::Unavailable("bounded original UTXO archive"))??;
         if !boundary.check_populated_data(tx, &entries, expected_fee) {
             return Err(E::Invalid("actual original populated input/fee identity"));
         }
@@ -484,16 +519,22 @@ impl VirtualStateProcessor {
         if actual_fee != expected_fee {
             return Err(E::Invalid("original actual Full fee differs"));
         }
-        let (_, parent) = self.palw_v2_state_at(selected_parent).ok_or(E::Unavailable("original native selected-parent state"))?;
+        let params = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("native state parameters"))?;
+        let replay_heap =
+            maximum_heap.checked_sub(retained_heap).ok_or(E::Unavailable("retained original inputs exhaust the archive heap cap"))?;
+        let (parent, parent_heap) = self.restore_native_archive_parent_v2(
+            (current_selected_parent, current_state),
+            selected_parent,
+            params,
+            replay_heap,
+            &mut remaining_work,
+        )?;
         if actual_header.palw_state_root != self.palw_committed_root_v1(&parent) {
             return Err(E::Invalid("original accepting header commits a different parent state"));
         }
-        let params = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("native state parameters"))?;
-        let (_, delta) = self
-            .palw_state_v2_store
-            .read()
-            .delta_of_retained_v1(accepting)
-            .map_err(|_| E::Unavailable("original native accepting delta"))?;
+        let replay_heap =
+            replay_heap.checked_sub(parent_heap).ok_or(E::Unavailable("restored parent exhausts the archive heap cap"))?;
+        let delta = self.read_archive_delta_v2(accepting, replay_heap, &mut remaining_work)?;
         if delta.point.block != accepting
             || delta.point.daa_score != origin.accepted_daa
             || delta.point.blue_score != origin.accepted_blue_score
@@ -502,19 +543,81 @@ impl VirtualStateProcessor {
         }
         let end = usize::try_from(before_delta_end).map_err(|_| E::Invalid("prefix position address space"))?;
         let root = Hash64::from_bytes(pre_event_root);
-        let prefix = parent.try_delta_prefix_v2(&delta, end, root, params).map_err(|e| match e {
+        let prefix = parent.try_delta_prefix_v2(&delta, end, root, params, replay_heap).map_err(|e| match e {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(r) => E::Resource(r),
             _ => E::Invalid("original executed native prefix mismatch"),
         })?;
         let entries = populated.entries;
-        let carriage =
-            NativeAcceptedCaseCarriageV2::from_native_history_v2(body, index, entries, actual_fee, origin, selected_parent, lease)
-                .map_err(|_| E::Invalid("actual native carriage shape"))?;
+        let carriage = NativeAcceptedCaseCarriageV2::from_native_history_v2(
+            carrier.transaction,
+            carrier.lease,
+            entries,
+            actual_fee,
+            origin,
+            selected_parent,
+            lease,
+        )
+        .map_err(|_| E::Invalid("actual native carriage shape"))?;
         let carriage = carriage.with_native_prefix_state_v2(Arc::new(prefix), root).map_err(|error| match error {
             NativeAssignedCaseBackingErrorV2::NativeResource(r) => E::Resource(r),
             _ => E::Invalid("actual prefix owner mismatch"),
         })?;
-        Ok((carriage, work))
+        Ok((carriage, maximum_work - remaining_work))
+    }
+
+    /// Start with the exact selected-parent view already held by the caller.
+    /// Walk only its ancestors, charging and releasing one delta at a time.
+    /// No tip or pruning snapshot from a different generation is consulted.
+    fn restore_native_archive_parent_v2(
+        &self,
+        (mut cursor, current_state): (BlockHash, &PalwChainStateV2),
+        original_parent: BlockHash,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        maximum_heap: u64,
+        remaining_work: &mut u64,
+    ) -> Result<(NativeChainStateV1, u64), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let mut restored: Option<NativeChainStateV1> = None;
+        let mut retained_heap = 0;
+        while cursor != original_parent {
+            charge_archive_work_v2(remaining_work, 1)?;
+            let heap = maximum_heap.checked_sub(retained_heap).ok_or(E::Unavailable("archive parent walk heap cap"))?;
+            let delta = self.read_archive_delta_v2(cursor, heap, remaining_work)?;
+            let state = restored.as_deref().unwrap_or(current_state);
+            if delta.point.block != cursor || state.last_point() != Some(&delta.point) {
+                return Err(E::Invalid("archive parent walk state and delta differ"));
+            }
+            let previous = self.ghostdag_store.get_selected_parent(cursor).map_err(|_| E::Unavailable("archive parent walk link"))?;
+            if previous == cursor {
+                return Err(E::Invalid("archive parent walk did not advance"));
+            }
+            let (next, requests) =
+                NativeChainStateV1::try_revert_archive_delta_v2(state, &delta, params, heap).map_err(|why| match why {
+                    NativeDecodeErrorV1::Resource(why) => E::Resource(why),
+                    NativeDecodeErrorV1::Decode(_) => E::Invalid("archive parent walk could not revert the actual delta"),
+                })?;
+            restored = Some(next);
+            retained_heap = requests;
+            cursor = previous;
+        }
+        // The event's accepting block is itself on the current selected chain,
+        // so the selected parent of that event takes at least one reversal.
+        Ok((restored.ok_or(E::Invalid("archive parent walk did not cross the accepting block"))?, retained_heap))
+    }
+
+    fn read_archive_delta_v2(
+        &self,
+        block: BlockHash,
+        heap: u64,
+        remaining_work: &mut u64,
+    ) -> Result<NativeStateDeltaV1, NativeAssignmentArchiveErrorV2> {
+        let (delta, bytes) = self
+            .palw_state_v2_store
+            .read()
+            .delta_of_retained_bounded_v2(block, *remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, heap)
+            .map_err(|_| NativeAssignmentArchiveErrorV2::Unavailable("bounded original native delta"))?;
+        charge_archive_work_v2(remaining_work, bytes * ARCHIVE_WORK_PER_DELTA_BYTE_V2)?;
+        Ok(delta)
     }
 
     /// Verify the historical outer op14 carrier with its real native inputs.
@@ -525,26 +628,14 @@ impl VirtualStateProcessor {
         mut replay: RelayCarrierReplayV2<'_>,
     ) -> Result<(), NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
-        use kaspa_database::{prelude::DbKey, registry::DatabaseStorePrefixes};
 
         let accepting = BlockHash::from_bytes(replay.origin.accepting_block.0);
         let carrier = BlockHash::from_bytes(replay.origin.carrier_block.0);
-        let record = |replay: &mut RelayCarrierReplayV2<'_>, prefix, block| {
-            // One pin to measure the stored extent and a second possible
-            // read through the ordinary cache owner.
-            replay.charge(2, 0)?;
-            let prefix = [u8::from(prefix)];
-            let key = DbKey::new(&prefix, block);
-            let raw = self
-                .db
-                .get_pinned(key)
-                .map_err(|_| E::Unavailable("historical relay record read"))?
-                .ok_or(E::Unavailable("historical relay record missing"))?;
-            replay.charge(0, raw.len() as u64)
-        };
-        record(&mut replay, DatabaseStorePrefixes::BlockTransactions, carrier)?;
-        let body = self.block_transactions_store.get(carrier).map_err(|_| E::Unavailable("original relay block body"))?;
-        let tx = body.get(replay.index as usize).ok_or(E::Invalid("original relay carrier index"))?;
+        replay.charge(1, 0)?;
+        let carrier = self.read_archive_transaction_v2(carrier, replay.index, replay.maximum_heap, &mut replay.remaining_work)?;
+        let input_heap =
+            replay.maximum_heap.checked_sub(carrier.heap).ok_or(E::Unavailable("archived relay carrier exhausted replay heap"))?;
+        let tx = &carrier.transaction;
         if tx.is_coinbase()
             || !tx.id_is_current()
             || tx.id().as_bytes() != replay.origin.carrier_transaction.0
@@ -556,19 +647,31 @@ impl VirtualStateProcessor {
 
         let acceptance_bytes = replay.acceptance_bytes;
         replay.charge(1, acceptance_bytes)?;
-        let acceptance = self.acceptance_data_store.get(accepting).map_err(|_| E::Unavailable("original relay acceptance data"))?;
-        let inputs = tx.inputs.len() as u64;
-        let input_work = u64::from(replay.origin.accepted_tx_ordinal)
-            .checked_mul(2)
-            .and_then(|n| n.checked_add(inputs))
-            .and_then(|n| n.checked_mul(inputs))
-            .ok_or(E::Invalid("relay input replay work overflow"))?;
-        replay.charge(0, input_work)?;
-        record(&mut replay, DatabaseStorePrefixes::UtxoDiffs, accepting)?;
-        let (entries, lease) =
-            self.restore_original_archive_inputs_v2(&acceptance, replay.origin, tx, replay.maximum_heap, 0, |creator| {
-                record(&mut replay, DatabaseStorePrefixes::BlockTransactions, creator)
-            })?;
+
+        replay.charge(0, original_input_replay_work_v2(acceptance_bytes, tx.inputs.len() as u64)?)?;
+        let scans = utxo_diff_scans_v2(tx.inputs.len() as u64)?;
+        replay.charge(1, 0)?;
+        let (entries, lease, _) = self
+            .utxo_diffs_store
+            .with_utxo_archive_v2(accepting, replay.remaining_work / scans, |diff, diff_bytes| {
+                replay.charge(0, diff_bytes * scans)?;
+                self.acceptance_data_store
+                    .with_accepted_archive_v2(accepting, acceptance_bytes, |acceptance| {
+                        self.restore_original_archive_inputs_v2(
+                            (&acceptance, &diff),
+                            replay.origin,
+                            tx,
+                            input_heap,
+                            0,
+                            |creator, index, heap| {
+                                replay.charge(1, 0)?;
+                                self.read_archive_transaction_v2(creator, index, heap, &mut replay.remaining_work)
+                            },
+                        )
+                    })
+                    .map_err(|_| E::Unavailable("bounded original relay acceptance archive"))?
+            })
+            .map_err(|_| E::Unavailable("bounded original relay UTXO archive"))??;
         let populated = PopulatedTransaction::new(tx, entries);
         let actual_fee = self
             .transaction_validator
@@ -579,6 +682,7 @@ impl VirtualStateProcessor {
         }
         drop(populated);
         drop(lease);
+        drop(carrier);
         self.replay_original_relay_payer_v2(replay)
     }
 
@@ -641,15 +745,14 @@ impl VirtualStateProcessor {
         let accepting = BlockHash::from_bytes(replay.origin.accepting_block.0);
         let mut cursor = replay.selected_parent;
         // Account for the wire preflights, decode and projected entry walk.
-        const WORK_PER_DELTA_BYTE: u64 = 6;
         loop {
             replay.charge(1, 0)?;
             let (delta, bytes) = self
                 .palw_state_v2_store
                 .read()
-                .delta_of_retained_bounded_v2(cursor, replay.remaining_work / WORK_PER_DELTA_BYTE, delta_heap)
+                .delta_of_retained_bounded_v2(cursor, replay.remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, delta_heap)
                 .map_err(|_| E::Unavailable("bounded original relay payer delta"))?;
-            replay.charge(0, bytes * WORK_PER_DELTA_BYTE)?;
+            replay.charge(0, bytes * ARCHIVE_WORK_PER_DELTA_BYTE_V2)?;
             if delta.point.block != cursor {
                 return Err(E::Invalid("relay payer history delta block differs"));
             }
@@ -738,19 +841,40 @@ impl VirtualStateProcessor {
         }
     }
 
+    fn read_archive_transaction_v2(
+        &self,
+        block: BlockHash,
+        index: u32,
+        maximum_heap: u64,
+        remaining_work: &mut u64,
+    ) -> Result<ArchivedTransactionV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        // Charge both the block framing scan and the selected decode before
+        // allocating the selected transaction.
+        let (transaction, extent) = self
+            .block_transactions_store
+            .archive_transaction_v2(block, index, *remaining_work / 2, maximum_heap)
+            .map_err(|error| match error {
+                kaspa_database::prelude::StoreError::DataInconsistency(_) => E::Invalid("archived transaction framing"),
+                _ => E::Unavailable("bounded archived transaction"),
+            })?;
+        charge_archive_work_v2(remaining_work, extent * 2)?;
+        Ok(transaction)
+    }
+
     fn restore_original_archive_inputs_v2(
         &self,
-        acceptance: &kaspa_consensus_core::acceptance_data::AcceptanceData,
+        (acceptance, diff): (&AcceptanceArchiveViewV2<'_>, &UtxoArchiveViewV2<'_>),
         origin: AcceptedOrigin,
         tx: &kaspa_consensus_core::tx::Transaction,
         maximum_heap: u64,
         owner_heap: u64,
-        mut before_creator: impl FnMut(BlockHash) -> Result<(), NativeAssignmentArchiveErrorV2>,
-    ) -> Result<(Vec<UtxoEntry>, kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1), NativeAssignmentArchiveErrorV2>
-    {
+        mut load_creator: impl FnMut(BlockHash, u32, u64) -> Result<ArchivedTransactionV2, NativeAssignmentArchiveErrorV2>,
+    ) -> Result<
+        (Vec<UtxoEntry>, kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1, u64),
+        NativeAssignmentArchiveErrorV2,
+    > {
         use NativeAssignmentArchiveErrorV2 as E;
-        let accepting = BlockHash::from_bytes(origin.accepting_block.0);
-        let diff = self.utxo_diffs_store.get(accepting).map_err(|_| E::Unavailable("original accepted UTXO delta"))?;
         // First pass borrows actual originals and prices every clone before
         // constructing the populated input vector or validation scratch.
         let mut heap = owner_heap
@@ -764,12 +888,19 @@ impl VirtualStateProcessor {
             if tx.inputs[..position].iter().any(|prior| prior.previous_outpoint == input.previous_outpoint) {
                 return Err(E::Invalid("duplicate original input"));
             }
-            let bytes = if let Some(entry) = diff.remove.get(&input.previous_outpoint) {
-                entry.script_public_key.script().len() as u64
+            let bytes = if let Some(entry) =
+                diff.find_removed_v2(input.previous_outpoint).map_err(|_| E::Invalid("original removed input archive"))?
+            {
+                entry.script.len() as u64
             } else {
-                self.with_prior_assignment_output_v2(acceptance, origin, input.previous_outpoint, &mut before_creator, |output, _| {
-                    output.script_public_key.script().len() as u64
-                })?
+                self.with_prior_assignment_output_v2(
+                    acceptance,
+                    origin,
+                    input.previous_outpoint,
+                    maximum_heap,
+                    &mut load_creator,
+                    |output, _| output.script_public_key.script().len() as u64,
+                )?
                 .ok_or(E::Unavailable("original populated input or same-prefix creator"))?
             };
             heap = heap.checked_add(bytes).ok_or(E::Invalid("input script heap overflow"))?;
@@ -783,59 +914,52 @@ impl VirtualStateProcessor {
         let mut entries = Vec::new();
         entries.try_reserve_exact(tx.inputs.len()).map_err(|_| E::Unavailable("pre-admitted input allocation"))?;
         for input in &tx.inputs {
-            let entry = if let Some(entry) = diff.remove.get(&input.previous_outpoint) {
-                entry.clone()
+            let entry = if let Some(entry) =
+                diff.find_removed_v2(input.previous_outpoint).map_err(|_| E::Invalid("original removed input archive"))?
+            {
+                entry.to_entry_v2()
             } else {
                 self.with_prior_assignment_output_v2(
                     acceptance,
                     origin,
                     input.previous_outpoint,
-                    &mut before_creator,
+                    maximum_heap - heap,
+                    &mut load_creator,
                     |output, coinbase| UtxoEntry::new(output.value, output.script_public_key.clone(), origin.accepted_daa, coinbase),
                 )?
                 .ok_or(E::Unavailable("same-prefix original creator disappeared"))?
             };
             entries.push(entry);
         }
-        Ok((entries, lease))
+        Ok((entries, lease, heap))
     }
 
     /// Same accepting-prefix creator outputs disappear from net UTXO diffs;
     /// resolve them only from ACTUAL earlier accepted transaction bodies.
     fn with_prior_assignment_output_v2<T>(
         &self,
-        acceptance: &kaspa_consensus_core::acceptance_data::AcceptanceData,
+        acceptance: &AcceptanceArchiveViewV2<'_>,
         origin: AcceptedOrigin,
         outpoint: kaspa_consensus_core::tx::TransactionOutpoint,
-        before_read: &mut impl FnMut(BlockHash) -> Result<(), NativeAssignmentArchiveErrorV2>,
+        maximum_heap: u64,
+        load_creator: &mut impl FnMut(BlockHash, u32, u64) -> Result<ArchivedTransactionV2, NativeAssignmentArchiveErrorV2>,
         mut visit: impl FnMut(&kaspa_consensus_core::tx::TransactionOutput, bool) -> T,
     ) -> Result<Option<T>, NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
-        let mut ordinal = 0u64;
-        for block in acceptance {
-            for entry in &block.accepted_transactions {
-                if ordinal >= u64::from(origin.accepted_tx_ordinal) {
-                    return Ok(None);
-                }
-                if entry.transaction_id == outpoint.transaction_id {
-                    before_read(block.block_hash)?;
-                    let body = self
-                        .block_transactions_store
-                        .get(block.block_hash)
-                        .map_err(|_| E::Unavailable("earlier accepted creator body"))?;
-                    let tx = body.get(entry.index_within_block as usize).ok_or(E::Invalid("earlier creator index"))?;
-                    if !tx.id_is_current() || tx.id() != outpoint.transaction_id {
-                        return Err(E::Invalid("earlier accepted creator identity"));
-                    }
-                    return tx
-                        .outputs
-                        .get(outpoint.index as usize)
-                        .map(|output| Some(visit(output, tx.is_coinbase())))
-                        .ok_or(E::Invalid("earlier creator output index"));
-                }
-                ordinal += 1;
-            }
+        let Some((block, entry)) = acceptance
+            .find_before_v2(origin.accepted_tx_ordinal, outpoint.transaction_id)
+            .map_err(|_| E::Invalid("original acceptance archive traversal"))?
+        else {
+            return Ok(None);
+        };
+        let creator = load_creator(block, entry.index_within_block, maximum_heap)?;
+        let tx = &creator.transaction;
+        if !tx.id_is_current() || tx.id() != outpoint.transaction_id {
+            return Err(E::Invalid("earlier accepted creator identity"));
         }
-        Ok(None)
+        tx.outputs
+            .get(outpoint.index as usize)
+            .map(|output| Some(visit(output, tx.is_coinbase())))
+            .ok_or(E::Invalid("earlier creator output index"))
     }
 }

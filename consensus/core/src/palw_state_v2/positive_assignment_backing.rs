@@ -3,7 +3,6 @@
 use super::*;
 use crate::tx::{Transaction, UtxoEntry};
 use crate::{
-    block::BlockTransactionsV3,
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1},
     palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2,
     palw_positive_journal_chain_v2::CaseJournalPinV2,
@@ -12,8 +11,8 @@ use misaka_palw_positive_contract::{assignment::rows::AssignmentRow, identity::C
 use std::sync::Arc;
 
 pub struct NativeAcceptedCaseCarriageV2 {
-    body: BlockTransactionsV3,
-    index: u32,
+    transaction: Transaction,
+    _transaction_lease: NativeDemandLeaseV1,
     entries: Vec<UtxoEntry>,
     fee: u64,
     origin: AcceptedOrigin,
@@ -25,19 +24,27 @@ impl NativeAcceptedCaseCarriageV2 {
     /// DATA constructor; production callers supply actual canonical archived
     /// carrier and revalidated populated inputs. No `Full=true` flag is stored.
     pub fn from_native_history_v2(
-        body: BlockTransactionsV3,
-        index: u32,
+        transaction: Transaction,
+        transaction_lease: NativeDemandLeaseV1,
         entries: Vec<UtxoEntry>,
         fee: u64,
         origin: AcceptedOrigin,
         selected_parent: BlockHash,
         lease: NativeDemandLeaseV1,
     ) -> Result<Self, NativeAssignedCaseBackingErrorV2> {
-        let tx = body.get(index as usize).ok_or(NativeAssignedCaseBackingErrorV2::Origin)?;
-        if tx.id().as_bytes() != origin.carrier_transaction.0 || tx.inputs.len() != entries.len() {
+        if transaction.id().as_bytes() != origin.carrier_transaction.0 || transaction.inputs.len() != entries.len() {
             return Err(NativeAssignedCaseBackingErrorV2::Origin);
         }
-        Ok(Self { body, index, entries, fee, origin, selected_parent, prefix_state: None, _lease: lease })
+        Ok(Self {
+            transaction,
+            _transaction_lease: transaction_lease,
+            entries,
+            fee,
+            origin,
+            selected_parent,
+            prefix_state: None,
+            _lease: lease,
+        })
     }
     /// Attach an ACTUAL executed-prefix owner reconstructed by the private
     /// native delta loader. The data is independently scope/head checked by
@@ -57,7 +64,7 @@ impl NativeAcceptedCaseCarriageV2 {
         self.prefix_state.as_ref().map(|state| &***state).ok_or(NativeAssignedCaseBackingErrorV2::Unavailable)
     }
     pub fn transaction(&self) -> &Transaction {
-        &self.body[self.index as usize]
+        &self.transaction
     }
     pub fn entries(&self) -> &[UtxoEntry] {
         &self.entries
@@ -193,8 +200,12 @@ pub enum NativeAssignedCaseBackingErrorV2 {
 }
 impl NativeHeapV1 for NativeAcceptedCaseCarriageV2 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        let Self { body, index: _, entries, fee: _, origin: _, selected_parent: _, prefix_state, _lease: _ } = self;
-        body.native_heap_v1(path).add::<Self>(entries.native_heap_v1(path), path).add::<Self>(prefix_state.native_heap_v1(path), path)
+        let Self { transaction, _transaction_lease: _, entries, fee: _, origin: _, selected_parent: _, prefix_state, _lease: _ } =
+            self;
+        transaction
+            .native_heap_v1(path)
+            .add::<Self>(entries.native_heap_v1(path), path)
+            .add::<Self>(prefix_state.native_heap_v1(path), path)
     }
 }
 impl NativeHeapV1 for NativeCommittedCaseRecordV2 {

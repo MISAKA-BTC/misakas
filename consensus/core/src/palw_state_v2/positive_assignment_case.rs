@@ -6,6 +6,7 @@
 use super::*;
 use crate::{
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1},
+    palw_positive_assignment_case_material_v2::assigned_case_native_carrier_matches_v2,
     palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2,
     palw_positive_common_replay_v2::LocalCheckedCourtFactV2,
     palw_positive_common_source_replay_v2::CommonSourceReplayStateV2,
@@ -26,7 +27,7 @@ use misaka_palw_positive_contract::{
         rows::{AssignmentRow, AssignmentStatusV2},
     },
     identity::{Digest, PUBKEY_BYTES, PrincipalId},
-    journal::{CaseJournalEventKind, CaseJournalLimits, CaseJournalRecordView},
+    journal::{CaseJournalLimits, CaseJournalRecordView},
     messages::{MinerResultCommit, PanelWitnessCommit},
     native::NativeRowKey,
     rows::{AcceptedMaterial, AcceptedOrigin, CaseRow, JournalHeadRow, NativeRowBody},
@@ -706,24 +707,10 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         let h = record.header();
         if !tx.id_is_current()
             || crate::hashing::tx::id(tx).as_bytes() != h.origin.carrier_transaction.0
-            || tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-            || tx.payload.get(..3) != Some(&[1, 0, 176])
             || h.origin.event_ordinal != 0
+            || !assigned_case_native_carrier_matches_v2(tx, record)
         {
             return Err(refuse("literal native carrier/origin"));
-        }
-        match h.kind {
-            CaseJournalEventKind::NativeBody => {
-                if h.sequence == 1 || tx.payload.get(3..) != Some(record.payload()) || !matches!(record.payload().get(4), Some(1..=7))
-                {
-                    return Err(refuse("native assigned Case body boundary"));
-                }
-            }
-            CaseJournalEventKind::NativeTransaction => {
-                if h.sequence != 1 || tx.payload.get(7) != Some(&9) || !canonical_equal(tx, record.payload()) {
-                    return Err(refuse("initial Case must be genuine literal accepted op9 transaction"));
-                }
-            }
         }
         let mut boundary = None;
         for aux in record.aux() {
