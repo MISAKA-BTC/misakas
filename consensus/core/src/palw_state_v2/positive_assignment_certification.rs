@@ -913,6 +913,24 @@ pub(super) fn check_rooted_positive_finish_v2(
     Ok(())
 }
 
+pub(super) fn case_still_waits_for_positive_quorum_v2(
+    state: &PalwChainStateV2,
+    case: CaseId,
+    result: ResultId,
+) -> Result<bool, PalwStateV2Error> {
+    let Some(result_row) = PositiveRowsV2::new(state).read(NativeRowKey::Result(result)).map_err(refuse)? else {
+        return Err(unavailable("missing due Positive Result"));
+    };
+    let NativeRowBody::Result(result_row) = result_row.body else {
+        return Err(refuse("wrong due Positive Result row"));
+    };
+    let owned = read(state, certification_subject(&result_row.result), 0)?;
+    if owned.row.fixed.header.case != case || owned.row.fixed.header.result != result {
+        return Err(refuse("due Positive subject differs from Case"));
+    }
+    Ok(owned.row.fixed.outcome.is_none())
+}
+
 impl PalwChainStateV2 {
     /// Bounded, deterministic archive requests for quorums past prosecution.
     /// The resulting Case still needs native replay and a fresh block session.
