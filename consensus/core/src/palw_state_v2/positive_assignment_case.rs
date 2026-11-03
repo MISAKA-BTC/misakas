@@ -9,7 +9,6 @@ use crate::{
     palw_positive_assignment_case_material_v2::assigned_case_native_carrier_matches_v2,
     palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2,
     palw_positive_common_replay_v2::LocalCheckedCourtFactV2,
-    palw_positive_common_source_replay_v2::CommonSourceReplayStateV2,
     palw_positive_contract_v2::PreparedCheck,
     palw_positive_court_v2::coordinator::{
         carrier::{PanelFrameAuthorityV2, PanelSignatureVerifierV2},
@@ -150,8 +149,6 @@ pub(super) struct NativeAssignedCaseCacheV2 {
     material: AssignmentAdmissionMaterialV2,
     pin: CaseJournalPinV2,
     checker: NativeAssignedCourtV2,
-    source: CommonSourceReplayStateV2,
-    positive_final: Option<AcceptedOrigin>,
     _lease: NativeDemandLeaseV1,
 }
 
@@ -442,27 +439,26 @@ pub(super) fn reject_legacy_aliases(
     Ok(())
 }
 
-impl NativeAssignedCaseCacheV2 {
-    pub(super) fn session<'a>(
+impl NativeAssignedCourtV2 {
+    fn certification_session<'a>(
         &'a self,
         state: &PalwChainStateV2,
         ctx: &PalwBlockContextV2,
+        backing: &'a NativeCommittedAssignedCaseV2,
     ) -> Result<NativeAssignedCaseSessionV2<'a>, PalwStateV2Error> {
-        if self.root != state.state_root() || self.context != *ctx {
-            return Err(refuse("cache root/context stale; cold replay required"));
-        }
-        let (a, bundle, pin) = rooted_bundle(state, self.assignment.id())?;
-        self.material.check_row(&a).map_err(refuse)?;
-        if a != self.assignment
-            || pin != self.pin
-            || self.source.case_row().map_err(refuse)? != bundle.case
-            || self.checker.court.result() != &bundle.result.result
+        let (a, bundle, pin) = rooted_bundle(state, backing.assignment().id())?;
+        let admission = backing.material();
+        admission.check_row(&a).map_err(refuse)?;
+        if &a != backing.assignment()
+            || &pin != backing.pin()
+            || self.court.result() != &bundle.result.result
             || bundle.case.unresolved_fraud != 0
         {
             return Err(refuse("actual replay before rows disagree"));
         }
-        let terminal = self.checker.facts.last();
-        let material = self.checker.accepted_finish.ok_or_else(missing)?;
+        check_replayed_court_projection_v2(state, &bundle.case, self)?;
+        let terminal = self.facts.last();
+        let material = self.accepted_finish.ok_or_else(missing)?;
         let fact = terminal.ok_or_else(missing)?;
         if fact.case() != pin.case
             || fact.result() != pin.result
@@ -472,31 +468,31 @@ impl NativeAssignedCaseCacheV2 {
         {
             return Err(refuse("actual checked terminal/coverage links"));
         }
-        let origin = self.positive_final.ok_or_else(missing)?;
-        if origin != material.origin || origin.accepted_daa > ctx.daa_score {
+        let origin = material.origin;
+        if origin.accepted_daa > ctx.daa_score || origin.accepted_blue_score > ctx.blue_score {
             return Err(refuse("Finish material/origin"));
         }
         let latest = origin
             .accepted_daa
-            .checked_add(self.material.certification_policy.prosecution_window_daa)
+            .checked_add(admission.certification_policy.prosecution_window_daa)
             .ok_or_else(|| refuse("finite actual Final prosecution"))?;
         // The native release path starts strictly after the last decision.
         // Preserve the entire original refund window after that point.
         let refund_before = latest
             .checked_add(1)
-            .and_then(|daa| daa.max(bundle.case.maturity_daa).checked_add(self.material.assignment_policy.refund_window_daa))
+            .and_then(|daa| daa.max(bundle.case.maturity_daa).checked_add(admission.assignment_policy.refund_window_daa))
             .ok_or_else(|| refuse("finite actual Final refund window"))?;
         if refund_before > a.bundle.terms.reserve_until_daa {
             return Err(refuse("actual Final exceeds original liability and refund reservation"));
         }
         let session = NativeAssignedCaseSessionV2 {
-            root: self.root,
+            root: state.state_root(),
             context: *ctx,
             assignment: a.id(),
-            result: self.checker.court.result(),
+            result: self.court.result(),
             case: bundle.case,
             head: pin.head,
-            policy: &self.material.certification_policy,
+            policy: &admission.certification_policy,
             terminal,
             material,
             positive_final: Some(origin),
