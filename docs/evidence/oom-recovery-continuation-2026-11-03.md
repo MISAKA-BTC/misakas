@@ -437,3 +437,12 @@ against 20,608 required. The class view showed zero assignments and
 zero valid receipt seats. Scoped Node test metadata with default and
 EVM features compiled on the provider changes. Full linkage and live
 qualification remain pending.
+
+The reference provider now admits up to four simultaneous request
+handlers. Excess connections receive a best-effort 503 without waiting
+in a user-space queue. Socket reads and writes share a 20-second
+deadline measured from acceptance. An already blocked filesystem
+operation may hold a slot beyond that deadline. Nineteen scoped tests
+passed, including real Qwen material, slow sender and reader cases, and
+normal service after the slots were released. Log SHA256 is
+`6c1872ff3746098ac4e00a0cb1bbac081fb2f19418970c2417c8e322f9212476`. The listener change has yet to run in production.
