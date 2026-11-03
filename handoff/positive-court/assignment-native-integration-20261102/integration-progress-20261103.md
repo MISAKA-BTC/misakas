@@ -1313,3 +1313,22 @@ It builds commit `45927210f` from a Git archive, uses the existing optimized
 test profile with debug symbols disabled and EVM off, and monitors host
 free space. At this checkpoint Cargo was compiling the node test dependencies.
 The runner has no native registration, fee or recovery result yet.
+
+## Initial Case relay preflight candidate
+
+The [staged candidate](initial-case-relay-preflight-candidate-20261103.tar.gz)
+extends the actual-output and selected-parent pending relay checks to C.
+It compares the exact ResultId, funding-scope and signed consent IDs, the
+original Assignment's payer/anchor/cap and the actual output index/amount.
+The extracted matcher passed a substitution, expiry and over-cap regression.
+The candidate Core library and focused Core test target passed isolated
+metadata checks. The Consensus transport has not been validated.
+
+The candidate remains outside the native branch source. A C registration
+uses the already accepted Assignment's original contract scope, while its R
+registration fee and physical policy use the rules at R's own acceptance.
+The current historical R reader handles initial A and requires its two scopes
+to come from the same intake. Before C can be integrated, its historical
+reader needs a bounded projection of the original accepted Assignment
+and payer at the exact R event. A preflight alone creates neither C custody
+nor a Case, and the replay cannot substitute a later Assignment rule scope.
