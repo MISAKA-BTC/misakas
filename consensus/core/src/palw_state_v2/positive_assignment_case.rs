@@ -953,11 +953,119 @@ impl CaseJournalSourceV2 for NativeAssignedArchiveV2<'_> {
     }
 }
 
+/// Rebind the original C relay against both its pending pre-op9 rows and
+/// the current account. The pending pair comes from the committed F prefix.
+fn check_recovered_case_relay_v2(
+    state: &PalwChainStateV2,
+    bind_prefix: &PalwChainStateV2,
+    assignment: &AssignmentRow,
+    bundle: &PositiveRowBundleV2,
+    minimum_service_cutoff: u64,
+    (maximum_heap, maximum_work): (u64, u64),
+    schedule: &crate::palw_positive_assignment_resources_v2::AssignmentWorkScheduleV2,
+) -> Result<u64, PalwStateV2Error> {
+    use crate::palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2};
+    use misaka_palw_positive_contract::{
+        CONTRACT_REVISION, CONTRACT_VERSION,
+        assignment::{
+            funding_relay::{FUNDING_RELAY_OPERATION_V2, FundingRelayRegistrationBodyV2, RelayFundingPurposeV2},
+            funding_relay_rows::FundingRelayBindingV2,
+        },
+        rows::{MAX_NATIVE_KEY_BYTES, NativeRowValue},
+    };
+    let unavailable = || {
+        PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+        )
+    };
+    let mut quote = TirNativeRequestsV1::new();
+    quote.exact_v1::<NativeRowValue>(4).map_err(PalwStateV2Error::NativeResource)?;
+    quote.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
+    quote.exact_v1::<u8>((2 * MAX_NATIVE_KEY_BYTES) as u64).map_err(PalwStateV2Error::NativeResource)?;
+    let scratch = quote.bytes_v1();
+    let signature_heap = maximum_heap.checked_sub(scratch).ok_or_else(unavailable)?;
+    let _lease = reserve_native_requests_v1(scratch).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(unavailable)?;
+    let account = &bundle.funding;
+    let funding = account.original_outpoint;
+    let purpose = RelayFundingPurposeV2::CaseC;
+    let authorization = NativeRowKey::FundingRelayAuthorization { funding, purpose };
+    let custody = NativeRowKey::FundingRelayCustody { funding, purpose };
+    let NativeRowBody::FundingRelayAuthorization(auth) = required(bind_prefix, authorization)? else {
+        return Err(missing());
+    };
+    let NativeRowBody::FundingRelayCustody(pending) = required(bind_prefix, custody)? else {
+        return Err(missing());
+    };
+    let NativeRowBody::FundingRelayAuthorization(current_auth) = required(state, authorization)? else {
+        return Err(missing());
+    };
+    let NativeRowBody::FundingRelayCustody(mut current) = required(state, custody)? else {
+        return Err(missing());
+    };
+    let origin = account.funding_origin;
+    current.check_pair(&current_auth).map_err(refuse)?;
+    if current.binding.take()
+        != Some(FundingRelayBindingV2 {
+            origin,
+            original_funding: funding,
+            predecessor: None,
+            original_contract: account.consent.id().0,
+            reservation: bundle.case.reservation,
+        })
+        || current != pending
+        || current_auth != auth
+        || auth.payer_key != account.payer_key
+        || auth.origin.accepting_block == origin.accepting_block
+        || auth.origin.accepted_daa > origin.accepted_daa
+        || pending
+            .retention_until_daa
+            .checked_sub(auth.policy.rollback_margin_daa)
+            .is_none_or(|cutoff| cutoff < minimum_service_cutoff)
+    {
+        return Err(refuse("recovered Case relay differs from the original binding or service horizon"));
+    }
+    crate::palw_positive_assignment_funds_v2::check_initial_case_relay_target_v2(
+        &auth.terms,
+        &assignment.bundle,
+        bundle.result.result.id(),
+        &account.consent,
+        funding,
+        account.initial_locked,
+        origin.accepted_daa,
+    )
+    .map_err(refuse)?;
+    let body = FundingRelayRegistrationBodyV2 {
+        version: CONTRACT_VERSION,
+        revision: CONTRACT_REVISION,
+        operation: FUNDING_RELAY_OPERATION_V2,
+        terms: auth.terms,
+        purpose_signature: auth.purpose_signature,
+        relay_signature: pending.relay_signature,
+    };
+    let work = schedule
+        .court_body_work(scratch)
+        .and_then(|decode| {
+            schedule.court_operation_work(2, 4, 0, 0).and_then(|check| {
+                decode.checked_add(check).ok_or(crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2::Budget)
+            })
+        })
+        .map_err(refuse)?;
+    let remaining_work = maximum_work.checked_sub(work).ok_or_else(|| refuse("Case relay replay work cap"))?;
+    verify_funding_relay_package_signatures_v2(&body, &auth.payer_key, signature_heap.min(auth.quote.usage.heap_bytes)).map_err(
+        |why| match why {
+            FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+            FundingRelayBodyErrorV2::Contract(why) => refuse(why),
+        },
+    )?;
+    Ok(remaining_work)
+}
+
 /// Authenticate the same initial checker that a cold Case replay will use.
 /// The derivation uses the original registered program and job inputs before
 /// op8, while payer identity comes from the actual state immediately before
 /// op9. A stored coverage descriptor is only a comparison target.
 fn prepare_initial_case_checker_v2(
+    state: &PalwChainStateV2,
     backing: &NativeCommittedAssignedCaseV2,
     bundle: &PositiveRowBundleV2,
 ) -> Result<NativeAssignedCourtV2, PalwStateV2Error> {
@@ -1154,6 +1262,19 @@ fn prepare_initial_case_checker_v2(
     // derivation is still live. Reuse the typed program/StepSpace quote for
     // that second owner and reserve it before authenticating the Result.
     let derived_heap = reserved.allocation_quote().total_requests;
+    let mut remaining_work = positive.max_case_work.min(policy.max_replay_work);
+    if material.funding_relay.requires_relay() {
+        let available = heap.checked_sub(derived_heap).ok_or_else(capacity)?;
+        remaining_work = check_recovered_case_relay_v2(
+            state,
+            bind_prefix,
+            row,
+            bundle,
+            horizon.retention_until_daa,
+            (available, remaining_work),
+            &physical.source_policy.work,
+        )?;
+    }
     let checker_heap = derived_heap.checked_add(size_of::<PreparedCheck>() as u64).ok_or_else(capacity)?;
     let fact_count = usize::try_from(positive.max_attempts.min(payload.service.budget.witness_attempts)).map_err(|_| capacity())?;
     let fact_heap = (fact_count as u64).checked_mul(size_of::<LocalCheckedCourtFactV2>() as u64).ok_or_else(capacity)?;
@@ -1238,7 +1359,7 @@ fn prepare_initial_case_checker_v2(
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
-        remaining_work: positive.max_case_work.min(policy.max_replay_work),
+        remaining_work,
         candidate_heap: 0,
         candidate_lease: None,
         _lease: lease,
@@ -1466,7 +1587,7 @@ fn replay_assigned_court_history_v2(
     rooted: &PositiveRowBundleV2,
 ) -> Result<NativeAssignedCourtV2, PalwStateV2Error> {
     use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeOperationV2 as Op, decode_native_body_v2};
-    let mut machine = prepare_initial_case_checker_v2(backing, rooted)?;
+    let mut machine = prepare_initial_case_checker_v2(state, backing, rooted)?;
     let material = backing.material();
     let pin = *backing.pin();
     let limits = case_replay_body_limits_v2(&material.positive_policy);
