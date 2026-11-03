@@ -816,7 +816,18 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(apply(&mut b, &open_at, &BatchCourtWireV1::Open(late_open), 0, 0).is_err());
     assert_eq!(b.state.state_root(), before_open);
     let opening = BatchCourtWireV1::Open(open);
+    let template_ready = |state: &PalwChainStateV2, point: &PalwBlockContextV2, wire: &BatchCourtWireV1| {
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(wire).unwrap());
+        let tx = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
+        crate::palw_state_v2::palw_batch_template_slot_v1(state, &tx, point)
+    };
+    assert!(template_ready(&b.state, &open_at, &opening).is_ok());
+    assert!(template_ready(&b.state, &notice_at, &opening).is_err());
+    assert!(template_ready(&b.state, &begin_at, &begin).is_err());
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
+    assert!(template_ready(&b.state, &open_at, &opening).is_err());
+    assert!(template_ready(&b.state, &begin_at, &begin).is_ok());
     let service = b.state.court_service_state_v1().unwrap();
     let mut missed = service.book.clone();
     missed.observe_block(open_at.daa_score, open_at.block.as_bytes(), ServiceCost::default()).unwrap();

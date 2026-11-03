@@ -14529,6 +14529,73 @@ pub fn palw_v2_apply_one_batch_carrier_retained_v1(
     )
 }
 
+/// Read-only block-template filter for the reserved Open and Respond slots.
+/// This is a selection hint. The accepting fold verifies signatures, fees,
+/// delivery, the actual accepting point and all state changes independently.
+pub fn palw_batch_template_slot_v1(
+    state: &PalwChainStateV2,
+    tx: &crate::tx::Transaction,
+    at: &PalwBlockContextV2,
+) -> Result<(), String> {
+    use crate::palw_batch_court_v1::{
+        BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
+        carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, decode_batch_court_carrier_v1},
+        rooted::reserved_open_slot_v1,
+    };
+    use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_requests_v1};
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return Ok(());
+    }
+    let Some(payload) = tx.payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else { return Ok(()) };
+    // Stop has its own native terminal verifier and does not use the response slot path.
+    if payload.first() == Some(&2) {
+        return Ok(());
+    }
+    let mut q = TirNativeRequestsV1::new();
+    q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(|why| why.to_string())?;
+    match payload.first() {
+        Some(0) => q.exact_v1::<BatchRangeV1>(MAX_BATCH_RANGES_V1 as u64),
+        Some(1) => q.exact_v1::<u8>(u64::from(MAX_BATCH_PART_BYTES_V1)),
+        _ => return Err("unknown Batch template carrier kind".into()),
+    }
+    .map_err(|why| why.to_string())?;
+    let _lease = reserve_native_requests_v1(q.bytes_v1()).map_err(|why| why.to_string())?;
+    match decode_batch_court_carrier_v1(tx)?.ok_or("Batch template carrier lost its wire payload")? {
+        BatchCourtWireV1::Open(signed) => {
+            let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(signed.notice_id)) else {
+                return Err("Batch template opening has no accepted notice".into());
+            };
+            if (notice.opened_by, notice.claim, notice.scope_id) != (signed.signer, signed.claim, signed.scope_id)
+                || state.staged_court_row_v1(&Key::CourtBatchDemand(signed.claim, signed.ordinal)).is_some()
+            {
+                return Err("Batch template opening differs from the notice or is already accepted".into());
+            }
+            let (_, _, slot) = reserved_open_slot_v1(state, signed.claim, signed.scope_id, signed.ordinal, tx.payload.len() as u64)?;
+            if signed.demand.opened_daa != slot || slot != at.daa_score {
+                return Err("Batch template opening is outside its booked DAA".into());
+            }
+            Ok(())
+        }
+        BatchCourtWireV1::Respond(control) => {
+            use crate::palw_court_shared_material_intake_v1::{MaterialActionV1, target_complete_v1};
+            let intake = &control.intake;
+            if !matches!(intake.action, MaterialActionV1::Finish { .. }) && target_complete_v1(state, intake.claim, intake.target)? {
+                return Err("Batch template response material is already available".into());
+            }
+            palw_court_shared_material_intake_fold_v1::checked_batch_response_slot_v1(
+                state,
+                at.daa_score,
+                intake,
+                control.demand_ordinal,
+            )
+            .map(|_| ())
+            .map_err(|why| why.to_string())
+        }
+        BatchCourtWireV1::Stop(_) => Ok(()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn rehearse_palw_object_retained_v1(
     base: &PalwChainStateV2,

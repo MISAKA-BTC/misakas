@@ -309,8 +309,8 @@ impl BatchDemandV1 {
     }
 
     fn root(&self) -> Result<Hash64, BatchCourtErrorV1> {
-        let bytes = borsh::to_vec(self).map_err(|_| BatchCourtErrorV1::Demand)?;
-        Ok(blake2b_512_keyed(b"misaka-palw/batch-court/demand/v1", &bytes))
+        crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-court/demand/v1", self)
+            .map_err(|_| BatchCourtErrorV1::Demand)
     }
 
     /// Project one exact demand after its opening, with independent part
@@ -669,6 +669,13 @@ mod tests {
             part_bytes: 4,
             ranges,
         }
+    }
+
+    #[test]
+    fn streamed_demand_root_preserves_the_signed_wire_identity() {
+        let demand = demand();
+        let bytes = borsh::to_vec(&demand).unwrap();
+        assert_eq!(demand.checked_request_root_v1().unwrap(), blake2b_512_keyed(b"misaka-palw/batch-court/demand/v1", &bytes));
     }
 
     fn part(progress: &BatchProgressV1, range: u64, part_index: u32, bytes: &'static [u8]) -> BatchResponsePartV1<'static> {

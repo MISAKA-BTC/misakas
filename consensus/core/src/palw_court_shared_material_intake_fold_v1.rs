@@ -53,20 +53,30 @@ pub(super) fn material_intake_pipelined(
     ordinal: u64,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    let request_root = checked_batch_response_slot_v1(&b.state, ctx.daa_score, s, ordinal)?;
+    material_intake_atomic(b, ctx, s, Some((request_root, ordinal)), storage_debit)
+}
+
+pub(super) fn checked_batch_response_slot_v1(
+    state: &PalwChainStateV2,
+    daa: u64,
+    s: &m::SignedMaterialIntakeV1,
+    ordinal: u64,
+) -> Result<Hash64, PalwStateV2Error> {
     let key = Key::CourtBatchDemand(s.claim, ordinal);
-    let Some(Row::CourtBatchDemand(demand)) = b.state.staged_court_row_v1(&key) else {
+    let Some(Row::CourtBatchDemand(demand)) = state.staged_court_row_v1(&key) else {
         return Err(refused("Batch material has no accepted demand"));
     };
     if demand.scope_id != s.scope_id {
         return Err(refused("Batch material differs from the retained request"));
     }
     let request_root = demand.request_root;
-    let context = shared::context(&b.state, s.claim).map_err(refused)?;
+    let context = shared::context(state, s.claim).map_err(refused)?;
     let retained;
     let declaration = match &s.action {
         m::MaterialActionV1::Begin { .. } => s,
         m::MaterialActionV1::Part { draft_id, .. } | m::MaterialActionV1::Finish { draft_id } => {
-            let draft = own_draft(b, s, *draft_id, Some(request_root))?;
+            let draft = own_draft(state, s, *draft_id, Some(request_root))?;
             retained = m::SignedMaterialIntakeV1 {
                 version: draft.version,
                 claim: draft.claim,
@@ -89,9 +99,9 @@ pub(super) fn material_intake_pipelined(
     if delivery.request_root_v1() != request_root {
         return Err(refused("Batch material delivery root differs from the retained demand"));
     }
-    let service = b.state.court_service_state_v1().ok_or_else(|| refused("Batch material has no rooted service book"))?;
+    let service = state.court_service_state_v1().ok_or_else(|| refused("Batch material has no rooted service book"))?;
     let binding = service.claims.get(&s.claim).ok_or_else(|| refused("Batch material original has no service binding"))?;
-    let id = delivery.check_slot_v1(&service.book, ctx.daa_score, s).map_err(refused)?;
+    let id = delivery.check_slot_v1(&service.book, daa, s).map_err(refused)?;
     if !binding.packet_ids.contains(&id) {
         return Err(refused("Batch material slot is not funded by this original"));
     }
@@ -101,7 +111,7 @@ pub(super) fn material_intake_pipelined(
             .check_draft_schedule_v1(&service.book, schedule)
             .map_err(|err| refused(format!("Batch material draft schedule: {err:?}")))?;
     }
-    material_intake_atomic(b, ctx, s, Some((request_root, ordinal)), storage_debit)
+    Ok(request_root)
 }
 
 #[cfg(test)]
@@ -250,7 +260,7 @@ fn material_intake_inner(
             Ok(MaterialIntakeEffectV1::Begun)
         }
         m::MaterialActionV1::Part { draft_id, offset, bytes } => {
-            let mut draft = own_draft(b, s, *draft_id, request_root)?;
+            let mut draft = own_draft(&b.state, s, *draft_id, request_root)?.clone();
             if ctx.daa_score >= draft.expires_daa
                 || ctx.daa_score < draft.last_daa
                 || draft.pipelined() && ctx.daa_score <= draft.begun_daa
@@ -311,7 +321,7 @@ fn material_intake_inner(
             Ok(MaterialIntakeEffectV1::Part)
         }
         m::MaterialActionV1::Finish { draft_id } => {
-            let draft = own_draft(b, s, *draft_id, request_root)?;
+            let draft = own_draft(&b.state, s, *draft_id, request_root)?.clone();
             if complete {
                 // First complete authenticated body already won; this one is released.
                 release_draft(b, &draft)?;
@@ -371,13 +381,13 @@ fn material_intake_inner(
     }
 }
 
-fn own_draft(
-    b: &TransitionBuilder<'_>,
+fn own_draft<'a>(
+    state: &'a PalwChainStateV2,
     s: &m::SignedMaterialIntakeV1,
     draft_id: Hash64,
     request_root: Option<Hash64>,
-) -> Result<m::MaterialDraftV1, PalwStateV2Error> {
-    let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&Key::CourtMaterialDraft(s.claim, draft_id)) else {
+) -> Result<&'a m::MaterialDraftV1, PalwStateV2Error> {
+    let Some(Row::CourtMaterialDraft(draft)) = state.staged_court_row_v1(&Key::CourtMaterialDraft(s.claim, draft_id)) else {
         return Err(refused("material draft missing"));
     };
     if draft.version != s.version
@@ -388,7 +398,7 @@ fn own_draft(
     {
         return Err(refused("material draft belongs to another submitter/target"));
     }
-    Ok((**draft).clone())
+    Ok(draft.as_ref())
 }
 
 /// Removes a draft and its parts and returns its reservation. The ledger's

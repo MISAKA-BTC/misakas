@@ -486,6 +486,22 @@ impl VirtualStateProcessor {
                 None => true,
             }
         };
+        let batch_point = self.palw_v2_template_point(&virtual_state);
+        let batch_active = self.palw_lifecycle_kind_fences.batch_court_in_force_at(batch_point.daa_score);
+        let batch_slot_due = |tx: &Transaction| {
+            use kaspa_consensus_core::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1;
+            if !batch_active || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+                || !tx.payload.starts_with(BATCH_COURT_CARRIER_MAGIC_V1)
+            {
+                return true;
+            }
+            prepared.checked.is_ok() && prepared.state.as_ref().is_some_and(|(_, state)| {
+                kaspa_consensus_core::palw_state_v2::palw_batch_template_slot_v1(state, tx, &batch_point).is_ok()
+            })
+        };
+        // A Batch carrier outside its booked slot can become eligible on a
+        // later template or a reorg. Defer it without evicting it from the pool.
+        let mut batch_deferred_ids = std::collections::HashSet::new();
         let results = self.validate_block_template_transactions_in_parallel(&txs, &virtual_state, &virtual_utxo_view);
         for (tx, res) in txs.iter().zip(results) {
             match res {
@@ -494,7 +510,10 @@ impl VirtualStateProcessor {
                     tx_selector.reject_selection(tx.id());
                 }
                 Ok(fee) => {
-                    if !market_room_for(tx) {
+                    if !batch_slot_due(tx) {
+                        batch_deferred_ids.insert(tx.id());
+                        tx_selector.reject_selection_for_refill(tx.id());
+                    } else if !market_room_for(tx) {
                         market_deferred += 1;
                         market_deferred_ids.insert(tx.id());
                         tx_selector.reject_selection_for_refill(tx.id());
@@ -521,12 +540,14 @@ impl VirtualStateProcessor {
             }
         }
 
-        let mut has_rejections = !invalid_transactions.is_empty() || !dropped_shard_ids.is_empty() || !market_deferred_ids.is_empty();
+        let mut has_rejections = !invalid_transactions.is_empty() || !dropped_shard_ids.is_empty() || !market_deferred_ids.is_empty()
+            || !batch_deferred_ids.is_empty();
         if has_rejections {
             txs.retain(|tx| {
                 !invalid_transactions.contains_key(&tx.id())
                     && !dropped_shard_ids.contains(&tx.id())
                     && !market_deferred_ids.contains(&tx.id())
+                    && !batch_deferred_ids.contains(&tx.id())
             });
         }
 
@@ -543,7 +564,10 @@ impl VirtualStateProcessor {
                         has_rejections = true;
                     }
                     Ok(fee) => {
-                        if !market_room_for(&tx) {
+                        if !batch_slot_due(&tx) {
+                            tx_selector.reject_selection_for_refill(tx.id());
+                            has_rejections = true;
+                        } else if !market_room_for(&tx) {
                             // P-B1: deferred to a later template, not refused (see above).
                             market_deferred += 1;
                             tx_selector.reject_selection_for_refill(tx.id());

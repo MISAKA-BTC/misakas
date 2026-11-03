@@ -3472,3 +3472,23 @@ Public and whole-node validation still require the funded profile.
 B0 and relay agreed at virtual DAA 19,718, with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-shared-material-live.IOZNPK/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-shared-material-resume.84DH16/tests.log`.
+
+## Template selection checks rooted Batch Open and Respond slots
+
+Past the Batch fence, the ordinary selector and its refill read the
+authenticated template parent before keeping Open or Respond. Open
+requires the accepted notice and booked DAA. Respond shares its slot
+and draft precheck with the accepting fold. Begin and Part are deferred
+when the source material is already available. Out-of-slot carriers
+stay in the mempool. Stop still uses its own terminal verifier. The
+selector does not establish delivery or replace the accepting fold.
+
+The demand root now streams the original Borsh fields into the same
+hash domain. The extracted suite passed 43 checks, including equality
+with the previous serialized root. The added native fixture tests Open
+at the wrong DAA, duplicate Open, and Respond before and after Open.
+The native fixture, template process and deployed path have not run.
+
+B0 and relay agreed at virtual DAA 19,719 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-template-slot-live.rcClXb/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-template-slot.htSv69/tests.log`.
