@@ -287,3 +287,82 @@ fn prospective_tokenizer_cache_rechecks_rooted_eof_and_claim_scope() {
     same_daa_cache.prepare_class_v2(&accepted.state, &class, accepted_daa, &raw, &eog, limits).unwrap();
     assert_eq!(same_daa_cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
 }
+
+#[test]
+fn tfp1_tokenizer_intake_pins_native_container_and_signed_eof_without_changing_quote() {
+    use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
+    use crate::palw_tokenizer_rendering_v2::{
+        PalwTfp1TokenizerIntakePinsV2 as Pins, PalwTfp1TokenizerIntakeQuoteErrorV2 as Error, PalwTokenizerRenderingBudgetV2,
+        PalwTokenizerRenderingCacheV2,
+    };
+
+    // This fixture validates a real signed inventory offer, then drives the
+    // native exact EOF primitive; the native registration check binds PALWART3.
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut state, params, mut extras) = world(&fx, &fx.frame);
+    let claim = fx.frame.plan_v1().original_claim;
+    state.claims.remove(&claim);
+    state.staged_courts.remove(&fx.frame.key_v1());
+    state.last_point = Some(at(&fx.frame, 0));
+    let now = state.last_point().unwrap().daa_score + 1;
+    let class_id = semantics.class_id;
+    let binding = test_binding_v1(&fx.record, semantics.artifact_root, b"tfp1-intake");
+    let container = check_tir_container_binding_v1(&binding, &class_id, &semantics.artifact_root, &fx.record, 1).unwrap();
+    let pins = Pins {
+        class_id,
+        container_root: container.container_root,
+        semantics_id: semantics.commitment(),
+        inventory_id: eof.inventory_id,
+    };
+    state.class_semantics.insert(class_id, semantics);
+    let container_key = Key::TirContainer(class_id);
+    let eof_key = Key::Inventory(eof.artifact_hash);
+    let original = fx.frame.original_v1();
+    let header = fx.frame.header_v1();
+    let eog = table.eog_opening().unwrap();
+    let budget = PalwTokenizerRenderingBudgetV2 {
+        raw_bytes: eof.actual_bytes,
+        vocab: table.vocab(),
+        key_events: eof.key_event_upper_bound_v1(),
+        eog_ids: 1,
+        total_rendering_bytes: 8,
+    };
+    let mut cache = PalwTokenizerRenderingCacheV2::default();
+    let full_quote = |state: &PalwChainStateV2, extras: &PalwTransitionExtrasV1| {
+        super::palw_tir_public_original_quote_v1(state, &params, extras, now, original, header)
+    };
+    let preclaim_quote = |cache: &PalwTokenizerRenderingCacheV2, state: &PalwChainStateV2, extras: &PalwTransitionExtrasV1| {
+        cache.tfp1_intake_quote_v2(state, &params, extras, now, &pins, original, header)
+    };
+    let quote_outcome = |res| match res {
+        Ok(plan) => Ok(plan),
+        Err(Error::Native(error)) => Err(error),
+        Err(Error::Local(reason)) => panic!("unexpected local intake error {reason}"),
+    };
+    assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &[], &eog, budget), Ok(false));
+    assert_eq!(quote_outcome(preclaim_quote(&cache, &state, &extras)), full_quote(&state, &extras));
+
+    extras.class_semantics_active = true;
+    extras.tir_container_identity_active = true;
+    extras.tir_public_conviction_active = true;
+    extras.staged_public_court = Some(fx.rules.config);
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, budget).is_err());
+    state.staged_courts.insert(eof_key, Row::ArtifactInventory(eof));
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, budget).is_err());
+    state.staged_courts.insert(container_key, Row::TirContainer(Box::new(container)));
+    assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
+    for wrong in
+        [Pins { inventory_id: h(8804), ..pins }, Pins { container_root: h(8805), ..pins }, Pins { semantics_id: h(8806), ..pins }]
+    {
+        assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &wrong, &raw, &eog, budget).is_err());
+    }
+    assert!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw[..raw.len() - 1], &eog, budget).is_err());
+    assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
+    assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, now, &pins, &raw, &eog, budget), Ok(true));
+    assert_eq!(quote_outcome(preclaim_quote(&cache, &state, &extras)), full_quote(&state, &extras));
+    let mut wrong_header = header.clone();
+    wrong_header.artifact_root = h(8807);
+    assert!(matches!(cache.tfp1_intake_quote_v2(&state, &params, &extras, now, &pins, original, &wrong_header), Err(Error::Local(_))));
+    state.staged_courts.remove(&container_key);
+    assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
+}

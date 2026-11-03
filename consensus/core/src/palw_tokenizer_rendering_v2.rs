@@ -9,9 +9,15 @@ use crate::{
         PALW_TOKEN_TABLE_MAX_LEAVES_V1, PalwTokenTableEogOpeningV1, PalwTokenTableOpeningV1, palw_fp_constraint_table_root_v1,
         table_leaf_hash_v1,
     },
+    palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1},
-    palw_state_v2::PalwChainStateV2,
+    palw_state_v2::{
+        PalwChainStateV2, PalwStateParamsV2, PalwStateV2Error, PalwTransitionExtrasV1, palw_tir_public_original_quote_v1,
+    },
     palw_step_leg::PalwStepPrefixStreamV1,
+    palw_tir_container_v1::{PalwTirContainerRowV1, palw_tir_bound_container_v1},
+    palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
     palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
     palw_tokenizer_rendering_v1::{
         PalwQwenRenderingMapV1, PalwTokenizerRenderingRuleV1, palw_tokenizer_raw_commitment_v1, palw_unique_json_v1,
@@ -186,9 +192,37 @@ impl PreparedTokenizerIdentityV2 {
     }
 }
 
+/// Operator pins for the exact native registrations being prepared. The
+/// inventory id is the signed offer's id, read back after native EOF acceptance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwTfp1TokenizerIntakePinsV2 {
+    pub class_id: Hash64,
+    pub container_root: Hash64,
+    pub semantics_id: Hash64,
+    pub inventory_id: Hash64,
+}
+
+/// Local intake refusal and native quote errors stay distinct. A cold cache
+/// or changed local pin must never become a consensus-invalid verdict.
+#[derive(Debug, thiserror::Error)]
+pub enum PalwTfp1TokenizerIntakeQuoteErrorV2 {
+    #[error("local tokenizer intake unavailable: {0}")]
+    Local(&'static str),
+    #[error(transparent)]
+    Native(#[from] PalwStateV2Error),
+}
+
+fn tfp1_tokenizer_intake_active(extras: &PalwTransitionExtrasV1) -> bool {
+    extras.class_semantics_active
+        && extras.tir_container_identity_active
+        && extras.tir_public_conviction_active
+        && extras.staged_public_court.is_some()
+}
+
 struct PreparedTokenizerRenderingV2 {
     identity: PreparedTokenizerIdentityV2,
     facts: PalwDerivedTokenizerRenderingV2,
+    container: Option<PalwTirContainerRowV1>,
 }
 
 /// One process-local entry per instance for prospective TIR checks. Empty on restart.
@@ -260,8 +294,88 @@ impl PalwTokenizerRenderingCacheV2 {
             .ok_or("tokenizer scratch estimate overflow")?;
         let _lease = memory.try_reserve(MemoryClass::Native, scratch).map_err(|e| e.to_string())?;
         let facts = derive_tokenizer_rendering_v2(statement, raw, eog, budget)?;
-        self.prepared = Some(PreparedTokenizerRenderingV2 { identity, facts });
+        self.prepared = Some(PreparedTokenizerRenderingV2 { identity, facts, container: None });
         Ok(())
+    }
+
+    fn tfp1_identity<'a>(
+        parent: &'a PalwChainStateV2,
+        now_daa: u64,
+        pins: &PalwTfp1TokenizerIntakePinsV2,
+    ) -> Result<(PreparedTokenizerIdentityV2, &'a PalwTirContainerRowV1), &'static str> {
+        let point = parent.last_point().ok_or("tokenizer intake has no accepted parent point")?;
+        if now_daa < point.daa_score {
+            return Err("tokenizer intake candidate precedes the accepted parent");
+        }
+        let identity = Self::class_identity(parent, &pins.class_id, now_daa)
+            .ok_or("tokenizer intake requires prospective class semantics and native accepted EOF")?;
+        let container = palw_tir_bound_container_v1(parent, pins.class_id).ok_or("tokenizer intake requires a bound PALWART3")?;
+        if identity.semantics != pins.semantics_id
+            || identity.eof.inventory_id != pins.inventory_id
+            || identity.eof.completed_daa > point.daa_score
+            || container.container_root != pins.container_root
+            || container.bound_daa > point.daa_score
+        {
+            return Err("tokenizer intake substitutes the accepted registration or signed EOF identity");
+        }
+        Ok((identity, container))
+    }
+
+    /// Read-only preclaim intake on the accepted parent. `Ok(false)` means
+    /// dormant. The native fold has already verified the offer and paid
+    /// inventory; this call rechecks the exact raw file and registered table
+    /// under a local scratch lease before memoizing. It admits no claim.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_tfp1_intake_v2(
+        &mut self,
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        now_daa: u64,
+        pins: &PalwTfp1TokenizerIntakePinsV2,
+        raw: &[u8],
+        eog: &PalwTokenTableEogOpeningV1,
+        budget: PalwTokenizerRenderingBudgetV2,
+    ) -> Result<bool, String> {
+        if !tfp1_tokenizer_intake_active(extras) {
+            return Ok(false);
+        }
+        let (identity, container) = Self::tfp1_identity(parent, now_daa, pins)?;
+        self.prepare(identity, raw, eog, budget, global_memory_budget())?;
+        self.prepared.as_mut().expect("successful tokenizer preparation installs one entry").container = Some(container.clone());
+        Ok(true)
+    }
+
+    /// Opt-in native quote boundary. The prepared entry is only a local
+    /// prerequisite under the effective fences; the full native quote still
+    /// owns all pricing, the admission horizon and the original's validation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn tfp1_intake_quote_v2(
+        &self,
+        parent: &PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        extras: &PalwTransitionExtrasV1,
+        now_daa: u64,
+        pins: &PalwTfp1TokenizerIntakePinsV2,
+        original: &PalwFreePromptCommitmentV3,
+        header: &PalwPublicTirBindingHeaderV1,
+    ) -> Result<Option<PalwTirPublicAllocationPlanV1>, PalwTfp1TokenizerIntakeQuoteErrorV2> {
+        if tfp1_tokenizer_intake_active(extras) {
+            use PalwTfp1TokenizerIntakeQuoteErrorV2::Local;
+            let (identity, container) = Self::tfp1_identity(parent, now_daa, pins).map_err(Local)?;
+            let semantics = parent.class_semantics_v1(&pins.class_id).ok_or(Local("tokenizer intake has no registered semantics"))?;
+            if original.job.class_id != pins.class_id
+                || original.job.tokenizer_id != identity.statement.tokenizer_id
+                || !semantics.well_formed_for(&pins.class_id, &header.artifact_root)
+                || !semantics.matches_context(&header.job_context)
+                || palw_fp_constraint_table_root_v1(&original.job).is_some_and(|root| root != identity.statement.table_root)
+            {
+                return Err(Local("tokenizer intake quote changes the registered job or artifact"));
+            }
+            if !self.prepared.as_ref().is_some_and(|entry| entry.identity == identity && entry.container.as_ref() == Some(container)) {
+                return Err(Local("tokenizer intake quote requires a current local preparation"));
+            }
+        }
+        Ok(palw_tir_public_original_quote_v1(parent, params, extras, now_daa, original, header)?)
     }
 
     fn for_claim(&self, state: &PalwChainStateV2, claim_id: &Hash64) -> Option<&PreparedTokenizerRenderingV2> {
@@ -452,5 +566,29 @@ mod tests {
         assert!(verified.verifies_token(3, &wrong));
         wrong.rendering = Some(vec![]);
         assert!(!verified.verifies_token(3, &wrong));
+    }
+
+    #[test]
+    fn tfp1_intake_is_dormant_without_all_fences_and_requires_a_parent() {
+        let state = PalwChainStateV2::genesis();
+        let (statement, table) = fixture();
+        let eog = table.eog_opening().unwrap();
+        let pins = PalwTfp1TokenizerIntakePinsV2 {
+            class_id: statement.table_root,
+            container_root: statement.table_root,
+            semantics_id: statement.table_root,
+            inventory_id: statement.table_root,
+        };
+        let mut cache = PalwTokenizerRenderingCacheV2::default();
+        let mut extras = PalwTransitionExtrasV1 {
+            class_semantics_active: true,
+            tir_container_identity_active: true,
+            staged_public_court: Some(crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
+            ..Default::default()
+        };
+        assert_eq!(cache.prepare_tfp1_intake_v2(&state, &extras, 0, &pins, &[], &eog, BUDGET), Ok(false));
+        extras.tir_public_conviction_active = true;
+        assert!(cache.prepare_tfp1_intake_v2(&state, &extras, 0, &pins, RAW, &eog, BUDGET).is_err());
+        assert!(cache.prepared.is_none());
     }
 }
