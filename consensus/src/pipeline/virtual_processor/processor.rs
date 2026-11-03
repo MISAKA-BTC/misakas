@@ -2557,6 +2557,7 @@ impl VirtualStateProcessor {
                             &selected_parent_utxo_view,
                             bond_view,
                             positive_point,
+                            state,
                             parent_multiset,
                             plan,
                         )?;
@@ -3856,12 +3857,27 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &(impl UtxoView + Sync),
         bond_view: &ActiveBondView,
         point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        parent_state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         parent_multiset: MuHash,
         plan: palw_accept::NativeRelayFeePlanV2,
     ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
-        let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan)?;
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("relay fee replay", why);
+        if let Some(round) = ctx.palw_round_verdicts.as_mut().filter(|round| round.has_fee_gated_body()) {
+            if round.relay_plan_changes_fee_admission(&plan) {
+                return Err(fault("fee-gated Round carrier requires prefix replanning"));
+            }
+            round.fee_budget = Some(
+                self.palw_round_fee_admission_at_v1(parent_state, &ctx.ghostdag_data, point.daa_score, point.block)
+                    .ok_or_else(|| fault("original Round fee budget unavailable"))?,
+            );
+        }
+        let round_incomes = std::mem::take(&mut ctx.palw_round_fee_incomes);
+        let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan);
         self.calculate_utxo_state(ctx, selected_parent_utxo_view, bond_view, point.daa_score)?;
+        if round_incomes != ctx.palw_round_fee_incomes {
+            return Err(fault("Round income changed during replay"));
+        }
         if !super::utxo_validation::relay_acceptance_matches(&original, &ctx.mergeset_acceptance_data) {
             return Err(NativeCoverageV1::unsupported::<Self>(
                 "relay fee replay",
@@ -3994,7 +4010,6 @@ impl VirtualStateProcessor {
         // The preview uses the real virtual bits. Timestamp-dependent Round
         // inputs and the own-attempt-dependent overlay carve need later inputs.
         if virtual_palw_state.is_some()
-            && ctx.can_replay_relay_fees()
             && self.palw_execution_lane_at(daa).is_none()
             && !self.dns_retired_at(daa)
             && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
@@ -4030,6 +4045,7 @@ impl VirtualStateProcessor {
                     &selected_parent_utxo_view,
                     selected_parent_bond_view,
                     point,
+                    state,
                     parent_multiset,
                     plan,
                 )

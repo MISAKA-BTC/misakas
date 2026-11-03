@@ -380,21 +380,25 @@ pub(super) struct PalwRoundVerdictsV1 {
     )>,
 }
 
-impl<'a> UtxoProcessingContext<'a> {
-    pub(super) fn can_replay_relay_fees(&self) -> bool {
-        self.palw_round_verdicts.as_ref().is_none_or(|round| round.fee_budget.is_none() || round.permitted.is_empty())
+impl PalwRoundVerdictsV1 {
+    pub(super) fn has_fee_gated_body(&self) -> bool {
+        self.fee_budget.is_some() && self.permitted.iter().any(|block| self.fee_recipients.contains_key(block))
     }
 
-    /// Rewind the disposable acceptance pass before reapplying with fees.
-    /// This is available only when no Round fee budget can alter acceptance.
+    pub(super) fn relay_plan_changes_fee_admission(&self, plan: &NativeRelayFeePlanV2) -> bool {
+        self.fee_budget.is_some()
+            && plan.debits_any_carrier(|block| self.permitted.contains(&block) && self.fee_recipients.contains_key(&block))
+    }
+}
+
+impl<'a> UtxoProcessingContext<'a> {
+    /// Rewind the disposable acceptance pass. The caller must re-seed any
+    /// Round fee budget from the same selected-parent inputs before replay.
     pub(super) fn restart_with_relay_fee_plan(
         &mut self,
         selected_parent_multiset: MuHash,
         plan: NativeRelayFeePlanV2,
-    ) -> Result<kaspa_consensus_core::acceptance_data::AcceptanceData, NativeCoverageV1> {
-        if !self.can_replay_relay_fees() {
-            return Err(NativeCoverageV1::unsupported::<Self>("relay fee replay", "Round fee admission requires prefix replanning"));
-        }
+    ) -> kaspa_consensus_core::acceptance_data::AcceptanceData {
         self.multiset_hash = selected_parent_multiset;
         self.mergeset_diff = UtxoDiff::default();
         self.accepted_tx_ids.clear();
@@ -408,7 +412,7 @@ impl<'a> UtxoProcessingContext<'a> {
         self.palw_escrow_settlements.clear();
         self.palw_assignment_settlements.clear();
         self.relay_fee_plan = Some(plan);
-        Ok(std::mem::take(&mut self.mergeset_acceptance_data))
+        std::mem::take(&mut self.mergeset_acceptance_data)
     }
 
     pub fn new(ghostdag_data: Refs<'a, GhostdagData>, selected_parent_multiset_hash: MuHash) -> Self {

@@ -618,8 +618,7 @@ impl VirtualStateProcessor {
         header: &Header,
         actions: &[kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2],
     ) -> Result<Option<NativeRelayFeePlanV2>, PalwLocalTransitionFaultV1> {
-        if !ctx.can_replay_relay_fees()
-            || !actions.iter().any(|action| action.relay_carrier_fees_v2().is_some())
+        if !actions.iter().any(|action| action.relay_carrier_fees_v2().is_some())
             || self.palw_committed_root_v1(state) != header.palw_state_root
         {
             return Ok(None);
@@ -692,7 +691,12 @@ impl VirtualStateProcessor {
         else {
             return Err(fault("ordered preview returned an observed schedule").into());
         };
-        Ok((plan.debit_count() != 0).then_some(plan))
+        // A debit inside a fee-gated body can free headroom for later bodies.
+        // That requires planning against a new prefix, even if this body was
+        // already admitted in the preliminary walk.
+        Ok((plan.debit_count() != 0
+            && !ctx.palw_round_verdicts.as_ref().is_some_and(|round| round.relay_plan_changes_fee_admission(&plan)))
+        .then_some(plan))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3910,6 +3914,10 @@ impl NativeRelayFeePlanV2 {
         self.entries.len()
     }
 
+    pub(in crate::pipeline::virtual_processor) fn debits_any_carrier(&self, mut matches: impl FnMut(BlockHash) -> bool) -> bool {
+        self.entries.iter().any(|entry| matches(BlockHash::from_bytes(entry.origin.carrier_block.0)))
+    }
+
     /// Rebind a proposed partition to the UTXO walk's actual fees and position.
     /// The Round lookahead and the eventual fee sink can check the same entry.
     #[allow(clippy::too_many_arguments)]
@@ -3976,6 +3984,11 @@ impl NativeRelayFeePlanV2 {
 #[cfg(test)]
 #[test]
 fn relay_fee_plan_keeps_only_debits_from_one_ordered_accepting_prefix() {
+    use crate::pipeline::virtual_processor::utxo_validation::PalwRoundVerdictsV1;
+    use kaspa_consensus_core::{
+        palw_bond_budget_v1::{PalwBondBudgetPolicyV1, PalwBondBudgetStateV1, PalwRoundFeeAdmissionV1},
+        palw_state_v2::PalwBondKeyV2,
+    };
     use misaka_palw_positive_contract::{
         assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
         rows::{AcceptedOrigin, NativeHash64},
@@ -3996,8 +4009,30 @@ fn relay_fee_plan_keeps_only_debits_from_one_ordered_accepting_prefix() {
         fees: FundingRelayCarrierFeesV2::new(20, 2, 17, tip).unwrap(),
     };
     plan.record(entry(1, parent, 5, 17)).unwrap();
-    assert!(plan.entries.is_empty());
+    assert!(!plan.debits_any_carrier(|_| true));
     plan.record(entry(2, parent, 5, 10)).unwrap();
+    assert!(plan.debits_any_carrier(|block| block == BlockHash::from_bytes([3; 64])));
+    assert!(!plan.debits_any_carrier(|block| block == parent));
+    let carrier = BlockHash::from_bytes([3; 64]);
+    let mut round = PalwRoundVerdictsV1::default();
+    let policy = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+    round.fee_budget = Some(PalwRoundFeeAdmissionV1 {
+        book: PalwBondBudgetStateV1::new(6, &policy),
+        policy,
+        capital: Default::default(),
+        daa_score: 6,
+    });
+    round.permitted.insert(parent);
+    round.fee_recipients.insert(parent, PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(parent, 0)));
+    assert!(round.has_fee_gated_body());
+    assert!(!round.relay_plan_changes_fee_admission(&plan));
+    round.permitted.insert(carrier);
+    assert!(!round.relay_plan_changes_fee_admission(&plan));
+    round.fee_recipients.insert(carrier, PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(parent, 0)));
+    assert!(round.relay_plan_changes_fee_admission(&plan));
+    round.fee_budget = None;
+    assert!(!round.has_fee_gated_body());
+    assert!(!round.relay_plan_changes_fee_admission(&plan));
     assert!(plan.record(entry(2, parent, 5, 10)).is_err());
     assert!(plan.record(entry(3, BlockHash::from_u64_word(8), 5, 10)).is_err());
     assert!(plan.record(entry(3, parent, 9, 10)).is_err());

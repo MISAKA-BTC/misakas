@@ -1090,3 +1090,24 @@ matcher, including rejection across template and actual origins, and the
 acceptance replay comparator. An actual funded template and its acceptance
 on another node have yet to run. The compressed verification record pins
 the commands, source map and logs.
+
+## Candidate relay replay alongside Round fee admission
+
+Candidate validation can apply a relay fee plan when Round bodies are present
+and every planned debit is outside bodies subject to the Round fee budget.
+The replay rebuilds the disposable Round budget from the same selected-parent
+state and candidate inputs. It checks exact equality of both the Round income
+records and the accepted blocks, transaction IDs, carrier positions and order
+before forwarding any observed relay actions to the native fold.
+
+A debit within a fee-gated Round body can free budget for a later body and
+change the accepted prefix. Those plans remain outside this replay path,
+including when the carrier's own body was already accepted. The general
+Round path also needs to distinguish an inactive budget from a local error
+constructing an active budget. The virtual template's timestamp and overlay
+limitations described above still apply.
+
+Strict Contract/Core/Consensus library Clippy and all Consensus test targets
+typechecked. Three isolated tests ran from the source, covering the plan
+matcher and Round gate intersection as well as exact acceptance comparison.
+No funded Round candidate was executed in this step.
