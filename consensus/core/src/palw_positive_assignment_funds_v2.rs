@@ -445,7 +445,22 @@ pub fn check_initial_assignment_relay_target_v2(
     Ok(())
 }
 
-fn relay_origin_precedes_v2(
+pub(crate) fn case_relay_rotation_reservation_v2(
+    origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+    case_reservation: AcceptedMaterial,
+    pending_reservation: AcceptedMaterial,
+) -> AcceptedMaterial {
+    let digest = blake2b_simd::Params::new()
+        .hash_length(64)
+        .key(b"misaka/positive/case-relay-rotation/v2/r1")
+        .to_state()
+        .update(&case_reservation.digest.0)
+        .update(&pending_reservation.digest.0)
+        .finalize();
+    AcceptedMaterial { origin, digest: Digest(*digest.as_array()) }
+}
+
+pub(crate) fn relay_origin_precedes_v2(
     accepted: misaka_palw_positive_contract::rows::AcceptedOrigin,
     origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
 ) -> bool {

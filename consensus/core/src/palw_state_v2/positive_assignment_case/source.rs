@@ -590,14 +590,11 @@ struct PendingCaseRelaySuccessorV2 {
 
 impl PendingCaseRelaySuccessorV2 {
     fn bind(mut self, origin: AcceptedOrigin, case_reservation: AcceptedMaterial) -> (FundingRelayCustodyRowV2, NativeDemandLeaseV1) {
-        let digest = blake2b_simd::Params::new()
-            .hash_length(64)
-            .key(b"misaka/positive/case-relay-rotation/v2/r1")
-            .to_state()
-            .update(&case_reservation.digest.0)
-            .update(&self.custody.reservation.digest.0)
-            .finalize();
-        let reservation = AcceptedMaterial { origin, digest: Digest(*digest.as_array()) };
+        let reservation = crate::palw_positive_assignment_funds_v2::case_relay_rotation_reservation_v2(
+            origin,
+            case_reservation,
+            self.custody.reservation,
+        );
         self.custody.binding = Some(FundingRelayBindingV2 {
             origin,
             original_funding: self.original_funding,
