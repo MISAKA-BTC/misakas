@@ -22,7 +22,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use kaspa_hashes::Hash64;
 
@@ -127,16 +127,7 @@ impl EvidenceProvider for crate::evidence::fs::FsProvider {
         write_atomic(&path, &borsh::to_vec(manifest).expect("borsh-serializable")).map_err(|e| ProviderError(e.to_string()))
     }
     fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
-        match std::fs::read_dir(self.root.join("redemptions")) {
-            Ok(entries) => Ok(entries
-                .flatten()
-                .filter_map(|e| e.file_name().to_str().and_then(|n| n.strip_suffix(".rda4")).map(str::to_string))
-                .filter(|n| is_hex128_text(n))
-                .take(REDEMPTION_INDEX_CAP)
-                .collect()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-            Err(e) => Err(ProviderError(e.to_string())),
-        }
+        list_redemption_ids(&self.root, || Ok(())).map_err(|e| ProviderError(e.to_string()))
     }
     fn get_redemption(&self, claim_hex: &str) -> Result<Option<Vec<u8>>, ProviderError> {
         match std::fs::read(redemption_path(&self.root, claim_hex)) {
@@ -148,6 +139,27 @@ impl EvidenceProvider for crate::evidence::fs::FsProvider {
     fn put_redemption(&self, claim_hex: &str, bundle: &[u8]) -> Result<(), ProviderError> {
         write_atomic(&redemption_path(&self.root, claim_hex), bundle).map_err(|e| ProviderError(e.to_string()))
     }
+}
+
+fn list_redemption_ids(root: &Path, check: impl Fn() -> std::io::Result<()>) -> std::io::Result<Vec<String>> {
+    let entries = match std::fs::read_dir(root.join("redemptions")) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        check()?;
+        if let Ok(entry) = entry
+            && let Some(id) = entry.file_name().to_str().and_then(|n| n.strip_suffix(".rda4")).filter(|n| is_hex128_text(n))
+        {
+            ids.push(id.to_string());
+            if ids.len() == REDEMPTION_INDEX_CAP {
+                break;
+            }
+        }
+    }
+    Ok(ids)
 }
 
 const REDEMPTION_INDEX_CAP: usize = 10_000;
@@ -1142,29 +1154,84 @@ pub mod server {
         }
     }
 
+    const MAX_ACTIVE_REQUESTS: usize = 4;
+    const CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
+    const OVERLOADED: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+
     /// Serve `root` on `listen` until the handle is stopped.
     pub fn start(listen: &str, root: PathBuf, cfg: ServerConfig) -> std::io::Result<ServerHandle> {
+        start_bounded(listen, root, cfg, MAX_ACTIVE_REQUESTS, CONNECTION_TIMEOUT)
+    }
+
+    pub(super) fn start_bounded(
+        listen: &str,
+        root: PathBuf,
+        cfg: ServerConfig,
+        max_active: usize,
+        timeout: Duration,
+    ) -> std::io::Result<ServerHandle> {
         let listener = TcpListener::bind(listen)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
         let stop = Arc::new(AtomicBool::new(false));
         let flag = stop.clone();
-        let thread = std::thread::spawn(move || {
+        let thread = std::thread::Builder::new().spawn(move || {
+            let mut workers = Vec::<std::thread::JoinHandle<()>>::with_capacity(max_active);
             while !flag.load(Ordering::SeqCst) {
                 match listener.accept() {
-                    Ok((stream, _)) => {
+                    Ok((mut stream, _)) => {
+                        workers.retain(|worker| !worker.is_finished());
+                        if workers.len() == max_active {
+                            // The accept loop never waits for an overloaded client to read.
+                            if stream.set_nonblocking(true).is_ok() {
+                                let _ = stream.write(OVERLOADED);
+                            }
+                            continue;
+                        }
+                        let deadline = Instant::now() + timeout;
                         let (root, cfg) = (root.clone(), cfg.clone());
-                        std::thread::spawn(move || {
-                            let _ = stream.set_nonblocking(false);
-                            let _ = handle(stream, &root, &cfg);
-                        });
+                        if let Ok(worker) = std::thread::Builder::new().spawn(move || {
+                            if stream.set_nonblocking(false).is_ok() {
+                                let _ = handle(DeadlineStream { stream, deadline }, &root, &cfg);
+                            }
+                        }) {
+                            workers.push(worker);
+                        }
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(5)),
                     Err(_) => break,
                 }
             }
-        });
+        })?;
         Ok(ServerHandle { addr, stop, thread: Some(thread) })
+    }
+
+    fn remaining_until(deadline: Instant) -> std::io::Result<Duration> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() { Err(std::io::ErrorKind::TimedOut.into()) } else { Ok(remaining) }
+    }
+
+    struct DeadlineStream {
+        stream: TcpStream,
+        deadline: Instant,
+    }
+
+    impl Read for DeadlineStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.stream.set_read_timeout(Some(remaining_until(self.deadline)?))?;
+            self.stream.read(buf)
+        }
+    }
+
+    impl Write for DeadlineStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.stream.set_write_timeout(Some(remaining_until(self.deadline)?))?;
+            self.stream.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.stream.flush()
+        }
     }
 
     #[derive(Debug, PartialEq, Eq)]
@@ -1209,7 +1276,7 @@ pub mod server {
         Some(Target::Chunk(id.parse().ok()?, index.parse().ok()?))
     }
 
-    fn respond(stream: &mut TcpStream, status: u16, body: &[u8]) -> std::io::Result<()> {
+    fn respond(stream: &mut DeadlineStream, status: u16, body: &[u8]) -> std::io::Result<()> {
         let reason = match status {
             200 => "OK",
             201 => "Created",
@@ -1225,25 +1292,23 @@ pub mod server {
         stream.write_all(body)
     }
 
-    fn store_size(root: &Path) -> u64 {
-        fn walk(dir: &Path) -> u64 {
-            std::fs::read_dir(dir)
-                .map(|it| {
-                    it.flatten()
-                        .map(|e| match e.metadata() {
-                            Ok(m) if m.is_dir() => walk(&e.path()),
-                            Ok(m) => m.len(),
-                            Err(_) => 0,
-                        })
-                        .sum()
-                })
-                .unwrap_or(0)
+    fn store_size(root: &Path, deadline: Instant) -> std::io::Result<u64> {
+        let Ok(entries) = std::fs::read_dir(root) else { return Ok(0) };
+        let mut bytes = 0u64;
+        for entry in entries {
+            remaining_until(deadline)?;
+            if let Ok(entry) = entry
+                && let Ok(meta) = entry.metadata()
+            {
+                let size = if meta.is_dir() { store_size(&entry.path(), deadline)? } else { meta.len() };
+                bytes = bytes.saturating_add(size);
+            }
         }
-        walk(root)
+        Ok(bytes)
     }
 
-    fn handle(mut stream: TcpStream, root: &Path, cfg: &ServerConfig) -> std::io::Result<()> {
-        stream.set_read_timeout(Some(Duration::from_secs(20)))?;
+    fn handle(mut stream: DeadlineStream, root: &Path, cfg: &ServerConfig) -> std::io::Result<()> {
+        let deadline = stream.deadline;
         // The head, bounded.
         let mut raw = Vec::new();
         let mut buf = [0u8; 4096];
@@ -1281,7 +1346,7 @@ pub mod server {
             if method != "GET" {
                 return respond(&mut stream, 405, b"GET only");
             }
-            let listing = crate::evidence::fs::FsProvider::new(root.to_path_buf()).list_redemptions().unwrap_or_default().join("\n");
+            let listing = list_redemption_ids(root, || remaining_until(deadline).map(|_| ())).unwrap_or_default().join("\n");
             return respond(&mut stream, 200, listing.as_bytes());
         }
         let cap = match &target {
@@ -1314,19 +1379,22 @@ pub mod server {
                     }
                     return respond(&mut stream, 413, b"too large");
                 }
-                let mut body = raw[split + 4..].to_vec();
+                let first_body = &raw[split + 4..];
+                let mut body = first_body[..first_body.len().min(content_length)].to_vec();
                 while body.len() < content_length {
-                    let n = stream.read(&mut buf)?;
+                    let remaining = (content_length - body.len()).min(buf.len());
+                    let n = stream.read(&mut buf[..remaining])?;
                     if n == 0 {
                         return respond(&mut stream, 400, b"short body");
                     }
-                    body.extend_from_slice(&buf[..n]);
-                    if body.len() > cap {
-                        return respond(&mut stream, 413, b"too large");
+                    let next_len = body.len() + n;
+                    if next_len > body.capacity() {
+                        let capacity = body.capacity().saturating_mul(2).max(next_len).min(content_length);
+                        body.reserve_exact(capacity - body.len());
                     }
+                    body.extend_from_slice(&buf[..n]);
                 }
-                body.truncate(content_length);
-                if store_size(root).saturating_add(body.len() as u64) > cfg.max_store_bytes {
+                if store_size(root, deadline)?.saturating_add(body.len() as u64) > cfg.max_store_bytes {
                     return respond(&mut stream, 507, b"this provider is full");
                 }
                 match target {
@@ -1342,13 +1410,17 @@ pub mod server {
                     Target::RedemptionIndex => respond(&mut stream, 405, b"GET only"),
                     // DA16: a manifest is stored only if every unit it names is already here and checks (this provider never serves a
                     // manifest it cannot back); units are stored as given and judged by every reader against the chain's roots.
-                    Target::Material(ref path) => match crate::public_material::server_accepts_material_v1(root, path, &body) {
-                        Ok(()) => match write_atomic(&file, &body) {
-                            Ok(()) => respond(&mut stream, 201, b"stored"),
-                            Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
-                        },
-                        Err(why) => respond(&mut stream, 409, why.as_bytes()),
-                    },
+                    Target::Material(ref path) => {
+                        match crate::public_material::server_accepts_material_while_v1(root, path, &body, || {
+                            remaining_until(deadline).map(|_| ()).map_err(|error| error.to_string())
+                        }) {
+                            Ok(()) => match write_atomic(&file, &body) {
+                                Ok(()) => respond(&mut stream, 201, b"stored"),
+                                Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
+                            },
+                            Err(why) => respond(&mut stream, 409, why.as_bytes()),
+                        }
+                    }
                     Target::Chunk(..) => match write_atomic(&file, &body) {
                         Ok(()) => respond(&mut stream, 201, b"stored"),
                         Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
@@ -1365,6 +1437,7 @@ pub mod server {
                         }
                         let id = manifest_id_v1(&manifest);
                         for entry in &manifest.chunks {
+                            remaining_until(deadline)?;
                             let stored =
                                 read_bounded_file(&crate::evidence::fs::chunk_path(root, id, entry.index), entry.len as usize);
                             match stored {
@@ -1718,6 +1791,82 @@ mod tests {
 
     fn mixed_all<'a>(a: &'a HttpProvider, b: &'a HttpProvider, c: &'a FsProvider) -> Vec<&'a dyn EvidenceProvider> {
         vec![a, b, c]
+    }
+
+    #[test]
+    fn reference_provider_rejects_excess_connections_and_recovers_after_slow_peers_expire() {
+        let dir = scratch("provider-connection-limit");
+        let timeout = Duration::from_millis(700);
+        let handle = server::start_bounded("127.0.0.1:0", dir.clone(), server::ServerConfig::default(), 2, timeout).unwrap();
+        let mut slow_head = TcpStream::connect(handle.addr).unwrap();
+        slow_head.write_all(b"GET /redemptions/index HTTP/1.1\r\n").unwrap();
+        let mut slow_body = TcpStream::connect(handle.addr).unwrap();
+        let manifest = format!("PUT /chunks/{}/0.chunk HTTP/1.1\r\nContent-Length: 1024\r\n\r\n", h(7));
+        slow_body.write_all(manifest.as_bytes()).unwrap();
+
+        for _ in 0..12 {
+            let mut excess = TcpStream::connect(handle.addr).unwrap();
+            excess.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut bytes = Vec::new();
+            excess.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.starts_with(b"HTTP/1.1 503 Service Unavailable"), "{bytes:?}");
+        }
+
+        // Keep both requests unfinished and continually active, well past their total deadline.
+        let trickle = std::thread::spawn(move || {
+            for _ in 0..35 {
+                let _ = slow_head.write_all(b"x");
+                let _ = slow_body.write_all(b"x");
+                std::thread::sleep(Duration::from_millis(35));
+            }
+        });
+        let http = StdHttp { timeout: Duration::from_millis(250) };
+        let url = format!("{}/redemptions/index", handle.url());
+        let expires = Instant::now() + Duration::from_millis(1400);
+        loop {
+            if http.request("GET", &url, None, 4096).is_ok_and(|r| r.status == 200 && r.body.is_empty()) {
+                break;
+            }
+            assert!(Instant::now() < expires, "honest request was still refused after the slow peers' deadline");
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        trickle.join().unwrap();
+        assert!(!dir.join("chunks").exists(), "the unfinished PUT did not publish anything");
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn reference_provider_write_deadline_releases_a_stalled_reader() {
+        let dir = scratch("provider-write-limit");
+        let handle =
+            server::start_bounded("127.0.0.1:0", dir.clone(), server::ServerConfig::default(), 1, Duration::from_millis(800)).unwrap();
+        let unit = crate::public_material::material_unit_path(&h(7), "held-leaf-1");
+        let file = dir.join(&unit);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::File::create(file).unwrap().set_len(16 << 20).unwrap();
+        let mut stalled = TcpStream::connect(handle.addr).unwrap();
+        stalled.write_all(format!("GET /{unit} HTTP/1.1\r\n\r\n").as_bytes()).unwrap();
+
+        let mut excess = TcpStream::connect(handle.addr).unwrap();
+        excess.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut bytes = Vec::new();
+        excess.read_to_end(&mut bytes).unwrap();
+        assert!(bytes.starts_with(b"HTTP/1.1 503 Service Unavailable"));
+        // Keep the stalled peer open and unread while the server releases its slot.
+        let http = StdHttp { timeout: Duration::from_millis(250) };
+        let url = format!("{}/redemptions/index", handle.url());
+        let expires = Instant::now() + Duration::from_millis(1700);
+        loop {
+            if http.request("GET", &url, None, 4096).is_ok_and(|r| r.status == 200 && r.body.is_empty()) {
+                break;
+            }
+            assert!(Instant::now() < expires, "the stalled response never released its request slot");
+            std::thread::sleep(Duration::from_millis(15));
+        }
+        drop(stalled);
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
