@@ -29,7 +29,7 @@ fn native_header_identity_worker_v2(mode: u8) {
     let mut extras = f.extras.clone();
     extras.tir_public_originals.insert(f.fp.claim_id(), f.envelope.clone());
     let b = TransitionBuilder::try_new(&f.state, &f.params, false, false, false, false, &extras).unwrap();
-    let (expected, rules, _, geometry) = original_plan_v1(&b, f.ctx.daa_score, &f.fp.commitment, &f.envelope.header).unwrap();
+    let (expected, rules, _, geometry) = original_plan_v1(&b, f.ctx.daa_score, &f.fp.commitment, &f.envelope.header, None).unwrap();
     drop(b);
     let derive = |g: &crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1| {
         derive_tir_public_allocation_native_v2(g, &f.fp.commitment, &f.envelope.header, &f.fx.record, &f.fx.layout, None, None, rules)

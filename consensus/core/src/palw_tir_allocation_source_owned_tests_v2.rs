@@ -17,7 +17,7 @@ fn allocation_source_owned_actual_derivation_quota_semantic_retry_and_release() 
     use crate::palw_tir_public_allocation_v1::*;
     let f = preparation_sources_fixture_v2();
     let b = TransitionBuilder::try_new(&f.state, &f.params, false, false, false, false, &f.extras).unwrap();
-    let (expected, native, _, geometry) = original_plan_v1(&b, f.ctx.daa_score, &f.fp.commitment, &f.envelope.header).unwrap();
+    let (expected, native, _, geometry) = original_plan_v1(&b, f.ctx.daa_score, &f.fp.commitment, &f.envelope.header, None).unwrap();
     drop(b);
     let raw = || {
         derive_tir_public_allocation_v1(

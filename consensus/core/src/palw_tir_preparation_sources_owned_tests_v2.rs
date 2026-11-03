@@ -67,7 +67,7 @@ fn preparation_sources_fixture_v2() -> PreparationSourcesFixtureV2 {
     }
     let ctx = PalwBlockContextV2 { block: h(0xF135), daa_score: fx.frame.plan_v1().terms.accepted_daa, blue_score: 1, subsidy: 0 };
     let builder = TransitionBuilder::try_new(&state, &params, false, false, false, false, &extras).unwrap();
-    let (plan, _, _, _) = original_plan_v1(&builder, ctx.daa_score, &fp.commitment, fx.frame.header_v1()).unwrap();
+    let (plan, _, _, _) = original_plan_v1(&builder, ctx.daa_score, &fp.commitment, fx.frame.header_v1(), None).unwrap();
     let mut pledge = fx.frame.custody_v1().pledge_v1().clone();
     pledge.claim = claim;
     pledge.job_identity = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&fp.commitment);
@@ -130,7 +130,7 @@ fn preparation_sources_worker_v2(mode: u8) {
     extras.tir_public_originals.insert(f.fp.claim_id(), f.envelope.clone());
     // The existing real signed funded-candidate fixture is fresh and unclaimed.
     let b = TransitionBuilder::try_new(&f.state, &f.params, false, false, false, false, &extras).unwrap();
-    let (plan, native, upper, geometry) = original_plan_v1(&b, f.ctx.daa_score, &f.fp.commitment, &f.envelope.header).unwrap();
+    let (plan, native, upper, geometry) = original_plan_v1(&b, f.ctx.daa_score, &f.fp.commitment, &f.envelope.header, None).unwrap();
     let producer = b.state.bond(&geometry.producer).unwrap();
     let panel = std::collections::BTreeSet::new();
     let custody = crate::palw_tir_public_custody_v1::PalwTirPublicCustodyContractV1::new_v1(
