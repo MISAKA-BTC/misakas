@@ -112,7 +112,7 @@ impl PositiveAssignmentMaterialOutcomeV2 {
             let mut frame = false;
             let mut head = false;
             let mut assignment = false;
-            for entry in entries.iter().take(record.delta_end) {
+            for entry in checkpoint_entries {
                 let PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(bytes), .. } = entry else {
                     continue;
                 };
@@ -329,6 +329,7 @@ fn validate_case_materials_v2(
             previous_case_end = record.delta_end;
             continue;
         }
+        let checkpoint_entries = &entries[previous_case_end..record.delta_end];
         previous_case_end = record.delta_end;
         let assigned_initial = record.header.kind == CaseJournalEventKind::NativeTransaction && record.header.sequence == 1;
         let mut consumed = None;
