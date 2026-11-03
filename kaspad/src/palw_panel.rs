@@ -2454,6 +2454,23 @@ impl PalwDaClaimFactsV1 {
     }
 }
 
+fn palw_da_provider_attempt_roots_v1(facts: &PalwDaClaimFactsV1) -> Option<PalwClaimRootsV1> {
+    let roots = facts.roots_v1(None);
+    (roots.anchor != Hash64::default() && roots.attempt_draw.is_some()).then_some(roots)
+}
+
+fn palw_da_verify_provider_attempt_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    output_root: Hash64,
+    bytes: &[u8],
+) -> bool {
+    palw_da_provider_attempt_roots_v1(facts).is_some_and(|mut roots| {
+        roots.output_root = Some(output_root);
+        backend.verify_material(&fp_capture_view(bytes, facts.form), roots) == PalwMaterialVerdictV1::Matches
+    })
+}
+
 /// **The material an R-core answer is built from, checked against the claim's roots** (P2-7).
 #[derive(Debug)]
 pub(crate) enum PalwDaCaptureV1 {
@@ -4481,6 +4498,25 @@ struct FetchedProviderMaterialV1 {
     http_admission: Option<(kaspa_core::memory_budget::MemoryLease, tokio::sync::OwnedSemaphorePermit)>,
 }
 
+struct PendingProviderMaterialV1 {
+    claim: Hash64,
+    roots: misaka_palw_remote::evidence::ClaimRoots,
+    material: FetchedProviderMaterialV1,
+    /// A Court recovery result may only be used for this exact Attempt carrier.
+    court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ready_at: std::time::Instant,
+}
+
+impl PendingProviderMaterialV1 {
+    fn matches_court(&self, claim: Hash64, carrier: kaspa_consensus_core::BlockHash) -> bool {
+        self.claim == claim && self.court_carrier == Some(carrier)
+    }
+
+    fn unused_after_court_pass(&self, tick_started: std::time::Instant) -> bool {
+        self.court_carrier.is_some() && self.ready_at <= tick_started
+    }
+}
+
 pub struct PalwPanelService {
     worker_running: std::sync::atomic::AtomicBool,
     /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this service's own copy of the node's gossip inbox, fanned out by the daemon when
@@ -4507,8 +4543,7 @@ pub struct PalwPanelService {
     /// a cadence rather than inside every write (audit M2-2).
     foreign_prune_at: std::sync::Mutex<std::time::Instant>,
     provider_http_fetch: Arc<tokio::sync::Semaphore>,
-    pending_provider_http:
-        Arc<std::sync::Mutex<Option<(Hash64, misaka_palw_remote::evidence::ClaimRoots, FetchedProviderMaterialV1)>>>,
+    pending_provider_http: Arc<std::sync::Mutex<Option<PendingProviderMaterialV1>>>,
     /// The claims the panel's last tick held live (its duties, court duties and disputes): their
     /// files in `retention/foreign/` are out of the sweep's reach, age and count alike
     /// ([`prune_foreign_retention_v1`]).
@@ -9314,13 +9349,20 @@ impl PalwPanelService {
             // Drain the gossip inbox first, so this tick's decisions see this tick's mail.
             self.drain_panel_inbox_v1(&mut inbox, &mut pool_books, &mut first_seen, &mut shard_books.arrivals, &mut receipt_arrivals);
 
-            let pending = self.pending_provider_http.lock().unwrap().take();
+            let provider_tick_started = std::time::Instant::now();
+            let pending = self.pending_provider_http.lock().unwrap().take_if(|ready| ready.court_carrier.is_none());
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
+                self.pending_provider_http.lock().unwrap().take();
                 continue;
             }
-            if let Some((claim, roots, FetchedProviderMaterialV1 { bytes, report, http_admission })) = pending
-                && self.provider_claim_roots(roots.network_domain, claim) == Some(roots)
+            if let Some(PendingProviderMaterialV1 {
+                claim,
+                roots,
+                material: FetchedProviderMaterialV1 { bytes, report, http_admission },
+                ..
+            }) = pending
+                && self.provider_claim_roots(roots.network_domain, claim, None) == Some(roots)
             {
                 info!(
                     "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from HTTP evidence provider(s) {:?}; {} failed attempt(s)",
@@ -9698,6 +9740,9 @@ impl PalwPanelService {
                     },
                 )
                 .await;
+            // Give a ready Court result one full Court pass. A reverted or
+            // already answered duty must not hold the provider slot forever.
+            self.pending_provider_http.lock().unwrap().take_if(|ready| ready.unused_after_court_pass(provider_tick_started));
             tick_guard.phase("court+da");
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
                 && (self.config.canonical_claims || self.config.canonical_class.is_some())
@@ -13336,22 +13381,56 @@ impl PalwPanelService {
             None
         };
         let answer_form = facts.form;
-        let (built, _held_for_the_answers) = offload_shared(backend, move |b| {
+        // The ordinary local answer path can use material without the old
+        // carrier header. A third-party copy must reproduce its exact job.
+        let court_carrier = palw_da_provider_attempt_roots_v1(&facts).map(|_| first.accepted_block);
+        let provider = court_carrier.and_then(|carrier| {
+            let ready = self.pending_provider_http.lock().unwrap().take_if(|ready| ready.matches_court(claim, carrier))?;
+            (self.provider_claim_roots(network_domain, claim, Some(carrier)) == Some(ready.roots)
+                && ready.roots.execution_root == first.execution_root
+                && ready.roots.trace_root == first.trace_root)
+                .then_some(ready)
+        });
+        let result = offload_shared(backend, move |b| {
+            let (provider_roots, provider_bytes, _provider_admission) = match provider {
+                Some(ready) => (Some(ready.roots), Some(ready.material.bytes), ready.material.http_admission),
+                None => (None, None, None),
+            };
+            let provider_verified = std::cell::Cell::new(false);
+            let provider = provider_bytes.into_iter().filter(|bytes| {
+                let verified =
+                    provider_roots.is_some_and(|roots| palw_da_verify_provider_attempt_v1(b, &facts, roots.output_root, bytes));
+                provider_verified.set(verified);
+                verified
+            });
             let built = palw_da_claim_answers_v1(
                 b,
                 &facts,
-                paths.iter().filter_map(|path| std::fs::read(path).ok()),
+                paths.iter().filter_map(|path| std::fs::read(path).ok()).chain(provider),
                 |bytes| palw_da_keep_remade_v1(&foreign, &claim, bytes),
                 &units,
                 in_run_rows,
                 flat_queued,
                 tir.as_ref(),
             )?;
-            Ok::<_, String>((built, reserved))
+            Ok::<_, String>((built, reserved, provider_roots.filter(|_| provider_verified.get())))
         })
         .await
-        .map_err(PalwDaClaimHoldV1::Material)?
-        .map_err(PalwDaClaimHoldV1::Material)?;
+        .and_then(|result| result);
+        let (built, _held_for_the_answers, provider_roots) = match result {
+            Ok(result) => result,
+            Err(why) => {
+                if !self.config.evidence_provider_http.is_empty()
+                    && let Some(carrier) = court_carrier
+                    && let Some(roots) = self.provider_claim_roots(network_domain, claim, Some(carrier))
+                    && roots.execution_root == first.execution_root
+                    && roots.trace_root == first.trace_root
+                {
+                    self.queue_provider_http_fetch(claim, roots, Some(carrier));
+                }
+                return Err(PalwDaClaimHoldV1::Material(why));
+            }
+        };
         if built.remade {
             info!(
                 "[{PALW_PANEL}] claim {claim}: no kept copy reproduces its roots — its capture was re-made by replaying the claim's job \
@@ -13360,24 +13439,40 @@ impl PalwPanelService {
             );
         }
         let duties: Vec<_> = duties.iter().map(|d| (*d).clone()).collect();
+        let discloser = first.discloser;
         let session = session.clone();
+        let consensus_manager = self.consensus_manager.clone();
         let keypair = self.keypair.clone();
         let maximum = self.config.court.max_close_bytes();
         tokio::task::spawn_blocking(move || {
             let _replay_guard = _held_for_the_answers;
             let _transport_guard = _transport_reservation;
+            let current_duties = if let Some(roots) = provider_roots {
+                let active = consensus_manager.consensus().unguarded_session();
+                if Self::provider_claim_roots_in_v1(&active, network_domain, claim, court_carrier) != Some(roots) {
+                    return Err("the accepted claim changed while building its provider-backed DA answer".into());
+                }
+                let now = active.get_virtual_daa_score();
+                let current = active.palw_disclosure_duties_v1(vec![discloser]).duties;
+                Some((current, now))
+            } else {
+                None
+            };
             let sign = |message: &[u8], context: &[u8]| {
                 keypair.as_ref().and_then(|kp| {
                     libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32]).ok().map(|sig| sig.as_ref().to_vec())
                 })
             };
-            duties
+            Ok(duties
                 .iter()
                 .zip(built.answers)
                 .map(|(duty, answer)| match answer {
                     None => Ok(None),
                     Some(Err(why)) => Err(why),
                     Some(Ok(answer)) => {
+                        if current_duties.as_ref().is_some_and(|(current, now)| *now > duty.deadline_daa || !current.contains(duty)) {
+                            return Err("the provider-backed DA duty is no longer current".into());
+                        }
                         let progress = if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = duty.unit {
                             session.palw_legacy_answer_progress_v2((duty.claim_id, unit, duty.discloser))?
                         } else {
@@ -13406,10 +13501,11 @@ impl PalwPanelService {
                         .map(Some)
                     }
                 })
-                .collect()
+                .collect())
         })
         .await
-        .map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))
+        .map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))?
+        .map_err(PalwDaClaimHoldV1::Material)
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
@@ -14846,9 +14942,28 @@ impl PalwPanelService {
         !self.config.evidence_provider_dirs.is_empty() || !self.config.evidence_provider_http.is_empty()
     }
 
-    fn provider_claim_roots(&self, network_domain: Hash64, claim: Hash64) -> Option<misaka_palw_remote::evidence::ClaimRoots> {
+    fn provider_claim_roots(
+        &self,
+        network_domain: Hash64,
+        claim: Hash64,
+        court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ) -> Option<misaka_palw_remote::evidence::ClaimRoots> {
         let session = self.consensus_manager.consensus().unguarded_session();
+        Self::provider_claim_roots_in_v1(&session, network_domain, claim, court_carrier)
+    }
+
+    fn provider_claim_roots_in_v1(
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        claim: Hash64,
+        court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ) -> Option<misaka_palw_remote::evidence::ClaimRoots> {
         let (state, _, _) = session.palw_derived_artifacts_v1(claim)?;
+        if court_carrier.is_some_and(|carrier| {
+            state.accepted_block != carrier || !matches!(state.source, kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::Attempt)
+        }) {
+            return None;
+        }
         Some(misaka_palw_remote::evidence::ClaimRoots {
             network_domain,
             trace_root: state.trace_root,
@@ -14908,10 +15023,30 @@ impl PalwPanelService {
         Ok((deadline, task))
     }
 
+    fn queue_provider_http_fetch(
+        &self,
+        claim: Hash64,
+        roots: misaka_palw_remote::evidence::ClaimRoots,
+        court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ) {
+        let pending = self.pending_provider_http.clone();
+        if let Err(why) = self.spawn_provider_http_fetch(claim, roots, move |result| match result {
+            Ok(material) => {
+                let mut pending = pending.lock().unwrap();
+                debug_assert!(pending.is_none(), "the HTTP admission owns the single-flight slot");
+                *pending =
+                    Some(PendingProviderMaterialV1 { claim, roots, material, court_carrier, ready_at: std::time::Instant::now() });
+            }
+            Err(why) => debug!("[{PALW_PANEL}] claim {claim}: no HTTP evidence-provider material ({why})"),
+        }) {
+            debug!("[{PALW_PANEL}] claim {claim}: HTTP evidence-provider fetch skipped ({why})");
+        }
+    }
+
     /// A verified provider copy enters the same seat pool and re-execution
     /// path as a producer's reply. A miss does not establish a claim fault.
     async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
-        let Some(roots) = self.provider_claim_roots(network_domain, claim) else { return };
+        let Some(roots) = self.provider_claim_roots(network_domain, claim, None) else { return };
         use misaka_palw_remote::evidence::ManifestLimits;
         let limits = ManifestLimits {
             max_total_bytes: kaspa_p2p_flows::palw_gossip::PALW_MATERIAL_MAX_BYTES as u64,
@@ -14920,7 +15055,7 @@ impl PalwPanelService {
         match self.fetch_directory_provider_material(claim, roots, limits).await {
             Ok(material) => {
                 // A directory read can straddle a reorg or a new acceptance.
-                if self.provider_claim_roots(network_domain, claim) != Some(roots) {
+                if self.provider_claim_roots(network_domain, claim, None) != Some(roots) {
                     return;
                 }
                 let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &material.bytes);
@@ -14939,19 +15074,9 @@ impl PalwPanelService {
             Err(_) => {}
         }
 
-        let pending = self.pending_provider_http.clone();
         // The P2P request has already been dispatched. Do not wait on HTTP
         // here: one silent endpoint must not delay later duties in the tick.
-        if let Err(why) = self.spawn_provider_http_fetch(claim, roots, move |result| match result {
-            Ok(material) => {
-                let mut pending = pending.lock().unwrap();
-                debug_assert!(pending.is_none(), "the HTTP admission owns the single-flight slot");
-                *pending = Some((claim, roots, material));
-            }
-            Err(why) => debug!("[{PALW_PANEL}] claim {claim}: no HTTP evidence-provider material ({why})"),
-        }) {
-            debug!("[{PALW_PANEL}] claim {claim}: HTTP evidence-provider fetch skipped ({why})");
-        }
+        self.queue_provider_http_fetch(claim, roots, None);
     }
 
     /// Fetch and stage a TIR frame original for the existing custodian.
@@ -14965,7 +15090,7 @@ impl PalwPanelService {
         {
             return Ok(false);
         }
-        let roots = self.provider_claim_roots(network_domain, claim).ok_or("the claim's committed roots are not readable")?;
+        let roots = self.provider_claim_roots(network_domain, claim, None).ok_or("the claim's committed roots are not readable")?;
         let limits = misaka_palw_remote::evidence::ManifestLimits::default();
         let material = match self.fetch_directory_provider_material(claim, roots, limits).await {
             Ok(material) => material,
@@ -14983,7 +15108,7 @@ impl PalwPanelService {
             }
         };
         // Both directory and HTTP reads may have started on an earlier branch.
-        if self.provider_claim_roots(network_domain, claim) != Some(roots) {
+        if self.provider_claim_roots(network_domain, claim, None) != Some(roots) {
             return Err("claim evidence roots or accepted retention changed during provider fetch".into());
         }
         let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
