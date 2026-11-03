@@ -3260,3 +3260,25 @@ native profile has no complete original-admission Batch graph.
 B0 and relay agreed at virtual DAA 19,713 with zero new Qwen carriers.
 See `/private/tmp/misaka-t12-oom-20261102/g14-profile-audit.iqmutK/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-canonical-response-deadline.NjdWhR/tests.log`.
+
+## Selected numerical root uses the original Batch positions
+
+The numerical planner now shares its source-bound target enumeration
+between the preclaim maximum envelope and a selected root's demand
+projection. It retains the canonical target coordinates and their
+native size ceilings for the selected demand. The partition comes from
+the maximum envelope, so smaller actual targets do not move into a
+different demand or borrow another reserved position. A missing root,
+out-of-range demand index, or oversized range refuses the projection.
+The returned lengths are ceilings. Open still needs the exact body
+lengths and must pass the branch's slot and signer checks.
+
+Three extracted tests passed for maximum folding, wire partition caps,
+and a shorter selected root spanning two prebooked partitions. The
+signed native original fixture now checks the selected target order and
+size bounds; that full fixture was not run. This is a native planning
+projection, before the full funded profile and automatic Panel path.
+
+B0 and relay agreed at virtual DAA 19,714 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-root-demand-live.5dfpEU/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-demand-plan.ou51Q3/tests.log`.

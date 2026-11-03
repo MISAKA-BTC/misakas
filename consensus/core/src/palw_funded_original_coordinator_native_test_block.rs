@@ -191,6 +191,24 @@
                 assert!(!envelope.maximums_v1().is_empty());
                 assert_eq!(envelope.demand_ranges_v1().flatten().copied().collect::<Vec<_>>(), envelope.maximums_v1());
                 assert!(req.numerical_batch_envelope_v1(&b, &ctx, envelope.maximums_v1().len() - 1).is_err());
+                let class = req.frame_v1().original_v1().job.class_id;
+                let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(
+                    b.state.tir_class_v1(&class).unwrap().program.as_slice(),
+                ).unwrap();
+                let profile = crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(
+                    b.state.court_service_state_v1().unwrap().profile_id,
+                );
+                use crate::palw_court_shared_material_intake_v1::batch::native_ranges::numerical_batch_root_demand_v1;
+                let first_root = req.inputs_v1().roots_v1()[0].leaf;
+                let selected = numerical_batch_root_demand_v1(
+                    req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, first_root, 0,
+                ).unwrap();
+                assert!(!selected.is_empty());
+                assert!(selected.iter().zip(envelope.demand_ranges_v1().next().unwrap()).all(|((_, bytes), cap)| bytes <= cap));
+                assert!(selected.windows(2).all(|pair| pair[0].0.id_v1(claim).unwrap() < pair[1].0.id_v1(claim).unwrap()));
+                assert!(numerical_batch_root_demand_v1(
+                    req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, u64::MAX, 0,
+                ).is_err());
                 let signers = req.frame_v1().custody_v1().liable_signers_v1();
                 let (after_signer, full) = funded_book_candidate_v1(&b, &req, &derivation, &admission, &signers).ok().unwrap();
                 let bound = &full.claims[&claim];

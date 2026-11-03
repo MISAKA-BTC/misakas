@@ -12,7 +12,10 @@ use crate::{
     palw_prompt_ids_v1::{PALW_PROMPT_IDS_TILE_LEN, PalwPromptIdsFormV1},
     palw_tir_court_v1::parameter_cover::RootInputBoundaryV1,
     palw_tir_public_claim_v1::PalwTirPublicClaimV1,
-    palw_tir_public_source_v1::{PalwTirPublicRequestV1, PalwTirPublicSourceV1, parameter_cover_v1::OriginalRootInputCoverV1},
+    palw_tir_public_source_v1::{
+        PalwTirPublicRequestV1, PalwTirPublicSourceV1,
+        parameter_cover_v1::{NamedParameterCoverV1, NamedRootInputCoverV1, OriginalRootInputCoverV1},
+    },
 };
 use misaka_palw_tir::program::TirProgramV1;
 use std::collections::{BTreeMap, BTreeSet};
@@ -105,6 +108,88 @@ pub(crate) fn numerical_batch_envelope_v1(
     retained.exact_v1::<NumericalBatchEnvelopeV1>(1).map_err(E::Resource)?;
     let lease = reserve_native_requests_v1(retained.bytes_v1()).map_err(E::Resource)?;
     let mut maximums = Vec::with_capacity(maximum_ranges);
+    let mut ids_bytes = None;
+
+    for (root, params) in roots.iter().zip(&parameters.roots) {
+        let ranges = root_ranges_v1(frame, source, &set, root, params, program, maximum_ranges, &mut ids_bytes)?;
+        fold_maximums(&mut maximums, ranges.values().map(|(_, bytes)| *bytes), maximum_ranges).map_err(E::Decode)?;
+    }
+
+    let scope = set.scope_id().map_err(E::Decode)?;
+    Ok(NativeRetainedV1::from_owner_reserved_v1(NumericalBatchEnvelopeV1 { scope, maximums }, lease))
+}
+
+/// Recover the canonical ranges for one selected root using the same
+/// target enumeration and position caps used to reserve its original.
+/// Returned sizes are upper bounds; the sender must know the exact body
+/// size before committing it in a signed Open.
+pub(crate) fn numerical_batch_root_demand_v1(
+    frame: &PalwTirPublicClaimV1,
+    source: &PalwTirPublicSourceV1,
+    cover: &OriginalRootInputCoverV1,
+    program: &TirProgramV1,
+    profile: Hash64,
+    envelope: &NumericalBatchEnvelopeV1,
+    leaf: u64,
+    demand_index: usize,
+) -> Result<NativeRetainedV1<Vec<(MaterialTargetV1, u64)>>, E> {
+    let set = TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+    let parameters = cover.parameters_v1();
+    if parameters.source_id != set.source_id() || envelope.scope != set.scope_id().map_err(E::Decode)? {
+        return Err(E::Decode("numerical Batch demand differs from the original".into()));
+    }
+    let roots = cover.roots_v1();
+    let index = roots
+        .binary_search_by_key(&leaf, |root| root.leaf)
+        .map_err(|_| E::Decode("numerical Batch root is absent from the original".into()))?;
+    let params = parameters
+        .roots
+        .get(index)
+        .filter(|params| params.leaf == leaf)
+        .ok_or_else(|| E::Decode("numerical Batch parameter cover differs from the original".into()))?;
+    let ranges = root_ranges_v1(frame, source, &set, &roots[index], params, program, envelope.maximums.len(), &mut None)?;
+    let span = root_demand_span_v1(&envelope.maximums, ranges.values().map(|(_, bytes)| *bytes), demand_index).map_err(E::Decode)?;
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<(MaterialTargetV1, u64)>(span.len() as u64).map_err(E::Resource)?;
+    let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let mut demand = Vec::with_capacity(span.len());
+    demand.extend(ranges.values().skip(span.start).take(span.len()).copied());
+    Ok(NativeRetainedV1::from_owner_reserved_v1(demand, lease))
+}
+
+fn root_demand_span_v1(
+    maximums: &[u64],
+    ranges: impl ExactSizeIterator<Item = u64>,
+    demand_index: usize,
+) -> Result<std::ops::Range<usize>, String> {
+    let len = ranges.len();
+    if len > maximums.len() || ranges.zip(maximums).any(|(actual, &cap)| actual == 0 || actual > cap) {
+        return Err("numerical Batch root exceeds its reserved positions".into());
+    }
+    let mut start = 0;
+    for (index, group) in partition_maximums_v1(maximums).enumerate() {
+        let end = start + group.len();
+        if index == demand_index && start < len {
+            return Ok(start..end.min(len));
+        }
+        if end >= len {
+            break;
+        }
+        start = end;
+    }
+    Err("numerical Batch root has no material at the reserved demand index".into())
+}
+
+fn root_ranges_v1(
+    frame: &PalwTirPublicClaimV1,
+    source: &PalwTirPublicSourceV1,
+    set: &TirSharedRequestSetV1<'_>,
+    root: &NamedRootInputCoverV1,
+    params: &NamedParameterCoverV1,
+    program: &TirProgramV1,
+    maximum_ranges: usize,
+    ids_bytes: &mut Option<u64>,
+) -> Result<NativeRetainedV1<BTreeMap<Hash64, (MaterialTargetV1, u64)>>, E> {
     let claim = frame.plan_v1().original_claim;
     let count = source.header_v1().job_context.declared_prefill_tokens;
     let prompt = frame.plan_v1().owner_work.rules.prompt_form;
@@ -112,92 +197,85 @@ pub(crate) fn numerical_batch_envelope_v1(
         crate::palw_tir_public_owned_v1::request_body_bound_v1(source, PalwTirPublicRequestV1::Ids { offset: 0 })
             .map(|(bytes, _)| bytes)
     };
-    let mut ids_bytes = None;
-
-    for (root, params) in roots.iter().zip(&parameters.roots) {
-        use RootInputBoundaryV1::{CommittedStepLeaf, GeneratedId, PromptPosition};
-        let boundaries = root.inputs.len() as u64 + 1;
-        let overflow = || E::Resource(NativeCoverageV1::overflow::<NumericalBatchEnvelopeV1>("Batch range enumeration"));
-        let mut q = TirNativeRequestsV1::new();
-        q.add_v1(boundaries.checked_mul(btree_node_envelope_bytes_v1::<RootInputBoundaryV1, ()>() as u64).ok_or_else(overflow)?)
-            .map_err(E::Resource)?;
-        q.add_v1(
-            (maximum_ranges as u64)
-                .min(boundaries.saturating_add(params.parameters.len() as u64))
-                .checked_mul(btree_node_envelope_bytes_v1::<Hash64, (MaterialTargetV1, u64)>() as u64)
-                .ok_or_else(overflow)?,
-        )
+    use RootInputBoundaryV1::{CommittedStepLeaf, GeneratedId, PromptPosition};
+    let boundaries = root.inputs.len() as u64 + 1;
+    let overflow = || E::Resource(NativeCoverageV1::overflow::<NumericalBatchEnvelopeV1>("Batch range enumeration"));
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(boundaries.checked_mul(btree_node_envelope_bytes_v1::<RootInputBoundaryV1, ()>() as u64).ok_or_else(overflow)?)
         .map_err(E::Resource)?;
-        let _scratch = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
-        let mut ranges = BTreeMap::new();
-        let mut add = |target: MaterialTargetV1, bytes: u64| -> Result<(), String> {
-            if !(1..=MATERIAL_PIPELINED_MAX_BYTES).contains(&bytes) {
-                return Err("numerical Batch native range exceeds the codec capacity".into());
-            }
-            let id = target.id_v1(claim)?;
-            if let Some(old) = ranges.get(&id) {
-                return if *old == (target, bytes) { Ok(()) } else { Err("numerical Batch range identity collision".into()) };
-            }
-            if ranges.len() >= maximum_ranges {
-                return Err("numerical Batch range cap exhausted".into());
-            }
-            ranges.insert(id, (target, bytes));
-            Ok(())
-        };
-        let boundaries = root.inputs.iter().copied().chain([CommittedStepLeaf(root.leaf)]).collect::<BTreeSet<_>>();
-        set.visit_batch_step_targets_v1(
-            &boundaries,
-            crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1,
-            maximum_ranges,
-            |target, _, bound| add(target, bound.maximum_response_bytes),
-        )
-        .map_err(E::Decode)?;
-        for &leaf in &params.parameters {
-            let bytes = parameter_body_bound_v1(program, leaf).map_err(E::Decode)?;
-            add(MaterialTargetV1::Parameter { leaf }, bytes).map_err(E::Decode)?;
+    q.add_v1(
+        (maximum_ranges as u64)
+            .min(boundaries.saturating_add(params.parameters.len() as u64))
+            .checked_mul(btree_node_envelope_bytes_v1::<Hash64, (MaterialTargetV1, u64)>() as u64)
+            .ok_or_else(overflow)?,
+    )
+    .map_err(E::Resource)?;
+    let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let mut ranges = BTreeMap::new();
+    let mut add = |target: MaterialTargetV1, bytes: u64| -> Result<(), String> {
+        if !(1..=MATERIAL_PIPELINED_MAX_BYTES).contains(&bytes) {
+            return Err("numerical Batch native range exceeds the codec capacity".into());
         }
-        for boundary in &boundaries {
-            match *boundary {
-                PromptPosition(position) => {
-                    if position >= count {
-                        return Err(E::Decode("numerical Batch prompt position outside original".into()));
-                    }
-                    let (target, bytes) = match prompt {
-                        PalwPromptIdsFormV1::Flat => (MaterialTargetV1::PromptFlat, 4 + 4 * u64::from(count)),
-                        PalwPromptIdsFormV1::MerkleV1 => {
-                            let tile = position / PALW_PROMPT_IDS_TILE_LEN;
-                            (MaterialTargetV1::PromptTile { tile }, prompt_tile_bound(count, tile).map_err(E::Decode)?)
-                        }
-                    };
-                    add(target, bytes).map_err(E::Decode)?;
-                }
-                GeneratedId(index) => {
-                    if index >= source.decode_count_v1() {
-                        return Err(E::Decode("numerical Batch generated ID outside original".into()));
-                    }
-                    let bytes = match ids_bytes {
-                        Some(bytes) => bytes,
-                        None => {
-                            let bytes = full_ids(source).map_err(E::Decode)?;
-                            ids_bytes = Some(bytes);
-                            bytes
-                        }
-                    };
-                    add(MaterialTargetV1::FullIds, bytes).map_err(E::Decode)?;
-                }
-                _ => {}
-            }
+        let id = target.id_v1(claim)?;
+        if let Some(old) = ranges.get(&id) {
+            return if *old == (target, bytes) { Ok(()) } else { Err("numerical Batch range identity collision".into()) };
         }
-        fold_maximums(&mut maximums, ranges.into_values().map(|(_, bytes)| bytes), maximum_ranges).map_err(E::Decode)?;
+        if ranges.len() >= maximum_ranges {
+            return Err("numerical Batch range cap exhausted".into());
+        }
+        ranges.insert(id, (target, bytes));
+        Ok(())
+    };
+    let boundaries = root.inputs.iter().copied().chain([CommittedStepLeaf(root.leaf)]).collect::<BTreeSet<_>>();
+    set.visit_batch_step_targets_v1(
+        &boundaries,
+        crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1,
+        maximum_ranges,
+        |target, _, bound| add(target, bound.maximum_response_bytes),
+    )
+    .map_err(E::Decode)?;
+    for &leaf in &params.parameters {
+        let bytes = parameter_body_bound_v1(program, leaf).map_err(E::Decode)?;
+        add(MaterialTargetV1::Parameter { leaf }, bytes).map_err(E::Decode)?;
     }
-
-    let scope = set.scope_id().map_err(E::Decode)?;
-    Ok(NativeRetainedV1::from_owner_reserved_v1(NumericalBatchEnvelopeV1 { scope, maximums }, lease))
+    for boundary in &boundaries {
+        match *boundary {
+            PromptPosition(position) => {
+                if position >= count {
+                    return Err(E::Decode("numerical Batch prompt position outside original".into()));
+                }
+                let (target, bytes) = match prompt {
+                    PalwPromptIdsFormV1::Flat => (MaterialTargetV1::PromptFlat, 4 + 4 * u64::from(count)),
+                    PalwPromptIdsFormV1::MerkleV1 => {
+                        let tile = position / PALW_PROMPT_IDS_TILE_LEN;
+                        (MaterialTargetV1::PromptTile { tile }, prompt_tile_bound(count, tile).map_err(E::Decode)?)
+                    }
+                };
+                add(target, bytes).map_err(E::Decode)?;
+            }
+            GeneratedId(index) => {
+                if index >= source.decode_count_v1() {
+                    return Err(E::Decode("numerical Batch generated ID outside original".into()));
+                }
+                let bytes = match *ids_bytes {
+                    Some(bytes) => bytes,
+                    None => {
+                        let bytes = full_ids(source).map_err(E::Decode)?;
+                        *ids_bytes = Some(bytes);
+                        bytes
+                    }
+                };
+                add(MaterialTargetV1::FullIds, bytes).map_err(E::Decode)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(NativeRetainedV1::from_owner_reserved_v1(ranges, lease))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{fold_maximums, partition_maximums_v1};
+    use super::{fold_maximums, partition_maximums_v1, root_demand_span_v1};
 
     #[test]
     fn envelope_preserves_every_position_without_combining_root_material() {
@@ -220,5 +298,17 @@ mod tests {
         let groups = partition_maximums_v1(&maximums).collect::<Vec<_>>();
         assert_eq!(groups.iter().map(|r| r.len()).collect::<Vec<_>>(), [MAX_BATCH_RANGES_V1, 1, 1, 1]);
         assert_eq!(groups.into_iter().flatten().copied().collect::<Vec<_>>(), maximums);
+    }
+
+    #[test]
+    fn selected_root_uses_booked_partitions_even_when_its_ranges_are_smaller() {
+        use crate::palw_batch_court_v1::{MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1};
+        let cap = MAX_BATCH_PARTS_V1 as u64 * u64::from(MAX_BATCH_PART_BYTES_V1);
+        let maximums = [cap, 2, 3];
+        let actual = [1, 2];
+        assert_eq!(root_demand_span_v1(&maximums, actual.into_iter(), 0).unwrap(), 0..1);
+        assert_eq!(root_demand_span_v1(&maximums, actual.into_iter(), 1).unwrap(), 1..2);
+        assert!(root_demand_span_v1(&maximums, actual.into_iter(), 2).is_err());
+        assert!(root_demand_span_v1(&maximums, [1, 3].into_iter(), 0).is_err());
     }
 }
