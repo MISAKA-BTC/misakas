@@ -1401,12 +1401,13 @@ fn prepare_initial_case_checker_v2(
 fn check_replayed_court_projection_v2(
     state: &PalwChainStateV2,
     row: &CaseRow,
-    checked: crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2,
+    machine: &NativeAssignedCourtV2,
 ) -> Result<(), PalwStateV2Error> {
     use misaka_palw_positive_contract::{
         messages::{ClaimStatus, WitnessStatus},
         rows::CoverageState,
     };
+    let checked = snapshot(&machine.court);
     let status_matches = checked.status == row.status
         || (checked.status == ClaimStatus::Pending && checked.attempts == 0 && row.status == ClaimStatus::ResultCommitted);
     let witness =
@@ -1417,6 +1418,17 @@ fn check_replayed_court_projection_v2(
         || witness != row.positive_witness
     {
         return Err(refuse("replayed arithmetic outcome differs from rooted Case"));
+    }
+    if checked.status == ClaimStatus::PositivePassed {
+        let fact = machine.facts.last().ok_or_else(missing)?;
+        if fact.terminal_kind() != TerminalKindV2::PositivePassed
+            || fact.case() != row.case
+            || fact.result() != row.result
+            || Some(fact.witness()) != witness
+            || fact.terminal().descriptor() != row.coverage
+        {
+            return Err(refuse("replayed Finish differs from rooted terminal coverage"));
+        }
     }
     if let Some(active) = checked.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) {
         let NativeRowBody::Coverage(coverage) = required(state, NativeRowKey::Coverage(active.witness))? else {
@@ -1640,7 +1652,7 @@ fn replay_assigned_court_history_v2(
         let NativeRowBody::Case(prior) = required(prefix, NativeRowKey::Case(pin.case))? else {
             return Err(refuse("archived pre-event Case row"));
         };
-        check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
+        check_replayed_court_projection_v2(prefix, &prior, &machine)?;
         if carriage.transaction().payload.get(7) == Some(&12) {
             let after = match backing.records().get(index + 1) {
                 Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
@@ -1700,7 +1712,7 @@ fn replay_assigned_court_history_v2(
             return Err(refuse("Case replay must retain work for its outstanding responses"));
         }
     }
-    check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))?;
+    check_replayed_court_projection_v2(state, &rooted.case, &machine)?;
     Ok(machine)
 }
 
