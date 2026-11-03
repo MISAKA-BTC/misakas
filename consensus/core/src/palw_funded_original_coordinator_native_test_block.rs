@@ -198,12 +198,20 @@
                 let profile = crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(
                     b.state.court_service_state_v1().unwrap().profile_id,
                 );
-                use crate::palw_court_shared_material_intake_v1::batch::native_ranges::numerical_batch_root_demand_v1;
+                use crate::palw_court_shared_material_intake_v1::batch::native_ranges::{
+                    numerical_batch_root_demand_v1, numerical_batch_streaming_demand_v1,
+                };
                 let first_root = req.inputs_v1().roots_v1()[0].leaf;
                 let selected = numerical_batch_root_demand_v1(
                     req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, first_root, 0,
                 ).unwrap();
                 let selected = selected.ranges_v1();
+                let streamed = numerical_batch_streaming_demand_v1(
+                    req.frame_v1(), req.geometry.source_v1(), b.state.tir_class_v1(&class).unwrap(),
+                    crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, class).unwrap(),
+                    &program, profile, budgets.1, 4_096, first_root, 0,
+                ).unwrap();
+                assert_eq!(streamed.ranges_v1(), selected);
                 assert!(!selected.is_empty());
                 assert!(selected.iter().zip(envelope.demand_ranges_v1().next().unwrap()).all(|((_, bytes), cap)| bytes <= cap));
                 assert!(selected.windows(2).all(|pair| pair[0].0.id_v1(claim).unwrap() < pair[1].0.id_v1(claim).unwrap()));

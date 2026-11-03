@@ -19,7 +19,7 @@ use crate::{
     palw_tir_public_claim_v1::PalwTirPublicClaimV1,
     palw_tir_public_source_v1::{
         PalwTirPublicRequestV1, PalwTirPublicSourceV1,
-        parameter_cover_v1::{NamedParameterCoverV1, NamedRootInputCoverV1, OriginalRootInputCoverV1},
+        parameter_cover_v1::{OriginalParameterCoverBudgetV1, OriginalRootInputCoverV1, StreamingParameterCoverBudgetV1},
     },
 };
 use misaka_palw_tir::program::TirProgramV1;
@@ -155,16 +155,72 @@ pub fn quote_numerical_batch_open_v1(
     let budget = super::super::material_intake_schedule_v1()
         .map_err(|_| E::Decode("numerical Batch material schedule is absent".into()))?
         .cover;
-    let cover = PalwTirPublicSourceV1::root_input_cover_native_v1(&source, record, layout, budget)?;
     let program =
         crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|err| match err {
             NativeDecodeErrorV1::Decode(why) => E::Decode(why.to_string()),
             NativeDecodeErrorV1::Resource(why) => E::Resource(why),
         })?;
-    let profile = context.profile_id;
-    let envelope = numerical_batch_envelope_v1(frame, &source, &cover, &program, profile, maximum_ranges)?;
-    let demand = numerical_batch_root_demand_v1(frame, &source, &cover, &program, profile, &envelope, leaf, demand_index)?;
+    let demand = numerical_batch_streaming_demand_v1(
+        frame, &source, record, layout, &program, context.profile_id, budget, maximum_ranges, leaf, demand_index,
+    )?;
     demand.quote_open_v1(state, notice, lengths)
+}
+
+/// Fold the positional maxima while visiting one authenticated root at a
+/// time. Retain only the selected root's targets for the quote.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn numerical_batch_streaming_demand_v1(
+    frame: &PalwTirPublicClaimV1,
+    source: &NativeRetainedV1<PalwTirPublicSourceV1>,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    program: &TirProgramV1,
+    profile: Hash64,
+    budget: OriginalParameterCoverBudgetV1,
+    maximum_ranges: usize,
+    leaf: u64,
+    demand_index: usize,
+) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
+    let set = TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<u64>(maximum_ranges as u64).map_err(E::Resource)?;
+    let _maxima_lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let mut maximums = Vec::with_capacity(maximum_ranges);
+    let mut selected = None;
+    let mut callback_error = None;
+    let mut ids_bytes = None;
+    let streaming = StreamingParameterCoverBudgetV1 {
+        total: budget,
+        per_root_edges: budget.max_total_edges,
+        per_root_coordinates: budget.max_total_coordinates,
+        per_root_memberships: budget.max_root_memberships,
+        // The walker quotes one root's bounded scratch and reserves it
+        // against the native process budget before exploring any root.
+        max_workspace_bytes: u64::MAX,
+    };
+    let summary = PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(
+        source, record, layout, streaming, |root, params, inputs| {
+            let ranges = root_ranges_v1(
+                frame, source, &set, root, inputs.iter().copied(), params, program, maximum_ranges, &mut ids_bytes,
+            ).map_err(|error| {
+                callback_error = Some(error);
+                "numerical Batch range projection failed".to_string()
+            })?;
+            fold_maximums(&mut maximums, ranges.values().map(|(_, bytes)| *bytes), maximum_ranges)?;
+            if root == leaf {
+                selected = Some(ranges);
+            }
+            Ok(0)
+        },
+    );
+    if let Some(error) = callback_error {
+        return Err(error);
+    }
+    if summary?.source_id != set.source_id() {
+        return Err(E::Decode("streamed Batch cover differs from the original".into()));
+    }
+    let selected = selected.ok_or_else(|| E::Decode("numerical Batch root is absent from the original".into()))?;
+    finish_root_demand_v1(frame.plan_v1().original_claim, set.scope_id().map_err(E::Decode)?, &maximums, &selected, demand_index)
 }
 
 fn partition_maximums_v1(mut remaining: &[u64]) -> impl Iterator<Item = &[u64]> {
@@ -236,7 +292,9 @@ pub(crate) fn numerical_batch_envelope_v1(
     let mut ids_bytes = None;
 
     for (root, params) in roots.iter().zip(&parameters.roots) {
-        let ranges = root_ranges_v1(frame, source, &set, root, params, program, maximum_ranges, &mut ids_bytes)?;
+        let ranges = root_ranges_v1(
+            frame, source, &set, root.leaf, root.inputs.iter().copied(), &params.parameters, program, maximum_ranges, &mut ids_bytes,
+        )?;
         fold_maximums(&mut maximums, ranges.values().map(|(_, bytes)| *bytes), maximum_ranges).map_err(E::Decode)?;
     }
 
@@ -272,8 +330,20 @@ pub(crate) fn numerical_batch_root_demand_v1(
         .get(index)
         .filter(|params| params.leaf == leaf)
         .ok_or_else(|| E::Decode("numerical Batch parameter cover differs from the original".into()))?;
-    let ranges = root_ranges_v1(frame, source, &set, &roots[index], params, program, envelope.maximums.len(), &mut None)?;
-    let span = root_demand_span_v1(&envelope.maximums, ranges.values().map(|(_, bytes)| *bytes), demand_index).map_err(E::Decode)?;
+    let ranges = root_ranges_v1(
+        frame, source, &set, leaf, roots[index].inputs.iter().copied(), &params.parameters, program, envelope.maximums.len(), &mut None,
+    )?;
+    finish_root_demand_v1(frame.plan_v1().original_claim, envelope.scope, &envelope.maximums, &ranges, demand_index)
+}
+
+fn finish_root_demand_v1(
+    claim: Hash64,
+    scope: Hash64,
+    maximums: &[u64],
+    ranges: &BTreeMap<Hash64, (MaterialTargetV1, u64)>,
+    demand_index: usize,
+) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
+    let span = root_demand_span_v1(maximums, ranges.values().map(|(_, bytes)| *bytes), demand_index).map_err(E::Decode)?;
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<(MaterialTargetV1, u64)>(span.len() as u64).map_err(E::Resource)?;
     q.exact_v1::<NumericalBatchRootDemandV1>(1).map_err(E::Resource)?;
@@ -282,8 +352,8 @@ pub(crate) fn numerical_batch_root_demand_v1(
     demand.extend(ranges.values().skip(span.start).take(span.len()).copied());
     Ok(NativeRetainedV1::from_owner_reserved_v1(
         NumericalBatchRootDemandV1 {
-            claim: frame.plan_v1().original_claim,
-            scope: envelope.scope,
+            claim,
+            scope,
             ordinal: demand_index as u64,
             ranges: demand,
         },
@@ -314,12 +384,14 @@ fn root_demand_span_v1(
     Err("numerical Batch root has no material at the reserved demand index".into())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn root_ranges_v1(
     frame: &PalwTirPublicClaimV1,
     source: &PalwTirPublicSourceV1,
     set: &TirSharedRequestSetV1<'_>,
-    root: &NamedRootInputCoverV1,
-    params: &NamedParameterCoverV1,
+    leaf: u64,
+    inputs: impl ExactSizeIterator<Item = RootInputBoundaryV1>,
+    parameters: &[u32],
     program: &TirProgramV1,
     maximum_ranges: usize,
     ids_bytes: &mut Option<u64>,
@@ -332,14 +404,14 @@ fn root_ranges_v1(
             .map(|(bytes, _)| bytes)
     };
     use RootInputBoundaryV1::{CommittedStepLeaf, GeneratedId, PromptPosition};
-    let boundaries = root.inputs.len() as u64 + 1;
+    let boundaries = inputs.len() as u64 + 1;
     let overflow = || E::Resource(NativeCoverageV1::overflow::<NumericalBatchEnvelopeV1>("Batch range enumeration"));
     let mut q = TirNativeRequestsV1::new();
     q.add_v1(boundaries.checked_mul(btree_node_envelope_bytes_v1::<RootInputBoundaryV1, ()>() as u64).ok_or_else(overflow)?)
         .map_err(E::Resource)?;
     q.add_v1(
         (maximum_ranges as u64)
-            .min(boundaries.saturating_add(params.parameters.len() as u64))
+            .min(boundaries.saturating_add(parameters.len() as u64))
             .checked_mul(btree_node_envelope_bytes_v1::<Hash64, (MaterialTargetV1, u64)>() as u64)
             .ok_or_else(overflow)?,
     )
@@ -360,7 +432,7 @@ fn root_ranges_v1(
         ranges.insert(id, (target, bytes));
         Ok(())
     };
-    let boundaries = root.inputs.iter().copied().chain([CommittedStepLeaf(root.leaf)]).collect::<BTreeSet<_>>();
+    let boundaries = inputs.chain([CommittedStepLeaf(leaf)]).collect::<BTreeSet<_>>();
     set.visit_batch_step_targets_v1(
         &boundaries,
         crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1,
@@ -368,7 +440,7 @@ fn root_ranges_v1(
         |target, _, bound| add(target, bound.maximum_response_bytes),
     )
     .map_err(E::Decode)?;
-    for &leaf in &params.parameters {
+    for &leaf in parameters {
         let bytes = parameter_body_bound_v1(program, leaf).map_err(E::Decode)?;
         add(MaterialTargetV1::Parameter { leaf }, bytes).map_err(E::Decode)?;
     }
@@ -455,5 +527,18 @@ mod tests {
         assert_eq!(root_demand_span_v1(&maximums, actual.into_iter(), 1).unwrap(), 1..2);
         assert!(root_demand_span_v1(&maximums, actual.into_iter(), 2).is_err());
         assert!(root_demand_span_v1(&maximums, [1, 3].into_iter(), 0).is_err());
+    }
+
+    #[test]
+    fn later_roots_can_change_the_partition_of_an_earlier_selection() {
+        use crate::palw_batch_court_v1::{MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1};
+        let cap = MAX_BATCH_PARTS_V1 as u64 * u64::from(MAX_BATCH_PART_BYTES_V1);
+        let selected = [2, 3];
+        let mut maximums = Vec::new();
+        fold_maximums(&mut maximums, selected.into_iter(), 2).unwrap();
+        assert_eq!(root_demand_span_v1(&maximums, selected.into_iter(), 0).unwrap(), 0..2);
+        fold_maximums(&mut maximums, [cap, 2].into_iter(), 2).unwrap();
+        assert_eq!(root_demand_span_v1(&maximums, selected.into_iter(), 0).unwrap(), 0..1);
+        assert_eq!(root_demand_span_v1(&maximums, selected.into_iter(), 1).unwrap(), 1..2);
     }
 }

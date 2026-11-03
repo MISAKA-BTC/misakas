@@ -3606,3 +3606,27 @@ B0 and relay agreed at virtual DAA 19,724 on a newer selected tip.
 The scanned page contained no new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stage-cost-live.zijqG3/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-stage-cost.LwBogh/tests.log`.
+
+## Stream numerical root inputs when quoting a Batch Open
+
+The operator quote now visits all authenticated numerical roots one at
+a time. It uses the same canonical target enumerator as the native
+envelope, retaining only the positional maxima and the selected root's
+range map. It resolves the demand partition after the whole traversal,
+including maxima contributed by later roots. The existing quote path
+still checks the signed notice, booked Open and response slots.
+
+The extracted suite passed 48 checks, including a later root that
+changes the partition of an earlier selection. The native funded
+fixture now compares the streamed range list with the retained
+preclaim envelope. That fixture has not run. The cached Studio Core
+lacks the streaming API, so it cannot verify the all-root runtime
+against the candidate. The current material estimate allows 4,096
+leaves, while the retained SmolLM2 execution has 15,252. A qualified
+profile and a guarded integrated build remain necessary for the real
+model and original-admission test.
+
+B0 and relay agreed at virtual DAA 19,725, with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-streamed-open-live.glDhTO/page.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-streamed-open.mVpk2D/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-cached-cover.CGbHR7/build.log`.
