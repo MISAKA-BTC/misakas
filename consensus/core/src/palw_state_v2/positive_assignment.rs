@@ -550,6 +550,8 @@ impl TransitionBuilder<'_> {
             || plan.case.positive_witness.is_some()
             || plan.case.usage != AggregateUsage::default()
             || plan.case.unresolved_fraud != 0
+            || plan.case.maturity_daa < origin.accepted_daa
+            || plan.case.maturity_daa >= expected.bundle.terms.reserve_until_daa
             || plan.result.policy != expected.positive_policy
             || plan.result.fired_fork != expected.fired_rules
             || plan.result.dependencies != expected.dependencies
@@ -1784,6 +1786,15 @@ impl TransitionBuilder<'_> {
             return Err(refusal("Case relation count differs from the original registered program"));
         }
         let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
+        let gate_c = rules.gate_c_clock(ctx.daa_score).map_err(refusal)?;
+        horizon
+            .check_case_source_floor_v2(
+                &payload.service,
+                &gate_c,
+                rules.assignment_policy().refund_window_daa,
+                rules.positive_policy().max_attempts,
+            )
+            .map_err(refusal)?;
         let relay = if rules.funding_relay_profile().requires_relay() {
             let checked = self.check_pending_initial_f_relay_v2(
                 ctx,
@@ -1812,11 +1823,8 @@ impl TransitionBuilder<'_> {
         };
         if payload.basis.required_fee < horizon.case_money.fee
             || payload.basis.required_capital < horizon.case_money.capital
-            || budget.rounds < horizon.minimum_source_rounds
-            || budget.unique_source_bytes < horizon.minimum_unique_source_bytes
-            || budget.transmitted_bytes < horizon.minimum_transmitted_source_bytes
         {
-            return Err(refusal("Case funding or source budgets do not cover the original native quote"));
+            return Err(refusal("Case funding does not cover the original native quote"));
         }
         Ok(relay)
     }

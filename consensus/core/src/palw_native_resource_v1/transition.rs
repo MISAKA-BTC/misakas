@@ -76,21 +76,26 @@ impl NativeTransitionReservationV1 {
     }
     fn take_value_v1<T: NativeHeapV1>(&mut self, value: T) -> Result<NativeRetainedV1<T>, NativeCoverageV1> {
         let requests = value_requests_v1(&value)?;
-        self.split_owner_v1(value, requests)
+        self.split_owner_v1(value, requests, "fresh transition output")
     }
-    fn split_owner_v1<T>(&mut self, value: T, requests: u64) -> Result<NativeRetainedV1<T>, NativeCoverageV1> {
+    fn split_owner_v1<T>(&mut self, value: T, requests: u64, component: &str) -> Result<NativeRetainedV1<T>, NativeCoverageV1> {
         if requests > self.requests {
             return Err(NativeCoverageV1::unsupported::<T>(
-                "fresh transition output",
-                "an actual output exceeds the writer's pre-construction reservations; uncovered growth cannot be approved afterwards",
+                component,
+                &format!("output requires {requests} bytes; writer has {} bytes of pre-construction reservation", self.requests),
             ));
         }
         let lease = self.lease.as_mut().map(|l| l.split_memory_v1(requests)).transpose()?;
         self.requests -= requests;
         Ok(NativeRetainedV1::from_owner_reserved_v1(value, lease))
     }
-    pub(crate) fn finish_state_v1(mut self, state: PalwChainStateV2) -> Result<NativeChainStateV1, NativeCoverageV1> {
-        self.take_value_v1(state)
+    pub(crate) fn finish_state_v1(
+        mut self,
+        state: PalwChainStateV2,
+        component: &str,
+    ) -> Result<NativeChainStateV1, NativeCoverageV1> {
+        let requests = value_requests_v1(&state)?;
+        self.split_owner_v1(state, requests, component)
     }
     pub(crate) fn finish_transition_with_assignment_materials_v2(
         mut self,
@@ -144,10 +149,15 @@ mod tests {
         let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 64, database_bytes: 0 });
         let mut construction =
             NativeTransitionReservationV1 { lease: Some(checker.reserve_requests_v1(64, 0).unwrap()), requests: 64 };
-        assert!(construction.split_owner_v1(0u8, 65).is_err());
+        let failure = construction.split_owner_v1(0u8, 65, "test output").err().unwrap();
+        assert!(matches!(
+            failure,
+            NativeCoverageV1::Unsupported { component, reason, .. }
+                if component == "test output" && reason.contains("65 bytes") && reason.contains("64 bytes")
+        ));
         assert_eq!(checker.outstanding(), (64, 0));
-        let state = construction.split_owner_v1(1u8, 32).unwrap();
-        let delta = construction.split_owner_v1(2u8, 16).unwrap();
+        let state = construction.split_owner_v1(1u8, 32, "state").unwrap();
+        let delta = construction.split_owner_v1(2u8, 16, "delta").unwrap();
         drop(construction);
         assert_eq!(checker.outstanding(), (48, 0));
         drop(delta);

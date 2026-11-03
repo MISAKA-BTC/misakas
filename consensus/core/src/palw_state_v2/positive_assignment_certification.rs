@@ -469,11 +469,10 @@ impl TransitionBuilder<'_> {
         ctx: &PalwBlockContextV2,
         session: &NativeAssignedCaseSessionV2,
     ) -> Result<(), PalwStateV2Error> {
-        session.ensure_current(&self.state, ctx)?;
         let subject = certification_subject(session.result());
         let mut owned = read(&self.state, subject, 0)?;
         let row = &mut owned.row;
-        check_session(self, ctx, row, session)?;
+        let case = check_session(self, ctx, row, session)?;
         let fact = session.checked_terminal().ok_or_else(|| refuse("native checked Court terminal missing"))?;
         let origin = session.positive_final_origin().ok_or_else(|| refuse("actual Finish origin missing"))?;
         let finality = PositiveCertificationFinalV2 { origin, witness: fact.witness(), material: session.court_material() };
@@ -489,7 +488,6 @@ impl TransitionBuilder<'_> {
                 .accepted_daa
                 .checked_add(row.fixed.header.policy.prosecution_window_daa)
                 .ok_or_else(|| refuse("Final prosecution overflow"))?;
-            let case = PositiveRowsV2::new(&self.state).bundle(row.fixed.header.claim).map_err(refuse)?.case;
             if ctx.daa_score >= prosecution && ctx.daa_score >= case.maturity_daa {
                 row.fixed.outcome = Some((PositiveCertificationOutcomeV2::Certified, ctx.daa_score));
             }
@@ -604,7 +602,6 @@ impl TransitionBuilder<'_> {
         ctx: &PalwBlockContextV2,
         session: &NativeAssignedCaseSessionV2,
     ) -> Result<(), PalwStateV2Error> {
-        session.ensure_current(&self.state, ctx)?;
         let closed = session.pending_fraud_bound();
         if closed.has_pending() || ctx.daa_score <= closed.latest_decision_daa() {
             return Err(refuse("actual P liability/fraud boundary remains live"));
@@ -612,17 +609,14 @@ impl TransitionBuilder<'_> {
         let subject = certification_subject(session.result());
         let mut owned = read(&self.state, subject, 0)?;
         let row = &mut owned.row;
-        if session.assignment() != row.fixed.header.assignment || session.result().id() != row.fixed.header.result {
-            return Err(refuse("foreign native closure session"));
-        }
-        let bundle = PositiveRowsV2::new(&self.state).bundle(row.fixed.header.claim).map_err(refuse)?;
-        if ctx.daa_score < bundle.case.maturity_daa || bundle.case.unresolved_fraud != 0 {
+        let case = bound_session_case(self, ctx, row, session)?;
+        if ctx.daa_score < case.maturity_daa || case.unresolved_fraud != 0 {
             return Err(refuse("actual native Case remains liable"));
         }
-        if matches!(bundle.case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked) {
+        if matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked) {
             return Err(unavailable("actual P attestor deterministic charge owner missing; no release"));
         }
-        if !matches!(bundle.case.status, ClaimStatus::PositivePassed | ClaimStatus::EndedUnverified) {
+        if !matches!(case.status, ClaimStatus::PositivePassed | ClaimStatus::EndedUnverified) {
             return Err(refuse("native Case is not terminal"));
         }
         if row.fixed.liability_release.is_some() {
@@ -641,25 +635,37 @@ impl TransitionBuilder<'_> {
     }
 }
 
+fn bound_session_case(
+    builder: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    row: &PositiveCertificationRowV2,
+    session: &NativeAssignedCaseSessionV2,
+) -> Result<CaseRow, PalwStateV2Error> {
+    let (assignment, bundle) = session.ensure_current(&builder.state, ctx)?;
+    let h = &row.fixed.header;
+    if &h.policy != session.certification_policy() {
+        return Err(refuse("P policy differs from original authenticated native admission"));
+    }
+    if session.assignment() != h.assignment
+        || h.worker != assignment.bundle.terms.worker
+        || h.worker_key != assignment.worker_key
+        || h.worker_gain != assignment.bundle.terms.worker_reward
+    {
+        return Err(refuse("P worker or Assignment differs from the native checked session"));
+    }
+    check_positive_certification_result_links_v2(h, &bundle.result, &bundle.case).map_err(refuse)?;
+    row.authenticate_votes(session.result()).map_err(refuse)?;
+    Ok(bundle.case)
+}
+
 fn check_session(
     builder: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     row: &PositiveCertificationRowV2,
     session: &NativeAssignedCaseSessionV2,
-) -> Result<(), PalwStateV2Error> {
-    session.ensure_current(&builder.state, ctx)?;
+) -> Result<CaseRow, PalwStateV2Error> {
+    let case = bound_session_case(builder, ctx, row, session)?;
     let h = &row.fixed.header;
-    if &h.policy != session.certification_policy() {
-        return Err(refuse("P policy differs from original authenticated native admission"));
-    }
-    row.authenticate_votes(session.result()).map_err(refuse)?;
-    if session.assignment() != h.assignment
-        || session.result().id() != h.result
-        || session.result().case_id() != h.case
-        || session.result().scope != h.scope
-    {
-        return Err(refuse("foreign native checked session"));
-    }
     let fact = session.checked_terminal().ok_or_else(|| refuse("native full checked terminal missing"))?;
     if fact.terminal_kind() != TerminalKindV2::PositivePassed
         || fact.terminal().outcome() != CheckOutcome::Matched
@@ -669,21 +675,20 @@ fn check_session(
     {
         return Err(refuse("native full Court did not pass"));
     }
-    let bundle = PositiveRowsV2::new(&builder.state).bundle(h.claim).map_err(refuse)?;
-    if bundle.case.positive_witness != Some(fact.witness())
-        || bundle.case.coverage != fact.terminal().descriptor()
-        || bundle.case.witness_status != WitnessStatus::Complete
-        || bundle.case.status != ClaimStatus::PositivePassed
+    if case.positive_witness != Some(fact.witness())
+        || case.coverage != fact.terminal().descriptor()
+        || case.witness_status != WitnessStatus::Complete
+        || case.status != ClaimStatus::PositivePassed
     {
         return Err(refuse("current exact Case/coverage differs from checked session"));
     }
     // Calling this getter requires a factory-authenticated closed initial
     // topology and actual pending state, not unresolved_fraud==0 as a shortcut.
     let closed = session.pending_fraud_bound();
-    if closed.has_pending() || bundle.case.unresolved_fraud != 0 {
+    if closed.has_pending() || case.unresolved_fraud != 0 {
         return Err(refuse("native case has pending fraud"));
     }
-    Ok(())
+    Ok(case)
 }
 
 /// Purpose-specific opaque approval, never Reward/issuance/DAG/receipt credit.
@@ -723,7 +728,7 @@ pub(super) fn approve_positive_worker_payment_v2(
 ) -> Result<PositiveCertifiedWorkerPaymentV2, PalwStateV2Error> {
     let owned = read(&builder.state, certification_subject(session.result()), 0)?;
     let row = &owned.row;
-    check_session(builder, ctx, row, session)?;
+    let case = check_session(builder, ctx, row, session)?;
     if !row.fixed.outcome.is_some_and(|(o, _)| o == PositiveCertificationOutcomeV2::Certified) {
         return Err(refuse("actual P outcome is not Certified"));
     }
@@ -737,12 +742,11 @@ pub(super) fn approve_positive_worker_payment_v2(
     {
         return Err(refuse("P Final/material differs from current session"));
     }
-    let bundle = PositiveRowsV2::new(&builder.state).bundle(row.fixed.header.claim).map_err(refuse)?;
     let prosecution = expected_final
         .accepted_daa
         .checked_add(row.fixed.header.policy.prosecution_window_daa)
         .ok_or_else(|| refuse("prosecution overflow"))?;
-    if ctx.daa_score < bundle.case.maturity_daa || ctx.daa_score < prosecution {
+    if ctx.daa_score < case.maturity_daa || ctx.daa_score < prosecution {
         return Err(refuse("current worker payment is immature"));
     }
     let a = assignment(&builder.state, row.fixed.header.assignment)?;

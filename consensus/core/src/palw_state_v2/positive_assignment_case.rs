@@ -169,7 +169,11 @@ pub(super) struct NativeAssignedCaseSessionV2<'a> {
     closed: ClosedAssignedFraudV2,
 }
 impl NativeAssignedCaseSessionV2<'_> {
-    pub(super) fn ensure_current(&self, state: &PalwChainStateV2, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    pub(super) fn ensure_current(
+        &self,
+        state: &PalwChainStateV2,
+        ctx: &PalwBlockContextV2,
+    ) -> Result<(AssignmentRow, PositiveRowBundleV2), PalwStateV2Error> {
         if state.state_root() != self.root || *ctx != self.context {
             return Err(refuse("stale native Case session"));
         }
@@ -183,7 +187,7 @@ impl NativeAssignedCaseSessionV2<'_> {
             return Err(refuse("native Case session lineage or before-row changed"));
         }
         reject_legacy_aliases(state, &a, self.result)?;
-        Ok(())
+        Ok((a, bundle))
     }
     pub(super) fn result(&self) -> &MinerResultCommit {
         self.result
@@ -411,6 +415,17 @@ struct NativeAssignedCourtAdvanceV2 {
     outcome: crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2,
 }
 
+fn assigned_prover_rows_v2(
+    aux: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+    prefix: Vec<u8>,
+) -> impl Iterator<Item = (&[u8], &[u8])> {
+    use misaka_palw_positive_contract::native::KERNEL_AUX_TABLE;
+
+    aux.range((KERNEL_AUX_TABLE, prefix.clone())..)
+        .take_while(move |((table, key), _)| *table == KERNEL_AUX_TABLE && key.starts_with(&prefix))
+        .map(|((_, key), bytes)| (key.as_slice(), bytes.as_slice()))
+}
+
 /// Resolve the literal original or accepted funded op13 role in the ACTUAL
 /// prefix. Historical replay calls with carriage.prefix_state(), never a later
 /// state, and a retired actor cannot buy a replacement global Court budget.
@@ -424,23 +439,35 @@ fn prover_step(
 ) -> Result<NativeAssignedPanelStepV2, PalwStateV2Error> {
     use misaka_palw_positive_contract::assignment::{AssignmentRoleV2, rows::AssignmentRoleAuthorizationV2};
     use misaka_palw_positive_contract::rows::NativeRowValue;
+
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
+    let assignment = a.id();
     let mut resolved = None;
     let mut count = 0u32;
-    for ((table, key), bytes) in &route.aux {
-        if *table != misaka_palw_positive_contract::native::KERNEL_AUX_TABLE || key.get(4) != Some(&15) {
-            continue;
+    let mut requests = TirNativeRequestsV1::new();
+    requests.exact_v1::<u8>(1024).map_err(PalwStateV2Error::NativeResource)?;
+    requests.exact_v1::<u8>(misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES as u64)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let _range_owner = reserve_native_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+        PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowKey>(
+            "assigned Case prover role range", "actual checker is not armed",
+        ))
+    })?;
+    let mut prefix = NativeRowKey::AssignmentRole { assignment, role: AssignmentRoleV2::Prover, bond: a.bundle.terms.prover }.encode();
+    // The canonical last field is the outpoint (64-byte txid and u32 index).
+    // Keep AssignmentId AND role in the prefix before entering the ordered map.
+    prefix.truncate(prefix.len() - (64 + 4));
+    for (key, bytes) in assigned_prover_rows_v2(&route.aux, prefix) {
+        count = count.checked_add(1).ok_or_else(|| refuse("role count overflow"))?;
+        if count > material.assignment_policy.max_role_candidates {
+            return Err(refuse("bounded native role candidates"));
         }
         let value = NativeRowValue::decode(key, bytes).map_err(refuse)?;
         let NativeRowBody::AssignmentRole(role) = value.body else {
             return Err(refuse("role key/value"));
         };
-        if role.assignment != a.id() || role.role != AssignmentRoleV2::Prover {
-            continue;
-        }
-        count = count.checked_add(1).ok_or_else(|| refuse("role count overflow"))?;
-        if count > material.assignment_policy.max_role_candidates {
-            return Err(refuse("bounded native role candidates"));
+        if role.assignment != assignment || role.role != AssignmentRoleV2::Prover {
+            return Err(refuse("foreign native prover role key/value"));
         }
         if misaka_palw_positive_contract::identity::principal(&role.key) != author {
             continue;
@@ -608,7 +635,7 @@ impl NativeAssignedCaseCacheV2 {
                 if *case != self.pin.case || *result != self.pin.result {
                     return Err(refuse("Expire Case identity"));
                 }
-                match self.court.expire(origin.accepted_daa) {
+                match self.court.expire_pending_v2(origin.accepted_daa) {
                     Ok(()) => Outcome::Expired,
                     Err(error) => semantic(error)?,
                 }

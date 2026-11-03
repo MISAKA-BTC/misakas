@@ -20,7 +20,7 @@ use misaka_palw_positive_contract::{
         policy::AssignmentPolicyV2,
     },
     identity::Digest,
-    messages::SourceKind,
+    messages::{MinerServiceContract, SourceKind},
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +88,36 @@ fn ceil(n: u64, d: u64) -> Result<u64, AssignmentHorizonErrorV2> {
     Ok(n / d + u64::from(!n.is_multiple_of(d)))
 }
 impl AssignmentHorizonSpecV2 {
+    /// The literal C service must supply the minimum signed A envelope.
+    /// Use the actual accepted Result clock for the exclusive source cutoff.
+    /// The original retention floor persists even if C arrives early.
+    pub(crate) fn check_case_source_floor_v2(
+        &self,
+        service: &MinerServiceContract,
+        gate_c: &AssignmentGateCClockV2,
+        refund_window_daa: u64,
+        attempts: u32,
+    ) -> Result<(), AssignmentHorizonErrorV2> {
+        let retained_until = self.refund_before_daa.checked_sub(refund_window_daa).ok_or(AssignmentHorizonErrorV2::Overflow)?;
+        let source_before = self.court_before_daa.max(gate_c.latest_failed_attestation_decision_daa);
+        if gate_c.commit_daa >= self.latest_result_before_daa
+            || service.deadline < source_before
+            || service.budget.retention_until < retained_until
+        {
+            return Err(AssignmentHorizonErrorV2::Window);
+        }
+        let budget = &service.budget;
+        if budget.rounds < self.minimum_source_rounds
+            || budget.unique_source_bytes < self.minimum_unique_source_bytes
+            || budget.transmitted_bytes < self.minimum_transmitted_source_bytes
+            || budget.retained_bytes < self.minimum_unique_source_bytes
+            || budget.witness_attempts != attempts
+        {
+            return Err(AssignmentHorizonErrorV2::Budget);
+        }
+        Ok(())
+    }
+
     /// Pure quote. The native factory must resolve certification from the
     /// actual original Params (not choose a shorter one), prove the INITIAL
     /// closed-ingress topology, and reserve all capacities/funds before using

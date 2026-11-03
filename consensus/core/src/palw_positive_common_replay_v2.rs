@@ -731,7 +731,7 @@ pub(crate) fn replay_common_case_retained_v2<'a, S: CaseJournalSourceV2, E: Nati
                         if *case != pin.case || *result != pin.result {
                             return Err(CommonReplayErrorV2::Identity);
                         }
-                        match court.expire(header.origin.accepted_daa) {
+                        match court.expire_pending_v2(header.origin.accepted_daa) {
                             Ok(()) => LocalCourtOutcomeV2::Expired,
                             Err(error) => semantic_error(error)?,
                         }
