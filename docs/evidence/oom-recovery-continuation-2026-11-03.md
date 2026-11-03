@@ -983,3 +983,20 @@ diagnostic. It had not been mounted or used.
 After cleanup, B0 and the relay agreed on their selected tip and were
 synced at DAA 19,609. B0 reported 44 Qwen model blocks, zero receipt
 blocks and zero kernel Finals. B1 remained unsynced at DAA 19,389.
+
+## Private tmpfs Qwen comparison and public cursor recovery — 05:32 UTC
+
+The exact Qwen #21 Linux diagnostic restarted as a separate transient
+unit with a private 4 GiB tmpfs, a read-only host filesystem outside its
+small diagnostic directory, and private networking. It received the
+pinned source directly into tmpfs. The offline single-job build was
+observed compiling after checking the source pins. The service caps
+memory at 5.5 GiB with no swap and one CPU, and guards host memory
+and the measured B0 filesystem reserve during transfer and build.
+At the build-entry check, the shared root had 15.70 GB available
+against the 15.55 GB reserve. No exact arithmetic result was available.
+
+A paired selected-chain scan advanced from DAA 19,608 to virtual DAA
+19,610 with no additional Qwen candidate. Public REST returned 503
+with checkpoint virtual-context lag while WebSocket remained synced,
+then returned HTTP 200 with the relay cursor current on recheck.
