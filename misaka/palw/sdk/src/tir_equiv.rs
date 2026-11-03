@@ -14,10 +14,11 @@
 //! (`base0_decode_token_select_v1`) of the legacy row, so both sides read the same tokens.
 
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::palw_decode_pipeline_v4::palw_fp_replay_select_v1;
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1;
 use misaka_palw_base0::artifact::Base0ArtifactV1;
-use misaka_palw_base0::engine_a16::{A16Cache, A16Engine, A16TraceV1};
+use misaka_palw_base0::engine_a16::{A16Cache, A16Engine, A16TraceV1, KV_STORAGE_SHIPPED_V1};
 use misaka_palw_base0::qwen25_a16_backend::qwen25_a16_prompt_for_anchor;
 use misaka_palw_base0::tir_a16::{A16_MIRROR_LAYER_BLOCK, A16_MIRROR_POST_BLOCK, A16_MIRROR_PRE_BLOCK, A16MirrorRowsV1};
 use misaka_palw_tir::TirProgramV1;
@@ -70,11 +71,16 @@ pub struct EquivReportV1 {
     pub first_mismatches: Vec<String>,
     pub legacy_seconds: f64,
     pub ir_seconds: f64,
+    /// Native and mirror selections for the exact one-token CoreV1 draw.
+    pub core_v1_selected_tokens: Option<[u32; 2]>,
 }
 
 impl EquivReportV1 {
     pub fn is_equal(&self) -> bool {
-        self.positions > 0 && self.logit_rows == self.logit_rows_equal && self.node_rows == self.node_rows_equal
+        self.positions > 0
+            && self.logit_rows == self.logit_rows_equal
+            && self.node_rows == self.node_rows_equal
+            && self.core_v1_selected_tokens.is_none_or(|[native, mirror]| native == mirror && self.first_mismatches.is_empty())
     }
 }
 
@@ -158,8 +164,44 @@ pub fn run_equiv_v1(
     jobs: &[EquivJobV1],
     progress: &mut dyn FnMut(usize, &EquivReportV1),
 ) -> Result<EquivReportV1, String> {
+    run_equiv_jobs_v1(artifact, profile, program, rows, tensors, jobs, None, progress)
+}
+
+/// Compare the exact one-token attempt, using the production batched prefill
+/// engine and a mirror post pass only at the final position.
+#[allow(clippy::too_many_arguments)]
+pub fn run_core_v1_prefill_equiv(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    program: &TirProgramV1,
+    rows: &A16MirrorRowsV1,
+    tensors: &BTreeMap<(u16, Option<u16>), Vec<u8>>,
+    job: &EquivJobV1,
+    run_positions: usize,
+    progress: &mut dyn FnMut(usize, &EquivReportV1),
+) -> Result<EquivReportV1, String> {
+    if job.decode != 1 || run_positions == 0 {
+        return Err("the CoreV1 draw comparison requires one selected token and a positive prefill run width".into());
+    }
+    run_equiv_jobs_v1(artifact, profile, program, rows, tensors, std::slice::from_ref(job), Some(run_positions), progress)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_equiv_jobs_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    program: &TirProgramV1,
+    rows: &A16MirrorRowsV1,
+    tensors: &BTreeMap<(u16, Option<u16>), Vec<u8>>,
+    jobs: &[EquivJobV1],
+    prefill_run_positions: Option<usize>,
+    progress: &mut dyn FnMut(usize, &EquivReportV1),
+) -> Result<EquivReportV1, String> {
     let engine = A16Engine::new(artifact).map_err(|e| format!("the legacy engine: {e:?}"))?;
     let plan = engine.plan_from_profile(profile).map_err(|e| format!("the row's profile is not servable here: {e:?}"))?;
+    if prefill_run_positions.is_some() && !plan.one_pass_prefill_supported() {
+        return Err("the class cannot run the batched prefill comparison".into());
+    }
     let tir_plan = TirPlan::compile(program).map_err(|e| format!("the IR program: {e}"))?;
     let mut params = TirParams::new(&tir_plan);
     for ((j, layer), bytes) in tensors {
@@ -173,15 +215,39 @@ pub fn run_equiv_v1(
     let (pre, layer, post) = (index(&rows.pre), index(&rows.layer), index(&rows.post));
     let mut report = EquivReportV1::default();
     for (ji, job) in jobs.iter().enumerate() {
-        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        let mut cache = if prefill_run_positions.is_some() {
+            A16Cache::with_storage(artifact.shape.n_layers, KV_STORAGE_SHIPPED_V1)
+        } else {
+            A16Cache::new(artifact.shape.n_layers)
+        };
         let mut exec = TirExecutor::new(&tir_plan, &params).map_err(|e| format!("the IR executor: {e}"))?;
-        let total = job.prompt.len() + job.decode;
+        let total = if prefill_run_positions.is_some() { job.prompt.len() } else { job.prompt.len() + job.decode };
         let mut token = *job.prompt.first().ok_or("an empty prompt")?;
+        let mut prefill_traces = Vec::new().into_iter();
+        let mut prefill_logits = Vec::new();
         for pos in 0..total {
             let t = Instant::now();
-            let (logits, trace) = engine
-                .forward_token_planned(&plan, &mut cache, token, pos)
-                .map_err(|e| format!("{}: legacy at {pos}: {e:?}", job.label))?;
+            let run_post = prefill_run_positions.is_none() || pos + 1 == total;
+            let (logits, trace) = if let Some(width) = prefill_run_positions {
+                if prefill_traces.len() == 0 {
+                    let end = pos + width.min(total - pos);
+                    let (logits, traces) = engine
+                        .forward_prefill_planned(&plan, &mut cache, &job.prompt[pos..end], pos, end == total)
+                        .map_err(|e| format!("{}: A16 prefill run at {pos}: {e:?}", job.label))?;
+                    if traces.len() != end - pos {
+                        return Err("the A16 prefill returned the wrong number of position traces".into());
+                    }
+                    prefill_logits = logits;
+                    prefill_traces = traces.into_iter();
+                }
+                let trace = prefill_traces.next().ok_or("the A16 prefill omitted a position's trace")?;
+                let logits = if run_post { std::mem::take(&mut prefill_logits) } else { Vec::new() };
+                (logits, trace)
+            } else {
+                engine
+                    .forward_token_planned(&plan, &mut cache, token, pos)
+                    .map_err(|e| format!("{}: legacy at {pos}: {e:?}", job.label))?
+            };
             report.legacy_seconds += t.elapsed().as_secs_f64();
             let mut sink = RowSink {
                 trace: &trace,
@@ -194,7 +260,7 @@ pub fn run_equiv_v1(
                 bad: Vec::new(),
             };
             let t = Instant::now();
-            exec.step(token as u32, &mut sink).map_err(|e| format!("{}: IR at {pos}: {e}", job.label))?;
+            exec.step_opt(token as u32, &mut sink, run_post).map_err(|e| format!("{}: IR at {pos}: {e}", job.label))?;
             report.ir_seconds += t.elapsed().as_secs_f64();
             let expected = trace.pre.len() + trace.attn.iter().map(|l| l.len()).sum::<usize>() + trace.post.len();
             report.positions += 1;
@@ -204,11 +270,24 @@ pub fn run_equiv_v1(
             if sink.compared != expected as u64 {
                 sink.bad.push(format!("{} legacy rows, {} IR commit points matched to one", expected, sink.compared));
             }
-            report.logit_rows += 1;
-            let (_, ir_logits) = exec.logits();
-            match first_diff(&ir_logits, &logits) {
-                None => report.logit_rows_equal += 1,
-                Some((at, ir, legacy)) => sink.bad.push(format!("logits lane {at}: IR {ir}, legacy {legacy}")),
+            if run_post {
+                report.logit_rows += 1;
+                let (_, ir_logits) = exec.logits();
+                match first_diff(&ir_logits, &logits) {
+                    None => report.logit_rows_equal += 1,
+                    Some((at, ir, legacy)) => sink.bad.push(format!("logits lane {at}: IR {ir}, legacy {legacy}")),
+                }
+                if prefill_run_positions.is_some() {
+                    let Slice::I16(mirror_logits) = ir_logits else {
+                        return Err("the A16 mirror must produce i16 logit codes".into());
+                    };
+                    if logits.is_empty() || mirror_logits.is_empty() {
+                        return Err("the CoreV1 draw requires nonempty final logits from both engines".into());
+                    }
+                    let mirror_logits: Vec<i32> = mirror_logits.iter().map(|&code| i32::from(code)).collect();
+                    report.core_v1_selected_tokens =
+                        Some([palw_fp_replay_select_v1(&logits, 0), palw_fp_replay_select_v1(&mirror_logits, 0)]);
+                }
             }
             for b in sink.bad {
                 if report.first_mismatches.len() < KEEP_MISMATCHES {
@@ -216,7 +295,11 @@ pub fn run_equiv_v1(
                 }
             }
             // The next token: the prompt's, then the consensus decode token of this row.
-            token = if pos + 1 < job.prompt.len() { job.prompt[pos + 1] } else { base0_decode_token_select_v1(&logits) };
+            if let Some(next) = job.prompt.get(pos + 1) {
+                token = *next;
+            } else if prefill_run_positions.is_none() {
+                token = base0_decode_token_select_v1(&logits);
+            }
         }
         report.jobs += 1;
         progress(ji, &report);
@@ -282,6 +365,22 @@ mod tests {
         assert_eq!(r.node_rows, r.positions * (2 + 2 * 24 + 3));
         // The fused site's logits and probability codes, per layer, are the IR's extra commits.
         assert_eq!(r.commits_without_row, 2 * 2);
+    }
+
+    #[test]
+    fn core_v1_draw_only_runs_the_prefill_and_selects_once() {
+        let (a, profile) = small();
+        let (program, rows) = a16_mirror_program_with_rows(&a.shape, HISTORY_BOUND_V1_SMALL).unwrap();
+        let tensors = a16_tir_tensor_bytes(&a, &program).unwrap();
+        let job = EquivJobV1 { label: "one-token draw".into(), prompt: vec![1, 7, 12, 4, 8], decode: 1 };
+        let exact = run_core_v1_prefill_equiv(&a, &profile, &program, &rows, &tensors, &job, 2, &mut |_, _| {}).unwrap();
+        let historical = run_equiv_v1(&a, &profile, &program, &rows, &tensors, std::slice::from_ref(&job), &mut |_, _| {}).unwrap();
+        assert!(exact.is_equal(), "{:#?}", exact.first_mismatches);
+        assert_eq!((exact.positions, exact.logit_rows, exact.node_rows), (5, 1, 5 * (2 + 2 * 24) + 3));
+        assert_eq!((historical.positions, historical.logit_rows), (6, 6));
+        let [native, mirror] = exact.core_v1_selected_tokens.unwrap();
+        assert_eq!(native, mirror);
+        assert_eq!(historical.core_v1_selected_tokens, None);
     }
 
     #[test]
