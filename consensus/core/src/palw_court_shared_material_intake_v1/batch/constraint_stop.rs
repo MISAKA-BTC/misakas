@@ -271,7 +271,7 @@ mod tests {
         assert!(required <= 10_000);
         let finish_daa = book.assigned_daa(&finish).unwrap();
         let owned: BTreeSet<_> = graph.iter().map(|node| node.packet.id).collect();
-        let mut causal: BTreeMap<_, _> = graph.into_iter().map(|node| (node.packet.id, node.predecessors)).collect();
+        let mut causal: BTreeMap<_, _> = graph.iter().map(|node| (node.packet.id, node.predecessors.clone())).collect();
         for predecessors in causal.values_mut() {
             predecessors.sort_unstable();
         }

@@ -5,6 +5,10 @@ use crate::{
     palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1, MAX_BATCH_PARTS_V1, MAX_BATCH_RANGES_V1},
     palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA},
     palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1},
+    palw_native_resource_v1::{
+        NativeCoverageV1, NativeDemandLeaseV1, NativeRetainedV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
+        reserve_native_requests_v1,
+    },
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -48,6 +52,7 @@ impl BatchAdmissionV1<'_> {
             return Err(BatchCourtErrorV1::Window);
         }
         let (required, graph) = self.reserve_v1(&mut candidate.state.book, graph, storage, cost)?;
+        let (graph, _graph_lease) = graph.into_parts_v1();
         for node in graph {
             binding.packet_ids.insert(node.packet.id);
             if !node.predecessors.is_empty() {
@@ -66,10 +71,21 @@ impl BatchAdmissionV1<'_> {
     pub(crate) fn reserve_v1(
         &self,
         book: &mut ServiceReservations,
+        graph: Vec<CausalServicePacketV1>,
+        storage: MaterialIntakeScheduleV1,
+        cost: impl FnMut(u64) -> Result<ServiceCost, String>,
+    ) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+        self.reserve_with_v1(book, graph, storage, cost, reserve_native_requests_v1)
+    }
+
+    fn reserve_with_v1(
+        &self,
+        book: &mut ServiceReservations,
         mut graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
         mut cost: impl FnMut(u64) -> Result<ServiceCost, String>,
-    ) -> Result<(u64, Vec<CausalServicePacketV1>), BatchCourtErrorV1> {
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, Window};
         let a = self.window.claim_accepted_daa;
         let hard = a.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
@@ -79,20 +95,11 @@ impl BatchAdmissionV1<'_> {
             return Err(CaseGraph);
         }
 
-        // Check the complete expansion before allocating or iterating over parts.
-        let native_nodes: BTreeMap<_, _> = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index)).collect();
-        let terminal = *native_nodes.get(&self.terminal).ok_or(CaseGraph)?;
-        if native_nodes.len() != graph.len() {
-            return Err(CaseGraph);
-        }
-        let mut ordinals = BTreeSet::new();
+        // Count the complete expansion before allocating graph/index scratch.
         let mut packets = graph.len();
+        let mut ranges = 0usize;
         for demand in self.demands {
-            if !ordinals.insert(demand.ordinal)
-                || !(1..=MAX_BATCH_RANGES_V1).contains(&demand.range_maximums.len())
-                || demand.verification == self.terminal
-                || !native_nodes.contains_key(&demand.verification)
-            {
+            if !(1..=MAX_BATCH_RANGES_V1).contains(&demand.range_maximums.len()) || demand.verification == self.terminal {
                 return Err(CaseGraph);
             }
             let parts = demand.range_maximums.iter().try_fold(0u64, |n, &bytes| {
@@ -105,12 +112,27 @@ impl BatchAdmissionV1<'_> {
                 return Err(DeliveryCost);
             }
             packets = packets.checked_add(1 + demand.range_maximums.len() * 2 + parts as usize).ok_or(CaseGraph)?;
+            ranges = ranges.checked_add(demand.range_maximums.len()).ok_or(CaseGraph)?;
             if packets > self.maximum_packets {
                 return Err(CaseGraph);
             }
         }
 
-        let mut spans = Vec::new();
+        let bytes = expansion_workspace_v1(&graph, self.demands, packets, ranges).map_err(BatchCourtErrorV1::LocalResource)?;
+        let lease = reserve(bytes).map_err(BatchCourtErrorV1::LocalResource)?;
+        let native_nodes: BTreeMap<_, _> = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index)).collect();
+        let terminal = *native_nodes.get(&self.terminal).ok_or(CaseGraph)?;
+        if native_nodes.len() != graph.len() {
+            return Err(CaseGraph);
+        }
+        let mut ordinals = BTreeSet::new();
+        for demand in self.demands {
+            if !ordinals.insert(demand.ordinal) || !native_nodes.contains_key(&demand.verification) {
+                return Err(CaseGraph);
+            }
+        }
+        graph.reserve_exact(packets - graph.len());
+        let mut spans = Vec::with_capacity(ranges);
         let mut verifications = BTreeSet::new();
         for demand in self.demands {
             let open = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(self.claim, self.scope, demand.ordinal)
@@ -158,8 +180,37 @@ impl BatchAdmissionV1<'_> {
             }
             Ok(())
         })?;
-        Ok((required, graph))
+        Ok((required, NativeRetainedV1::from_owner_reserved_v1(graph, lease)))
     }
+}
+
+fn expansion_workspace_v1(
+    graph: &[CausalServicePacketV1],
+    demands: &[MaximumBatchDemandV1<'_>],
+    packets: usize,
+    ranges: usize,
+) -> Result<u64, NativeCoverageV1> {
+    type Id = [u8; 64];
+    let overflow = || NativeCoverageV1::overflow::<CausalServicePacketV1>("Batch admission graph expansion");
+    let original_edges =
+        graph.iter().try_fold(0u64, |n, node| n.checked_add(node.predecessors.capacity() as u64)).ok_or_else(overflow)?;
+    let demand_edges =
+        demands.iter().try_fold(0u64, |n, demand| n.checked_add(demand.predecessors.len() as u64)).ok_or_else(overflow)?;
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<CausalServicePacketV1>(packets as u64)?; // original, expanded and one response during append
+    q.exact_v1::<(Id, Id)>(ranges as u64)?;
+    q.add_v1((graph.len() as u64).checked_mul(btree_node_envelope_bytes_v1::<Id, usize>() as u64).ok_or_else(overflow)?)?;
+    let per_demand = btree_node_envelope_bytes_v1::<u64, ()>() + btree_node_envelope_bytes_v1::<Id, ()>();
+    q.add_v1((demands.len() as u64).checked_mul(per_demand as u64).ok_or_else(overflow)?)?;
+    // A response part has one parent, each Finish has all its parts as
+    // parents, and verification/terminal edges grow from existing vectors.
+    let edges = (packets as u64)
+        .checked_mul(10)
+        .and_then(|n| n.checked_add(original_edges.checked_mul(2)?))
+        .and_then(|n| n.checked_add(demand_edges))
+        .ok_or_else(overflow)?;
+    q.exact_v1::<Id>(edges)?;
+    Ok(q.bytes_v1())
 }
 
 #[cfg(test)]
@@ -208,6 +259,18 @@ mod tests {
         };
         let mut book = ServiceReservations::new(ServiceCost { bytes: 64 * 1024, work: 2, io: 2, controls: 2 }).unwrap();
         let empty = book.clone();
+        let denied = plan.reserve_with_v1(
+            &mut book,
+            graph(3_129),
+            schedule,
+            |_| panic!("cost before capacity"),
+            |bytes| {
+                assert!(bytes > 0);
+                Err(NativeCoverageV1::unsupported::<CausalServicePacketV1>("test", "quota exhausted"))
+            },
+        );
+        assert!(matches!(denied, Err(BatchCourtErrorV1::LocalResource(_))));
+        assert_eq!(book, empty);
         let short = BatchAdmissionV1 { recovery_daa: plan.recovery_daa + 1, ..plan };
         assert!(short.reserve_v1(&mut book, graph(3_128), schedule, |n| Ok(cost(n))).is_err());
         assert_eq!(book, empty);

@@ -3349,3 +3349,24 @@ coordination and the complete native funded original profile are open.
 B0 and relay still agreed at virtual DAA 19,715, with no newly scanned
 Qwen carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-root-open-cli-live.2IFo7v/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-open-cli.pmrwbc/tests.log`.
+
+## Local memory admission for preclaim Batch graph expansion
+
+The preclaim Batch planner now counts the expanded packet and range
+geometry before allocating delivery packets, causal edges or indexes.
+It reserves native memory for that expansion before invoking the cost
+projection or scheduler. A local quota refusal leaves the service book
+unchanged and is distinct from a consensus window or capacity refusal.
+The expanded graph keeps its memory lease until its consumer takes over
+the edges during preparation of the rooted service row.
+
+The extracted suite passed 39 checks. The maximum case still schedules
+at 10,000 DAA including recovery and the boundary margin. The quota
+assertion verifies refusal before cost projection and no book mutation.
+The rooted original write and full funded profile are outside this
+extracted suite and still require native and live verification.
+
+B0 and relay agreed at virtual DAA 19,716. The scanned interval had no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-preclaim-graph-live.SXiyAc/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-preclaim-graph-quota.6LSqsO/tests.log`.
