@@ -1235,8 +1235,16 @@ mod source_material_tests {
     #[test]
     fn later_case_record_cannot_reuse_an_earlier_case_mutation() {
         let (source, delta) = fixture(3);
-        let make_record = |header, delta_end| {
-            let raw = CaseJournalRecord { header, payload: vec![2, 0, 1, 0, 6], aux: vec![] }.encode(source.limits).unwrap();
+        use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, PositiveNativeOperationV2};
+
+        let make_record = |header: CaseJournalHeader, delta_end| {
+            let payload = borsh::to_vec(&PositiveNativeBodyV2 {
+                version: 2,
+                revision: 1,
+                operation: PositiveNativeOperationV2::Expire { case: header.case, result: header.result },
+            })
+            .unwrap();
+            let raw = CaseJournalRecord { header, payload, aux: vec![] }.encode(source.limits).unwrap();
             PositiveCaseAcceptedMaterialV2 { header, raw, limits: source.limits, delta_end }
         };
         let make_head = |record: &PositiveCaseAcceptedMaterialV2| {
