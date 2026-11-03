@@ -3052,3 +3052,32 @@ B0 and relay agreed at DAA 19,707. The newly scanned selected interval
 had no Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-durable.G0k4E0/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-stop-durable-live.TZqUzd/page.json`.
+
+## Batch Stop fault settlement and archive cause
+
+An accepted, independently verified Stop fault now calls the existing
+original-claim conviction funnel. The writer verifies the finding's
+claim, notice signer and original clock, and requires the version 2
+signed material. The funnel checks the original producer and credited
+custody locks, uses existing offence keys and applies `CourtFraud` to
+the original claim. A finding-free Stop records only the scoped result.
+The receipt and liability effects share a rollback boundary. A retry
+of the same accepted object does not apply the effects again.
+
+The court-end archive appends evidence variant 4, carrying the same
+signed receipt. It checks the rooted receipt while that row is live and
+keeps the actual operands if a pending archive outlasts the row. New
+archives require the matching native close event. Prior archive tags
+retain their original decoding.
+
+The extracted suite passed 39 checks, including the appended archive
+codec, signed operand round trip and wire allocation count. The new
+native fixture covers a no-fault result, refused-filer rollback,
+duplicate refusal and a settled fault with a same-claim archive. The
+native fixture and whole-Core build remain unrun. The complete funded
+Batch profile, pruned IBD and public same-claim G0–G7 remain unverified.
+
+B0 and relay agreed on an advanced selected tip at DAA 19,707 and the
+newly scanned interval contained no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-accounting.TKCQk2/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-stop-accounting-live.LRx9zg/page.json`.

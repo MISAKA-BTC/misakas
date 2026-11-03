@@ -394,6 +394,27 @@ pub(super) fn apply_shared_bottom_conviction_v1(
     claim_id: Hash64,
     filer: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
+    apply_shared_claim_conviction_v1(b, ctx, claim_id, filer, PalwVoidReasonV2::CourtHeldVerdict)
+}
+
+/// Called only after the signed Stop operands independently produced a fault at this point.
+pub(super) fn apply_batch_stop_conviction_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    filer: PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    // This ruling judges the original claim's Stop statement. It does not adjudicate a sibling claim.
+    apply_shared_claim_conviction_v1(b, ctx, claim_id, filer, PalwVoidReasonV2::CourtFraud)
+}
+
+fn apply_shared_claim_conviction_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    filer: PalwBondKeyV2,
+    reason: PalwVoidReasonV2,
+) -> Result<(), PalwStateV2Error> {
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim_id)
         .ok_or_else(|| refused("shared bottom conviction has no original frame"))?
         .clone();
@@ -443,7 +464,7 @@ pub(super) fn apply_shared_bottom_conviction_v1(
         let g = b.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
         b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
     }
-    b.convict_by_court_verdict_as_v1(ctx, claim_id, &claim, filer, None, PalwVoidReasonV2::CourtHeldVerdict)
+    b.convict_by_court_verdict_as_v1(ctx, claim_id, &claim, filer, None, reason)
 }
 
 #[cfg(test)]

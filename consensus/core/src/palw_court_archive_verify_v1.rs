@@ -132,6 +132,7 @@ impl TransitionBuilder<'_> {
             }
             let captured_at = match a.evidence.as_ref() {
                 CourtEndEvidenceV1::Native { point, .. } | CourtEndEvidenceV1::TirConviction { point, .. } => *point,
+                CourtEndEvidenceV1::BatchStop { receipt } => receipt.at,
                 CourtEndEvidenceV1::Uncaptured | CourtEndEvidenceV1::DeadlineSweep { .. } => continue,
             };
             let Some(Row::CourtCloseReceipt(r)) = self.state.staged_court_row_v1(&Key::CourtCloseReceipt(id, side)) else {
@@ -498,6 +499,7 @@ impl TransitionBuilder<'_> {
             .ok_or_else(|| refusal("archive original binding missing"))?;
         let ended_at = match archive.evidence.as_ref() {
             CourtEndEvidenceV1::Native { point, .. } | CourtEndEvidenceV1::TirConviction { point, .. } => Some(point.daa_score),
+            CourtEndEvidenceV1::BatchStop { receipt } => Some(receipt.at.daa_score),
             CourtEndEvidenceV1::Uncaptured | CourtEndEvidenceV1::DeadlineSweep { .. } => None,
         };
         if deadline != group.assembly_deadline_daa

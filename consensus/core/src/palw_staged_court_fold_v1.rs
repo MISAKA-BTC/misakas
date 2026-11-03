@@ -1154,7 +1154,7 @@ impl TransitionBuilder<'_> {
         let rules = self.extras.native_court_rules_v1.filter(|rules| {
             &rules.at == at && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
         }).ok_or_else(|| refused("Batch Stop requires native rules at the accepting point and network"))?;
-        let (claim, _) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| refused(&why.to_string()))?;
+        let (claim, filer) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| refused(&why.to_string()))?;
         let key = PalwStagedCourtKeyV1::CourtBatchStopReceipt(claim);
         let digest = RootedBatchStopReceiptV1::digest_operands(operands).map_err(PalwStateV2Error::CarriageInconsistent)?;
         if let Some(old) = self.state.staged_court_row_v1(&key) {
@@ -1167,6 +1167,11 @@ impl TransitionBuilder<'_> {
             .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
         let context = crate::palw_court_shared_tir_state_v1::context(&self.state, claim)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        if finding.as_ref().is_some_and(|fault| {
+            fault.claim_id != claim || fault.reservation_owner != filer || fault.reserved_daa != context.original_accepted_daa
+        }) {
+            return Err(refused("Batch Stop finding changes its claim, signer or original clock"));
+        }
         let (source_id, material_until_daa) = (context.source_id, context.material_until_daa);
         let mut quote = super::native_writers::NativeWriteQuoteV1::new("Batch Stop receipt row");
         quote
@@ -1192,15 +1197,62 @@ impl TransitionBuilder<'_> {
             fault_position: finding.map(|fault| fault.position),
             operands: Some(Box::new(BatchStopControlV1 { operands: retained }).into()),
         };
+        self.commit_verified_batch_stop_v1(receipt, filer)
+    }
+
+    /// Persist and apply an already verified finding together. Only the native
+    /// Stop verifier may reach this writer; loading a receipt has no effects.
+    fn commit_verified_batch_stop_v1(
+        &mut self,
+        receipt: crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1,
+        filer: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1;
+        use crate::palw_court_end_archive_v1::CourtEndEvidenceV1;
+        let (claim, at) = (receipt.claim, receipt.at);
+        let key = PalwStagedCourtKeyV1::CourtBatchStopReceipt(claim);
+        if self.state.staged_court_row_v1(&key).is_some() {
+            return Err(PalwStateV2Error::CarriageInconsistent("accepted Batch Stop receipt is immutable".into()));
+        }
+        if receipt.version != 2 {
+            return Err(PalwStateV2Error::CarriageInconsistent("new Batch Stop receipt needs retained operands".into()));
+        }
         receipt.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let ending = if receipt.fault_position.is_some() {
+            let mut quote = super::native_writers::NativeWriteQuoteV1::new("Batch Stop court end evidence");
+            quote.exact::<RootedBatchStopReceiptV1>(1)?.exact::<CourtEndEvidenceV1>(2)?.exact::<usize>(3)?;
+            self.admit_native_write_v1(quote)?;
+            Some(Box::new(CourtEndEvidenceV1::BatchStop { receipt: Box::new(receipt.clone()) }).into())
+        } else {
+            None
+        };
         let new = Some(PalwStagedCourtRowV1::CourtBatchStopReceipt(Box::new(receipt)));
         self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "native Batch Stop receipt writer")?;
         self.reserve_staged_indices_v1(&key, &new)?;
+        let saved = if ending.is_some() { Some(self.try_checkpoint()?) } else { None };
         let row = new.as_ref().expect("new Batch Stop receipt");
         self.state.staged_courts.insert(key, row.clone());
         update_indices(&mut self.state, key, None, Some(row));
         self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new });
+        if let (Some(ending), Some(saved)) = (ending, saved) {
+            let previous = self.court_end_evidence.replace(ending);
+            let result = super::palw_court_service_lifecycle_fold_v1::apply_batch_stop_conviction_v1(self, &at, claim, filer);
+            self.court_end_evidence = previous;
+            if let Err(err) = result {
+                self.restore(saved);
+                return Err(err);
+            }
+        }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(super) fn commit_batch_stop_finding_for_tests_v1(
+        &mut self,
+        receipt: crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1,
+        filer: PalwBondKeyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        self.commit_verified_batch_stop_v1(receipt, filer)
     }
 
     /// The Batch dispatcher calls this with the literal signed opening.
@@ -1407,6 +1459,10 @@ impl TransitionBuilder<'_> {
                     return Err(PalwStateV2Error::CarriageInconsistent("court archive foreign row".into()));
                 };
                 a.check_material_extension(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            } else if matches!(a.evidence.as_ref(), crate::palw_court_end_archive_v1::CourtEndEvidenceV1::BatchStop { .. })
+                && self.court_end_evidence.as_deref() != Some(a.evidence.as_ref())
+            {
+                return Err(PalwStateV2Error::CarriageInconsistent("Batch Stop archive lacks its native closing event".into()));
             }
             a.check_context(&self.state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         }

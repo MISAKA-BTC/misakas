@@ -979,6 +979,7 @@ impl NativeWireScanV1 for crate::palw_court_end_archive_v1::CourtEndEvidenceV1 {
                 sum = sum.merge(<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            4 => <Box<crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(reader),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

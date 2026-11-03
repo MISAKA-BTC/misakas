@@ -7503,6 +7503,63 @@ mod conviction_e2e_tests {
         archive_roundtrip(&mut b, &params, &frame, id, at(&frame, 6), state.state_root());
     }
 
+    #[test]
+    fn batch_stop_verified_fault_is_atomic_and_retains_its_archive_cause() {
+        use crate::palw_batch_court_v1::{carriage::BatchStopControlV1, rooted::RootedBatchStopReceiptV1};
+        use crate::palw_court_end_archive_v1::{CourtEndDispositionV1, CourtEndEvidenceV1};
+        use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::SignedConstraintStopIntentV1;
+        use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1};
+
+        // This fixture starts at the writer boundary, after native adjudication.
+        let (fx, semantics, table) = crate::palw_tir_public_claim_v1::palw_tir_public_constraint_frame_fixture_v1();
+        let frame = &fx.frame;
+        let plan = frame.plan_v1();
+        let claim = plan.original_claim;
+        let (state, params, extras) = world(&fx, frame);
+        let point = at(frame, 6);
+        let intent = SignedConstraintStopIntentV1 {
+            version: 1, claim, scope_id: h(2), policy_id: h(3), semantics_id: semantics.commitment(), material_id: h(4),
+            position: frame.original_v1().decode_tokens_executed, stop_reason: frame.original_v1().stop_reason,
+            filer: outsider(), signature: vec![7; SIG],
+        };
+        let operands = borsh::to_vec(&(&intent, table.eog_opening().unwrap(), Vec::<u8>::new())).unwrap();
+        let receipt = RootedBatchStopReceiptV1 {
+            version: 2, claim, source_id: plan.source_id,
+            operands_digest: RootedBatchStopReceiptV1::digest_operands(&operands).unwrap(), at: point,
+            material_until_daa: plan.terms.material_until_daa, fault_position: Some(0),
+            operands: Some(Box::new(BatchStopControlV1 { operands }).into()),
+        };
+        let mut clean = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let mut no_fault = receipt.clone();
+        no_fault.fault_position = None;
+        clean.commit_batch_stop_finding_for_tests_v1(no_fault, outsider()).unwrap();
+        assert_eq!(clean.state.claim(&claim), state.claim(&claim));
+
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        archive_service(&mut b, frame);
+        let (session, _) = archive_session(&mut b, frame);
+        let before = b.state.state_root();
+        let count = b.entries.len();
+        assert!(b.commit_batch_stop_finding_for_tests_v1(receipt.clone(), frame.custody_v1().pledge_v1().producer).is_err());
+        assert_eq!((b.state.state_root(), b.entries.len()), (before, count));
+        b.commit_batch_stop_finding_for_tests_v1(receipt.clone(), outsider()).unwrap();
+        let settled = b.state.state_root();
+        assert!(b.commit_batch_stop_finding_for_tests_v1(receipt.clone(), outsider()).is_err());
+        assert_eq!(b.state.state_root(), settled);
+        assert!(matches!(b.state.claim(&claim).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+        let archive = b.state.court_end_archive_v1(session).unwrap();
+        assert_eq!(archive.adjudication(), CourtEndDispositionV1::TirClaimFault);
+        assert_eq!(archive.evidence.as_ref(), &CourtEndEvidenceV1::BatchStop { receipt: Box::new(receipt) });
+        archive.check_context(&b.state).unwrap();
+        let bytes = borsh::to_vec(archive.evidence.as_ref()).unwrap();
+        assert_eq!(bytes[0], 4);
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        CourtEndEvidenceV1::scan_native_wire_v1(&mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(&borsh::from_slice::<CourtEndEvidenceV1>(&bytes).unwrap(), archive.evidence.as_ref());
+    }
+
     /// fix-b (audit B-04): the court DEADLINE sweep no longer skips a service-bound session — it ends at its own deadline with the
     /// existing outcome minus any responder default (never a producer default), archived with the sweep as its cause, and the
     /// orphan cleanup still progresses. The independent ASSEMBLY sweep still skips a held head (an incomplete assembly on a bound
