@@ -562,6 +562,10 @@ impl PositiveCarrierPhaseTwoV2 {
             } else {
                 None
             };
+            let (original, open_carriage) = match original {
+                Some((rules, carriage)) => (Some(rules), (kind == 9).then_some(carriage)),
+                None => (None, None),
+            };
             let Some(rules) = original.or_else(|| {
                 NativeAssignmentRulesV2::resolve(
                     params,
@@ -656,6 +660,10 @@ impl PositiveCarrierPhaseTwoV2 {
                 transport,
                 decode,
             )?;
+            let action = match open_carriage {
+                Some(carriage) => action.with_original_open_carriage_v2(carriage)?,
+                None => action,
+            };
             actions
                 .try_reserve_exact(1)
                 .map_err(|_| NativeCoverageV1::unsupported::<Self>("native Positive raw actions", "allocation refused"))?;

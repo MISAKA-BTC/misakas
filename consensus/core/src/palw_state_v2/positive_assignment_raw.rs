@@ -103,6 +103,9 @@ impl NativeAssignmentRulesV2 {
     ) -> Result<AssignmentBodyLimitsV2, crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyErrorV2> {
         AssignmentBodyLimitsV2::from_policy(&self.policy)
     }
+    pub(super) fn certification_policy(&self) -> Option<&crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1> {
+        self.gate_c.as_ref()
+    }
     pub fn gate_c_clock(&self, quoted_result_daa: u64) -> Result<AssignmentGateCClockV2, AssignmentGateCClockErrorV2> {
         AssignmentGateCClockV2::from_existing_policy(
             self.gate_c.as_ref().ok_or(AssignmentGateCClockErrorV2::MissingActualPolicy)?,
@@ -125,6 +128,7 @@ struct PositiveAssignmentRawDataV2 {
     current_output: Option<UtxoEntry>,
     rules: NativeAssignmentRulesV2,
     case_backing: Option<Arc<NativeAssignedCaseBackingV2>>,
+    original_open: Option<Arc<NativeAcceptedCaseCarriageV2>>,
     _transport: Arc<NativeDemandLeaseV1>,
     _decode: Arc<NativeDemandLeaseV1>,
 }
@@ -159,6 +163,7 @@ impl PositiveAssignmentRawActionV2 {
             current_output,
             rules,
             case_backing: None,
+            original_open: None,
             _transport: Arc::new(transport),
             _decode: Arc::new(decode),
         })))
@@ -171,6 +176,27 @@ impl PositiveAssignmentRawActionV2 {
             + std::mem::size_of::<[usize; 2]>()
             + std::mem::align_of::<NativeDemandLeaseV1>();
         (arc_data + 2 * arc_ticket) as u64
+    }
+    /// Retain the original accepted op8 and executed prefix for op9 replay.
+    pub fn with_original_open_carriage_v2(mut self, carriage: NativeAcceptedCaseCarriageV2) -> Result<Self, NativeCoverageV1> {
+        let error =
+            || NativeCoverageV1::unsupported::<Self>("original Assignment carriage", "wrong operation, origin or shared owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(error)?;
+        if data.original_open.is_some()
+            || data.rules.original_material().map(|material| material.origin) != Some(carriage.origin())
+            || data.body[data.index as usize].payload.get(7) != Some(&9)
+        {
+            return Err(error());
+        }
+        let bytes = (std::mem::size_of::<NativeAcceptedCaseCarriageV2>()
+            + std::mem::size_of::<[usize; 2]>()
+            + std::mem::align_of::<NativeAcceptedCaseCarriageV2>()) as u64;
+        Arc::get_mut(&mut data._decode).ok_or_else(error)?.grow_memory_v1(bytes)?;
+        data.original_open = Some(Arc::new(carriage));
+        Ok(self)
+    }
+    pub(super) fn original_open_carriage_v2(&self) -> Option<&NativeAcceptedCaseCarriageV2> {
+        self.0.original_open.as_deref()
     }
     pub fn with_native_case_backing_v2(
         mut self,
@@ -234,6 +260,11 @@ impl PartialEq for PositiveAssignmentRawActionV2 {
             && self.selected_parent() == other.selected_parent()
             && self.current_output() == other.current_output()
             && self.rules() == other.rules()
+            && match (&self.0.original_open, &other.0.original_open) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
             && match (&self.0.case_backing, &other.0.case_backing) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -320,6 +351,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             current_output,
             rules,
             case_backing,
+            original_open,
             _transport: _,
             _decode: _,
         } = &*self.0;
@@ -329,6 +361,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             .add::<Self>(current_output.native_heap_v1(path), path)
             .add::<Self>(rules.native_heap_v1(path), path)
             .add::<Self>(case_backing.native_heap_v1(path), path)
+            .add::<Self>(original_open.native_heap_v1(path), path)
     }
 }
 impl NativeHeapV1 for PositiveAssignmentScheduledActionV2 {

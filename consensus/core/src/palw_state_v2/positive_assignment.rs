@@ -22,6 +22,46 @@ use misaka_palw_positive_contract::{
 fn refusal(detail: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(format!("Positive Assignment transition: {detail:?}"))
 }
+fn assignment_resource_error(error: crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2) -> PalwStateV2Error {
+    use crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2 as E;
+    match error {
+        E::Native(why) => PalwStateV2Error::NativeResource(why),
+        E::MissingNativeLease => PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+            PositiveAssignmentRawActionV2,
+        >(
+            "Assignment derived construction",
+            "actual native allocation lease is not armed",
+        )),
+        other => refusal(other),
+    }
+}
+fn missing_assignment_history() -> PalwStateV2Error {
+    PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
+}
+fn assignment_horizon_v2(
+    rules: &NativeAssignmentRulesV2,
+    bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
+    source: &misaka_palw_positive_contract::assignment::consents::AssignmentSourceConsentV2,
+    prover: &misaka_palw_positive_contract::assignment::consents::AssignmentProverConsentV2,
+    resources: &crate::palw_positive_assignment_resources_v2::AssignmentDerivedResourcesV2,
+    original_daa: u64,
+) -> Result<crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2, PalwStateV2Error> {
+    let preimages = rules.native_preimages().ok_or_else(|| refusal("missing original Case cost preimages"))?;
+    let certification = rules.certification_policy().ok_or_else(|| refusal("missing actual original Gate C policy"))?;
+    crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2::derive(
+        bundle,
+        source,
+        prover,
+        rules.assignment_policy(),
+        rules.positive_policy(),
+        certification,
+        &preimages.case_fees,
+        resources,
+        preimages.source_policy.max_units_per_request,
+        original_daa,
+    )
+    .map_err(refusal)
+}
 fn native_bond(outpoint: NativeOutpoint) -> PalwBondKeyV2 {
     PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(outpoint.transaction.0), outpoint.index))
 }
@@ -542,6 +582,18 @@ impl TransitionBuilder<'_> {
                             return Err(refusal("current role cannot accept work"));
                         }
                     }
+                    let poster =
+                        self.state.bond(&native_bond(bundle.terms.poster)).ok_or_else(|| refusal("missing current poster"))?;
+                    let payer_key: &[u8; PUBKEY_BYTES] = poster.pubkey.as_slice().try_into().map_err(refusal)?;
+                    let (funding, _) = crate::palw_positive_assignment_funds_v2::check_assignment_funding_carriage_v2(
+                        bundle,
+                        tx,
+                        payer_key,
+                        action.current_output(),
+                        ctx.daa_score,
+                    )
+                    .map_err(refusal)?;
+                    self.require_assignment_output_unlocked_v2(funding)?;
                     let layout: crate::palw_tir_class_v1::PalwTirLayoutV1 = borsh::from_slice(layout).map_err(refusal)?;
                     let reserved = crate::palw_positive_assignment_resources_v2::ReservedAssignmentDerivedResourcesV2::derive(
                         &self.state,
@@ -553,18 +605,7 @@ impl TransitionBuilder<'_> {
                         rules.prompt_form(),
                         preimages.physical.max_heap_bytes.min(rules.assignment_policy().max_heap_bytes),
                     )
-                    .map_err(|error| match error {
-                        crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2::Native(why) => {
-                            PalwStateV2Error::NativeResource(why)
-                        }
-                        crate::palw_positive_assignment_resources_v2::AssignmentResourceErrorV2::MissingNativeLease => {
-                            PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                                "Assignment derived construction",
-                                "actual native allocation lease is not armed",
-                            ))
-                        }
-                        other => refusal(other),
-                    })?;
+                    .map_err(assignment_resource_error)?;
                     let resources = reserved.resources();
                     if resources.source_quote().digest != bundle.source_catalog
                         || resources.binding().job().context_hash().as_bytes() != bundle.job_context.0
@@ -572,20 +613,22 @@ impl TransitionBuilder<'_> {
                         return Err(refusal("independently derived native job/source catalog differs from signed bundle"));
                     }
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
+                    assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
                     let clock = rules.gate_c_clock(bundle.terms.result_before_daa).map_err(refusal)?;
                     match clock.require_complete_native_bound() {
                         Err(why) => Err(refusal(why)),
                         Ok(impossible) => match impossible {},
                     }
                 }
-                O::AdmitAssignedResult { assignment, .. } => {
+                O::AdmitAssignedResult { assignment, payload } => {
                     let row = self
                         .assignment_row_v2(*assignment)?
                         .ok_or_else(|| refusal("missing actual accepted Assignment at this prefix"))?;
                     if row.status != AssignmentStatusV2::Open || ctx.daa_score >= row.bundle.terms.result_before_daa {
                         return Err(refusal("Assignment unavailable for single Result consumption"));
                     }
-                    Err(refusal("native original material/Case reservation owner is not yet resolved"))
+                    self.check_assigned_result_carriage_v2(ctx, action, &row, payload)?;
+                    Err(refusal("native Case reservation owner is not yet resolved"))
                 }
                 O::CancelAssignment { cancellation, .. } => {
                     let row =
@@ -628,5 +671,139 @@ impl TransitionBuilder<'_> {
             self.restore(checkpoint);
         }
         result
+    }
+}
+
+impl TransitionBuilder<'_> {
+    fn check_assigned_result_carriage_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+        row: &AssignmentRow,
+        payload: &crate::palw_positive_court_v2::coordinator::assignment_body::AssignedResultPayloadV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::{
+            palw_native_resource_v1::reserve_native_requests_v1,
+            palw_positive_assignment_funds_v2::qualify_assigned_case_funding_output_v2,
+            palw_positive_assignment_resources_v2::ReservedAssignmentDerivedResourcesV2,
+            palw_positive_court_v2::coordinator::assignment_body::{
+                PositiveAssignmentNativeOperationV2 as O, decode_assignment_body_v2, scan_assignment_body_v2,
+            },
+        };
+        use misaka_palw_positive_contract::identity::Digest;
+        let rules = action.rules();
+        let open = action.original_open_carriage_v2().ok_or_else(missing_assignment_history)?;
+        if open.origin() != row.origin || rules.original_material() != Some(row.admission_material) {
+            return Err(missing_assignment_history());
+        }
+        let rows = PositiveRowsV2::new(&self.state);
+        let funding = rows.read(NativeRowKey::AssignmentFunding(row.id())).map_err(refusal)?.ok_or_else(missing_assignment_history)?;
+        let NativeRowBody::AssignmentFunding(funding) = funding.body else {
+            return Err(missing_assignment_history());
+        };
+        payload.result.authenticate(&row.worker_key, &payload.miner_signature).map_err(refusal)?;
+        payload
+            .consent
+            .authenticate(
+                &payload.result,
+                &payload.service,
+                &payload.basis,
+                ctx.daa_score,
+                &funding.payer_key,
+                &payload.payer_signature,
+            )
+            .map_err(refusal)?;
+        let source = &row.source_consent;
+        let budget = &payload.service.budget;
+        if payload.service.source_catalog != source.source_catalog
+            || payload.basis.policy != row.positive_policy
+            || payload.basis.schedule != rules.assignment_policy().case_fee_schedule
+            || payload.service.deadline > source.service_before_daa
+            || budget.rounds > source.budget.rounds
+            || budget.unique_source_bytes > source.budget.unique_source_bytes
+            || budget.transmitted_bytes > source.budget.transmitted_bytes
+            || budget.additional_work > source.budget.additional_work
+            || budget.retained_bytes > source.budget.retained_bytes
+            || budget.retention_until > source.budget.retention_until
+            || budget.fee > source.budget.fee
+            || budget.witness_attempts > source.budget.witness_attempts
+        {
+            return Err(refusal("Case terms exceed the original signed policy and source bounds"));
+        }
+        // These are the payer-signed amounts. The reservation owner must still
+        // derive and compare the complete native resource and price quote.
+        let output = qualify_assigned_case_funding_output_v2(
+            row,
+            &funding,
+            &payload.result,
+            &payload.service,
+            &payload.basis,
+            &payload.consent,
+            &funding.payer_key,
+            action.transaction(),
+            action.current_output(),
+            ctx.daa_score,
+        )
+        .map_err(refusal)?;
+        self.require_assignment_output_unlocked_v2(output.outpoint())?;
+
+        let tx = open.transaction();
+        if tx.payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 8]) {
+            return Err(missing_assignment_history());
+        }
+        let limits = rules.body_limits().map_err(|_| missing_assignment_history())?;
+        let raw = &tx.payload[3..];
+        let summary = scan_assignment_body_v2(raw, limits).map_err(|_| missing_assignment_history())?;
+        let _decode = reserve_native_requests_v1(summary.heap).map_err(PalwStateV2Error::NativeResource)?.ok_or({
+            PalwStateV2Error::NativeContextUnavailable(
+                crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+            )
+        })?;
+        let original = decode_assignment_body_v2(raw, limits).map_err(|_| missing_assignment_history())?;
+        let O::AcceptCanonicalAssignment { bundle, source, prover, signatures, layout } = &original.operation else {
+            return Err(missing_assignment_history());
+        };
+        if bundle != &row.bundle || source != &row.source_consent || prover != &row.prover_consent {
+            return Err(missing_assignment_history());
+        }
+        let prefix = open.prefix_state().map_err(|_| missing_assignment_history())?;
+        let layout: crate::palw_tir_class_v1::PalwTirLayoutV1 = borsh::from_slice(layout).map_err(|_| missing_assignment_history())?;
+        let preimages = rules.native_preimages().ok_or_else(missing_assignment_history)?;
+        let resources = ReservedAssignmentDerivedResourcesV2::derive(
+            prefix,
+            bundle.terms,
+            &layout,
+            rules.assignment_policy(),
+            rules.positive_policy(),
+            &preimages.source_policy,
+            rules.prompt_form(),
+            preimages.physical.max_heap_bytes.min(rules.assignment_policy().max_heap_bytes),
+        )
+        .map_err(assignment_resource_error)?;
+        let resources = resources.resources();
+        let binding = resources.binding();
+        if resources.source_quote().digest != bundle.source_catalog
+            || Digest(binding.job().job_id.as_bytes()) != row.job
+            || Digest(binding.job().context_hash().as_bytes()) != row.context
+            || Digest(binding.job().prompt_token_ids_hash.as_bytes()) != row.input
+            || prefix.bond(&native_bond(bundle.terms.worker)).is_none_or(|bond| bond.pubkey.as_slice() != row.worker_key)
+        {
+            return Err(missing_assignment_history());
+        }
+        binding.authenticate_bundle_roles(prefix, bundle, signatures).map_err(|_| missing_assignment_history())?;
+        binding.check_result(&payload.result).map_err(refusal)?;
+        if resources.all_attempt_relations() / u64::from(rules.positive_policy().max_attempts) != payload.basis.mandatory_relations {
+            return Err(refusal("Case relation count differs from the original registered program"));
+        }
+        let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
+        if payload.basis.required_fee < horizon.case_money.fee
+            || payload.basis.required_capital < horizon.case_money.capital
+            || budget.rounds < horizon.minimum_source_rounds
+            || budget.unique_source_bytes < horizon.minimum_unique_source_bytes
+            || budget.transmitted_bytes < horizon.minimum_transmitted_source_bytes
+        {
+            return Err(refusal("Case funding or source budgets do not cover the original native quote"));
+        }
+        Ok(())
     }
 }

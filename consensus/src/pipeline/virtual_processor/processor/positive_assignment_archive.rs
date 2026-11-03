@@ -112,7 +112,7 @@ impl VirtualStateProcessor {
         state: &PalwChainStateV2,
         assignment: AssignmentId,
         continuation_body: &[u8],
-    ) -> Result<Option<NativeAssignmentRulesV2>, NativeAssignmentArchiveErrorV2> {
+    ) -> Result<Option<(NativeAssignmentRulesV2, NativeAcceptedCaseCarriageV2)>, NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
         let workspace = (4 * std::mem::size_of::<NativeRowValue>()
             + 2 * std::mem::size_of::<AssignmentAdmissionMaterialV2>()
@@ -188,7 +188,7 @@ impl VirtualStateProcessor {
         if !matches!(PositiveRowsV2::new(prefix).read(NativeRowKey::Assignment(assignment)), Ok(None)) {
             return Err(E::Invalid("original Open did not start at an absent Assignment"));
         }
-        Ok(Some(rules))
+        Ok(Some((rules, carriage)))
     }
 
     /// Reconstruct a genuine Assignment control event from the original native

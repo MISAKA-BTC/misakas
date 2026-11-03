@@ -171,3 +171,31 @@ passed all ten cases on the same source as the passing Clippy checks. The
 artifact audit records both executable hashes and the original failed check.
 The native reader still requires an actual accepted Assignment for end-to-end
 coverage.
+
+
+## Native preflight for Assignment and Case funding
+
+Op8 now checks the actual carrier output against the composed UTXO and
+poster key. It checks the signed worker amount and total caps before deriving
+resources and rejects an outpoint that already backs a native lock. The full
+Assignment funding calculator uses the same output check.
+
+For op9 the accepted original Open carriage retains its reconstructed pre-event
+state through rehearsal and the final fold. The fold checks the current Open
+row and original material reference, authenticates the Result and C payer,
+checks the C output and original signed caps, and independently derives the
+original job, source catalog, and required relations from the registered
+program and original layout. Missing original carriage defers the transition.
+A same-block Open would require a separate in-memory history path.
+
+Op8 also runs the existing horizon calculation using the actual selected
+Gate C policy. Op9 derives the same horizon at the original admission DAA and
+checks its Case funding and source budget minima. Actual global service
+reservations, native capacity custody, complete price and liability ownership,
+and the atomic A/C acceptance writes remain necessary.
+
+The first library Clippy run refused an unnecessary lazy error construction.
+The corrected run and focused test Clippy passed. The funds, original material,
+and resource quote targets passed all 16 Core cases on that source. The scoped
+artifact audit records the three executable hashes. The native A/C path still
+needs end-to-end execution with actual accepted contracts.

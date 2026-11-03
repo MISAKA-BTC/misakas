@@ -582,5 +582,37 @@
     "stored_sha256": "177fb89b4a3324eb3507eb7681a2e96fbc76752fe97aae1873a9389baf1c850e",
     "raw_bytes": 360454,
     "stored_bytes": 24856
+  },
+  {
+    "raw_name": "case-carriage-library-clippy-first.log",
+    "stored_name": "case-carriage-library-clippy-first.log.gz",
+    "raw_sha256": "17e030a189306e92c251db844d9353a3729749f97ea188e774f40ead7f5eef3e",
+    "stored_sha256": "cbb08f50e3c2881f7e233960e7c494267684c15733a39aafe002c191b64fdb10",
+    "raw_bytes": 293465,
+    "stored_bytes": 20864
+  },
+  {
+    "raw_name": "case-carriage-library-clippy-second.log",
+    "stored_name": "case-carriage-library-clippy-second.log.gz",
+    "raw_sha256": "a1546c686b32723efaf437f94a9764a2a29a8b687f7133f9bda043843fd49da6",
+    "stored_sha256": "f4d82612e504251c59a4ebc577af7e1cbde8404ad3c623011671fbee06b2ade5",
+    "raw_bytes": 341727,
+    "stored_bytes": 23641
+  },
+  {
+    "raw_name": "case-carriage-tests-clippy-second.log",
+    "stored_name": "case-carriage-tests-clippy-second.log.gz",
+    "raw_sha256": "5d609dff0694197a7a91b7d35dbde983cfa365f3374c9ddd0a0cbca77adb9535",
+    "stored_sha256": "7b9921a31d2e49c20b58b7743189f053eeb40f47aa843c02d8ef1b26f58eee1e",
+    "raw_bytes": 342554,
+    "stored_bytes": 23671
+  },
+  {
+    "raw_name": "case-carriage-runtime-second.log",
+    "stored_name": "case-carriage-runtime-second.log.gz",
+    "raw_sha256": "95a5257d6fd39e3ced2e6c8bc2454f20394c8f799e449211184b9734a80b716d",
+    "stored_sha256": "f694f01028d22ffa5df2fbc665aa842124d4dd36ef7923f9c5025728d536c645",
+    "raw_bytes": 362195,
+    "stored_bytes": 25061
   }
 ]

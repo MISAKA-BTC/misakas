@@ -371,20 +371,15 @@ impl AssignmentFundingOutputV2 {
     }
 }
 
-/// Reads the carrier's own output and the CURRENT composed UTXO entry for that
-/// same outpoint. A spent output, another transaction's entry, another payer,
-/// an incorrect native refund script, expired consent and cap overflow refuse.
-/// The `current_entry` lookup and accepted-carrier authentication belong to the
-/// native exclusive writer; public transaction/entry DTOs alone authorize none.
-pub fn qualify_assignment_funding_output_v2(
+/// Check the signed payer and actual composed output before pricing capacity.
+/// The returned outpoint is only a lookup key for the shared lock check.
+pub(crate) fn check_assignment_funding_carriage_v2(
     bundle: &AssignmentAdmissionBundleV2,
     transaction: &Transaction,
     payer_key: &[u8; PUBKEY_BYTES],
     current_entry: Option<&UtxoEntry>,
-    required_fee: u64,
-    required_capital: u64,
     now: u64,
-) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
+) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
     bundle.validate_shape()?;
     if principal(payer_key) != bundle.terms.payer
         || Digest(kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes()) != bundle.terms.refund_payload
@@ -402,12 +397,36 @@ pub fn qualify_assignment_funding_output_v2(
     if entry.amount != output.value || entry.script_public_key != output.script_public_key || entry.is_coinbase {
         return Err(AssignmentFundsErrorV2::CurrentUtxo);
     }
-    bundle.check_quoted_amounts(required_fee, required_capital, output.value)?;
+    if output.value < bundle.terms.worker_reward
+        || output.value > bundle.funding.max_locked
+        || output.value > bundle.terms.max_assignment_locked
+    {
+        return Err(AssignmentFundsErrorV2::Contract(ContractError::Budget));
+    }
+    Ok((point(TransactionOutpoint::new(transaction.id(), bundle.funding.funding_output_index)), output.value))
+}
+
+/// Reads the carrier's own output and the CURRENT composed UTXO entry for that
+/// same outpoint. A spent output, another transaction's entry, another payer,
+/// an incorrect native refund script, expired consent and cap overflow refuse.
+/// The `current_entry` lookup and accepted-carrier authentication belong to the
+/// native exclusive writer; public transaction/entry DTOs alone authorize none.
+pub fn qualify_assignment_funding_output_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    transaction: &Transaction,
+    payer_key: &[u8; PUBKEY_BYTES],
+    current_entry: Option<&UtxoEntry>,
+    required_fee: u64,
+    required_capital: u64,
+    now: u64,
+) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
+    let (outpoint, amount) = check_assignment_funding_carriage_v2(bundle, transaction, payer_key, current_entry, now)?;
+    bundle.check_quoted_amounts(required_fee, required_capital, amount)?;
     let allocated = add([bundle.terms.worker_reward, required_fee, required_capital])?;
-    let surplus = output.value.checked_sub(allocated).ok_or(AssignmentFundsErrorV2::Conservation)?;
+    let surplus = amount.checked_sub(allocated).ok_or(AssignmentFundsErrorV2::Conservation)?;
     Ok(AssignmentFundingOutputV2 {
-        outpoint: point(TransactionOutpoint::new(transaction.id(), bundle.funding.funding_output_index)),
-        amount: output.value,
+        outpoint,
+        amount,
         worker: bundle.terms.worker_reward,
         fee: required_fee,
         capital: required_capital,
