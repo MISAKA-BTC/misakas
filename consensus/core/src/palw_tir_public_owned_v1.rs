@@ -1878,7 +1878,7 @@ impl PalwTirPublicOwnedV1 {
         self.spent
     }
     /// An open demand the frame's literal custodians still owe an answer to, not yet collected as a default.
-    fn unpaid_v1(&self) -> bool {
+    pub(crate) fn unpaid_v1(&self) -> bool {
         self.active_v1().is_some_and(|p| {
             !p.collected && self.response_custodians_v1().iter().any(|s| p.slots.get(s).is_none_or(|slot| slot.finished.is_none()))
         })

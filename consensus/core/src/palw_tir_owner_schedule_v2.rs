@@ -23,33 +23,33 @@ pub enum OwnerScheduleErrorV2 {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OwnerPhaseV2 {
+pub enum OwnerPhaseV2<D = u64> {
     Ready,
     Active { until: u64 },
-    Waiting { turn: u64, respond_until: u64, collect_until: u64 },
+    Waiting { turn: u64, demand: D, respond_until: u64, collect_until: u64 },
     Closed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct OwnerRow<K> {
+struct OwnerRow<K, D> {
     key: K,
-    phase: OwnerPhaseV2,
+    phase: OwnerPhaseV2<D>,
     last_demand: Option<u64>,
 }
 
 /// Ready owners and re-entrants are appended to the same FIFO. A key is
 /// reserved for the frame's lifetime, including after execution closes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OwnerScheduleV2<K> {
+pub struct OwnerScheduleV2<K, D = u64> {
     roster_limit: usize,
     active_limit: usize,
     response_limit: usize,
     lease_daa: u64,
     now: u64,
-    rows: VecDeque<OwnerRow<K>>,
+    rows: VecDeque<OwnerRow<K, D>>,
 }
 
-impl<K: Copy + Eq> OwnerScheduleV2<K> {
+impl<K: Copy + Eq, D: Copy + Eq> OwnerScheduleV2<K, D> {
     pub fn new(
         roster_limit: usize,
         active_limit: usize,
@@ -69,7 +69,7 @@ impl<K: Copy + Eq> OwnerScheduleV2<K> {
         Ok(Self { roster_limit, active_limit, response_limit, lease_daa, now, rows: VecDeque::with_capacity(roster_limit) })
     }
 
-    pub fn phase(&self, key: K) -> Option<OwnerPhaseV2> {
+    pub fn phase(&self, key: K) -> Option<OwnerPhaseV2<D>> {
         self.rows.iter().find(|row| row.key == key).map(|row| row.phase)
     }
 
@@ -133,6 +133,7 @@ impl<K: Copy + Eq> OwnerScheduleV2<K> {
         &mut self,
         key: K,
         turn: u64,
+        demand: D,
         respond_until: u64,
         collect_until: u64,
     ) -> Result<(), OwnerScheduleErrorV2> {
@@ -151,7 +152,7 @@ impl<K: Copy + Eq> OwnerScheduleV2<K> {
             return Err(OwnerScheduleErrorV2::ResponseCapacityFull);
         }
         self.rows[index].last_demand = Some(turn);
-        self.rows[index].phase = OwnerPhaseV2::Waiting { turn, respond_until, collect_until };
+        self.rows[index].phase = OwnerPhaseV2::Waiting { turn, demand, respond_until, collect_until };
         self.fill_active();
         Ok(())
     }
@@ -159,12 +160,12 @@ impl<K: Copy + Eq> OwnerScheduleV2<K> {
     /// Called after a verified final response part (with `collected=false`)
     /// or a verified default collection (with `collected=true`). Partial
     /// parts keep the same reservation and do not requeue the owner.
-    pub fn resume(&mut self, key: K, turn: u64, collected: bool) -> Result<(), OwnerScheduleErrorV2> {
+    pub fn resume(&mut self, key: K, turn: u64, demand: D, collected: bool) -> Result<(), OwnerScheduleErrorV2> {
         let index = self.index(key)?;
-        let OwnerPhaseV2::Waiting { turn: pending, respond_until, collect_until } = self.rows[index].phase else {
+        let OwnerPhaseV2::Waiting { turn: pending, demand: pending_id, respond_until, collect_until } = self.rows[index].phase else {
             return Err(OwnerScheduleErrorV2::WrongPhase);
         };
-        if turn != pending {
+        if turn != pending || demand != pending_id {
             return Err(OwnerScheduleErrorV2::WrongDemand);
         }
         if self.now >= collect_until || collected != (self.now >= respond_until) {
@@ -217,13 +218,14 @@ mod tests {
             schedule.admit(key).unwrap();
         }
         assert_eq!(schedule.ready_wait_slot_releases(4), Some(3));
-        schedule.wait_for_response(1, 7, 108, 112).unwrap();
-        assert_eq!(schedule.phase(1), Some(Waiting { turn: 7, respond_until: 108, collect_until: 112 }));
+        schedule.wait_for_response(1, 7, 107u64, 108, 112).unwrap();
+        assert_eq!(schedule.phase(1), Some(Waiting { turn: 7, demand: 107, respond_until: 108, collect_until: 112 }));
         assert_eq!(schedule.phase(2), Some(Active { until: 103 }));
         schedule.advance(101).unwrap();
-        assert_eq!(schedule.resume(1, 6, false), Err(WrongDemand));
-        assert_eq!(schedule.resume(1, 7, true), Err(InvalidWindow));
-        schedule.resume(1, 7, false).unwrap();
+        assert_eq!(schedule.resume(1, 6, 106u64, false), Err(WrongDemand));
+        assert_eq!(schedule.resume(1, 7, 199u64, false), Err(WrongDemand));
+        assert_eq!(schedule.resume(1, 7, 107u64, true), Err(InvalidWindow));
+        schedule.resume(1, 7, 107u64, false).unwrap();
         assert_eq!(schedule.ready_wait_slot_releases(1), Some(3));
         schedule.advance(103).unwrap();
         assert_eq!(schedule.phase(3), Some(Active { until: 106 }));
@@ -231,8 +233,8 @@ mod tests {
         assert_eq!(schedule.phase(4), Some(Active { until: 106 }));
         schedule.finish(4).unwrap();
         assert_eq!(schedule.phase(1), Some(Active { until: 106 }));
-        assert_eq!(schedule.wait_for_response(1, 7, 108, 112), Err(WrongDemand));
-        schedule.wait_for_response(1, 8, 108, 112).unwrap();
+        assert_eq!(schedule.wait_for_response(1, 7, 107u64, 108, 112), Err(WrongDemand));
+        schedule.wait_for_response(1, 8, 108u64, 108, 112).unwrap();
     }
 
     #[test]
@@ -241,23 +243,23 @@ mod tests {
         for key in 1..=3 {
             schedule.admit(key).unwrap();
         }
-        schedule.wait_for_response(1, 0, 20, 25).unwrap();
+        schedule.wait_for_response(1, 0, 100u64, 20, 25).unwrap();
         let parked = schedule.clone();
-        assert_eq!(schedule.wait_for_response(2, 0, 20, 25), Err(ResponseCapacityFull));
+        assert_eq!(schedule.wait_for_response(2, 0, 100u64, 20, 25), Err(ResponseCapacityFull));
         assert_eq!(schedule.finish(1), Err(WrongPhase));
         assert_eq!(schedule, parked);
 
         schedule.advance(20).unwrap();
-        assert_eq!(schedule.resume(1, 0, false), Err(InvalidWindow));
-        schedule.resume(1, 0, true).unwrap();
+        assert_eq!(schedule.resume(1, 0, 100u64, false), Err(InvalidWindow));
+        schedule.resume(1, 0, 100u64, true).unwrap();
         assert_eq!(schedule.phase(1), Some(Ready));
-        schedule.wait_for_response(2, 0, 22, 25).unwrap();
+        schedule.wait_for_response(2, 0, 100u64, 22, 25).unwrap();
         schedule.advance(25).unwrap();
         assert_eq!(schedule.phase(2), Some(Closed));
-        assert_eq!(schedule.resume(2, 0, true), Err(WrongPhase));
+        assert_eq!(schedule.resume(2, 0, 100u64, true), Err(WrongPhase));
         assert_eq!(schedule.admit(2), Err(DuplicateOwner));
         assert_eq!(schedule.admit(4), Err(RosterFull));
-        schedule.wait_for_response(1, 1, 27, 30).unwrap();
+        schedule.wait_for_response(1, 1, 101u64, 27, 30).unwrap();
     }
 
     #[test]
@@ -266,23 +268,23 @@ mod tests {
         for key in 1..=6 {
             schedule.admit(key).unwrap();
         }
-        schedule.wait_for_response(1, 4, 33, 37).unwrap();
+        schedule.wait_for_response(1, 4, 104u64, 33, 37).unwrap();
         let checkpoint = schedule.clone();
 
         schedule.advance(32).unwrap();
         assert_eq!(schedule.phase(4), Some(Active { until: 34 }));
         assert_eq!(schedule.phase(5), Some(Active { until: 34 }));
-        schedule.resume(1, 4, false).unwrap();
+        schedule.resume(1, 4, 104u64, false).unwrap();
 
         let mut replay = checkpoint.clone();
         replay.advance(32).unwrap();
-        replay.resume(1, 4, false).unwrap();
+        replay.resume(1, 4, 104u64, false).unwrap();
         assert_eq!(replay, schedule);
 
         let mut alternate = checkpoint;
         alternate.advance(34).unwrap();
-        assert_eq!(alternate.resume(1, 4, false), Err(InvalidWindow));
-        alternate.resume(1, 4, true).unwrap();
+        assert_eq!(alternate.resume(1, 4, 104u64, false), Err(InvalidWindow));
+        alternate.resume(1, 4, 104u64, true).unwrap();
         assert_ne!(alternate, schedule);
         assert_eq!(alternate.phase(1), Some(Ready));
     }
@@ -299,7 +301,7 @@ mod tests {
         assert_eq!(schedule.advance(11), Err(InvalidClock));
         assert_eq!(schedule.advance(u64::MAX), Err(InvalidClock));
         assert_eq!(schedule.admit(MAX_ROSTER_V2), Err(RosterFull));
-        assert_eq!(schedule.wait_for_response(0, 0, 12, 13), Err(InvalidWindow));
+        assert_eq!(schedule.wait_for_response(0, 0, 100u64, 12, 13), Err(InvalidWindow));
         assert_eq!(schedule, initial);
 
         let last = MAX_ROSTER_V2 - 1;
