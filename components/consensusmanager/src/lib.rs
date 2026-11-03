@@ -140,6 +140,11 @@ impl ConsensusManager {
         self.inner.read().current.consensus.clone()
     }
 
+    /// Fail closed if the manager is swapping the pinned instance.
+    pub fn is_current_consensus_v1(&self, pinned: &dyn ConsensusApi) -> bool {
+        self.inner.try_read().is_some_and(|inner| inner.current.consensus.matches_api_v1(pinned))
+    }
+
     pub fn new_staging_consensus(self: &Arc<Self>) -> ConsensusCreationResult<StagingConsensus> {
         let (consensus, ctl) = self.factory.new_staging_consensus()?;
         Ok(StagingConsensus::new(self.clone(), ConsensusInner::new(consensus, ctl)))

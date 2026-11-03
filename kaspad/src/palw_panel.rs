@@ -13625,9 +13625,9 @@ impl PalwPanelService {
         stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
     ) -> Result<(kaspa_consensusmanager::ConsensusProxy, u64), String> {
         let active = self.consensus_manager.consensus().unguarded_session();
-        let now =
+        let view =
             active.with_consensus_api_v1(|pinned| Self::check_provider_da_current(&self.consensus_manager, pinned, stamp, stage))?;
-        Ok((active, now))
+        Ok((active, view.daa_score))
     }
 
     fn check_provider_da_current(
@@ -13635,18 +13635,17 @@ impl PalwPanelService {
         pinned: &dyn kaspa_consensus_core::api::ConsensusApi,
         stamp: &court_outbox::ProviderDaStampV1,
         stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
-    ) -> Result<u64, String> {
-        let is_active = || manager.consensus().unguarded_session().with_consensus_api_v1(|active| std::ptr::eq(pinned, active));
-        if !is_active() {
+    ) -> Result<kaspa_consensus_core::palw_producer_v2::PalwProviderDaCurrentViewV1, String> {
+        if !manager.is_current_consensus_v1(pinned) {
             return Err("provider DA pinned consensus is no longer active".into());
         }
-        let now = pinned
+        let view = pinned
             .palw_provider_da_answer_current_v1(&stamp.duty, &stamp.roots, stage)?
             .ok_or("provider DA carrier, roots, duty or multipart stage changed")?;
-        if !palw_disclosure_due_v1(&stamp.duty, now) || !is_active() {
+        if !palw_disclosure_due_v1(&stamp.duty, view.daa_score) || !manager.is_current_consensus_v1(pinned) {
             return Err("provider DA duty is outside its turn or the active consensus changed".into());
         }
-        Ok(now)
+        Ok(view)
     }
 
     fn provider_da_submission_guard(
@@ -13655,7 +13654,19 @@ impl PalwPanelService {
         stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
     ) -> kaspa_mining::manager::LocalTransactionSubmissionGuard {
         let manager = self.consensus_manager.clone();
-        Box::new(move |pinned| Self::check_provider_da_current(&manager, pinned, &stamp, stage).map(|_| ()))
+        Box::new(move |pinned| {
+            let view = Self::check_provider_da_current(&manager, pinned, &stamp, stage)?;
+            let manager = Arc::clone(&manager);
+            Ok(Box::new(move |pinned| {
+                if !manager.is_current_consensus_v1(pinned)
+                    || !pinned.palw_provider_da_view_current_v1(&view)
+                    || !manager.is_current_consensus_v1(pinned)
+                {
+                    return Err("provider DA authority changed before insertion".into());
+                }
+                Ok(())
+            }))
+        })
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;

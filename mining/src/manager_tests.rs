@@ -98,7 +98,12 @@ mod tests {
                     Priority::Low,
                     Orphan::Forbidden,
                     rbf,
-                    Box::new(move |_| read.load(Ordering::SeqCst).then_some(()).ok_or_else(|| "duty changed".into())),
+                    Box::new(move |_| {
+                        if !read.load(Ordering::SeqCst) {
+                            return Err("duty changed".into());
+                        }
+                        Ok(Box::new(|_| Ok(())))
+                    }),
                 ));
                 assert!(futures_util::poll!(submission.as_mut()).is_pending(), "worker is queued behind blocker");
                 current.store(false, Ordering::SeqCst);
@@ -108,6 +113,58 @@ mod tests {
                 assert!(manager.get_transaction(&next_id, TransactionQuery::TransactionsOnly).is_none());
                 assert_eq!(manager.get_transaction(&old.id(), TransactionQuery::TransactionsOnly).is_some(), replace);
             }
+        });
+    }
+
+    #[test]
+    fn local_submission_pin_refuses_changed_view_after_second_exact_check() {
+        use crate::manager::MiningManagerProxy;
+        use kaspa_consensusmanager::ConsensusSessionOwned;
+        use std::{
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            let consensus = Arc::new(ConsensusMock::new());
+            let session = ConsensusSessionOwned::new_without_session_guard(consensus.clone());
+            let manager =
+                Arc::new(MiningManager::new(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS, None, Arc::new(MiningCounters::default())));
+            let next = create_child_and_parent_txs_and_add_parent_to_consensus(&consensus);
+            let next_id = next.id();
+            let generation = Arc::new(AtomicUsize::new(1));
+            let worker_generation = Arc::clone(&generation);
+            let exact_count = Arc::new(AtomicUsize::new(0));
+            let worker_count = Arc::clone(&exact_count);
+            let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let submission = MiningManagerProxy::new(manager.clone()).validate_and_insert_transaction_guarded(
+                &session,
+                next,
+                Priority::Low,
+                Orphan::Forbidden,
+                RbfPolicy::Forbidden,
+                Box::new(move |_| {
+                    let pinned = worker_generation.load(Ordering::SeqCst);
+                    if worker_count.fetch_add(1, Ordering::SeqCst) == 1 {
+                        checked_tx.send(pinned).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    }
+                    let generation = Arc::clone(&worker_generation);
+                    Ok(Box::new(move |_| {
+                        (generation.load(Ordering::SeqCst) == pinned).then_some(()).ok_or_else(|| "pinned view changed".into())
+                    }))
+                }),
+            );
+            let mut submission = std::pin::pin!(submission);
+            assert!(futures_util::poll!(submission.as_mut()).is_pending());
+            assert_eq!(checked_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+            generation.store(2, Ordering::SeqCst);
+            release_tx.send(()).unwrap();
+            assert!(matches!(submission.await, Err(MiningManagerError::LocalSubmissionWithheld(why)) if why == "pinned view changed"));
+            assert_eq!(exact_count.load(Ordering::SeqCst), 2);
+            assert!(manager.get_transaction(&next_id, TransactionQuery::TransactionsOnly).is_none());
         });
     }
 

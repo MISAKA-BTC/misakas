@@ -903,18 +903,21 @@ impl MiningManager {
         rbf_policy: RbfPolicy,
         guard: Option<&LocalTransactionSubmissionGuard>,
     ) -> MiningManagerResult<TransactionInsertion> {
-        let check = || guard.map_or(Ok(()), |guard| guard(consensus)).map_err(MiningManagerError::LocalSubmissionWithheld);
-        check()?;
+        let exact = || guard.map(|guard| guard(consensus)).transpose().map_err(MiningManagerError::LocalSubmissionWithheld);
+        drop(exact()?);
         // read lock on mempool
         let TransactionPreValidation { mut transaction, feerate_threshold } =
             self.mempool.read().pre_validate_and_populate_transaction(consensus, transaction, rbf_policy)?;
         let args = TransactionValidationArgs::new(feerate_threshold);
         // no lock on mempool
         let validation_result = validate_mempool_transaction(consensus, &mut transaction, &args);
-        // Recheck after contextual validation and any wait for the write lock.
-        // A local refusal cannot evict an RBF target or add/broadcast a carrier.
+        // Match the exact duty after contextual validation without holding the
+        // pool lock. Under the lock only compare the immutable authority pin.
+        let pin = exact()?;
         let mut mempool = self.mempool.write();
-        check()?;
+        if let Some(pin) = &pin {
+            pin(consensus).map_err(MiningManagerError::LocalSubmissionWithheld)?;
+        }
         match mempool.post_validate_and_insert_transaction(consensus, validation_result, transaction, priority, orphan, rbf_policy)? {
             TransactionPostValidation { removed, accepted: Some(accepted_transaction) } => {
                 let unorphaned_transactions = mempool.get_unorphaned_transactions_after_accepted_transaction(&accepted_transaction);
@@ -1631,8 +1634,12 @@ impl MiningManager {
     }
 }
 
-/// Bounded local-origin policy checked inside the transaction worker.
-pub type LocalTransactionSubmissionGuard = Box<dyn Fn(&dyn ConsensusApi) -> Result<(), String> + Send>;
+/// A fixed-size local authority pin checked with the pool write lock held.
+/// Its check must fail closed without taking a blocking consensus lock.
+pub type LocalTransactionSubmissionPin = Box<dyn Fn(&dyn ConsensusApi) -> Result<(), String> + Send>;
+
+/// Exact local-origin policy checked outside the pool lock by its worker.
+pub type LocalTransactionSubmissionGuard = Box<dyn Fn(&dyn ConsensusApi) -> Result<LocalTransactionSubmissionPin, String> + Send>;
 
 /// Async proxy for the mining manager.
 #[derive(Clone)]

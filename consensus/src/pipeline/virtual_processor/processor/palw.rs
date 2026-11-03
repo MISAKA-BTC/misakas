@@ -1220,15 +1220,14 @@ impl VirtualStateProcessor {
         duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
         roots: &kaspa_consensus_core::palw_evidence_v1::ClaimRoots,
         stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
-    ) -> Result<Option<u64>, String> {
-        use kaspa_consensus_core::{palw_producer_v2::palw_provider_da_answer_matches_v1, palw_state_v2::PalwTransitionExtrasV1};
-        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
-        let epoch = || {
-            let (import, stable) = self.pruning_import_status().map_err(|_| "provider DA import status unavailable")?;
-            (stable && import.active.is_none()).then_some(import.epoch).ok_or("provider DA import is not stable")
+    ) -> Result<Option<kaspa_consensus_core::palw_producer_v2::PalwProviderDaCurrentViewV1>, String> {
+        use kaspa_consensus_core::{
+            palw_producer_v2::{PalwProviderDaCurrentViewV1, palw_provider_da_answer_matches_v1},
+            palw_state_v2::PalwTransitionExtrasV1,
         };
-        let before_epoch = epoch()?;
-        let before = self.lkg_virtual_state.load_full();
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        let epoch = self.palw_provider_da_stable_epoch_v1().ok_or("provider DA import status unavailable or unstable")?;
+        let before = self.palw_provider_da_committed_virtual_v1().ok_or("provider DA committed virtual unavailable")?;
         let sink = before.ghostdag_data.selected_parent;
         let now = before.daa_score;
         let (at, state) = self
@@ -1248,10 +1247,38 @@ impl VirtualStateProcessor {
         };
         let matches = roots.network_domain == self.palw_network_domain_v2()
             && palw_provider_da_answer_matches_v1(&state, params, &extras, duty, roots, stage, now);
-        if before_epoch != epoch()? || !Arc::ptr_eq(&before, &self.lkg_virtual_state.load_full()) {
+        let view = PalwProviderDaCurrentViewV1::new(now, epoch, before);
+        if !self.palw_provider_da_view_current_v1(&view) {
             return Err("provider DA accepted view changed".into());
         }
-        Ok(matches.then_some(now))
+        Ok(matches.then_some(view))
+    }
+
+    // The LKG Arc is published when a batch is staged. Require the virtual
+    // read lock to be available so a write still reaching disk cannot pass.
+    fn palw_provider_da_committed_virtual_v1(&self) -> Option<Arc<VirtualState>> {
+        let stores = self.virtual_stores.try_read()?;
+        let snapshot = stores.state.get().ok()?;
+        Arc::ptr_eq(&snapshot, &self.lkg_virtual_state.load_full()).then_some(snapshot)
+    }
+
+    fn palw_provider_da_stable_epoch_v1(&self) -> Option<u64> {
+        let meta = self.pruning_meta_stores.try_read()?;
+        let session = meta.import_session().ok()?;
+        (session.active.is_none() && meta.try_pruning_utxoset_stable_flag().ok()?).then_some(session.epoch)
+    }
+
+    pub(crate) fn palw_provider_da_view_current_v1(
+        &self,
+        view: &kaspa_consensus_core::palw_producer_v2::PalwProviderDaCurrentViewV1,
+    ) -> bool {
+        // Both outer locks use try_read: template selection takes the virtual
+        // read lock before the mempool, so blocking here would invert it.
+        let Some(stores) = self.virtual_stores.try_read() else { return false };
+        let Ok(snapshot) = stores.state.get() else { return false };
+        view.pins(snapshot.as_ref())
+            && Arc::ptr_eq(&snapshot, &self.lkg_virtual_state.load_full())
+            && self.palw_provider_da_stable_epoch_v1() == Some(view.import_epoch)
     }
 
     /// [`Self::palw_disclosure_duties_v1_impl`] on a given state, for the block at `now_daa` on

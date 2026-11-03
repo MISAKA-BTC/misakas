@@ -137,6 +137,10 @@ impl ConsensusInstance {
         Self { session_lock, consensus, startup: Arc::new(StartupGate::new(false)) }
     }
 
+    pub(crate) fn matches_api_v1(&self, pinned: &dyn ConsensusApi) -> bool {
+        std::ptr::eq(self.consensus.as_ref(), pinned)
+    }
+
     pub(crate) fn finish_startup(&self) {
         self.startup.finish();
     }

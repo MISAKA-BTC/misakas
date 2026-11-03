@@ -2047,6 +2047,24 @@ pub fn palw_disclosure_duty_v1(
     ))
 }
 
+/// Pins an already-owned immutable virtual publication and its import epoch.
+/// The concrete snapshot remains private to the consensus implementation.
+pub struct PalwProviderDaCurrentViewV1 {
+    pub daa_score: u64,
+    pub import_epoch: u64,
+    snapshot: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl PalwProviderDaCurrentViewV1 {
+    pub fn new<T: Send + Sync + 'static>(daa_score: u64, import_epoch: u64, snapshot: std::sync::Arc<T>) -> Self {
+        Self { daa_score, import_epoch, snapshot }
+    }
+
+    pub fn pins<T: 'static>(&self, snapshot: &T) -> bool {
+        self.snapshot.downcast_ref::<T>().is_some_and(|pinned| std::ptr::eq(pinned, snapshot))
+    }
+}
+
 /// Fixed-size metadata for the exact packet admitted by the Panel outbox.
 #[derive(Clone, Copy)]
 pub struct PalwProviderDaAnswerStageV1 {
