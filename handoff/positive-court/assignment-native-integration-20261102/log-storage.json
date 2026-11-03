@@ -926,5 +926,21 @@
     "stored_sha256": "e67a672065df0cb1db55dae485b404cc6c076ec5381e945fd39fce927a8b3bb7",
     "raw_bytes": 287415,
     "stored_bytes": 20025
+  },
+  {
+    "raw_name": "relay-material-contract-first.log",
+    "stored_name": "relay-material-contract-first.log.gz",
+    "raw_sha256": "f4f106f970bf72f7ff452e6d2764d6c11abd4624ce9f4f67ad96c1e678b450f1",
+    "stored_sha256": "632354dcd1a46de5cf875bf4c40a81a61925983d705635e2f99751018833f750",
+    "raw_bytes": 52938,
+    "stored_bytes": 4157
+  },
+  {
+    "raw_name": "relay-material-library-first.log",
+    "stored_name": "relay-material-library-first.log.gz",
+    "raw_sha256": "3bca1d234f3d4a40efe851ba68ddb07a406115e539ad023722b55dea46048249",
+    "stored_sha256": "fcaf2d21173ca3c77ee249152d02b70434549310ec55cecf1d985a8cd8b94e27",
+    "raw_bytes": 342049,
+    "stored_bytes": 23727
   }
 ]

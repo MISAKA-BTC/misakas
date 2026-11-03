@@ -395,6 +395,7 @@ fn native_store_capacity_v1(
     }
 }
 struct PalwUtxoCommitV2 {
+    relay_carriers: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
     root: Hash64,
     delta: kaspa_consensus_core::palw_state_v2::PalwStateDeltaV2,
     _native_delta_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
@@ -2909,6 +2910,70 @@ impl VirtualStateProcessor {
                                     Some(envelope) => self.palw_attempt_keys_v1(Some(header.as_ref()), &envelope.attempt),
                                     None => (kaspa_hashes::Hash64::default(), kaspa_hashes::Hash64::default()),
                                 };
+                                let transition_extras = fp_answers.attach_v1({
+                                    let mut extras =
+                                        self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
+                                    extras.history_custody_pledges = history_custody_pledges;
+                                    extras.tir_public_originals = tir_public_originals;
+                                    extras.tir_funded_originals = tir_funded_originals;
+                                    extras.public_original_bindings = public_original_bindings;
+                                    extras.producer_custody_delegations = producer_custody_delegations;
+                                    if state_params.exec_v2_active_at(point.daa_score)
+                                        || state_params.monetary_material_at_v1(point.daa_score).is_some()
+                                    {
+                                        if attempt.is_some()
+                                            && let Ok(bytes) = borsh::to_vec(header.as_ref())
+                                        {
+                                            extras.exec_v2_origin_headers.insert(current, bytes);
+                                        }
+                                        for owned in &merged_owned {
+                                            if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned
+                                                && let Ok(bytes) = borsh::to_vec(origin_header.as_ref())
+                                            {
+                                                extras.exec_v2_origin_headers.insert(*source, bytes);
+                                            }
+                                        }
+                                    }
+                                    if let Some(staged) = evm_staged.as_ref() {
+                                        extras.evm_actions = staged.result.market_actions.clone();
+                                    }
+                                    // P-B1: what the filter above refused and owes back. Empty
+                                    // below `palw_audit_2026_09_23`, and the fold checks again.
+                                    extras.carrier_market_refunds = carrier_refunds;
+                                    // ADR-0125: the permits this block accepted, as decided above.
+                                    if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
+                                        extras.round_permit_uses = verdicts.uses.clone();
+                                    }
+                                    extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
+                                    // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
+                                    // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
+                                    extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
+                                    // Tentative UTXO plans are diagnostics only. The raw
+                                    // accepted op12 action is the sole settlement writer input.
+                                    extras.positive_assignment_actions = assignment_raw_schedule;
+                                    // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
+                                    // re-judged by the fold against its own running state) and the covered set itself.
+                                    if let Some(resolved) = exec_resolved.as_ref() {
+                                        let (anchor, slices) = self.palw_exec_v2_fold_inputs(resolved, point.daa_score);
+                                        extras.exec_v2_anchor = Some(anchor);
+                                        extras.exec_v2_covered = slices;
+                                    }
+                                    // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
+                                    extras.own_job_anchor = own_job_anchor;
+                                    // **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of this block's mergeset** — the floor state machine reads a merged
+                                    // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
+                                    extras.merged_reds = ctx
+                                        .ghostdag_data
+                                        .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member))
+                                        .genuine_reds()
+                                        .iter()
+                                        .copied()
+                                        .collect();
+                                    // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
+                                    extras.audit_1004_draw_seed_source =
+                                        self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
+                                    extras
+                                })?;
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
                                     state,
                                     state_params,
@@ -2926,70 +2991,7 @@ impl VirtualStateProcessor {
                                     self.palw_da_court_at(point.daa_score),
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
-                                    &*fp_answers.attach_v1({
-                                        let mut extras =
-                                            self.palw_transition_extras_for_objects(state, &point, &objects).into_legacy_extras();
-                                        extras.history_custody_pledges = history_custody_pledges;
-                                        extras.tir_public_originals = tir_public_originals;
-                                        extras.tir_funded_originals = tir_funded_originals;
-                                        extras.public_original_bindings = public_original_bindings;
-                                        extras.producer_custody_delegations = producer_custody_delegations;
-                                        if state_params.exec_v2_active_at(point.daa_score)
-                                            || state_params.monetary_material_at_v1(point.daa_score).is_some()
-                                        {
-                                            if attempt.is_some()
-                                                && let Ok(bytes) = borsh::to_vec(header.as_ref())
-                                            {
-                                                extras.exec_v2_origin_headers.insert(current, bytes);
-                                            }
-                                            for owned in &merged_owned {
-                                                if let PalwMergedOwnedWorkV1::Attempt(source, _, _, _, _, origin_header) = owned
-                                                    && let Ok(bytes) = borsh::to_vec(origin_header.as_ref())
-                                                {
-                                                    extras.exec_v2_origin_headers.insert(*source, bytes);
-                                                }
-                                            }
-                                        }
-                                        if let Some(staged) = evm_staged.as_ref() {
-                                            extras.evm_actions = staged.result.market_actions.clone();
-                                        }
-                                        // P-B1: what the filter above refused and owes back. Empty
-                                        // below `palw_audit_2026_09_23`, and the fold checks again.
-                                        extras.carrier_market_refunds = carrier_refunds;
-                                        // ADR-0125: the permits this block accepted, as decided above.
-                                        if let Some(verdicts) = ctx.palw_round_verdicts.as_ref() {
-                                            extras.round_permit_uses = verdicts.uses.clone();
-                                        }
-                                        extras.round_fee_incomes = ctx.palw_round_fee_incomes.clone();
-                                        // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
-                                        // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
-                                        extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
-                                        // Tentative UTXO plans are diagnostics only. The raw
-                                        // accepted op12 action is the sole settlement writer input.
-                                        extras.positive_assignment_actions = assignment_raw_schedule;
-                                        // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
-                                        // re-judged by the fold against its own running state) and the covered set itself.
-                                        if let Some(resolved) = exec_resolved.as_ref() {
-                                            let (anchor, slices) = self.palw_exec_v2_fold_inputs(resolved, point.daa_score);
-                                            extras.exec_v2_anchor = Some(anchor);
-                                            extras.exec_v2_covered = slices;
-                                        }
-                                        // ADR-0152 v3.1 J-1: the anchor this block's own attempt answers.
-                                        extras.own_job_anchor = own_job_anchor;
-                                        // **ADR-0165 / ADR-0125 semantic amendment: the genuine reds of this block's mergeset** — the floor state machine reads a merged
-                                        // attempt's colour from them (a RED REAL attempt never extends a Probe or Normal).
-                                        extras.merged_reds = ctx
-                                            .ghostdag_data
-                                            .classify_palw_mergeset_v1(|member| self.ghostdag_manager.is_round_block(member))
-                                            .genuine_reds()
-                                            .iter()
-                                            .copied()
-                                            .collect();
-                                        // **Lane PA (`palw_audit_1004_v1`, RF-3 / P-F5): the beacon** a draw reads in place of this block's own hash.
-                                        extras.audit_1004_draw_seed_source =
-                                            self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
-                                        extras
-                                    })?,
+                                    &transition_extras,
                                 ) {
                                     Ok((next, delta, merged_skips, assignment_materials)) => {
                                         // A skipped merged work is the block standing while a
@@ -3049,7 +3051,15 @@ impl VirtualStateProcessor {
                                             );
                                         }
                                         let (delta, delta_lease) = delta.into_parts_v1();
-                                        Some((state.state_root(), delta, delta_lease, assignment_materials))
+                                        let relay_carriers =
+                                            if crate::model::stores::palw_state_v2::funding_relay::has_new_funding_relay_rows_v2(
+                                                &delta,
+                                            ) {
+                                                transition_extras.into_assignment_actions_v2()
+                                            } else {
+                                                Vec::new()
+                                            };
+                                        Some((state.state_root(), delta, delta_lease, assignment_materials, relay_carriers))
                                     }
                                     Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => {
                                         return Err(why.into());
@@ -3098,7 +3108,8 @@ impl VirtualStateProcessor {
                             ctx.validator_quality_subpool,
                             ctx.reserve_balance_after,
                             evm_staged,
-                            palw_v2_staged.map(|(root, delta, delta_lease, assignment_materials)| PalwUtxoCommitV2 {
+                            palw_v2_staged.map(|(root, delta, delta_lease, assignment_materials, relay_carriers)| PalwUtxoCommitV2 {
+                                relay_carriers,
                                 root,
                                 delta,
                                 _native_delta_lease: delta_lease,
@@ -3554,6 +3565,8 @@ impl VirtualStateProcessor {
         let mut native_genesis_write = None;
         let mut native_assignment_write = None;
         let mut native_case_material_write = None;
+        let mut native_relay_material_write = None;
+        let mut native_relay_carriers_hold = None;
         let mut native_assignment_materials_hold = None;
         if let Some(staged) = palw_v2_staged {
             let store = palw_archive_guard.as_mut().expect("PALW accepted archive guard");
@@ -3576,6 +3589,19 @@ impl VirtualStateProcessor {
                     native_assignment_materials_hold.as_ref().expect("retained original Case material outcome"),
                 )
                 .map_err(native_store_capacity_v1)?;
+            native_relay_carriers_hold = Some(staged.relay_carriers);
+            native_relay_material_write = store
+                .stage_funding_relay_material_v2(
+                    &mut batch,
+                    &staged.delta,
+                    native_relay_carriers_hold.as_deref().expect("retained relay carriers"),
+                )
+                .map_err(|why| {
+                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwUtxoCommitV2>(
+                        "native relay material staging",
+                        &why.to_string(),
+                    )
+                })?;
             native_delta_write = Some(
                 store
                     .insert_delta_batch_tracked_v1(&mut batch, current, staged.root, &staged.delta)
@@ -3752,6 +3778,8 @@ impl VirtualStateProcessor {
         drop(native_delta_write);
         drop(native_assignment_write);
         drop(native_case_material_write);
+        drop(native_relay_material_write);
+        drop(native_relay_carriers_hold);
         drop(native_assignment_materials_hold);
         drop(native_genesis_write);
         drop(genesis_class_store);
@@ -6143,6 +6171,7 @@ impl VirtualStateProcessor {
                     }
                 }
                 Ok(PalwUtxoCommitV2 {
+                    relay_carriers: Vec::new(),
                     root: genesis_state.state_root(),
                     delta,
                     _native_delta_lease: delta_lease,

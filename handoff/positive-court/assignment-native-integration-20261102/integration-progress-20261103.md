@@ -579,3 +579,35 @@ stopped when it began rebuilding RocksDB on the low-space volume; those
 fixtures were not run. The verification archive records both source
 candidates, all five results and their raw log digests. Documentation
 checking found zero new issues against the existing 43.
+
+## Relay raw material in the native UTXO WriteBatch
+
+The consensus commit now carries the already admitted raw action
+schedule to the DB writer when the final PALW delta contains a new
+relay registration. The writer checks adjacent fresh authorization
+and custody mutations, original accepted point and ordinal, actual
+lifecycle carrier, and the literal terms and both signatures. It uses
+the reserved 0x4c key and stages the exact carrier payload in the
+existing batch containing the PALW delta, UTXO diff and acceptance
+record. Material staging has no independent commit.
+
+An identical existing payload is reused. Different bytes at the same
+digest, missing material, a half pair, or a changed accepting point
+refuse the local commit. All checks and write reservations precede the
+first relay put. The writer keeps the actual archive lock and allocation
+tickets through the enclosing commit and checks actual database quota
+for new material. Original branch origin is retained in the canonical
+rows and acceptance record rather than in the shared content key.
+
+The native op14 dispatcher still refuses registrations while the
+pre-coinbase fee allocator and canonical custody reservation owner are
+unconnected. There is no live fee burn or successful RocksDB
+registration in this stage. Cold native replay, binding and retirement
+still require their actual owners.
+
+Core and Consensus library Clippy passed with warnings denied using
+the existing static RocksDB/Snappy archives. Eight relay contract
+cases passed on the same source map. These cases exercise the signed
+package and storage floor. The newly connected WriteBatch path was
+typechecked and did not execute a live op14 commit. The documentation
+check reported zero new issues against the existing 43.

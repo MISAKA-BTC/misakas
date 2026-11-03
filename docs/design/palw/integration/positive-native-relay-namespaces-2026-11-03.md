@@ -21,7 +21,7 @@ The pair reconstructs and hashes the exact full literal body, including both sig
 
 Binding is absent at R registration. Only actual F/S acceptance may install its actual origin, original funding outpoint/contract, predecessor and account-slot reservation. A DTO with these fields supplies no such capability. No registration deadline automatically removes a current package or unlocks its account.
 
-The reserved raw-material suffix is0x4c under existing `DatabaseStorePrefixes::PalwStateV2Tip`, followed by the64-byte relay material digest. This inventory reserves that suffix; its actual DB writer is not implemented. Existing suffixes0x49/0x4a/0x4b and global DB prefixes remain unchanged. The new rows do not replace the required actual raw framing/fee/custody/accepted-prefix reader.
+The raw-material key uses suffix `0x4c` under `DatabaseStorePrefixes::PalwStateV2Tip`, followed by the 64-byte relay material digest. The UTXO commit stages the literal lifecycle payload at that key when the final delta and actual admitted carrier supply a matching new registration. Accepted origin is scoped to the canonical rows and acceptance record. Cold replay still requires an authenticated branch and custody reader.
 
 ## Data identity domains
 
@@ -47,4 +47,4 @@ The ordinary transaction signature remains `kaspa-pq-v2/tx/mldsa87`; NONE|ANYONE
 
 `relay-row-collision-audit-20261103.json` and `relay-domain-collision-audit-20261103.json` in the integration handoff record1,450 visible local/remote refs and the exact searched implementation scopes. No conflicting match was found. These checks do not establish public activation or a running network's state.
 
-The separate Some-only Params selection commits full metadata policy/fee/physical preimages and template identity. All published presets must remain None. Current validators still refuse activation while the native fee/custody/binding/restore owners are missing. Original Assignment profile routing, pre-coinbase collectible-fee allocation, R raw DB staging, prior selected-parent F lookup, conditional R2 continuation and terminal actual settlement remain required. Structural pair/codec success and a declared logical allocation lease do not satisfy those owners or an enforced OS quota.
+The separate Some-only Params selection commits full metadata policy/fee/physical preimages and template identity. All published presets must remain None. Current validators still refuse activation while the native fee/custody/binding/restore owners are missing. Original Assignment profile routing, pre-coinbase collectible-fee allocation, live R custody reservation, prior selected-parent F lookup, conditional R2 continuation and terminal actual settlement remain required. Structural pair/codec success and a declared logical allocation lease do not satisfy those owners or an enforced OS quota.
