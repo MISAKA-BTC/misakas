@@ -714,6 +714,23 @@ pub(crate) fn repair_rooted_batch_slots_v1(
             return Err(InvalidState);
         }
         repairable.remove(&open);
+        // A signed Open can use a prefix of the original maximum layout.
+        // Unused positions keep their historical slots and causal edges, but
+        // must not compete with live response work during repair.
+        for index in demand.ranges.len()..crate::palw_batch_court_v1::MAX_BATCH_RANGES_V1 {
+            let position = BatchResponsePositionV1 { demand_ordinal: rooted.ordinal, range_index: index as u32 };
+            let begin = position.packet_id(claim, rooted.scope_id, Stage::Begin).map_err(|_| InvalidState)?;
+            if !ids.contains(&begin) {
+                break;
+            }
+            let finish = position.packet_id(claim, rooted.scope_id, Stage::Finish).map_err(|_| InvalidState)?;
+            if !ids.contains(&finish) {
+                return Err(InvalidState);
+            }
+            repairable.remove(&begin);
+            repairable.remove(&finish);
+            exclude_unused_response_parts_v1(position, claim, rooted.scope_id, 0, ids, &mut repairable)?;
+        }
         for (index, range) in demand.ranges.iter().enumerate() {
             let position = BatchResponsePositionV1 { demand_ordinal: rooted.ordinal, range_index: index as u32 };
             let packet = |stage| position.packet_id(claim, rooted.scope_id, stage).map_err(|_| InvalidState);
@@ -743,6 +760,8 @@ pub(crate) fn repair_rooted_batch_slots_v1(
                 }
                 bound(id, before)?;
             }
+            let first_unused = u64::from(range.bytes).div_ceil(PART);
+            exclude_unused_response_parts_v1(position, claim, rooted.scope_id, first_unused, ids, &mut repairable)?;
             bound(begin, before)?;
             bound(finish, before)?;
             spans.push((begin, finish, rooted.material_until(), before));
@@ -768,6 +787,24 @@ pub(crate) fn repair_rooted_batch_slots_v1(
             Ok(())
         },
     )
+}
+
+fn exclude_unused_response_parts_v1(
+    position: BatchResponsePositionV1,
+    claim: Hash64,
+    scope: Hash64,
+    first_unused: u64,
+    owned: &std::collections::BTreeSet<[u8; 64]>,
+    repairable: &mut std::collections::BTreeSet<[u8; 64]>,
+) -> Result<(), ServiceRefusal> {
+    for index in first_unused..crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1 as u64 {
+        let id = position.packet_id(claim, scope, Stage::Part(index * PART)).map_err(|_| ServiceRefusal::InvalidState)?;
+        if !owned.contains(&id) {
+            break;
+        }
+        repairable.remove(&id);
+    }
+    Ok(())
 }
 
 fn repair_batch_material_with_drafts_v1(
@@ -828,6 +865,22 @@ mod tests {
 
     fn test_case() -> BatchCourtWindowV1 {
         BatchCourtWindowV1 { claim_accepted_daa: 2, challenge_opened_daa: 7, collect_until_daa: 20, material_until_daa: 11_000 }
+    }
+
+    #[test]
+    fn repair_excludes_only_the_unused_tail_of_an_owned_response() {
+        let claim = Hash64::from_u64_word(1);
+        let scope = Hash64::from_u64_word(2);
+        let position = BatchResponsePositionV1 { demand_ordinal: 3, range_index: 0 };
+        let id = |stage| position.packet_id(claim, scope, stage).unwrap();
+        let begin = id(Stage::Begin);
+        let finish = id(Stage::Finish);
+        let needed = id(Stage::Part(0));
+        let unused = id(Stage::Part(PART));
+        let owned = [begin, finish, needed, unused].into_iter().collect::<std::collections::BTreeSet<_>>();
+        let mut repairable = owned.clone();
+        exclude_unused_response_parts_v1(position, claim, scope, 1, &owned, &mut repairable).unwrap();
+        assert_eq!(repairable, [begin, finish, needed].into_iter().collect());
     }
 
     #[test]

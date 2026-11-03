@@ -3434,3 +3434,21 @@ does not establish a live reorg or the full funded original path.
 B0 and relay agreed at virtual DAA 19,718 with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-rooted-repair-live.nMhP9W/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-repair.1tviwt/tests.log`.
+
+## Batch repair skips unused response positions
+
+A signed Open may use fewer ranges and shorter bodies than the maximum
+layout reserved at original acceptance. The recovery sweep now skips
+those unused ranges and part positions. It retains their original slots
+and causal edges in the service book. Missing active parts still use the
+existing signed deadline and draft checks.
+
+The extracted suite passed 41 checks. Its mocked rooted-row case has
+one missed active Part, one unused tail and one omitted range. It moves
+only the active Part, keeps both unused slots at their original DAA,
+and refuses a recovery outside the signed window. Whole-node and
+public recovery under a funded profile remain unverified.
+
+B0 and relay still agreed at virtual DAA 19,718, with no new Qwen
+carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-unused-slots-live.UXWfK7/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-repair-unused-slots.qyAd7v/tests.log`.
