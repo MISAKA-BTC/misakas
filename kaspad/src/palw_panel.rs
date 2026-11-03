@@ -7814,8 +7814,33 @@ impl PalwPanelService {
     /// withholds (DA-7); so a seat that could not keep it files nothing this tick (silence costs a seat
     /// nothing, X10) and is asked again on the next.
     fn licensed_job_kept_v1(&self, claim: &Hash64, bytes: Option<Vec<u8>>, current_daa: u64) -> bool {
-        let kept = bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes));
-        if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+        if !self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+            if let Some(bytes) = bytes {
+                self.persist_foreign_material(claim, &bytes);
+            }
+            return true;
+        }
+        let kept = bytes.is_some_and(|bytes| {
+            let _publication = crate::palw_retention::pin_attempt_publication(*claim);
+            let path = self.fp_retained_replay_path(claim);
+            let result = kaspa_utils::storage_budget::reserve_global(
+                kaspa_utils::storage_budget::StorageCategory::PalwRetained,
+                bytes.len() as u64,
+            )
+            .map_err(|e| e.to_string())
+            .and_then(|_storage| publish_retained_file(&path, &bytes, RetainedPublication::DurableReplace).map_err(|e| e.to_string()));
+            match result {
+                Ok(_) => {
+                    self.prune_foreign_retention(path.parent().expect("foreign retention directory"));
+                    true
+                }
+                Err(e) => {
+                    warn!("[{PALW_PANEL}] cannot retain the verified replay for claim {claim}: {e}");
+                    false
+                }
+            }
+        });
+        if !kept {
             warn!(
                 "[{PALW_PANEL}] claim {claim}: licensed by replay, but its job could not be kept on disk — no Valid: a full \
                  mask's Valid owes every unit a data-availability session can demand, from material this seat does not hold \
@@ -8553,7 +8578,7 @@ impl PalwPanelService {
         use std::io::Read;
         let own = crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim);
         let foreign = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
-        for path in [own, foreign] {
+        for path in [own, foreign, self.fp_retained_replay_path(claim)] {
             let Ok(mut file) = std::fs::File::open(&path) else { continue };
             let mut head = vec![0u8; 8192];
             let Ok(n) = file.read(&mut head) else { continue };
@@ -12145,15 +12170,20 @@ impl PalwPanelService {
         })
     }
 
-    /// Every file a free-prompt payload for `claim` may be retained under, own retention first:
-    /// the material and the answer envelope, then their foreign twins (ADR-0084 Decision 2).
-    fn fp_retained_payload_paths(&self, claim: &Hash64) -> [std::path::PathBuf; 4] {
+    fn fp_retained_replay_path(&self, claim: &Hash64) -> PathBuf {
+        self.config.retention_dir.join("foreign").join(format!("{claim}.replay"))
+    }
+
+    /// A verified replay is retained separately from captures and answer
+    /// envelopes, which may still be needed as evidence or to avoid replay.
+    fn fp_retained_payload_paths(&self, claim: &Hash64) -> [std::path::PathBuf; 5] {
         let dir = &self.config.retention_dir;
         [
             crate::palw_producer::palw_retained_material_path(dir, claim),
             crate::palw_producer::palw_retained_answer_path(dir, claim),
             dir.join("foreign").join(format!("{claim}.material")),
             dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX)),
+            self.fp_retained_replay_path(claim),
         ]
     }
 
@@ -12273,7 +12303,10 @@ impl PalwPanelService {
             // Decision 1's persistence), and it is what an interval-lane seat needs.
             let own_answer = crate::palw_producer::palw_retained_answer_path(dir, &claim);
             let foreign_answer = dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
-            return std::fs::read(own_answer).ok().or_else(|| std::fs::read(foreign_answer).ok());
+            return std::fs::read(own_answer)
+                .ok()
+                .or_else(|| std::fs::read(foreign_answer).ok())
+                .or_else(|| std::fs::read(self.fp_retained_replay_path(&claim)).ok());
         };
         let size = std::fs::metadata(&material_path).ok()?.len();
         // DRILL (ADR-0111): served as if no capture fit the cap, whatever its size.
@@ -14901,7 +14934,9 @@ impl PalwPanelService {
         network_domain: Hash64,
         claim: Hash64,
     ) -> Result<bool, String> {
-        if !self.has_evidence_providers() || self.fp_retained_payload_paths(&claim).iter().any(|p| p.is_file()) {
+        if !self.has_evidence_providers()
+            || self.fp_retained_payload_paths(&claim).iter().any(|p| p.extension().is_some_and(|ext| ext != "replay") && p.is_file())
+        {
             return Ok(false);
         }
         let roots = self.provider_claim_roots(network_domain, claim).ok_or("the claim's committed roots are not readable")?;

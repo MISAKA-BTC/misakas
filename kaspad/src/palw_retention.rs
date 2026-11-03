@@ -364,8 +364,12 @@ fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<RetainedCla
                 continue;
             }
             let (stem, material) = match (name.strip_suffix(".material"), name.strip_suffix(".answer")) {
-                (Some(stem), _) => (stem.to_owned(), true),
-                (None, Some(stem)) => (stem.to_owned(), false),
+                (Some(stem), _) => (stem, true),
+                (None, Some(stem)) => (stem, false),
+                _ if foreign => match name.strip_suffix(".replay") {
+                    Some(stem) => (stem, false),
+                    None => continue,
+                },
                 _ => continue,
             };
             let Ok(claim) = stem.parse::<Hash64>() else { continue };
@@ -718,6 +722,28 @@ mod tests {
         };
         assert_eq!(retention_prune_plan_with_material_v1(&claims, chain, owed, 60 * MIN, 0, 40), (vec![3, 1, 2, 4], 0));
         assert_eq!((chain_reads.get(), obligation_reads.get()), (claims.len(), claims.len()));
+    }
+
+    #[test]
+    fn licensed_replay_is_kept_separately_and_remains_subject_to_claim_gc() {
+        let dir = tempfile::tempdir().unwrap();
+        let foreign = dir.path().join("foreign");
+        let claim = Hash64::from_u64_word(115);
+        let material = foreign.join(format!("{claim}.material"));
+        let replay = foreign.join(format!("{claim}.replay"));
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(&material, b"legacy truncated capture").unwrap();
+        assert!(publish_retained_file(&replay, b"verified replay job", RetainedPublication::DurableReplace).unwrap());
+        assert_eq!(std::fs::read(&material).unwrap(), b"legacy truncated capture");
+        assert_eq!(std::fs::read(&replay).unwrap(), b"verified replay job");
+        let (claims, _) = scan_retention_v1(dir.path(), std::time::SystemTime::now());
+        assert_eq!(claims.len(), 2);
+        assert!(claims.iter().all(|row| row.claim == claim && row.kind == RetainedKindV1::Foreign));
+        let needed = |id: &Hash64| Ok(*id == claim);
+        assert_eq!(retention_prune_plan_with_material_v1(&claims, |_| None, needed, 60 * MIN, 0, 1), (vec![], 1));
+        let (doomed, _) = retention_prune_plan_v1(&claims, |_| None, 60 * MIN, 0, u64::MAX);
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Ok(false)).0, 2);
+        assert!(!material.exists() && !replay.exists());
     }
 
     #[test]

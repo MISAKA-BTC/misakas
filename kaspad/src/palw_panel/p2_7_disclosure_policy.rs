@@ -502,8 +502,10 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     let gate = &source[source.find_code("    fn licensed_job_kept_v1(").expect("the gate")..];
     let gate = &gate[..gate.find("\n    }\n").expect("its end")];
     assert!(
-        gate.contains_code("bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes))")
-            && gate.contains_code("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {"),
+        gate.contains_code("bytes.is_some_and(|bytes| {")
+            && gate.contains_code("let path = self.fp_retained_replay_path(claim);")
+            && gate.contains_code("publish_retained_file(&path, &bytes, RetainedPublication::DurableReplace)")
+            && gate.contains_code("if !kept {"),
         "the job is kept, or past the fence the licence is not signed"
     );
 }
