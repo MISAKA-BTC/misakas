@@ -11,7 +11,9 @@ use crate::{
     processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags,
 };
 use kaspa_consensus_core::{
-    palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1},
+    palw_native_resource_v1::{
+        NativeChainStateV1, NativeCoverageV1, NativeDecodeErrorV1, NativeStateDeltaV1, reserve_native_requests_v1,
+    },
     palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, assigned_case_native_carrier_matches_v2},
     palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2},
     palw_positive_funding_relay_v2::{pending_funding_relay_payer_scratch_v2, pending_funding_relay_row_images_match_v2},
@@ -148,6 +150,7 @@ impl VirtualStateProcessor {
     pub(in crate::pipeline::virtual_processor) fn load_positive_case_carriage_v2(
         &self,
         current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
         record: CaseJournalRecordView<'_>,
         boundary: AssignmentCaseBoundaryV2,
         maximum_heap: u64,
@@ -177,6 +180,7 @@ impl VirtualStateProcessor {
         }
         let (carriage, _) = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
+            current_state,
             NativeArchiveBoundaryV2::Case(boundary),
             maximum_heap,
             maximum_work,
@@ -268,6 +272,7 @@ impl VirtualStateProcessor {
         }
         let (carriage, work) = self.load_positive_assignment_carriage_v2(
             parent,
+            state,
             record,
             max_payload,
             view.material.custody.heap_bytes.min(view.material.native_preimages.physical.max_heap_bytes),
@@ -300,6 +305,7 @@ impl VirtualStateProcessor {
     fn load_positive_assignment_carriage_v2(
         &self,
         current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
         record: AssignmentJournalRecordViewV2<'_>,
         maximum_payload: u64,
         maximum_heap: u64,
@@ -313,6 +319,7 @@ impl VirtualStateProcessor {
             .map_err(|_| E::Invalid("invalid original Assignment control carriage framing"))?;
         let (carriage, work) = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
+            current_state,
             NativeArchiveBoundaryV2::Assignment(boundary),
             maximum_heap,
             maximum_work,
@@ -330,6 +337,7 @@ impl VirtualStateProcessor {
     fn load_positive_accepted_carriage_v2(
         &self,
         current_selected_parent: BlockHash,
+        current_state: &PalwChainStateV2,
         boundary: NativeArchiveBoundaryV2,
         maximum_heap: u64,
         maximum_work: u64,
@@ -404,21 +412,22 @@ impl VirtualStateProcessor {
         if actual_fee != expected_fee {
             return Err(E::Invalid("original actual Full fee differs"));
         }
-        let (_, parent) = self.palw_v2_state_at(selected_parent).ok_or(E::Unavailable("original native selected-parent state"))?;
+        let params = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("native state parameters"))?;
+        let replay_heap =
+            maximum_heap.checked_sub(retained_heap).ok_or(E::Unavailable("retained original inputs exhaust the archive heap cap"))?;
+        let (parent, parent_heap) = self.restore_native_archive_parent_v2(
+            (current_selected_parent, current_state),
+            selected_parent,
+            params,
+            replay_heap,
+            &mut remaining_work,
+        )?;
         if actual_header.palw_state_root != self.palw_committed_root_v1(&parent) {
             return Err(E::Invalid("original accepting header commits a different parent state"));
         }
-        let params = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("native state parameters"))?;
-        // Charge the complete persisted delta, including work to scan,
-        // preflight, decode and replay it even when the prefix is short.
         let replay_heap =
-            maximum_heap.checked_sub(retained_heap).ok_or(E::Unavailable("retained original inputs exhaust the archive heap cap"))?;
-        let (delta, delta_bytes) = self
-            .palw_state_v2_store
-            .read()
-            .delta_of_retained_bounded_v2(accepting, remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, replay_heap)
-            .map_err(|_| E::Unavailable("bounded original native accepting delta"))?;
-        charge_archive_work_v2(&mut remaining_work, delta_bytes * ARCHIVE_WORK_PER_DELTA_BYTE_V2)?;
+            replay_heap.checked_sub(parent_heap).ok_or(E::Unavailable("restored parent exhausts the archive heap cap"))?;
+        let delta = self.read_archive_delta_v2(accepting, replay_heap, &mut remaining_work)?;
         if delta.point.block != accepting
             || delta.point.daa_score != origin.accepted_daa
             || delta.point.blue_score != origin.accepted_blue_score
@@ -440,6 +449,61 @@ impl VirtualStateProcessor {
             _ => E::Invalid("actual prefix owner mismatch"),
         })?;
         Ok((carriage, maximum_work - remaining_work))
+    }
+
+    /// Start with the exact selected-parent view already held by the caller.
+    /// Walk only its ancestors, charging and releasing one delta at a time.
+    /// No tip or pruning snapshot from a different generation is consulted.
+    fn restore_native_archive_parent_v2(
+        &self,
+        (mut cursor, current_state): (BlockHash, &PalwChainStateV2),
+        original_parent: BlockHash,
+        params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        maximum_heap: u64,
+        remaining_work: &mut u64,
+    ) -> Result<(NativeChainStateV1, u64), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let mut restored: Option<NativeChainStateV1> = None;
+        let mut retained_heap = 0;
+        while cursor != original_parent {
+            charge_archive_work_v2(remaining_work, 1)?;
+            let heap = maximum_heap.checked_sub(retained_heap).ok_or(E::Unavailable("archive parent walk heap cap"))?;
+            let delta = self.read_archive_delta_v2(cursor, heap, remaining_work)?;
+            let state = restored.as_deref().unwrap_or(current_state);
+            if delta.point.block != cursor || state.last_point() != Some(&delta.point) {
+                return Err(E::Invalid("archive parent walk state and delta differ"));
+            }
+            let previous = self.ghostdag_store.get_selected_parent(cursor).map_err(|_| E::Unavailable("archive parent walk link"))?;
+            if previous == cursor {
+                return Err(E::Invalid("archive parent walk did not advance"));
+            }
+            let (next, requests) =
+                NativeChainStateV1::try_revert_archive_delta_v2(state, &delta, params, heap).map_err(|why| match why {
+                    NativeDecodeErrorV1::Resource(why) => E::Resource(why),
+                    NativeDecodeErrorV1::Decode(_) => E::Invalid("archive parent walk could not revert the actual delta"),
+                })?;
+            restored = Some(next);
+            retained_heap = requests;
+            cursor = previous;
+        }
+        // The event's accepting block is itself on the current selected chain,
+        // so the selected parent of that event takes at least one reversal.
+        Ok((restored.ok_or(E::Invalid("archive parent walk did not cross the accepting block"))?, retained_heap))
+    }
+
+    fn read_archive_delta_v2(
+        &self,
+        block: BlockHash,
+        heap: u64,
+        remaining_work: &mut u64,
+    ) -> Result<NativeStateDeltaV1, NativeAssignmentArchiveErrorV2> {
+        let (delta, bytes) = self
+            .palw_state_v2_store
+            .read()
+            .delta_of_retained_bounded_v2(block, *remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, heap)
+            .map_err(|_| NativeAssignmentArchiveErrorV2::Unavailable("bounded original native delta"))?;
+        charge_archive_work_v2(remaining_work, bytes * ARCHIVE_WORK_PER_DELTA_BYTE_V2)?;
+        Ok(delta)
     }
 
     /// Verify the historical outer op14 carrier with its real native inputs.

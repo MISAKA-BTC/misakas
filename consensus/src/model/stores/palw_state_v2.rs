@@ -1275,6 +1275,28 @@ mod tests {
         assert_eq!(loaded_block, parent_block);
         assert_eq!(loaded_parent.state_root(), parent_root);
         assert_eq!(recorded_root, child_root);
+        let revert_heap =
+            kaspa_consensus_core::palw_native_resource_v1::native_delta_replay_requests_v1(&child, &retained_delta).unwrap();
+        assert!(matches!(
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1::try_revert_archive_delta_v2(
+                &child,
+                &retained_delta,
+                &params,
+                revert_heap - 1,
+            ),
+            Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+        ));
+        let (reverted, retained_heap) =
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1::try_revert_archive_delta_v2(
+                &child,
+                &retained_delta,
+                &params,
+                revert_heap,
+            )
+            .unwrap();
+        assert!(retained_heap <= revert_heap);
+        assert_eq!(reverted.state_root(), parent_root);
+        assert_eq!(child.state_root(), child_root);
         let replay_heap =
             kaspa_consensus_core::palw_native_resource_v1::native_delta_replay_requests_v1(&loaded_parent, &retained_delta).unwrap();
         assert!(matches!(

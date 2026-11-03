@@ -418,6 +418,32 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
     /// Borrowed replay retains the original owner on every error. It reserves
     /// its new state, decoded row temporaries and index rebuild before cloning
     /// or applying anything. The old state/ticket remains live on every error.
+    /// Revert one actual historical delta under the caller's remaining heap
+    /// cap. The returned quote stays charged while this state is retained.
+    pub fn try_revert_archive_delta_v2(
+        child: &crate::palw_state_v2::PalwChainStateV2,
+        delta: &crate::palw_state_v2::PalwStateDeltaV2,
+        params: &crate::palw_state_v2::PalwStateParamsV2,
+        maximum_heap: u64,
+    ) -> Result<(Self, u64), NativeStateMutationErrorV1> {
+        let requests = Self::bounded_archive_replay_requests_v2(child, delta, maximum_heap)?;
+        let mut lease = reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
+        let value = crate::palw_state_v2::revert_delta_v2(child, delta, params).map_err(NativeDecodeErrorV1::Decode)?;
+        let retained = tracked_value_requests_v1(&value).map_err(NativeDecodeErrorV1::Resource)?;
+        let scratch = requests.checked_sub(retained).ok_or_else(|| {
+            NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Self>(
+                "native archive replay",
+                "restored state exceeds the audited replay quote",
+            ))
+        })?;
+        if let Some(lease) = &mut lease
+            && scratch != 0
+        {
+            drop(lease.split_memory_v1(scratch).map_err(NativeDecodeErrorV1::Resource)?);
+        }
+        Ok((Self::from_owner_reserved_v1(value, lease), retained))
+    }
+
     /// Reconstruct an original executed event prefix from the ACTUAL selected
     /// parent and stored accepting delta. The complete replay quote is reserved
     /// before cloning even when only a prefix is needed. No owned delta clone
@@ -434,13 +460,7 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
         if end > delta.entries.len() {
             return Err(NativeDecodeErrorV1::Decode(PalwStateV2Error::DeltaMismatch("recorded event prefix exceeds actual delta")));
         }
-        let requests = native_delta_replay_requests_v1(&self.value, delta).map_err(NativeDecodeErrorV1::Resource)?;
-        if requests > maximum_heap {
-            return Err(NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Self>(
-                "native executed prefix",
-                "quoted replay heap exceeds the original archive cap",
-            )));
-        }
+        let requests = Self::bounded_archive_replay_requests_v2(&self.value, delta, maximum_heap)?;
         let lease = reserve_native_requests_v1(requests).map_err(NativeDecodeErrorV1::Resource)?;
         let value =
             crate::palw_state_v2::apply_delta_prefix_v2(&self.value, delta, end, params).map_err(NativeDecodeErrorV1::Decode)?;
@@ -450,6 +470,21 @@ impl NativeRetainedV1<crate::palw_state_v2::PalwChainStateV2> {
             )));
         }
         Ok(Self { value, _lease: lease })
+    }
+
+    fn bounded_archive_replay_requests_v2(
+        state: &crate::palw_state_v2::PalwChainStateV2,
+        delta: &crate::palw_state_v2::PalwStateDeltaV2,
+        maximum_heap: u64,
+    ) -> Result<u64, NativeStateMutationErrorV1> {
+        let requests = native_delta_replay_requests_v1(state, delta).map_err(NativeDecodeErrorV1::Resource)?;
+        if requests > maximum_heap {
+            return Err(NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<Self>(
+                "native archive replay",
+                "quoted replay heap exceeds the original archive cap",
+            )));
+        }
+        Ok(requests)
     }
 
     pub fn try_delta_v1(
