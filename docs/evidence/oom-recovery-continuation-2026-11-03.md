@@ -1021,3 +1021,42 @@ and no connection to B0. The unsigned trial on host 5 had already
 stopped and had no synced database or active trial ports. The
 available filesystem capacity on 5 is below the existing floor for
 a fresh trial and below the space needed for an independent B0 seed.
+
+## SmolLM2 Tokenizer Court quote and rendering check — 05:38 UTC
+
+The existing Studio Rust diagnostic from `f4a60bcda` reproduced
+8,782,776 DAA against the 3,120 DAA limit using the retained
+SmolLM2-135M worker frame, public binding and class declaration.
+The quote uses DAA 19,597, six custodian slots and a fixture EOF
+certificate. The worker frame has three input tokens, one decode
+token and 15,252 step leaves.
+
+The door is 347,858 DAA for the non-Tokenizer path, 8,418,376 for
+Tokenizer raw and key work, 16,392 for the original table rendering
+ceiling, and 150 for inventory and semantic opening. The separate
+non-Tokenizer comparison still exceeds the same limit.
+
+The read-only V2 rendering derivation checks the exact raw hash,
+unique JSON and IDs, all token leaves, and the registered EOG leaf.
+It reuses the original promote-odd tree and holds only the Merkle
+frontier while building it. Local input limits cover raw length,
+vocab, EOG count, key events and total rendering bytes. A native
+caller still needs to reserve transient JSON parsing memory and
+schedule the full artifact check.
+
+On the retained SmolLM2 tokenizer and registered table root, the
+focused Rust harness derived 98,471 key events, 81 maximum
+rendering bytes and 332,367 total rendering bytes over 49,152 IDs.
+The four source fixtures and that retained-artifact case passed.
+They included a shorter, recomputed table root with a valid EOG
+opening, changed EOG, duplicate keys and IDs, and premature EOF.
+The harness linked the existing Merkle implementation and compiled
+the changed renderer sources. The V2 result has no state or clock
+effect. Native branch persistence, actual batch scheduling, and the
+remaining TIR path still need verification before acceptance.
+
+Separately, the focused A1 fixture accepted signed I16 boundary
+values widened to I32 and preserved first-max selection. It refused
+a re-committed and re-signed bad Panel lane. This fixture used a
+small trace. The exact Linux Qwen #21 job was still compiling in
+its private tmpfs, with no OOM events at the last sample.
