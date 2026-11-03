@@ -310,7 +310,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     pub fn court_service_release_eligible_v1(&self, claim: &Hash64) -> bool {
         let Some(service) = self.court_service_state_v1() else { return false };
         let Some(now) = service.book.last_observed_daa else { return false };
-        if self.family_supplier_rows_v1().map_or(true,|rows|rows.iter().any(|(_,row)|row.consent.terms.claim==*claim&&now<=row.consent.terms.material_until_daa)) {
+        if self.family_supplier_rows_v1().map_or(true, |rows| {
+            rows.iter().any(|(_, row)| row.consent.terms.claim == *claim && now <= row.consent.terms.material_until_daa)
+        }) {
             return false;
         }
         crate::palw_court_service_release_v1::CourtServiceRowV3::binding_decided_v1(service, claim)

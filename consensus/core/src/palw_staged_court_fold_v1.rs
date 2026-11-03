@@ -1,6 +1,139 @@
 //! Prospective claim contract/continuation writers. All failures precede claim acceptance writes.
 use super::*;
 use crate::palw_staged_court_state_v1::*;
+/// Same finite material/source floor used by native admission and the actual
+/// terminal retirement reader. Trace TTL alone is not a retirement contract.
+pub(super) fn staged_retirement_floor_from_sources_v1(
+    ordinary: u64,
+    claim_material: Option<u64>,
+    source_material: Option<u64>,
+) -> u64 {
+    ordinary.max(claim_material.unwrap_or(0)).max(source_material.unwrap_or(0))
+}
+
+/// Private, non-wire prospective floor from the real preparation at a native
+/// admission seam. It cannot be supplied as a caller-selected scalar horizon.
+#[derive(Clone, Copy)]
+pub(super) struct PalwProspectiveRetirementV1 {
+    claim: Hash64,
+    bond: PalwBondKeyV2,
+    class: Hash64,
+    accepted_daa: u64,
+    execution_root: Hash64,
+    trace_root: Hash64,
+    output_root: Hash64,
+    claim_material: Option<u64>,
+    source_material: Option<u64>,
+}
+impl PalwProspectiveRetirementV1 {
+    pub(super) fn floor_v1(&self, params: &PalwStateParamsV2, id: Hash64, claim: &PalwClaimStateV2) -> Result<u64, PalwStateV2Error> {
+        if !params.settlement_once_active_at(claim.accepted_daa) {
+            return Ok(0); // Ignored dormant term: preserve no-read/no-arithmetic behavior.
+        }
+        if (self.claim, self.bond, self.class, self.accepted_daa, self.execution_root, self.trace_root, self.output_root)
+            != (id, claim.bond, claim.class_id, claim.accepted_daa, claim.execution_root, claim.trace_root, claim.output_root)
+        {
+            return Err(PalwStateV2Error::BondBudgetRefused("prospective retirement source belongs to another native claim".into()));
+        }
+        if params.claim_retirement_daa == 0 {
+            return Ok(u64::MAX); // Actual policy: these claims never retire.
+        }
+        let ordinary = claim
+            .accepted_daa
+            .checked_add(params.claim_retirement_daa)
+            .ok_or(PalwStateV2Error::Overflow("prospective claim retirement"))?;
+        Ok(staged_retirement_floor_from_sources_v1(ordinary, self.claim_material, self.source_material))
+    }
+}
+/// Owns the exact row returned by native preparation and its bound witness.
+/// A caller cannot exchange a same-producer/birth row after borrowing its floor.
+pub(super) struct PalwPreparedStagedClaimForBudgetV1 {
+    row: Option<PalwStagedCourtRowV1>,
+    retirement: PalwProspectiveRetirementV1,
+}
+impl PalwPreparedStagedClaimForBudgetV1 {
+    pub(super) fn retirement_v1(&self) -> PalwProspectiveRetirementV1 {
+        self.retirement
+    }
+    pub(super) fn install_v1(self, builder: &mut TransitionBuilder<'_>, id: Hash64) -> Result<(), PalwStateV2Error> {
+        if self.retirement.claim != id {
+            return Err(PalwStateV2Error::BondBudgetRefused("prepared staged install belongs to another claim".into()));
+        }
+        builder.stamp_staged_claim_v1(id, self.row)
+    }
+}
+impl TransitionBuilder<'_> {
+    /// Mint only inside actual native preparation. No raw row-to-witness API
+    /// exists outside this module; legacy row-returning APIs remain unchanged.
+    pub(super) fn prepare_staged_claim_for_budget_v1(
+        &self,
+        id: Hash64,
+        claim: &mut PalwClaimStateV2,
+        public_job: Option<&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>,
+    ) -> Result<PalwPreparedStagedClaimForBudgetV1, PalwStateV2Error> {
+        let row = self.prepare_staged_claim_with_job_v1(id, claim, public_job)?;
+        let mut retirement = self.prospective_retirement_v1(id, claim, None)?;
+        if self.params.settlement_once_active_at(claim.accepted_daa) {
+            retirement.claim_material = match row.as_ref() {
+                Some(PalwStagedCourtRowV1::Claim(c)) => Some(c.terms.material_until_daa),
+                Some(PalwStagedCourtRowV1::ClaimBundle(c)) => Some(c.claim.terms.material_until_daa),
+                None => None,
+                Some(_) => {
+                    return Err(PalwStateV2Error::BondBudgetRefused("native preparation returned a non-claim retirement row".into()));
+                }
+            };
+        }
+        Ok(PalwPreparedStagedClaimForBudgetV1 { row, retirement })
+    }
+    /// These are the exact native preparation results installed after the
+    /// budget reservation in the SAME paired checkpoint. No source is inferred
+    /// from trace_retention_daa, a quote DTO, or an uninstalled peer declaration.
+    pub(super) fn prospective_retirement_v1(
+        &self,
+        id: Hash64,
+        claim: &PalwClaimStateV2,
+        original: Option<&super::palw_tir_public_fold_v1::OriginalAdmissionV1>,
+    ) -> Result<PalwProspectiveRetirementV1, PalwStateV2Error> {
+        let bad = |why: &str| PalwStateV2Error::BondBudgetRefused(why.into());
+        let (claim_material, source_material) = if !self.params.settlement_once_active_at(claim.accepted_daa) {
+            (None, None) // No new source checks under the historical ruleset.
+        } else if let Some(original) = original {
+            let frame = original.frame_v1();
+            let plan = frame.plan_v1();
+            let fp = frame.original_v1();
+            if plan.original_claim != id
+                || plan.terms.accepted_daa != claim.accepted_daa
+                || frame.custody_v1().pledge_v1().producer != claim.bond
+                || fp.job.class_id != claim.class_id
+                || fp.execution_root != claim.execution_root
+                || fp.trace_root != claim.trace_root
+                || fp.output_root != claim.output_root
+            {
+                return Err(bad("prepared original retirement source does not match native claim"));
+            }
+            // install_original_v1 writes the frame/preparation source index and
+            // its existing semantic ClaimBundle, if any, atomically.
+            (plan.semantic.as_ref().map(|s| s.terms.material_until_daa), Some(plan.terms.material_until_daa))
+        } else {
+            (None, None)
+        };
+        if claim_material.into_iter().chain(source_material).any(|until| until > claim.trace_retention_daa) {
+            return Err(bad("prepared retirement source exceeds this native claim's retained material"));
+        }
+        Ok(PalwProspectiveRetirementV1 {
+            claim: id,
+            bond: claim.bond,
+            class: claim.class_id,
+            accepted_daa: claim.accepted_daa,
+            execution_root: claim.execution_root,
+            trace_root: claim.trace_root,
+            output_root: claim.output_root,
+            claim_material,
+            source_material,
+        })
+    }
+}
+
 impl PalwChainStateV2 {
     /// Native verified-state import only. No rooted row or dynamic material is
     /// cloned, and this iterator is not an anonymous request-facing reader.
@@ -158,8 +291,11 @@ impl PalwChainStateV2 {
     }
     pub(super) fn staged_retirement_floor_v1(&self, claim: &Hash64, ordinary: u64) -> u64 {
         if self.claims.get(claim).is_some_and(|c| c.phase.is_terminal()) {
-            let original = self.staged_claim_contract_v1(claim).map(|c| ordinary.max(c.terms.material_until_daa)).unwrap_or(ordinary);
-            original.max(self.staged_tir_source_until_v1(*claim).unwrap_or(0))
+            staged_retirement_floor_from_sources_v1(
+                ordinary,
+                self.staged_claim_contract_v1(claim).map(|c| c.terms.material_until_daa),
+                self.staged_tir_source_until_v1(*claim),
+            )
         } else {
             ordinary
         }
@@ -1270,7 +1406,13 @@ impl TransitionBuilder<'_> {
                 let old_released = self.state.court_service_row_v3_v1().is_some();
                 match &new {
                     Some(PalwStagedCourtRowV1::CourtService(service)) if !old_released => {
-                        service.check_retains_unresolved(old).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                        if service.check_retains_unresolved(old).is_err() {
+                            super::palw_court_family_material_fold_v1::draft_reservations::normalized_prior(
+                                &self.state,
+                                old,
+                                service,
+                            )?;
+                        }
                     }
                     Some(PalwStagedCourtRowV1::CourtService(_)) => {
                         return Err(PalwStateV2Error::CarriageInconsistent(
@@ -1282,7 +1424,18 @@ impl TransitionBuilder<'_> {
                             .state
                             .court_service_as_v3_v1()
                             .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("service book vanished under its writer".into()))?;
-                        row.check_transition_from_v1(&lifted).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                        if row.check_transition_from_v1(&lifted).is_err() {
+                            let mut normalized = lifted;
+                            let (prior, _draft_extension_lease) =
+                                super::palw_court_family_material_fold_v1::draft_reservations::normalized_prior(
+                                    &self.state,
+                                    &normalized.state,
+                                    &row.state,
+                                )?
+                                .into_parts_v1();
+                            normalized.state = prior;
+                            row.check_transition_from_v1(&normalized).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                        }
                     }
                     _ if !old.claims.is_empty() || old_released => {
                         return Err(PalwStateV2Error::CarriageInconsistent(
@@ -1343,6 +1496,9 @@ impl TransitionBuilder<'_> {
         }
         self.reserve_map_row_v1(&key, &new, |s| &s.staged_courts, false, "native staged_courts writer")?;
         self.reserve_staged_indices_v1(&key, &new)?;
+        if new.is_none() && matches!(key, PalwStagedCourtKeyV1::TirClaim(_)) {
+            super::palw_claim_local_born_tir_source_v16::before_native_staged_write_v16(self, key, new.as_ref())?;
+        }
         let old = match &new {
             Some(row) => self.state.staged_courts.insert(key, row.clone()),
             None => self.state.staged_courts.remove(&key),
@@ -1356,8 +1512,8 @@ impl TransitionBuilder<'_> {
             };
             if let Some(service) = service {
                 // Do not re-date unrelated claims midway through an accepting block. G14 lane r6-d1-release (user decision D1): a
-                // bound claim keeps its normal (pre-Final / Final) deadline — DL-1 arms it. A terminal binding holds retirement,
-                // while its exact operational collateral-release deadline remains armed.
+                // bound claim keeps its normal (pre-Final / Final) deadline. A terminal binding holds retirement,
+                // while its exact operational exposure-release deadline remains armed.
                 let held_terminal: Vec<Hash64> = service
                     .claims
                     .keys()
@@ -4125,6 +4281,13 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
         if let Some(until) = tir_until {
             if ctx.daa_score >= until {
                 b.write_staged_row_v1(key, None)?;
+                if let PalwStagedCourtRowV1::TirClaim(frame) = &saved
+                    && b.state.claim(&frame.plan_v1().original_claim).is_some_and(|row| row.phase.is_terminal())
+                {
+                    // Expiring the last live frame can lower the retirement
+                    // floor. Re-derive after the staged index is updated.
+                    b.rearm_claim_deadline_dl1_v1(frame.plan_v1().original_claim, ctx.daa_score)?;
+                }
             }
             continue;
         }

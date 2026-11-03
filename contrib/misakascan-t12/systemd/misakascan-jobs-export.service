@@ -1,0 +1,20 @@
+[Unit]
+Description=MISAKAScan public header metadata feed
+After=network-online.target misakascan-relay95-g14-tunnel.service
+Requires=misakascan-relay95-g14-tunnel.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/misakascan-jobs-export.env
+StateDirectory=misakascan-jobs
+StateDirectoryMode=0750
+ExecStart=/usr/bin/node --experimental-websocket /usr/local/libexec/misakascan-jobs-publisher.mjs --rpc ws://127.0.0.1:38314 --exporter ${EXPORTER} --workdir /var/lib/misakascan-jobs --output /var/www/misaka-explorer/llm-jobs.json --lookback 24 --overlap 12 --max-pages 6 --max-rpc 64 --timeout-ms 60000 --max-rows 512
+TimeoutStartSec=90
+Nice=15
+CPUWeight=50
+MemoryMax=512M
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+ReadWritePaths=/var/lib/misakascan-jobs /var/www/misaka-explorer

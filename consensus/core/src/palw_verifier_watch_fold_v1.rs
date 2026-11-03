@@ -77,7 +77,7 @@ fn admit(
 }
 
 pub(super) fn sweep(builder: &mut TransitionBuilder<'_>, point: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
-    if !builder.params.verifier_watch_v1.as_ref().is_some_and(|(at, _)| point.daa_score >= *at) {
+    if builder.params.verifier_watch_v1.as_ref().is_none_or(|(at, _)| point.daa_score < *at) {
         return Ok(());
     }
     builder.state.assert_verifier_watch_consistency_v1(builder.params)?;

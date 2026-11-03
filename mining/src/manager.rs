@@ -644,7 +644,8 @@ impl MiningManager {
                     self.reconcile_attestation_template_drops(&dropped, latest_ready_epoch);
                     match *source {
                         BlockRuleError::InvalidTransactionsInNewBlock(invalid_transactions) => {
-                            self.remove_invalid_block_template_transactions(invalid_transactions).map_err(BuilderError::ConsensusError)?;
+                            self.remove_invalid_block_template_transactions(invalid_transactions)
+                                .map_err(BuilderError::ConsensusError)?;
                         }
                         err => {
                             warn!("Building a new block template failed after attestation cleanup: {}", err);
@@ -663,14 +664,21 @@ impl MiningManager {
         }
     }
 
-    pub(crate) fn remove_invalid_block_template_transactions(&self, invalid_transactions: HashMap<TransactionId, TxRuleError>) -> Result<(),BlockRuleError> {
+    pub(crate) fn remove_invalid_block_template_transactions(
+        &self,
+        invalid_transactions: HashMap<TransactionId, TxRuleError>,
+    ) -> Result<(), BlockRuleError> {
         // A local retry ends this build attempt. It must not enter the manager's
         // remove-and-rebuild loop, evict the transaction, or spin on the same set.
-        for error in invalid_transactions.values(){
-            match error{
-                TxRuleError::LocalNativeCapacityUnavailable(why)=>return Err(BlockRuleError::LocalNativeCapacityUnavailable(why.clone())),
-                TxRuleError::LocalNativeStateContextUnavailable(why)=>return Err(BlockRuleError::LocalNativeStateContextUnavailable(why.clone())),
-                _=>{},
+        for error in invalid_transactions.values() {
+            match error {
+                TxRuleError::LocalNativeCapacityUnavailable(why) => {
+                    return Err(BlockRuleError::LocalNativeCapacityUnavailable(why.clone()));
+                }
+                TxRuleError::LocalNativeStateContextUnavailable(why) => {
+                    return Err(BlockRuleError::LocalNativeStateContextUnavailable(why.clone()));
+                }
+                _ => {}
             }
         }
         let mut missing_outpoint: usize = 0;
@@ -680,7 +688,9 @@ impl MiningManager {
         invalid_transactions.iter().for_each(|(x, err)| {
             // A local collateral read has not judged the transaction. Keep it
             // and its descendants for a later template with available capacity.
-            if err.is_local_native_retry_v1(){return;}
+            if err.is_local_native_retry_v1() {
+                return;
+            }
             // On missing outpoints, the most likely is that the tx was already in a block accepted by
             // the consensus but not yet processed by handle_new_block_transactions(). Another possibility
             // is a double spend. In both cases, we simply remove the transaction but keep its redeemers.
@@ -1554,10 +1564,10 @@ impl MiningManager {
                             .inspect_err(|err| warn!("Failed to remove transaction {} from mempool: {}", transaction_id, err));
                         missing_outpoint += 1;
                     }
-                    Err(err) if err.is_local_native_retry_v1()=>{
+                    Err(err) if err.is_local_native_retry_v1() => {
                         // No validity decision was made: retain the pool entry
                         // and its redeemers, and retry with the next local view.
-                        other+=1;
+                        other += 1;
                     }
                     Err(err) => {
                         // Rust rewrite note:

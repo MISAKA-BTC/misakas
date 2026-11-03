@@ -12,11 +12,11 @@
 //! HASH and comparing with the dump — a header this tool mis-assembled would derive a wrong
 //! anchor and display a wrong prompt while looking plausible, so a mismatch is fatal for that
 //! row, never papered over.
+use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::hashing::header::{hash as header_hash, pre_pow_hash_64};
 use kaspa_consensus_core::header::Header;
-use kaspa_consensus_core::palw_attempt_v2::{attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2_for};
+use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptUnsignedV2, attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2_for};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
-use kaspa_hashes::Hash64;
 // The material decoders are gone with the reads that used them: this tool derives the anchor
 // prompt (public by construction) and opens nothing the executor retains.
 use misaka_palw_base0::qwen25_a16_backend::qwen25_a16_prompt_for_anchor;
@@ -96,6 +96,55 @@ fn header_from_json(h: &Value) -> Option<Header> {
     Some(header)
 }
 
+/// Export identity for every model class; unavailable profile codecs cannot hide a claim.
+/// This is a decoded submission, never an assertion of admission or verification.
+fn attempt_row(header: &Header, a: &PalwAttemptUnsignedV2, domain: Hash64) -> Value {
+    let class_hex = a.class_id.to_string();
+    let bond = TransactionOutpoint::new(TransactionId::from_bytes(a.executor_bond.transaction_id.as_bytes()), a.executor_bond.index);
+    let anchor = palw_job_anchor_v1(
+        domain,
+        pre_pow_hash_64(header),
+        a.class_id,
+        &bond,
+        kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
+    );
+    // Only these historical codecs are implemented here. In particular, never
+    // apply their small prefill/decode shape to a newer Qwen/TIR registration.
+    let profile = if class_hex == QWEN36_CLASS {
+        Some((QWEN36_VOCAB, QWEN36_JOB, "QWEN36"))
+    } else if class_hex == QWEN25_CLASS {
+        Some((QWEN25_VOCAB, QWEN25_JOB, "QWEN25-A16"))
+    } else {
+        None
+    };
+    let prompt = profile.map(|(vocab, job, _)| {
+        if class_hex == QWEN36_CLASS {
+            qwen36_prompt_for_anchor(anchor, vocab, job.0)
+        } else {
+            qwen25_a16_prompt_for_anchor(anchor, vocab, job.0)
+        }
+    });
+    json!({
+        "block": header.hash.to_string(),
+        "daa": header.daa_score,
+        "ts": header.timestamp,
+        "class": profile.map(|(_, _, name)| name).unwrap_or(&class_hex),
+        "class_id": class_hex,
+        "claim": attempt_id_v2(a).to_string(),
+        "executor_bond": bond.to_string(),
+        "execution_root": a.execution_root.to_string(),
+        "pwu": a.pwu,
+        "anchor": anchor.to_string(),
+        "prompt_ids": prompt,
+        "prompt_derived": profile.is_some(),
+        "prefill": profile.map(|(_, job, _)| job.0),
+        "decode": profile.map(|(_, job, _)| job.1),
+        "acceptance": "unconfirmed: consult the node claim state",
+        // Answers and retained material are never opened or published here.
+        "disclosed": Vec::<Value>::new(),
+    })
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let mut blocks_path = None;
@@ -144,10 +193,14 @@ fn main() {
     // anchor below, and therefore every prompt this tool prints, would be wrong while looking
     // plausible. The genesis comes from the network's own shipped params, the same place consensus
     // reads it.
-    let genesis = kaspa_consensus_core::network::NetworkId::from_str(&network)
-        .map(|net| kaspa_consensus_core::config::params::Params::from(net).genesis.hash)
+    let params = kaspa_consensus_core::network::NetworkId::from_str(&network)
+        .map(kaspa_consensus_core::config::params::Params::from)
         .unwrap_or_else(|e| die(format!("--network {network}: {e}")));
-    let domain = palw_network_domain_v2_for(network.as_bytes(), Some(genesis));
+    let domain = palw_network_domain_v2_for(network.as_bytes(), Some(params.genesis.hash));
+    let floor_class = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
+        _ => None,
+    };
 
     // claim hex -> the generated ids that claim's material holds. Loaded before the walk, written
     // after it; a missing or unreadable file is an empty cache, never a failure.
@@ -179,75 +232,12 @@ fn main() {
         let Ok(envelope) = kaspa_consensus_core::palw_attempt_material_v3::native_attempt_base_v3(&header.palw_commitment) else {
             continue;
         };
-        let a = &envelope.attempt;
-        let class_hex = a.class_id.to_string();
-        let (vocab, job, name) = if class_hex == QWEN36_CLASS {
-            (QWEN36_VOCAB, QWEN36_JOB, "QWEN36")
-        } else if class_hex == QWEN25_CLASS {
-            (QWEN25_VOCAB, QWEN25_JOB, "QWEN25-A16")
-        } else {
-            continue; // the floor's job is integer arithmetic, not tokens — out of scope here
-        };
-        let pre_pow = pre_pow_hash_64(&header);
-        let bond =
-            TransactionOutpoint::new(TransactionId::from_bytes(a.executor_bond.transaction_id.as_bytes()), a.executor_bond.index);
-        // The bucket the block's own nonce names — the same fact a verifier reads, so an export
-        // and a court derive one job (ADR-0071 Decision 2).
-        let anchor = palw_job_anchor_v1(
-            domain,
-            pre_pow,
-            a.class_id,
-            &bond,
-            kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
-        );
-        let prompt: Vec<usize> = if class_hex == QWEN36_CLASS {
-            qwen36_prompt_for_anchor(anchor, vocab, job.0)
-        } else {
-            qwen25_a16_prompt_for_anchor(anchor, vocab, job.0)
-        };
-        let claim = attempt_id_v2(a);
-        // `--retention` is comma-separated: each producer holds only its own executions, and this
-        // host may run several (the QWEN36 producer and the QWEN25 producer are different nodes).
-        //
-        // **One codec, asked in the order the producer might have written.** The per-class
-        // decoders (`qwen36_material_decode_v1` / `qwen25_a16_material_decode_v1`) read the flat
-        // rows-then-generated layout; since ADR-0077 a producer retains the FOLDED capture
-        // (`base0_fp_material_encode_v2`: version, binding, sparse step tree, logits rows,
-        // generated ids, prompt ids, checkpoints), and every 5f material on the public chain is
-        // that shape — 253 MB each, and the flat decoder returns None on the first field, so the
-        // page's answer column was empty for every row. `base0_material_decode_any_v1` tries the
-        // folded form and falls back to the flat one, which is exactly what a seat does.
-        // **The answer is not read.** It used to come out of the `<claim>.answer` envelope or the
-        // retained capture, so this feed could print what the model said. Both are the executor's
-        // to SERVE — to the claim's five drawn seats, over an authenticated pull — and the chain
-        // carries `output_root` instead. Not publishing it would fix the page; not reading it is
-        // what lets a reader check the guarantee by reading this function.
-        rows.push(json!({
-            "block": dumped_hash,
-            "daa": h.get("daaScore").map(u64of),
-            "ts": h.get("timestamp").map(u64of),
-            "class": name,
-            "claim": claim.to_string(),
-            "anchor": anchor.to_string(),
-            // **Published because ANYONE can recompute it** — the attempt lane's prompt is a pure
-            // function of the block's own anchor, the class and the producer's bond. It is a
-            // lottery draw, not a person's words, and a reader who does not trust this file
-            // re-derives it from the block.
-            "prompt_ids": prompt,
-            // `generated_ids` is NOT here, and that is the change of 2026-09-06. The answer exists
-            // in the executor's retention and in the answer envelope it serves to the claim's
-            // seats; the chain carries `output_root` and nothing else. Publishing it here made a
-            // web page the one place the network's own rules do not put it. See `visibility`.
-            "prefill": job.0,
-            "decode": job.1,
-            // **What a demand has opened, and nothing else.** Empty on every network whose
-            // `palw_da_court` is not in force — which is every network until testnet-11 crosses
-            // DAA 1,900. When it is, a `MaterialDisclosed` object names the claim and the event
-            // its accuser demanded, and that event is public because the chain carries it. Reading
-            // those objects is the exporter's next job; the field exists now so the page renders
-            // the same shape before and after, and an empty list is an honest "nobody has asked".
-            "disclosed": Vec::<Value>::new(),
-        }));
+        // The floor is not a model. Every other native class gets identity metadata,
+        // including registered/TIR classes for which this exporter has no prompt codec.
+        if floor_class.is_some_and(|floor| floor == envelope.attempt.class_id) {
+            continue;
+        }
+        rows.push(attempt_row(&header, &envelope.attempt, domain));
     }
     if let Some(path) = generated_cache.as_ref()
         && let Ok(bytes) = serde_json::to_vec(&cache)
@@ -368,4 +358,54 @@ fn free_prompt_rows(dirs: &str) -> Vec<Value> {
         }
     }
     rows
+}
+
+#[cfg(test)]
+mod attempt_metadata_tests {
+    use super::*;
+    fn attempt(class_id: Hash64) -> PalwAttemptUnsignedV2 {
+        let h = Hash64::from_u64_word;
+        PalwAttemptUnsignedV2 {
+            version: 6,
+            network_domain: h(1),
+            challenge: h(2),
+            class_id,
+            executor_bond: TransactionOutpoint::new(TransactionId::from_bytes(h(3).as_bytes()), 0),
+            executor_pubkey: vec![],
+            operator_id: h(4),
+            artifact_root: h(5),
+            trace_root: h(6),
+            output_root: h(7),
+            pwu: 42,
+            trace_manifest_root: h(8),
+            trace_chunk_count: 1,
+            trace_retention_daa: 900,
+            execution_root: h(9),
+        }
+    }
+    #[test]
+    fn current_qwen_and_unknown_registered_classes_export_exact_identity_without_invented_prompt() {
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let header = Header::from(&params.genesis);
+        for class_id in [Hash64::from_str("ebf44d0aa09ff7d1310a7855ab4005c275cdce557e32c269b0f3a984ea80ca73ad1ea0c9b1c0539c8ae04abb5fe24399e67e05bb0895a3dee82253e772246d01").unwrap(), Hash64::from_u64_word(777)] {
+            let a = attempt(class_id);
+            let row = attempt_row(&header, &a, a.network_domain);
+            assert_eq!(row["claim"], attempt_id_v2(&a).to_string());
+            assert_eq!(row["class_id"], class_id.to_string());
+            assert_eq!(row["executor_bond"], a.executor_bond.to_string());
+            assert_eq!(row["execution_root"], a.execution_root.to_string());
+            assert_eq!(row["prompt_derived"], false);
+            assert!(row["prompt_ids"].is_null() && row["prefill"].is_null() && row["decode"].is_null());
+            assert!(row.get("accepted").is_none() && row.get("output_ids").is_none());
+        }
+    }
+    #[test]
+    fn historical_known_codec_keeps_its_anchor_derived_prompt() {
+        let params = kaspa_consensus_core::config::params::palw_t12_shipped_params();
+        let a = attempt(Hash64::from_str(QWEN25_CLASS).unwrap());
+        let row = attempt_row(&Header::from(&params.genesis), &a, a.network_domain);
+        assert_eq!(row["prompt_derived"], true);
+        assert_eq!(row["prompt_ids"].as_array().unwrap().len(), QWEN25_JOB.0 as usize);
+        assert_eq!(row["decode"], QWEN25_JOB.1);
+    }
 }

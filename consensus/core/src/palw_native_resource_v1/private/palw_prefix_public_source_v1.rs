@@ -5,6 +5,9 @@ native_struct!(crate::palw_prefix_public_source_v1::PalwPrefixPublicPendingV1; c
 native_struct!(crate::palw_prefix_public_source_v1::PalwPrefixPublicSourceV1; coordinate, leaf_index, value_count, byte_length, step_root, step_leaves, maximum_leaves, hash_header);
 native_enum!(crate::palw_prefix_public_source_v1::PalwPrefixPublicAttemptV1; Waiting, Receiving { opening, hash, bytes }, Invalid);
 
+// Reflected owner-local layouts may require parent-private names; this import
+// is intentionally conditional on that layout, like the visitor imports below.
+#[allow(unused_imports)]
 use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
@@ -13,10 +16,7 @@ impl NativeWireScanV1 for crate::palw_prefix_public_source_v1::PalwPrefixPublicA
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::palw_step_leg::PalwStepOpeningV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -26,10 +26,7 @@ impl NativeWireScanV1 for crate::palw_prefix_public_source_v1::PalwPrefixPublicA
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

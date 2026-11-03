@@ -58,6 +58,15 @@ impl TransitionBuilder<'_> {
         let open: Vec<PalwFundedEscrowRowV1> =
             self.state.funded_escrows.values().filter(|r| r.liability_open && r.settled_by.is_none()).copied().collect();
         for row in open {
+            super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::retry_original_archive_ownership_v19(
+                self, &row, daa,
+            )?;
+            // A missing/malformed financial authority is a typed refusal, not
+            // a quiet downgrade to a merely pending old escrow.
+            if super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, &row)?
+            {
+                continue;
+            }
             if self.funded_liability_strictly_resolved_v1(&row, daa)
                 && palw_escrow_liability_resolved_v1(&row, &self.funded_escrow_claim_view_v1(&row.claim), daa)
             {
@@ -71,6 +80,13 @@ impl TransitionBuilder<'_> {
     /// hard deadline, the original frame's material horizon, every duty clock of the claim and every packet of its binding decided.
     fn funded_liability_strictly_resolved_v1(&self, row: &PalwFundedEscrowRowV1, daa: u64) -> bool {
         use crate::palw_funded_original_admission_v1::{FundedLiabilityViewV1, funded_liability_resolved_v1};
+        // Version2 holds the dedicated extra UTXO capital until its OWN
+        // Source16 root/A2 retention has actually been released. A missing or
+        // resource-unavailable receipt cannot free principal.
+        match super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, row) {
+            Ok(false) => {}
+            Ok(true) | Err(_) => return false,
+        }
         let material_until_daa = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, row.claim)
             .map(|frame| frame.plan_v1().terms.material_until_daa);
         let clocks = self
@@ -109,7 +125,11 @@ impl TransitionBuilder<'_> {
         {
             return Err(refused("a continued escrow row whose change-back outpoint is another live row's"));
         }
-        self.write_funded_escrow_v1(fact.contract_id, Some(fact.new))
+        self.write_funded_escrow_v1(fact.contract_id, Some(fact.new))?;
+        super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::collect_settled_original_archive_receipt_v1(
+            self,
+            fact.contract_id,
+        )
     }
 
     /// **G14 r5: the rooted liability view of a row's claim** — open court sessions, whether the claim record is still rooted and
@@ -134,6 +154,9 @@ impl TransitionBuilder<'_> {
         if !row.liability_open || row.settled_by.is_some() {
             return Err(refused("only an unsettled row with an open liability clears"));
         }
+        if super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, &row)? {
+            return Err(refused("original archive capital still has a native retention owner"));
+        }
         let mut cleared = row;
         cleared.liability_open = false;
         self.write_funded_escrow_v1(contract_id, Some(cleared))?;
@@ -157,6 +180,11 @@ impl TransitionBuilder<'_> {
     pub(super) fn sweep_funded_escrows_v1(&mut self, now: u64) -> Result<(), PalwStateV2Error> {
         if self.state.funded_escrows.is_empty() {
             return Ok(());
+        }
+        for row in self.state.funded_escrows.values().filter(|r| {
+            r.version == crate::palw_funded_escrow_v1::PALW_FUNDED_ESCROW_ORIGINAL_ARCHIVE_ROW_VERSION_V1 && r.settled_by.is_none()
+        }) {
+            super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, row)?;
         }
         let resolved: Vec<Hash64> = self
             .state

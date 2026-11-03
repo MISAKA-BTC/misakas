@@ -638,13 +638,274 @@ fn source_bootstrap_economics_appends_actions_without_reusing_old_tags() {
 #[test]
 fn ordinary_verifier_fee_rows_have_exact_versioned_aux_codecs() {
     use crate::palw_verifier_fee_consent_v1::*;
-    let terms=VerifierFeeConsentV1{version:1,network:[1;64],ruleset:[2;64],claim:[3;64],verifier:[4;64],slot:5,poster:[6;64],fee:17,liability_until:100,material_until:100,policy_digest:misaka_palw_kernel::verifier_fee_consent_v1::verifier_fee_policy_digest_v1(),nonce:0,clean:true};
-    let held=HeldVerifierFeeV1{terms,amount:17,convicted_daa:Some(90)};
-    let mut conviction_key=vec![6];conviction_key.extend_from_slice(&terms.claim);
-    for (key,bytes) in [(fee_key(CONSENT,&terms.claim,&terms.verifier,terms.slot),borsh::to_vec(&terms).unwrap()),(fee_key(HELD,&terms.claim,&terms.verifier,terms.slot),borsh::to_vec(&held).unwrap()),(conviction_key,borsh::to_vec(&90u64).unwrap())] {
-        let mut reader=NativeWireReaderV1::new(bytes.as_slice(),bytes.len() as u64);
-        super::wire_kernel_aux::scan_native_aux_row_v1(TABLE,&key,&mut reader).unwrap();assert_eq!(reader.remaining(),0);
-        let mut truncated=NativeWireReaderV1::new(&bytes[..bytes.len()-1],(bytes.len()-1) as u64);
-        assert!(super::wire_kernel_aux::scan_native_aux_row_v1(TABLE,&key,&mut truncated).is_err());
+    let terms = VerifierFeeConsentV1 {
+        version: 1,
+        network: [1; 64],
+        ruleset: [2; 64],
+        claim: [3; 64],
+        verifier: [4; 64],
+        slot: 5,
+        poster: [6; 64],
+        fee: 17,
+        liability_until: 100,
+        material_until: 100,
+        policy_digest: misaka_palw_kernel::verifier_fee_consent_v1::verifier_fee_policy_digest_v1(),
+        nonce: 0,
+        clean: true,
+    };
+    let held = HeldVerifierFeeV1 { terms, amount: 17, convicted_daa: Some(90) };
+    let mut conviction_key = vec![6];
+    conviction_key.extend_from_slice(&terms.claim);
+    for (key, bytes) in [
+        (fee_key(CONSENT, &terms.claim, &terms.verifier, terms.slot), borsh::to_vec(&terms).unwrap()),
+        (fee_key(HELD, &terms.claim, &terms.verifier, terms.slot), borsh::to_vec(&held).unwrap()),
+        (conviction_key, borsh::to_vec(&90u64).unwrap()),
+    ] {
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        super::wire_kernel_aux::scan_native_aux_row_v1(TABLE, &key, &mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        let mut truncated = NativeWireReaderV1::new(&bytes[..bytes.len() - 1], (bytes.len() - 1) as u64);
+        assert!(super::wire_kernel_aux::scan_native_aux_row_v1(TABLE, &key, &mut truncated).is_err());
     }
+}
+
+#[test]
+fn kernel_certification_claim_and_escrow_hold_have_exact_native_codecs() {
+    use crate::palw_security_certification_v1::*;
+    let held = PalwKernelCertifiedRewardHoldV1 {
+        version: PALW_KERNEL_CERTIFIED_REWARD_HOLD_VERSION_V1,
+        claim: [1; 64],
+        producer_bond: [2; 64],
+        producer_payload: [3; 64],
+        poster_bond: [4; 64],
+        poster_payload: [5; 64],
+        amount: 17,
+        held_daa: 100,
+    };
+    let certification = PalwClaimCertificationRowV1 {
+        claim: [1; 64],
+        class_id: [6; 64],
+        producer_bond: [2; 64],
+        producer_principal: [7; 64],
+        attempt: false,
+        final_daa: 100,
+        committed_daa: 101,
+        committed_span: 1,
+        anchor: None,
+        draws: vec![],
+        drawn_daa: 0,
+        deadline_daa: 120,
+        attestations: vec![],
+        held_reward: 0,
+        payout_payload: [3; 64],
+        outcome: None,
+    };
+    let held_bytes = borsh::to_vec(&held).unwrap();
+    let cert_bytes = borsh::to_vec(&certification).unwrap();
+    // Actual owner codecs, not a substitute terminal/approval decision.
+    assert_eq!(borsh::from_slice::<PalwKernelCertifiedRewardHoldV1>(&held_bytes).unwrap(), held);
+    assert_eq!(borsh::from_slice::<PalwClaimCertificationRowV1>(&cert_bytes).unwrap(), certification);
+    super::preflight_native_value_v1::<PalwKernelCertifiedRewardHoldV1>(held_bytes.as_slice(), held_bytes.len() as u64).unwrap();
+    for (prefix, bytes) in [(CERTIFICATION_KERNEL_HOLD_PREFIX_V1, held_bytes), (CERTIFICATION_KERNEL_CLAIM_PREFIX_V1, cert_bytes)] {
+        let mut key = vec![prefix];
+        key.extend_from_slice(&[1; 64]);
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key, &mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0, "scanner consumes exact owner layout");
+        let mut truncated = NativeWireReaderV1::new(&bytes[..bytes.len() - 1], (bytes.len() - 1) as u64);
+        assert!(super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key, &mut truncated).is_err());
+        key[0] = 0x5A;
+        let mut wrong = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        assert!(
+            super::wire_kernel_aux::scan_native_aux_row_v1(PALW_SECURITY_CERTIFICATION_TABLE_V1, &key, &mut wrong).is_err(),
+            "unallocated certification prefix is refused"
+        );
+    }
+}
+
+/// Real owner Borsh layouts, not acceptance/approval fixtures. The aux scanner
+/// must admit their exact nested codec and refuse truncated or unallocated keys.
+#[test]
+fn court_family_material_and_supplier_aux_have_exact_native_codecs() {
+    use crate::{palw_court_family_material_v1 as material, palw_court_family_supplier_v1 as supplier};
+    let id = crate::Hash64::from_bytes([71; 64]);
+    let part = material::FamilyMaterialPartV1 { draft: id, offset: 0, bytes: vec![1, 2, 3], expires_daa: 2000 };
+    let status = supplier::FamilySupplierStatusV2 {
+        version: 2,
+        contract: id,
+        defaulted_daa: None,
+        fee_state: supplier::FamilySupplierFeeStateV1::Held,
+    };
+    let part_bytes = borsh::to_vec(&part).unwrap();
+    assert_eq!(borsh::from_slice::<material::FamilyMaterialPartV1>(&part_bytes).unwrap(), part);
+    let status_bytes = borsh::to_vec(&status).unwrap();
+    assert_eq!(borsh::from_slice::<supplier::FamilySupplierStatusV2>(&status_bytes).unwrap(), status);
+    for (table, mut key, bytes) in [
+        (material::FAMILY_MATERIAL_TABLE_V1, material::material_aux_key_v1(2, id, Some(0)), part_bytes),
+        (supplier::FAMILY_SUPPLIER_TABLE_V1, supplier::family_status_key_v2(id).to_vec(), status_bytes),
+    ] {
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        super::wire_kernel_aux::scan_native_aux_row_v1(table, &key, &mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        let mut truncated = NativeWireReaderV1::new(&bytes[..bytes.len() - 1], (bytes.len() - 1) as u64);
+        assert!(super::wire_kernel_aux::scan_native_aux_row_v1(table, &key, &mut truncated).is_err());
+        key[0] = u8::MAX;
+        let mut unknown = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        assert!(
+            super::wire_kernel_aux::scan_native_aux_row_v1(table, &key, &mut unknown).is_err(),
+            "unknown writer prefix cannot become an opaque row"
+        );
+    }
+}
+
+#[test]
+fn native39_archive_aux_scanners_use_exact_full_writer_keys() {
+    fn scan(table: u8, key: &[u8], bytes: &[u8]) -> std::io::Result<NativeWireShapeV1> {
+        let mut r = NativeWireReaderV1::new(bytes, bytes.len() as u64);
+        let shape = super::wire_kernel_aux::scan_native_aux_row_v1(table, key, &mut r)?;
+        if r.remaining() != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native39 archive trailing bytes"));
+        }
+        Ok(shape)
+    }
+    for (table, key) in [(193, vec![7; 64]), (194, vec![1]), (195, vec![8; 64])] {
+        let e = scan(table, &key, &[]).unwrap_err();
+        assert_ne!(e.kind(), std::io::ErrorKind::Unsupported, "actual writer key reaches its typed owner codec");
+    }
+    for (table, key) in
+        [(193, vec![]), (193, vec![1; 65]), (194, vec![]), (194, vec![0]), (194, vec![1, 0]), (195, vec![]), (195, vec![1; 65])]
+    {
+        assert_eq!(
+            scan(table, &key, &[]).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidData,
+            "unknown full keys remain unallocated"
+        );
+    }
+    // Codec grammar only. Deliberately NOT semantically valid source/approval
+    // fixtures: scanner acceptance never mints a native work fact or credit.
+    use crate::palw_native39_settlement_checkpoint_v1::Native39SettlementCheckpointV1 as Checkpoint;
+    use crate::palw_state_v2::PalwBlockContextV2 as Point;
+    let z = crate::Hash64::default();
+    let point = Point { block: z, daa_score: 0, blue_score: 0, subsidy: 0 };
+    let checkpoint = Checkpoint {
+        version: 1,
+        ruleset: crate::Hash::default(),
+        policy_id: z,
+        retirement_daa: 0,
+        depth_required: 0,
+        work_required: 0,
+        operator_permille: 0,
+        class_permille: 0,
+        effect: point,
+        point,
+        parent: point,
+        parent_state_root: z,
+        parent_leaf: None,
+        frontier: z,
+        frontier_blue: 0,
+        depth: 0,
+        work: 0,
+        max_operator_work: 0,
+        max_class_work: 0,
+    };
+    assert!(checkpoint.validate_shape_v1().is_err());
+    let raw = borsh::to_vec(&checkpoint).unwrap();
+    scan(194, &[1], &raw).unwrap();
+    assert!(scan(194, &[1], &raw[..raw.len() - 1]).is_err());
+    let mut tail = raw;
+    tail.push(0);
+    assert!(scan(194, &[1], &tail).is_err());
+    use crate::palw_native_closed_facts_v1::{ClosedFactFamilyV1, NativeClosedFactOriginV1, NativeClosedFactRowV1};
+    let fact = crate::palw_native_settlement_v1::MatureUsefulWorkV1 {
+        identity: z,
+        anchor: z,
+        operator: z,
+        class: z,
+        anchor_blue: 0,
+        accepted_blue: 0,
+        anchor_daa: 0,
+        accepted_daa: 0,
+        matured_daa: 0,
+        work: 0,
+    };
+    let row = NativeClosedFactRowV1 {
+        version: 1,
+        fact,
+        origin: NativeClosedFactOriginV1 {
+            family: ClosedFactFamilyV1::LegacyAttempt,
+            subject: z,
+            work: z,
+            ruleset: crate::Hash::default(),
+            canonical_work_daa: None,
+            quantum: None,
+            approval: None,
+            source_manifest: z,
+            once_obligation: None,
+            source_point: point,
+            source_state_root: z,
+            terminal_daa: 0,
+            material_until_daa: 0,
+            quantum_maturity_daa: 0,
+            retirement_daa: 0,
+        },
+        closed_at: point,
+    };
+    assert!(row.validate_v1(z).is_err());
+    let raw = borsh::to_vec(&row).unwrap();
+    let shape = scan(195, &[8; 64], &raw).unwrap();
+    assert!(
+        shape.heap >= std::mem::size_of::<(crate::Hash64, NativeClosedFactRowV1)>() as u64,
+        "actual restore output list is typed capacity, not opaque bytes"
+    );
+    assert!(scan(195, &[8; 64], &raw[..raw.len() - 1]).is_err());
+    let mut tail = raw;
+    tail.push(0);
+    assert!(scan(195, &[8; 64], &tail).is_err());
+}
+
+#[test]
+fn native_budget_binding_aux_scanner_uses_both_exact_writer_keys() {
+    use crate::palw_native_budget_binding_v1::{
+        NativeBudgetBindingV1, NativeBudgetSourceV1, native_budget_binding_key_v1, native_budget_binding_producer_key_v1,
+    };
+    fn scan(key: &[u8], bytes: &[u8]) -> std::io::Result<NativeWireShapeV1> {
+        let mut r = NativeWireReaderV1::new(bytes, bytes.len() as u64);
+        let shape = super::wire_kernel_aux::scan_native_aux_row_v1(197, key, &mut r)?;
+        if r.remaining() != 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native budget trailing bytes"));
+        }
+        Ok(shape)
+    }
+    let producer = crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(crate::Hash64::from_u64_word(3), 4));
+    // Codec fixture only; no accepted native job/mining source or collateral
+    // provenance is asserted. Owner semantic validation still rejects this id.
+    let row = NativeBudgetBindingV1 {
+        version: 1,
+        source: NativeBudgetSourceV1::Mining39,
+        source_id: crate::Hash64::from_u64_word(1),
+        budget_id: crate::Hash64::from_u64_word(2),
+        producer,
+        accepted_daa: 5,
+        liability_sompi: 6,
+        original_reserve_sompi: 0,
+        closed: false,
+    };
+    assert!(row.validate_shape_v1().is_err());
+    let raw = borsh::to_vec(&row).unwrap();
+    let primary = native_budget_binding_key_v1(row.budget_id);
+    let index = native_budget_binding_producer_key_v1(&producer, row.budget_id);
+    assert_eq!((primary.len(), index.len()), (65, 133));
+    assert_eq!(borsh::object_length(&producer).unwrap(), 68);
+    scan(&primary, &raw).unwrap();
+    scan(&index, &raw).unwrap();
+    for key in [vec![], vec![1; 64], vec![2; 65], vec![1; 133], vec![2; 132], vec![3; 133]] {
+        assert_eq!(scan(&key, &[]).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    }
+    assert!(scan(&primary, &raw[..raw.len() - 1]).is_err());
+    let mut trailing = raw.clone();
+    trailing.push(0);
+    assert!(scan(&index, &trailing).is_err());
+    let mut unknown_source = raw;
+    unknown_source[2] = 3;
+    assert!(scan(&primary, &unknown_source).is_err(), "unknown native source enum is not opaque bytes");
 }

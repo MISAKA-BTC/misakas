@@ -4,7 +4,6 @@
 //! nonce in this proposal. A quote is not block acceptance or economic approval.
 use crate::palw_native_resource_v1::{
     NativeRetainedV1, NativeWireReaderV1, NativeWireScanV1, preflight_native_value_v1, reserve_native_requests_v1,
-    retain_native_value_decode_v1,
 };
 use crate::{
     BlockHash, Hash64,
@@ -39,7 +38,8 @@ pub fn native_recovery_session_quote_v4(
     executor: PalwBondKeyV2,
     roster: &[PalwBondKeyV2],
 ) -> Result<NativeRetainedV1<PalwNativeRecoverySessionQuoteV4>, String> {
-    native_recovery_session_quote_checked_v4(state, params, checkpoint, daa, network, class_id, executor, roster).map_err(|error|error.to_string())
+    native_recovery_session_quote_checked_v4(state, params, checkpoint, daa, network, class_id, executor, roster)
+        .map_err(|error| error.to_string())
 }
 /// Classified preparation; local capacity/context never becomes collateral shortage.
 pub fn native_recovery_session_quote_checked_v4(
@@ -70,7 +70,9 @@ pub fn native_recovery_session_quote_checked_v4(
     let n = roster.len() as u64;
     let stream = std::io::Cursor::new((n as u32).to_le_bytes()).chain(std::io::repeat(0).take(n * 64));
     let mut reader = NativeWireReaderV1::new(stream, 4 + n * 64);
-    let operator_heap = BTreeSet::<Hash64>::scan_native_wire_v1(&mut reader).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?.heap;
+    let operator_heap = BTreeSet::<Hash64>::scan_native_wire_v1(&mut reader)
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?
+        .heap;
     let key_bytes = roster
         .iter()
         .try_fold(executor_row.pubkey.len() as u64, |sum, b| sum.checked_add(state.bond(b)?.pubkey.len() as u64))
@@ -88,7 +90,8 @@ pub fn native_recovery_session_quote_checked_v4(
         .and_then(|v| v.checked_add(policy_wire))
         .and_then(|v| v.checked_add(64))
         .ok_or("native recovery quote ownership overflow")?;
-    let lease = reserve_native_requests_v1(requests).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+    let lease =
+        reserve_native_requests_v1(requests).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
     let mut operators = BTreeSet::new();
     let mut provider_keys = Vec::with_capacity(roster.len());
     for provider in roster {
@@ -108,9 +111,12 @@ pub fn native_recovery_session_quote_checked_v4(
             if *table != PALW_MONETARY_MATERIAL_TABLE_V1 {
                 continue;
             }
-            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes.as_slice(), bytes.len() as u64).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
-            let row = crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || borsh::from_slice::<PalwMonetaryMaterialRowV1>(bytes))
+            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes.as_slice(), bytes.len() as u64)
                 .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+            let row = crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || {
+                borsh::from_slice::<PalwMonetaryMaterialRowV1>(bytes)
+            })
+            .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
             let Some(s) = row.terms.native_session.as_ref() else { continue };
             if row.native_binding.is_some()
                 || s.class_id != class_id
@@ -130,9 +136,12 @@ pub fn native_recovery_session_quote_checked_v4(
             else {
                 continue;
             };
-            preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(bytes.as_slice(), bytes.len() as u64).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
-            let recovery_row = crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || borsh::from_slice::<PalwMaterialRecoveryRowV2>(bytes))
+            preflight_native_value_v1::<PalwMaterialRecoveryRowV2>(bytes.as_slice(), bytes.len() as u64)
                 .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+            let recovery_row = crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || {
+                borsh::from_slice::<PalwMaterialRecoveryRowV2>(bytes)
+            })
+            .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
             let PalwMaterialRecoveryRowV2::Active(contract) = &*recovery_row else { continue };
             if recovery_row.validate(recovery).is_err() || contract.generations.last().is_none_or(|g| g.consent != row.consent) {
                 continue;
@@ -172,8 +181,13 @@ pub fn native_recovery_session_quote_checked_v4(
         }
     }
     let fees = p.minimum_fee_sompi.checked_mul(roster.len() as u64).ok_or("recovery fees overflow")?;
-    if u128::from(executor_row.collateral).saturating_sub(palw_bond_committed_checked_v2(state, &executor, daa, None, params.window_court())?)
-        < u128::from(fees)
+    if u128::from(executor_row.collateral).saturating_sub(palw_bond_committed_checked_v2(
+        state,
+        &executor,
+        daa,
+        None,
+        params.window_court(),
+    )?) < u128::from(fees)
     {
         return Err("recovery sponsor has no own unused funding collateral".into());
     }

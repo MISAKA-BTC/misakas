@@ -914,6 +914,18 @@ impl TransitionBuilder<'_> {
             return Ok(None);
         }
         self.admit_bond_budget_growth_v1(growth)?;
+        if let Some(point) = self.claim_local_lock_point_v6
+            && self.params.claim_local_settlement_active_at(point.daa_score)
+        {
+            // Inverse apply_row decodes/reindexes at most these SAME actual
+            // typed row/write bounds. Own a second simultaneous reservation
+            // BEFORE f; no fee, consensus limit or native journal changes.
+            self.admit_bond_budget_growth_v1(PalwBudgetGrowthV1 {
+                writes: growth.writes,
+                rows: 0,
+                assignment_rows: growth.assignment_rows,
+            })?;
+        }
         let mut budget = self.state.bond_budget.take().expect("checked above");
         let mut journal = Vec::new();
         let out = f(&mut budget, &self.state, &mut journal);
@@ -925,6 +937,17 @@ impl TransitionBuilder<'_> {
                 "bond budget engine op",
                 "the op journaled more writes than its admitted bound",
             )));
+        }
+        // Native engine writes and admitted bound have succeeded. Observe
+        // the exact borrowed operation journal before publishing its delta.
+        if let Some(point) = self.claim_local_lock_point_v6
+            && let Err(error) = super::palw_claim_local_material_income_lineage_v7::observe_operation_v7(self, point, &journal)
+        {
+            let mut book = self.state.bond_budget.take().expect("existing native engine");
+            let restored = super::palw_claim_local_material_income_lineage_v7::restore_engine_v7(&mut book, &journal);
+            self.state.bond_budget = Some(book);
+            restored?;
+            return Err(error);
         }
         self.journal_bond_budget(journal);
         Ok(Some(out))
@@ -1925,10 +1948,12 @@ impl TransitionBuilder<'_> {
     pub(super) fn plan_attempt_budget_v1(
         &self,
         ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
         claim: &PalwClaimStateV2,
         artifact_root: &Hash64,
         rider: bool,
         budget_block_units: u64,
+        retirement: &super::palw_staged_court_fold_v1::PalwProspectiveRetirementV1,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
             return Ok(None);
@@ -1949,7 +1974,13 @@ impl TransitionBuilder<'_> {
             self.admit_claim_liability_v1(
                 ctx.daa_score,
                 plan,
-                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim,
+                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim {
+                    retire_not_before: if self.params.settlement_once_active_at(ctx.daa_score) {
+                        retirement.floor_v1(self.params, claim_id, claim)?
+                    } else {
+                        0 // Ignored by dormant admission; do not evaluate a new horizon.
+                    },
+                },
             )?;
         }
         Ok(plan)
@@ -1959,8 +1990,10 @@ impl TransitionBuilder<'_> {
     pub(super) fn plan_free_prompt_budget_v1(
         &self,
         ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
         claim: &PalwClaimStateV2,
         quanta: u32,
+        retirement: &super::palw_staged_court_fold_v1::PalwProspectiveRetirementV1,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
             return Ok(None);
@@ -1980,7 +2013,13 @@ impl TransitionBuilder<'_> {
             self.admit_claim_liability_v1(
                 ctx.daa_score,
                 plan,
-                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim,
+                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim {
+                    retire_not_before: if self.params.settlement_once_active_at(ctx.daa_score) {
+                        retirement.floor_v1(self.params, claim_id, claim)?
+                    } else {
+                        0 // Ignored by dormant admission; do not evaluate a new horizon.
+                    },
+                },
             )?;
         }
         Ok(plan)
@@ -2947,12 +2986,11 @@ impl TransitionBuilder<'_> {
                 let blocks = budget.consume(budget_id, PalwBudgetDimV1::BlockUnits, PALW_BUDGET_BLOCK_UNIT_V1 as u128, true, j);
                 let reward = budget.consume(budget_id, PalwBudgetDimV1::Reward, carve as u128, true, j);
                 debug_assert!(matches!((blocks, reward), (Some(Ok(_)), Some(Ok(_)))), "checked whole above");
-                let weight =
-                    budget.consume(budget_id, PalwBudgetDimV1::FinalWeight, per_quantum, false, j).and_then(Result::ok).unwrap_or(0);
+
                 // Exhausting issuance is not the end of the native claim's
                 // accusation/material liability. Keep the exact row and L open
                 // until its actual collection or conviction closes that claim.
-                weight
+                budget.consume(budget_id, PalwBudgetDimV1::FinalWeight, per_quantum, false, j).and_then(Result::ok).unwrap_or(0)
             })?
             .ok_or(PalwStateV2Error::BondBudgetRefused("native39 receipt budget engine absent".into()))?;
         Ok(granted)

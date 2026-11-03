@@ -2256,8 +2256,7 @@ mod bond_free_recovery_clock_tests {
 /// The admission failure a recovery block may stand through: the named executor bond is absent.
 /// A failed signature, lottery, or class check still disqualifies the block.
 pub fn palw_base_coinbase_recovery_missing_bond_v1(admission_error: &str) -> bool {
-    admission_error.starts_with("the named executor bond ")
-        && admission_error.ends_with("does not exist at the candidate chain point")
+    admission_error.starts_with("the named executor bond ") && admission_error.ends_with("does not exist at the candidate chain point")
 }
 
 /// **Placeholder the BASE recovery attempt names.** Not a UTXO, not a genesis bond, not collateral.

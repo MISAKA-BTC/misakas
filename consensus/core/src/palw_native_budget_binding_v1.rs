@@ -36,7 +36,7 @@ impl crate::palw_native_resource_v1::NativeWireScanV1 for NativeBudgetSourceV1 {
     ) -> std::io::Result<crate::palw_native_resource_v1::NativeWireShapeV1> {
         r.step()?;
         match r.byte()? {
-            0 | 1 | 2 => Ok(Default::default()),
+            0..=2 => Ok(Default::default()),
             _ => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "native budget source kind")),
         }
     }
@@ -58,14 +58,20 @@ pub fn native_budget_binding_producer_key_v1(bond: &PalwBondKeyV2, id: Hash64) -
 fn decode(bytes: &[u8]) -> Result<NativeRetainedV1<NativeBudgetBindingV1>, PalwStateV2Error> {
     // A missing local reservation is not a corrupt committed row, and a
     // malformed fixed-schema row is not local capacity. Inspect before Borsh.
-    let shape=crate::palw_native_resource_v1::preflight_native_value_v1::<NativeBudgetBindingV1>(bytes,bytes.len() as u64).map_err(|error|match error.kind(){
-        std::io::ErrorKind::OutOfMemory=>PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<NativeBudgetBindingV1>("native budget binding decode")),
-        std::io::ErrorKind::Unsupported|std::io::ErrorKind::TimedOut=>PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeBudgetBindingV1>("native budget binding decode",&error.to_string())),
-        _=>bad(error),
-    })?;
-    let lease=crate::palw_native_resource_v1::reserve_native_requests_v1(shape.logical_requests_v1()).map_err(PalwStateV2Error::NativeResource)?;
-    let row=borsh::from_slice(bytes).map_err(bad)?;
-    Ok(NativeRetainedV1::from_owner_reserved_v1(row,lease))
+    let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<NativeBudgetBindingV1>(bytes, bytes.len() as u64)
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::OutOfMemory => {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<NativeBudgetBindingV1>("native budget binding decode"))
+            }
+            std::io::ErrorKind::Unsupported | std::io::ErrorKind::TimedOut => PalwStateV2Error::NativeResource(
+                NativeCoverageV1::unsupported::<NativeBudgetBindingV1>("native budget binding decode", &error.to_string()),
+            ),
+            _ => bad(error),
+        })?;
+    let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(shape.logical_requests_v1())
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let row = borsh::from_slice(bytes).map_err(bad)?;
+    Ok(NativeRetainedV1::from_owner_reserved_v1(row, lease))
 }
 impl NativeBudgetBindingV1 {
     pub fn validate_shape_v1(&self) -> Result<(), PalwStateV2Error> {
@@ -204,11 +210,11 @@ pub fn native_budget_binding_v1(
     id: Hash64,
 ) -> Result<Option<NativeRetainedV1<NativeBudgetBindingV1>>, PalwStateV2Error> {
     let Some(route) = state.kernel_route_state_v1() else { return Ok(None) };
-    if !route
+    if route
         .aux
         .range((NATIVE_BUDGET_BINDING_TABLE_V1, Vec::new())..)
         .next()
-        .is_some_and(|((table, _), _)| *table == NATIVE_BUDGET_BINDING_TABLE_V1)
+        .is_none_or(|((table, _), _)| *table != NATIVE_BUDGET_BINDING_TABLE_V1)
     {
         return Ok(None);
     }

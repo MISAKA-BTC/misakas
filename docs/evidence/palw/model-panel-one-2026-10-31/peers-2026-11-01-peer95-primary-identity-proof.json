@@ -1,0 +1,61 @@
+{
+  "checkedUtc": "2026-11-01T14:00:27.882581+00:00",
+  "sshForwardMetadata": [
+    {
+      "pid": 4386,
+      "executable": "ssh",
+      "forward": "127.0.0.1:39314 -> 95.111.236.186 localhost:26314"
+    }
+  ],
+  "direct": {
+    "network": "testnet-12",
+    "daa": 18930,
+    "p2pId": "52196ead-085a-408b-a1c4-5cda62c769fd",
+    "isSynced": false,
+    "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+    "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+    "fences": [
+      750,
+      1000,
+      1300,
+      1700,
+      2000,
+      3600,
+      5300,
+      5395,
+      5490,
+      5585,
+      15500,
+      18400,
+      18640
+    ]
+  },
+  "public": {
+    "network": "testnet-12",
+    "daa": 18930,
+    "p2pId": "52196ead-085a-408b-a1c4-5cda62c769fd",
+    "isSynced": false,
+    "genesisHash": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+    "params": "edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189",
+    "schedule": "4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04",
+    "fences": [
+      750,
+      1000,
+      1300,
+      1700,
+      2000,
+      3600,
+      5300,
+      5395,
+      5490,
+      5585,
+      15500,
+      18400,
+      18640
+    ]
+  },
+  "sameP2pIdentity": true,
+  "sameParamsAndFences": true,
+  "claim": "Public primary is the direct95 node; it advertises18640. No binary revision attestation inferred."
+}

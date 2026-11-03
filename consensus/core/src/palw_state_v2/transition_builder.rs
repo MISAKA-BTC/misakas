@@ -31,6 +31,28 @@ impl<'a> TransitionBuilder<'a> {
             .expect("test transition construction capacity")
     }
 
+    pub(super) fn with_native_original_parent_v19(mut self, parent: &'a PalwChainStateV2) -> Self {
+        self.claim_local_original_parent_v19 = Some(parent);
+        self
+    }
+
+    pub(super) fn bind_native_original_input_context_v19(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        context: &PalwNativeOriginalInputContextV19<'a>,
+    ) -> Result<(), PalwStateV2Error> {
+        if context.point != *ctx {
+            return Err(PalwStateV2Error::CarriageInconsistent(
+                "native candidate input context belongs to another executing point".into(),
+            ));
+        }
+        self.claim_local_original_parent_v19 = Some(context.original_parent);
+        if palw_tir_public_fold_v1::native_input_measurement_enabled_v12(self.extras) {
+            self.claim_local_input_basis_v12 = Some(context.basis);
+        }
+        Ok(())
+    }
+
     pub(super) fn try_new(
         parent: &PalwChainStateV2,
         params: &'a PalwStateParamsV2,
@@ -44,6 +66,11 @@ impl<'a> TransitionBuilder<'a> {
             .map_err(PalwStateV2Error::NativeResource)?;
         Ok(Self {
             native_reservation,
+            claim_local_gc_undo_v3: BTreeMap::new(),
+            claim_local_gc_sequence_v3: 0,
+            claim_local_gc_defer_v3: false,
+            compact_root_undo_v15: Vec::new(),
+            compact_root_inactive_undo_v15: None,
             params,
             monetary_native_ready: BTreeMap::new(),
             court_end_evidence: None,
@@ -53,6 +80,16 @@ impl<'a> TransitionBuilder<'a> {
             court_neutral_void_close: false,
             state,
             entries: Vec::new(),
+            claim_local_family_spans: Vec::new(),
+            claim_local_object_spans: Vec::new(),
+            claim_local_object_scope_active: false,
+            claim_local_lock_point_v6: None,
+            claim_local_original_parent_v19: None,
+            claim_local_cert_relay_seals_v18: BTreeMap::new(),
+            claim_local_capture_retired_exec_events_v24: false,
+            claim_local_retired_exec_events_v24: BTreeMap::new(),
+            claim_local_retired_claim_events_v25: BTreeMap::new(),
+            claim_local_input_basis_v12: None,
             registration_index: None,
             unavailable_abstains,
             model_moves: 0,
@@ -75,6 +112,9 @@ impl<'a> TransitionBuilder<'a> {
             panel_v3_beacons: Vec::new(),
             paid_lifetime_admission_v1: None,
             court_cost_spent: Default::default(),
+            court_family_packing_spent_v2: Default::default(),
+            court_family_unreserved_service_spent_v2: Default::default(),
+            court_family_charged_v2: None,
             court_one_move_spent: Default::default(),
         })
     }
@@ -787,6 +827,11 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Result<(), PalwStateV2Error> {
+        if new.is_none()
+            && let Some(old) = self.state.claims.get(&key)
+        {
+            super::palw_claim_local_legacy_terminal_v18::guard_actual_removal_v18(self, key, old)?;
+        }
         if !self.state.claims.contains_key(&key) {
             if let Some(claim) = &new {
                 self.stamp_reader_router_claim_v2(key, claim)?;
@@ -799,6 +844,9 @@ impl<'a> TransitionBuilder<'a> {
             if self.native_reservation.is_tracking_v1() { self.claim_cascade_requests_v1(key, &new)? } else { (0, 0) };
         self.reserve_mutation_sequence_v1(requests, slots)?;
         self.reserve_map_journal_v1(&key, &new, !self.state.claims.contains_key(&key), "native claims writer")?;
+        if new.is_none() {
+            super::palw_claim_local_execution_cohort_archive_v15::release_current_before_removal_v15(self, key, slots)?;
+        }
         // **X3 × retention (REQ-X3-6; Lead default 2026-10-15 round 3; `palw_claim_hard_deadline_v1`)**: a claim CREATED past the
         // fence owes its material — trace, DA units, every hold that reads the record — through its hard deadline, fixed at
         // acceptance, so a pursuit X3 admits can start from public material any time before `hard − B_remaining`. Raised once, here,
@@ -914,6 +962,12 @@ impl<'a> TransitionBuilder<'a> {
             && new.as_ref().is_none_or(|claim| claim.phase.is_terminal() || matches!(claim.phase, PalwClaimPhaseV2::Provisional))
         {
             self.write_tir_shard_claim(key, None)?;
+        }
+        if new.is_some() && !self.state.claims.contains_key(&key) {
+            super::palw_claim_local_exact_closed_source_v5::migrate_legacy_before_reuse_v5(self, key)?;
+        }
+        if let Some(claim) = &new {
+            super::palw_claim_local_prefix_financial_archive_v4::on_terminal_v4(self, key, claim)?;
         }
         let old = match &new {
             Some(record) => self.state.claims.insert(key, record.clone()),
@@ -1776,6 +1830,7 @@ impl<'a> TransitionBuilder<'a> {
     ) -> Result<(), PalwStateV2Error> {
         self.reserve_map_row_v1(&key, &new, |s| &s.slashable_locks, false, "native slashable_locks writer")?;
         let old = self.state.slashable_locks.get(&key).copied();
+        palw_claim_local_physical_lock_instances_v6::observe_existing_v6(self, key, old, new)?;
         if old == new {
             return Ok(());
         }
@@ -1806,6 +1861,7 @@ impl<'a> TransitionBuilder<'a> {
         {
             self.write_claim_semantics_v1(key, None)?;
         }
+        super::palw_claim_local_prefix_financial_archive_v4::before_generic_panel_write_v4(self, key, new.as_ref())?;
         let old = self.state.panel_liabilities.get(&key).cloned();
         if old == new {
             return Ok(());
@@ -3489,13 +3545,15 @@ impl<'a> TransitionBuilder<'a> {
     /// DA lattice included). Taken before any leg runs — in particular before a kind 3 or a DA-7 S4
     /// deletes the signer's lock, which v6 reads (digest §11 #9), and before any debit, so `C₀` is
     /// never a post-debit collateral (#10). A bond named twice is opened once.
-    pub(super) fn open_conviction_v1(&self, bonds: &[PalwBondKeyV2], now_daa: u64) -> Result<PalwConvictionV1,PalwStateV2Error> {
+    pub(super) fn open_conviction_v1(&self, bonds: &[PalwBondKeyV2], now_daa: u64) -> Result<PalwConvictionV1, PalwStateV2Error> {
         let raw_depth = self.read().settled_anchor_depth();
         // RFC-0015 §8.3.3 (2026-10-15): the same duty gate as the processor's bond lock — also on every network with an OPV policy.
         let duty_gate =
             self.extras.audit_2026_09_23_active || self.extras.kernel_route.as_ref().is_some_and(|route| route.opv.is_some());
-        let bytes=(bonds.len() as u64).checked_mul(std::mem::size_of::<(PalwBondKeyV2,u64,bool)>() as u64).ok_or(PalwStateV2Error::Overflow("conviction opening inventory"))?;
-        let lease=crate::palw_native_resource_v1::reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
+        let bytes = (bonds.len() as u64)
+            .checked_mul(std::mem::size_of::<(PalwBondKeyV2, u64, bool)>() as u64)
+            .ok_or(PalwStateV2Error::Overflow("conviction opening inventory"))?;
+        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
         let mut opened: Vec<(PalwBondKeyV2, u64, bool)> = Vec::with_capacity(bonds.len());
         for bond in bonds {
             if opened.iter().any(|(seen, _, _)| seen == bond) {
@@ -3519,7 +3577,10 @@ impl<'a> TransitionBuilder<'a> {
             };
             opened.push((*bond, c0, locked));
         }
-        Ok(PalwConvictionV1 { now_daa, bonds: crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(opened,lease) })
+        Ok(PalwConvictionV1 {
+            now_daa,
+            bonds: crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(opened, lease),
+        })
     }
 
     /// **R-2: what a conviction collected from `counted`** — Σ over the bonds it opened with their
@@ -3562,6 +3623,37 @@ impl<'a> TransitionBuilder<'a> {
         counted: &[PalwBondKeyV2],
         liable: &[(PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1)],
     ) -> Result<u64, PalwStateV2Error> {
+        self.close_conviction_with_subject_audit_v1(
+            conv,
+            key,
+            kind,
+            accused,
+            nominal,
+            execution_root,
+            claim_id,
+            counted,
+            liable,
+            self.state.audit_status_of_v1(&claim_id).cloned(),
+        )
+    }
+
+    /// Close an authenticated cohort conviction using that subject's audit
+    /// status. A retired FP source has no audit door; a later raw-ID cohort
+    /// must never supply its auditor receipts for this conviction.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn close_conviction_with_subject_audit_v1(
+        &mut self,
+        conv: &PalwConvictionV1,
+        key: Hash64,
+        kind: crate::palw_offence_v1::PalwOffenceKindV1,
+        accused: PalwBondKeyV2,
+        nominal: u128,
+        execution_root: Hash64,
+        claim_id: Hash64,
+        counted: &[PalwBondKeyV2],
+        liable: &[(PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwConvictedOffenceV1)],
+        subject_audit: Option<crate::palw_audit_door_v1::PalwAuditStatusV1>,
+    ) -> Result<u64, PalwStateV2Error> {
         let collected = self.conviction_collected_v1(conv, counted);
         // **ADR-0164 F-K (K2, K1′): what this conviction asked and what it collected**, whether its bond had been forfeited whole already
         // (a forfeited bond has nothing left to collect, so its tier is not a shortfall) and whether the claim it binds held audit
@@ -3573,7 +3665,7 @@ impl<'a> TransitionBuilder<'a> {
                     nominal: u64::try_from(nominal.min(u128::from(u64::MAX))).unwrap_or(u64::MAX),
                     collected,
                     forfeited_before: self.state.bond_freezes.get(&accused).is_some_and(|freeze| freeze.final_),
-                    audited: self.state.audit_status_of_v1(&claim_id).is_some(),
+                    audited: subject_audit.is_some(),
                     accused,
                 },
             )?;
@@ -3582,7 +3674,7 @@ impl<'a> TransitionBuilder<'a> {
         self.aggregate_on_conviction_v1(conv.now_daa, key, kind, liable)?;
         // **ADR-0160 F-Q (§5.9 (g)): a conviction of a claim that holds audit receipts excludes every
         // auditor that receipted it** from every pool, for good (only a flag day removes one).
-        if let Some(status) = self.state.audit_status_of_v1(&claim_id).cloned() {
+        if let Some(status) = subject_audit {
             for (auditor, _) in status.receipts {
                 if !self.state.auditor_excluded_v1(&auditor) {
                     self.write_auditor_excluded_v1(auditor, Some(conv.now_daa))?;
@@ -4086,17 +4178,22 @@ impl<'a> TransitionBuilder<'a> {
         };
         // ADR-0160 lane liab (AG-3): a frozen seat's `Valid` backs nothing (the map is empty below
         // `Params::palw_capacity_aggregate_liability`).
-        let backed_at = |lock: u128| -> Result<Vec<(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)>, PalwStateV2Error> {
-            let mut backed = Vec::new();
-            for (bond, mask) in &valid {
-                if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&self.state, bond) { continue; }
-                if self.state.slashable_locks.contains_key(&(*bond, claim_id))
-                    || lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, bond))
-                        <= self.gate_room(bond, now_daa, PalwRcoreGateV1::Work)?
-                { backed.push((*bond, *mask)); }
-            }
-            Ok(backed)
-        };
+        let backed_at =
+            |lock: u128| -> Result<Vec<(PalwBondKeyV2, crate::palw_verification_v2::PalwSegmentMaskV2)>, PalwStateV2Error> {
+                let mut backed = Vec::new();
+                for (bond, mask) in &valid {
+                    if crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&self.state, bond) {
+                        continue;
+                    }
+                    if self.state.slashable_locks.contains_key(&(*bond, claim_id))
+                        || lock.saturating_sub(palw_seat_duty_of_v1(&self.state, &claim_id, bond))
+                            <= self.gate_room(bond, now_daa, PalwRcoreGateV1::Work)?
+                    {
+                        backed.push((*bond, *mask));
+                    }
+                }
+                Ok(backed)
+            };
         // `G_res` and `s` are read ONCE, and every price of this set is computed from them (the value
         // the licence records: the S-4 review's G freeze) — `PalwFoldReadV1::rcore_lock`, spelled
         // out so the recorded input is the priced one.
@@ -4107,7 +4204,14 @@ impl<'a> TransitionBuilder<'a> {
         let step = crate::palw_audit_door_v1::palw_capacity_seat_step_v1(self.params, claim);
         let lock_at = |basis_k: u8| {
             crate::palw_aggregate_liability_v1::palw_seat_lock_v2(
-                palw_rcore_lock_v1(g_res, claim.escrowed_reward, buyback, basis_k),
+                crate::palw_model_panel_one_v1::model_claim_seat_lock_v1(
+                    self.params.model_panel_one_from_daa(),
+                    claim.accepted_daa,
+                    g_res,
+                    claim.escrowed_reward,
+                    buyback,
+                    basis_k,
+                ),
                 step,
             )
         };
@@ -4138,14 +4242,27 @@ impl<'a> TransitionBuilder<'a> {
         carried: &[(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)],
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
+        let model_one = self.params.model_panel_one_governs_v1(claim.accepted_daa);
+        let door = if model_one {
+            if !matches!(door, PalwLicenceDoorV1::Quorum | PalwLicenceDoorV1::Coverage)
+                || carried.iter().any(|(_, mask)| mask.is_some_and(|m| m != crate::palw_verification_v2::PalwSegmentMaskV2::full(1)))
+            {
+                return Err(PalwStateV2Error::CarriageInconsistent("the G14 model route requires a whole-claim receipt".into()));
+            }
+            PalwLicenceDoorV1::G14PanelOne
+        } else {
+            door
+        };
         let all: Vec<crate::palw_panel_v2::PalwSeatReceiptV2> = carried.iter().map(|(receipt, _)| receipt.clone()).collect();
-        palw_licence_names_its_outsider_v1(
-            &self.state,
-            &claim_id,
-            claim,
-            &palw_seat_verdicts_of_v2(&all),
-            self.extras.admission_independence_daa,
-        )?;
+        if !model_one {
+            palw_licence_names_its_outsider_v1(
+                &self.state,
+                &claim_id,
+                claim,
+                &palw_seat_verdicts_of_v2(&all),
+                self.extras.admission_independence_daa,
+            )?;
+        }
         let set = self.rcore_backed_set(claim_id, claim, carried, now_daa)?;
         let reads: Vec<(crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)> = carried
             .iter()
@@ -4159,6 +4276,9 @@ impl<'a> TransitionBuilder<'a> {
         let verdicts = palw_seat_verdicts_of_v2(&read_receipts);
         let quorum = crate::palw_offence_v1::PALW_PANEL_COLLUDING_QUORUM_V1 as usize;
         let door_holds = match door {
+            PalwLicenceDoorV1::G14PanelOne => {
+                self.state.panels.get(&claim_id).is_some_and(|p| p.seats.len() == 1) && set.backed.len() == 1 && set.basis_k == 1
+            }
             PalwLicenceDoorV1::Quorum => set.backed.len() >= quorum,
             PalwLicenceDoorV1::Coverage => set.backed.len() >= quorum && set.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1,
             PalwLicenceDoorV1::Optimistic => {
@@ -4169,8 +4289,15 @@ impl<'a> TransitionBuilder<'a> {
             PalwLicenceDoorV1::ShardPart { .. } => false,
         };
         if !door_holds
-            || palw_licence_names_its_outsider_v1(&self.state, &claim_id, claim, &verdicts, self.extras.admission_independence_daa)
-                .is_err()
+            || (!model_one
+                && palw_licence_names_its_outsider_v1(
+                    &self.state,
+                    &claim_id,
+                    claim,
+                    &verdicts,
+                    self.extras.admission_independence_daa,
+                )
+                .is_err())
         {
             return Ok(());
         }
@@ -4178,7 +4305,7 @@ impl<'a> TransitionBuilder<'a> {
         self.slash_silent_seats(&claim_id, claim, &verdicts)?;
         self.credit_seat_receipts(claim_id, &read_receipts, now_daa)?;
         for (bond, mask) in &set.backed {
-            self.lock_valid_seat_rcore(*bond, claim_id, set.lock, *mask, set.segments, now_daa)?;
+            self.lock_valid_seat_rcore(*bond, claim_id, claim, set.lock, *mask, set.segments, now_daa)?;
         }
         let mut staged = {
             let refs: Vec<(&crate::palw_panel_v2::PalwSeatReceiptV2, Option<crate::palw_verification_v2::PalwSegmentMaskV2>)> =
@@ -4211,12 +4338,14 @@ impl<'a> TransitionBuilder<'a> {
         &mut self,
         seat: PalwBondKeyV2,
         claim_id: Hash64,
+        claim: &PalwClaimStateV2,
         amount: u128,
         attested: crate::palw_verification_v2::PalwSegmentMaskV2,
         segments: u16,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
         if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
+            super::palw_claim_local_prefix_financial_archive_v4::on_actual_lock_reference_v4(self, (seat, claim_id), claim)?;
             return Ok(());
         }
         let expiry_daa = crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(
@@ -4226,16 +4355,18 @@ impl<'a> TransitionBuilder<'a> {
             // G-13 (lane g14-close-legacy): a claim accepted past `palw_legacy_public_filer_v1` keeps `window_court`.
             self.valid_lock_life_v1(&claim_id, now_daa),
         );
-        self.write_slashable_lock(
+        palw_claim_local_physical_lock_instances_v6::mint_and_write_v6(
+            self,
             (seat, claim_id),
-            Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
+            claim,
+            crate::palw_panel_var_v1::PalwSlashableLockV1 {
                 claim: claim_id,
                 amount,
                 expiry_daa,
                 settled_at_final: self.state.settled_attempt_finals,
                 attested,
                 segments,
-            }),
+            },
         )?;
         Ok(())
     }
@@ -4505,6 +4636,7 @@ impl<'a> TransitionBuilder<'a> {
         &mut self,
         seat: PalwBondKeyV2,
         claim_id: Hash64,
+        claim: &PalwClaimStateV2,
         required: u128,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
@@ -4512,6 +4644,7 @@ impl<'a> TransitionBuilder<'a> {
             return Ok(());
         }
         if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
+            super::palw_claim_local_prefix_financial_archive_v4::on_actual_lock_reference_v4(self, (seat, claim_id), claim)?;
             return Ok(());
         }
         let available = self.slashable_available(&seat, now_daa)?;
@@ -4525,9 +4658,11 @@ impl<'a> TransitionBuilder<'a> {
             // G-13 (lane g14-close-legacy): a claim accepted past `palw_legacy_public_filer_v1` keeps `window_court`.
             self.valid_lock_life_v1(&claim_id, now_daa),
         );
-        self.write_slashable_lock(
+        palw_claim_local_physical_lock_instances_v6::mint_and_write_v6(
+            self,
             (seat, claim_id),
-            Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
+            claim,
+            crate::palw_panel_var_v1::PalwSlashableLockV1 {
                 claim: claim_id,
                 amount: required,
                 expiry_daa,
@@ -4536,7 +4671,7 @@ impl<'a> TransitionBuilder<'a> {
                 // `palw_rcore_plus`; until then no lock records them.
                 attested: crate::palw_verification_v2::PalwSegmentMaskV2::NONE,
                 segments: 0,
-            }),
+            },
         )?;
         Ok(())
     }
@@ -4569,7 +4704,9 @@ impl<'a> TransitionBuilder<'a> {
             if matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid)
                 && !self.state.slashable_locks.contains_key(&(receipt.seat_bond, claim_id))
                 && self.slashable_available(&receipt.seat_bond, now_daa)? < prices.of(&receipt.seat_bond)
-            { return Ok(false); }
+            {
+                return Ok(false);
+            }
         }
         Ok(true)
     }
@@ -4590,7 +4727,7 @@ impl<'a> TransitionBuilder<'a> {
         let prices = self.door_lock_prices(claim_id, claim, door);
         for receipt in receipts {
             if matches!(receipt.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid) {
-                self.lock_valid_seat(receipt.seat_bond, claim_id, prices.of(&receipt.seat_bond), now_daa)?;
+                self.lock_valid_seat(receipt.seat_bond, claim_id, claim, prices.of(&receipt.seat_bond), now_daa)?;
             }
         }
         Ok(())
@@ -4682,6 +4819,7 @@ impl<'a> TransitionBuilder<'a> {
         let mut valid_signers: Vec<(crate::tx::TransactionOutpoint, Hash64)> = Vec::new();
         let mut locked_sompi = 0u128;
         let keys: Vec<(PalwBondKeyV2, Hash64)> = self.state.slashable_locks.keys().filter(|(_, c)| *c == claim_id).copied().collect();
+        super::palw_claim_local_prefix_financial_archive_v4::before_native_lock_redate_v4(self, claim_id, claim, &keys)?;
         for key in keys {
             if let Some(lock) = self.state.slashable_locks.get(&key).copied() {
                 locked_sompi = locked_sompi.saturating_add(lock.amount);
@@ -4740,9 +4878,11 @@ impl<'a> TransitionBuilder<'a> {
             .get(&claim_id)
             .map(|panel| crate::palw_verification_v2::palw_segment_count_v2(u16::try_from(panel.seats.len()).unwrap_or(u16::MAX)))
             .unwrap_or(0);
-        self.write_panel_liability(
+        super::palw_claim_local_prefix_financial_archive_v4::actual_mint_v4(
+            self,
             claim_id,
-            Some(crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 {
+            claim,
+            crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1 {
                 claim_id,
                 work_id: claim.work_id.unwrap_or(claim.execution_root),
                 class_id: claim.class_id,
@@ -4768,7 +4908,8 @@ impl<'a> TransitionBuilder<'a> {
                 basis_k: rcore_row.map(|(_, basis_k, _)| basis_k).unwrap_or(0),
                 g_res_sompi: rcore_row.map(|(_, _, g_res)| g_res).unwrap_or(0),
                 escrowed_reward: if rcore_row.is_some() { claim.escrowed_reward } else { 0 },
-            }),
+            },
+            now_daa,
         )?;
         Ok(())
     }
@@ -5003,7 +5144,10 @@ impl<'a> TransitionBuilder<'a> {
             // `consume_executor_refuted_v1` past the fence, refused as dormant below it. An `Err`,
             // never `unreachable!`, so a routing change that forgot this arm refuses the object
             // instead of panicking the node.
-            PalwOffenceKindV1::PanelFalseValidV2 | PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => {
+            PalwOffenceKindV1::PanelFalseValidV2
+            | PalwOffenceKindV1::ExecutorRefuted
+            | PalwOffenceKindV1::TirIdentityMismatch
+            | PalwOffenceKindV1::PrefixExportRefuted => {
                 return Err(PalwStateV2Error::ObjectiveOffenceRefused(
                     offence_id,
                     crate::palw_offence_v1::PalwOffenceVerifyError::AttributionDormant.to_string(),
@@ -5560,7 +5704,15 @@ impl<'a> TransitionBuilder<'a> {
                     self.reverse_convicted_final(ctx, claim_id, reason)?;
                     self.mark_liability_convicted(claim_id, ctx.daa_score, reason)?;
                 }
-                PalwClaimPhaseV2::Voided { .. } => self.mark_liability_convicted(claim_id, ctx.daa_score, reason)?,
+                PalwClaimPhaseV2::Voided { reason: previous, .. } => {
+                    // A producer-only export conviction did not contradict the
+                    // old Gate C approvals. A separately admitted computation
+                    // fraud still charges their existing locks exactly once.
+                    if previous == PalwVoidReasonV2::PrefixExportFraud && reason == PalwVoidReasonV2::CourtFraud {
+                        super::palw_security_certification_fold_v1::charge_chain_claim_attestors_v1(self, &claim_id)?;
+                    }
+                    self.mark_liability_convicted(claim_id, ctx.daa_score, reason)?;
+                }
             },
             None => self.mark_liability_convicted(claim_id, ctx.daa_score, reason)?,
         }
@@ -5988,9 +6140,13 @@ impl<'a> TransitionBuilder<'a> {
         // RFC-0018 Gate C: take back exactly what the Final (or the spends) added — nothing where Gate C withheld it.
         let weight = crate::palw_rfc0018_v1::palw_gate_c_weight_v1(self.params, &self.state, &id, &claim, weight);
         self.bond_budget_close_v1(&id, ctx.daa_score)?;
-        // lane GC-DUTY: the conviction contradicts every positive Gate C attestation of the claim — their liability locks are
-        // slashed (none exist below `palw_gate_c_attestor_liability_v1`: no lock is written there).
-        super::palw_security_certification_fold_v1::charge_chain_claim_attestors_v1(self, &id)?;
+        // A producer's prefix export statement was not approved by the old
+        // Gate C seats. Reverse this source's credit, but do not charge them
+        // for an independently signed export fault.
+        if reason != PalwVoidReasonV2::PrefixExportFraud {
+            // No locks exist below palw_gate_c_attestor_liability_v1.
+            super::palw_security_certification_fold_v1::charge_chain_claim_attestors_v1(self, &id)?;
+        }
         self.state.safe_weight = self.state.safe_weight.saturating_sub(weight);
         self.unnote_model_probe_pass(&claim, final_daa, ctx.daa_score)?;
         self.unnote_activation_probe_credits_v1(&id, &claim)?;
@@ -8491,7 +8647,7 @@ impl<'a> TransitionBuilder<'a> {
                 if self.state.slashable_locks.contains_key(&(receipt.seat_bond, claim_id)) {
                     self.widen_counted_seat_v1(receipt.seat_bond, claim_id, full, segments)?;
                 } else {
-                    self.lock_valid_seat_rcore(receipt.seat_bond, claim_id, lock, full, segments, ctx.daa_score)?;
+                    self.lock_valid_seat_rcore(receipt.seat_bond, claim_id, claim, lock, full, segments, ctx.daa_score)?;
                 }
             }
             return self.stage_supplementary_v1(claim_id, claim, receipts, basis_k, deadline, ctx.daa_score);
@@ -8708,15 +8864,19 @@ impl<'a> TransitionBuilder<'a> {
             Ok(!crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&builder.state, seat)
                 && (!locks || builder.slashable_available(seat, now)? >= price))
         };
-        let retain_backed = |set: &mut Vec<(usize, &crate::palw_panel_v2::PalwSeatReceiptV3)>, price: u128| -> Result<(), PalwStateV2Error> {
-            let mut write = 0;
-            for read in 0..set.len() {
-                let entry = set[read];
-                if backs(self, &entry.1.receipt.seat_bond, price)? { set[write] = entry; write += 1; }
-            }
-            set.truncate(write);
-            Ok(())
-        };
+        let retain_backed =
+            |set: &mut Vec<(usize, &crate::palw_panel_v2::PalwSeatReceiptV3)>, price: u128| -> Result<(), PalwStateV2Error> {
+                let mut write = 0;
+                for read in 0..set.len() {
+                    let entry = set[read];
+                    if backs(self, &entry.1.receipt.seat_bond, price)? {
+                        set[write] = entry;
+                        write += 1;
+                    }
+                }
+                set.truncate(write);
+                Ok(())
+            };
         let k0 = recount(&valid);
         let first = self.read().rcore_lock_required_v1(claim, k0);
         let mut backed = valid.clone();
@@ -8732,7 +8892,7 @@ impl<'a> TransitionBuilder<'a> {
         // 3. Locks, each with the mask its seat attested.
         if locks {
             for (_, signed) in &backed {
-                self.lock_counted_seat_v1(signed.receipt.seat_bond, claim_id, price, now, signed.segments, segments)?;
+                self.lock_counted_seat_v1(signed.receipt.seat_bond, claim_id, claim, price, now, signed.segments, segments)?;
             }
         }
 
@@ -8813,12 +8973,14 @@ impl<'a> TransitionBuilder<'a> {
         &mut self,
         seat: PalwBondKeyV2,
         claim_id: Hash64,
+        claim: &PalwClaimStateV2,
         required: u128,
         now_daa: u64,
         attested: crate::palw_verification_v2::PalwSegmentMaskV2,
         segments: u16,
     ) -> Result<(), PalwStateV2Error> {
         if self.state.slashable_locks.contains_key(&(seat, claim_id)) {
+            super::palw_claim_local_prefix_financial_archive_v4::on_actual_lock_reference_v4(self, (seat, claim_id), claim)?;
             return Ok(());
         }
         // Lane V02 (post-launch): a supplementary Valid's lock takes the same shortened life as a
@@ -8826,16 +8988,18 @@ impl<'a> TransitionBuilder<'a> {
         // G-13 (lane g14-close-legacy): `window_court` for a claim accepted past `palw_legacy_public_filer_v1`.
         let expiry_daa =
             crate::palw_panel_var_v1::palw_panel_liability_expiry_v1(now_daa, self.valid_lock_life_v1(&claim_id, now_daa));
-        self.write_slashable_lock(
+        palw_claim_local_physical_lock_instances_v6::mint_and_write_v6(
+            self,
             (seat, claim_id),
-            Some(crate::palw_panel_var_v1::PalwSlashableLockV1 {
+            claim,
+            crate::palw_panel_var_v1::PalwSlashableLockV1 {
                 claim: claim_id,
                 amount: required,
                 expiry_daa,
                 settled_at_final: self.state.settled_attempt_finals,
                 attested,
                 segments,
-            }),
+            },
         )?;
         Ok(())
     }
@@ -9332,22 +9496,59 @@ impl<'a> TransitionBuilder<'a> {
     /// leave fingerprints in the root — which is why this is a full clone rather than an undo
     /// log: an `apply_*` that grows a new mid-write failure mode cannot corrupt a clone.
     #[cfg(test)]
-    pub(super) fn checkpoint(&self) -> (PalwChainStateV2, usize, crate::palw_court_observation_v1::CourtObservationCheckpointV1) {
-        (self.state.clone(), self.entries.len(), crate::palw_court_observation_v1::checkpoint_v1())
+    pub(super) fn checkpoint(
+        &self,
+    ) -> (
+        PalwChainStateV2,
+        usize,
+        crate::palw_court_observation_v1::CourtObservationCheckpointV1,
+        palw_claim_local_object_spans_v2::ScopedExecutionCheckpointV2,
+    ) {
+        (
+            self.state.clone(),
+            self.entries.len(),
+            crate::palw_court_observation_v1::checkpoint_v1(),
+            palw_claim_local_object_spans_v2::checkpoint(self),
+        )
     }
 
     /// The aggregate construction owner retains this exact state copy until
     /// rollback or the final output ownership split. A local refusal occurs
     /// before Clone, never as a semantic rejection of the carried work.
-    pub(super) fn try_checkpoint(&mut self) -> Result<(PalwChainStateV2, usize, crate::palw_court_observation_v1::CourtObservationCheckpointV1), PalwStateV2Error> {
+    pub(super) fn try_checkpoint(
+        &mut self,
+    ) -> Result<
+        (
+            PalwChainStateV2,
+            usize,
+            crate::palw_court_observation_v1::CourtObservationCheckpointV1,
+            palw_claim_local_object_spans_v2::ScopedExecutionCheckpointV2,
+        ),
+        PalwStateV2Error,
+    > {
         let requests =
             crate::palw_native_resource_v1::native_value_requests_v1(&self.state).map_err(PalwStateV2Error::NativeResource)?;
         self.native_reservation.grow_v1(requests).map_err(PalwStateV2Error::NativeResource)?;
-        Ok((self.state.clone(), self.entries.len(), crate::palw_court_observation_v1::checkpoint_v1()))
+        Ok((
+            self.state.clone(),
+            self.entries.len(),
+            crate::palw_court_observation_v1::checkpoint_v1(),
+            palw_claim_local_object_spans_v2::checkpoint(self),
+        ))
     }
-    pub(super) fn restore(&mut self, checkpoint: (PalwChainStateV2, usize, crate::palw_court_observation_v1::CourtObservationCheckpointV1)) {
+    pub(super) fn restore(
+        &mut self,
+        checkpoint: (
+            PalwChainStateV2,
+            usize,
+            crate::palw_court_observation_v1::CourtObservationCheckpointV1,
+            palw_claim_local_object_spans_v2::ScopedExecutionCheckpointV2,
+        ),
+    ) {
         self.state = checkpoint.0;
         self.entries.truncate(checkpoint.1);
+        super::palw_claim_local_legacy_terminal_v18::rollback_cert_relay_seals_v18(self, checkpoint.1);
+        palw_claim_local_object_spans_v2::restore(self, checkpoint.3);
         crate::palw_court_observation_v1::restore_v1(checkpoint.2);
         // The caches describe the state just replaced; the next reader rebuilds them from the
         // restored one (audit #13b).
@@ -9625,7 +9826,10 @@ impl<'a> TransitionBuilder<'a> {
         let escrow_forfeit = match reason {
             // A court default is charged exactly as a proven fraud (ADR-0152 F2 residual): only the
             // reason it is recorded under differs, so kind 3 cannot read it as a proof.
-            PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::PrefixExportFraud => true,
+            PalwVoidReasonV2::CourtFraud
+            | PalwVoidReasonV2::CourtDefault
+            | PalwVoidReasonV2::CourtHeldVerdict
+            | PalwVoidReasonV2::PrefixExportFraud => true,
             PalwVoidReasonV2::ProducerWithholding | PalwVoidReasonV2::ReceiptTimeout => self.extras.audit_2026_09_23_active,
             // ADR-0152 v3.1 S0′ (v22 skeleton): both are a second failed panel and are charged as the
             // second `ReceiptTimeout` is. M4's Q-5 gate writes 6 (`sweep_deadlines`); S-5 writes 5
@@ -9671,9 +9875,10 @@ impl<'a> TransitionBuilder<'a> {
                 // challenger could be paid for, and nothing a seat can be convicted by). A held
                 // dissection's verdict (ADR-0152 §4-ter F3 (B), `CourtHeldVerdict`) is the producer's
                 // and is charged as `CourtFraud` is.
-                PalwVoidReasonV2::CourtFraud | PalwVoidReasonV2::CourtDefault | PalwVoidReasonV2::CourtHeldVerdict | PalwVoidReasonV2::PrefixExportFraud => {
-                    palw_rcore_s1s2_action_v1(c0, g)
-                }
+                PalwVoidReasonV2::CourtFraud
+                | PalwVoidReasonV2::CourtDefault
+                | PalwVoidReasonV2::CourtHeldVerdict
+                | PalwVoidReasonV2::PrefixExportFraud => palw_rcore_s1s2_action_v1(c0, g),
                 PalwVoidReasonV2::ProducerWithholding => {
                     let strike = palw_rcore_strike_v1(self.state.withholding_strikes(&claim.bond).unwrap_or(&[]), voided_daa);
                     if let Some(written) = strike.written {
@@ -9736,7 +9941,7 @@ impl<'a> TransitionBuilder<'a> {
         // reaches on its own — keeps the tick only below the fence (`finalize_claim`).
         let attempt = matches!(claim.source, PalwClaimSourceV2::Attempt);
         let ticks = if rcore {
-            attempt && claim.rcore.basis_k >= PALW_RCORE_FINAL_BASIS_K_V1
+            attempt && claim.rcore.basis_k >= palw_rcore_required_basis_of_claim_v1(&claim)
         } else {
             self.extras.audit_2026_09_23_active && attempt
         };
@@ -10533,10 +10738,34 @@ impl<'a> TransitionBuilder<'a> {
     ///
     /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
     /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
+    /// The only production retirement entry point receives the actual native
+    /// context. Capture, deletion and pending/closed publication remain inside
+    /// ONE owning call. Any error abandons the enclosing transition; no whole
+    /// state checkpoint/clone is created to implement this ownership boundary.
+    pub(super) fn retire_claim_at_v18(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        id: Hash64,
+        claim: &PalwClaimStateV2,
+    ) -> Result<(), PalwStateV2Error> {
+        if self.state.court_service_holds_claim_v1(&id) {
+            return Ok(());
+        }
+        let capture = super::palw_claim_local_legacy_terminal_v18::capture_before_retirement_v18(self, ctx, id, claim)?;
+        self.retire_claim(id, claim)?;
+        if let Some(capture) = capture {
+            super::palw_claim_local_legacy_terminal_v18::finish_actual_retirement_v18(self, capture)?;
+            super::palw_claim_local_legacy_terminal_v18::resolve_exact_pending_v18(self, ctx, id, claim)?;
+        }
+        Ok(())
+    }
+    /// Historical/test wrapper. Migrated rows still pass the central removal
+    /// guard, so it cannot silently bypass actual-context capture.
     pub(super) fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
         if self.state.court_service_holds_claim_v1(&id) {
             return Ok(());
         }
+        super::palw_claim_local_source_contract_generation_v8::capture_retiring_source_v8(self, id, claim)?;
         let now = self.state.last_point.map_or(0, |p| p.daa_score);
         super::palw_claim_local_rewards_v1::clear_hold_v1(self, now, id)?;
         self.forget_paid_consumer_v1(id)?;

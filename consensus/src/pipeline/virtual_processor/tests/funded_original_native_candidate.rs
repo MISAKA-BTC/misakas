@@ -18,6 +18,127 @@ use kaspa_consensus_core::{
 use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
 use libcrux_ml_dsa::ml_dsa_87 as mldsa;
 
+/// Ordinary UTXO script validation and escrow qualification are independent
+/// requirements. This self-contained test uses real payer signatures and the
+/// production fee schedule, without a captured chain or an ignored campaign.
+#[tokio::test]
+async fn funded_escrow_real_native_signatures_payment_burn_continuation_and_refund() {
+    use crate::pipeline::virtual_processor::utxo_validation::PalwEscrowSpendLocksV1;
+    use kaspa_consensus_core::palw_funded_escrow_v1 as escrow;
+    let config = ConfigBuilder::new(MAINNET_PARAMS).skip_proof_of_work().build();
+    let ctx = TestContext::new(TestConsensus::new(&config));
+    let vp = ctx.consensus.virtual_processor();
+    let keypair = mldsa::generate_key_pair([0x74; 32]);
+    let key = keypair.verification_key.as_ref().to_vec();
+    let address = kaspa_hashes::blake2b_512_address_payload(&key);
+    let spk = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&address.as_bytes());
+    let h = kaspa_hashes::Hash64::from_u64_word;
+    let mut row = escrow::PalwFundedEscrowRowV1::fresh_v1(
+        h(1),
+        h(2),
+        TransactionOutpoint::new(h(3), 0),
+        2_000_000_000,
+        kaspa_consensus_core::mldsa87_primitives::mldsa87_key_id(&key),
+        address,
+        100,
+        10_100,
+        true,
+    )
+    .unwrap();
+    row.fee_sompi = 1_000_000_000;
+    row.seat_payee = address;
+    row.relay_payee = address;
+    let [work, relay, burn] = kaspa_consensus_core::palw_g14_values_v1::palw_g14_escrow_split_v1(row.fee_sompi);
+    let remainder = row.amount_sompi - row.fee_sompi;
+    let entry = UtxoEntry::new(row.amount_sompi, spk.clone(), 0, false);
+    let sign = |tx: &mut Transaction, entries: Vec<UtxoEntry>| {
+        tx.set_mass(
+            MassCalculator::new(0, 0, 0, config.params.storage_mass_parameter)
+                .calc_contextual_masses(&PopulatedTransaction::new(tx, entries.clone()))
+                .unwrap()
+                .storage_mass,
+        );
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        for input in 0..tx.inputs.len() {
+            let hash = calc_mldsa87_signature_hash(&PopulatedTransaction::new(tx, entries.clone()), input, SIG_HASH_ALL, &reused);
+            let mut signature = mldsa::sign(&keypair.signing_key, hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x75; 32])
+                .unwrap()
+                .as_ref()
+                .to_vec();
+            signature.push(SIG_HASH_ALL.to_u8());
+            tx.inputs[input].signature_script = ScriptBuilder::new().add_data(&signature).unwrap().add_data(&key).unwrap().drain();
+        }
+        tx.finalize();
+    };
+    let mut spend = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(row.funding_outpoint, vec![], 0, 1)],
+        vec![
+            TransactionOutput::new(work, spk.clone()),
+            TransactionOutput::new(relay, spk.clone()),
+            TransactionOutput::new(remainder, spk.clone()),
+        ],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+        0,
+        vec![],
+    );
+    sign(&mut spend, vec![entry.clone()]);
+    let view: UtxoCollection = [(row.funding_outpoint, entry.clone())].into_iter().collect();
+    let full = crate::processes::transaction_validator::tx_validation_in_utxo_context::TxValidationFlags::Full;
+    let validated = vp.validate_transaction_in_utxo_context(&spend, &view, 500, full, None).unwrap();
+    assert_eq!(validated.calculated_fee, burn);
+    let locks = PalwEscrowSpendLocksV1 { rows: [(row.funding_outpoint, row)].into_iter().collect(), provisional: Default::default() };
+    assert_eq!(locks.refusal(&spend, [row.amount_sompi], 500), None);
+    let plan = escrow::palw_escrow_qualified_spend_v1(
+        &row,
+        &spend,
+        &[row.amount_sompi],
+        500,
+        escrow::palw_escrow_fee_schedule_v1(&row).as_ref(),
+    )
+    .unwrap();
+    assert_eq!((plan.paid_now, plan.burned_now, plan.continued_now), (work + relay, burn, remainder));
+    assert_eq!(vp.palw_collectible_transaction_fee_v1(&spend, validated.calculated_fee, plan.burned_now, 500), 0);
+    let mut invalid_signature = spend.clone();
+    invalid_signature.inputs[0].signature_script[10] ^= 1;
+    invalid_signature.finalize();
+    assert!(vp.validate_transaction_in_utxo_context(&invalid_signature, &view, 500, full, None).is_err());
+    let mut theft = spend.clone();
+    theft.outputs[2].value -= 1;
+    sign(&mut theft, vec![entry]);
+    vp.validate_transaction_in_utxo_context(&theft, &view, 500, full, None).unwrap();
+    assert_eq!(locks.refusal(&theft, [row.amount_sompi], 500), Some(row.funding_outpoint));
+
+    // The core sweep's liability-resolution tests cover authorization to clear
+    // this flag. Once resolved, the actual current change output is refundable.
+    let mut closed = plan.new;
+    closed.liability_open = false;
+    let continued_entry = UtxoEntry::new(remainder, spk.clone(), 500, false);
+    let fee_outpoint = TransactionOutpoint::new(h(4), 0);
+    let fee_entry = UtxoEntry::new(100_000_000, spk.clone(), 0, false);
+    let mut refund = Transaction::new(
+        crate::constants::TX_VERSION,
+        vec![TransactionInput::new(closed.funding_outpoint, vec![], 0, 1), TransactionInput::new(fee_outpoint, vec![], 0, 1)],
+        vec![TransactionOutput::new(remainder, spk)],
+        0,
+        kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
+        0,
+        vec![],
+    );
+    sign(&mut refund, vec![continued_entry.clone(), fee_entry.clone()]);
+    let view: UtxoCollection = [(closed.funding_outpoint, continued_entry), (fee_outpoint, fee_entry)].into_iter().collect();
+    vp.validate_transaction_in_utxo_context(&refund, &view, closed.hard_deadline_daa, full, None).unwrap();
+    let returned =
+        escrow::palw_escrow_qualified_spend_v1(&closed, &refund, &[remainder, 100_000_000], closed.hard_deadline_daa, None).unwrap();
+    assert_eq!(returned.returned_now, remainder);
+    assert_eq!(returned.new.paid_sompi + returned.new.burned_sompi + returned.new.returned_sompi, row.amount_sompi);
+    assert_eq!(
+        escrow::palw_escrow_qualified_spend_v1(&returned.new, &refund, &[remainder, 100_000_000], closed.hard_deadline_daa, None),
+        Err(escrow::PalwEscrowRefusalV1::AlreadySettled)
+    );
+}
+
 #[tokio::test]
 async fn palw_funded_original_real_native_inputs_preserve_fallback_and_refuse_incomplete_admission() {
     let dir = std::env::var("MISAKA_G14_NATIVE_FIXTURE_DIR").unwrap_or_else(|_| {

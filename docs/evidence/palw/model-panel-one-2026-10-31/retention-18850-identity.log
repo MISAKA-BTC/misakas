@@ -1,0 +1,7 @@
+
+running 1 test
+test palw_model_panel_one_v1::tests::public_migration_activates_at_its_separate_future_boundary ... all-model release params=bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2 schedule=5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a identity=5de80e64b63572de0cbf1a09679034e3a1765166e8249d3a88f8e29891215bb5
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5315 filtered out; finished in 0.02s
+

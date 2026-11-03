@@ -78,8 +78,10 @@ fn row<T: NativeWireScanV1 + BorshDeserialize>(
         .find(|((t, k), _)| *t == table && k.as_slice() == root.as_byte_slice())
         .map(|(_, b)| b.as_slice())
         .ok_or("replacement current row absent")?;
-    preflight_native_value_v1::<T>(bytes, bytes.len() as u64).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
-    crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || borsh::from_slice::<T>(bytes)).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)
+    preflight_native_value_v1::<T>(bytes, bytes.len() as u64)
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+    crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || borsh::from_slice::<T>(bytes))
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)
 }
 pub fn kernel_material_replacement_v4(
     state: &PalwChainStateV2,
@@ -90,7 +92,7 @@ pub fn kernel_material_replacement_v4(
     bundle: &PalwProspectiveKernelBundleV4,
     intent: &PalwKernelMaterialReplacementIntentV4,
 ) -> Result<PalwKernelMaterialReplacementOwnedV4, String> {
-    kernel_material_replacement_checked_v4(state, params, now, raw_depth, context, bundle, intent).map_err(|error|error.to_string())
+    kernel_material_replacement_checked_v4(state, params, now, raw_depth, context, bundle, intent).map_err(|error| error.to_string())
 }
 /// Classified preparation; local capacity/context never becomes collateral shortage.
 pub fn kernel_material_replacement_checked_v4(
@@ -142,8 +144,13 @@ pub fn kernel_material_replacement_checked_v4(
         return Err("replacement does not match current exact accepted covenant/sequence/capacity".into());
     }
     let fees = p.minimum_fee_sompi.checked_mul(intent.providers.len() as u64).ok_or("replacement fees overflow")?;
-    if u128::from(sponsor.collateral).saturating_sub(palw_bond_committed_raw_checked_v2(state, params, &old.terms.sponsor, now, raw_depth)?)
-        < u128::from(fees)
+    if u128::from(sponsor.collateral).saturating_sub(palw_bond_committed_raw_checked_v2(
+        state,
+        params,
+        &old.terms.sponsor,
+        now,
+        raw_depth,
+    )?) < u128::from(fees)
     {
         return Err("replacement sponsor lacks own unused fee funding".into());
     }
@@ -154,7 +161,8 @@ pub fn kernel_material_replacement_checked_v4(
             || native.operator_id == sponsor.operator_id
             || intent.providers[..index].iter().any(|b| state.bond(b).is_some_and(|r| r.operator_id == native.operator_id))
             || old.providers.iter().any(|p| p.provider == *provider && (!p.charged || !p.fee_paid))
-            || u128::from(native.collateral).saturating_sub(palw_bond_committed_raw_checked_v2(state, params, provider, now, raw_depth)?)
+            || u128::from(native.collateral)
+                .saturating_sub(palw_bond_committed_raw_checked_v2(state, params, provider, now, raw_depth)?)
                 < u128::from(p.minimum_collateral_sompi)
         {
             return Err("replacement provider is dependent/reused or lacks actual capital".into());
@@ -165,9 +173,12 @@ pub fn kernel_material_replacement_checked_v4(
             if *table != PALW_MONETARY_MATERIAL_TABLE_V1 {
                 continue;
             }
-            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes.as_slice(), bytes.len() as u64).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
-            let row = crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || borsh::from_slice::<PalwMonetaryMaterialRowV1>(bytes))
+            preflight_native_value_v1::<PalwMonetaryMaterialRowV1>(bytes.as_slice(), bytes.len() as u64)
                 .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+            let row = crate::palw_native_resource_v1::retain_native_value_decode_classified_v1(bytes, || {
+                borsh::from_slice::<PalwMonetaryMaterialRowV1>(bytes)
+            })
+            .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
             if row.providers.iter().any(|p| p.provider == *provider && !p.charged) {
                 count += 1;
                 held = held.checked_add(row.terms.max_material_bytes).ok_or("replacement provider bytes overflow")?;
@@ -176,7 +187,11 @@ pub fn kernel_material_replacement_checked_v4(
         if count >= u64::from(p.max_contracts_per_provider) || held > p.max_bytes_per_provider {
             return Err("replacement provider actual native capacity exhausted".into());
         }
-        keys[index] = Some((*provider, NativeRetainedV1::try_from_clone_v1(&native.pubkey).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?));
+        keys[index] = Some((
+            *provider,
+            NativeRetainedV1::try_from_clone_v1(&native.pubkey)
+                .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?,
+        ));
     }
     let local = crate::palw_native_resource_v1::native_declared_logical_limits_v1()
         .ok_or_else(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::capacity_unavailable_v4)?;
@@ -201,7 +216,8 @@ pub fn kernel_material_replacement_checked_v4(
             )
         })
         .ok_or("replacement proposal heap overflow")?;
-    let lease = reserve_native_requests_v1(heap).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+    let lease =
+        reserve_native_requests_v1(heap).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
     let proposal = Action::ReplaceBeforeV4 {
         valid_until_daa: intent.valid_until_daa,
         recovery: contract.id(),
@@ -236,8 +252,10 @@ pub fn kernel_material_replacement_checked_v4(
         daa_score: now,
         candidate,
         context_request: context.request,
-        manifest: NativeRetainedV1::try_from_clone_v1(&context.intent.manifest).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?,
-        producer_key: NativeRetainedV1::try_from_clone_v1(&sponsor.pubkey).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?,
+        manifest: NativeRetainedV1::try_from_clone_v1(&context.intent.manifest)
+            .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?,
+        producer_key: NativeRetainedV1::try_from_clone_v1(&sponsor.pubkey)
+            .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?,
         provider_keys: keys,
     })
 }

@@ -215,7 +215,9 @@ impl PalwTirPublicClaimV1 {
         F: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
     {
         if family {
-            rules.clock.version = crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
+            if rules.clock.version != crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4 {
+                rules.clock.version = crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
+            }
             crate::palw_tir_public_allocation_v1::check_tir_public_allocation_family_retained_v2(
                 &plan, geometry, &original, &header, record, layout, semantics, inventory, rules, table,
             )?;
@@ -531,7 +533,7 @@ pub const PALW_TIR_PUBLIC_MAX_OWNERS_PER_CLAIM_V1: u64 = 8;
 pub fn palw_tir_owner_tenure_v1(frame: &PalwTirPublicClaimV1, grace: u64) -> u64 {
     let plan = frame.plan_v1();
     let old = palw_tir_owner_tenure_of_window_v1(plan.terms.open_until_daa.saturating_sub(plan.preparation_until_daa), grace);
-    if plan.acquisition.clock.version == crate::palw_tir_frame_cost_v1::PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
+    if crate::palw_tir_frame_cost_v1::is_family_clock_v3(plan.acquisition.clock.version) {
         old.max(plan.acquisition.owner_tenure_family_v3().unwrap_or(u64::MAX))
     } else {
         old
@@ -840,6 +842,38 @@ pub(crate) fn palw_tir_public_family_source_frame_with_executor_network_fixture_
     tests::source_tokenizer_frame_v1(Some(key), Some(network), fault)
 }
 
+/// Distinct producer material is re-executed in its own signed job context.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_family_source_frame_with_executor_network_prompt_fixture_v1(
+    key: &[u8],
+    network: Hash64,
+    fault: bool,
+    prompt: &[u32],
+) -> (
+    PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+    Vec<u8>,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+) {
+    tests::source_tokenizer_frame_with_prompt_v1(Some(key), Some(network), fault, Some(prompt))
+}
+
+/// Genuine constrained original, selected before context/roots/admission.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_family_constraint_frame_with_executor_network_fixture_v1(
+    key: &[u8],
+    network: Hash64,
+) -> (
+    PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+    Vec<u8>,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+) {
+    tests::constraint_tokenizer_frame_v1(key, network)
+}
+
 /// **G14 G-T2 test support:** [`palw_tir_public_frame_fixture_v1`] over a job `edit_job` shapes (a seeded V3 job, a V4 job with
 /// penalties or stop sequences, ...), whose execution decodes by THAT job's own selection rule — except at decode position
 /// `wrong_at`, where it commits the best lane the rule does not choose (a selection violation over honest arithmetic).
@@ -1058,7 +1092,7 @@ mod tests {
     }
     /// Explicit test-only native quote point for an actual mature genesis
     /// registry; no accepted block or signed horizon is patched after capture.
-    fn family_fixture_accepted_daa_v2() -> u64 {
+    pub(super) fn family_fixture_accepted_daa_v2() -> u64 {
         match std::env::var("MISAKA_FAMILY_ACCEPTED_DAA") {
             Ok(value) => {
                 let value = value.parse::<u64>().expect("explicit family accepted DAA must be u64");
@@ -1082,6 +1116,36 @@ mod tests {
         production_family: bool,
         table_witness: Option<&[u8]>,
     ) -> super::PalwTirPublicFrameFixtureV1 {
+        try_frame_from_execution_with_material_form_stop_v65(
+            x,
+            job,
+            maximum_custodians,
+            output_root,
+            semantics,
+            inventory,
+            prompt_form,
+            stop_reason,
+            trace_retention_daa,
+            production_family,
+            table_witness,
+            None,
+        )
+        .unwrap_or_else(|incomplete| panic!("fixture requires a real native generic arithmetic quote: {incomplete:?}"))
+    }
+    fn try_frame_from_execution_with_material_form_stop_v65(
+        x: crate::palw_tir_court_v1::test_support::TinyExecution,
+        job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        maximum_custodians: u64,
+        output_root: Option<Hash64>,
+        semantics: Option<&crate::palw_class_semantics_v1::PalwClassSemanticsV1>,
+        inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        stop_reason: crate::palw_freeprompt_v3::PalwFpStopReasonV3,
+        trace_retention_daa: u64,
+        production_family: bool,
+        table_witness: Option<&[u8]>,
+        prospective: Option<super::PalwCompactPairProspectiveContextV67>,
+    ) -> Result<super::PalwTirPublicFrameFixtureV1, Box<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationQuoteV1>> {
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_public_allocation_v1::*;
         let binding = x.binding.clone();
@@ -1105,7 +1169,8 @@ mod tests {
             producer: PalwBondKeyV2(original.job.executor_bond),
             execution_root: original.execution_root,
             job_identity: crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&original),
-            accepted_daa: if production_family { family_fixture_accepted_daa_v2() } else { 100 },
+            accepted_daa: prospective
+                .map_or_else(|| if production_family { family_fixture_accepted_daa_v2() } else { 100 }, |p| p.accepted_daa),
         };
         let header = PalwPublicTirBindingHeaderV1::of_binding_v1(&binding);
         let (record, _) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&binding.class, &binding.artifact_root).unwrap();
@@ -1150,7 +1215,7 @@ mod tests {
         };
         let plan = match quoted.unwrap() {
             PalwTirPublicAllocationQuoteV1::Complete(plan) => plan,
-            incomplete => panic!("fixture requires a real native generic arithmetic quote: {incomplete:?}"),
+            incomplete => return Err(Box::new(incomplete)),
         };
         let pledge = crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1 {
             version: 1,
@@ -1161,7 +1226,7 @@ mod tests {
             source_id: plan.source_id,
             resource_plan_id: plan.resource_plan_id,
             maximum_custodians,
-            accept_until_daa: 101,
+            accept_until_daa: plan.terms.accepted_daa.checked_add(1).unwrap(),
             material_until_daa: plan.terms.material_until_daa,
             signature: vec![2; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
@@ -1219,7 +1284,7 @@ mod tests {
             production_family,
         )
         .unwrap();
-        super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object }
+        Ok(super::PalwTirPublicFrameFixtureV1 { frame, record, layout, execution: x, rules, object })
     }
     pub(super) fn constraint_frame() -> (
         super::PalwTirPublicFrameFixtureV1,
@@ -1457,12 +1522,7 @@ mod tests {
         Fixed { committed_writer: bool },
         Prefix { fault: bool },
         SourceFault,
-    }
-    pub(super) fn history_frame_form_v1(
-        direct_input: bool,
-        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
-    ) -> super::PalwTirPublicFrameFixtureV1 {
-        history_frame_condition_v1(if direct_input { HistoryConditionV1::Input } else { HistoryConditionV1::None }, prompt_form)
+        Constraint,
     }
     pub(super) fn history_frame_form_v1(
         direct_input: bool,
@@ -1482,7 +1542,7 @@ mod tests {
         prefill: u32,
         decode: u32,
     ) -> super::PalwTirPublicFrameFixtureV1 {
-        history_frame_shape_material_v1(condition, prompt_form, prefill, decode, false, None, None).0
+        history_frame_shape_material_v1(condition, prompt_form, prefill, decode, false, None, None, None).0
     }
     pub(super) fn prefix_tokenizer_frame_v1(
         executor: Option<&[u8]>,
@@ -1502,8 +1562,53 @@ mod tests {
             true,
             executor,
             network,
+            None,
         );
         let (sem, eof, raw, table) = material.expect("actual tokenizer requested before original construction");
+        (frame, sem, eof, raw, table)
+    }
+    pub(super) fn compact_pair_tokenizer_frame_at_v67(
+        executor: &[u8],
+        network: Hash64,
+        prefix: bool,
+        fault: bool,
+        prompt: Option<&[u32]>,
+        prospective: Option<super::PalwCompactPairProspectiveContextV67>,
+    ) -> super::PalwCompactPairMaterialV67 {
+        assert!(!prefix || (!fault && prompt.is_none()));
+        let condition = if prefix {
+            HistoryConditionV1::Prefix { fault: false }
+        } else if fault {
+            HistoryConditionV1::SourceFault
+        } else {
+            HistoryConditionV1::None
+        };
+        let (frame, material) = try_history_frame_shape_material_inner_v65(
+            condition,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            6,
+            1,
+            true,
+            Some(executor),
+            Some(network),
+            prompt,
+            true,
+            prospective,
+        )
+        .unwrap_or_else(|q| panic!("prospective compact native quote incomplete: {q:?}"));
+        let (sem, eof, raw, table) = material.unwrap();
+        assert_eq!(frame.execution.prompt.len(), 6);
+        let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(&frame.record.program).unwrap();
+        assert_eq!(
+            program.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(),
+            5,
+            "genuine gather/history/max/reshape/logits program has a node-valued numerical carry"
+        );
+        assert_eq!(
+            crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&program).len(),
+            1,
+            "the compact corpus has one actual committed H-reduction cone before native admission"
+        );
         (frame, sem, eof, raw, table)
     }
     pub(super) fn source_tokenizer_frame_v1(
@@ -1525,6 +1630,96 @@ mod tests {
             true,
             executor,
             network,
+            None,
+        );
+        let (sem, eof, raw, table) = material.unwrap();
+        (frame, sem, eof, raw, table)
+    }
+    pub(super) fn source_tokenizer_frame_with_prompt_v1(
+        executor: Option<&[u8]>,
+        network: Option<Hash64>,
+        fault: bool,
+        prompt_override: Option<&[u32]>,
+    ) -> (
+        super::PalwTirPublicFrameFixtureV1,
+        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+        Vec<u8>,
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+    ) {
+        let (frame, material) = history_frame_shape_material_v1(
+            if fault { HistoryConditionV1::SourceFault } else { HistoryConditionV1::None },
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            6,
+            1,
+            true,
+            executor,
+            network,
+            prompt_override,
+        );
+        let (sem, eof, raw, table) = material.unwrap();
+        (frame, sem, eof, raw, table)
+    }
+    pub(super) fn constraint_tokenizer_frame_v1(
+        executor: &[u8],
+        network: Hash64,
+    ) -> (
+        super::PalwTirPublicFrameFixtureV1,
+        crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+        crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+        Vec<u8>,
+        crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+    ) {
+        // Preserve the original six-node model's real quote as the oversized
+        // boundary negative. No invalid frame, Claim, pledge or signature is minted.
+        let oversized = try_history_frame_shape_material_inner_v65(
+            HistoryConditionV1::Constraint,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            6,
+            1,
+            true,
+            Some(executor),
+            Some(network),
+            None,
+            false,
+            None,
+        );
+        let rejected = match oversized {
+            Err(quote) => quote,
+            Ok(_) => panic!("the original six-node Constraint pursuit must not bypass its native 3,120-DAA cap"),
+        };
+        let crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationQuoteV1::Incomplete { source_id, missing } = *rejected else {
+            panic!("unexpected complete Constraint quote in the rejection result");
+        };
+        assert_ne!(source_id, Hash64::default());
+        assert_eq!(
+            missing,
+            vec![crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationMissingV1::DoorBeyondLiabilityHorizon {
+                required: 3_126,
+                allowed: 3_120,
+            }]
+        );
+        // Reuse the complete five-node I32 corpus and omit the tokenizer's
+        // optional empty list. The tokenizer door is sized from the actual
+        // artifact bytes. The model still commits the H-reduction carry and
+        // drives logits, and the native quote must admit every branch.
+        let (frame, material) = history_frame_shape_material_inner_v26(
+            HistoryConditionV1::Constraint,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            6,
+            1,
+            true,
+            Some(executor),
+            Some(network),
+            None,
+            true,
+        );
+        let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(&frame.record.program).unwrap();
+        assert_eq!(program.blocks.iter().map(|b| b.nodes.len()).sum::<usize>(), 5);
+        assert_eq!(
+            crate::palw_tir_dissect_v1::palw_tir_dissected_commit_points_v1(&program).len(),
+            1,
+            "Constraint still has its actual committed H-reduction cone"
         );
         let (sem, eof, raw, table) = material.unwrap();
         (frame, sem, eof, raw, table)
@@ -1537,6 +1732,7 @@ mod tests {
         family_material: bool,
         executor: Option<&[u8]>,
         network: Option<Hash64>,
+        prompt_override: Option<&[u32]>,
     ) -> (
         super::PalwTirPublicFrameFixtureV1,
         Option<(
@@ -1546,6 +1742,72 @@ mod tests {
             crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
         )>,
     ) {
+        history_frame_shape_material_inner_v26(
+            condition,
+            prompt_form,
+            prefill,
+            decode,
+            family_material,
+            executor,
+            network,
+            prompt_override,
+            false,
+        )
+    }
+    fn history_frame_shape_material_inner_v26(
+        condition: HistoryConditionV1,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        prefill: u32,
+        decode: u32,
+        family_material: bool,
+        executor: Option<&[u8]>,
+        network: Option<Hash64>,
+        prompt_override: Option<&[u32]>,
+        compact_pair: bool,
+    ) -> (
+        super::PalwTirPublicFrameFixtureV1,
+        Option<(
+            crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+            crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+            Vec<u8>,
+            crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+        )>,
+    ) {
+        try_history_frame_shape_material_inner_v65(
+            condition,
+            prompt_form,
+            prefill,
+            decode,
+            family_material,
+            executor,
+            network,
+            prompt_override,
+            compact_pair,
+            None,
+        )
+        .unwrap_or_else(|incomplete| panic!("fixture requires a real native generic arithmetic quote: {incomplete:?}"))
+    }
+    type FamilyFrameMaterialV66 = (
+        super::PalwTirPublicFrameFixtureV1,
+        Option<(
+            crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+            crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+            Vec<u8>,
+            crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+        )>,
+    );
+    fn try_history_frame_shape_material_inner_v65(
+        condition: HistoryConditionV1,
+        prompt_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
+        prefill: u32,
+        decode: u32,
+        family_material: bool,
+        executor: Option<&[u8]>,
+        network: Option<Hash64>,
+        prompt_override: Option<&[u32]>,
+        compact_pair: bool,
+        prospective: Option<super::PalwCompactPairProspectiveContextV67>,
+    ) -> Result<FamilyFrameMaterialV66, Box<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationQuoteV1>> {
         use crate::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3};
         use crate::palw_freeprompt_v3::*;
         use crate::palw_tir_corpus_fixture_v1::{fixture_with, programs};
@@ -1555,19 +1817,23 @@ mod tests {
             // tractable without altering native service or security limits.
             use misaka_palw_tir::{DType, MapParams, Ref, Tensor, TensorType};
             let mut pb = misaka_palw_tir::builder::ProgramBuilder::new(2, misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL);
-            let embed = pb.param("embedding", DType::I8, &[2, 2], false);
+            let embed = pb.param("embedding", if compact_pair { DType::I32 } else { DType::I8 }, &[2, 2], false);
             let history = pb.hist_state("kv", DType::I32, &[2], misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL, true);
             let carry = vec![TensorType::fixed(DType::I32, &[2])];
             let pre = {
                 let mut b = pb.block("pre", vec![]);
                 let x = b.gather(embed, Ref::Input(0), 0, 0);
-                let x = b.cast(x, DType::I32);
+                let x = if compact_pair { x } else { b.cast(x, DType::I32) };
                 b.finish(&[x])
             };
             let layer = {
                 let mut b = pb.block("layer", carry.clone());
-                b.hist_append(history, Ref::CarryIn(0));
-                let x = b.cast(Ref::CarryIn(0), DType::I32);
+                let rows = b.hist_append(history, Ref::CarryIn(0));
+                // Both ordinary and Prefix family fixtures execute a real H
+                // reduction. Its node-valued carry is committed by finish,
+                // drives the actual logits and supports a numerical court.
+                let total = b.reduce_max(rows, 0);
+                let x = b.reshape_fixed(total, &[2]);
                 b.finish(&[x])
             };
             let (post, logits) = {
@@ -1579,10 +1845,23 @@ mod tests {
             };
             let program = pb.finish(pre, vec![layer], post, logits);
             let mut params = MapParams::default();
-            params.tensors.insert((0, None), Tensor::new(DType::I8, vec![2, 2], vec![7, 1, 4, 2]).unwrap());
+            let embedding = if compact_pair {
+                Tensor::new(DType::I32, vec![2, 2], vec![7, 1, 4, 2]).unwrap()
+            } else {
+                Tensor::new(DType::I8, vec![2, 2], vec![7, 1, 4, 2]).unwrap()
+            };
+            params.tensors.insert((0, None), embedding);
             ("complete-prefix-family-text".to_string(), program, params, vec![0, 1])
         } else {
             programs().into_iter().find(|(name, ..)| name == "dense-gqa-2layer").expect("golden GQA corpus")
+        };
+        let tokens = if let Some(prompt) = prompt_override {
+            assert!(family_material && matches!(condition, HistoryConditionV1::None | HistoryConditionV1::SourceFault));
+            assert_eq!(prompt.len(), prefill as usize, "explicit producer prompt must cover the exact prefill");
+            assert!(prompt.iter().all(|id| *id < program.token_bound), "producer prompt must use actual model vocabulary");
+            prompt.to_vec()
+        } else {
+            tokens
         };
         let fixed = if let HistoryConditionV1::Fixed { committed_writer } = condition {
             let state: u16 = program.states.len().try_into().unwrap();
@@ -1593,57 +1872,6 @@ mod tests {
                 shape: vec![],
                 per_layer: true,
             });
-            Some((state, committed_writer))
-        } else {
-            None
-        };
-        if matches!(condition, HistoryConditionV1::Input | HistoryConditionV1::Fixed { .. }) {
-            use misaka_palw_tir::types::Dim;
-            use misaka_palw_tir::{Prim, Ref};
-            let (bi, ni, input, out) = program
-                .blocks
-                .iter()
-                .enumerate()
-                .find_map(|(bi, b)| {
-                    b.nodes.iter().enumerate().find_map(|(ni, n)| {
-                        if !matches!(n.prim, Prim::ReduceSum { .. } | Prim::ReduceMax { .. }) {
-                            return None;
-                        }
-                        let Ref::Node(input) = *n.inputs.first()? else {
-                            return None;
-                        };
-                        let out = b.nodes.get(usize::from(input))?.out.clone();
-                        out.shape.contains(&Dim::H).then_some((bi, ni, input, out))
-                    })
-                })
-                .expect("GQA actual history reduction");
-            let block = &mut program.blocks[bi];
-            for node in &mut block.nodes {
-                for input in &mut node.inputs {
-                    if let Ref::Node(index) = input {
-                        if usize::from(*index) >= ni {
-                            *index = index.checked_add(1).unwrap();
-                        }
-                    }
-                }
-            }
-            for index in &mut block.carry_out {
-                if usize::from(*index) >= ni {
-                    *index = index.checked_add(1).unwrap();
-                }
-            }
-            if bi == usize::from(program.schedule.post) && usize::from(program.logits) >= ni {
-                program.logits += 1;
-            }
-            block.nodes.insert(
-                ni,
-                misaka_palw_tir::program::Node {
-                    prim: Prim::Select,
-                    inputs: vec![fixed.map_or(Ref::Input(0), |(state, _)| Ref::State(state)), Ref::Node(input), Ref::Node(input)],
-                    out,
-                    commit: false,
-                },
-            );
             Some((state, committed_writer))
         } else {
             None
@@ -1747,7 +1975,9 @@ mod tests {
         // accepted frame, native claim or registration is re-pointed afterwards.
         let family_raw = family_material.then(|| {
             let vocabulary = (0..program.token_bound).map(|id| format!("\"t{id}\":{id}")).collect::<Vec<_>>().join(",");
-            format!("{{\"model\":{{\"vocab\":{{{vocabulary}}},\"merges\":[]}},\"added_tokens\":[]}}").into_bytes()
+            let added_tokens =
+                if compact_pair && matches!(condition, HistoryConditionV1::Constraint) { "" } else { ",\"added_tokens\":[]" };
+            format!("{{\"model\":{{\"vocab\":{{{vocabulary}}},\"merges\":[]}}{added_tokens}}}").into_bytes()
         });
         let mut f = if let Some(raw) = &family_raw {
             let tokenizer = crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw);
@@ -1805,6 +2035,52 @@ mod tests {
             job.decode = prefix_decode;
             job.tail = Some(PalwFpJobTailV1::Prefix(PalwFpPrefixStateV1 { class_id: f.class_id, prefix_tokens: k, state_root: root }));
         }
+        let constraint_table = if matches!(condition, HistoryConditionV1::Constraint) {
+            use crate::palw_decode_constraint_v1::{
+                PalwConstraintActionV1, PalwConstraintEdgeV1, PalwConstraintFrameV1, PalwConstraintNodeV1, PalwDecodeConstraintV1,
+            };
+            let raw = family_raw.as_ref().expect("constraint material fixed before job context");
+            let vocabulary = f.rows[0].len() as u32;
+            assert_eq!(vocabulary, 2, "this real fixture automaton accepts t0/t1");
+            let table = crate::palw_fp_constraint_job_v1::PalwTokenTableV1 {
+                entries: (0..vocabulary).map(|id| Some(format!("t{id}").into_bytes())).collect(),
+                eog_token_ids: vec![vocabulary - 1],
+                tokenizer_id: job.tokenizer_id,
+            };
+            assert_eq!(job.tokenizer_id, crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(raw));
+            // A real nontrivial DFA accepts one or more t[01] renderings.
+            // Both real token renderings are admitted by the initial mask.
+            // The model's actual winning token is 0; no token is replaced.
+            let edge = |lo, hi, next| PalwConstraintEdgeV1 { lo, hi, action: PalwConstraintActionV1::Goto(next) };
+            let grammar = PalwDecodeConstraintV1 {
+                version: crate::palw_decode_constraint_v1::PALW_DECODE_CONSTRAINT_VERSION_V1,
+                compiler_id: Hash64::from_u64_word(0xC0157),
+                start_frame: 0,
+                frames: vec![PalwConstraintFrameV1 {
+                    start: 0,
+                    nodes: vec![
+                        PalwConstraintNodeV1 { accepting: false, edges: vec![edge(b't', b't', 1)] },
+                        PalwConstraintNodeV1 { accepting: false, edges: vec![edge(b'0', b'1', 2)] },
+                        PalwConstraintNodeV1 { accepting: true, edges: vec![edge(b't', b't', 1)] },
+                    ],
+                }],
+            };
+            grammar.validate().unwrap();
+            job.version = crate::palw_fp_constraint_job_v1::PALW_FP_CONSTRAINT_VERSION;
+            job.tail = Some(PalwFpJobTailV1::Constraint(crate::palw_fp_constraint_job_v1::PalwFpConstraintTailV1 {
+                constraint: grammar.to_bytes(),
+                table_root: table.root(),
+            }));
+            let mask =
+                crate::palw_fp_constraint_job_v1::PalwConstraintMaskV1::for_job(&job, std::sync::Arc::new(table.clone())).unwrap();
+            let mut decoder = job.decoder_v1().with_constraint(Some(mask));
+            for (row, id) in f.rows.iter().zip(&f.generated) {
+                assert_eq!(decoder.select(row), *id, "actual native constrained decoder must select the real model token");
+            }
+            Some(table)
+        } else {
+            None
+        };
         let class = PalwFpClassFactsV3 {
             model_profile_id: Hash64::default(),
             runtime_manifest_hash: Hash64::default(),
@@ -1864,6 +2140,9 @@ mod tests {
                 eog_token_ids: vec![vocabulary - 1],
                 tokenizer_id: tokenizer,
             };
+            if let Some(expected) = &constraint_table {
+                assert_eq!(&table, expected);
+            }
             let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
             let mut offer = PalwTokenizerArtifactInventoryOfferV1 {
                 version: 1,
@@ -1919,8 +2198,11 @@ mod tests {
             };
             let explicit_network = executor.is_some() && network.is_some();
             let maximum_custodians = if explicit_network { 2 } else { 1 };
-            let accepted_daa = if explicit_network { family_fixture_accepted_daa_v2() } else { 100 };
-            let retention = if explicit_network {
+            let accepted_daa =
+                prospective.map_or_else(|| if explicit_network { family_fixture_accepted_daa_v2() } else { 100 }, |p| p.accepted_daa);
+            let retention = if let Some(p) = prospective {
+                p.trace_retention_daa
+            } else if explicit_network {
                 match std::env::var("MISAKA_FAMILY_TRACE_RETENTION_DAA") {
                     Ok(value) => {
                         let value = value.parse::<u64>().expect("explicit family trace retention must be u64");
@@ -1942,7 +2224,7 @@ mod tests {
                 100
             };
             let table_bytes = explicit_network.then(|| crate::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table));
-            let frame = frame_from_execution_with_material_form_stop_v1(
+            let frame = try_frame_from_execution_with_material_form_stop_v65(
                 x,
                 job,
                 maximum_custodians,
@@ -1954,10 +2236,11 @@ mod tests {
                 retention,
                 explicit_network,
                 table_bytes.as_deref(),
-            );
-            return (frame, Some((semantics, eof, raw, table)));
+                prospective,
+            )?;
+            return Ok((frame, Some((semantics, eof, raw, table))));
         }
-        if matches!(condition, HistoryConditionV1::Prefix { .. }) {
+        Ok(if matches!(condition, HistoryConditionV1::Prefix { .. }) {
             let c = &x.binding.job_context;
             let semantics = crate::palw_class_semantics_v1::PalwClassSemanticsV1 {
                 version: 1,
@@ -1978,6 +2261,33 @@ mod tests {
             (frame_from_execution_with_material_form_v1(x, job, 1, None, Some(&semantics), None, prompt_form), None)
         } else {
             (frame_from_execution_with_material_form_v1(x, job, 1, None, None, None, prompt_form), None)
+        })
+    }
+
+    #[test]
+    fn same_native_model_distinct_prompts_reexecute_before_original_signing() {
+        let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0x5b; 32]);
+        let key = kp.verification_key.as_ref();
+        let network = Hash64::from_u64_word(0x425037);
+        let (old, ..) = source_tokenizer_frame_v1(Some(key), Some(network), false);
+        let (same, ..) = source_tokenizer_frame_with_prompt_v1(Some(key), Some(network), false, Some(&old.execution.prompt));
+        assert_eq!(
+            borsh::to_vec(&old.frame).unwrap(),
+            borsh::to_vec(&same.frame).unwrap(),
+            "explicit unchanged prompt preserves native bytes"
+        );
+        let different = old.execution.prompt.iter().map(|id| 1 - id).collect::<Vec<_>>();
+        let (other, ..) = source_tokenizer_frame_with_prompt_v1(Some(key), Some(network), false, Some(&different));
+        assert_eq!(old.frame.original_v1().job.class_id, other.frame.original_v1().job.class_id);
+        assert_eq!(other.execution.prompt, different);
+        assert_ne!(old.frame.plan_v1().original_claim, other.frame.plan_v1().original_claim);
+        for f in [&old, &other] {
+            assert_eq!(f.frame.original_v1().job.executor_pubkey, key);
+            f.frame.check_structure_v1(&f.frame.key_v1()).unwrap();
+            assert_eq!(
+                f.frame.original_v1().job.prompt_token_ids_hash,
+                crate::palw_prompt_ids_v1::prompt_token_ids_commitment_v1(f.rules.prompt_form, &f.execution.prompt).unwrap()
+            );
         }
     }
 
@@ -2257,3 +2567,55 @@ mod tests {
 // Exhaustive read-only native input allocation inventory; no consensus encoding change.
 #[path = "palw_native_resource_v1/private/palw_tir_public_claim_v1.rs"]
 mod native_resource_inventory_v1;
+
+/// Explicit pre-execution fixture context, never a runtime admission authority.
+/// Both claims use the same finite presigned raw-material interval. No global
+/// environment mutation and no already-signed Claim/pledge is retimed.
+#[cfg(test)]
+#[derive(Clone, Copy)]
+pub(crate) struct PalwCompactPairProspectiveContextV67 {
+    pub(crate) accepted_daa: u64,
+    pub(crate) trace_retention_daa: u64,
+    pub(crate) policy_from_daa: u64,
+}
+#[cfg(test)]
+pub(crate) type PalwCompactPairMaterialV67 = (
+    PalwTirPublicFrameFixtureV1,
+    crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1,
+    Vec<u8>,
+    crate::palw_fp_constraint_job_v1::PalwTokenTableV1,
+);
+#[cfg(test)]
+pub(crate) fn palw_compact_pair_prospective_contexts_v67()
+-> (PalwCompactPairProspectiveContextV67, PalwCompactPairProspectiveContextV67) {
+    let parent = tests::family_fixture_accepted_daa_v2();
+    // Every existing original/family/archive packet must be assigned strictly
+    // before its service_before <= parentHard. This finite bound is independent
+    // of the larger signed raw-material interval and its holding packet count.
+    let child = parent.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).unwrap().checked_add(1).unwrap();
+    let cost = crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1;
+    let retention = child
+        .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+        .unwrap()
+        .checked_add(cost.config.reorg_retention_daa)
+        .unwrap()
+        .checked_add(cost.clock.maximum_door_daa)
+        .unwrap();
+    (
+        PalwCompactPairProspectiveContextV67 { accepted_daa: parent, trace_retention_daa: retention, policy_from_daa: parent },
+        PalwCompactPairProspectiveContextV67 { accepted_daa: child, trace_retention_daa: retention, policy_from_daa: parent },
+    )
+}
+#[cfg(test)]
+pub(crate) fn palw_tir_public_compact_pair_frame_at_v67(
+    key: &[u8],
+    network: Hash64,
+    prefix: bool,
+    fault: bool,
+    prompt: Option<&[u32]>,
+    context: PalwCompactPairProspectiveContextV67,
+) -> PalwCompactPairMaterialV67 {
+    assert!(context.accepted_daa > 0 && context.trace_retention_daa > context.accepted_daa && context.trace_retention_daa < u64::MAX);
+    tests::compact_pair_tokenizer_frame_at_v67(key, network, prefix, fault, prompt, Some(context))
+}

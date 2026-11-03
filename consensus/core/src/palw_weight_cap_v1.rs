@@ -186,8 +186,8 @@ fn stage_of_phase(claim: &PalwClaimStateV2, phase: &PalwClaimPhaseV2) -> PalwWei
         PalwClaimPhaseV2::ReceiptLicensed { .. } => {
             // `palw_rcore_counts_licensed_v1` reads `claim.phase`; the licence record (`rcore`) is the
             // claim's whatever phase a dispute parked it in, so the recount is asked of the record.
-            let counted =
-                claim.rcore.licence_door.is_none() || claim.rcore.basis_k >= crate::palw_state_v2::PALW_RCORE_FINAL_BASIS_K_V1;
+            let counted = claim.rcore.licence_door.is_none()
+                || claim.rcore.basis_k >= crate::palw_state_v2::palw_rcore_required_basis_of_claim_v1(claim);
             PalwWeightStageV1::Licensed { permille: if counted { 1000 } else { PALW_CAPACITY_S2_PERMILLE_V1 } }
         }
         // **An open DA accusation keeps the stage the claim held** (`resumed`, the phase it restores

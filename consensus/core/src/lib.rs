@@ -264,6 +264,8 @@ pub mod palw_chain_weight;
 /// ADR-0103 Decision 1 — a checkpoint's chunk is tried against the cache-write rows it claims to
 /// hold, in one move. A consensus object behind `Params::palw_held_context`, `None` everywhere.
 pub mod palw_checkpoint_court_v1;
+// Scoped historical-context storage is typechecked before production wiring.
+mod palw_claim_local_context_nodes_v2;
 pub mod palw_claim_local_v1;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
@@ -537,6 +539,7 @@ pub mod palw_model_eligibility_v1;
 pub mod palw_model_fit_v1;
 pub mod palw_model_lines_v1;
 pub mod palw_model_market_v1;
+pub mod palw_model_panel_one_v1;
 /// RFC-0002 P0 (RFC02-T): the protected candidate refutation — fence `palw_model_refutation_seal_v1`, dormant, refused when armed.
 pub mod palw_model_refutation_seal_v4;
 /// Model-add tracking: machine-readable refusal codes and the constructed→folded pipeline.
@@ -1012,6 +1015,10 @@ pub mod palw_tir_frame_cost_v1;
 pub mod palw_tir_history_bisection_v1;
 pub mod palw_tir_prefix_owned_v1;
 pub mod palw_tir_prefix_state_v1;
+// Native prospective geometry only; paid source/court admission is supplied by its owner.
+#[cfg(test)]
+mod palw_tir_prefix_export_owned_v2;
+pub(crate) mod palw_tir_prefix_export_relation_v2;
 pub mod palw_tir_public_allocation_v1;
 pub mod palw_tir_public_owned_v1;
 pub mod palw_tir_public_source_v1;
@@ -1203,7 +1210,7 @@ pub mod palw_exec_origin_coverage_v1;
 pub mod palw_court_family_material_v1;
 pub mod palw_court_family_supplier_v1;
 pub mod palw_court_observation_v1;
-mod palw_court_rooted_numerical_material_v1;
+pub mod palw_court_rooted_numerical_material_v1;
 pub mod palw_court_rooted_semantic_v1;
 pub mod palw_direct_row_export_v1;
 pub mod palw_monetary_material_fee_v2;

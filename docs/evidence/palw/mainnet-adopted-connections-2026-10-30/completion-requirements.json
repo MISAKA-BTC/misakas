@@ -66,7 +66,14 @@
       "item": 10,
       "name": "RFC-0041 zero-genesis-bond startup",
       "acceptance": "Real zero-bond node BASE recovery; spendable funds; ordinary signed bond registration/maturity; first PALW and selected verifier authentication; no artifact/PWU/class-gate bypass; reorg/restart.",
-      "current_candidate_evidence": "pending"
+      "current_candidate_evidence": "C10 PASS: 7-package EVM build, RFC0041 core 3, exact node 1, related Prefix regressions 11; immutable executable copies and source inventories recorded. Later edits are separate.",
+      "verified_candidate": {
+        "id": "C10",
+        "result": "PASS",
+        "record": "docs/evidence/palw/rfc0041-bond-free-bootstrap-2026-10-31/candidate-c10/verification.json",
+        "previous_verified_candidate": "C7",
+        "resolved_failure": "C9 missing Prefix conviction helper resolved and revalidated"
+      }
     },
     {
       "item": 11,

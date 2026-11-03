@@ -67,13 +67,12 @@ async fn rfc23s1_node_restart_and_genesis_replay_agree_on_the_resolved_prefix_ac
     assert_eq!(resolved_through(&other), prefix, "the same resolved prefix on the replaying node");
 }
 
-
 /// Node-level checkpoint persistence, not the full outsider-conviction campaign.
 #[tokio::test]
 async fn rfc23s2_node_checkpoint_survives_restart_and_genesis_replay_across_the_fence() {
-    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
-    use kaspa_consensus_core::palw_claim_local_v1::{PalwClaimLocalCheckpointV1, PALW_CLAIM_LOCAL_TABLE_V1};
+    use kaspa_consensus_core::palw_claim_local_v1::{PALW_CLAIM_LOCAL_TABLE_V1, PalwClaimLocalCheckpointV1};
     use kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_key_v1;
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     kaspa_core::log::try_init_logger("warn");
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
@@ -87,8 +86,10 @@ async fn rfc23s2_node_checkpoint_survives_restart_and_genesis_replay_across_the_
     net.beat_to(160).await;
     let read_checkpoint = |net: &Net| {
         let state = net.chain.tip_state().1;
-        (*kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_snapshot_v2(&state).unwrap()
-            .expect("the real node wrote a complete resolved claim-local checkpoint")).clone()
+        (*kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_snapshot_v2(&state)
+            .unwrap()
+            .expect("the real node wrote a complete resolved claim-local checkpoint"))
+        .clone()
     };
     let checkpoint = read_checkpoint(&net);
     assert!(checkpoint.point.daa_score >= 20);

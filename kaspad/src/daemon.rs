@@ -835,10 +835,15 @@ pub(crate) fn create_core_with_runtime_inner(
     // LIVE-R1: the verified resync moves the data directory ASIDE before anything opens it. Never deleted:
     // the operator removes it once the report says the synced chain was confirmed, or moves it back.
     let resync_report_path = app_dir.join(network.to_prefixed()).join(crate::palw_verified_resync::REPORT_FILE);
-    let resync_aside: Option<Option<PathBuf>> = args.palw_verified_resync.then(|| {
-        crate::palw_verified_resync::move_datadir_aside(&db_dir, &resync_report_path)
-            .unwrap_or_else(|e| panic!("--palw-verified-resync: {e}"))
-    });
+    let resync_aside: Option<Option<PathBuf>> = if args.palw_verified_resync {
+        Some(
+            crate::palw_verified_resync::move_datadir_aside(&db_dir, &resync_report_path)
+                .unwrap_or_else(|e| panic!("--palw-verified-resync: {e}")),
+        )
+    } else {
+        crate::palw_verified_resync::pending_resync_aside(&db_dir, &resync_report_path)
+            .unwrap_or_else(|e| panic!("could not resume verified resync: {e}"))
+    };
 
     let consensus_db_dir = db_dir.join(CONSENSUS_DB);
     let utxoindex_db_dir = db_dir.join(UTXOINDEX_DB);
@@ -1245,7 +1250,7 @@ Do you confirm? (y/n)";
                 }
             });
         }
-        let utxoindex = UtxoIndexProxy::new(UtxoIndex::new(consensus_manager.clone(), utxoindex_db).unwrap());
+        let utxoindex = UtxoIndexProxy::new(UtxoIndex::new_before_processors(consensus_manager.clone(), utxoindex_db).unwrap());
         let index_service = Arc::new(IndexService::new(&notify_service.notifier(), subscription_context.clone(), Some(utxoindex)));
         Some(index_service)
     } else {
@@ -1557,12 +1562,13 @@ Do you confirm? (y/n)";
         // RFC-0041: with no genesis bond and no --palw-producer-bond, the base-class producer names
         // a placeholder outpoint. It is not registered. The coinbase pays the pay address; the
         // ordinary registration spends that matured output or an owned genesis UTXO.
-        let genesis_bond_free = palw_bundle.as_ref().is_some_and(|bundle| {
-            kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&bundle.genesis_objects)
-        });
-        let producer_bond = args.palw_producer_bond.clone().or_else(|| {
-            genesis_bond_free.then(kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_label_v1)
-        });
+        let genesis_bond_free = palw_bundle
+            .as_ref()
+            .is_some_and(|bundle| kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&bundle.genesis_objects));
+        let producer_bond = args
+            .palw_producer_bond
+            .clone()
+            .or_else(|| genesis_bond_free.then(kaspa_consensus_core::config::params::palw_base_coinbase_recovery_bond_label_v1));
         if args.palw_producer_bond.is_none() && producer_bond.is_some() {
             info!(
                 "PALW genesis registers no bond: the base-class producer mines the existing idle-floor coinbase. \

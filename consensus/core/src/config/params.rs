@@ -2465,6 +2465,12 @@ pub struct Params {
     /// 3-of-3 ([`crate::palw_kernel_route_v1::PALW_KERNEL_ROUTE_INTERIM_SEATS_V1`]). Hashed Some-only. Needs
     /// `palw_probabilistic_constraints_v1` at or below it (validation); mirrored by `Params::sync_palw_g14_gates_v1`.
     pub palw_kernel_route_panel_one_v1: Option<ForkActivation>,
+    /// All-model G14 single-seat migration; original claim acceptance selects its route.
+    pub palw_model_panel_one_v1: Option<ForkActivation>,
+    /// New ModelOne Attempt claims retain the protocol-derived full obligation
+    /// from their original acceptance. Signed header pins/lotteries are unchanged.
+    /// None preserves every historical claim and network; future activation only.
+    pub palw_model_panel_one_retention_v1: Option<ForkActivation>,
     /// **G14 U06/U07 court clock v2 (DORMANT, lane g14p/court-clock; RFC-0026 §2-3, RFC-0014 2026-10-19 §B/§D, ADR-0198 A).** A claim
     /// whose ORIGINAL acceptance is at/after this height has every court clock derived from that acceptance (`a + 3,120` normal,
     /// `a + 10,000` once disputed — one rooted extension); older claims keep the old clock (T15). `None` on every shipped preset;
@@ -5134,6 +5140,44 @@ impl Params {
     }
 
     /// Kernel route Panel=1 seat policy fence (dormant: `None` on every shipped preset; `never()` reads as `None`).
+    pub fn palw_model_panel_one_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_model_panel_one_v1.filter(|f| *f != ForkActivation::never())
+    }
+
+    pub fn palw_model_panel_one_retention_v1_fence(&self) -> Option<ForkActivation> {
+        self.palw_model_panel_one_retention_v1.filter(|f| *f != ForkActivation::never())
+    }
+
+    pub fn validate_palw_model_panel_one_retention_v1(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+        use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        let Some(at) = self.palw_model_panel_one_retention_v1_fence() else {
+            if let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+                && bundle.state.model_panel_one_retention_v1_from_daa().is_some()
+            {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_model_panel_one_retention_v1 is absent but its ConsensusV2 mirror is armed",
+                ));
+            }
+            return Ok(());
+        };
+        let dependencies = [
+            self.palw_model_panel_one_v1_fence(),
+            self.palw_court_capacity_v1.map(|f| f.activation),
+            self.palw_independently_work_certified_v1,
+        ];
+        if dependencies.iter().any(|f| f.is_none_or(|f| f == ForkActivation::never() || f.daa_score() > at.daa_score())) {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_model_panel_one_retention_v1 requires ModelOne, court capacity and Gate C at or before its activation",
+            ));
+        }
+        match &self.palw_consensus_mode {
+            PalwConsensusMode::ConsensusV2(bundle) if bundle.state.model_panel_one_retention_v1_from_daa() == Some(at.daa_score()) => {
+                Ok(())
+            }
+            _ => Err(PalwModeV2Error::Invalid("palw_model_panel_one_retention_v1 requires its synchronized ConsensusV2 mirror")),
+        }
+    }
+
     pub fn palw_kernel_route_panel_one_v1_fence(&self) -> Option<ForkActivation> {
         self.palw_kernel_route_panel_one_v1.filter(|f| *f != ForkActivation::never())
     }
@@ -6219,6 +6263,8 @@ impl Params {
             palw_court_outsider_lane_v1: self.palw_court_outsider_lane_v1,
             palw_state_row_map_v1: self.palw_state_row_map_v1,
             palw_kernel_route_panel_one_v1: self.palw_kernel_route_panel_one_v1,
+            palw_model_panel_one_v1: self.palw_model_panel_one_v1,
+            palw_model_panel_one_retention_v1: self.palw_model_panel_one_retention_v1,
             palw_court_clock_v2: self.palw_court_clock_v2,
             palw_panel_da_disclosure_v1: self.palw_panel_da_disclosure_v1,
             palw_staged_float_constraint_v1: self.palw_staged_float_constraint_v1,
@@ -7404,6 +7450,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -7781,6 +7829,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -8140,6 +8190,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -10996,6 +11048,22 @@ pub fn palw_t12_shipped_params() -> Params {
     palw_t12_public_params_over_v1(palw_t12_base_params())
 }
 
+/// All-model producer migration, separately scheduled after the kernel slice.
+/// This height does not reinterpret claims accepted under the DAA-18,400 rules.
+pub const PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1: u64 = 18_640;
+/// Separate future obligation rule: never reinterpret the old 18,400 activation.
+pub const PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1: u64 = 20_000;
+
+/// The live DAA-18,400 ruleset before the all-model migration, for historical
+/// replay identities and fixtures that deliberately disarm its prerequisites.
+pub fn palw_t12_pre_model_panel_one_params_v1() -> Params {
+    let mut params = palw_t12_shipped_params();
+    params.palw_model_panel_one_v1 = None;
+    params.palw_model_panel_one_retention_v1 = None;
+    params.sync_palw_g14_gates_v1();
+    params
+}
+
 /// **testnet-12 as it LAUNCHED** (`0e8ec984e`; params `b8564b88…`, identity `5de80e64…`, schedule
 /// `93da24cc…`): [`palw_t12_shipped_params`] with every fence of [`PALW_T12_POST_LAUNCH_FENCES_V1`] set
 /// back to dormant, each through its own `set` (mirrors included). The ruleset a node that has not
@@ -11004,7 +11072,7 @@ pub fn palw_t12_shipped_params() -> Params {
 /// post-launch lanes' tests arm ONE fence over, so each lane's test keeps judging its own fence
 /// against the build it replaces.
 pub fn palw_t12_launch_params_v1() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
     // The second flag day's list first (its fences ride the DAA-750 ones' prerequisites), then the
@@ -12021,7 +12089,7 @@ pub fn palw_t12_arm_int13_flag_day_at_v1(params: &mut Params, at: Option<u64>) {
 /// `5ee7fd8e…`, schedule `1678e073…`), and the baseline the int-13 flag day is judged against (the fork-id comparison, the "only this
 /// list moved it" twin).
 pub fn palw_t12_release_v6_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     // G14 is later than int-12. Take it off before the int-13 list, or this baseline still carries 17,400.
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
@@ -12032,7 +12100,7 @@ pub fn palw_t12_release_v6_params() -> Params {
 /// entry) and the int-13 flag day set back to dormant: the ruleset a node that has not taken the int-11 release runs, int-10's, and the
 /// baseline the int-11 flag day is judged against (the fork-id comparison, the "only this list moved it" twin).
 pub fn palw_t12_release_v5_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12045,7 +12113,7 @@ pub fn palw_t12_release_v5_params() -> Params {
 /// baseline the DAA-3,600 flag day is judged against (the fork-id comparison, the "only this fence moved it"
 /// twin).
 pub fn palw_t12_release_v4_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12068,7 +12136,7 @@ pub fn palw_t12_release_v4_params() -> Params {
 /// node that has not taken the IR release runs (int-7's, params `770fb822…`, schedule `9410712f…`), and the
 /// baseline the IR flag day is judged against.
 pub fn palw_t12_release_v3_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12091,7 +12159,7 @@ pub fn palw_t12_release_v3_params() -> Params {
 /// that has not taken the third flag day's release runs, and the baseline the capacity package is judged
 /// against.
 pub fn palw_t12_release_v2_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12116,7 +12184,7 @@ pub fn palw_t12_release_v2_params() -> Params {
 /// ruleset a node that has not taken the second flag day's release runs, and the baseline that
 /// list's lanes arm ONE fence over. Equal to the shipped ruleset while the list's height is `None`.
 pub fn palw_t12_release_v1_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_G14_17000_FENCES_V1, None);
     palw_t12_arm_int13_flag_day_at_v1(&mut params, None);
     palw_t12_arm_int11_flag_day_at_v1(&mut params, None);
@@ -12200,6 +12268,10 @@ fn palw_t12_params_with_registry_v1(
     // entries plus every G14 / RFC fence of the full-activation release — at `PALW_T12_FULL_ACTIVATION_DAA` (target 16,000), after the
     // int-13 flag day; dormant while the height is `None` (it is: no arming record is pinned and the user has not approved).
     full_activation_v1::palw_t12_arm_full_activation_v1(&mut params);
+    // RFC-0042 / ADR-0210: the all-model route is a separate future fork.
+    params.palw_model_panel_one_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_FENCE_DAA_V1));
+    params.palw_model_panel_one_retention_v1 = Some(ForkActivation::new(PALW_T12_MODEL_PANEL_ONE_RETENTION_FENCE_DAA_V1));
+    params.sync_palw_g14_gates_v1();
     // **`palw_rc_arm_phase1` is NOT called here, and that is deliberate.** Its whole body is
     // "arm this if the preset left it dormant", and `palw_t12_arm_every_rule_from_genesis` has
     // already armed everything — so routing through it could only either change nothing or
@@ -13707,6 +13779,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_outsider_lane_v1: None,
     palw_state_row_map_v1: None,
     palw_kernel_route_panel_one_v1: None,
+    palw_model_panel_one_v1: None,
+    palw_model_panel_one_retention_v1: None,
     palw_court_clock_v2: None,
     palw_panel_da_disclosure_v1: None,
     palw_staged_float_constraint_v1: None,
@@ -13907,6 +13981,9 @@ pub const DEVNET_PARAMS: Params = Params {
 
 #[cfg(test)]
 mod consensus_params_id_tests;
+
+#[cfg(test)]
+mod model_panel_one_retention_config_tests;
 
 #[cfg(test)]
 mod fingerprint_probe {

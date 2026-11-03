@@ -338,7 +338,7 @@ pub(super) fn apply_part_v1(
                     ..lock
                 }),
             )?,
-            None => builder.lock_valid_seat_rcore(*bond, claim_id, price, *mask, record.s_p.max(1), now)?,
+            None => builder.lock_valid_seat_rcore(*bond, claim_id, &claim, price, *mask, record.s_p.max(1), now)?,
         }
     }
     // Land the part: the shard's cell counts, the counted signers, the abstention latch, the progress.

@@ -223,6 +223,9 @@ mod tests {
             }
             assert!(bad.check_source_v1(&e, &a, h(1), h(10), 30, 40).is_err());
         }
+        let mut foreign_namespace = e.clone();
+        foreign_namespace.source_namespace = 2;
+        assert_eq!(c.check_source_v1(&foreign_namespace, &a, h(1), h(10), 30, 40), Err(R::Contract));
         assert_eq!(c.check_source_v1(&e, &a, h(1), h(10), 9, 40), Err(R::FutureSource));
         assert_eq!(c.check_source_v1(&e, &a, h(1), h(10), 30, 20), Err(R::FutureSource));
         let mut replay = a;
@@ -270,6 +273,18 @@ mod tests {
         let sig =
             libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key, e.id_v1().as_byte_slice(), PREFIX_EXPORT_CONTEXT_V1, [72; 32]).unwrap();
         e.verify_signature_v1(pk, sig.as_ref()).unwrap();
+        let unauthorized = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([74; 32]);
+        assert_eq!(e.verify_signature_v1(unauthorized.verification_key.as_ref(), sig.as_ref()), Err(R::Signature));
+        let mut foreign_namespace = e.clone();
+        foreign_namespace.source_namespace = 2;
+        let foreign_sig = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keys.signing_key,
+            foreign_namespace.id_v1().as_byte_slice(),
+            PREFIX_EXPORT_CONTEXT_V1,
+            [75; 32],
+        )
+        .unwrap();
+        assert_eq!(foreign_namespace.verify_signature_v1(pk, foreign_sig.as_ref()), Err(R::Contract));
         let mut changed = e.clone();
         changed.material_until += 1;
         assert_eq!(changed.verify_signature_v1(pk, sig.as_ref()), Err(R::Signature));
@@ -369,6 +384,15 @@ impl super::PalwClaimLocalAdmissionContextV1 {
     /// claimed accepting point. This authenticates provenance only; the court
     /// must separately bind the exported KV descriptor to the source execution.
     pub fn prefix_export_v1(&self, ordinal: u32) -> Result<Option<(&PalwSignedPrefixExportV1, PalwPrefixExportIdentityV1)>, R> {
+        let born = self.original_claim();
+        let point = self.accepting_point();
+        if !matches!(born.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. })
+            || born.accepted_block != point.block
+            || born.accepted_daa != point.daa_score
+            || born.accepted_blue_score != point.blue_score
+        {
+            return Err(R::Identity);
+        }
         let mut envelopes = self.frame().inputs.iter().filter_map(|input| match input {
             super::PalwClaimLocalInputV1::PrefixDependency { claim, envelope } if *claim == self.claim_id() => Some(envelope.as_ref()),
             _ => None,
@@ -486,35 +510,7 @@ pub(crate) fn check_admission_v1(
                 return Err(bad(R::Retention));
             }
             consumed.intent.verify_signature_v1(executor_pubkey, &consumed.signature).map_err(bad)?;
-            let source = consumed.intent.source;
-            let source_point = state.claim_local_prefix_source_point_v1(&source)?;
-            let context =
-                state.claim_local_admission_context_v1(params, &source_point, source.source_claim)?.ok_or_else(|| bad(R::Identity))?;
-            // Find by the full intent id, never descriptor/hash coincidence.
-            let export = context
-                .frame()
-                .inputs
-                .iter()
-                .filter_map(|input| match input {
-                    super::PalwClaimLocalInputV1::PrefixDependency { claim, envelope } if *claim == source.source_claim => {
-                        Some(envelope)
-                    }
-                    _ => None,
-                })
-                .flat_map(|envelope| envelope.exports.iter())
-                .find(|e| e.intent.id_v1() == source.intent)
-                .ok_or_else(|| bad(R::Identity))?;
-            let (export, actual) = context.prefix_export_v1(export.intent.ordinal).map_err(bad)?.ok_or_else(|| bad(R::Identity))?;
-            let reservation =
-                state.prefix_export_reservation_v1(&source_point, source.source_claim)?.ok_or_else(|| bad(R::Retention))?;
-            if reservation.convicted_daa.is_some() || reservation.liability_until < export.intent.liability_until || reservation.material_until < export.intent.material_until
-            {
-                return Err(bad(R::Retention));
-            }
-            consumed
-                .intent
-                .check_source_v1(&export.intent, &actual, job.job.network_domain, *claim, point.daa_score, point.blue_score)
-                .map_err(bad)
+            state.check_prefix_consumed_source_v8(params, point, consumed, job.job.network_domain, *claim)
         }
         _ => Err(bad(R::Contract)),
     }
@@ -610,32 +606,48 @@ impl crate::palw_state_v2::PalwChainStateV2 {
     ) -> Result<PalwPrefixExportReservationV1, crate::palw_state_v2::PalwStateV2Error> {
         use crate::palw_state_v2::PalwStateV2Error;
         let bad = |message: &'static str| PalwStateV2Error::CarriageInconsistent(message.into());
-        if evidence.version != 1 || !params.claim_local_settlement_active_at(point.daa_score)
-            || !params.claim_local_settlement_active_at(evidence.source.accepted_daa) {
+        if evidence.version != 1
+            || !params.claim_local_settlement_active_at(point.daa_score)
+            || !params.claim_local_settlement_active_at(evidence.source.accepted_daa)
+        {
             return Err(bad("prefix export court is dormant or has an unsupported version"));
         }
         let born = self.claim_local_prefix_source_point_v1(&evidence.source)?;
-        let context = self.claim_local_admission_context_v1(params, &born, evidence.source.source_claim)?
+        let context = self
+            .claim_local_admission_context_v1(params, &born, evidence.source.source_claim)?
             .ok_or_else(|| bad("prefix court has no actual source birth material"))?;
         if context.original_claim().bond != *accused {
             return Err(bad("prefix court accused another producer"));
         }
-        let (export, identity) = context.prefix_export_v1(evidence.ordinal)
+        let (export, identity) = context
+            .prefix_export_v1(evidence.ordinal)
             .map_err(|_| bad("prefix court source signature is invalid"))?
             .ok_or_else(|| bad("prefix court export was not accepted"))?;
-        if identity != evidence.source || point.daa_score > export.intent.liability_until
-            || point.blue_score <= born.blue_score {
+        if identity != evidence.source
+            || point.daa_score > export.intent.liability_until
+            || point.daa_score < born.daa_score
+            || point.blue_score <= born.blue_score
+        {
             return Err(bad("prefix court identity or signed liability window differs"));
         }
-        let reservation = self.prefix_export_reservation_v1(&born, evidence.source.source_claim)?
+        let reservation = self
+            .prefix_export_reservation_v1(&born, evidence.source.source_claim)?
             .ok_or_else(|| bad("prefix court source has no collateral reservation"))?;
-        if reservation.bond != *accused || reservation.liability_until < export.intent.liability_until
-            || reservation.material_until < export.intent.material_until {
+        if reservation.bond != *accused
+            || reservation.liability_until < export.intent.liability_until
+            || reservation.material_until < export.intent.material_until
+        {
             return Err(bad("prefix court source is not backed by its original reservation"));
         }
-        if !context.prefix_export_fault_v1(evidence.ordinal, &evidence.binding, &evidence.tiles,
-            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
-            .map_err(bad)? {
+        if !context
+            .prefix_export_fault_v1(
+                evidence.ordinal,
+                &evidence.binding,
+                &evidence.tiles,
+                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            )
+            .map_err(bad)?
+        {
             return Err(bad("prefix export agrees with the authenticated source cache"));
         }
         Ok(reservation)
@@ -644,10 +656,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
 
 /// One producer conviction per accepted source cohort, independently of which
 /// export ordinal first exposed the lie. Re-admission has a different key.
-pub fn prefix_export_offence_id_v1(
-    accused: &crate::tx::TransactionOutpoint,
-    source: &PalwPrefixExportIdentityV1,
-) -> Hash64 {
+pub fn prefix_export_offence_id_v1(accused: &crate::tx::TransactionOutpoint, source: &PalwPrefixExportIdentityV1) -> Hash64 {
     Hash64::from_bytes(misaka_palw_kernel::hash::object_id(
         b"misaka-palw/prefix-export/conviction/v1",
         &(accused, source.source_claim, source.accepted_block, source.accepted_daa, source.accepted_blue_score),

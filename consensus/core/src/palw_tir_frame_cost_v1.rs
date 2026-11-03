@@ -45,6 +45,12 @@ pub const PALW_TIR_FRAME_CLOCK_VERSION_V2: u16 = 2;
 /// New family supplier contract only: native response-turn idle grace is
 /// separate from the unchanged material/reorg retention horizon.
 pub const PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3: u16 = 3;
+/// Same family owner3 grammar/rates, with the original's adopted maximal
+/// clock-v2 material floor fixed BEFORE initial signatures. No old3 rewrite.
+pub const PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4: u16 = 4;
+pub fn is_family_clock_v3(version: u16) -> bool {
+    matches!(version, PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4)
+}
 
 /// WorkDebits on a preparer's serial path per pass: ONE debit carries the whole pass (the fold counts grants, not slices; the
 /// preparer's own lane bounds its cumulative work). Then its Ready.
@@ -98,7 +104,10 @@ impl PalwTirFrameClockV1 {
     pub fn check_v1(&self) -> Result<(), String> {
         if !matches!(
             self.version,
-            PALW_TIR_FRAME_CLOCK_VERSION_V1 | PALW_TIR_FRAME_CLOCK_VERSION_V2 | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3
+            PALW_TIR_FRAME_CLOCK_VERSION_V1
+                | PALW_TIR_FRAME_CLOCK_VERSION_V2
+                | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3
+                | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
         ) || self.action_parser_steps == 0
             || self.frame_passes_per_check == 0
             || self.control_bytes == 0
@@ -480,7 +489,7 @@ pub fn tir_public_owner_queue_wait_family_v3(
     open_window: u64,
     plan: &crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1,
 ) -> Result<u64, String> {
-    if plan.clock.version != PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 {
+    if !is_family_clock_v3(plan.clock.version) {
         return Err("family owner queue requires its versioned native plan".into());
     }
     tir_public_owner_queue_wait_with_grace_v3(
@@ -675,7 +684,11 @@ pub fn tir_public_filing_daa_v1(
     // here. Original maximum_door still rejects a frame that no longer fits.
     let serial = match clock.version {
         PALW_TIR_FRAME_CLOCK_VERSION_V1 => 2,
-        PALW_TIR_FRAME_CLOCK_VERSION_V2 | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 if witness_moves > 0 => witness_moves.max(2),
+        PALW_TIR_FRAME_CLOCK_VERSION_V2 | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+            if witness_moves > 0 =>
+        {
+            witness_moves.max(2)
+        }
         _ => return Err("sequential filing needs at least one carried move".into()),
     };
     sum(&[product(serial, config.prices.inclusion_margin_daa)?, clock.inclusion_daa_v1(witness_moves, parts)?])

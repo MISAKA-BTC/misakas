@@ -20,9 +20,13 @@ let court=crate::palw_tir_court_v1::PalwTirCourtRulesV1{max_step_leaf_count:nati
 let material=crate::palw_court_rooted_numerical_material_v1::RootedNumericalMaterialV1::retain_v1(&court_state,claim).unwrap();
 let scope=crate::palw_court_shared_tir_state_v1::context(&court_state,claim).unwrap().scope_id;
 let store=material.store_v1(&court_state,claim,scope).unwrap();
+let mut root_errors=Vec::new();
 let (leaf,mut root)=(0..binding.step_leaf_count).find_map(|leaf|
-    crate::palw_tir_court_v1::build_tir_root_claim_v1(binding,leaf,&store,&court).ok().map(|root|(leaf,root)))
-    .expect("restored native operands support a real numerical root");
+    match crate::palw_tir_court_v1::build_tir_root_claim_v1(binding,leaf,&store,&court) {
+        Ok(root)=>Some((leaf,root)),
+        Err(error)=>{root_errors.push((leaf,error.to_string()));None},
+    })
+    .unwrap_or_else(||panic!("restored native operands support a real numerical root; actual builder refusals: {root_errors:?}"));
 crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut root.finalize.binding);
 let mut control=roots::SignedSharedTirRootV1{version:1,claim,scope_id:scope,policy_id:roots::shared_tir_root_policy_id_v1(&native).unwrap(),
     leaf,arity:native.court.dissection_arity(),signer:producer,root:Box::new(root),signature:vec![]};
@@ -32,7 +36,9 @@ let initial_claim=court_state.claim(&claim).unwrap().clone();
 let initial_slashed=court_state.bond(&producer).unwrap().slashed;
 let mut apply=|state:&PalwChainStateV2,op:crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1|{
     elapsed+=1;
-    let point=PalwBlockContextV2{daa_score:ctx.daa_score+1,blue_score:ctx.blue_score+elapsed,block:h(0x430000+elapsed),subsidy:0};
+    let last=*state.last_point().unwrap();
+    let point=PalwBlockContextV2{daa_score:last.daa_score.checked_add(1).unwrap(),blue_score:last.blue_score.checked_add(1).unwrap(),block:h(0x430000+elapsed),subsidy:0};
+    assert!(point.daa_score<crate::palw_court_shared_tir_state_v1::context(state,claim).unwrap().hard_daa,"actual court must fit the unchanged original hard");
     let mut extras=active.clone();let mut rules=native;rules.at=point;extras.native_court_rules_v1=Some(rules);
     let object=PalwConsensusObjectV2::SharedCourtOpV1{op:Box::new(op)};
     let (next,delta)=apply_palw_transition_v2_with_extras(state,&family_params,&point,&[object],None,false,false,false,false,&extras).unwrap();

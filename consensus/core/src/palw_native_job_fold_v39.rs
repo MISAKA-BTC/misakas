@@ -5,7 +5,6 @@ use crate::palw_native_liability_hold_v1::{
     PALW_NATIVE_FAMILY_JOB_V39, PALW_NATIVE_LIABILITY_HOLD_ROW_VERSION_V1, PALW_NATIVE_LIABILITY_HOLD_TABLE_V1,
     PalwNativeHeldFeeRowV1, palw_native_held_fee_key_v1,
 };
-use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1};
 use crate::{
     palw_flat_execution_capacity_v22::*,
     palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_bond_id_v1},

@@ -15,16 +15,34 @@ use kaspa_hashes::ZERO_HASH64;
 /// are not globally unique credit-lot identities.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwClaimLocalWorkRefV1 {
-    ChainClaim { claim: Hash64 },
-    KernelClaim { claim: Hash64 },
-    ExecSession { root: Hash64 },
-    ExecSlice { root: Hash64, index: u32 },
+    ChainClaim {
+        claim: Hash64,
+    },
+    KernelClaim {
+        claim: Hash64,
+    },
+    ExecSession {
+        root: Hash64,
+    },
+    ExecSlice {
+        root: Hash64,
+        index: u32,
+    },
     /// Actual successful terminal journal event; original session birth is unchanged.
-    ExecSettlement { root: Hash64, block: Hash64 },
+    ExecSettlement {
+        root: Hash64,
+        block: Hash64,
+    },
     /// Native39 accepted mining quantum; separate from kernel/chain claim IDs.
-    NativeMining39 { claim: Hash64, work: Hash64, quantum: u32 },
+    NativeMining39 {
+        claim: Hash64,
+        work: Hash64,
+        quantum: u32,
+    },
     /// Native39 claim before receipt issuance as well as its retained source.
-    NativeMiningClaim39 { claim: Hash64 },
+    NativeMiningClaim39 {
+        claim: Hash64,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwClaimLocalExecDependencyV1 {

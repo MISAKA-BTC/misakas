@@ -1,7 +1,10 @@
 //! **`palw_state_v2`'s unit tests**, moved out of `palw_state_v2.rs` (2026-10-12, a behaviour-preserving split: the module path
 //! `crate::palw_state_v2::tests` and every test in it are unchanged; only the file moved).
 
+mod g14_model_panel_one_retention_v1;
+mod g14_model_panel_one_v1;
 mod kernel_route_locator_v1;
+mod owned_delta_replay_v1;
 // Liveness audit (lane lifecycle): per-object rehearsal / per-block fold cost vs state rows.
 mod claim_local_rewards_v1;
 mod claim_local_v1;
@@ -522,23 +525,21 @@ fn rfc0041_empty_genesis_recovers_until_an_ordinary_bond_may_take_work() {
     let bare = PalwChainStateV2::genesis();
     let admits = bare.floor_state_v1().admits_floor_at(1);
     assert!(palw_base_coinbase_recovery_due_v1(true, bare.bonds_iter().next().is_none(), admits, true));
-    assert!(palw_base_coinbase_recovery_missing_bond_v1(
-        "the named executor bond abc does not exist at the candidate chain point"
-    ));
+    assert!(palw_base_coinbase_recovery_missing_bond_v1("the named executor bond abc does not exist at the candidate chain point"));
     assert!(!palw_base_coinbase_recovery_missing_bond_v1("the lottery missed"));
 
     let p = economy_params();
-    let (state, _) = apply_palw_transition_v2(
-        &bare,
-        &p,
-        &ctx(1, 10, 1),
-        &[bond_registration_with_collateral(1, 7, 21, 1_000_000)],
-        None,
-    )
-    .expect("an ordinary bond registers with no genesis bond ahead of it");
+    let (state, _) =
+        apply_palw_transition_v2(&bare, &p, &ctx(1, 10, 1), &[bond_registration_with_collateral(1, 7, 21, 1_000_000)], None)
+            .expect("an ordinary bond registers with no genesis bond ahead of it");
     let (_, bond) = state.bonds_iter().next().expect("the registration is the live registry");
     assert!(palw_bond_may_take_work_v2(bond, p.min_collateral_sompi()));
-    assert!(!palw_base_coinbase_recovery_due_v1(true, state.bonds_iter().next().is_none(), state.floor_state_v1().admits_floor_at(1), true));
+    assert!(!palw_base_coinbase_recovery_due_v1(
+        true,
+        state.bonds_iter().next().is_none(),
+        state.floor_state_v1().admits_floor_at(1),
+        true
+    ));
 }
 
 /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
@@ -28641,6 +28642,8 @@ mod evm_market {
 
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
+            claim_local_legacy_retention_fixture_v50: false,
+            original_archive_data_observer_v16: false,
             prefix_dependencies_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
@@ -28940,6 +28943,8 @@ mod evm_market {
         assert_eq!(st[0].escrow_sompi, 10 * MSK, "a refused buy's escrow is the refund the child pays");
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
+            claim_local_legacy_retention_fixture_v50: false,
+            original_archive_data_observer_v16: false,
             prefix_dependencies_v1: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
@@ -32203,7 +32208,11 @@ mod rcore_s1_api {
                         let v5 =
                             palw_bond_collateral_is_locked_v5(&s, key, record, now, delay, escaped, duty_gate, dormant.window_court());
                         let v6 = palw_bond_collateral_is_locked_v6(&s, &dormant, key, record, now, delay, raw, duty_gate);
-                        assert_eq!(palw_bond_collateral_is_locked_checked_v7(&s,&dormant,key,record,now,delay,raw,duty_gate).unwrap(),v6,"checked exit preserves legacy without native197");
+                        assert_eq!(
+                            palw_bond_collateral_is_locked_checked_v7(&s, &dormant, key, record, now, delay, raw, duty_gate).unwrap(),
+                            v6,
+                            "checked exit preserves legacy without native197"
+                        );
                         assert_eq!(v6, v5, "below the fence: {key:?} now={now} raw={raw:?} gate={duty_gate}");
                         let v6_armed = palw_bond_collateral_is_locked_v6(&s, &armed, key, record, now, delay, raw, duty_gate);
                         assert_eq!(v6_armed, v5, "past it with no court and no row: {key:?}");
@@ -34695,7 +34704,17 @@ mod class_verify_deadline {
             let p = t12_like(armed);
             let s = state(d, PalwClaimPhaseV2::PanelBound { bound_daa: b }, b);
             let mut builder = TransitionBuilder::new(&s, &p, false, false, false, false, &extras);
-            builder.lock_valid_seat_rcore(bond_key(2), id, 5, crate::palw_verification_v2::PalwSegmentMaskV2::full(5), 5, l).unwrap();
+            builder
+                .lock_valid_seat_rcore(
+                    bond_key(2),
+                    id,
+                    s.claims.get(&id).unwrap(),
+                    5,
+                    crate::palw_verification_v2::PalwSegmentMaskV2::full(5),
+                    5,
+                    l,
+                )
+                .unwrap();
             assert_eq!(builder.state.slashable_locks[&(bond_key(2), id)].expiry_daa, anchor + 3_000, "D {d}, armed {armed}");
         }
     }

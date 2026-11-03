@@ -40,8 +40,8 @@ mod progress;
 pub use progress::PalwRowGenerationProgressV1;
 mod reader;
 pub use reader::{PalwRowSuffixV1, palw_verify_row_generation_reader_v1};
-mod spill_reader;
 mod projection;
+mod spill_reader;
 pub use spill_reader::{PalwRowSpillEventV1, PalwRowSpillLimitsV1, palw_visit_row_spill_v1};
 
 /// Upper bound on the preimage a peer may send (it is every collection's 64-byte root plus small scalar blocks; the
@@ -312,8 +312,6 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
             // This opening aliases the ordinary payout table. Hash it directly
             // under the canonical label instead of buffering a peer's whole table.
             Rooter::Standard(PalwCollectionRootStreamV1::new(b"pending_payouts", rows))
-        } else if label == crate::palw_native_audit_proof_v32::NATIVE_PAYOUT_LABEL_V32 {
-            Rooter::Standard(PalwCollectionRootStreamV1::new(b"pending_payouts", rows))
         } else {
             Rooter::Standard(PalwCollectionRootStreamV1::new(label, rows))
         };
@@ -412,12 +410,17 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
             return Err(PalwRowStreamErrorV1::CollectionAlreadyOpen);
         }
         self.sink.flush().map_err(|e| PalwRowStreamErrorV1::Sink(e.to_string()))?;
-        let mut inventory_rows:Vec<_>=self.done.iter().zip(self.used.iter()).collect();
-        inventory_rows.sort_unstable_by_key(|(_,offset)|**offset);
-        let mut inventory=inventory_hasher(inventory_rows.len() as u64);
-        for ((label,rows),offset) in &inventory_rows { inventory_entry(&mut inventory,label,**offset as u64,*rows); }
-        let inventory=PalwRowInventoryV1{state_root:self.expected_root,count:inventory_rows.len() as u64,
-            commitment:Hash64::from_bytes(inventory.finalize().as_bytes().try_into().unwrap())};
+        let mut inventory_rows: Vec<_> = self.done.iter().zip(self.used.iter()).collect();
+        inventory_rows.sort_unstable_by_key(|(_, offset)| **offset);
+        let mut inventory = inventory_hasher(inventory_rows.len() as u64);
+        for ((label, rows), offset) in &inventory_rows {
+            inventory_entry(&mut inventory, label, **offset as u64, *rows);
+        }
+        let inventory = PalwRowInventoryV1 {
+            state_root: self.expected_root,
+            count: inventory_rows.len() as u64,
+            commitment: Hash64::from_bytes(inventory.finalize().as_bytes().try_into().unwrap()),
+        };
         drop(inventory_rows);
         Ok(PalwRowStreamVerifiedV1 {
             inventory,
@@ -433,33 +436,47 @@ impl<W: Write> PalwRowStreamVerifierV1<W> {
 /// Opaque authenticated inventory. It binds every observed label/offset/count
 /// independently of the native envelope suffix. Only completed verification
 /// mints this value; consumers compare it with the restored canonical state.
-#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwRowInventoryV1 {
     state_root: Hash64,
     count: u64,
     commitment: Hash64,
 }
-fn inventory_hasher(count:u64)->blake2b_simd::State {
-    let mut h=blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/row-inventory/v1").to_state();
-    h.update(&count.to_le_bytes());h
+fn inventory_hasher(count: u64) -> blake2b_simd::State {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/row-inventory/v1").to_state();
+    h.update(&count.to_le_bytes());
+    h
 }
-fn inventory_entry(h:&mut blake2b_simd::State,label:&[u8],offset:u64,rows:u64){
-    h.update(&(label.len() as u32).to_le_bytes());h.update(label);h.update(&offset.to_le_bytes());h.update(&rows.to_le_bytes());
+fn inventory_entry(h: &mut blake2b_simd::State, label: &[u8], offset: u64, rows: u64) {
+    h.update(&(label.len() as u32).to_le_bytes());
+    h.update(label);
+    h.update(&offset.to_le_bytes());
+    h.update(&rows.to_le_bytes());
 }
 impl PalwRowInventoryV1 {
-    pub fn state_root(&self)->Hash64 {self.state_root}
-    pub fn collection_count(&self)->u64 {self.count}
+    pub fn state_root(&self) -> Hash64 {
+        self.state_root
+    }
+    pub fn collection_count(&self) -> u64 {
+        self.count
+    }
     /// Use only after the ordinary typed state/root/consistency import gate.
-    pub fn matches_state(&self,state:&crate::palw_state_v2::PalwChainStateV2)->std::io::Result<bool>{
-        let mut count=0u64;
-        state.visit_direct_state_root_collections_v1(|_,_,_,_|{count+=1;Ok(())})?;
-        if count!=self.count {return Ok(false);}
-        let mut hash=inventory_hasher(count);
-        let (preimage,_)=state.visit_direct_state_root_collections_v1(|label,offset,rows,_|{
-            inventory_entry(&mut hash,label,offset as u64,rows);Ok(())
+    pub fn matches_state(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> std::io::Result<bool> {
+        let mut count = 0u64;
+        state.visit_direct_state_root_collections_v1(|_, _, _, _| {
+            count += 1;
+            Ok(())
         })?;
-        Ok(palw_state_root_of_preimage_v1(&preimage)==self.state_root
-            && hash.finalize().as_bytes()==self.commitment.as_byte_slice())
+        if count != self.count {
+            return Ok(false);
+        }
+        let mut hash = inventory_hasher(count);
+        let (preimage, _) = state.visit_direct_state_root_collections_v1(|label, offset, rows, _| {
+            inventory_entry(&mut hash, label, offset as u64, rows);
+            Ok(())
+        })?;
+        Ok(palw_state_root_of_preimage_v1(&preimage) == self.state_root
+            && hash.finalize().as_bytes() == self.commitment.as_byte_slice())
     }
 }
 
@@ -474,7 +491,9 @@ pub struct PalwRowStreamVerifiedV1<W> {
 }
 
 impl<W> PalwRowStreamVerifiedV1<W> {
-    pub fn inventory(&self)->PalwRowInventoryV1 {self.inventory}
+    pub fn inventory(&self) -> PalwRowInventoryV1 {
+        self.inventory
+    }
     pub fn root(&self) -> Hash64 {
         self.root
     }
@@ -603,12 +622,9 @@ pub fn encode_row_stream_generation_v1(
     if preimage.len() > PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1 {
         return Err(PalwRowStreamErrorV1::PreimageTooLarge { len: preimage.len(), max: PALW_ROW_STREAM_MAX_PREIMAGE_BYTES_V1 });
     }
-    let len = generation_frame_len(preimage, collections, import_suffix).filter(|len| *len <= PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1).ok_or(
-        PalwRowStreamErrorV1::GenerationTooLarge {
-            len: usize::MAX,
-            max: PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1,
-        },
-    )?;
+    let len = generation_frame_len(preimage, collections, import_suffix)
+        .filter(|len| *len <= PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1)
+        .ok_or(PalwRowStreamErrorV1::GenerationTooLarge { len: usize::MAX, max: PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1 })?;
     let mut stream = Vec::new();
     push_u32(&mut stream, preimage.len() as u32);
     stream.extend_from_slice(preimage);
@@ -716,10 +732,8 @@ pub fn palw_accept_row_stream_generation_v1<'a, W: Write>(
         }
         let label = read_exact(&mut stream, label_len)?.to_vec();
         let rows = read_u64(&mut stream)?;
-        let offset = usize::try_from(read_u64(&mut stream)?).map_err(|_| PalwRowStreamErrorV1::BadOffset {
-            label: label.clone(),
-            offset: usize::MAX,
-        })?;
+        let offset = usize::try_from(read_u64(&mut stream)?)
+            .map_err(|_| PalwRowStreamErrorV1::BadOffset { label: label.clone(), offset: usize::MAX })?;
         if rows.saturating_mul(8) > stream.len() as u64 {
             return Err(PalwRowStreamErrorV1::TruncatedGeneration);
         }
@@ -770,10 +784,17 @@ mod generation_tests {
         let accepted = palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), bytes.len() as u64, None).unwrap();
         assert_eq!(accepted.generation(), PALW_ROW_STREAM_CURRENT_GENERATION_V1);
         assert_eq!(accepted.import_suffix(), suffix.as_slice());
-        assert_eq!(accepted.import_suffix().as_ptr(), bytes[bytes.len() - suffix.len()..].as_ptr(), "the native envelope is borrowed, never copied before admission");
-        let evidence = accepted.into_whole_state(|_, preimage, root| {
-            if palw_state_root_of_preimage_v1(preimage) == root { Ok(()) } else { Err("preimage".into()) }
-        });
+        assert_eq!(
+            accepted.import_suffix().as_ptr(),
+            bytes[bytes.len() - suffix.len()..].as_ptr(),
+            "the native envelope is borrowed, never copied before admission"
+        );
+        let evidence =
+            accepted.into_whole_state(
+                |_, preimage, root| {
+                    if palw_state_root_of_preimage_v1(preimage) == root { Ok(()) } else { Err("preimage".into()) }
+                },
+            );
         assert!(evidence.is_ok());
     }
 
@@ -792,10 +813,22 @@ mod generation_tests {
         let rows = vec![(vec![1], vec![9; 8192]), (vec![2], vec![8; 8192])];
         let root = PalwCollectionOpeningV1 { label: label.to_vec(), rows: rows.clone() }.root();
         let preimage = root.as_byte_slice().to_vec();
-        let bytes = encode_row_stream_generation_v1(&preimage,
-            &[PalwRowStreamCollectionV1 { label: label.to_vec(), offset: 0, rows }], b"staging").unwrap();
-        assert!(palw_accept_row_stream_generation_v1(palw_state_root_of_preimage_v1(&preimage), &bytes,
-            std::io::sink(), bytes.len() as u64, None).is_ok());
+        let bytes = encode_row_stream_generation_v1(
+            &preimage,
+            &[PalwRowStreamCollectionV1 { label: label.to_vec(), offset: 0, rows }],
+            b"staging",
+        )
+        .unwrap();
+        assert!(
+            palw_accept_row_stream_generation_v1(
+                palw_state_root_of_preimage_v1(&preimage),
+                &bytes,
+                std::io::sink(),
+                bytes.len() as u64,
+                None
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -803,7 +836,13 @@ mod generation_tests {
         let (root, preimage, collection) = sample();
         let bytes = encode_row_stream_generation_v1(&preimage, &[collection], b"suffix").unwrap();
         assert!(matches!(
-            palw_accept_row_stream_generation_v1(root, &bytes, Vec::<u8>::new(), u64::MAX, Some(PALW_ROW_STREAM_CURRENT_GENERATION_V1)),
+            palw_accept_row_stream_generation_v1(
+                root,
+                &bytes,
+                Vec::<u8>::new(),
+                u64::MAX,
+                Some(PALW_ROW_STREAM_CURRENT_GENERATION_V1)
+            ),
             Err(PalwRowStreamErrorV1::DuplicateGeneration(_))
         ));
         assert!(matches!(

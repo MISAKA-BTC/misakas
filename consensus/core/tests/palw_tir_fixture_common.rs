@@ -161,13 +161,20 @@ pub fn fixture_tiled(
     decode: u32,
     logits_tile: u32,
 ) -> Fixture {
-    fixture_tiled_with_tokenizer(name,program,params,tokens,prefill,decode,logits_tile,Hash64::from_bytes([3;64]))
+    fixture_tiled_with_tokenizer(name, program, params, tokens, prefill, decode, logits_tile, Hash64::from_bytes([3; 64]))
 }
 /// Bind actual tokenizer identity before class identity, step space and execution.
 /// Existing fixtures retain their literal historical tokenizer through the wrapper.
 pub fn fixture_tiled_with_tokenizer(
-    name:String,mut program:TirProgramV1,params:MapParams,tokens:Vec<u32>,prefill:u32,decode:u32,logits_tile:u32,tokenizer:Hash64,
-)->Fixture {
+    name: String,
+    mut program: TirProgramV1,
+    params: MapParams,
+    tokens: Vec<u32>,
+    prefill: u32,
+    decode: u32,
+    logits_tile: u32,
+    tokenizer: Hash64,
+) -> Fixture {
     program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
     let bytes = program.encode();
     let program = TirProgramV1::decode_canonical(&bytes).expect("still canonical under the tiled scheme");
@@ -216,8 +223,7 @@ pub fn fixture_tiled_with_tokenizer(
         .position(|(bi, ni)| bi == program.schedule.post as usize && ni == program.logits as usize)
         .expect("the logits node commits");
     lay.commit_tiles[logits_index] = logits_tile;
-    let class =
-        PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: bytes, layout: lay, tokenizer_id: tokenizer };
+    let class = PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: bytes, layout: lay, tokenizer_id: tokenizer };
     let (ops, artifact_root) = if program.params.is_empty() {
         (Vec::new(), Hash64::from_bytes([0xA7; 64]))
     } else {

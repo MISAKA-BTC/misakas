@@ -1129,7 +1129,10 @@ pub trait RpcApi: Sync + Send + AnySync {
     }
 
     /// Read-only committed native court observation, never a computation proof.
-    async fn get_palw_memory_routing_outcome_v1(&self, request: GetPalwMemoryRoutingOutcomeV1Request) -> RpcResult<GetPalwMemoryRoutingOutcomeV1Response> {
+    async fn get_palw_memory_routing_outcome_v1(
+        &self,
+        request: GetPalwMemoryRoutingOutcomeV1Request,
+    ) -> RpcResult<GetPalwMemoryRoutingOutcomeV1Response> {
         self.get_palw_memory_routing_outcome_v1_call(None, request).await
     }
     async fn get_palw_memory_routing_outcome_v1_call(

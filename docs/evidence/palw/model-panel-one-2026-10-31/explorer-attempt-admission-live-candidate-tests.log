@@ -1,0 +1,24 @@
+✔ live execution-round classification is preserved, independently of the isolated baseline (2.853083ms)
+✔ live real Attempt, heartbeat, floor and red classification remains unchanged (1.112584ms)
+✔ live arrival order uses observed arrival time before historical timestamp (1.058208ms)
+✔ existing live home cold-fill, bounded paging and body hydration fixes are untouched (0.378917ms)
+✔ an exact admitted one-seat Final is joined without increasing execution round counts (3.008875ms)
+✔ the actually received 481352 header is never admitted from its presence or a blue flag (0.976666ms)
+✔ class, executor, block and claimed identity mismatches cannot borrow another admission (1.305042ms)
+✔ found=false, truncated/retired row absence and unavailable RPC remain unknown and retryable (2.887ms)
+✔ a feed candidate may be confirmed only by a matching found detail response (1.69325ms)
+✔ PAV3 metadata reads the unchanged base attempt at the correct offset (1.090791ms)
+✔ an unavailable operator RPC cannot supply stray rows as admitted claims (1.015667ms)
+✔ two free-prompt claims sharing a carrier cannot share cached admission or phase (1.544709ms)
+✔ only the explicit whole-claim all-model single-seat arming record enables the new view (1.420417ms)
+✔ active G14 renders class facts with ready=0 and withBond=false without asserting mining or certification (1.640167ms)
+✔ inactive or unknown arming preserves the legacy readiness hold renderer (1.803125ms)
+✔ active policy does not fabricate class availability from an unavailable producer-facts read (0.522833ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 105.903708

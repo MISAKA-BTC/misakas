@@ -256,3 +256,70 @@ fn paid_ingress_preserves_actual_claim_principal_and_refuses_before_burn() {
         }
     }
 }
+
+#[test]
+fn paid_ingress_preserves_separate_accuser_principal_and_native_object_refusal() {
+    let _schedule = Schedule::set(Some(500));
+    let (mut state, params, claim) = source();
+    let params = params.with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+    // source() has a stored running court. Rebuild the derived index exactly
+    // as carriage restore does, so A-6 reads the real session/claim principal.
+    rebuild_deadline_free_indices(&mut state);
+    let extras = PalwTransitionExtrasV1::default();
+    let point = ctx(3, 80, 3);
+    let opener = bond_key(3);
+    let probe = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let committed = probe.committed_at(&opener, point.daa_score).unwrap();
+    let accuser = probe.read().accuser_ledger_v1(&opener, point.daa_score);
+    assert!(accuser > 0, "the running court must hold its challenger's principal in A-6");
+    let held = u64::try_from(committed.checked_add(accuser).unwrap()).unwrap();
+    drop(probe);
+    for free in [499, 500] {
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let keep = held.checked_add(free).unwrap();
+        let collateral = b.state.bond(&opener).unwrap().collateral;
+        b.slash_bond(opener, u128::from(collateral - keep)).unwrap();
+        let root = b.state.state_root();
+        let journal = borsh::to_vec(&b.entries).unwrap();
+        let result = court_ingress_admission_v1(&mut b, &point, claim, opener, false, 20);
+        if free < 500 {
+            assert!(format!("{:?}", result.unwrap_err()).contains("free principal"));
+            assert_eq!(b.state.state_root(), root);
+            assert_eq!(borsh::to_vec(&b.entries).unwrap(), journal);
+            // The production object boundary discards its local builder on
+            // failure. Its caller keeps exactly the original state and root.
+            let base = b.state.clone();
+            let object = court_open(claim, base.claim(&claim).unwrap().trace_root, bond_key(1), opener);
+            let error = palw_v2_apply_one_object_v1(&base, &params, &point, &object, false, false, false, false, &extras).unwrap_err();
+            assert!(format!("{error:?}").contains("free principal"), "{error:?}");
+            assert_eq!(base.state_root(), root);
+            assert_eq!(b.state, base);
+        } else {
+            assert_eq!(result.unwrap(), PalwCourtAdmissionV1::Legacy);
+            assert_eq!(b.state.bond(&opener).unwrap().collateral, held);
+            assert_eq!(b.read().accuser_ledger_v1(&opener, point.daa_score), accuser);
+        }
+    }
+}
+
+#[test]
+fn fee_principal_view_counts_pre_rcore_classic_court_once() {
+    let _schedule = Schedule::set(Some(0));
+    let (mut state, params, claim) = source();
+    rebuild_deadline_free_indices(&mut state);
+    let extras = PalwTransitionExtrasV1::default();
+    let point = ctx(3, 80, 3);
+    let who = bond_key(2);
+    let object = court_open(claim, state.claim(&claim).unwrap().trace_root, bond_key(1), who);
+    let opened = palw_v2_apply_one_object_v1(&state, &params, &point, &object, false, false, false, false, &extras).unwrap();
+    let b = TransitionBuilder::new(&opened, &params, false, false, false, false, &extras);
+    let a1 = b.committed_at(&who, point.daa_score).unwrap();
+    let a6 = b.read().accuser_ledger_v1(&who, point.daa_score);
+    assert!(a1 > 0 && a6 > 0, "the actual classic opening is represented in both old views");
+    assert_eq!(a1, a6);
+    assert_eq!(
+        super::super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(&b, &who, point.daa_score).unwrap(),
+        a1,
+        "the fee view must not subtract the same classic principal twice before R-core+"
+    );
+}

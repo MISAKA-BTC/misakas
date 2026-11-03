@@ -301,10 +301,14 @@ pub(super) fn live_source(
         return Ok(RewardReadinessV1::Hold(c.trace_retention_daa.max(now)));
     };
     let mut decision = approval(params, id, c, cert_bytes(state.kernel_route.as_ref(), id))?;
-    if let Some(origin) = origin_for(state, params, id, c)? {
-        if let Some(reservation) = state.prefix_export_reservation_v1(&origin.accepting_point(), id)? {
-            if reservation.convicted_daa.is_some() { return Ok(RewardReadinessV1::Denied); }
-            if now <= reservation.material_until { decision = decision.join(RewardReadinessV1::Hold(reservation.material_until)); }
+    if let Some(origin) = super::palw_claim_local_source_origin_v8::SourceOriginV8::for_claim(state, params, id, c)?
+        && let Some(reservation) = state.prefix_export_reservation_v1(&origin.accepting_point(), id)?
+    {
+        if reservation.convicted_daa.is_some() {
+            return Ok(RewardReadinessV1::Denied);
+        }
+        if now <= reservation.material_until {
+            decision = decision.join(RewardReadinessV1::Hold(reservation.material_until));
         }
     }
     if !retiring_self {
@@ -329,7 +333,77 @@ pub(super) fn live_source(
     }
     Ok(decision)
 }
+/// Exact original-cohort export hold, also required by Closed(A5) shortcuts.
+/// The claim's accepted_block may name RED provenance rather than its actual
+/// accepting point. Obtain the point from SourceOriginV8 (scoped A8 or legacy F1) or strict A5 birth authority,
+/// never derive a negative E lookup from that carried provenance block.
+pub(super) fn exact_export_readiness_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now: u64,
+    id: Hash64,
+    born: &PalwClaimStateV2,
+) -> Result<RewardReadinessV1, PalwStateV2Error> {
+    // Before this birth's activation E admission was impossible. Preserve
+    // legacy S1/no-F1 compatibility without imposing a new archival obligation.
+    if !params.claim_local_settlement_active_at(born.accepted_daa) {
+        return Ok(RewardReadinessV1::Ready);
+    }
+    let point = if let Some(origin) = super::palw_claim_local_source_origin_v8::SourceOriginV8::for_claim(state, params, id, born)? {
+        if !same_birth(origin.original_claim(), born) {
+            return Err(bad("export reward hold changes its actual original cohort"));
+        }
+        origin.accepting_point()
+    } else if let Some(closed) = super::palw_claim_local_exact_closed_source_v5::read_original_birth_v5(state, id, born)? {
+        // Strict original-birth A5 verifies both directories and native body
+        // authority; legacy S1 alone cannot assert absence of an old export E.
+        if !same_birth(&closed.original, born) {
+            return Err(bad("closed export reward hold changes its original cohort"));
+        }
+        closed.birth
+    } else {
+        // Without scoped A8, retained F1 or strict A5 authority the E scope is unknown. Guessing a
+        // key from born.accepted_block could turn a RED dependency into credit.
+        return Ok(RewardReadinessV1::Hold(u64::MAX));
+    };
+    let Some(reservation) = state.prefix_export_reservation_v1(&point, id)? else {
+        return Ok(RewardReadinessV1::Ready);
+    };
+    if reservation.bond != born.bond {
+        return Err(bad("export reward hold changes its original producer"));
+    }
+    Ok(if reservation.convicted_daa.is_some() {
+        RewardReadinessV1::Denied
+    } else if now <= reservation.material_until {
+        RewardReadinessV1::Hold(reservation.material_until)
+    } else {
+        RewardReadinessV1::Ready
+    })
+}
+
 pub(super) fn source(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now: u64,
+    id: Hash64,
+    born: &PalwClaimStateV2,
+    target: Hash64,
+    target_birth: &PalwClaimStateV2,
+    retiring: bool,
+) -> Result<RewardReadinessV1, PalwStateV2Error> {
+    let base = source_without_export_guard_v1(state, params, now, id, born, target, target_birth, retiring)?;
+    // Known void/closed denial must not depend on a new source hydration.
+    if base == RewardReadinessV1::Denied {
+        return Ok(base);
+    }
+    // live_source already checked this exact cohort's E conviction/material;
+    // avoid duplicate original decode/leases on every normal live read.
+    if state.claims.get(&id).is_some_and(|live| same_birth(live, born)) {
+        return Ok(base);
+    }
+    Ok(base.join(exact_export_readiness_v1(state, params, now, id, born)?))
+}
+fn source_without_export_guard_v1(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     now: u64,
@@ -351,7 +425,14 @@ pub(super) fn source(
         }
         return live_source(state, params, now, id, live, retiring && id == target && same_birth(born, target_birth));
     }
-    if let Some(decision)=super::palw_claim_local_compact_sources_v1::recorded(state,id,born)?{return Ok(decision)}
+    if let Some(decision) = super::palw_claim_local_compact_sources_v1::recorded(state, id, born)? {
+        return Ok(decision);
+    }
+    if let Some(decision) =
+        super::palw_claim_local_legacy_terminal_v18::readiness_for_source_v18(state, params, now, id, born, target, target_birth)?
+    {
+        return Ok(decision);
+    }
     // Never infer a successful retirement just from boundary carriages: the
     // claim may have been convicted and removed in the same transition.
     let mut latest = None;
@@ -386,7 +467,7 @@ pub(super) fn source(
                 RewardReadinessV1::Hold(u64::MAX)
             } else {
                 frame_read(&f, |prior, _| {
-                    if !retired_exec_source_closed_v1(prior,params,id,&old,now)?{
+                    if !retired_exec_source_closed_v1(prior, params, id, &old, now)? {
                         return Ok(RewardReadinessV1::Hold(u64::MAX));
                     }
                     let wanted = cert_key(id);
@@ -429,12 +510,15 @@ pub(super) fn origin_for(
     }
     Ok(None)
 }
-fn inputs_known(
+pub(super) fn inputs_known(
     state: &PalwChainStateV2,
     params: &PalwStateParamsV2,
     id: Hash64,
     c: &PalwClaimStateV2,
 ) -> Result<bool, PalwStateV2Error> {
+    if let Some(known) = super::palw_claim_local_source_admission_v8::known_inputs_v8(state, id, c)? {
+        return Ok(known);
+    }
     let Some(origin) = origin_for(state, params, id, c)? else {
         return Ok(false);
     };
@@ -463,49 +547,83 @@ pub(super) fn kernel_claim_row<'a>(state: &'a PalwChainStateV2, id: &Hash64) -> 
 /// actually stored. Shared execution roots and model or bond identity are not edges.
 pub(super) fn dependency_inputs_v1(
     state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
     id: Hash64,
     claim: &PalwClaimStateV2,
     origin: Option<&PalwClaimLocalAdmissionContextV1>,
 ) -> Result<BTreeSet<PalwClaimLocalWorkRefV1>, PalwStateV2Error> {
     let mut inputs = BTreeSet::new();
-    if let Some(origin) = origin {
-        if let Some(consumed) = prefix_rewards::prefix_use(origin)? {
-            let source = consumed.intent.source;
-            if source.source_claim != id
-                && let Some(row) = state.claims.get(&source.source_claim)
-                && row.accepted_block == source.accepted_block
-                && row.accepted_daa == source.accepted_daa
-                && row.accepted_blue_score == source.accepted_blue_score
-                && row.accepted_daa <= claim.accepted_daa
-                && row.accepted_blue_score <= claim.accepted_blue_score
+    if let Some(source) = super::palw_claim_local_source_admission_v8::for_stored_claim_v8(state, id, claim)? {
+        source.visit_dependencies(|source, block, daa, blue| {
+            if source != id
+                && let Some(row) = state.claims.get(&source)
+                && (row.accepted_block, row.accepted_daa, row.accepted_blue_score) == (block, daa, blue)
+                && daa <= claim.accepted_daa
+                && blue <= claim.accepted_blue_score
             {
-                inputs.insert(PalwClaimLocalWorkRefV1::ChainClaim { claim: source.source_claim });
+                inputs.insert(PalwClaimLocalWorkRefV1::ChainClaim { claim: source });
             }
+            Ok(())
+        })?;
+    } else if let Some(origin) = origin
+        && let Some(consumed) = prefix_rewards::prefix_use(origin)?
+    {
+        let source = consumed.intent.source;
+        if source.source_claim != id
+            && let Some(row) = state.claims.get(&source.source_claim)
+            && row.accepted_block == source.accepted_block
+            && row.accepted_daa == source.accepted_daa
+            && row.accepted_blue_score == source.accepted_blue_score
+            && row.accepted_daa <= claim.accepted_daa
+            && row.accepted_blue_score <= claim.accepted_blue_score
+        {
+            inputs.insert(PalwClaimLocalWorkRefV1::ChainClaim { claim: source.source_claim });
         }
-        for input in &origin.frame().inputs {
-            let PalwClaimLocalInputV1::ConsumedCarrier { consumer, source } = input else { continue };
-            if *consumer != id || *source == id {
-                continue;
-            }
-            if let Some(row) = state.claims.get(source)
-                && row.accepted_daa <= claim.accepted_daa
-                && row.accepted_blue_score <= claim.accepted_blue_score
+    }
+    // A raw tag8 names no birth. Use the SAME actual native carrier facts as
+    // reward readiness, with authenticated historical fallback only. A retired
+    // old owner never becomes an edge to whichever same raw ID is live today.
+    if let Some(cursor) = super::palw_claim_local_source_origin_v8::SourceOriginV8::for_claim(state, params, id, claim)? {
+        use super::palw_claim_local_carrier_lineage_v9 as lineage;
+        let point = cursor.accepting_point();
+        let mut visit = |fact: &lineage::CarrierFactV9, owner: lineage::CarrierSourceViewV9| {
+            let source_point = owner.accepting_point();
+            if fact.consumer() != id
+                || fact.consumer_point() != point
+                || fact.source() != owner.source()
+                || fact.source_point() != source_point
+                || fact.spent_txid() != owner.winning_txid()
+                || source_point.blue_score >= point.blue_score
+                || source_point.daa_score > point.daa_score
             {
-                inputs.insert(PalwClaimLocalWorkRefV1::ChainClaim { claim: *source });
+                return Err(bad("checkpoint carrier fact differs from actual causal births"));
             }
+            if lineage::is_exact_live_source_v9(state, &owner) {
+                inputs.insert(PalwClaimLocalWorkRefV1::ChainClaim { claim: owner.source() });
+            }
+            Ok(())
+        };
+        if !lineage::visit_consumer_facts_v9(state, id, point, &mut visit)? {
+            // False means unavailable provenance, never permission/closure.
+            // The existing readiness reader independently keeps that work held.
+            lineage::visit_legacy_consumer_facts_v9(state, params, &cursor, &mut visit)?;
         }
     }
     if let Some(root) = state.exec_v2.roots.get(&id)
         && !matches!(root.prefix, crate::palw_work_slice_v2::PalwWorkPrefixStageV2::Unbound)
     {
-        let mut consider = |input: Hash64| {
-            if input != ZERO_HASH64 && kernel_claim_row(state, &input).is_some() {
-                inputs.insert(PalwClaimLocalWorkRefV1::KernelClaim { claim: input });
+        let mut consider = |input: Hash64| -> Result<(), PalwStateV2Error> {
+            if input != ZERO_HASH64 {
+                let _key = crate::palw_native_resource_v1::reserve_native_requests_v1(64).map_err(PalwStateV2Error::NativeResource)?;
+                if kernel_claim_row(state, &input).is_some() {
+                    inputs.insert(PalwClaimLocalWorkRefV1::KernelClaim { claim: input });
+                }
             }
+            Ok(())
         };
-        consider(root.prefix_claim);
+        consider(root.prefix_claim)?;
         for (_, slice) in state.exec_v2.slices.range((id, 0)..=(id, u32::MAX)) {
-            consider(slice.evidence_root);
+            consider(slice.evidence_root)?;
         }
     }
     Ok(inputs)
@@ -524,11 +642,17 @@ pub(super) fn reward_readiness_v1(
     let Some(target) = state.claims.get(&id) else {
         return Ok(RewardReadinessV1::Denied);
     };
-    recorded_reward_readiness_v1(state,params,now,id,target,retiring)
+    recorded_reward_readiness_v1(state, params, now, id, target, retiring)
 }
-fn recorded_reward_readiness_v1(state:&PalwChainStateV2,params:&PalwStateParamsV2,now:u64,id:Hash64,target:&PalwClaimStateV2,retiring:bool)
-    ->Result<RewardReadinessV1,PalwStateV2Error>{
-    let Some(origin) = origin_for(state, params, id, target)? else {
+pub(super) fn recorded_reward_readiness_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now: u64,
+    id: Hash64,
+    target: &PalwClaimStateV2,
+    retiring: bool,
+) -> Result<RewardReadinessV1, PalwStateV2Error> {
+    let Some(origin) = super::palw_claim_local_source_origin_v8::SourceOriginV8::for_claim(state, params, id, target)? else {
         return Ok(RewardReadinessV1::Hold(u64::MAX));
     };
     if !inputs_known(state, params, id, target)? {
@@ -536,44 +660,94 @@ fn recorded_reward_readiness_v1(state:&PalwChainStateV2,params:&PalwStateParamsV
     }
     let birth = origin.original_claim();
     let mut result = carrier_dependencies::readiness(state, params, now, id, target, id, birth, retiring)?;
-    // Sources visible at birth include legacy live claims. Older frames also
-    // preserve already-retired sources and transient insert/void/remove runs.
-    for (key, bytes) in frames(state) {
-        let f = frame_checked(state, key, bytes)?;
-        if f.point.daa_score > birth.accepted_daa || f.point.blue_score > birth.accepted_blue_score {
-            continue;
-        }
-        let mut consider = |source_id: Hash64, c: &PalwClaimStateV2| -> Result<(), PalwStateV2Error> {
-            if c.execution_root != ZERO_HASH64
-                && c.execution_root == birth.execution_root
-                && c.accepted_daa <= birth.accepted_daa
-                && c.accepted_blue_score <= birth.accepted_blue_score
-            {
-                result = result.join(source(state, params, now, source_id, c, id, birth, retiring)?);
-                result = result.join(carrier_dependencies::readiness(state, params, now, source_id, c, id, birth, retiring)?);
-            }
-            Ok(())
-        };
-        frame_read(&f, |prior, current| {
-            for (source_id, c) in prior.claims.iter().chain(current.claims.iter()) {
-                consider(*source_id, c)?;
-            }
-            Ok(())
+    let mut scoped =
+        super::palw_claim_local_legacy_terminal_v18::visit_cohort_members_v18(state, params, id, birth, |source_id, c| {
+            result = result.join(cohort_member_readiness_v15(state, params, now, source_id, c, id, birth, retiring)?);
+            Ok(if result == RewardReadinessV1::Denied {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            })
         })?;
-        for event in &f.native_changes {
-            if event.owner == PalwClaimLocalRowOwnerV1::ChainClaims {
-                if event.key.len() != 64 {
-                    return Err(bad("claim journal key has wrong width"));
+    if !scoped && result != RewardReadinessV1::Denied {
+        scoped = super::palw_claim_local_execution_cohort_archive_v15::visit_snapshot_members_until_v15(
+            state,
+            id,
+            birth,
+            |source_id, c| {
+                result = result.join(cohort_member_readiness_v15(state, params, now, source_id, c, id, birth, retiring)?);
+                Ok(if result == RewardReadinessV1::Denied {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                })
+            },
+        )?;
+    }
+    if result == RewardReadinessV1::Denied {
+        return Ok(result);
+    }
+    if !scoped {
+        // Incomplete census is not an empty or Ready universe. Join only real
+        // birth-visible native facts first, then keep the full legacy fallback.
+        // In particular a denied exact A5 source survives F0/raw-S1 reuse.
+        if birth.execution_root != ZERO_HASH64 {
+            let _complete = super::palw_claim_local_execution_cohort_census_v15::visit_known_birth_members_v15(
+                state,
+                birth.execution_root,
+                origin.accepting_point(),
+                |source_id, c| {
+                    result = result.join(cohort_member_readiness_v15(state, params, now, source_id, c, id, birth, retiring)?);
+                    Ok(if result == RewardReadinessV1::Denied {
+                        std::ops::ControlFlow::Break(())
+                    } else {
+                        std::ops::ControlFlow::Continue(())
+                    })
+                },
+            )?;
+            if result == RewardReadinessV1::Denied {
+                return Ok(result);
+            }
+        }
+        // Sources visible at birth include legacy live claims. Older frames also
+        // preserve already-retired sources and transient insert/void/remove runs.
+        for (key, bytes) in frames(state) {
+            let f = frame_checked(state, key, bytes)?;
+            if f.point.daa_score > birth.accepted_daa || f.point.blue_score > birth.accepted_blue_score {
+                continue;
+            }
+            let mut consider = |source_id: Hash64, c: &PalwClaimStateV2| -> Result<(), PalwStateV2Error> {
+                if c.execution_root != ZERO_HASH64
+                    && c.execution_root == birth.execution_root
+                    && c.accepted_daa <= birth.accepted_daa
+                    && c.accepted_blue_score <= birth.accepted_blue_score
+                {
+                    result = result.join(source(state, params, now, source_id, c, id, birth, retiring)?);
+                    result = result.join(carrier_dependencies::readiness(state, params, now, source_id, c, id, birth, retiring)?);
                 }
-                if let Some(raw) = event.new.as_deref() {
-                    let c = decoded::<PalwClaimStateV2>(raw)?;
-                    let source_id = Hash64::from_bytes(event.key.as_slice().try_into().expect("checked fixed width"));
-                    consider(source_id, &c)?;
+                Ok(())
+            };
+            frame_read(&f, |prior, current| {
+                for (source_id, c) in prior.claims.iter().chain(current.claims.iter()) {
+                    consider(*source_id, c)?;
+                }
+                Ok(())
+            })?;
+            for event in &f.native_changes {
+                if event.owner == PalwClaimLocalRowOwnerV1::ChainClaims {
+                    if event.key.len() != 64 {
+                        return Err(bad("claim journal key has wrong width"));
+                    }
+                    if let Some(raw) = event.new.as_deref() {
+                        let c = decoded::<PalwClaimStateV2>(raw)?;
+                        let source_id = Hash64::from_bytes(event.key.as_slice().try_into().expect("checked fixed width"));
+                        consider(source_id, &c)?;
+                    }
                 }
             }
         }
     }
-    result=result.join(super::palw_claim_local_compact_sources_v1::shared_root(state,birth)?);
+    result = result.join(super::palw_claim_local_compact_sources_v1::shared_root(state, birth)?);
     Ok(result)
 }
 
@@ -625,19 +799,25 @@ pub fn palw_claim_local_settlement_v1(
     })
 }
 
-
 #[path = "palw_claim_local_carrier_rewards_v1.rs"]
 mod carrier_dependencies;
 
 /// Historical native evidence is resolved against its real accepting birth and
 /// retirement journal. Absence from the live registry never implies success.
-pub fn palw_claim_local_recorded_settlement_v1(state:&PalwChainStateV2,params:&PalwStateParamsV2,claim:Hash64,recorded:&PalwClaimStateV2,now:u64)
-    ->Result<PalwClaimLocalSettlementV1,PalwStateV2Error>{
-    if !params.claim_local_settlement_active_at(now){return Ok(PalwClaimLocalSettlementV1::Dormant)}
-    Ok(match recorded_reward_readiness_v1(state,params,now,claim,recorded,false)?{
-        RewardReadinessV1::Ready=>PalwClaimLocalSettlementV1::Settled,
-        RewardReadinessV1::Hold(until_daa)=>PalwClaimLocalSettlementV1::Held{until_daa},
-        RewardReadinessV1::Denied=>PalwClaimLocalSettlementV1::Denied,
+pub fn palw_claim_local_recorded_settlement_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim: Hash64,
+    recorded: &PalwClaimStateV2,
+    now: u64,
+) -> Result<PalwClaimLocalSettlementV1, PalwStateV2Error> {
+    if !params.claim_local_settlement_active_at(now) {
+        return Ok(PalwClaimLocalSettlementV1::Dormant);
+    }
+    Ok(match recorded_reward_readiness_v1(state, params, now, claim, recorded, false)? {
+        RewardReadinessV1::Ready => PalwClaimLocalSettlementV1::Settled,
+        RewardReadinessV1::Hold(until_daa) => PalwClaimLocalSettlementV1::Held { until_daa },
+        RewardReadinessV1::Denied => PalwClaimLocalSettlementV1::Denied,
     })
 }
 
@@ -645,39 +825,192 @@ pub fn palw_claim_local_recorded_settlement_v1(state:&PalwChainStateV2,params:&P
 /// retained native snapshot. Missing roots/evidence do not stand for a completed
 /// execution; optimistic Final or matching replay never replaces selected OPV
 /// approval. The ordinary no-EXEC source keeps its existing path.
-pub(super) fn retired_exec_source_closed_v1(prior:&PalwStateCarriageV2,params:&PalwStateParamsV2,id:Hash64,terminal:&PalwClaimStateV2,now:u64)->Result<bool,PalwStateV2Error>{
-    use crate::palw_work_slice_v2::{PalwWorkRootPhaseV2 as Phase,PalwWorkPrefixStageV2 as Prefix,PalwWorkSliceStageV2 as Slice};
-    let Some(root)=prior.exec_v2.roots.get(&id)else{return Ok(!prior.exec_v2_rewards.contains_key(&id))};
-    let settled=match root.phase{Phase::Settled{settled_daa}=>settled_daa,_=>return Ok(false)};
-    if !matches!(terminal.phase,PalwClaimPhaseV2::Final{final_daa} if final_daa==settled)||!matches!(root.prefix,Prefix::Verified{..})
-        ||root.root_bond!=terminal.bond||root.class_id!=terminal.class_id||root.anchor!=terminal.accepted_block
-        ||root.canonical_job_id!=terminal.job_identity||root.pending!=0||root.next_index!=root.slice_count()
-        ||root.accepted_work!=root.slice_work_total()||root.verified_work!=root.accepted_work{return Ok(false)}
-    let Some(route)=&prior.kernel_route else{return Ok(false)};
-    let floor=super::palw_kernel_route_fold_v1::exec_liability_floor_v1(root.expiry_daa,params.window_court(),&route.header.policy)?;
-    if now<=floor||prior.exec_v2_rewards.get(&id).is_some_and(|r|now<=r.liability_until){return Ok(false)}
-    let mut count=0u32;
-    for ((_,index),slice)in prior.exec_v2.slices.range((id,0)..=(id,u32::MAX)){
-        if *index!=count||slice.accepted_daa>settled||!matches!(slice.stage,Slice::Verified{verified_daa,..} if verified_daa<=settled){return Ok(false)}count=count.checked_add(1).ok_or(PalwStateV2Error::Overflow("retired EXEC slice inventory"))?;
+pub(super) fn retired_exec_source_closed_v1(
+    prior: &PalwStateCarriageV2,
+    params: &PalwStateParamsV2,
+    id: Hash64,
+    terminal: &PalwClaimStateV2,
+    now: u64,
+) -> Result<bool, PalwStateV2Error> {
+    exec_source_closed_from_borrowed_owner_v1(
+        &prior.exec_v2,
+        &prior.exec_v2_rewards,
+        prior.kernel_route.as_ref(),
+        params,
+        id,
+        terminal,
+        now,
+    )
+}
+/// Same exact closure predicate, while the actual retirement writer still owns
+/// live EXEC/native paid authority. No whole-state carriage or fake old root.
+pub(super) fn current_exec_source_closed_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    id: Hash64,
+    terminal: &PalwClaimStateV2,
+    now: u64,
+) -> Result<bool, PalwStateV2Error> {
+    exec_source_closed_from_borrowed_owner_v1(
+        &state.exec_v2,
+        &state.exec_v2_rewards,
+        state.kernel_route.as_ref(),
+        params,
+        id,
+        terminal,
+        now,
+    )
+}
+fn exec_source_closed_from_borrowed_owner_v1(
+    exec: &crate::palw_work_slice_v2::PalwExecV2StateV1,
+    rewards: &BTreeMap<Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>,
+    route: Option<&crate::palw_kernel_route_v1::PalwKernelRouteStateV1>,
+    params: &PalwStateParamsV2,
+    id: Hash64,
+    terminal: &PalwClaimStateV2,
+    now: u64,
+) -> Result<bool, PalwStateV2Error> {
+    use crate::palw_work_slice_v2::{PalwWorkPrefixStageV2 as Prefix, PalwWorkRootPhaseV2 as Phase, PalwWorkSliceStageV2 as Slice};
+    let Some(root) = exec.roots.get(&id) else { return Ok(!rewards.contains_key(&id)) };
+    let settled = match root.phase {
+        Phase::Settled { settled_daa } => settled_daa,
+        _ => return Ok(false),
+    };
+    if !matches!(terminal.phase,PalwClaimPhaseV2::Final{final_daa} if final_daa==settled)
+        || !matches!(root.prefix, Prefix::Verified { .. })
+        || root.root_bond != terminal.bond
+        || root.class_id != terminal.class_id
+        || root.anchor != terminal.accepted_block
+        || root.canonical_job_id != terminal.job_identity
+        || root.pending != 0
+        || root.next_index != root.slice_count()
+        || root.accepted_work != root.slice_work_total()
+        || root.verified_work != root.accepted_work
+    {
+        return Ok(false);
     }
-    if count!=root.slice_count(){return Ok(false)}
-    let _keys=crate::palw_native_resource_v1::reserve_native_requests_v1(512).map_err(PalwStateV2Error::NativeResource)?;
-    for claim in std::iter::once(root.prefix_claim).chain(prior.exec_v2.slices.range((id,0)..=(id,u32::MAX)).map(|(_,s)|s.evidence_root)){
-        let Some(raw)=route.rows.iter().find(|((t,k),_)|*t==misaka_palw_kernel::rows::TABLE_CLAIMS_V1&&k.as_slice()==claim.as_byte_slice()).map(|(_,r)|r)else{return Ok(false)};
-        let row=decoded::<misaka_palw_kernel::ledger::ClaimRowV1>(raw)?;
-        if row.liability_until.is_none_or(|until|now<=until)||!matches!(crate::palw_exec_v2_verify::palw_exec_v2_claim_outcome_v1(&row,now),crate::palw_exec_v2_verify::PalwSliceVerificationV1::Verified{final_daa} if final_daa<=settled){return Ok(false)}
+    let Some(route) = route else { return Ok(false) };
+    let floor =
+        super::palw_kernel_route_fold_v1::exec_liability_floor_v1(root.expiry_daa, params.window_court(), &route.header.policy)?;
+    if now <= floor || rewards.get(&id).is_some_and(|r| now <= r.liability_until) {
+        return Ok(false);
+    }
+    let mut count = 0u32;
+    for ((_, index), slice) in exec.slices.range((id, 0)..=(id, u32::MAX)) {
+        if *index != count
+            || slice.accepted_daa > settled
+            || !matches!(slice.stage,Slice::Verified{verified_daa,..} if verified_daa<=settled)
+        {
+            return Ok(false);
+        }
+        count = count.checked_add(1).ok_or(PalwStateV2Error::Overflow("retired EXEC slice inventory"))?;
+    }
+    if count != root.slice_count() {
+        return Ok(false);
+    }
+    let _keys = crate::palw_native_resource_v1::reserve_native_requests_v1(512).map_err(PalwStateV2Error::NativeResource)?;
+    for claim in std::iter::once(root.prefix_claim).chain(exec.slices.range((id, 0)..=(id, u32::MAX)).map(|(_, s)| s.evidence_root)) {
+        let Some(raw) = route
+            .rows
+            .iter()
+            .find(|((t, k), _)| *t == misaka_palw_kernel::rows::TABLE_CLAIMS_V1 && k.as_slice() == claim.as_byte_slice())
+            .map(|(_, r)| r)
+        else {
+            return Ok(false);
+        };
+        let row = decoded::<misaka_palw_kernel::ledger::ClaimRowV1>(raw)?;
+        if row.liability_until.is_none_or(|until| now <= until)
+            || !matches!(crate::palw_exec_v2_verify::palw_exec_v2_claim_outcome_v1(&row,now),crate::palw_exec_v2_verify::PalwSliceVerificationV1::Verified{final_daa} if final_daa<=settled)
+        {
+            return Ok(false);
+        }
         // Require an actual selected-approval source. The legacy non-OPV
         // compatibility branch of the general gate cannot close this archive.
-        let authority=match route.paid_claim_authority_for_base_checked_v1(&claim.as_bytes()){
-            Ok(Some(a))=>a,Ok(None)=>return Ok(false),
-            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(r))=>return Err(PalwStateV2Error::NativeResource(r)),
-            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_))=>return Ok(false),
+        let authority = match route.paid_claim_authority_for_base_checked_v1(&claim.as_bytes()) {
+            Ok(Some(a)) => a,
+            Ok(None) => return Ok(false),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(r)) => return Err(PalwStateV2Error::NativeResource(r)),
+            Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(_)) => return Ok(false),
         };
-        if authority.class.base_class!=row.class_binding_id||authority.job.base_job!=row.job_id
-            ||authority.enrollment.producer!=row.producer||authority.authorized_daa!=row.committed_daa
-            ||authority.enrollment.class!=authority.class.id()||authority.enrollment.job!=authority.job.id()
-            ||authority.enrollment.lifetime.liability_until!=row.liability_until.expect("checked source horizon")
-            ||!crate::palw_exec_v2_verify::palw_exec_v2_credit_approval_v1(route,&claim){return Ok(false)}
+        if authority.class.base_class != row.class_binding_id
+            || authority.job.base_job != row.job_id
+            || authority.enrollment.producer != row.producer
+            || authority.authorized_daa != row.committed_daa
+            || authority.enrollment.class != authority.class.id()
+            || authority.enrollment.job != authority.job.id()
+            || authority.enrollment.lifetime.liability_until != row.liability_until.expect("checked source horizon")
+            || !crate::palw_exec_v2_verify::palw_exec_v2_credit_approval_v1(route, &claim)
+        {
+            return Ok(false);
+        }
     }
     Ok(true)
+}
+
+/// Membership is data authority only. Existing source() decides native status
+/// and exact E holds first; a known denial never hydrates a later origin.
+fn cohort_member_readiness_v15(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now: u64,
+    id: Hash64,
+    born: &PalwClaimStateV2,
+    target: Hash64,
+    target_birth: &PalwClaimStateV2,
+    retiring: bool,
+) -> Result<RewardReadinessV1, PalwStateV2Error> {
+    let base = source(state, params, now, id, born, target, target_birth, retiring)?;
+    if base == RewardReadinessV1::Denied {
+        return Ok(base);
+    }
+    // Preserve the existing real-origin traversal whenever it is available.
+    // A native closed summary does not suppress still-authentic input evidence.
+    let origin = super::palw_claim_local_source_origin_v8::SourceOriginV8::for_claim(state, params, id, born)?;
+    if origin.is_some() || state.claims.get(&id).is_some_and(|c| same_birth(c, born)) {
+        drop(origin);
+        return Ok(base.join(carrier_dependencies::readiness(state, params, now, id, born, target, target_birth, retiring)?));
+    }
+    let exact = super::palw_claim_local_exact_closed_source_v5::read_original_birth_v5(state, id, born)?;
+    let legacy = if exact.is_none() { super::palw_claim_local_compact_sources_v1::read(state, id)? } else { None };
+    let closed = exact.as_deref().or_else(|| legacy.as_deref().filter(|c| same_birth(&c.original, born)));
+    if let Some(closed) = closed {
+        if !same_birth(&closed.original, born)
+            || closed.claim != id
+            || closed.original.execution_root != born.execution_root
+            || closed.original.class_id != born.class_id
+            || closed.original.bond != born.bond
+            || closed.original.output_root != born.output_root
+            || closed.original.trace_root != born.trace_root
+            || !matches!((&closed.original.source, &born.source), (PalwClaimSourceV2::Attempt, PalwClaimSourceV2::Attempt))
+                && !matches!((&closed.original.source,&born.source),(PalwClaimSourceV2::FreePrompt{quanta:a,..},PalwClaimSourceV2::FreePrompt{quanta:b,..})if a==b)
+        {
+            return Err(bad("cohort closed source substitutes immutable birth identity"));
+        }
+        // A5's authoritative denial is not replaced by a later raw-ID state.
+        if !closed.permitted {
+            return Ok(RewardReadinessV1::Denied);
+        }
+        if !matches!(closed.terminal_phase, PalwClaimPhaseV2::Final { .. })
+            || closed.closed_at.daa_score > now
+            || closed.birth.daa_score != born.accepted_daa
+            || closed.birth.blue_score != born.accepted_blue_score
+        {
+            return Err(bad("cohort permitted closure lacks actual Final/clock"));
+        }
+        // Current mint_source explicitly requires Ready selected approval even
+        // for permitted S1. An imported legacy/pre-Gate-C body is not evidence
+        // for this NEW no-origin shortcut; preserve it as typed Missing/Hold,
+        // rather than relabeling old-rule data malformed or certifying it.
+        if !crate::palw_rfc0018_v1::palw_gate_c_governs_v1(params, &closed.original) {
+            return Ok(base.join(RewardReadinessV1::Hold(u64::MAX)));
+        }
+        if approval(params, id, &closed.original, Some(&closed.approval))? != RewardReadinessV1::Ready {
+            return Err(bad("cohort permitted closure lacks native selected approval"));
+        }
+        // Actual native closure already settled this retired source's inputs.
+        // Keep base's exact E material Hold, rather than inventing Ready or
+        // requiring the released A8/F world to rehydrate a completed chain.
+        return Ok(base);
+    }
+    Ok(base.join(carrier_dependencies::readiness(state, params, now, id, born, target, target_birth, retiring)?))
 }

@@ -123,18 +123,22 @@ pub(crate) const PROTOCOL_VERSION_PALW_PREFIX_HISTORY: u32 = 108;
 /// RFC0037 adopted protocol assignment. Advertising it requires the explicit
 /// local --palw-row-stream-ibd opt-in; deployment defaults remain version108.
 pub(crate) const PROTOCOL_VERSION_PALW_ROW_STREAM: u32 = 109;
-pub(crate) fn palw_row_stream_negotiated_v1(version: u32) -> bool { version >= PROTOCOL_VERSION_PALW_ROW_STREAM }
-fn local_protocol_version_v1(enabled: bool) -> u32 { if enabled { PROTOCOL_VERSION_PALW_ROW_STREAM } else { PROTOCOL_VERSION } }
+pub(crate) fn palw_row_stream_negotiated_v1(version: u32) -> bool {
+    version >= PROTOCOL_VERSION_PALW_ROW_STREAM
+}
+fn local_protocol_version_v1(enabled: bool) -> u32 {
+    if enabled { PROTOCOL_VERSION_PALW_ROW_STREAM } else { PROTOCOL_VERSION }
+}
 #[cfg(test)]
 mod row_stream_protocol_tests {
     use super::*;
     #[test]
     fn row_stream_protocol_assignment_requires_explicit_local_opt_in() {
-        assert_eq!(local_protocol_version_v1(false),108);
-        assert_eq!(local_protocol_version_v1(true),109);
-        for peer in [106,107,108,109,u32::MAX] {
+        assert_eq!(local_protocol_version_v1(false), 108);
+        assert_eq!(local_protocol_version_v1(true), 109);
+        for peer in [106, 107, 108, 109, u32::MAX] {
             assert!(!palw_row_stream_negotiated_v1(local_protocol_version_v1(false).min(peer)));
-            assert_eq!(palw_row_stream_negotiated_v1(local_protocol_version_v1(true).min(peer)),peer>=109);
+            assert_eq!(palw_row_stream_negotiated_v1(local_protocol_version_v1(true).min(peer)), peer >= 109);
         }
     }
 }
@@ -646,10 +650,9 @@ pub struct FlowContextInner {
     ibd_candidates: Arc<RwLock<IbdCandidateRegistry>>,
     /// LIVE-R1 N2: which chain this node's peers relay, for the partition watchdog
     /// (`flowcontext::partition_watch`).
-    partition_watch: Arc<Mutex<crate::flowcontext::partition_watch::PartitionWatch>>,
-    /// LIVE-R1: a verified resync in progress (`kaspad --palw-verified-resync`): the reporter to call
-    /// once the synced chain is confirmed. `None` otherwise.
-    verified_resync: Arc<Mutex<Option<ResyncReporter>>>,
+    /// Watch observations and native-resync ownership share one lock: an expired ordinary verdict
+    /// must never release a newly armed native hold. No await or reporter callback holds this lock.
+    partition_participation: Arc<Mutex<crate::flowcontext::partition_refresh::PartitionParticipation>>,
     /// The chain this node has decided to sync next, reserved so that cancelling an IBD hands the
     /// latch to the winner rather than to whoever relays first. See [`PreferredIbdCandidate`].
     preferred_ibd_candidate: Arc<RwLock<Option<PreferredIbdCandidate>>>,
@@ -1010,8 +1013,7 @@ impl FlowContext {
                 ibd_metadata: Default::default(),
                 ibd_lease: Default::default(),
                 ibd_candidates: Default::default(),
-                partition_watch: Default::default(),
-                verified_resync: Default::default(),
+                partition_participation: Default::default(),
                 challenger_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
                 preferred_ibd_candidate: Default::default(),
                 handoff_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
@@ -1611,18 +1613,19 @@ impl FlowContext {
     /// dropped connection is a source failover, not a reason to reconsider which chain to follow.
     pub fn forget_ibd_candidate_peer(&self, peer: &PeerKey) {
         self.ibd_candidates.write().forget_peer(peer);
-        self.partition_watch.lock().forget_peer(peer);
+        self.partition_participation.lock().watch.forget_peer(peer);
+        self.refresh_partition_participation();
     }
 
-    /// **LIVE-R1: start a verified resync.** The node (whose data directory the daemon has just moved
-    /// aside) stays out of participation — the partition hold — until long-lived outbound peers confirm
-    /// the chain it synced (`PartitionWatch::resync_verdict`); then `reporter` is called once and the hold
-    /// is released. Never started by the node itself.
+    /// **LIVE-R1: start or resume an operator-requested resync's confirmation hold.** An initial
+    /// resync moves the old data directory aside; a pending report restores the hold after a restart
+    /// without moving the partial database. Participation stays held until long-lived outbound peers
+    /// confirm the chain (`PartitionWatch::resync_verdict`); then `reporter` is called once. A new
+    /// resync is never initiated by network input.
     pub fn begin_verified_resync(&self, reporter: ResyncReporter) {
-        *self.verified_resync.lock() = Some(reporter);
-        self.chain_participation().set_partition_hold(true);
+        self.partition_participation.lock().begin(reporter, self.chain_participation());
         warn!(
-            "VERIFIED RESYNC: syncing from an empty data directory; this node will not mine, attest or report synced until \
+            "VERIFIED RESYNC: peer confirmation pending for this data directory; this node will not mine, attest or report synced until \
              at least {} long-lived outbound peers confirm the chain it synced.",
             crate::flowcontext::partition_watch::RESYNC_MIN_CONFIRMING_PEERS
         );
@@ -1630,7 +1633,7 @@ impl FlowContext {
 
     /// Whether a verified resync is still waiting for its confirmation.
     pub fn verified_resync_pending(&self) -> bool {
-        self.verified_resync.lock().is_some()
+        self.partition_participation.lock().pending().is_some()
     }
 
     /// **LIVE-R1 N2: the partition watchdog, asked after every relayed block is processed.** Records
@@ -1642,7 +1645,13 @@ impl FlowContext {
     /// this node's selected chain (either side of the sink) and "other" only when it extends the refused branch's chain; a sibling
     /// the chain merges notes nobody.
     pub async fn observe_relay_for_partition(&self, session: &ConsensusSessionOwned, peer: PeerKey, block: BlockHash) {
-        use crate::flowcontext::partition_watch::{BlockPlace, PartitionVerdict, PeerView};
+        use crate::flowcontext::{
+            partition_refresh::{PartitionObservation, snapshot_matches},
+            partition_watch::BlockPlace,
+        };
+        // Capture native ownership before any async reads. A begin/rearm during those reads
+        // invalidates this completion, including a formerly ordinary (None) completion.
+        let expected = self.partition_participation.lock().pending();
         let sink = session.async_get_sink().await;
         let refusal = session.palw_partition_refusal_v1();
         let (Ok(down), Ok(up)) =
@@ -1654,54 +1663,88 @@ impl FlowContext {
             Some(r) => session.async_is_chain_ancestor_of(r.refused, block).await.unwrap_or(false),
             None => false,
         };
-        let place = BlockPlace { on_our_chain: down || up, extends_refused };
-        let now = std::time::Instant::now();
-        let peers: Vec<PeerView> = self
-            .hub()
+        let report = if expected.is_some() {
+            // Bind the report DAA to that exact immutable sink, not to a later virtual snapshot.
+            let Ok(header) = session.async_get_header(sink).await else { return };
+            Some(ResyncReport {
+                confirmed_unix_ms: unix_now(),
+                sink,
+                sink_daa: header.daa_score,
+                confirming_outbound_peers: 0,
+                eligible_outbound_peers: 0,
+            })
+        } else {
+            None
+        };
+        let update = {
+            let mut state = self.partition_participation.lock();
+            let current = self.consensus().unguarded_session();
+            let current_snapshot = snapshot_matches(session, &current, sink, refusal);
+            // A pruning session does not pin manager adoption. Never confirm from an old active
+            // instance or while its chain is still being adopted/reviewed by the existing gate.
+            if !current_snapshot {
+                return;
+            }
+            state.observe(
+                PartitionObservation {
+                    expected: &expected,
+                    block,
+                    peer,
+                    place: BlockPlace { on_our_chain: down || up, extends_refused },
+                    refusal,
+                    peers: &self.partition_peer_views(),
+                    now: Instant::now(),
+                    report,
+                },
+                self.chain_participation(),
+            )
+        };
+        self.log_partition_update(update);
+    }
+
+    fn partition_peer_views(&self) -> Vec<crate::flowcontext::partition_watch::PeerView> {
+        use crate::flowcontext::partition_watch::PeerView;
+        self.hub()
             .active_peers()
             .iter()
-            .map(|p| PeerView {
-                key: p.key(),
-                outbound: p.is_outbound(),
-                connected_for: std::time::Duration::from_millis(p.time_connected()),
-            })
-            .collect();
-        let pending_resync = self.verified_resync.lock().clone();
-        if let Some(reporter) = pending_resync {
-            use crate::flowcontext::partition_watch::ResyncVerdict;
-            let resync = {
-                let mut watch = self.partition_watch.lock();
-                watch.note_placed(block, peer, place, now);
-                watch.resync_verdict(refusal, &peers, now)
-            };
-            if let ResyncVerdict::Confirmed { on_ours, eligible } = resync {
-                let sink_daa = session.async_get_sink_daa_score_timestamp().await.daa_score;
-                let report = ResyncReport {
-                    confirmed_unix_ms: unix_now(),
-                    sink,
-                    sink_daa,
-                    confirming_outbound_peers: on_ours,
-                    eligible_outbound_peers: eligible,
-                };
-                *self.verified_resync.lock() = None;
-                self.chain_participation().set_partition_hold(false);
+            .map(|p| PeerView { key: p.key(), outbound: p.is_outbound(), connected_for: Duration::from_millis(p.time_connected()) })
+            .collect()
+    }
+
+    /// Ordinary observation expiry also runs when actors poll participation, even if every clock
+    /// producer is held and no new block arrives. This never confirms a pending native resync.
+    fn refresh_partition_participation(&self) {
+        let update = {
+            let state = self.partition_participation.lock();
+            let current = self.consensus().unguarded_session();
+            state.refresh(
+                current.palw_partition_refusal_v1(),
+                &self.partition_peer_views(),
+                Instant::now(),
+                self.chain_participation(),
+            )
+        };
+        self.log_partition_update(update);
+    }
+
+    fn log_partition_update(&self, update: crate::flowcontext::partition_refresh::PartitionUpdate) {
+        use crate::flowcontext::{partition_refresh::PartitionUpdate, partition_watch::PartitionVerdict};
+        let PartitionUpdate::Ordinary { verdict, changed } = update else {
+            if let PartitionUpdate::Confirmed { reporter, report } = update {
                 info!(
-                    "VERIFIED RESYNC confirmed: sink {sink} (DAA {sink_daa}) is extended by {on_ours} of {eligible} long-lived outbound \
+                    "VERIFIED RESYNC confirmed: sink {} (DAA {}) is extended by {} of {} long-lived outbound \
                      peers and refuses nothing heavier. Participating again; the previous data directory is kept where the \
-                     daemon moved it, for the operator to delete."
+                     daemon moved it, for the operator to delete.",
+                    report.sink, report.sink_daa, report.confirming_outbound_peers, report.eligible_outbound_peers
                 );
+                // The reporter may read FlowContext again; never call it under the state mutex.
                 reporter(&report);
             }
             return;
-        }
-        let verdict = {
-            let mut watch = self.partition_watch.lock();
-            watch.note_placed(block, peer, place, now);
-            watch.verdict(refusal, &peers, now)
         };
         match verdict {
             PartitionVerdict::Hold { refusal, on_other, on_ours, eligible } => {
-                if self.chain_participation().set_partition_hold(true) {
+                if changed {
                     kaspa_core::error!(
                         "PARTITION HOLD: this node keeps a branch its peers have left. Its sink {} (DAA {}) has refused the heavier, \
                          fully validated chain at {} (DAA {}, advanced {} ticks while refused, {} resolves) on the PALW deep-reorg \
@@ -1719,7 +1762,7 @@ impl FlowContext {
                 }
             }
             PartitionVerdict::Clear(reason) => {
-                if self.chain_participation().set_partition_hold(false) {
+                if changed {
                     info!("Partition hold released ({reason:?}): this node participates again.");
                 }
             }
@@ -1729,7 +1772,7 @@ impl FlowContext {
     /// **C4 F-C4R4-09**: `peer` announced `block`, which this node already requested from another peer: it is noted with the block's
     /// deliverer once the block is processed.
     pub fn note_partition_announcement(&self, peer: PeerKey, block: BlockHash) {
-        self.partition_watch.lock().note_announced(block, peer);
+        self.partition_participation.lock().watch.note_announced(block, peer);
     }
 
     pub fn is_ibd_running(&self) -> bool {
@@ -2004,11 +2047,17 @@ impl FlowContext {
     }
 
     pub async fn is_nearly_synced(&self, session: &ConsensusSessionOwned) -> bool {
+        // This predicate is also used by transaction relay and data-serving paths. Refresh
+        // ordinary expiry without changing its existing timestamp-only meaning.
+        let _ = self.is_consensus_participation_allowed();
         let sink_daa_score_and_timestamp = session.async_get_sink_daa_score_timestamp().await;
         self.mining_rule_engine.is_nearly_synced(sink_daa_score_and_timestamp)
     }
 
     pub async fn should_mine(&self, session: &ConsensusSessionOwned) -> bool {
+        if !self.is_consensus_participation_allowed() {
+            return false;
+        }
         let sink_daa_score_and_timestamp = session.async_get_sink_daa_score_timestamp().await;
         self.mining_rule_engine.should_mine(sink_daa_score_and_timestamp)
     }
@@ -2025,6 +2074,9 @@ impl FlowContext {
     /// A validator that reused `should_mine` would inherit the sync-rate override, which can hold
     /// `true` on a chain nobody has compared.
     pub fn is_consensus_participation_allowed(&self) -> bool {
+        if self.chain_participation().partition_hold() {
+            self.refresh_partition_participation();
+        }
         self.chain_participation().allows_participation()
     }
 
@@ -2594,9 +2646,14 @@ impl ConnectionInitializer for FlowContext {
 
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version.min(local_protocol_version) {
-            PROTOCOL_VERSION_PALW_ROW_STREAM => (v8::register(self.clone(),router.clone(),PROTOCOL_VERSION_PALW_ROW_STREAM),PROTOCOL_VERSION_PALW_ROW_STREAM),
-            PROTOCOL_VERSION => (v8::register(self.clone(),router.clone(),PROTOCOL_VERSION),PROTOCOL_VERSION),
-            PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED => (v8::register(self.clone(),router.clone(),PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED),PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED),
+            PROTOCOL_VERSION_PALW_ROW_STREAM => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_ROW_STREAM), PROTOCOL_VERSION_PALW_ROW_STREAM)
+            }
+            PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED => (
+                v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED),
+                PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED,
+            ),
             PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS => (
                 v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS),
                 PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS,

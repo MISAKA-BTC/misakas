@@ -20,6 +20,7 @@ pub(super) fn prepare_block_objects_v1(
     rules: PalwRulesAtBlockV1<'_>,
     migration: ArtifactMigrationOrderV1,
 ) -> Result<(), PalwStateV2Error> {
+    super::palw_claim_local_carrier_lineage_v9::prepare_global_legacy_index_v9(builder, ctx)?;
     queue_drain_workspace_v2::drain_consumed_queues_v2(builder, ctx)?;
 
     // 1c″. Lane BUDGET (ADR-0176 / ADR-0177): the bond budget's clock — the engine created at the fence's first block (the live old
@@ -146,8 +147,8 @@ pub(super) fn prepare_block_objects_v1(
     //     below `palw_permissionless_panel_v1`.
     palw_panel_v3_fold_v1::advance_v1(builder, parent, ctx)?;
     palw_monetary_material_fold_v1::tick(builder, ctx)?;
-    palw_court_family_supplier_fold_v1::tick_family_suppliers_v1(builder,ctx)?;
-    palw_court_family_material_fold_v1::sweep_family_material_v1(builder,ctx)?;
+    palw_court_family_supplier_fold_v1::tick_family_suppliers_v1(builder, ctx)?;
+    palw_court_family_material_fold_v1::sweep_family_material_v1(builder, ctx)?;
 
     Ok(())
 }

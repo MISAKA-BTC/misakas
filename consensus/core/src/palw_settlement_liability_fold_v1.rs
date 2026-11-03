@@ -77,8 +77,9 @@ pub(super) enum PalwLegLiabilityV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(clippy::enum_variant_names)]
 pub(super) enum PalwAdmissionLiabilityV1 {
-    /// A V2 attempt, rider or free-prompt claim (X3 defines its hard deadline from its acceptance).
-    V2Claim,
+    /// V2 attempt/rider/FP: the retirement floor is derived from actual native
+    /// preparation and the same material/source composition as the writer.
+    V2Claim { retire_not_before: u64 },
     /// A kernel claim (its producer-signed paid lifetime and its covenant are read by the claim's digest).
     KernelClaim { claim: [u8; 64] },
     /// **A native funded / text / job / mining claim** (ADR-0184 §1, user decision 2026-10-18): its liability horizon is the Final
@@ -132,6 +133,15 @@ pub(super) fn kernel_claim_signed_hard_deadline_v1(
         .and_then(|d| d.checked_add(mirror.policy.observe_daa))
         .and_then(|d| d.checked_add(mirror.policy.resolve_daa))
         .ok_or("the kernel signed hard deadline: overflow")
+}
+
+/// The existing V2 X3 hard under the adopted X3 x clock-v2 composition.
+/// Admission and every V2 financial leg read the same checked acceptance-point
+/// rule as runtime's `palw_claim_x3_cap_hard_v2`; no new lifetime consent is made.
+pub(super) fn v2_claim_signed_hard_deadline_v1(params: &PalwStateParamsV2, accepted_daa: u64) -> PalwSettlementTermV1<u64> {
+    crate::palw_court_clock_v2::palw_claim_x3_cap_hard_at_checked_v2(params, accepted_daa)
+        .map_err(|_| "the signed hard deadline: X3 x clock-v2 overflow")?
+        .ok_or("the signed hard deadline: X3 (palw_claim_hard_deadline_v1) does not govern the claim")
 }
 
 /// Refusal as a semantic consensus error (never a local capacity error).
@@ -251,12 +261,7 @@ impl TransitionBuilder<'_> {
                         })
                     })
                     .ok_or("the claim's post-Final liability horizon (no Final, no liability record)");
-                let hard = self
-                    .params
-                    .claim_hard_deadline_v1()
-                    .filter(|mirror| row.accepted_daa >= mirror.from_daa)
-                    .map(|mirror| crate::palw_ruling_fences_v1::palw_x3_hard_deadline_at_v1(&mirror.policy, row.accepted_daa))
-                    .ok_or("the signed hard deadline: X3 (palw_claim_hard_deadline_v1) does not govern the claim");
+                let hard = v2_claim_signed_hard_deadline_v1(self.params, row.accepted_daa);
                 let claim_state = self.state.claims.get(&claim);
                 let material_ttl_until = match self.covenant_ttl_v1(claim) {
                     Some(ttl) => Ok(ttl),
@@ -617,10 +622,9 @@ impl TransitionBuilder<'_> {
             .as_ref()
             .and_then(|route| route.kernel_claim_row_v1(&Hash64::from_bytes(claim)))
             .map(|kernel| kernel.committed_daa)
+            && committed < from
         {
-            if committed < from {
-                return Ok(None);
-            }
+            return Ok(None);
         }
         let moving = if payment == 0 { 0 } else { row.amount };
         Ok(Some(self.signed_fee_tranche_v1(row.amount, moving, row.terms.liability_until, row.terms.material_until, now)))
@@ -786,21 +790,12 @@ impl TransitionBuilder<'_> {
             PalwSettlementTermV1<u64>,
             PalwSettlementTermV1<u64>,
         ) = match family {
-            PalwAdmissionLiabilityV1::V2Claim => {
-                let hard = self
-                    .params
-                    .claim_hard_deadline_v1()
-                    .filter(|mirror| accepted_daa >= mirror.from_daa)
-                    .map(|mirror| crate::palw_ruling_fences_v1::palw_x3_hard_deadline_at_v1(&mirror.policy, accepted_daa))
-                    .ok_or("the signed hard deadline: X3 (palw_claim_hard_deadline_v1) does not govern a claim accepted now");
-                // REQ-X3-6: the claim writer raises the new claim's retention to at least the hard deadline.
-                let retire = if self.params.claim_retirement_daa == 0 {
-                    Ok(u64::MAX)
-                } else {
-                    // Terminal is no earlier than acceptance: a lower bound.
-                    Ok(accepted_daa.saturating_add(self.params.claim_retirement_daa))
-                };
-                (hard, hard, retire)
+            PalwAdmissionLiabilityV1::V2Claim { retire_not_before } => {
+                let hard = v2_claim_signed_hard_deadline_v1(self.params, accepted_daa);
+                // REQ-X3-6 / clock-v2 birth retention covers the effective hard.
+                // A material TTL is not itself a retirement floor: the native
+                // preparation token names only rows this same install writes.
+                (hard, hard, Ok(retire_not_before))
             }
             PalwAdmissionLiabilityV1::KernelClaim { claim } => {
                 let route = self.state.kernel_route.as_ref();

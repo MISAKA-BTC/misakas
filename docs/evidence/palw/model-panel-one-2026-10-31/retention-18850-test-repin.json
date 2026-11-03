@@ -1,0 +1,182 @@
+{
+  "sourceRevision": "31d451ce6a5a65350514c812d58c2036e1d01739",
+  "runner": "17 existing integration modules aggregated in one temporary test binary; no replacement of implementation",
+  "baselineResult": "75 passed; 21 failed; 1 ignored; failures are stale pins and historical fixture dependency mismatch",
+  "shipped": {
+    "params": "bbb4ad66e54695b04f136742902794a6d93aa4cec178e80c185cb58b1c3050a2",
+    "schedule": "5a84a8d700cae89fad2fb6316cf2033d7c80cecede29e7ccfa00eb3088e8679a"
+  },
+  "twins": {
+    "T12_BEFORE_THE_CAP": {
+      "before": [
+        "baf7429c1bd1760c48d34589d8ecb82c0bcb2b41851b3a0221183bc5d64d6117",
+        "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
+        "b8176e47f4503ff3e72440792fc562b1fd186572053f89ac644828a3c7efca9f"
+      ],
+      "computed": [
+        "3f467a99a23d8bb68ccaaf2bd7b14a4751b2cfd30e9ab4a2cea9c6999f1eec1f",
+        "50990e0f0b634856aeae49eb38ffa38cfa991571be196d27c17befaefe805ec2",
+        "990c031172c1f759a53dd3e44f04921956c2d2907b0984909aebc744da147a76"
+      ]
+    },
+    "T12_WITHOUT_THE_MATURITY": {
+      "before": [
+        "38e8164b1ff21846475a48c85f68be2666f8ced9f810699a7bd9358f2efaa190",
+        "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
+        "d8eda51c6425e7845ef3382b84a80caa2053a5dac57d0bb527276a153b9e4141"
+      ],
+      "computed": [
+        "616affca901c89ede3e622350d46830d21b7807f81c1d8f204a8ad6819caf220",
+        "e4add02e255f61615fbe0195a08ea893614bc4a234f4c635a0706d9e3b3d7b53",
+        "a7fc2066fe2824edd74bea131532cbbaf4b8bc677c2a61567f22b05fc6f84b6f"
+      ]
+    },
+    "T12_BEFORE_THE_HORIZON": {
+      "before": [
+        "62d8c8cedd6b7e9df505b559653c74f48181fced6fdebf894f34f3bd9a68c531",
+        "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
+        "5ed2aa627b008a0a05922dc41b1cda1ff350242e5e825c9845260260f50cc499"
+      ],
+      "computed": [
+        "fabadc7551619df89aba3b3aaf8d0c3df930b8c56c9ff461c392bb599f67db8a",
+        "9f267fb1794c366a70a9b9008773bc470f8d0ab03ebb0ca26e9a28eaacb70ab4",
+        "6aeeaf1d0f62787ee5cee4f35f7fe823664a81b4dc53eee9b64727365ea12e7c"
+      ]
+    }
+  },
+  "changedTests": [
+    "consensus/core/tests/palw_panel_seed_execution_is_t12_only.rs",
+    "consensus/core/tests/palw_lane_accept_parents_first_is_t12_only.rs",
+    "consensus/core/tests/palw_hb_transparency_same_chain_fence.rs",
+    "consensus/core/tests/reorg_strict_win_fence.rs",
+    "consensus/core/tests/palw_final_lock_life_is_t12_only.rs",
+    "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs",
+    "consensus/core/tests/pruning_proof_strict_economic_fence.rs",
+    "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs",
+    "consensus/core/tests/palw_bond_maturity_early_is_t12_only.rs",
+    "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs",
+    "consensus/core/tests/palw_readiness_horizon_is_t12_only.rs",
+    "consensus/core/tests/palw_registry_resilience_is_t12_only.rs",
+    "consensus/core/tests/g14_close_legacy.rs",
+    "consensus/core/tests/palw_operator_anchor_is_t12_only.rs",
+    "consensus/core/tests/g14_court_capacity.rs",
+    "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs",
+    "consensus/core/tests/palw_exec_maturity_is_t12_only.rs",
+    "consensus/core/tests/palw_offence_attribution_is_t12_only.rs",
+    "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs",
+    "consensus/core/tests/t12_mainnet_values_moved_only_these.rs",
+    "consensus/core/tests/palw_tir_fences_are_dormant.rs"
+  ],
+  "historicalFixtureChange": "When deliberately clearing ModelOne, clear its later retention fence too; preserve normal mirror sync",
+  "files": {
+    "consensus/core/tests/palw_panel_seed_execution_is_t12_only.rs": "a3859ed01b7321c329adbaaadadbfee6ec80a31f9f72f32e6d9b0514bfea025a",
+    "consensus/core/tests/palw_lane_accept_parents_first_is_t12_only.rs": "1085b42227961826a5c668b6ab1bd0a099d63566acb8c61076d03f7c76fdcbe1",
+    "consensus/core/tests/palw_hb_transparency_same_chain_fence.rs": "9aaf27f02f2e22596cc7dcaa7fcbe28bc459d8f66d312f7b84956244e65548c5",
+    "consensus/core/tests/reorg_strict_win_fence.rs": "4e85441aaae8308a0d23418338523f25a142ca625f64be32fb9ae04da8fab72f",
+    "consensus/core/tests/palw_final_lock_life_is_t12_only.rs": "d5876a1752ff376f2b64cbded8a1dd6ffa87e33e98de62c9abe7374f9982cd67",
+    "consensus/core/tests/palw_final_lock_full_collateral_is_t12_only.rs": "454e70de746abe75e22c12d425966cdd19d63737a2456a4a8f94233356ffd43a",
+    "consensus/core/tests/pruning_proof_strict_economic_fence.rs": "b99385055fd3a17a5017b1de0f9711af1bbd4c9819b8933a5e91ece1fac93a90",
+    "consensus/core/tests/palw_anchor_at_ceiling_is_t12_only.rs": "abf7b3fad3440d8e46e4848c1c12072eb165025c17781f59eae9aed3d8d60f7f",
+    "consensus/core/tests/palw_bond_maturity_early_is_t12_only.rs": "1e63abca3edc5473b70a87454f13a6b1d8fc1c9a9a74262bacbd9b1b930dfc53",
+    "consensus/core/tests/palw_clock_lead_cap_is_t12_only.rs": "69f14441b8c4cd28e5edae411534752c3b19889f94a1361acb2264d232553659",
+    "consensus/core/tests/palw_readiness_horizon_is_t12_only.rs": "9abe349d612f16672c9e0bc7a4c10af3dcd972c36ffd6fe181feb4aa47c46eac",
+    "consensus/core/tests/palw_registry_resilience_is_t12_only.rs": "b0e22bb9415db645f2192bc19b908df187dcd86e978bd91517b78fc21d1fe2ce",
+    "consensus/core/tests/g14_close_legacy.rs": "1fc329a2b8a380215b88756a04d68feaba055b6363dc50047baae6d818654cbe",
+    "consensus/core/tests/palw_operator_anchor_is_t12_only.rs": "63672f0000bb933b3e0cc16cadcc371ddd79e6c7c09f37d23693475051c3f3b2",
+    "consensus/core/tests/g14_court_capacity.rs": "1e5fe742841e548ba80cd05d82372c52a8c21d25846b94dffdfe2a374787aa33",
+    "consensus/core/tests/palw_model_sink_bound_is_t12_only.rs": "3c85c06601c322343df31142accfa9e2cfbeadfaefc8d166425f54dcd79970dc",
+    "consensus/core/tests/palw_exec_maturity_is_t12_only.rs": "73fb781f62795b4e933c5a54d51bd9b959d65951a27cd5456848e74c7ab07948",
+    "consensus/core/tests/palw_offence_attribution_is_t12_only.rs": "c5ea28ca75040eb3682d7578226659847efb3c9c4c6231b225ba5bd51f00a7b5",
+    "consensus/core/tests/evm_bridge_ledger_is_t12_only.rs": "abdf9c0f528db6a150c9ff8ea084c954b0f6e4d190501ba5948b02e044268748",
+    "consensus/core/tests/t12_mainnet_values_moved_only_these.rs": "b62af42fe9a28fcdad5388771cd4ef0bb33103961ec3c9630caa7049cb43b88c",
+    "consensus/core/tests/palw_tir_fences_are_dormant.rs": "de26bb5264dfe114b6670b6390a1ef78d08eb837543aae29b4bab156560cfff3"
+  },
+  "additionalDerivedTwins": {
+    "T12_BEFORE_THE_ATTRIBUTION": {
+      "before": [
+        "d0457fe48dfd13944527ac698259dd66ee1c6ef838d1f8e6dca68214d72f74ef",
+        "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
+        "5258dd7a395a9ea7d5cd00b853a6dae424a83925253c183062bfce92817f34db"
+      ],
+      "computed": [
+        "2c96fc09b9050440d27193bf7bfdf53e1e7f477a548a63888170b1aa4d0139c7",
+        "7be7b92fd3583a6d288ebcd417d3f2cee9ab7d86f13967c19ee28c9aec08c62f",
+        "385e033a25cc6ceff9f050379fe182e26f6fc94e0ffe40a89ef8db169ac02c4b"
+      ]
+    },
+    "T12_BEFORE_THE_ATTRIBUTION_AND_THE_DEADLINE": {
+      "before": [
+        "365aa673baa94e3332ec742893648532f34afcc0c228fe8b75b88e7c223474ae",
+        "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
+        "5901b120faf8e150b8734b1d34d54161db5875eba609933091591b18886be4de"
+      ],
+      "computed": [
+        "90adbb90aa759482d66a3201974f8fd19f7b6d557bce7cc8318946fa4a55dff9",
+        "0d7ca2bade522865cc0c3f464262b90834064de57ad1c984ecdbf11b3cab9c8c",
+        "f882a28c7d007e615e8eeb83d39de7774df183d0abc368e47838cbe9e299fca6"
+      ]
+    },
+    "T12_AT_THE_PARENT_WITHOUT_THE_ATTRIBUTION": {
+      "before": [
+        "d8bc65c926f99386c8f49903bccb117e1de8a821cb757d01e2dcdaa8240ab441",
+        "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
+        "2d36f1d9bba11a0e9263e17c21aab2f710b155d8c0d44ac8f09c0d830568c490"
+      ],
+      "computed": [
+        "a012c74138264894056e5585a8e664286cf717a1555fae52bc0be94080ae2d19",
+        "e36ebef71a24c0ee234a0db62506caff6a58461f6cce7ba48a6cf6be809c9035",
+        "84145809a36a08e2e0b1c86d150d5ef541579452f33dd70876ef63358d9874cd"
+      ]
+    },
+    "PARENT_WITHOUT_THE_ATTRIBUTION": {
+      "before": [
+        "f13bab0ed46f23346f7973fb6fe7bee0107b81f78b6a249a57eb1f1d1a8a8f9d",
+        "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
+        "aab1c09ecba1582328c306a20183d4629379ccbd7020ec3bf1d806ca8383bf9e"
+      ],
+      "computed": [
+        "b3d58e52311e86055b207cefa48e857f790e334a2f2a37b7519f97b705d146b5",
+        "df8d548dea8dc91bf12a34c6ba2f79d81c0736fb40212012080e4cce35cd5cfe",
+        "98566ae08f2bc9750819f5c6f323d401f6867d0cd225569a9f4c911e026c2973"
+      ]
+    },
+    "tirdorm.palw_t12_shipped_params_ir_flag_day.params_id": {
+      "before": "8b48626ce2ad305b50dd66cf7ff984f34d1bfce7ee3e6c82634fe4f4ecda3dfc",
+      "computed": "cd12b4714408e5694e263f59e15b2fb1bf27c80a5ee5d7255f09164604c7f978",
+      "occurrences": 2
+    },
+    "tirdorm.palw_t12_drill_params_v1_ir_flag_day.params_id": {
+      "before": "f68dce733f9e4a0c73fe39bd9d1ea5520e65bb42af6f4ef8848529a33ac48994",
+      "computed": "1b0411ba360aac6e1c060c6abc4ef8878f1d092878b7940fca7f20dffc610480",
+      "occurrences": 1
+    },
+    "tirdorm.palw_t12_shipped_params_ir_flag_day.schedule_id": {
+      "before": "6487dd1cbbbee581b264add191e615b97de045b11ad4189d3db91a3226247598",
+      "computed": "ebc1b8bba64ff0b5669b37493be3a2e792594f79b0e853a20fd49ddf2078118a",
+      "occurrences": 3
+    }
+  },
+  "finalResult": {
+    "passed": 108,
+    "failed": 0,
+    "ignored": 1,
+    "ignoredTest": "g14_court_capacity::palw_court_op_timing_harness",
+    "seconds": 66.52
+  },
+  "testBinarySha256": "9bee5da1b4148eae16794da719aae5bec9ca14f745ee71ca4e30bd1e0ed62218",
+  "finalCommand": "RUST_MIN_STACK=67108864 /Users/wata/Downloads/MISAKA-testnet/.claude/worktrees/g14-18400-deploy/target/ci-gates/debug/deps/retention_18850_repin_probe-51e3cd3ed63af145 --test-threads=1 --nocapture",
+  "runnerSha256": "82ff60eabed3a6af09a85076b32256851e34bf288b85fb23a0a23e9bb17038cd",
+  "finalLogSha256": "f27b56b9994a1bf94e726ddbfd3db877bcdc199cc1f842c2d4a5973cc193afe6",
+  "historicalEvidenceJsonModified": false,
+  "productionSourceModified": false,
+  "additionalSourceFixtureAudit": {
+    "path": "consensus/src/pipeline/virtual_processor/tests/t12_round_lane_e2e.rs",
+    "sha256": "2b842b151bfe5388aa2dd00b77c7304701661b12f0d662b44e692e0fad386ac8",
+    "sites": [
+      "harness params immediately before sync_palw_g14_gates_v1",
+      "expected shipped clone immediately before sync_palw_g14_gates_v1"
+    ],
+    "change": "clear retention fence alongside ModelOne at two historical harness sites; keep existing mirror sync",
+    "verification": "source and diff review only; kaspa-consensus runtime/compile was not run for this extra file"
+  }
+}

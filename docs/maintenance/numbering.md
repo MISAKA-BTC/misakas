@@ -40,3 +40,12 @@ RFC-0010/0012のdormant implementationは主RFCではなくdesignへ移しまし
 ## 2026-10-22 認証付き state map の追加予約
 
 [ADR-0203](../adr/0203-authenticated-palw-state-map-and-row-access.md) / [RFC-0036](../rfc/0036-authenticated-palw-state-map-and-row-access.md)をProposed / Review Requiredとして予約した（30 GB pruned node 方針の state lane）。基準 b1eb33960 の tree には ADR-0202 / RFC-0035 までの主文書があり、0198–0202 / 0031–0035 は他 lane の割当で本台帳には未記録。storage 作業の他 lane（IBD）が consensus 可視の形式を起案する場合は ADR-0204 / RFC-0037 以降を使う。次のローカル番号は ADR-0204 / RFC-0037。未 fetch の remote や将来 branch の未使用保証ではない。
+
+## 2026-11-02 並行割当衝突
+
+CourtSupplierConsent と AllModelG14PanelOne は並行 branch で同じ RFC-0042 / ADR-0210 を割り当てた別主文書である。両方の元番号・完全パス・採択状態・wire/署名domainを保持し、再採番・採択内容の統合を行わない。これは衝突の明示記録であり、新たな採択・実装検証・有効化の記録ではない。既存機械検査の exact-path duplicate registry に以下の二組を記録する。
+
+- [RFC-0042 (AllModelG14PanelOne)](../rfc/0042-all-model-g14-panel-one.md)
+- [RFC-0042 (CourtSupplierConsent)](../rfc/0042-court-family-supplier-consent-and-native-reservation.md)
+- [ADR-0210 (AllModelG14PanelOne)](../adr/0210-all-model-g14-panel-one.md)
+- [ADR-0210 (CourtSupplierConsent)](../adr/0210-court-family-supplier-consent-and-native-reservation.md)

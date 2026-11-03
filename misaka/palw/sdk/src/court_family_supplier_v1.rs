@@ -2,12 +2,20 @@
 //! must come from native admission; local signatures/encodings do not reserve funds.
 //! Sign UTXO inputs after wrapping: their sighash commits the complete TFO2 carrier.
 pub use kaspa_consensus_core::palw_court_family_material_v1::{
-    FamilyMaterialActionV1, FamilyMaterialTargetV1, SignedFamilyMaterialV1, sign_family_material_v1,
+    FamilyDraftQuoteV2, FamilyMaterialActionV1, FamilyMaterialTargetV1, SignedFamilyMaterialV1, sign_family_material_v1,
 };
 pub use kaspa_consensus_core::palw_court_family_supplier_v1::{
     FamilySupplierRoleV1, FamilySupplierTermsV1, SignedFamilySupplierV1, sign_family_supplier_v1,
 };
-pub use kaspa_consensus_core::palw_state_v2::{PalwFamilyOriginalNativeQuoteV2, palw_family_original_native_quote_v2};
+pub use kaspa_consensus_core::palw_state_v2::{
+    PalwFamilyOriginalNativeQuoteV2, palw_family_material_begin_quote_v2, palw_family_original_native_quote_v2,
+    palw_family_supplier_terms_quote_v2,
+};
+/// Active source-derived generated semantic purpose; V2 exports remain literal.
+pub use kaspa_consensus_core::palw_state_v2::{
+    PalwFamilyOriginalNativeQuoteV3, family_supplier_profiles_v3, palw_family_original_native_quote_v3,
+    palw_family_supplier_terms_quote_v3,
+};
 use kaspa_consensus_core::palw_tir_funded_original_envelope_v2::{MAX_SUPPLIERS, PalwTirFundedOriginalEnvelopeV2};
 use kaspa_consensus_core::{
     Hash64,
@@ -103,6 +111,54 @@ pub fn family_material_upload_v1(
     push(FamilyMaterialActionV1::Finish { draft })?;
     Ok(controls)
 }
+/// Additional optional draft: sign the exact native quote against the current
+/// prefix state and acceptance DAA. If the quote changes, regenerate Begin,
+/// Part and Finish: the draft identity binds the exact signed quote.
+pub fn family_material_upload_v2(
+    network: Hash64,
+    contract: Hash64,
+    target: FamilyMaterialTargetV1,
+    submitter: PalwBondKeyV2,
+    native_bound: u64,
+    body: &[u8],
+    quote: FamilyDraftQuoteV2,
+    mut sign: impl FnMut(&PalwBondKeyV2, &[u8], &[u8]) -> Option<Vec<u8>>,
+) -> Result<Vec<SignedFamilyMaterialV1>, String> {
+    use kaspa_consensus_core::palw_court_family_material_v1::{FAMILY_MATERIAL_PART_BYTES_V1, family_material_draft_id_v2};
+    if body.is_empty() || body.len() as u64 > native_bound || quote.version != 2 || quote.fee_sompi == 0 || quote.collateral_sompi == 0
+    {
+        return Err("independent draft native bound/quote absent".into());
+    }
+    let hash = kaspa_consensus_core::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(body);
+    let draft = family_material_draft_id_v2(contract, target, submitter, body.len() as u64, hash, &quote)?;
+    let count = body.len().div_ceil(FAMILY_MATERIAL_PART_BYTES_V1).checked_add(2).ok_or("independent draft control count overflow")?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(count).map_err(|e| e.to_string())?;
+    let mut push = |version, action| -> Result<(), String> {
+        out.push(
+            sign_family_material_v1(
+                SignedFamilyMaterialV1 { version, contract, target, submitter, action, signature: vec![] },
+                network,
+                |who, message, context| sign(who, message, context),
+            )
+            .ok_or("independent draft signing key unavailable")?,
+        );
+        Ok(())
+    };
+    push(2, FamilyMaterialActionV1::BeginReserved { total_bytes: body.len() as u64, body_hash: hash, quote })?;
+    for (n, bytes) in body.chunks(FAMILY_MATERIAL_PART_BYTES_V1).enumerate() {
+        push(
+            1,
+            FamilyMaterialActionV1::Part {
+                draft,
+                offset: (n as u64).checked_mul(FAMILY_MATERIAL_PART_BYTES_V1 as u64).ok_or("independent draft offset overflow")?,
+                bytes: bytes.to_vec(),
+            },
+        )?;
+    }
+    push(1, FamilyMaterialActionV1::Finish { draft })?;
+    Ok(out)
+}
 pub fn family_material_object_v1(control: SignedFamilyMaterialV1) -> PalwConsensusObjectV2 {
     PalwConsensusObjectV2::CourtFamilyMaterialV1 { control: Box::new(control) }
 }
@@ -145,6 +201,7 @@ mod tests {
                     restored.extend_from_slice(bytes);
                 }
                 FamilyMaterialActionV1::Finish { draft: id } => assert_eq!(draft, Some(*id)),
+                FamilyMaterialActionV1::BeginReserved { .. } => panic!("legacy builder must preserve literal V1 Begin"),
             }
         }
         assert_eq!(restored, body);
@@ -163,4 +220,16 @@ mod tests {
         assert!(result.is_err());
         assert!(!called);
     }
+}
+
+/// Explicit new wire framing with lossless aliases for identical literal
+/// supplier/sponsor signatures. Logical signatures and both verifications stay
+/// independent. Existing V2 wrappers keep their original bytes.
+pub fn wrap_funded_original_with_table_v3(
+    literal_tfo1: Vec<u8>,
+    mut suppliers: Vec<SignedFamilySupplierV1>,
+    semantic_table: Option<Vec<u8>>,
+) -> Result<Vec<u8>, String> {
+    suppliers.sort_by_key(|s| s.terms.role);
+    PalwTirFundedOriginalEnvelopeV2 { version: 3, funded_original: literal_tfo1, suppliers, semantic_table }.encode_v2()
 }

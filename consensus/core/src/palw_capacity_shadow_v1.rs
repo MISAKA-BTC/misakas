@@ -703,7 +703,9 @@ pub fn palw_capacity_route_of_record_v1(
             Some(PalwVoidReasonV2::CourtHeldVerdict) => PalwCapacityRouteV1::CourtHeldVerdict,
             _ => PalwCapacityRouteV1::Other,
         },
-        PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => PalwCapacityRouteV1::Refuted,
+        PalwOffenceKindV1::ExecutorRefuted | PalwOffenceKindV1::TirIdentityMismatch | PalwOffenceKindV1::PrefixExportRefuted => {
+            PalwCapacityRouteV1::Refuted
+        }
         PalwOffenceKindV1::PanelFalseValidV2 => PalwCapacityRouteV1::SeatFinding,
         PalwOffenceKindV1::ExecutorEquivocation | PalwOffenceKindV1::PanelFalseValid | PalwOffenceKindV1::CourtExecutorGuilty => {
             PalwCapacityRouteV1::Other

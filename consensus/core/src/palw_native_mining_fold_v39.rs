@@ -1007,7 +1007,6 @@ pub(super) fn write_native39_settlement_checkpoint_v1(
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     use crate::palw_native_settlement_v1::*;
-    use crate::palw_native39_frontier_v1::*;
     use crate::palw_native39_settlement_checkpoint_v1::*;
     let Some(context) = builder.extras.native39_settlement_checkpoint else { return Ok(()) };
     if !context.retirement.activation.is_active(ctx.daa_score) || ctx.daa_score < context.evm_activation_daa {

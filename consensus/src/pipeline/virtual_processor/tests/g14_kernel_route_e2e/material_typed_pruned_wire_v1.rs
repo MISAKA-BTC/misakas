@@ -133,6 +133,17 @@ impl WireNode {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires completed retained source, explicit new run directory and exclusive source DB closure"]
 async fn retained_source_tcp_pruned_ibd_publishes_real_staging_and_relays_one_new_block() {
+    retained_source_tcp_pruned_ibd(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires completed retained source, explicit new run directory and exclusive source DB closure"]
+async fn rfc37_retained_source_tcp_rows_full_import_new_block_and_cold_reopen() {
+    retained_source_tcp_pruned_ibd(true).await;
+}
+
+async fn retained_source_tcp_pruned_ibd(rows: bool) {
+    let before_rows = kaspa_p2p_flows::ibd::IbdFlow::last_authenticated_row_snapshot_v1();
     let original = required_path("MISAKA_RFC12_PRUNED_SOURCE_DB_V1").canonicalize().expect("completed source required");
     let requested = required_path("MISAKA_RFC12_PRUNED_WIRE_RUN_V1");
     let run = requested.parent().unwrap().canonicalize().unwrap().join(requested.file_name().unwrap());
@@ -151,7 +162,11 @@ async fn retained_source_tcp_pruned_ibd_publishes_real_staging_and_relays_one_ne
     let point: Hash64 = manifest.pruning_point.parse().unwrap();
     let tip: Hash64 = manifest.tip.parse().unwrap();
     let release: Hash64 = manifest.release.parse().unwrap();
-    let (cfg, bundle, premine, floats) = config();
+    let (mut cfg, bundle, premine, floats) = config();
+    cfg.palw_row_stream_ibd = rows;
+    if rows {
+        assert!(cfg.params.palw_fork_choice_commitment_v1.is_none(), "row fixture must use the adopted flat-header commitment");
+    }
     assert_eq!(cfg.params.genesis.hash.to_string(), manifest.genesis);
     assert_eq!(cfg.params.consensus_params_id().to_string(), manifest.consensus_params_id);
     assert_ne!(point, cfg.params.genesis.hash);
@@ -252,7 +267,8 @@ async fn retained_source_tcp_pruned_ibd_publishes_real_staging_and_relays_one_ne
         assert!(!peers.is_empty());
         for peer in peers {
             let negotiated = peer.properties().protocol_version;
-            assert_eq!(negotiated, current, "same-build native fixture cannot silently fall back to an older dialect");
+            let expected = if rows { 109 } else { current };
+            assert_eq!(negotiated, expected, "both nodes must negotiate exactly their explicit local opt-in dialect");
             assert!(negotiated >= complete_snapshot, "snapshot must include native complete material and declarations");
             assert!(
                 negotiated >= prefix_history,
@@ -264,6 +280,8 @@ async fn retained_source_tcp_pruned_ibd_publishes_real_staging_and_relays_one_ne
         }
     }
     source.announce(tip).await;
+    // This is one finite transfer, not an operational campaign. Keep the
+    // existing retained-source bound; an unavailable source is a hard failure.
     let deadline = Instant::now() + Duration::from_secs(7200);
     let mut last = None;
     loop {
@@ -298,6 +316,46 @@ async fn retained_source_tcp_pruned_ibd_publishes_real_staging_and_relays_one_ne
     assert!(epoch.epoch > 0 && epoch.active.is_none() && !epoch.utxos_started && !epoch.utxos_imported);
     drop(target_active);
     compare_wire_nodes(&source_factory, &target_factory, &bundle, tip, root, &consents);
+    if rows {
+        let receipt =
+            kaspa_p2p_flows::ibd::IbdFlow::last_authenticated_row_snapshot_v1().expect("codec2 full inventory was actually received");
+        assert!(receipt.0 > before_rows.map_or(0, |old| old.0), "negotiation or codec1 fallback alone cannot pass this fixture");
+        assert_eq!(receipt.1, point);
+        let source = source_factory.retained_fixture_active_consensus_v1();
+        let (snapshot_point, state) = source
+            .storage
+            .palw_state_v2_store
+            .read()
+            .load_pruning_snapshot_retained_v1(&bundle.state)
+            .unwrap()
+            .expect("canonical source snapshot remains servable");
+        assert_eq!(snapshot_point, point);
+        assert_eq!(state.state_root(), receipt.2, "source matches actual row-authenticated root");
+        assert!(
+            state.kernel_route_state_v1().is_some(),
+            "this is the retained native/material source, not an empty genesis codec fixture"
+        );
+        let Some(kaspa_consensus_core::palw_material_release_recovery_v2::PalwMaterialRecoveryRowV2::Terminal(terminal)) =
+            state.material_recovery_row_v2(root)
+        else {
+            panic!("the row generation's native suffix must itself retain the actual material terminal receipt");
+        };
+        for consent in consents {
+            assert!(terminal.covers(root, consent), "both real material generations are in the pruning snapshot");
+        }
+        let mut count = 0;
+        state
+            .visit_direct_state_root_collections_v1(|_, _, _, _| {
+                count += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(receipt.3, count, "the real peer delivered the entire canonical inventory");
+        eprintln!(
+            "RFC37_WIRE_V1 codec=2 generation=1 point={point} state_root={} collections={} actual_receive_sequence={}",
+            receipt.2, receipt.3, receipt.0
+        );
+    }
 
     let now = reader.simulated_time.checked_add(cfg.params.target_time_per_block()).unwrap();
     source_clock.advance(now);
@@ -358,7 +416,7 @@ async fn retained_source_tcp_pruned_ibd_publishes_real_staging_and_relays_one_ne
     drop(cold_factory);
     source.stop().await;
     eprintln!(
-        "PRUNED_WIRE_V1 actual_tcp_factory_staging_session_snapshot_cold_and_newblock=PASS run={run:?} full_daemon_args_os_crash_campaign=NOT_RUN"
+        "PRUNED_WIRE_V1 actual_tcp_factory_staging_session_snapshot_cold_and_newblock=PASS rows={rows} run={run:?} full_daemon_args_os_crash_campaign=NOT_RUN"
     );
 }
 
@@ -400,3 +458,6 @@ fn compare_wire_nodes(
         assert_eq!(lhs, rhs);
     }
 }
+
+#[path = "material_typed_pruned_wire_fp_v1.rs"]
+pub(in crate::pipeline::virtual_processor::tests) mod actual_fp_v1;

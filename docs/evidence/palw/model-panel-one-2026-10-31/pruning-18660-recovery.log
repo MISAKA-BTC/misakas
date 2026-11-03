@@ -1,0 +1,12 @@
+2026-10-31 14:51:06.123+01:00 [INFO ] Periodic pruning point movement: advancing from a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23 to 86a176cd3d3b29d18b4e9cb6c3773f4ce03ccb165d06dc465d32ab7a5d825e39a262596d4ac5f914957a87df0259aafc2830668be9cf99a2b26f8ecb341b23c1
+2026-10-31 14:51:06.512+01:00 [INFO ] Updated the pruning point UTXO set
+2026-10-31 15:37:30.570+01:00 [INFO ] PALW: captured and verified the V2 state at pruning point 86a176cd3d3b29d18b4e9cb6c3773f4ce03ccb165d06dc465d32ab7a5d825e39a262596d4ac5f914957a87df0259aafc2830668be9cf99a2b26f8ecb341b23c1
+2026-10-31 15:37:30.571+01:00 [INFO ] Header and Block pruning: preparing proof and anticone data...
+2026-10-31 15:38:27.858+01:00 [INFO ] Header and Block pruning: waiting for consensus write permissions...
+2026-10-31 15:38:40.150+01:00 [INFO ] Starting Header and Block pruning...
+2026-10-31 15:38:40.419+01:00 [INFO ] Header and Block pruning: updated ghostdag data for 0 blocks
+2026-10-31 15:38:40.542+01:00 [INFO ] Header and Block pruning: starting traversal from: a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23 (genesis: a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23)
+2026-10-31 15:38:40.781+01:00 [INFO ] Header and Block pruning completed: traversed: 613, pruned 0
+2026-10-31 15:38:40.781+01:00 [INFO ] Header and Block pruning stats: proof size: 839, pruning point and anticone: 1, unique headers in proof and windows: 614, pruning points in history: 1
+2026-10-31 15:38:40.837+01:00 [INFO ] Proof was rebuilt successfully following pruning
+2026-10-31 15:39:03.901+01:00 [INFO ] Trusted data was rebuilt successfully following pruning

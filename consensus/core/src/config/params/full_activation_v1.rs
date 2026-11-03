@@ -247,10 +247,11 @@ pub const PALW_T12_FULL_ACTIVATION_FENCES_V1: &[PalwPostLaunchFenceV1] = &[
     PALW_T12_FULL_NATIVE_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_REWARD_LIABILITY_HORIZON_ENTRY,
     PALW_T12_FULL_UNRESOLVED_BOUND_ENTRY,
-    // `palw_claim_local_settlement_v1` (RFC-0023 stage 2) is NOT on this list (audit fix-cd): its validation refuses every armed
-    // height ("material retention / transition drills are unmeasured"), which no code change can supply, so with it the list could
-    // never validate as a whole. Rule E's side frontier now reads the claim-local irreversible anchors past that fence (audit D-1),
-    // but the measurements remain the user's; it rejoins (before Gate C) with its measured record behind the standard gate.
+    // RFC-0023 stage 2 stays outside this list while the fixed reviewed
+    // readiness registry is empty. Its standard gate requires genuine retained
+    // campaign/drill/resource records for the exact genesis, height and Params.
+    // Rule E reads claim-local irreversible anchors after that separate fence;
+    // this inventory does not manufacture a measurement or arm its height.
     PALW_T12_FULL_GATE_C_ENTRY,
     PALW_T12_FULL_DAG_SIBLING_ATTRIBUTION_ENTRY,
     PALW_T12_FULL_PANEL_ANCHOR_PERMISSIONLESS_ENTRY,
@@ -504,7 +505,7 @@ pub fn palw_t12_arm_fence_list_at_v1(params: &mut Params, list: &[PalwPostLaunch
 /// baseline the full-activation flag day is judged against (the fork-id comparison, the "only this list moved it" twin). While both the
 /// int-13 height and this list's height are `None`, it equals [`palw_t12_release_v6_params`] (int-12, `5ee7fd8e…`), byte for byte.
 pub fn palw_t12_release_v7_params() -> Params {
-    let mut params = palw_t12_shipped_params();
+    let mut params = palw_t12_pre_model_panel_one_params_v1();
     // The int-13 entries stay at PALW_T12_INT13_DAA (15,500): this baseline is the public fleet's ruleset.
     palw_t12_arm_after_int13_at_v1(&mut params, PALW_T12_FULL_ACTIVATION_FENCES_V1, None);
     // The G14 17,000 list too (its value entries — allocation, frame cost — are not on the full list).

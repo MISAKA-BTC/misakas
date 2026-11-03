@@ -300,6 +300,8 @@ provider court は consensus 変更なので独立 fence とし、§4.2 の条�
 
 ## 共通post-commit challengeとremote status — 2026-10-08
 
+> **2026-10-15ユーザー恒久決定による除外:** 本節の `GKR transcript` によってモデル計算の正しさを検証する旧記述は、[PRINCIPLES §8](../PRINCIPLES.md)により除外する。履歴として保存するが、採用候補・実装・検証要件として使用しない。
+
 新しいKernel/model onboarding、claim/EXEC slice検査は[RFC07 Part VI](0007-palw-verification-certificates-and-algebraic-checks.md#post-commit-challenge-protocol)だけを使う。remote clientもclass/policy、canonical commitment、qualifying future workとFinal/settlement provenanceからseed・queries・GKR transcriptを検証し、remote worker/operatorのseedを信頼しない。既存receipt quantum/ticketのbeacon規則とは別のversioned契約であり、今回の文書で再解釈しない。
 
 RFC11 §17 / RFC13 §9のRegisteredDormant、WaitingRandomness、ConformancePassed、ActiveRewardableを明示し、beacon待ちはdurable idからresumeできる。artifact/layout/plan/implementation変更は古いevidenceを無効にする。source不足をheartbeat/BASE-0/EXEC hash・BFT/DNS署名で補わず、candidate/verificationだけをpending/既定deadline扱いにする。source/constraint/G14不足を「registered/active成功」と表示せず、fraud proofの客観性・担保・public material条件を維持する。runtime・activationは変更しない。

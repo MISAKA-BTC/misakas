@@ -380,13 +380,19 @@ mod tests {
 /// retained by this claim's supplier contract. The returned trait object owns the
 /// native allocation ticket for as long as the court worker uses the operand.
 pub(crate) fn public_table_for_claim_v1(
-    consensus:&kaspa_consensusmanager::ConsensusProxy,
-    claim:Hash64,root:&Hash64,tokenizer:&Hash64,
-)->Result<Arc<dyn PalwPublicTokenTableSourceV1>,String>{
-    if let Some(local)=public_table_v1(root,tokenizer){return Ok(local)}
-    let held=consensus.with_consensus_api_v1(|api|api.palw_rooted_family_table_v1(claim)).map_err(|e|e.to_string())?
+    consensus: &kaspa_consensusmanager::ConsensusProxy,
+    claim: Hash64,
+    root: &Hash64,
+    tokenizer: &Hash64,
+) -> Result<Arc<dyn PalwPublicTokenTableSourceV1>, String> {
+    if let Some(local) = public_table_v1(root, tokenizer) {
+        return Ok(local);
+    }
+    let held = consensus
+        .with_consensus_api_v1(|api| api.palw_rooted_family_table_v1(claim))
+        .map_err(|e| e.to_string())?
         .ok_or("claim's literal semantic table material is unavailable")?;
-    if held.root_v1()!=*root||held.tokenizer_id_v1()!=*tokenizer{
+    if held.root_v1() != *root || held.tokenizer_id_v1() != *tokenizer {
         return Err("rooted table changes requested original root/tokenizer".into());
     }
     Ok(Arc::new(held))

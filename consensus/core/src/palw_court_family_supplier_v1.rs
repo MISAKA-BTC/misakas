@@ -167,7 +167,9 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             }
             let shape = match (key.len(), key.first().copied()) {
                 (64, _) => preflight_native_value_v1::<FamilySupplierRowV1>(bytes.as_slice(), bytes.len() as u64),
+                (65, Some(4)) => preflight_native_value_v1::<FamilyCarrierProjectionRowV3>(bytes.as_slice(), bytes.len() as u64),
                 (65, Some(1)) => preflight_native_value_v1::<FamilySupplierStatusV2>(bytes.as_slice(), bytes.len() as u64),
+                (129, Some(3)) => preflight_native_value_v1::<FamilyPrimaryWindowV2>(bytes.as_slice(), bytes.len() as u64),
                 (129, Some(2)) => {
                     quote.exact_v1::<BTreeNodeEnvelopeV1<Hash64, Hash64>>(1).map_err(E::NativeResource)?;
                     preflight_native_value_v1::<FamilySupplierCompletionV2>(bytes.as_slice(), bytes.len() as u64)
@@ -203,8 +205,42 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             rows.push((id, row));
         }
         let mut statuses = 0usize;
+        let mut carrier_facts = 0usize;
         for ((table, key), bytes) in &route.aux {
             if *table != FAMILY_SUPPLIER_TABLE_V1 || key.len() == 64 {
+                continue;
+            }
+            if key.len() == 65 && key[0] == 4 {
+                let facts: FamilyCarrierProjectionRowV3 = borsh::from_slice(bytes).map_err(|_| bad())?;
+                let index = rows.binary_search_by_key(&facts.contract, |p| p.0).map_err(|_| bad())?;
+                let row = &rows[index].1;
+                if facts.version != 3
+                    || key.as_slice() != family_carrier_projection_key_v3(facts.contract)
+                    || facts.claim != row.consent.terms.claim
+                    || facts.accepted_daa != row.accepted_daa
+                    || facts.source != row.consent.terms.source
+                    || facts.allocation != row.allocation
+                    || facts.accepted_block == Hash64::default()
+                    || facts.funding_contract == Hash64::default()
+                    || signed_profile_generation_v3(&row.consent.terms).map_err(|_| bad())? != 3
+                {
+                    return Err(bad());
+                }
+                facts.facts.check_v3().map_err(|_| bad())?;
+                carrier_facts += 1;
+                continue;
+            }
+            if key.len() == 129 && key[0] == 3 {
+                let w: FamilyPrimaryWindowV2 = borsh::from_slice(bytes).map_err(|_| bad())?;
+                let index = rows.binary_search_by_key(&w.contract, |p| p.0).map_err(|_| bad())?;
+                let row = &rows[index].1;
+                if !matches!(signed_profile_generation_v3(&row.consent.terms).map_err(|_| bad())?, 2 | 3)
+                    || w.version != 2
+                    || key.as_slice() != family_primary_window_key_v2(w.contract, w.target)
+                    || row.targets.binary_search_by_key(&w.target, |t| t.id).is_err()
+                {
+                    return Err(bad());
+                }
                 continue;
             }
             if key.len() == 65 {
@@ -236,6 +272,12 @@ impl crate::palw_state_v2::PalwChainStateV2 {
                     return Err(bad());
                 }
             }
+        }
+        let expected_carriers = rows.iter().try_fold(0usize, |n, (_, row)| {
+            Ok::<_, E>(n + usize::from(signed_profile_generation_v3(&row.consent.terms).map_err(|_| bad())? == 3))
+        })?;
+        if carrier_facts != expected_carriers {
+            return Err(bad());
         }
         if statuses != rows.len() {
             return Err(bad());
@@ -383,10 +425,10 @@ impl crate::config::params::Params {
                 "family supplier fence requires ConsensusV2/public TIR/material intake/settlement/material income at or before it",
             ));
         }
-        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode {
-            if bundle.state.family_supplier_from() != Some(at.daa_score()) {
-                return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("family supplier activation mirror must be synchronized"));
-            }
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.family_supplier_from() != Some(at.daa_score())
+        {
+            return Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("family supplier activation mirror must be synchronized"));
         }
         Ok(())
     }
@@ -553,3 +595,61 @@ crate::palw_native_resource_v1::native_struct!(FamilySupplierStatusV2;version,co
 crate::palw_native_resource_v1::native_struct!(FamilySupplierCompletionV2;version,contract,target,digest);
 crate::palw_native_resource_v1::wire::wire_struct!(FamilySupplierStatusV2;u16,Hash64,Option<u64>,FamilySupplierFeeStateV1);
 crate::palw_native_resource_v1::wire::wire_struct!(FamilySupplierCompletionV2;u16,Hash64,Hash64,Hash64);
+
+/// New-profile native calendar birth. This immutable sidecar records the
+/// selected concrete packing, while signatures retain the relative inventory,
+/// existing inclusion interval, hard and material horizons.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub(crate) struct FamilyPrimaryWindowV2 {
+    pub version: u16,
+    pub contract: Hash64,
+    pub target: Hash64,
+    pub first_daa: u64,
+    pub span_daa: u64,
+}
+pub(crate) fn family_primary_window_key_v2(contract: Hash64, target: Hash64) -> [u8; 129] {
+    let mut key = [0u8; 129];
+    key[0] = 3;
+    key[1..65].copy_from_slice(contract.as_byte_slice());
+    key[65..].copy_from_slice(target.as_byte_slice());
+    key
+}
+crate::palw_native_resource_v1::native_struct!(FamilyPrimaryWindowV2;version,contract,target,first_daa,span_daa);
+crate::palw_native_resource_v1::wire::wire_struct!(FamilyPrimaryWindowV2;u16,Hash64,Hash64,u64,u64);
+
+/// Exact signed profile dispatch; a matching fee hash alone cannot silently
+/// choose a different inventory, capital, retention or settlement derivation.
+pub(crate) fn signed_profile_generation_v3(terms: &FamilySupplierTermsV1) -> Result<u16, String> {
+    let signed = [terms.fee_profile, terms.capital_profile, terms.retention_profile, terms.settlement_policy];
+    if signed == crate::palw_state_v2::family_supplier_profiles_v1().map_err(|e| e.to_string())? {
+        Ok(1)
+    } else if signed == crate::palw_state_v2::family_supplier_profiles_v2().map_err(|e| e.to_string())? {
+        Ok(2)
+    } else if signed == crate::palw_state_v2::family_supplier_profiles_v3().map_err(|e| e.to_string())? {
+        Ok(3)
+    } else {
+        Err("family contract unknown signed derivation profiles".into())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub(crate) struct FamilyCarrierProjectionRowV3 {
+    pub version: u16,
+    pub contract: Hash64,
+    pub claim: Hash64,
+    pub accepted_daa: u64,
+    pub accepted_block: Hash64,
+    pub accepted_blue_score: u64,
+    pub source: Hash64,
+    pub allocation: Hash64,
+    pub funding_contract: Hash64,
+    pub facts: crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3,
+}
+pub(crate) fn family_carrier_projection_key_v3(contract: Hash64) -> [u8; 65] {
+    let mut key = [0; 65];
+    key[0] = 4;
+    key[1..].copy_from_slice(contract.as_byte_slice());
+    key
+}
+crate::palw_native_resource_v1::native_struct!(FamilyCarrierProjectionRowV3;version,contract,claim,accepted_daa,accepted_block,accepted_blue_score,source,allocation,funding_contract,facts);
+crate::palw_native_resource_v1::wire::wire_struct!(FamilyCarrierProjectionRowV3;u16,Hash64,Hash64,u64,Hash64,u64,Hash64,Hash64,Hash64,crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3);

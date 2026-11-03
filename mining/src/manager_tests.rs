@@ -2236,34 +2236,61 @@ mod tests {
     /// Pool policy control using the real revalidation and template-cleanup
     /// paths. Local collateral reads make no new transaction validity decision.
     #[test]
-    fn native_bond_exit_local_retry_retains_pool_descendants_and_never_spins_template_cleanup(){
-        let consensus=Arc::new(ConsensusMock::new());
-        let manager=MiningManager::new(TARGET_TIME_PER_BLOCK,false,MAX_BLOCK_MASS,None,Arc::new(MiningCounters::default()));
-        let (parent,spend)=create_parent_and_children_transactions(&consensus,vec![3000*SOMPI_PER_KASPA]);
-        consensus.add_transaction(parent,0);
-        let descendant=create_transaction(&spend,1000);
-        for tx in [&spend,&descendant]{manager.validate_and_insert_transaction(consensus.as_ref(),tx.clone(),Priority::High,Orphan::Forbidden,RbfPolicy::Forbidden).unwrap();}
-        let errors=[
-            TxRuleError::LocalNativeCapacityUnavailable(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<u8>("own exit reader","temporarily held memory")),
-            TxRuleError::LocalNativeStateContextUnavailable(kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable),
-        ];
-        for error in errors{
-            let classified:RuleError=error.clone().into();
-            assert!(classified.is_local_native_retry_v1());
-            consensus.set_status(spend.id(),Err(error.clone()));
-            let (sender,_receiver)=unbounded_channel();
-            manager.revalidate_high_priority_transactions(consensus.as_ref(),sender);
-            assert_transaction_count(&manager,2,"local revalidation is not invalidity");
-            assert!(manager.has_transaction(&descendant.id(),TransactionQuery::All));
-            let invalid=std::collections::HashMap::from([(spend.id(),error)]);
-            assert!(matches!(manager.remove_invalid_block_template_transactions(invalid),Err(kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(_)|kaspa_consensus_core::errors::block::RuleError::LocalNativeStateContextUnavailable(_))),"end this build attempt instead of remove-and-retry on an unchanged pool");
-            assert_transaction_count(&manager,2,"template local retry preserves both entries");
+    fn native_bond_exit_local_retry_retains_pool_descendants_and_never_spins_template_cleanup() {
+        let consensus = Arc::new(ConsensusMock::new());
+        let manager = MiningManager::new(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS, None, Arc::new(MiningCounters::default()));
+        let (parent, spend) = create_parent_and_children_transactions(&consensus, vec![3000 * SOMPI_PER_KASPA]);
+        consensus.add_transaction(parent, 0);
+        let descendant = create_transaction(&spend, 1000);
+        for tx in [&spend, &descendant] {
+            manager
+                .validate_and_insert_transaction(
+                    consensus.as_ref(),
+                    tx.clone(),
+                    Priority::High,
+                    Orphan::Forbidden,
+                    RbfPolicy::Forbidden,
+                )
+                .unwrap();
         }
-        consensus.set_status(spend.id(),Ok(()));
-        let (sender,mut receiver)=unbounded_channel();
-        manager.revalidate_high_priority_transactions(consensus.as_ref(),sender);
-        assert!(receiver.blocking_recv().unwrap().contains(&spend.id()),"the identical transaction is revalidated once own context recovers");
-        assert_transaction_count(&manager,2,"no txid invalid cache was poisoned");
+        let errors = [
+            TxRuleError::LocalNativeCapacityUnavailable(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<u8>(
+                    "own exit reader",
+                    "temporarily held memory",
+                ),
+            ),
+            TxRuleError::LocalNativeStateContextUnavailable(
+                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+            ),
+        ];
+        for error in errors {
+            let classified: RuleError = error.clone().into();
+            assert!(classified.is_local_native_retry_v1());
+            consensus.set_status(spend.id(), Err(error.clone()));
+            let (sender, _receiver) = unbounded_channel();
+            manager.revalidate_high_priority_transactions(consensus.as_ref(), sender);
+            assert_transaction_count(&manager, 2, "local revalidation is not invalidity");
+            assert!(manager.has_transaction(&descendant.id(), TransactionQuery::All));
+            let invalid = std::collections::HashMap::from([(spend.id(), error)]);
+            assert!(
+                matches!(
+                    manager.remove_invalid_block_template_transactions(invalid),
+                    Err(kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(_)
+                        | kaspa_consensus_core::errors::block::RuleError::LocalNativeStateContextUnavailable(_))
+                ),
+                "end this build attempt instead of remove-and-retry on an unchanged pool"
+            );
+            assert_transaction_count(&manager, 2, "template local retry preserves both entries");
+        }
+        consensus.set_status(spend.id(), Ok(()));
+        let (sender, mut receiver) = unbounded_channel();
+        manager.revalidate_high_priority_transactions(consensus.as_ref(), sender);
+        assert!(
+            receiver.blocking_recv().unwrap().contains(&spend.id()),
+            "the identical transaction is revalidated once own context recovers"
+        );
+        assert_transaction_count(&manager, 2, "no txid invalid cache was poisoned");
     }
 
     fn all_priority_orphan_rbf_policy_combinations() -> impl Iterator<Item = (Priority, Orphan, RbfPolicy)> {

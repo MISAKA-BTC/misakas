@@ -372,7 +372,8 @@ pub fn prepare_unsigned_kernel_candidate_v4(
     commit_daa: u64,
     raw_depth: Option<u64>,
 ) -> Result<ReservedKernelLedgerV1, String> {
-    prepare_unsigned_kernel_candidate_checked_v4(state, params, producer, commit, salt, commit_daa, raw_depth).map_err(|error|error.to_string())
+    prepare_unsigned_kernel_candidate_checked_v4(state, params, producer, commit, salt, commit_daa, raw_depth)
+        .map_err(|error| error.to_string())
 }
 /// Classified preparation; local capacity/context never becomes collateral shortage.
 pub fn prepare_unsigned_kernel_candidate_checked_v4(
@@ -423,7 +424,8 @@ pub fn prospective_kernel_material_v4(
     max_bytes: u64,
     verify_mldsa: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> Result<PalwProspectiveKernelMaterialOwnedV4, String> {
-    prospective_kernel_material_checked_v4(state, params, checkpoint, now_daa, raw_depth, request, max_bytes, verify_mldsa).map_err(|error|error.to_string())
+    prospective_kernel_material_checked_v4(state, params, checkpoint, now_daa, raw_depth, request, max_bytes, verify_mldsa)
+        .map_err(|error| error.to_string())
 }
 /// Classified preparation; local capacity/context never becomes collateral shortage.
 pub fn prospective_kernel_material_checked_v4(
@@ -495,9 +497,8 @@ pub fn prospective_kernel_material_checked_v4(
         return Err("prospective enrollment requires the complete v4 codec, including immutable artifacts".into());
     }
     let coverage = crate::palw_material_capacity_v1::prospective_kernel_bundle_requests_v4(&request.bundle)?;
-    let _bundle_decode_lease =
-        crate::palw_native_resource_v1::reserve_native_requests_v1(coverage.bytes().ok_or(coverage)?)
-            .map_err(PalwMaterialQuoteFaultV4::from)?;
+    let _bundle_decode_lease = crate::palw_native_resource_v1::reserve_native_requests_v1(coverage.bytes().ok_or(coverage)?)
+        .map_err(PalwMaterialQuoteFaultV4::from)?;
     candidate.try_reserve_kernel_material_v4(&root).map_err(PalwMaterialQuoteFaultV4::from)?;
     let auth = crate::palw_material_capacity_v1::prospective_kernel_bundle_auth_requests_v4(&request.bundle, &candidate)?;
     let _bundle_auth_lease = crate::palw_native_resource_v1::reserve_native_requests_v1(auth.bytes().ok_or(auth)?)
@@ -526,7 +527,8 @@ pub fn prospective_kernel_material_checked_v4(
     let mut provider_pubkeys = std::array::from_fn(|_| None);
     for (index, key) in intent.providers.iter().enumerate() {
         let provider = state.bond(key).ok_or("provider native bond absent")?;
-        provider_pubkeys[index] = Some((*key, NativeRetainedV1::try_from_clone_v1(&provider.pubkey).map_err(PalwMaterialQuoteFaultV4::from)?));
+        provider_pubkeys[index] =
+            Some((*key, NativeRetainedV1::try_from_clone_v1(&provider.pubkey).map_err(PalwMaterialQuoteFaultV4::from)?));
     }
     Ok(PalwProspectiveKernelMaterialOwnedV4 {
         producer_pubkey,
@@ -737,7 +739,7 @@ mod tests {
 
 /// Local state/capacity failures are distinct from a refused preparation request.
 /// This is a read-side quote error, never admission or payment authority.
-#[derive(Debug,Clone,PartialEq,Eq,thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PalwMaterialQuoteFaultV4 {
     #[error("local quote state unavailable: {0}")]
     State(#[from] crate::palw_state_v2::PalwStateV2Error),
@@ -746,35 +748,72 @@ pub enum PalwMaterialQuoteFaultV4 {
     #[error("{0}")]
     Material(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1),
 }
-impl From<String> for PalwMaterialQuoteFaultV4 {fn from(s:String)->Self{Self::Refused(s)}}
-impl From<&str> for PalwMaterialQuoteFaultV4 {fn from(s:&str)->Self{Self::Refused(s.into())}}
-impl From<crate::palw_native_resource_v1::NativeCoverageV1> for PalwMaterialQuoteFaultV4 {
-    fn from(e:crate::palw_native_resource_v1::NativeCoverageV1)->Self{Self::State(crate::palw_state_v2::PalwStateV2Error::NativeResource(e))}
+impl From<String> for PalwMaterialQuoteFaultV4 {
+    fn from(s: String) -> Self {
+        Self::Refused(s)
+    }
 }
-impl<E:std::fmt::Display> From<crate::palw_native_resource_v1::NativeDecodeErrorV1<E>> for PalwMaterialQuoteFaultV4 {
-    fn from(e:crate::palw_native_resource_v1::NativeDecodeErrorV1<E>)->Self{match e{
-        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e)=>e.into(),
-        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e)=>Self::Refused(e.to_string()),
-    }}
+impl From<&str> for PalwMaterialQuoteFaultV4 {
+    fn from(s: &str) -> Self {
+        Self::Refused(s.into())
+    }
+}
+impl From<crate::palw_native_resource_v1::NativeCoverageV1> for PalwMaterialQuoteFaultV4 {
+    fn from(e: crate::palw_native_resource_v1::NativeCoverageV1) -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeResource(e))
+    }
+}
+impl<E: std::fmt::Display> From<crate::palw_native_resource_v1::NativeDecodeErrorV1<E>> for PalwMaterialQuoteFaultV4 {
+    fn from(e: crate::palw_native_resource_v1::NativeDecodeErrorV1<E>) -> Self {
+        match e {
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => e.into(),
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => Self::Refused(e.to_string()),
+        }
+    }
 }
 
 impl From<std::io::Error> for PalwMaterialQuoteFaultV4 {
-    fn from(e:std::io::Error)->Self{match e.kind(){
-        std::io::ErrorKind::OutOfMemory=>crate::palw_native_resource_v1::NativeCoverageV1::overflow::<PalwProspectiveKernelMaterialOwnedV4>("material quote shape scan").into(),
-        std::io::ErrorKind::Unsupported|std::io::ErrorKind::TimedOut=>crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwProspectiveKernelMaterialOwnedV4>("material quote shape scan",&e.to_string()).into(),
-        _=>Self::Refused(e.to_string()),
-    }}
+    fn from(e: std::io::Error) -> Self {
+        match e.kind() {
+            std::io::ErrorKind::OutOfMemory => crate::palw_native_resource_v1::NativeCoverageV1::overflow::<
+                PalwProspectiveKernelMaterialOwnedV4,
+            >("material quote shape scan")
+            .into(),
+            std::io::ErrorKind::Unsupported | std::io::ErrorKind::TimedOut => {
+                crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwProspectiveKernelMaterialOwnedV4>(
+                    "material quote shape scan",
+                    &e.to_string(),
+                )
+                .into()
+            }
+            _ => Self::Refused(e.to_string()),
+        }
+    }
 }
 
 impl PalwMaterialQuoteFaultV4 {
-    pub fn capacity_unavailable_v4()->Self{Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable))}
-    pub fn history_unavailable_v4()->Self{Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable))}
-    pub fn store_unreadable_v4()->Self{Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::StoreUnreadable))}
+    pub fn capacity_unavailable_v4() -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+        ))
+    }
+    pub fn history_unavailable_v4() -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+        ))
+    }
+    pub fn store_unreadable_v4() -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::StoreUnreadable,
+        ))
+    }
 }
 
 impl From<crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> for PalwMaterialQuoteFaultV4 {
-    fn from(e:crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1)->Self{match e{
-        crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::LocalResource(resource)=>resource.into(),
-        other=>Self::Material(other),
-    }}
+    fn from(e: crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1) -> Self {
+        match e {
+            crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::LocalResource(resource) => resource.into(),
+            other => Self::Material(other),
+        }
+    }
 }

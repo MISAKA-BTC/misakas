@@ -512,7 +512,7 @@ impl VirtualStateProcessor {
             // G14 item 1 (RFC-0035 A): a TFO1 carrier burns its literal TFP1's declared rent exactly as that TFP1 carrier would, so
             // the coordinator's native rent check (`prepare_paired_original_v1`) reads a burn that actually happened. Refused or
             // admitted, the rent is destroyed (the TFP1 rule); the funding output is untouched (it is an output, not fee).
-            if (payload.starts_with(b"TFO1") || payload.starts_with(b"TFO2")) {
+            if payload.starts_with(b"TFO1") || payload.starts_with(b"TFO2") {
                 return kaspa_consensus_core::palw_tir_funded_original_envelope_v2::decode_funded_original_base_v2(payload)
                     .and_then(|envelope| envelope.original_v1())
                     .map(|original| original.declared_rent_sompi)

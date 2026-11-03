@@ -1502,73 +1502,307 @@ fn rfc40_export_reservation_survives_source_terminal_and_releases_only_after_mat
         }
     }
     let (registered, _) = apply(&PalwChainStateV2::genesis(), &base, &ctx(1, 100, 1), &registrations, None);
+    let mut p = base.with_claim_local_settlement_from_daa(Some(101));
+    p.econ_contracts_v1.horizon_extension =
+        Some((101, crate::palw_econ_contracts_v1::PalwHorizonExtensionPolicyV1::unapproved_probe_v1()));
+    // Explicit native rule material for this budget-boundary fixture. E's
+    // financial archive must retain its real supplied network/fork identity;
+    // the later closed-source seam uses the SAME supplied native ruleset.
+    let native_ruleset = crate::Hash::from_bytes([98; 32]);
+    let mut extras = PalwTransitionExtrasV1 {
+        claim_local_rule_context_v1: Some(([99; 32], [98; 32])),
+        native_fact_ruleset: Some(native_ruleset),
+        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+            network_domain: h64(99),
+            ruleset_digest: h64(98),
+            chain_genesis: h64(97),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    // Source birth itself uses the SAME active stage-2 rules and real native
+    // rule material. A later adapter must not retroactively activate an old
+    // untracked birth or manufacture an admission context at cold restore.
     let point = ctx(2, 101, 2);
     let id = h64(0xFC);
     let mut commit = fp_commit(0xFC, 20, 1);
     if let PalwConsensusObjectV2::FreePromptCommitted { executor_pubkey, .. } = &mut commit {
         *executor_pubkey = producer_key.clone();
     }
-    let (source, _) = apply(&registered, &base, &point, &[commit], None);
-    let mut p = base.with_claim_local_settlement_from_daa(Some(101));
-    p.econ_contracts_v1.horizon_extension = Some((101, crate::palw_econ_contracts_v1::PalwHorizonExtensionPolicyV1::unapproved_probe_v1()));
-    let mut extras = PalwTransitionExtrasV1 {
-        kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
-            network_domain: h64(99), ruleset_digest: h64(98), chain_genesis: h64(97), ..Default::default()
-        }),
-        ..Default::default()
-    };
+    let (source, _) =
+        apply_palw_transition_v2_with_extras(&registered, &p, &point, &[commit], None, false, false, false, false, &extras).unwrap();
+    assert!(
+        super::super::palw_claim_local_source_admission_v8::for_stored_claim_v8(&source, id, source.claim(&id).unwrap(),)
+            .unwrap()
+            .is_some(),
+        "actual active source admission owns its genuine birth archive"
+    );
+    assert!(super::super::palw_claim_local_checkpoint_fold_v1::stored_claim_local_checkpoint_v1(&source).unwrap().is_some());
     let intent = PalwPrefixExportIntentV1 {
-        version: 1, network: h64(99), source_namespace: 1, source_nonce: h64(9), base_commitment: id,
-        producer_key_id: crate::mldsa87_primitives::mldsa87_key_id(&producer_key), ordinal: 0,
+        version: 1,
+        network: h64(99),
+        source_namespace: 1,
+        source_nonce: h64(9),
+        base_commitment: id,
+        producer_key_id: crate::mldsa87_primitives::mldsa87_key_id(&producer_key),
+        ordinal: 0,
         prefix: crate::palw_freeprompt_v3::PalwFpPrefixStateV1 { state_root: h64(7), prefix_tokens: 2, class_id: h64(1) },
-        liability_until: 300, material_until: 400,
+        liability_until: 300,
+        material_until: 400,
     };
-    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
-        &keys.signing_key, intent.id_v1().as_byte_slice(), PREFIX_EXPORT_CONTEXT_V1, [72; 32],
-    ).unwrap().as_ref().to_vec();
-    extras.prefix_dependencies_v1.insert(id, PalwPrefixDependencyEnvelopeV1 {
-        inner: vec![1],
-        exports: vec![PalwSignedPrefixExportV1 { intent: intent.clone(), signature: vec![0; signature.len()] }],
-        consumed: None,
-    });
+    let signature =
+        libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key, intent.id_v1().as_byte_slice(), PREFIX_EXPORT_CONTEXT_V1, [72; 32])
+            .unwrap()
+            .as_ref()
+            .to_vec();
+    extras.prefix_dependencies_v1.insert(
+        id,
+        PalwPrefixDependencyEnvelopeV1 {
+            inner: vec![1],
+            exports: vec![PalwSignedPrefixExportV1 { intent: intent.clone(), signature: vec![0; signature.len()] }],
+            consumed: None,
+        },
+    );
     let mut refused = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+    refused.claim_local_lock_point_v6 = Some(point);
     assert!(super::super::palw_claim_local_prefix_reservation_v1::admit(&mut refused, &point, id).is_err());
     drop(refused);
-    extras.prefix_dependencies_v1.insert(id, PalwPrefixDependencyEnvelopeV1 {
-        inner: vec![1],
-        exports: vec![PalwSignedPrefixExportV1 { intent, signature }],
-        consumed: None,
-    });
+    extras.prefix_dependencies_v1.insert(
+        id,
+        PalwPrefixDependencyEnvelopeV1 {
+            inner: vec![1],
+            exports: vec![PalwSignedPrefixExportV1 { intent, signature }],
+            consumed: None,
+        },
+    );
+    for false_birth in [ctx(3, 101, 2), ctx(2, 102, 2), ctx(2, 101, 3)] {
+        let mut wrong_birth = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+        wrong_birth.claim_local_lock_point_v6 = Some(point);
+        assert!(
+            super::super::palw_claim_local_prefix_reservation_v1::admit(&mut wrong_birth, &false_birth, id).is_err(),
+            "valid producer signature cannot substitute the actual admitted block/DAA/blue score"
+        );
+        assert_eq!(wrong_birth.state.state_root(), source.state_root(), "refused birth installs no reservation");
+    }
     let mut builder = TransitionBuilder::new(&source, &p, false, false, false, false, &extras);
+    // Direct budget/financial-adapter boundary: supply the SAME real executing
+    // point which the ordinary native entry initializes before dispatch. This
+    // neither creates provenance nor bypasses the actual stored-birth checks.
+    builder.claim_local_lock_point_v6 = Some(point);
     let producer = source.claims.get(&id).unwrap().bond;
     let committed_before = builder.committed_at(&producer, point.daa_score).unwrap();
     super::super::palw_claim_local_prefix_reservation_v1::admit(&mut builder, &point, id).unwrap();
     let reservation = builder.state.prefix_export_reservation_v1(&point, id).unwrap().unwrap();
+    super::super::palw_claim_local_prefix_financial_archive_v4::assert_native_body_pin_replace_gc_reorg_cold_v4(
+        &mut builder,
+        &reservation,
+    );
     assert_ne!(reservation.budget_id, id);
     assert!(reservation.liability_sompi > 0);
     assert_eq!(builder.state.prefix_export_reserved_at_checked_v1(&producer, 101).unwrap(), reservation.liability_sompi);
-    assert_eq!(builder.committed_at(&producer, 101).unwrap(), committed_before + reservation.liability_sompi,
-        "withdrawal and every ordinary work gate must see the extra source principal");
+    assert_eq!(
+        builder.committed_at(&producer, 101).unwrap(),
+        committed_before + reservation.liability_sompi,
+        "withdrawal and every ordinary work gate must see the extra source principal"
+    );
     assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 400), reservation.liability_sompi);
-    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 401), 0);
+    assert_eq!(
+        builder.state.prefix_export_reserved_at_v1(&producer, 401),
+        reservation.liability_sompi,
+        "passing the signed clock alone does not demonstrate an actual material release"
+    );
 
-    builder.bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |budget, _, journal| {
-        budget.close_at(&id, None, journal);
-    }).unwrap();
+    // The source must become terminal through the real fold before native
+    // retirement; a hand-built S1 never authorizes deleting a migrated Claim.
+    // This is the existing legacy core ledger fixture (not the node court/
+    // selected-verifier approval campaign); no Claim or source is transplanted.
+    let bind = PalwConsensusObjectV2::PanelBound {
+        claim: id,
+        anchor: h64(77),
+        seats: vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }],
+    };
+    let (bound, _) =
+        apply_palw_transition_v2_with_extras(&builder.state, &p, &ctx(3, 102, 3), &[bind], None, false, false, false, false, &extras)
+            .unwrap();
+    let license = PalwConsensusObjectV2::ReceiptLicensed { claim: id, receipts: seat_says(true) };
+    let (licensed, _) =
+        apply_palw_transition_v2_with_extras(&bound, &p, &ctx(4, 103, 4), &[license], None, false, false, false, false, &extras)
+            .unwrap();
+    let (final_source, _) =
+        apply_palw_transition_v2_with_extras(&licensed, &p, &ctx(5, 124, 5), &[], None, false, false, false, false, &extras).unwrap();
+    assert!(matches!(final_source.claim(&id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
+    assert_eq!(
+        final_source.prefix_export_reserved_at_v1(&producer, 401),
+        reservation.liability_sompi,
+        "actual source Final cannot release the separately signed export principal"
+    );
+    let mut builder = TransitionBuilder::new(&final_source, &p, false, false, false, false, &extras);
+
+    builder
+        .bond_budget_op(super::super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |budget, _, journal| {
+            budget.close_at(&id, None, journal);
+        })
+        .unwrap();
     let budget = builder.state.bond_budget.as_ref().unwrap();
     assert!(!budget.claim_row(&id).unwrap().open);
     let export = budget.claim_row(&reservation.budget_id).unwrap();
     assert!(export.open, "Final of the source cannot release its distinct export obligation");
     assert_eq!(export.reserved.reward_sompi, 0);
     assert_eq!(export.reserved.final_weight, 0);
-    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(3, 400, 3)).unwrap();
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(6, 400, 6)).unwrap();
     assert!(builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
-    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(4, 401, 4)).unwrap();
+    // A retained monetary covenant is held until its ordinary Release action
+    // removes it, even after the source's absolute material clock has elapsed.
+    // This is the reservation boundary fixture, not an enrollment/signature test.
+    use crate::palw_monetary_material_v1::*;
+    let material_root = h64(0xFC01);
+    let material = PalwMonetaryMaterialRowV1 {
+        terms: PalwMonetaryMaterialTermsV1 {
+            version: 1,
+            root: material_root,
+            dependencies: vec![id],
+            exec_plan_root: None,
+            sponsor: producer,
+            nonce: h64(0xFC02),
+            policy: h64(0xFC03),
+            max_material_bytes: 1024,
+            material_manifest: None,
+            native_session: None,
+            window_daa: 10,
+            enrollment_until_daa: 400,
+            payment_relative_until_finality: true,
+        },
+        consent: h64(0xFC04),
+        sequence: 0,
+        accepted_daa: 101,
+        root_seen: true,
+        native_binding: None,
+        providers: vec![],
+        challenges: vec![],
+        last_tail_until: None,
+        tail_block: None,
+        tail_blue_score: None,
+        last_payment: None,
+        payment_history_root: Hash64::default(),
+        service_fee_count: 0,
+        service_fee_total_sompi: 0,
+        service_fee_paid_sompi: 0,
+        service_fee_history_root: Hash64::default(),
+        queued_entitlements: Default::default(),
+    };
+    builder.write_kernel_row_encoded_v1(PALW_MONETARY_MATERIAL_TABLE_V1, material_root.as_byte_slice(), Some(&material)).unwrap();
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(7, 401, 7)).unwrap();
+    assert!(builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
+    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 401), reservation.liability_sompi);
+    // The normal writer rejects malformed monetary bytes before publishing
+    // either the row or its derived direct-membership index.
+    let before_bad_row = builder.state.state_root();
+    let before_bad_journal = builder.entries.len();
+    let before_bad_members = builder.state.material_contracts_by_member_v8.clone();
+    let why =
+        builder.write_kernel_row(PALW_MONETARY_MATERIAL_TABLE_V1, material_root.as_byte_slice().to_vec(), Some(vec![0])).unwrap_err();
+    assert!(matches!(why, PalwStateV2Error::CarriageInconsistent(ref text) if text == "monetary member native row codec"));
+    assert_eq!(builder.state.state_root(), before_bad_row);
+    assert_eq!(builder.entries.len(), before_bad_journal);
+    assert_eq!(builder.state.material_contracts_by_member_v8, before_bad_members);
+    {
+        // Reader corruption probe only, deliberately outside the valid writer
+        // and on a disposable clone. This is not an admitted native row, delta
+        // or cold snapshot; it must never discharge the existing source hold.
+        let mut corrupt = TransitionBuilder::new(&builder.state, &p, false, false, false, false, &extras);
+        corrupt
+            .state
+            .kernel_route
+            .as_mut()
+            .unwrap()
+            .aux
+            .insert((PALW_MONETARY_MATERIAL_TABLE_V1, material_root.as_byte_slice().to_vec()), vec![0]);
+        assert!(super::super::palw_monetary_material_scope_v8::validate_v8(&corrupt.state).is_err());
+        super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut corrupt, &ctx(8, 402, 8)).unwrap();
+        assert!(corrupt.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
+        assert_eq!(corrupt.state.prefix_export_reserved_at_v1(&producer, 402), reservation.liability_sompi);
+    }
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(8, 402, 8)).unwrap();
+    assert!(builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id).unwrap().open);
+    builder
+        .write_kernel_row_encoded_v1::<PalwMonetaryMaterialRowV1>(PALW_MONETARY_MATERIAL_TABLE_V1, material_root.as_byte_slice(), None)
+        .unwrap();
+    super::super::palw_claim_local_prefix_reservation_v1::sweep(&mut builder, &ctx(9, 403, 9)).unwrap();
+    assert_eq!(builder.state.prefix_export_reserved_at_v1(&producer, 403), 0);
     if let Some(row) = builder.state.bond_budget.as_ref().unwrap().claim_row(&reservation.budget_id) {
         assert!(!row.open);
         assert!(!row.live, "synthetic export reservation has no later ordinary retirement hook");
         assert!(row.in_window, "only the budget rolling window may retain a released row");
     }
+    // Collector boundary: absence of a completed source record cannot discharge
+    // provenance. The closed record below is an explicit ledger fixture; native
+    // A/C court acceptance is exercised by the separate real-node campaign.
+    let original = source.claim(&id).unwrap().clone();
+    let later = ctx(10, original.trace_retention_daa + 2, 10);
+    // Match compact_and_collect's ordinary block-clock guard.
+    builder.state.last_point = Some(later);
+    super::super::palw_claim_local_prefix_reservation_v1::collect_closed_exports_v1(&mut builder, &later).unwrap();
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_some());
+    let closed = super::super::palw_claim_local_compact_sources_v1::PalwClosedClaimSourceV1 {
+        version: 1,
+        ruleset: native_ruleset,
+        claim: id,
+        birth: point,
+        original: original.clone(),
+        terminal_phase: builder.state.claim(&id).unwrap().phase.clone(),
+        closed_at: later,
+        material_until: original.trace_retention_daa,
+        winner: None,
+        approval: vec![],
+        permitted: true,
+    };
+    let mut closed_key = [0u8; 65];
+    closed_key[0] = b'S';
+    closed_key[1..].copy_from_slice(id.as_byte_slice());
+    builder.write_kernel_row_encoded_v1(crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, &closed_key, Some(&closed)).unwrap();
+    super::super::palw_claim_local_prefix_reservation_v1::collect_closed_exports_v1(&mut builder, &later).unwrap();
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_some(), "live original still needs its export outcome");
+    let mut convicted = reservation;
+    convicted.convicted_daa = Some(350);
+    super::super::palw_claim_local_prefix_reservation_v1::deny_closed_source_v1(&mut builder, &convicted).unwrap();
+    assert!(
+        !super::super::palw_claim_local_compact_sources_v1::read(&builder.state, id).unwrap().unwrap().permitted,
+        "a later export conviction is retained even after ordinary source retirement"
+    );
+    let before_missing_capture = builder.state.state_root();
+    let before_missing_capture_journal = builder.entries.len();
+    let why = builder.write_claim(id, None).unwrap_err();
+    assert!(matches!(why, PalwStateV2Error::CarriageInconsistent(ref text)
+        if text == "migrated retirement lacks actual native capture"));
+    assert_eq!(builder.state.state_root(), before_missing_capture);
+    assert_eq!(builder.entries.len(), before_missing_capture_journal);
+    // The owning native method captures the actual still-live terminal body,
+    // performs the deletion and completes its exact removal journal witness.
+    let terminal = builder.state.claim(&id).unwrap().clone();
+    assert!(matches!(terminal.phase, PalwClaimPhaseV2::Final { .. }));
+    builder.claim_local_lock_point_v6 = Some(later);
+    builder.retire_claim_at_v18(&later, id, &terminal).unwrap();
+    assert!(builder.state.claim(&id).is_none());
+    let provider_covenants = |state: &PalwChainStateV2| {
+        super::super::palw_claim_local_source_contract_generation_v8::source_covenants_pending_if_present_v8(
+            state,
+            reservation.budget_id,
+            id,
+            point,
+        )
+        .unwrap()
+    };
+    assert_eq!(provider_covenants(&builder.state), Some(false), "retirement captured the closed provider population");
+    let before_gc = builder.checkpoint();
+    let root_before_gc = builder.state.state_root();
+    super::super::palw_claim_local_prefix_reservation_v1::collect_closed_exports_v1(&mut builder, &later).unwrap();
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_none());
+    assert_eq!(provider_covenants(&builder.state), None, "export collection also removes the captured provider population");
+    assert!(!super::super::palw_claim_local_compact_sources_v1::read(&builder.state, id).unwrap().unwrap().permitted);
+    builder.restore(before_gc);
+    assert_eq!(builder.state.state_root(), root_before_gc, "GC undo restores exact retained provenance and closed outcome");
+    assert!(builder.state.prefix_export_reservation_v1(&point, id).unwrap().is_some());
+    assert_eq!(provider_covenants(&builder.state), Some(false));
 }
 
 #[test]
@@ -1582,9 +1816,9 @@ fn rfc37_budget_generation_roundtrips_an_actual_paid_consumer_fold_snapshot() {
     let suffix = carriage_bytes(state);
     let mut wire = Vec::new();
     let len = crate::palw_direct_row_export_v1::write_row_generation_v1(state, &suffix, &mut wire).unwrap();
-    let accepted = crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
-        state.state_root(), &wire, std::io::sink(), len, None,
-    ).unwrap();
+    let accepted =
+        crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(state.state_root(), &wire, std::io::sink(), len, None)
+            .unwrap();
     let carriage: PalwStateCarriageV2 = borsh::from_slice(accepted.import_suffix()).unwrap();
     let restored = carriage.into_state(&p, Some(state.state_root())).unwrap();
     assert_eq!(restored, *state, "the ordinary whole-state import remains the final authority");
@@ -1602,14 +1836,28 @@ fn rfc37_budget_all_tables_and_income_tails_match_frozen_header_grammar() {
     budget.models.insert(h64(0xD4), PalwModelBudgetRowV1::default());
     budget.liability_releases.insert((400, bond_key(1)));
     budget.releases.insert((500, h64(0xDB)));
-    budget.reporter_income.insert(h64(0xD5), PalwReporterIncomeBindingV1 {
-        recipient: Some(bond_key(1)), payload: h64(0xD6), maximum: 37, accepted_daa: 100,
-        awarded_daa: Some(101), queue: Some(h64(0xD7)), paid_daa: None, historical_boundary: None,
-    });
-    budget.material_income.insert(h64(0xD8), PalwMaterialIncomeV1 {
-        root: Some(h64(0xD9)), amount: 41, accepted_daa: 100,
-        payment: PalwMaterialPaymentV1::HeldEscrow { obligation: h64(0xDA) },
-    });
+    budget.reporter_income.insert(
+        h64(0xD5),
+        PalwReporterIncomeBindingV1 {
+            recipient: Some(bond_key(1)),
+            payload: h64(0xD6),
+            maximum: 37,
+            accepted_daa: 100,
+            awarded_daa: Some(101),
+            queue: Some(h64(0xD7)),
+            paid_daa: None,
+            historical_boundary: None,
+        },
+    );
+    budget.material_income.insert(
+        h64(0xD8),
+        PalwMaterialIncomeV1 {
+            root: Some(h64(0xD9)),
+            amount: 41,
+            accepted_daa: 100,
+            payment: PalwMaterialPaymentV1::HeldEscrow { obligation: h64(0xDA) },
+        },
+    );
     assert!(!budget.releases.is_empty() && !budget.claims.is_empty() && !budget.bonds.is_empty());
     assert!(!budget.assignments.is_empty() && !budget.models.is_empty() && !budget.liability_releases.is_empty());
     let tail_bytes = [
@@ -1619,45 +1867,73 @@ fn rfc37_budget_all_tables_and_income_tails_match_frozen_header_grammar() {
     ];
     // An independent spelling of the historical V1..V4 header grammar. Do not
     // use the new shared header factory to generate its own expected result.
-    let collection = |label: &[u8], rows: Vec<(Vec<u8>,Vec<u8>)>| {
-        palw_collection_root_of_entries_v1(label, rows.len(), rows.into_iter())
-    };
-    let income = collection(b"bond_budget_reporter_income/v1", budget.reporter_income.iter()
-        .map(|(k,v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect());
-    let material = collection(b"bond_budget_material_income/v1", budget.material_income.iter()
-        .map(|(k,v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect());
-    let consumer = collection(b"bond_budget_consumer_contract/v1", budget.consumer_contracts.iter()
-        .map(|(k,v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect());
+    let collection =
+        |label: &[u8], rows: Vec<(Vec<u8>, Vec<u8>)>| palw_collection_root_of_entries_v1(label, rows.len(), rows.into_iter());
+    let income = collection(
+        b"bond_budget_reporter_income/v1",
+        budget.reporter_income.iter().map(|(k, v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect(),
+    );
+    let material = collection(
+        b"bond_budget_material_income/v1",
+        budget.material_income.iter().map(|(k, v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect(),
+    );
+    let consumer = collection(
+        b"bond_budget_consumer_contract/v1",
+        budget.consumer_contracts.iter().map(|(k, v)| (borsh::to_vec(k).unwrap(), borsh::to_vec(v).unwrap())).collect(),
+    );
     for version in 1..=4 {
         let budget = state.bond_budget.as_mut().unwrap();
         budget.header.version = version;
         let mut expected = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/bond-budget/header/v1").to_state();
-        let mut part = |bytes: &[u8]| { expected.update(&(bytes.len() as u64).to_le_bytes()); expected.update(bytes); };
+        let mut part = |bytes: &[u8]| {
+            expected.update(&(bytes.len() as u64).to_le_bytes());
+            expected.update(bytes);
+        };
         part(&borsh::to_vec(&budget.header).unwrap());
-        if version >= 2 { part(b"reporter_income/v1"); part(income.as_byte_slice()); }
-        if version >= 3 { part(b"material_income/v1"); part(material.as_byte_slice()); }
-        if version >= 4 { part(b"consumer_contract/v1"); part(consumer.as_byte_slice()); }
+        if version >= 2 {
+            part(b"reporter_income/v1");
+            part(income.as_byte_slice());
+        }
+        if version >= 3 {
+            part(b"material_income/v1");
+            part(material.as_byte_slice());
+        }
+        if version >= 4 {
+            part(b"consumer_contract/v1");
+            part(consumer.as_byte_slice());
+        }
         assert_eq!(budget.root_parts().0.as_byte_slice(), expected.finalize().as_bytes());
         let mut seen = BTreeSet::new();
-        state.visit_direct_state_root_collections_v1(|label, _, rows, _| {
-            if label.starts_with(b"bond_budget_") || label == crate::palw_nested_row_stream_v1::BUDGET_HEADER {
-                assert!(rows > 0, "the fixture exercises a nonempty table"); seen.insert(label.to_vec());
-            }
-            Ok(())
-        }).unwrap();
+        state
+            .visit_direct_state_root_collections_v1(|label, _, rows, _| {
+                if label.starts_with(b"bond_budget_") || label == crate::palw_nested_row_stream_v1::BUDGET_HEADER {
+                    assert!(rows > 0, "the fixture exercises a nonempty table");
+                    seen.insert(label.to_vec());
+                }
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(seen.len(), 7, "six direct tables plus the nested header");
         let mut wire = Vec::new();
         let len = crate::palw_direct_row_export_v1::write_row_generation_v1(&state, b"codec-fixture", &mut wire).unwrap();
-        crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
-            state.state_root(), &wire, std::io::sink(), len, None,
-        ).unwrap();
+        crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(state.state_root(), &wire, std::io::sink(), len, None)
+            .unwrap();
         if version == 4 {
             for tail in &tail_bytes {
                 let at = wire.windows(tail.len()).position(|bytes| bytes == tail).unwrap();
-                let mut corrupt = wire.clone(); corrupt[at + tail.len() - 1] ^= 1;
-                assert!(crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
-                    state.state_root(), &corrupt, std::io::sink(), len, None,
-                ).is_err(), "changing any nested income/contract tail must change the committed header");
+                let mut corrupt = wire.clone();
+                corrupt[at + tail.len() - 1] ^= 1;
+                assert!(
+                    crate::palw_row_stream_v1::palw_accept_row_stream_generation_v1(
+                        state.state_root(),
+                        &corrupt,
+                        std::io::sink(),
+                        len,
+                        None,
+                    )
+                    .is_err(),
+                    "changing any nested income/contract tail must change the committed header"
+                );
             }
         }
     }
