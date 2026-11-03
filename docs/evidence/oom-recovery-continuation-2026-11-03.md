@@ -1656,3 +1656,11 @@ output. The existing query and RMS diagnostics remained valid.
 The bound on-chain one-move verifier still requires dissection.
 The 27,100-byte packet SHA-256 is
 `3023def6983a7bd83cd73ecd106aacff384a404151600bbc56fdc36f4194b2e2`.
+
+The queued provenance candidate now has a one-duty resident
+reader on the isolated branch at `dee83ebc4`. It borrows a stable
+selected snapshot and checks the exact claim, carrier, roots,
+deadline, covering rank and multipart progress. Full Node and
+native fixture validation remain open. The first exact Core
+metadata attempt was stopped at its 3 GiB child RSS guard while
+the separate A0 build was active. The owned RAM volume detached.
