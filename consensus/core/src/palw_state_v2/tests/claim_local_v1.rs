@@ -1491,6 +1491,10 @@ fn rfc23_targeted_native_material_ignores_an_unrelated_birth_body() {
         !s3.kernel_route.as_ref().unwrap().aux.contains_key(&(PALW_CLAIM_LOCAL_TABLE_V1, original_frame.to_vec())),
         "actual scoped original has no reconstructed F1 birth image"
     );
+    assert!(
+        super::super::palw_claim_local_owned_checkpoint_v1(&s3, &p, &bborn).unwrap().is_some(),
+        "the lifecycle reader must accept the actual rooted scoped original"
+    );
     let inspect = |s: &PalwChainStateV2| {
         let mut ids = BTreeSet::new();
         let complete = related::visit_consumer_material_v24(s, &p, aid, s.claim(&aid).unwrap(), |raw| {
@@ -1522,6 +1526,10 @@ fn rfc23_targeted_native_material_ignores_an_unrelated_birth_body() {
     // This is not a replacement positive or a fabricated Claim/source/point.
     diagnostic.kernel_route.as_mut().unwrap().aux.insert((PALW_CLAIM_LOCAL_TABLE_V1, key.to_vec()), vec![0]);
     assert!(source::for_stored_claim_v8(&diagnostic, bid, diagnostic.claim(&bid).unwrap()).is_err());
+    assert!(
+        super::super::palw_claim_local_owned_checkpoint_v1(&diagnostic, &p, &bborn).is_err(),
+        "a corrupt scoped original cannot produce an all-claims lifecycle capability"
+    );
     assert_eq!(
         inspect(&diagnostic),
         expected,
