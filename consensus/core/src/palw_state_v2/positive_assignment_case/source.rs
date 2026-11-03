@@ -290,6 +290,26 @@ impl NativeAssignedCourtV2 {
         Ok(*union)
     }
 
+    pub(super) fn consume_witness_record_reserve_v2(
+        &mut self,
+        material: &AssignmentAdmissionMaterialV2,
+        case: &CaseRow,
+        prior: (u64, u64),
+        journal_bytes: u64,
+        record_bytes: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        self.source_court_reserve = self.source_court_reserve.checked_sub(record_bytes).ok_or_else(capacity)?;
+        self.check_source_journal_reserve_v2(material, prior, journal_bytes)?;
+        let pending = self.source_unions.pending;
+        misaka_palw_positive_contract::reservations::RemainingCapacity {
+            transmitted_bytes: pending.body.checked_add(self.source_court_reserve).ok_or_else(capacity)?,
+            additional_work: pending.work,
+            retained_bytes: pending.journal,
+        }
+        .check(&case.usage, &case.service.budget)
+        .map_err(refuse)
+    }
+
     fn check_source_journal_reserve_v2(
         &self,
         material: &AssignmentAdmissionMaterialV2,
@@ -390,7 +410,7 @@ impl NativeAssignedCourtV2 {
         usage.additional_work = usage.additional_work.checked_add(cost.work).ok_or_else(capacity)?;
         usage.retained_bytes = usage.retained_bytes.checked_add(cost.journal).ok_or_else(capacity)?;
         misaka_palw_positive_contract::reservations::RemainingCapacity {
-            transmitted_bytes: pending.body,
+            transmitted_bytes: pending.body.checked_add(court).ok_or_else(capacity)?,
             additional_work: pending.work,
             retained_bytes: pending.journal,
         }

@@ -188,6 +188,7 @@ struct NativeAssignedPanelStepV2 {
     author: PrincipalId,
     key: [u8; PUBKEY_BYTES],
     max_signed_bytes: u64,
+    role_material: AcceptedMaterial,
     before_daa: u64,
     origin: AcceptedOrigin,
 }
@@ -500,6 +501,7 @@ struct NativeAssignedCourtAdvanceV2 {
     before: crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2,
     after: crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2,
     outcome: crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2,
+    opened_by: Option<NativeAssignedPanelStepV2>,
 }
 
 fn assigned_prover_rows_v2(
@@ -625,6 +627,7 @@ fn find_prover_step(
             author,
             key: role.key,
             max_signed_bytes,
+            role_material: role.admission,
             before_daa,
             origin,
         });
@@ -777,12 +780,12 @@ impl NativeAssignedCourtV2 {
                 return Err(refuse("P owner handles actual op7"));
             }
         };
-        *self.authority.step.borrow_mut() = None;
+        let opened_by = self.authority.step.borrow_mut().take().filter(|_| matches!(outcome, Outcome::CandidateOpened));
         let after = snapshot(&self.court);
         if matches!(outcome, Outcome::SemanticError(_)) && before == after {
             return Err(refuse("uncharged checker refusal is not a native event"));
         }
-        Ok(NativeAssignedCourtAdvanceV2 { before, after, outcome })
+        Ok(NativeAssignedCourtAdvanceV2 { before, after, outcome, opened_by })
     }
 }
 
@@ -1376,6 +1379,95 @@ fn prepare_initial_case_checker_v2(
     })
 }
 
+struct AssignedWitnessOpeningV2 {
+    case: CaseRow,
+    witness: misaka_palw_positive_contract::rows::WitnessRow,
+    coverage: misaka_palw_positive_contract::rows::CoverageRow,
+}
+
+impl NativeAssignedCourtV2 {
+    fn project_witness_opening_v2(
+        &mut self,
+        material: &AssignmentAdmissionMaterialV2,
+        prior: &CaseRow,
+        replayed: &NativeAssignedCourtAdvanceV2,
+        origin: AcceptedOrigin,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+        (prior_journal_bytes, prior_events, body_bytes): (u64, u64, u64),
+    ) -> Result<AssignedWitnessOpeningV2, PalwStateV2Error> {
+        use crate::{
+            palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2,
+            palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2,
+            palw_positive_common_replay_v2::LocalCourtOutcomeV2,
+            palw_positive_court_v2::coordinator::{
+                native_body::PositiveNativeOperationV2, record_ingress::preflight_witness_record_v2,
+            },
+        };
+        use misaka_palw_positive_contract::{
+            messages::{ClaimStatus, WitnessStatus},
+            record::{RECORD_HEADER_BYTES, RECORD_MAGIC},
+            rows::{CoverageRow, CoverageState, WitnessRow},
+        };
+        let PositiveNativeOperationV2::WitnessCommit { witness, panel_signature, .. } = &body.operation else {
+            return Err(refuse("witness opening requires its literal witness carrier"));
+        };
+        let author = replayed.opened_by.as_ref().ok_or_else(|| refuse("witness opening has no authenticated role"))?;
+        if !matches!(replayed.outcome, LocalCourtOutcomeV2::CandidateOpened)
+            || replayed.after.status != ClaimStatus::Pending
+            || replayed.after.cursor != 0
+            || replayed.after.attempts.checked_sub(1) != Some(prior.usage.witness_attempts)
+            || replayed
+                .after
+                .last_attempt
+                .is_none_or(|attempt| attempt.witness != witness.id() || attempt.status != WitnessStatus::Checking)
+            || witness.plan != prior.coverage.plan
+            || author.author != witness.author
+        {
+            return Err(refuse("witness opening differs from the exact checker transition"));
+        }
+        let record = preflight_witness_record_v2(self.court.result(), body, self.record_limits.max_record_bytes).map_err(refuse)?;
+        let record_bytes = record.record_bytes();
+        let material_work = material.native_preimages.source_policy.work.court_body_work(record_bytes.len() as u64).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(material_work).ok_or_else(source::capacity)?;
+        let retained = assigned_case_followup_journal_extent_v2(body_bytes).ok_or_else(source::capacity)?;
+        let mut case = *prior;
+        case.status = ClaimStatus::Pending;
+        case.witness_status = WitnessStatus::Checking;
+        case.last_event = origin;
+        case.usage.witness_attempts = replayed.after.attempts;
+        case.usage.transmitted_bytes =
+            case.usage.transmitted_bytes.checked_add(record_bytes.len() as u64).ok_or_else(source::capacity)?;
+        case.usage.retained_bytes = case.usage.retained_bytes.checked_add(retained).ok_or_else(source::capacity)?;
+        let record_len = record_bytes.len() as u64;
+        let component = |bytes| AcceptedMaterial { origin, digest: assignment_custody_bytes_id_v2(bytes) };
+        let witness_row = WitnessRow {
+            witness: witness.clone(),
+            panel_key: author.key,
+            panel_signature: *panel_signature,
+            origin,
+            record_header: component(&record_bytes[RECORD_MAGIC.len()..RECORD_MAGIC.len() + RECORD_HEADER_BYTES]),
+            generated_tokens: component(record.execution_record().generated_bytes()),
+            role_assignment: author.role_material,
+        };
+        let coverage = CoverageRow {
+            witness: witness.id(),
+            case: case.case,
+            result: case.result,
+            plan: case.coverage.plan,
+            mandatory_relations: case.coverage.mandatory_relations,
+            next_relation: 0,
+            frame_bytes: 0,
+            signatures: 0,
+            elements: 0,
+            terms: 0,
+            state: CoverageState::Checking,
+            last_event: origin,
+        };
+        self.consume_witness_record_reserve_v2(material, &case, (prior_journal_bytes, prior_events), retained, record_len)?;
+        Ok(AssignedWitnessOpeningV2 { case, witness: witness_row, coverage })
+    }
+}
+
 /// Project the literal checker expiry without discharging any existing source
 /// duty, fee, collateral or liability. Only the active attempt is incomplete.
 fn project_assigned_case_expiry_v2(
@@ -1619,6 +1711,7 @@ impl NativeAssignedCourtV2 {
             .and_then(|n| n.checked_add(size_of::<PositiveNativeBodyV2>() as u64))
             .and_then(|n| n.checked_add((4 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64))
             .and_then(|n| n.checked_add(if is_frame { policy.max_part_heap } else { 0 }))
+            .and_then(|n| n.checked_add(if is_witness { size_of::<NativeAssignedPanelStepV2>() as u64 } else { 0 }))
             .ok_or_else(capacity)?;
         let role_heap =
             if is_witness || is_frame { (1024 + misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES) as u64 } else { 0 };
@@ -1720,6 +1813,29 @@ fn replay_assigned_court_history_v2(
         }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             let replayed = machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
+            if matches!(&body.operation, Op::WitnessCommit { .. }) {
+                let expected = machine.project_witness_opening_v2(
+                    material,
+                    &prior,
+                    &replayed,
+                    carriage.origin(),
+                    &body,
+                    (prior_journal, index as u64, body_bytes.len() as u64),
+                )?;
+                let after = match backing.records().get(index + 1) {
+                    Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                    None => state,
+                };
+                for body in [
+                    NativeRowBody::Case(expected.case),
+                    NativeRowBody::Witness(expected.witness),
+                    NativeRowBody::Coverage(expected.coverage),
+                ] {
+                    if required(after, body.key())? != body {
+                        return Err(refuse("archived witness opening differs from exact replay"));
+                    }
+                }
+            }
             if matches!(&body.operation, Op::Expire { .. }) {
                 let (expected_case, expected_coverage) =
                     project_assigned_case_expiry_v2(prefix, &prior, &replayed, carriage.origin())?;
@@ -1815,7 +1931,11 @@ impl TransitionBuilder<'_> {
             Op::Expire { case, .. } => Some(*case),
             _ => None,
         };
-        if let Some(case) = source_case.or(expiry_case) {
+        let witness_case = match &body.operation {
+            Op::WitnessCommit { witness, .. } => Some(witness.case),
+            _ => None,
+        };
+        if let Some(case) = source_case.or(expiry_case).or(witness_case) {
             let row = PositiveRowsV2::new(&self.state).read(NativeRowKey::Case(case)).map_err(refuse)?;
             match row.map(|row| row.body) {
                 Some(NativeRowBody::Case(row)) if row.last_event.accepting_block.0 != ctx.block.as_bytes() => {}
@@ -1840,7 +1960,7 @@ impl TransitionBuilder<'_> {
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
         machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
         let expires = expiry_case.is_some();
-        if source_case.is_some() || expires {
+        if source_case.is_some() || expires || witness_case.is_some() {
             let controls = self.extras.positive_assignment_actions.len() as u64;
             let work = material.native_preimages.source_policy.work.court_operation_work(0, controls, 0, 0).map_err(refuse)?;
             machine.remaining_work = machine.remaining_work.checked_sub(work).ok_or_else(source::capacity)?;
@@ -1883,6 +2003,26 @@ impl TransitionBuilder<'_> {
             return self.write_assigned_case_followup_journal_v2(backing);
         }
         let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
+        if witness_case.is_some() {
+            let prior_bytes =
+                backing.records().iter().map(|r| r.raw().len() as u64).try_fold(0, u64::checked_add).ok_or_else(source::capacity)?;
+            let opened = machine.project_witness_opening_v2(
+                material,
+                &prior,
+                &replayed,
+                origin,
+                body,
+                (prior_bytes, backing.records().len() as u64, raw.len() as u64),
+            )?;
+            for row in [NativeRowBody::Witness(opened.witness), NativeRowBody::Coverage(opened.coverage)] {
+                if PositiveRowsV2::new(&self.state).read(row.key()).map_err(refuse)?.is_some() {
+                    return Err(refuse("witness opening already has an indexed row"));
+                }
+                self.write_assignment_aux_v2(row)?;
+            }
+            self.write_assignment_aux_v2(NativeRowBody::Case(opened.case))?;
+            return self.write_assigned_case_followup_journal_v2(backing);
+        }
         if expires {
             let (case, coverage) = project_assigned_case_expiry_v2(&self.state, &prior, &replayed, origin)?;
             if let Some(coverage) = coverage {
@@ -1981,6 +2121,7 @@ mod tests {
                 ..before
             },
             outcome: LocalCourtOutcomeV2::Expired,
+            opened_by: None,
         };
         let mut origin = prior.last_event;
         origin.accepted_daa += 1;
