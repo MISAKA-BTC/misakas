@@ -235,6 +235,23 @@ impl AssignmentAdmissionMaterialV2 {
         Ok(())
     }
 
+    /// Reprice the literal native operation under its original policy.
+    pub fn check_native_open_quote_v2(&self, row: &AssignmentRow, body: &[u8]) -> Result<(), ContractError> {
+        let (quote, _) = crate::palw_positive_assignment_funds_v2::quote_native_assignment_open_v2(
+            &self.assignment_policy,
+            &row.bundle.terms,
+            &self.native_preimages.assignment_fees,
+            &self.native_preimages.physical,
+            body,
+            row.origin.accepted_daa,
+        )
+        .map_err(|_| ContractError::Budget)?;
+        if quote != self.money {
+            return Err(ContractError::Identity);
+        }
+        Ok(())
+    }
+
     pub fn check_row(&self, row: &AssignmentRow) -> Result<(), ContractError> {
         row.validate_shape()?;
         self.assignment_policy.check_terms(&row.bundle.terms, self.origin.accepted_daa)?;

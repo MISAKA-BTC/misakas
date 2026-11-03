@@ -719,6 +719,9 @@ impl VirtualStateProcessor {
         view.material
             .check_native_open_record_extent_v2(max_payload)
             .map_err(|_| E::Invalid("original Open record exceeds quoted history extent"))?;
+        view.material
+            .check_native_open_quote_v2(&row, body)
+            .map_err(|_| E::Invalid("original Open quote differs from literal carrier"))?;
         let rules = NativeAssignmentRulesV2::from_original_material_data_v2(&row, &view.material)
             .map_err(|_| E::Invalid("original Assignment rule scope"))?;
         if let Some(body) = continuation_body {

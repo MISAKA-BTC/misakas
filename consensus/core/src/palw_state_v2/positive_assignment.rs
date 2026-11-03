@@ -419,6 +419,7 @@ impl TransitionBuilder<'_> {
             return Err(refusal("Open material differs from the actual fired intake profile"));
         }
         material.check_native_open_record_extent_v2(payload_bytes).map_err(refusal)?;
+        material.check_native_open_quote_v2(row, original.open.native_body()).map_err(refusal)?;
         let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
         if anchor.as_bytes() != row.bundle.terms.branch_anchor.0 {
             return Err(refusal("Open uses a different signed ancestor"));
@@ -1685,15 +1686,29 @@ impl TransitionBuilder<'_> {
                     let poster =
                         self.state.bond(&native_bond(bundle.terms.poster)).ok_or_else(|| refusal("missing current poster"))?;
                     let payer_key: &[u8; PUBKEY_BYTES] = poster.pubkey.as_slice().try_into().map_err(refusal)?;
-                    let (funding, amount) = crate::palw_positive_assignment_funds_v2::check_assignment_funding_carriage_v2(
+                    let (quote, body_heap) = crate::palw_positive_assignment_funds_v2::quote_native_assignment_open_v2(
+                        rules.assignment_policy(),
+                        &bundle.terms,
+                        &preimages.assignment_fees,
+                        &preimages.physical,
+                        &tx.payload[3..],
+                        ctx.daa_score,
+                    )
+                    .map_err(refusal)?;
+                    if quote.id() != bundle.quote {
+                        return Err(refusal("signed Assignment quote differs from the actual native Open quote"));
+                    }
+                    let funding = crate::palw_positive_assignment_funds_v2::qualify_assignment_funding_output_v2(
                         bundle,
                         tx,
                         payer_key,
                         action.current_output(),
+                        quote.fee,
+                        quote.capital,
                         ctx.daa_score,
                     )
                     .map_err(refusal)?;
-                    self.require_assignment_output_unlocked_v2(funding)?;
+                    self.require_assignment_output_unlocked_v2(funding.outpoint())?;
                     let layout: crate::palw_tir_class_v1::PalwTirLayoutV1 = borsh::from_slice(layout).map_err(refusal)?;
                     let reserved = crate::palw_positive_assignment_resources_v2::ReservedAssignmentDerivedResourcesV2::derive(
                         &self.state,
@@ -1715,7 +1730,7 @@ impl TransitionBuilder<'_> {
                     }
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
                     assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
-                    self.check_initial_assignment_relay_v2(ctx, action, bundle, (funding, amount), payer_key)?;
+                    self.check_initial_assignment_relay_v2(ctx, action, bundle, (funding.outpoint(), funding.amount()), payer_key)?;
                     let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
                     if anchor.as_bytes() != bundle.terms.branch_anchor.0 {
                         return Err(refusal("Assignment verifier bound uses a different signed ancestor"));
@@ -1752,8 +1767,13 @@ impl TransitionBuilder<'_> {
                         certification.m,
                         cohort.count(),
                     )?;
-                    let simultaneous =
-                        workspace.checked_add(cohort.bytes().len() as u64).ok_or_else(|| refusal("Gate C workspace overflow"))?;
+                    let simultaneous = reserved
+                        .allocation_quote()
+                        .total_requests
+                        .checked_add(body_heap)
+                        .and_then(|n| n.checked_add(workspace))
+                        .and_then(|n| n.checked_add(cohort.bytes().len() as u64))
+                        .ok_or_else(|| refusal("simultaneous Open workspace overflow"))?;
                     if simultaneous > heap_budget {
                         return Err(refusal("original Assignment budget cannot cover Gate C draw workspace"));
                     }

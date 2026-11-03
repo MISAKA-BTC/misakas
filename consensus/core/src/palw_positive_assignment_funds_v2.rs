@@ -326,6 +326,76 @@ pub fn quote_assignment_money_v2(
         physical_profile: physical.id(),
     })
 }
+/// Price the literal op8 and the bounded state and history it may occupy.
+/// Policy ceilings are stable over the signed intake window. The actual
+/// Open extent and simultaneous allocations must also fit at the native writer.
+pub fn quote_native_assignment_open_v2(
+    policy: &AssignmentPolicyV2,
+    terms: &AssignmentTermsV2,
+    schedule: &AssignmentFeeScheduleV2,
+    physical: &AssignmentPhysicalProfileV2,
+    native_body: &[u8],
+    now: u64,
+) -> Result<(AssignmentMoneyQuoteV2, u64), AssignmentFundsErrorV2> {
+    use crate::palw_positive_court_v2::coordinator::assignment_body::{AssignmentBodyLimitsV2, scan_assignment_body_v2};
+
+    let limits = AssignmentBodyLimitsV2::from_policy(policy).map_err(|_| AssignmentFundsErrorV2::PhysicalProfile)?;
+    let body = scan_assignment_body_v2(native_body, limits).map_err(|_| AssignmentFundsErrorV2::Payload)?;
+    if body.kind != 8 {
+        return Err(AssignmentFundsErrorV2::Payload);
+    }
+    let usage = native_assignment_open_usage_v2(policy, physical, body)?;
+    let money = quote_assignment_money_v2(policy, terms, schedule, physical, usage, now)?;
+    Ok((money, body.heap))
+}
+
+fn native_assignment_open_usage_v2(
+    policy: &AssignmentPolicyV2,
+    physical: &AssignmentPhysicalProfileV2,
+    body: crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodySummaryV2,
+) -> Result<AssignmentPhysicalUsageV2, AssignmentFundsErrorV2> {
+    use misaka_palw_positive_contract::{
+        assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2,
+        rows::{MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES},
+    };
+
+    let cap = AssignmentFundsErrorV2::PhysicalProfile;
+    let header = ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+    let minimum_payload = body.canonical_bytes.checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64).ok_or(cap)?;
+    let minimum_record = minimum_payload.checked_add(header).ok_or(cap)?;
+    if minimum_payload > policy.max_frame_bytes {
+        return Err(cap);
+    }
+    // Assignment, permanent nonce, one Result use, funding, journal head,
+    // bounded frames and roles, plus a separate funding row per eligible join.
+    // Use the enforced maximum key/value extent for each retained row.
+    let roles = u64::from(policy.max_role_candidates);
+    let joins = roles.checked_sub(3).ok_or(cap)?.min(u64::from(policy.max_prover_joins));
+    let frames = u64::from(policy.max_history_frames);
+    let row_bytes = (MAX_NATIVE_KEY_BYTES + MAX_NATIVE_ROW_BYTES) as u64;
+    let retained_rows = row_bytes.checked_mul(5 + roles + joins + frames).ok_or(cap)?;
+    let retained_cap = policy.max_retained_bytes.min(physical.max_retained_bytes);
+    let replay_cap = policy.max_replay_bytes.min(physical.max_replay_bytes);
+    let maximum_frame = policy.max_frame_bytes.checked_add(header).ok_or(cap)?;
+    let maximum_history = frames.checked_mul(maximum_frame).ok_or(cap)?;
+    let history_bytes =
+        policy.max_history_bytes.min(retained_cap.checked_sub(retained_rows).ok_or(cap)?).min(replay_cap / 2).min(maximum_history);
+    let heap_bytes = policy.max_heap_bytes.min(physical.max_heap_bytes);
+    if history_bytes < minimum_record || body.heap > heap_bytes {
+        return Err(cap);
+    }
+    Ok(AssignmentPhysicalUsageV2 {
+        admission_bytes: body.canonical_bytes,
+        retained_bytes: retained_rows + history_bytes,
+        replay_bytes: 2 * history_bytes,
+        heap_bytes,
+        // A owns one protected output. Ordinary carrier inputs/outputs and
+        // script costs are accounted for by the enclosing UTXO validator.
+        utxo_writes: 1,
+        signatures: body.signatures,
+    })
+}
+
 impl From<ContractError> for AssignmentFundsErrorV2 {
     fn from(error: ContractError) -> Self {
         Self::Contract(error)

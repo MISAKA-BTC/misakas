@@ -478,6 +478,71 @@ fn frozen_original_policy_survives_future_policy_change_and_rejects_substitution
     assert!(substituted.check_row(&row).is_err());
 }
 #[test]
+fn native_open_price_is_bound_to_literal_body_and_full_history_capacity() {
+    use kaspa_consensus_core::{
+        palw_positive_court_v2::coordinator::assignment_body::{
+            AssignmentBodyLimitsV2, PositiveAssignmentNativeBodyV2, PositiveAssignmentNativeOperationV2, encode_assignment_body_v2,
+        },
+        palw_tir_class_v1::PalwTirLayoutV1,
+    };
+    use misaka_palw_positive_contract::{
+        identity::SIGNATURE_BYTES,
+        rows::{MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES},
+    };
+
+    let (mut row, material, _) = fixture();
+    row.bundle.terms.max_assignment_fee = 2_000_000_000;
+    row.bundle.terms.max_assignment_capital = 2_000_000;
+    row.bundle.terms.max_assignment_locked = 3_000_000_000;
+    let policy = &material.assignment_policy;
+    let preimages = &material.native_preimages;
+    let limits = AssignmentBodyLimitsV2::from_policy(policy).unwrap();
+    let mut layout = PalwTirLayoutV1 {
+        version: 1,
+        max_context: 16,
+        checkpoint_interval: 4,
+        h_tile: 4,
+        commit_tiles: vec![4, 8],
+        state_tiles: vec![2],
+    };
+    let body = |layout: &PalwTirLayoutV1| {
+        encode_assignment_body_v2(
+            &PositiveAssignmentNativeBodyV2 {
+                version: 2,
+                revision: 1,
+                operation: PositiveAssignmentNativeOperationV2::AcceptCanonicalAssignment {
+                    bundle: row.bundle,
+                    source: row.source_consent,
+                    prover: row.prover_consent,
+                    signatures: [[0; SIGNATURE_BYTES]; 3],
+                    layout: borsh::to_vec(layout).unwrap(),
+                },
+            },
+            limits,
+        )
+        .unwrap()
+    };
+    let quote = |body: &[u8], now| {
+        quote_native_assignment_open_v2(policy, &row.bundle.terms, &preimages.assignment_fees, &preimages.physical, body, now)
+    };
+    let first = body(&layout);
+    let (price, decode_heap) = quote(&first, 10).unwrap();
+    assert_eq!(quote(&first, 11).unwrap(), (price, decode_heap));
+    assert_eq!(price.usage.admission_bytes, first.len() as u64);
+    assert_eq!(price.usage.signatures, 3);
+    assert!(decode_heap <= price.usage.heap_bytes);
+    let joins = (policy.max_role_candidates - 3).min(policy.max_prover_joins);
+    let retained_rows = u64::from(5 + policy.max_history_frames + policy.max_role_candidates + joins)
+        * (MAX_NATIVE_KEY_BYTES + MAX_NATIVE_ROW_BYTES) as u64;
+    assert_eq!(price.usage.retained_bytes, retained_rows + price.usage.replay_bytes / 2);
+    layout.commit_tiles.push(16);
+    let (larger, _) = quote(&body(&layout), 10).unwrap();
+    assert_eq!(larger.usage.admission_bytes, price.usage.admission_bytes + 4);
+    assert_ne!(larger.id(), price.id());
+    assert!(quote(&first[..first.len() - 1], 10).is_err());
+}
+
+#[test]
 fn native_open_quote_covers_control_envelope_and_complete_journal_record() {
     use misaka_palw_positive_contract::assignment::{
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2, journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2,
