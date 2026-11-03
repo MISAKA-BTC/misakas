@@ -15,6 +15,8 @@ use misaka_palw_positive_contract::{
     assignment::{
         AssignmentId, AssignmentNonceV2, AssignmentRoleV2,
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2,
+        funding_relay::{FundingRelayRegistrationBodyV2, FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2},
+        funding_relay_policy::FundingRelayPolicyV2,
         journal::{AssignmentJournalEventKindV2, assignment_frame_v2},
         open_material::AssignmentOpenLimitsV2,
         rows::*,
@@ -898,6 +900,123 @@ pub(super) fn apply_raw_before_object_v2(
     Ok(())
 }
 impl TransitionBuilder<'_> {
+    /// An existing relay owns the whole outpoint across the three purposes.
+    /// Even byte-identical replay needs the original native custody reader.
+    #[inline(never)]
+    fn require_unused_relay_outpoint_v2(&self, body: &FundingRelayRegistrationBodyV2) -> Result<(), PalwStateV2Error> {
+        use RelayFundingPurposeV2::{CaseC, PosterA, ProverJoin};
+
+        let rows = PositiveRowsV2::new(&self.state);
+        let funding = body.terms.funding_outpoint;
+        let mut existing = None;
+        for purpose in [PosterA, CaseC, ProverJoin] {
+            let auth = rows.read(NativeRowKey::FundingRelayAuthorization { funding, purpose });
+            let custody = rows.read(NativeRowKey::FundingRelayCustody { funding, purpose });
+            match (auth, custody) {
+                (Ok(None), Ok(None)) => {}
+                (Ok(Some(auth)), Ok(Some(custody))) if existing.is_none() => {
+                    let (NativeRowBody::FundingRelayAuthorization(auth), NativeRowBody::FundingRelayCustody(custody)) =
+                        (auth.body, custody.body)
+                    else {
+                        return Err(missing_assignment_history());
+                    };
+                    custody.check_pair(&auth).map_err(|_| missing_assignment_history())?;
+                    existing = Some(
+                        auth.terms == body.terms
+                            && auth.purpose_signature == body.purpose_signature
+                            && custody.relay_signature == body.relay_signature,
+                    );
+                }
+                _ => return Err(missing_assignment_history()),
+            }
+        }
+        match existing {
+            None => Ok(()),
+            Some(false) => Err(refusal("relay funding outpoint already has a different signed package")),
+            Some(true) => Err(missing_assignment_history()),
+        }
+    }
+
+    /// Count current canonical rows. Until the retirement owner removes a
+    /// pending pair, even a passed registration or custody clock occupies it.
+    #[inline(never)]
+    fn check_initial_relay_slots_v2(
+        &self,
+        terms: &FundingRelayTermsV2,
+        poster_nonce: u64,
+        policy: &FundingRelayPolicyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let route = self.state.kernel_route.as_ref().ok_or_else(missing_assignment_history)?;
+        let rows = PositiveRowsV2::new(&self.state);
+        let funding = terms.funding_outpoint;
+        let purpose = terms.funding_purpose;
+        let prefix = |key: NativeRowKey| {
+            let mut key = key.encode();
+            key.truncate(key.len() - (64 + 4 + 1)); // funding outpoint and purpose
+            (KERNEL_AUX_TABLE, key)
+        };
+        let auth_start = prefix(NativeRowKey::FundingRelayAuthorization { funding, purpose });
+        let custody_start = prefix(NativeRowKey::FundingRelayCustody { funding, purpose });
+        // Two rows for every registration, plus two for this new package.
+        let available_pairs = policy.max_stored_rows as usize / 2 - 1;
+        let mut total = 0;
+        let mut pending = 0;
+        let mut poster_pending = 0;
+        let mut nonce_pending = 0;
+        for ((_, key), bytes) in route
+            .aux
+            .range(auth_start.clone()..)
+            .take_while(|((table, key), _)| *table == KERNEL_AUX_TABLE && key.starts_with(&auth_start.1))
+        {
+            if total == available_pairs {
+                return Err(refusal("relay stored row cap exhausted"));
+            }
+            total += 1;
+            let NativeRowBody::FundingRelayAuthorization(auth) =
+                NativeRowValue::decode(key, bytes).map_err(|_| missing_assignment_history())?.body
+            else {
+                return Err(missing_assignment_history());
+            };
+            let NativeRowBody::FundingRelayCustody(custody) = rows
+                .read(NativeRowKey::FundingRelayCustody { funding: auth.terms.funding_outpoint, purpose: auth.terms.funding_purpose })
+                .map_err(|_| missing_assignment_history())?
+                .ok_or_else(missing_assignment_history)?
+                .body
+            else {
+                return Err(missing_assignment_history());
+            };
+            if custody.material != auth.material {
+                return Err(missing_assignment_history());
+            }
+            if custody.binding.is_none() {
+                pending += 1;
+                if auth.terms.payer_bond == terms.payer_bond && auth.terms.funding_purpose != RelayFundingPurposeV2::ProverJoin {
+                    poster_pending += 1;
+                    if matches!(auth.terms.target, RelayTargetV2::InitialAssignment { poster_nonce: nonce, .. } if nonce == poster_nonce)
+                    {
+                        nonce_pending += 1;
+                    }
+                }
+                if pending >= policy.max_pending_global
+                    || poster_pending >= policy.max_pending_per_poster
+                    || nonce_pending >= policy.max_account_candidates
+                {
+                    return Err(refusal("relay pending registration cap exhausted"));
+                }
+            }
+        }
+        let custody_count = route
+            .aux
+            .range(custody_start.clone()..)
+            .take_while(|((table, key), _)| *table == KERNEL_AUX_TABLE && key.starts_with(&custody_start.1))
+            .take(total + 1)
+            .count();
+        if custody_count != total {
+            return Err(missing_assignment_history());
+        }
+        Ok(())
+    }
+
     fn check_initial_assignment_relay_v2(
         &self,
         ctx: &PalwBlockContextV2,
@@ -909,7 +1028,6 @@ impl TransitionBuilder<'_> {
             palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, ReservedFundingRelayBodyV2},
             palw_positive_relay_signature_v2::{ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2, FundingRelaySignatureTemplateV2},
         };
-        use misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2;
 
         let rules = action.rules();
         let AssignmentFundingRelayProfileV2::RequiresRelayV2 { ruleset, policy, fees, physical, .. } = rules.funding_relay_profile()
@@ -927,7 +1045,6 @@ impl TransitionBuilder<'_> {
         let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
             return Err(refusal("relay target needs the original Case, join or continuation owner"));
         };
-        policy.check_terms(terms, ctx.daa_score).map_err(refusal)?;
         let (anchor, _) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
         if terms.contract_network != rules.network()
             || terms.contract_ruleset.0 != rules.rule_scope().ruleset().as_bytes()
@@ -937,6 +1054,28 @@ impl TransitionBuilder<'_> {
             || reserved.quote().decoded_inline_bytes > physical.max_decoded_bytes
         {
             return Err(refusal("initial relay differs from the current contract or native relay scope"));
+        }
+        {
+            let mut requests = TirNativeRequestsV1::new();
+            // Two decoded rows plus decoder scratch and the reconstructed
+            // literal used to check an existing package's stored crosslinks.
+            requests.exact_v1::<NativeRowValue>(4).map_err(PalwStateV2Error::NativeResource)?;
+            requests.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
+            // Two Borsh key buffers, one range cursor and one exact key copy.
+            requests.exact_v1::<u8>(2 * 1024 + 2 * 74).map_err(PalwStateV2Error::NativeResource)?;
+            let workspace = requests.bytes_v1();
+            if reserved.quote().logical_decode_requests.checked_add(workspace).is_none_or(|n| n > physical.max_heap_bytes) {
+                return Err(refusal("initial relay rooted checks exceed the native heap cap"));
+            }
+            let _lease = reserve_native_requests_v1(workspace).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowValue>(
+                    "initial relay rooted checks",
+                    "native owner is not armed",
+                ))
+            })?;
+            self.require_unused_relay_outpoint_v2(body)?;
+            policy.check_terms(terms, ctx.daa_score).map_err(refusal)?;
+            self.check_initial_relay_slots_v2(terms, poster_nonce, policy)?;
         }
         let native_key = native_bond(terms.payer_bond);
         let bond = self.state.bond(&native_key).ok_or_else(|| refusal("initial relay poster bond missing"))?;

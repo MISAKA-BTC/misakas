@@ -854,5 +854,37 @@
     "stored_sha256": "371b69a609a197a070028f1f9413bd4ed23fd9c22dc882dcf893510ad6580c08",
     "raw_bytes": 52856,
     "stored_bytes": 4121
+  },
+  {
+    "raw_name": "relay-rooted-contract-third.log",
+    "stored_name": "relay-rooted-contract-third.log.gz",
+    "raw_sha256": "95137a0af8979126f35a10b4c2053c25c19f7d916a4e078174488028f49aec68",
+    "stored_sha256": "8443b276e580a80e755043153a4607a5220a56b65aec59be048f3f9008bfb96a",
+    "raw_bytes": 52856,
+    "stored_bytes": 4121
+  },
+  {
+    "raw_name": "relay-rooted-core-third.log",
+    "stored_name": "relay-rooted-core-third.log.gz",
+    "raw_sha256": "6232360c12ce4312540193f848b8e6b17e20a282b33513bb315b17dfca19b628",
+    "stored_sha256": "92875987779ccb3fc53d8d0bb1deb9fb3283913bc856ca253f42f122c78a4ebe",
+    "raw_bytes": 287270,
+    "stored_bytes": 20030
+  },
+  {
+    "raw_name": "relay-rooted-library-first.log",
+    "stored_name": "relay-rooted-library-first.log.gz",
+    "raw_sha256": "f3b6679015889b122619caf1d044692d9d74803a76286bd3760959fa6b562eb2",
+    "stored_sha256": "a0cdb72de72e893a785454b6c467890d72102708f0cb2a731175ab60356d972b",
+    "raw_bytes": 314973,
+    "stored_bytes": 21942
+  },
+  {
+    "raw_name": "relay-rooted-library-second.log",
+    "stored_name": "relay-rooted-library-second.log.gz",
+    "raw_sha256": "ab611b2566d71c6dc950b8e9d6cbe7f3d52b6802179c5b485f9b10c5d29c491e",
+    "stored_sha256": "4e0f90b4b376613363a634648f90cdbec28e00c7136c854ec165d0bffb3e5c17",
+    "raw_bytes": 314736,
+    "stored_bytes": 21893
   }
 ]

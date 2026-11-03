@@ -508,3 +508,42 @@ first Clippy run failed because the template workspace quote was moved
 twice. The corrected runs used a single frozen source map. The added
 fence-boundary case was typechecked. Native relay registration and a
 new metadata burn were not exercised.
+
+## Initial A relay outpoint and registration capacity
+
+The current-prefix op14 check reads both authorization and custody keys
+for all three purposes of the same funding outpoint. A different signed
+package cannot replace an existing pair or use the outpoint under another
+purpose. A half pair, ambiguous purpose, or inconsistent retained material
+is a local history fault. An identical package also stops at the local
+history boundary until native custody and accepted origin can be replayed.
+The literal comparison covers terms and both signatures.
+
+For new initial A packages, the canonical authorization range and exact
+custody lookups count stored pairs, all pending registrations, the
+poster's pending registrations and its initial candidates at the same
+nonce. A bound pair still uses storage. An unbound pair occupies pending
+capacity until the retirement writer actually removes it. The storage cap
+bounds the traversal and leaves room for both new rows. A bounded reverse
+custody count detects unmatched rows. Both checks reserve their temporary
+workspace against the native heap owner alongside the retained literal
+body. The initial A scope uses neither prover nor continuation slots.
+
+This is qualification at the accepted native prefix. Successful replay,
+aggregate work and metadata pricing, fee allocation before coinbase and
+round fee readers, and the custody/retirement writer remain open. The
+round path currently reserves its collectible fee before accepting a
+mergeset body, so withholding a charge solely in the later PALW fold
+would arrive after both that reservation and UTXO reward validation.
+The virtual/template UTXO walk also calls the common fee calculation
+without the block-validation carrier context. Native allocation must
+reconcile both entry points before any registration can deduct a fee.
+
+Core library Clippy passed with warnings denied. All seven existing
+contract relay cases passed on the same source map. The tests exercise
+the signed package and row shapes. The newly wired prefix lookup and
+census were typechecked; no real op14 acceptance, replay or cap boundary
+was exercised. The two combined Core/Consensus Clippy attempts were
+stopped when the dependency rebuild reached RocksDB on the low-space
+volume. Scoped Core verification completed independently. The
+documentation check reported zero new issues against the existing 43.
