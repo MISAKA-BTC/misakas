@@ -663,7 +663,11 @@ fn project_numerical_batch_streaming_v1(
     if let Some(error) = callback_error {
         return Err(error);
     }
-    if summary?.source_id != set.source_id() || maximums.is_empty() {
+    let summary = summary?;
+    if maximums.is_empty() {
+        return Err(E::Decode("streamed Batch cover contains no numerical ranges".into()));
+    }
+    if summary.source_id != set.source_id() {
         return Err(E::Decode("streamed Batch cover differs from the original".into()));
     }
     let scope = set.scope_id().map_err(E::Decode)?;
