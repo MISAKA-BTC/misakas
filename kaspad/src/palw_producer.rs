@@ -382,6 +382,26 @@ pub(crate) fn palw_retained_answer_path(dir: &std::path::Path, claim: &Hash64) -
     dir.join(format!("{claim}{PALW_RETAINED_ANSWER_SUFFIX}"))
 }
 
+/// Publish the capture before the producer makes a network commitment to it.
+fn persist_attempt_material(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let dir = path.parent().ok_or_else(|| std::io::Error::other("retention directory absent"))?;
+    std::fs::create_dir_all(dir)?;
+    let mut pending = tempfile::Builder::new().prefix(".attempt-").suffix(".partial").tempfile_in(dir)?;
+    pending.write_all(bytes)?;
+    pending.as_file().sync_all()?;
+    pending.persist(path).map_err(|error| error.error)?;
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()?;
+        if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    Ok(())
+}
+
 /// The wall-clock horizon of every retained capture that is not an attempt claim's: the bind +
 /// receipt windows at the frozen 120 s cadence are ~40 h, and two days of re-serving covers every
 /// claim that can still be licensed.
@@ -1036,27 +1056,20 @@ impl PalwProducerService {
     /// because only the code that produced material knows how to write it. This function's job is
     /// the obligation — that the bytes are on disk before the block that promises them is
     /// published — and that is the backend's business either way.
-    fn retain_execution(&self, attempt_id: Hash64, material: &[u8]) -> Result<Vec<u8>, String> {
-        std::fs::create_dir_all(&self.config.retention_dir)
-            .map_err(|e| format!("cannot create the retention directory {}: {e}", self.config.retention_dir.display()))?;
+    fn retain_execution(&self, attempt_id: Hash64, material: &[u8]) -> Result<(), String> {
         let path = palw_retained_material_path(&self.config.retention_dir, &attempt_id);
         // Still the ONE codec — the retention file, the gossip broadcast and the seat's decode all
         // read these exact bytes — it is just applied one frame up now, where the backend is.
-        let bytes = material.to_vec();
         // G14 capacity lane: under a storage budget the bytes are reserved BEFORE the obligation is
         // written — a refusal here means no block promising them is published, so no liability is
         // taken on that the node has no room to keep. The reservation covers the write; once the
         // file exists the scan counts it.
         let _storage = kaspa_utils::storage_budget::reserve_global(
             kaspa_utils::storage_budget::StorageCategory::PalwRetained,
-            bytes.len() as u64,
+            material.len() as u64,
         )
         .map_err(|refusal| format!("not retaining {}: {refusal}", path.display()))?;
-        let tmp = path.with_extension("material.partial");
-        std::fs::write(&tmp, &bytes).map_err(|e| format!("cannot write {}: {e}", tmp.display()))?;
-        // Rename last: a reader never sees a half-written obligation.
-        std::fs::rename(&tmp, &path).map_err(|e| format!("cannot publish {}: {e}", path.display()))?;
-        Ok(bytes)
+        persist_attempt_material(&path, material).map_err(|e| format!("cannot retain {}: {e}", path.display()))
     }
 
     fn verification_key(&self) -> Vec<u8> {
@@ -2311,8 +2324,8 @@ impl PalwProducerService {
             .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
             .as_ref()
             .to_vec();
-            let material = self.retain_execution(message, &run.material)?;
-            let announced = palw_attempt_announcement_v1(material, None);
+            self.retain_execution(message, &run.material)?;
+            let announced = palw_attempt_announcement_v1(run.material, None);
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, announced)).await;
             riders_out
                 .as_mut()
@@ -2415,7 +2428,7 @@ impl PalwProducerService {
             // **RFC-0008 PAV3: the custody carriage, before anything is retained or announced** — the actual bundle, every roster
             // provider's signature (each after its durable publication) and this executor's seal. A refusal anywhere publishes
             // nothing: never a PAV2 fallback the chain refuses past the fence.
-            let commitment = match native_draw {
+            let (commitment, material) = match native_draw {
                 Some((row, provisional)) => {
                     let mut probe = template.block.header.clone();
                     probe.nonce = nonce;
@@ -2428,16 +2441,16 @@ impl PalwProducerService {
                         PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: signature.clone() },
                         anchor,
                         backend,
-                        run.material.clone(),
+                        run.material,
                         prompt.clone(),
                     )
                     .await?
                 }
-                None => PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire(),
+                None => (PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature }.encode_wire(), run.material),
             };
             // The promise, kept before it is made. See `retain_execution`.
             require_fresh_routing_v2()?;
-            let material = self.retain_execution(message, &run.material)?;
+            self.retain_execution(message, &material)?;
             // **RFC-0007 Part II: the witness is the producer's obligation** (§II.7): a class whose attempts commit witness chunks keeps its
             // witness for the claim — the canonical serving set's `MatMul` outputs, in exactly the pinned number of chunks, with their
             // digests — before the block that promises it is published. A producer that cannot make it does not publish: a claim whose
@@ -2552,7 +2565,7 @@ impl PalwProducerService {
         backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
         capture: Vec<u8>,
         prompt: Vec<usize>,
-    ) -> Result<Vec<u8>, String> {
+    ) -> Result<(Vec<u8>, Vec<u8>), String> {
         use crate::palw_native_custody_v3::{
             PALW_NATIVE_READY_EXCHANGE_VERSION_V3, PalwNativeReadyRequestV3, palw_native_bundle_v3, palw_native_check_signatures_v3,
             palw_native_provisional_envelope_v3, palw_native_same_draw_v3,
@@ -2570,7 +2583,7 @@ impl PalwProducerService {
         let prefill_draw = self.consensus_config.params.palw_prefill_draw_active_at(header.daa_score);
         let (session, row, draw) = (session.clone(), row.clone(), provisional.clone());
         let described = exchange.0.describe();
-        let (ready, signatures, base) = palw_until_exit_v1(
+        let (ready, signatures, base, capture) = palw_until_exit_v1(
             &self.shutdown.listener,
             tokio::task::spawn_blocking(move || {
                 let attempt = base.attempt.clone();
@@ -2635,7 +2648,7 @@ impl PalwProducerService {
                 };
                 let signatures = exchange.0.request_signatures_authenticated(&request, &provider_keys)?;
                 palw_native_check_signatures_v3(&ready, &provider_keys, &signatures)?;
-                Ok::<_, String>((ready, signatures, request.envelope.base))
+                Ok::<_, String>((ready, signatures, request.envelope.base, request.capture))
             }),
         )
         .await
@@ -2656,7 +2669,7 @@ impl PalwProducerService {
             sealed.ready.session,
             sealed.ready.providers.len()
         );
-        Ok(sealed.encode_wire())
+        Ok((sealed.encode_wire(), capture))
     }
 }
 
@@ -3237,6 +3250,23 @@ mod accepted_rider_tests {
 #[cfg(test)]
 mod tests {
     use super::palw_da_court_in_force_v1;
+
+    #[test]
+    fn attempt_material_persist_is_atomic_and_retryable() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("retention");
+        let path = dir.join("attempt.material");
+        std::fs::create_dir_all(&path).unwrap();
+        assert!(super::persist_attempt_material(&path, b"first").is_err());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir(&path).unwrap();
+
+        super::persist_attempt_material(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        super::persist_attempt_material(&path, b"third").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"third");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+    }
 
     /// **A producer misconfiguration never takes the node down** (the route-matrix re-audit's #11).
     /// The unproducible-class refusal called `process::exit(1)` from the constructor, which under
