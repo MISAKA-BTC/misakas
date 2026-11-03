@@ -4,6 +4,10 @@
 use crate::Hash64;
 use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA, shared_initial_notice_daa_in_window_v1};
 use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1};
+use crate::palw_native_resource_v1::{
+    NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
+    reserve_native_requests_v1,
+};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::blake2b_512_keyed;
 use std::collections::{BTreeMap, BTreeSet};
@@ -71,6 +75,18 @@ impl BatchCourtWindowV1 {
         recovery_daa: u64,
         check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
     ) -> Result<u64, BatchCourtErrorV1> {
+        self.reserve_latest_notice_with_v1(book, graph, terminal, recovery_daa, check_assignments, reserve_native_requests_v1)
+    }
+
+    fn reserve_latest_notice_with_v1(
+        self,
+        book: &mut ServiceReservations,
+        graph: &[CausalServicePacketV1],
+        terminal: [u8; 64],
+        recovery_daa: u64,
+        check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<u64, BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, Reservation, Window};
         self.check()?;
         let latest_notice = self.claim_accepted_daa.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
@@ -81,6 +97,8 @@ impl BatchCourtWindowV1 {
         if self.challenge_opened_daa != latest_notice || recovery_daa == 0 || first_service >= service_before {
             return Err(Window);
         }
+        let bytes = latest_notice_workspace_bytes_v1(book, graph).map_err(BatchCourtErrorV1::LocalResource)?;
+        let _workspace = reserve(bytes).map_err(BatchCourtErrorV1::LocalResource)?;
 
         let mut nodes = BTreeMap::new();
         for node in graph {
@@ -112,6 +130,33 @@ impl BatchCourtWindowV1 {
         let terminal_daa = book.assigned_daa(&terminal).expect("successful case reservation assigns its terminal");
         Ok(terminal_daa - self.claim_accepted_daa + recovery_daa + 1)
     }
+}
+
+fn latest_notice_workspace_bytes_v1(book: &ServiceReservations, graph: &[CausalServicePacketV1]) -> Result<u64, NativeCoverageV1> {
+    type Id = [u8; 64];
+    let path = "Batch latest-notice scheduling workspace";
+    let overflow = || NativeCoverageV1::overflow::<CausalServicePacketV1>(path);
+    let nodes = graph.len() as u64;
+    let edges = graph.iter().try_fold(0u64, |n, packet| n.checked_add(packet.predecessors.len() as u64)).ok_or_else(overflow)?;
+    let mut q = TirNativeRequestsV1::new();
+    let book_heap = book.native_heap_v1(path);
+    let heap = book_heap.bytes().ok_or(book_heap)?;
+    // The candidate clones the book. Its validation rebuilds a residual map,
+    // which is bounded by another full existing-book envelope.
+    q.add_v1(heap.checked_mul(2).ok_or_else(overflow)?)?;
+    let per_node = 2 * btree_node_envelope_bytes_v1::<Id, &CausalServicePacketV1>() // outer and scheduler node maps
+        + 3 * btree_node_envelope_bytes_v1::<Id, ()>() // reachability, recheck and temporary parent sets
+        + btree_node_envelope_bytes_v1::<Id, usize>() // pending dependencies
+        + btree_node_envelope_bytes_v1::<Id, Vec<Id>>() // children
+        + btree_node_envelope_bytes_v1::<(u64, Id), ()>() // ready queue
+        + 2 * btree_node_envelope_bytes_v1::<u64, ServiceCost>() // new residual slots and the check's rebuild
+        + btree_node_envelope_bytes_v1::<Id, u64>() // new assignments
+        + btree_node_envelope_bytes_v1::<Id, ServicePacket>(); // new packet rows
+    q.add_v1(nodes.checked_mul(per_node as u64).ok_or_else(overflow)?)?;
+    q.vec_v1::<Id>(nodes)?; // reachability worklist
+    // Every child vector may grow independently from its minimum capacity.
+    q.exact_v1::<Id>(edges.checked_mul(2).and_then(|n| n.checked_add(nodes.checked_mul(8)?)).ok_or_else(overflow)?)?;
+    Ok(q.bytes_v1())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -205,7 +250,7 @@ pub enum BatchProgressStatusV1 {
     TimedOutUnverified,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BatchCourtErrorV1 {
     Demand,
     Identity,
@@ -217,6 +262,7 @@ pub enum BatchCourtErrorV1 {
     DeliveryCost,
     CaseGraph,
     Reservation(ServiceRefusal),
+    LocalResource(NativeCoverageV1),
     VerificationUnavailable,
     Checkpoint,
     Clock,
@@ -732,8 +778,22 @@ mod tests {
         ];
         let initial = ServiceReservations::new(cost).unwrap();
         let mut book = initial.clone();
+        let local = NativeCoverageV1::unsupported::<ServiceReservations>("Batch test", "no local workspace");
+        let empty_quote = latest_notice_workspace_bytes_v1(&initial, &graph).unwrap();
+        assert_eq!(
+            case.reserve_latest_notice_with_v1(&mut book, &graph, terminal, recovery, |_, _| {
+                panic!("local refusal must precede candidate construction")
+            }, |bytes| {
+                assert_eq!(bytes, empty_quote);
+                assert!(bytes > 0);
+                Err(local.clone())
+            }),
+            Err(BatchCourtErrorV1::LocalResource(local)),
+        );
+        assert_eq!(book, initial);
         assert_eq!(case.reserve_latest_notice_case_v1(&mut book, &graph, terminal, recovery), Ok(DISPUTE_WINDOW_DAA));
         assert_eq!(book.assigned_daa(&terminal), Some(before - 1));
+        assert!(latest_notice_workspace_bytes_v1(&book, &graph).unwrap() > empty_quote);
         let mut refused = initial.clone();
         let early = BatchCourtWindowV1 { challenge_opened_daa: notice - 1, ..case };
         assert_eq!(early.reserve_latest_notice_case_v1(&mut refused, &graph, terminal, recovery), Err(BatchCourtErrorV1::Window));
@@ -797,7 +857,7 @@ mod tests {
         };
         let invalid = Err(BatchCourtErrorV1::Opening);
         let unavailable = Err(BatchCourtErrorV1::VerificationUnavailable);
-        assert_eq!(whole(&mut mixed, b"abcdef", invalid), Err(BatchCourtErrorV1::Opening));
+        assert_eq!(whole(&mut mixed, b"abcdef", invalid.clone()), Err(BatchCourtErrorV1::Opening));
         assert_eq!(whole(&mut mixed, b"abcdef", unavailable), Err(BatchCourtErrorV1::VerificationUnavailable));
         assert_eq!(mixed.checkpoint_root().unwrap(), before);
         assert_eq!(whole(&mut mixed, b"abcdef", Ok(())), Ok(BatchPartOutcomeV1::Applied));

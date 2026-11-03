@@ -3103,3 +3103,25 @@ B0 and relay agreed at DAA 19,708. The newly scanned interval contained
 no Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-rent.AI2wG9/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-stop-rent-live.70CIzK/page.json`.
+
+## Native workspace for the latest-notice reservation
+
+The latest-notice Batch scheduler now reserves typed local workspace
+before building reachability indexes or cloning the service book. The
+quote includes the existing book, the rebuilt residual map, new packet
+and assignment rows, and the causal node, edge and queue owners. Local
+resource refusal returns a separate typed error before mutating the
+book. Packet geometry, capacity prices and clocks are unchanged.
+
+The extracted suite passed 39 checks. The latest-notice fixture still
+fits exactly at 10,000 DAA, refuses a larger recovery allowance, and
+now verifies unchanged state on a local workspace refusal and a larger
+quote with an occupied book. This covers the scheduler workspace for
+an already compiled graph. The full native profile compiler, pricing
+and admission at the original, integrated build, and public completion
+remain open.
+
+B0 and relay agreed at DAA 19,709 with no Qwen carrier in the newly
+scanned selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-workspace.EnboGP/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-workspace-live.FmeDg3/page.json`.
