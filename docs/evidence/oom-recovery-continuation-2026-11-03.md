@@ -735,3 +735,24 @@ eligible independent Qwen bonds and zero ready independent bonds.
 The producer's own row was the only ready one. No seats were assigned.
 This inventory precedes an accepted claim and a claim-specific draw.
 Node default/EVM test metadata compiled on `6e1285b78`.
+
+## Retention scan versus producer replacement — 05:06 UTC
+
+Commit `ab609f520` snapshots retained files' identities when planning
+GC. Under the publication lock, pruning defers the entire capture
+when an inventoried file was replaced. A file written after the scan
+clock has age zero. Two regressions failed on the previous code:
+it deleted a same-sized replacement and its companion answer after
+the writer released its pin, and it treated a later mtime as missing.
+Fifteen scoped tests passed on the fix. Log SHA256 is
+`6b8bf265ad369d48966a6d8631173d355a9311c42552c1a49adade09b9407520`.
+Node default/EVM test metadata compiled. The independent review
+confirmed the lock covers cooperating producer writes. Panel writers
+that bypass that lock, the separate Panel sweep and abandoned
+partials still require verification.
+
+At DAA 19,602, the exact selected tip matched on B0, the relay, the
+113 RPC tunnel, and public REST and WebSocket. B1 and the 113
+primary remained unsynced at 19,389 and 19,224 respectively. B0
+still reported 40 real producer blocks and zero receipts or kernel
+Finals. The local fixes have yet to run on T12.
