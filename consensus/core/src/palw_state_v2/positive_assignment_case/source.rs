@@ -290,15 +290,15 @@ impl NativeAssignedCourtV2 {
         Ok(*union)
     }
 
-    pub(super) fn consume_witness_record_reserve_v2(
+    pub(super) fn consume_court_transport_reserve_v2(
         &mut self,
         material: &AssignmentAdmissionMaterialV2,
         case: &CaseRow,
         prior: (u64, u64),
         journal_bytes: u64,
-        record_bytes: u64,
+        transport_bytes: u64,
     ) -> Result<(), PalwStateV2Error> {
-        self.source_court_reserve = self.source_court_reserve.checked_sub(record_bytes).ok_or_else(capacity)?;
+        self.source_court_reserve = self.source_court_reserve.checked_sub(transport_bytes).ok_or_else(capacity)?;
         self.check_source_journal_reserve_v2(material, prior, journal_bytes)?;
         let pending = self.source_unions.pending;
         misaka_palw_positive_contract::reservations::RemainingCapacity {
