@@ -660,7 +660,7 @@ impl VirtualStateProcessor {
         continuation_body: &[u8],
     ) -> Result<Option<(NativeAssignmentRulesV2, NativeAcceptedCaseCarriageV2)>, NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
-        let Some(open) = self.load_original_assignment_open_v2(parent, state, assignment, Some(continuation_body))? else {
+        let Some(mut open) = self.load_original_assignment_open_v2(parent, state, assignment, Some(continuation_body))? else {
             return Ok(None);
         };
         if continuation_body.get(4) == Some(&12)
@@ -706,7 +706,7 @@ impl VirtualStateProcessor {
                     &mut remaining_work,
                 )?;
                 let record = records.last().ok_or(E::Invalid("closed Assignment has no archived closing event"))?;
-                state
+                let close = state
                     .check_archived_unconsumed_assignment_close_v2(assignment, &open.rules, record, (remaining_heap, remaining_work))
                     .map_err(|why| match why {
                         kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => E::Resource(why),
@@ -715,6 +715,7 @@ impl VirtualStateProcessor {
                         }
                         _ => E::Invalid("archived Assignment closure differs from the executed state"),
                     })?;
+                open.rules = open.rules.with_checked_unconsumed_close_v2(close);
             }
         }
         Ok(Some((open.rules, open.carriage)))

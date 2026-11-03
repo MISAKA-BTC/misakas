@@ -183,7 +183,11 @@ impl TransitionBuilder<'_> {
             self.admit_native_write_v1(quote)?;
         }
         let amounts: Vec<u64> = action.entries().iter().map(|entry| entry.amount).collect();
-        let plan = qualify_rooted_assignment_candidate_v2(&self.state, tx, &amounts, ctx.daa_score, limits).map_err(refused)?;
+        let plan = if let Some(close) = action.rules().checked_unconsumed_close_v2() {
+            close.qualify_refund_candidate_v2(&self.state, tx, &amounts, ctx.daa_score)?
+        } else {
+            qualify_rooted_assignment_candidate_v2(&self.state, tx, &amounts, ctx.daa_score, limits).map_err(refused)?
+        };
         self.commit_authorized_assignment_spend_v2(ctx, action, &plan)
     }
 
