@@ -594,7 +594,9 @@ impl VirtualStateProcessor {
         };
         let fault = |why| NativeCoverageV1::unsupported::<Self>("rooted relay archive", why);
         use misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2;
-        let (case_contract_material, case_contract_work) = if matches!(auth.terms.target, RelayTargetV2::InitialCase { .. }) {
+        let (case_contract_material, case_contract_work) = if auth.terms.funding_purpose
+            == misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2::CaseC
+        {
             let (material, work) = self.case_relay_original_contract_v2(parent, state, &auth.terms, &auth.physical, workspace)
                 .map_err(|why| match why {
                     crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => why,
@@ -607,8 +609,8 @@ impl VirtualStateProcessor {
         };
         // Two rooted relay rows, two reachability checks, header, selected
         // parent, acceptance index and material keys. C resolves its Open.
-        let fixed_reads =
-            RELAY_ARCHIVE_LOOKUP_READS_V2 + if case_contract_material.is_some() { CASE_RELAY_OPEN_LOOKUP_READS_V2 } else { 0 };
+        let case_reads = if case_contract_material.is_some() { CASE_RELAY_OPEN_LOOKUP_READS_V2 } else { 0 };
+        let fixed_reads = RELAY_ARCHIVE_LOOKUP_READS_V2 + case_reads;
         if auth.quote.usage.replay_reads < fixed_reads || auth.quote.usage.heap_bytes < workspace {
             return Err(fault("original relay replay limits do not cover archive lookup"));
         }
@@ -676,7 +678,10 @@ impl VirtualStateProcessor {
             }
             // C's exact original contract is checked at R's actual accepted
             // prefix in the payer replay. Its registration uses R's own policy.
-            misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2::InitialCase { .. } => true,
+            RelayTargetV2::InitialCase { .. } => true,
+            RelayTargetV2::Continuation { .. } => {
+                auth.terms.funding_purpose == misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2::CaseC
+            }
             _ => false,
         };
         let profile = AssignmentFundingRelayProfileV2::capture_at_intake(params, origin.accepted_daa)
@@ -966,8 +971,11 @@ impl PositiveCarrierPhaseTwoV2 {
             let mut initial_c = None;
             let output = if let Some(physical) = relay_cap {
                 let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], physical.max_frame_bytes) else { continue };
-                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. }) {
-                    continue; // Other purposes need their own original account owner.
+                let case_relay = body.terms.funding_purpose == RelayFundingPurposeV2::CaseC;
+                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. })
+                    && !(case_relay && matches!(body.terms.target, RelayTargetV2::Continuation { .. }))
+                {
+                    continue;
                 }
                 if let Some(state) = selected_parent_state {
                     pending_relay = processor.check_exact_relay_archive_v2(
@@ -983,9 +991,7 @@ impl PositiveCarrierPhaseTwoV2 {
                     continue;
                 }
                 if pending_relay.is_none() {
-                    if matches!(body.terms.target, RelayTargetV2::InitialCase { .. })
-                        && let Some(state) = selected_parent_state
-                    {
+                    if case_relay && let Some(state) = selected_parent_state {
                         let original = processor.case_relay_original_contract_v2(
                             carrier.prefix.selected_parent, state, &body.terms, &physical, bytes,
                         ).map_err(|why| match why {

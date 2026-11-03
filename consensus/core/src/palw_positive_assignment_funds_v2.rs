@@ -492,6 +492,69 @@ pub fn check_case_relay_registration_assignment_v2(
     Ok(())
 }
 
+/// The previous Case cursor already exists at the relay registration prefix.
+/// The proposed successor output is deliberately absent until its own spend.
+pub fn check_case_relay_continuation_account_v2(
+    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
+    assignment: &misaka_palw_positive_contract::assignment::rows::AssignmentRow,
+    funding: &misaka_palw_positive_contract::rows::FundingRow,
+    origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+) -> Result<(), ContractError> {
+    use misaka_palw_positive_contract::{
+        assignment::{
+            funding_relay::{RelayFundingPurposeV2, RelayTargetV2},
+            rows::AssignmentStatusV2,
+        },
+        identity::principal,
+    };
+    terms.validate_shape()?;
+    assignment.validate_shape()?;
+    let AssignmentStatusV2::Consumed { case, .. } = assignment.status else {
+        return Err(ContractError::Range);
+    };
+    let RelayTargetV2::Continuation { original_funding, predecessor, original_contract, .. } = terms.target else {
+        return Err(ContractError::Identity);
+    };
+    let accepted = funding.last_settlement.map_or(funding.funding_origin, |material| material.origin);
+    let precedes = if accepted.accepting_block == origin.accepting_block {
+        accepted.accepted_daa == origin.accepted_daa
+            && accepted.accepted_blue_score == origin.accepted_blue_score
+            && (accepted.accepted_tx_ordinal, accepted.event_ordinal) < (origin.accepted_tx_ordinal, origin.event_ordinal)
+    } else {
+        accepted.accepted_daa <= origin.accepted_daa && accepted.accepted_blue_score < origin.accepted_blue_score
+    };
+    if !precedes || origin.accepted_daa >= terms.register_before_daa {
+        return Err(ContractError::Range);
+    }
+    let signed = &assignment.bundle.terms;
+    if terms.funding_purpose != RelayFundingPurposeV2::CaseC
+        || terms.assignment != assignment.id()
+        || terms.contract_network != signed.network
+        || terms.contract_ruleset != signed.ruleset
+        || terms.contract_anchor != signed.branch_anchor
+        || terms.payer_bond != signed.poster
+        || terms.payer != signed.payer
+        || terms.payer != funding.consent.payer
+        || terms.payer != principal(&funding.payer_key)
+        || terms.refund_payload != signed.refund_payload
+        || terms.refund_payload != funding.consent.refund_payload
+        || funding.consent.case != case
+        || original_funding != funding.original_outpoint
+        || Some(predecessor) != funding.current_outpoint
+        || original_contract != funding.consent.id().0
+    {
+        return Err(ContractError::Identity);
+    }
+    let remaining = [funding.fee.remaining, funding.capital.remaining, funding.surplus.remaining]
+        .into_iter()
+        .try_fold(0u64, u64::checked_add)
+        .ok_or(ContractError::Budget)?;
+    if terms.expected_amount > remaining {
+        return Err(ContractError::Budget);
+    }
+    Ok(())
+}
+
 /// Checks a pending C registration against the original accepted Assignment
 /// and the signed Case consent. The writer must qualify the real coin and
 /// authenticate the archived registration before it can bind either row.

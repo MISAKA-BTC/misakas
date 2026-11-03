@@ -1162,20 +1162,43 @@ impl VirtualStateProcessor {
         let authorization = replay.authorization;
         let current_custody = replay.custody;
         let terms = &authorization.terms;
+        // Use the unchanged Assignment identity to find the Case, then reverse
+        // the actual funding cursor to the original registration position.
+        let scratch = pending_funding_relay_payer_scratch_v2(terms);
+        let delta_heap = replay.maximum_heap.checked_sub(scratch).ok_or(E::Invalid("relay payer replay heap cap"))?;
+        let _lease =
+            reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("relay payer replay workspace owner"))?;
+        let mut continuation_assignment = None;
         let (contract_key, poster_nonce) = match terms.target {
             RelayTargetV2::InitialAssignment { poster_nonce, .. } => {
                 (NativeRowKey::AssignmentNonce(terms.payer_bond), Some(poster_nonce))
             }
             RelayTargetV2::InitialCase { .. } => (NativeRowKey::Assignment(terms.assignment), None),
+            RelayTargetV2::Continuation { .. }
+                if terms.funding_purpose == misaka_palw_positive_contract::assignment::funding_relay::RelayFundingPurposeV2::CaseC =>
+            {
+                use misaka_palw_positive_contract::assignment::rows::AssignmentStatusV2;
+                let assignment_key = NativeRowKey::Assignment(terms.assignment);
+                let encoded = (KERNEL_AUX_TABLE, assignment_key.encode());
+                let route = replay.state.kernel_route_state_v1().ok_or(E::Unavailable("rooted relay kernel route"))?;
+                let bytes = route.aux.get(&encoded).ok_or(E::Unavailable("continuation original Assignment"))?;
+                replay.charge(1, 8 * bytes.len() as u64)?;
+                let NativeRowBody::Assignment(assignment) =
+                    NativeRowValue::decode(&encoded.1, bytes).map_err(|_| E::Invalid("continuation Assignment codec"))?.body
+                else {
+                    return Err(E::Invalid("continuation Assignment kind"));
+                };
+                let AssignmentStatusV2::Consumed { case, .. } = assignment.status else {
+                    return Err(E::Invalid("continuation Assignment was not consumed"));
+                };
+                if replay.case_contract_material != Some(assignment.admission_material) {
+                    return Err(E::Invalid("continuation differs from its original Assignment material"));
+                }
+                continuation_assignment = Some(assignment);
+                (NativeRowKey::Funding(case), None)
+            }
             _ => return Err(E::Unavailable("original relay payer contract owner")),
         };
-        // The rooted R rows remain under the outer lease. Compare them
-        // directly with the delta's borrowed encodings. Only keys and the
-        // small nonce projection need additional scratch.
-        let scratch = pending_funding_relay_payer_scratch_v2(terms.funding_purpose);
-        let delta_heap = replay.maximum_heap.checked_sub(scratch).ok_or(E::Invalid("relay payer replay heap cap"))?;
-        let _lease =
-            reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("relay payer replay workspace owner"))?;
         let funding = terms.funding_outpoint;
         let purpose = terms.funding_purpose;
         let auth_key = NativeRowKey::FundingRelayAuthorization { funding, purpose }.encode();
@@ -1204,7 +1227,7 @@ impl VirtualStateProcessor {
                 .transpose()
         };
         replay.charge(2, (size_of::<PalwBondKeyV2>() + authorization.payer_key.len() + contract_key.1.len()) as u64)?;
-        let mut bond = project(replay.state.bond(&payer));
+        let mut bond = continuation_assignment.is_none().then(|| project(replay.state.bond(&payer))).flatten();
         let route = replay.state.kernel_route_state_v1().ok_or(E::Unavailable("rooted relay kernel route"))?;
         let raw = route.aux.get(&contract_key).map(Vec::as_slice);
         replay.charge(0, raw.map_or(0, |bytes| bytes.len() as u64))?;
@@ -1231,7 +1254,7 @@ impl VirtualStateProcessor {
             }
             for (index, entry) in delta.entries.iter().enumerate().rev() {
                 match entry {
-                    PalwDeltaEntryV2::Bond { key, old, new } if *key == payer => {
+                    PalwDeltaEntryV2::Bond { key, old, new } if *key == payer && continuation_assignment.is_none() => {
                         if bond != project(new.as_ref()) {
                             return Err(E::Invalid("relay payer bond history differs"));
                         }
@@ -1263,7 +1286,7 @@ impl VirtualStateProcessor {
                         if *table != KERNEL_AUX_TABLE
                             || *key != custody_key
                             || !pending_funding_relay_row_images_match_v2(authorization, current_custody, bytes, custody_bytes)
-                            || !matches!(bond, Some((_, true, true)))
+                            || (continuation_assignment.is_none() && !matches!(bond, Some((_, true, true))))
                         {
                             return Err(E::Invalid("original relay row images or payer bond differ"));
                         }
@@ -1272,6 +1295,28 @@ impl VirtualStateProcessor {
                                 .unwrap_or_default()
                                 .after_accepting(poster_nonce)
                                 .map_err(|_| E::Invalid("original relay payer nonce was ineligible"))?;
+                        } else if let Some(assignment) = &continuation_assignment {
+                            let bytes = case_row
+                                .as_ref()
+                                .and_then(RelayCaseHistoryRowV2::raw)
+                                .ok_or(E::Invalid("Case funding missing at successor registration"))?;
+                            replay.charge(0, 8 * bytes.len() as u64)?;
+                            let NativeRowBody::Funding(account) = NativeRowValue::decode(&contract_key.1, bytes)
+                                .map_err(|_| E::Invalid("successor funding codec"))?
+                                .body
+                            else {
+                                return Err(E::Invalid("successor funding kind"));
+                            };
+                            if account.payer_key != authorization.payer_key {
+                                return Err(E::Invalid("successor payer differs from historical funding key"));
+                            }
+                            kaspa_consensus_core::palw_positive_assignment_funds_v2::check_case_relay_continuation_account_v2(
+                                terms,
+                                assignment,
+                                &account,
+                                replay.origin,
+                            )
+                            .map_err(|_| E::Invalid("successor differs from historical Case cursor"))?;
                         } else {
                             let raw = case_row
                                 .as_ref()

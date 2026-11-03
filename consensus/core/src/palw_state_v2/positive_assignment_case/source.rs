@@ -270,9 +270,10 @@ impl NativeAssignedCourtV2 {
         remaining_heap: u64,
     ) -> Result<Option<PendingCaseRelaySuccessorV2>, PalwStateV2Error> {
         use crate::palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2};
-        let (Some(minimum_service_cutoff), Some(point)) = (self.relay_service_cutoff, funding.current_outpoint) else {
+        let (Some((minimum_service_cutoff, remaining)), Some(point)) = (self.relay_envelope, funding.current_outpoint) else {
             return Ok(None);
         };
+        let remaining = remaining.checked_sub(1).ok_or_else(|| refuse("Case successor exceeds the original continuation capacity"))?;
         let mut quote = TirNativeRequestsV1::new();
         quote.exact_v1::<NativeRowValue>(3).map_err(PalwStateV2Error::NativeResource)?;
         quote.exact_v1::<FundingRelayRegistrationBodyV2>(1).map_err(PalwStateV2Error::NativeResource)?;
@@ -344,6 +345,7 @@ impl NativeAssignedCourtV2 {
                 FundingRelayBodyErrorV2::Contract(why) => refuse(why),
             },
         )?;
+        self.relay_envelope = Some((minimum_service_cutoff, remaining));
         Ok(Some(PendingCaseRelaySuccessorV2 {
             custody,
             predecessor,
