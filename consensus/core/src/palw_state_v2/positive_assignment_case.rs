@@ -1029,6 +1029,19 @@ fn prepare_initial_case_checker_v2(
     {
         return Err(refuse("original Case source and policy"));
     }
+    let horizon =
+        super::positive_assignment::assignment_horizon_v2(&rules, signed, source, prover, resources, row.origin.accepted_daa)?;
+    let accepted_daa = first.origin().accepted_daa;
+    let gate_c = rules.gate_c_clock(accepted_daa).map_err(refuse)?;
+    horizon.check_case_source_floor_v2(&payload.service, &gate_c, policy.refund_window_daa, positive.max_attempts).map_err(refuse)?;
+    if bundle.case.maturity_daa < accepted_daa
+        || bundle.case.maturity_daa >= row.bundle.terms.reserve_until_daa
+        || bundle.funding.basis != payload.basis
+        || payload.basis.required_fee < horizon.case_money.fee
+        || payload.basis.required_capital < horizon.case_money.capital
+    {
+        return Err(refuse("recovered Case funding or maturity differs from its original envelope"));
+    }
     // The preparation retains another class, job, and plan while the original
     // derivation is still live. Reuse the typed program/StepSpace quote for
     // that second owner and reserve it before authenticating the Result.
@@ -1088,7 +1101,7 @@ fn prepare_initial_case_checker_v2(
             max_receipt_bytes: receipt_bytes,
             max_reserved_elements: positive.max_all_attempt_elements,
             max_reserved_terms: positive.max_all_attempt_terms,
-            deadline: payload.service.deadline,
+            deadline: horizon.court_before_daa,
         },
         first.origin().accepted_daa,
     )
