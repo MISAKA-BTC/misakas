@@ -1418,3 +1418,34 @@ off and on. The timed-out Darwin executable had linked unoptimized
 native A16 and TIR arithmetic dependencies. The guarded diagnostic
 build compiles those same sources with optimization and preserves
 overflow checks and debug assertions.
+
+## Exact original Qwen #21 full arithmetic comparison — 06:45 UTC
+
+The guarded optimized diagnostic completed in 230.0 seconds with
+`EQUAL`. It used the registered Qwen2.5 A16 8K artifact, the
+original T12 anchor, and the DAA 19,566 attempt. The workload
+was 1,023 input positions and one selected output token. Native
+A16 and the typed mirror matched 689,505 of 689,505 compared
+node rows and the final logits row. Both selected token ID 220
+and reproduced the original signed output root. The input root
+matched the original commitment. Peak RSS was 4,528,504,832
+bytes. Across 114 samples, free disk stayed above 1,359,351,808
+bytes, swap growth was zero, and no scratch files were written.
+The run used two Rayon threads and a network-denied sandbox.
+Its receipt SHA-256 is
+`ab311b11749ecce2d3e11d655ecddbd2343b67070991e47de358cfaacea99e6a`.
+The optimized build and its five focused tests used the pinned
+original Base0 and TIR Exec sources with overflow checks and
+debug assertions retained.
+
+This is arithmetic compatibility for a specific original claim
+in an isolated process that had the full model. It establishes
+the exact baseline for a Panel-built packet and an independent
+model-free Node check. Those checks and native adjudication
+remain separate from this result.
+
+The later public and paired-node read matched at DAA 19,631.
+Qwen #57 had signed retention DAA 40,236 and was referenced
+by the selected fold at DAA 19,630. B0 rejected the claim
+with 20,606 DAA remaining against 20,608 required. Both nodes
+returned no claim row for the exact ID.
