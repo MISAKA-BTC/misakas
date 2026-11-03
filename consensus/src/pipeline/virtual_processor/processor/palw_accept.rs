@@ -2460,6 +2460,7 @@ impl VirtualStateProcessor {
             round_fee_incomes: Vec::new(),
             funded_escrow_settlements: Vec::new(),
             assignment_settlements: Vec::new(),
+            case_source_spends: Vec::new(),
             positive_assignment_actions: Vec::new(),
             // G14 r5: settled funded-escrow rows retire `2 × pruning_depth` DAA after their settling spend, past the route's fence.
             funded_escrow_retention_daa: self

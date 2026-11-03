@@ -223,6 +223,8 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// `PalwTransitionExtrasV1::funded_escrow_settlements`, so the row settles in the same rooted delta as the UTXO spend.
     pub palw_escrow_settlements: Vec<kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
     pub palw_assignment_settlements: Vec<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
+    pub palw_case_source_spends: Vec<kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2>,
+    case_source_spends_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 
 /// **G14 lane escrow-rfc08 (RFC-0035 A): what the funded-escrow half of the spend filter reads.**
@@ -426,6 +428,8 @@ impl<'a> UtxoProcessingContext<'a> {
         self.palw_escrow_locks.provisional.clear();
         self.palw_escrow_settlements.clear();
         self.palw_assignment_settlements.clear();
+        self.palw_case_source_spends = Vec::new();
+        self.case_source_spends_lease = None;
         self.relay_fee_plan = Some(plan);
         std::mem::take(&mut self.mergeset_acceptance_data)
     }
@@ -462,6 +466,8 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_escrow_locks: Default::default(),
             palw_escrow_settlements: Vec::new(),
             palw_assignment_settlements: Vec::new(),
+            palw_case_source_spends: Vec::new(),
+            case_source_spends_lease: None,
         }
     }
 
@@ -1211,10 +1217,28 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
-                if let Some(spend) = case_spends.get(&validated_tx.tx.id())
-                    && let Some(continued) = spend.continuation_v2()
-                {
-                    new_provisional_escrows.push(continued);
+                if let Some(spend) = case_spends.get(&validated_tx.tx.id()) {
+                    if let Some(continued) = spend.continuation_v2() {
+                        new_provisional_escrows.push(continued);
+                    }
+                    if ctx.palw_case_source_spends.len() == ctx.palw_case_source_spends.capacity() {
+                        let bytes = size_of_val(spend) as u64;
+                        let unavailable = |detail| NativeCoverageV1::unsupported::<Self>("accepted Case spend facts", detail);
+                        match &mut ctx.case_source_spends_lease {
+                            Some(lease) => lease.grow_memory_v1(bytes)?,
+                            None => {
+                                ctx.case_source_spends_lease = Some(
+                                    kaspa_consensus_core::palw_native_resource_v1::reserve_native_requests_v1(bytes)?
+                                        .ok_or_else(|| unavailable("native owner is not armed"))?,
+                                )
+                            }
+                        }
+                        ctx.palw_case_source_spends.try_reserve_exact(1).map_err(|_| unavailable("accepted Case spend allocation"))?;
+                        if ctx.palw_case_source_spends.capacity() - ctx.palw_case_source_spends.len() != 1 {
+                            return Err(unavailable("accepted Case spend allocation exceeds its quote"));
+                        }
+                    }
+                    ctx.palw_case_source_spends.push(*spend);
                 }
                 if !ctx.palw_escrow_locks.assignment.is_empty() {
                     let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();

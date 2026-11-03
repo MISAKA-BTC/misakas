@@ -101,6 +101,61 @@ impl PositiveAssignmentMaterialOutcomeV2 {
         Ok(())
     }
 
+    pub(super) fn check_case_source_utxo_settlements_v2(
+        &self,
+        entries: &[PalwDeltaEntryV2],
+        spends: &[QualifiedCaseSourceSpendV2],
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2;
+        use misaka_palw_positive_contract::{
+            journal::{CaseJournalEventKind, CaseJournalRecordView},
+            native::NativeRowKey,
+        };
+
+        let mismatch = || PalwStateV2Error::DeltaMismatch("accepted Case UTXO debit and native journal/funding differ");
+        let mut spends = spends.iter();
+        for record in &self.case_records {
+            if record.header.kind != CaseJournalEventKind::NativeTransaction || record.header.sequence == 1 {
+                continue;
+            }
+            let spend = spends.next().ok_or_else(mismatch)?;
+            let view = CaseJournalRecordView::decode(&record.raw, record.limits).map_err(|_| mismatch())?;
+            if !spend.matches_payment_journal_v2(record.header, view.payload()) {
+                return Err(mismatch());
+            }
+            let aux = view.aux().next().ok_or_else(mismatch)?;
+            let boundary = AssignmentCaseBoundaryV2::decode(aux.preimage()).map_err(|_| mismatch())?;
+            let start = usize::try_from(boundary.before_delta_end).map_err(|_| mismatch())?;
+            let event = entries.get(start..record.delta_end).ok_or_else(mismatch)?;
+            let key = NativeRowKey::Funding(record.header.case).encode();
+            let mut found = false;
+            for entry in event {
+                let PalwDeltaEntryV2::KernelRouteRow { table, key: delta_key, old, new } = entry else { continue };
+                if *table != KERNEL_AUX_TABLE || *delta_key != key {
+                    continue;
+                }
+                let (Some(old), Some(new)) = (old.as_deref(), new.as_deref()) else { return Err(mismatch()) };
+                let NativeRowBody::Funding(before) = NativeRowValue::decode(&key, old).map_err(|_| mismatch())?.body else {
+                    return Err(mismatch());
+                };
+                let NativeRowBody::Funding(after) = NativeRowValue::decode(&key, new).map_err(|_| mismatch())?.body else {
+                    return Err(mismatch());
+                };
+                if found || !spend.matches_funding_delta_v2(&before, &after, record.header.origin) {
+                    return Err(mismatch());
+                }
+                found = true;
+            }
+            if !found {
+                return Err(mismatch());
+            }
+        }
+        if spends.next().is_some() {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_v2(&self, entries: &[PalwDeltaEntryV2]) -> Result<(), PalwStateV2Error> {
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
         for record in &self.records {

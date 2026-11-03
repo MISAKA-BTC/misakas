@@ -71,6 +71,17 @@ fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Digest {
     value.serialize(&mut writer).expect("native bounded canonical data");
     Digest(writer.0.finalize().as_bytes().try_into().expect("64-byte hash"))
 }
+const CASE_PAYMENT_CARRIER_DOMAIN_V2: &[u8] = b"misaka/positive/case-payment-carrier/v2/r1";
+
+pub(crate) fn case_payment_carrier_digest_v2(transaction: &Transaction) -> Digest {
+    hash(CASE_PAYMENT_CARRIER_DOMAIN_V2, transaction)
+}
+
+pub(crate) fn case_payment_journal_digest_v2(raw: &[u8]) -> Digest {
+    let digest = blake2b_simd::Params::new().hash_length(64).key(CASE_PAYMENT_CARRIER_DOMAIN_V2).hash(raw);
+    Digest(*digest.as_array())
+}
+
 /// Exact canonical DATA recipe is Borsh `(2u16,1u16,actual_txid,[entries])`.
 /// The slice encodes its ordinary u32 length. Entries are the actual populated
 /// inputs in transaction-input order, retaining amounts/scripts/coinbase/DAA.

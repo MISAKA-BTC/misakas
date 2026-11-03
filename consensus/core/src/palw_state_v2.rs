@@ -15827,6 +15827,7 @@ fn apply_palw_transition_v7_inner(
         PositiveAssignmentMaterialOutcomeV2 { records: builder.assignment_materials, case_records: builder.assignment_case_materials };
     materials.validate_v2(&delta.entries)?;
     materials.check_utxo_settlements_v2(&delta.entries, &extras.assignment_settlements)?;
+    materials.check_case_source_utxo_settlements_v2(&delta.entries, &extras.case_source_spends)?;
     builder
         .native_reservation
         .finish_transition_with_assignment_materials_v2(builder.state, delta, merged_skips, materials)
@@ -20890,6 +20891,8 @@ pub struct PalwTransitionExtrasV1 {
     /// Ordinary UTXO spends qualified by acceptance. After raw execution, the
     /// fold checks that each has the same funding mutation and journal record.
     pub assignment_settlements: Vec<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
+    /// Qualified Case debits that survived ordinary UTXO acceptance, in order.
+    pub case_source_spends: Vec<crate::palw_state_v2::QualifiedCaseSourceSpendV2>,
     /// Raw native actions replayed at exact positions in the accepted object
     /// fold. This is not a vector of prepared or previously accepted rows.
     pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,

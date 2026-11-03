@@ -3022,6 +3022,7 @@ impl VirtualStateProcessor {
                                     // Raw op12 still derives settlement at the executed prefix.
                                     // Compare that outcome with what UTXO acceptance debited.
                                     extras.assignment_settlements = std::mem::take(&mut ctx.palw_assignment_settlements);
+                                    extras.case_source_spends = std::mem::take(&mut ctx.palw_case_source_spends);
                                     extras.positive_assignment_actions = assignment_raw_schedule;
                                     // RFC-0008 v2: and the EXEC blocks this block's anchor covered — the slice carriers (each
                                     // re-judged by the fold against its own running state) and the covered set itself.

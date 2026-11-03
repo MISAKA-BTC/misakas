@@ -221,7 +221,7 @@ def aux_root(value):
                 aux_root(fm[1]) if fm[1].startswith('mirror:') else references(fm[1],item)
         references(re.sub(r'mirror:[\w:]+','u8',alt),AUX_ORIGIN)
 for _n in AUX.NS:aux_root(_n['value'])
-FUNDED_MANUAL={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1'}
+FUNDED_MANUAL={'crate::palw_state_v2::positive_assignment_case::source::QualifiedCaseSourceSpendV2','crate::palw_state_v2::QualifiedCaseSourceSpendV2','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1'}
 while queue:
  path=queue.pop(0)
  if path in visited:continue
@@ -282,7 +282,7 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'crate::palw_kernel_route_v1::PalwKernelRouteStateV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'crate::palw_state_v2::positive_assignment_case::source::QualifiedCaseSourceSpendV2','crate::palw_state_v2::QualifiedCaseSourceSpendV2','crate::palw_kernel_route_v1::PalwKernelRouteStateV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
 private={}; public=[]
 for item,code,is_private in generated:

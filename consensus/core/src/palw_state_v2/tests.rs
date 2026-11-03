@@ -28788,6 +28788,7 @@ mod evm_market {
     fn extras(actions: Vec<PalwEvmMarketActionV1>) -> PalwTransitionExtrasV1 {
         PalwTransitionExtrasV1 {
             assignment_settlements: Default::default(),
+            case_source_spends: Default::default(),
             positive_assignment_actions: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,
@@ -29081,6 +29082,7 @@ mod evm_market {
         // Below the fence the same actions write nothing.
         let dormant = PalwTransitionExtrasV1 {
             assignment_settlements: Default::default(),
+            case_source_spends: Default::default(),
             positive_assignment_actions: Default::default(),
             selected_source_bootstrap_v1: None,
             selected_source_bootstrap_fault_v1: None,

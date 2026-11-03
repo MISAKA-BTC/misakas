@@ -917,7 +917,7 @@ impl NativeAssignedCourtV2 {
     }
 
     fn check_case_payment_journal_reserve_v2(
-        &self,
+        &mut self,
         backing: &NativeCommittedAssignedCaseV2,
         tx: &crate::tx::Transaction,
         prior: (u64, u64),
@@ -925,7 +925,10 @@ impl NativeAssignedCourtV2 {
         let payload = borsh::object_length(tx).map_err(refuse)? as u64;
         let bytes = crate::palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2(payload)
             .ok_or_else(capacity)?;
-        self.check_source_journal_reserve_v2(backing.material(), prior, bytes)
+        self.check_source_journal_reserve_v2(backing.material(), prior, bytes)?;
+        let work = backing.material().native_preimages.source_policy.work.court_body_work(bytes).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(|| refuse("Case payment journal replay work cap"))?;
+        Ok(())
     }
 
     pub(super) fn replay_case_source_payment_v2(
@@ -1070,16 +1073,58 @@ impl TransitionBuilder<'_> {
 
 /// The exact Case settlement validated from rooted history and populated
 /// inputs. The ordinary script check and the accepted-event fold still run.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct QualifiedCaseSourceSpendV2 {
     transaction: crate::TransactionId,
     carrier_hash: crate::TransactionHash,
     inputs: Digest,
+    journal_carrier: Digest,
+    case: CaseId,
+    locked: u64,
+    paid: u64,
     debit: crate::tx::TransactionOutpoint,
     continuation: Option<crate::tx::TransactionOutpoint>,
     successor_relay: Option<AcceptedMaterial>,
 }
+impl crate::palw_native_resource_v1::NativeHeapV1 for QualifiedCaseSourceSpendV2 {
+    fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
+        NativeCoverageV1::zero()
+    }
+}
 impl QualifiedCaseSourceSpendV2 {
+    pub(in crate::palw_state_v2) fn matches_payment_journal_v2(
+        &self,
+        header: misaka_palw_positive_contract::journal::CaseJournalHeader,
+        raw: &[u8],
+    ) -> bool {
+        header.case == self.case
+            && header.origin.carrier_transaction.0 == self.transaction.as_bytes()
+            && crate::palw_positive_assignment_case_material_v2::case_payment_journal_digest_v2(raw) == self.journal_carrier
+    }
+
+    pub(in crate::palw_state_v2) fn matches_funding_delta_v2(
+        &self,
+        before: &FundingRow,
+        after: &FundingRow,
+        origin: AcceptedOrigin,
+    ) -> bool {
+        use crate::palw_positive_assignment_funds_v2::{AssignmentLegDebitV2, debit_assignment_leg_v2, native_assignment_outpoint_v2};
+        let locked =
+            [before.fee.remaining, before.capital.remaining, before.surplus.remaining].into_iter().try_fold(0u64, u64::checked_add);
+        let Ok(fee) = debit_assignment_leg_v2(before.fee, AssignmentLegDebitV2 { paid: self.paid, ..Default::default() }, 0) else {
+            return false;
+        };
+        let Ok(settlement) = source_material(origin) else {
+            return false;
+        };
+        before.consent.case == self.case
+            && locked == Some(self.locked)
+            && before.current_outpoint.map(native_assignment_outpoint_v2) == Some(self.debit)
+            && after.current_outpoint.map(native_assignment_outpoint_v2) == self.continuation
+            && *after
+                == FundingRow { current_outpoint: after.current_outpoint, fee, last_settlement: Some(settlement), ..before.clone() }
+    }
+
     pub fn matches_v2(&self, transaction: &crate::tx::Transaction, entries: &[crate::tx::UtxoEntry]) -> bool {
         transaction.id() == self.transaction
             && transaction.id_is_current()
@@ -1132,6 +1177,10 @@ pub fn qualify_case_source_spend_v2(
         carrier_hash: crate::hashing::tx::hash(transaction),
         inputs: crate::palw_positive_assignment_case_material_v2::assigned_case_inputs_id_v2(transaction.id(), entries)
             .map_err(refuse)?,
+        journal_carrier: crate::palw_positive_assignment_case_material_v2::case_payment_carrier_digest_v2(transaction),
+        case: prior.case,
+        locked: entries[0].amount,
+        paid: payment.amount,
         debit: native_assignment_outpoint_v2(payment.debit),
         continuation: payment.funding.current_outpoint.map(native_assignment_outpoint_v2),
         successor_relay: payment.successor.as_ref().map(|successor| successor.custody.reservation),
@@ -1141,6 +1190,60 @@ pub fn qualify_case_source_spend_v2(
 #[cfg(test)]
 mod source_fee_tests {
     use super::{CaseSourceFeesV2, SourceDeliveryReserveV2};
+
+    #[test]
+    fn accepted_case_coin_and_literal_journal_must_reconcile() {
+        use super::*;
+        use crate::{
+            palw_positive_assignment_case_material_v2::case_payment_carrier_digest_v2,
+            palw_positive_assignment_funds_v2::native_assignment_outpoint_v2,
+            tx::{Transaction, TransactionOutpoint},
+        };
+        use misaka_palw_positive_contract::journal::{CaseJournalEventKind, CaseJournalHeader};
+
+        let (_, _, case, before, _, _) = crate::palw_positive_rows_v2::tests::signed_bundle();
+        let tx = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, vec![]);
+        let next = NativeOutpoint { transaction: NativeHash64(tx.id().as_bytes()), index: 1 };
+        let origin = AcceptedOrigin { carrier_transaction: next.transaction, ..before.funding_origin };
+        let header = CaseJournalHeader {
+            version: 2,
+            revision: 1,
+            scope: case.coverage.scope,
+            case: case.case,
+            result: case.result,
+            sequence: 2,
+            previous: Digest([3; 64]),
+            origin,
+            kind: CaseJournalEventKind::NativeTransaction,
+        };
+        let proof = QualifiedCaseSourceSpendV2 {
+            transaction: tx.id(),
+            carrier_hash: crate::hashing::tx::hash(&tx),
+            inputs: Digest([0; 64]),
+            journal_carrier: case_payment_carrier_digest_v2(&tx),
+            case: case.case,
+            locked: before.initial_locked,
+            paid: 1,
+            debit: native_assignment_outpoint_v2(before.original_outpoint),
+            continuation: Some(TransactionOutpoint::new(tx.id(), 1)),
+            successor_relay: None,
+        };
+        let mut raw = borsh::to_vec(&tx).unwrap();
+        assert!(proof.matches_payment_journal_v2(header, &raw));
+        raw.push(0);
+        assert!(!proof.matches_payment_journal_v2(header, &raw));
+
+        let mut after = before.clone();
+        after.current_outpoint = Some(next);
+        after.fee.paid += 1;
+        after.fee.remaining -= 1;
+        after.last_settlement = Some(source_material(origin).unwrap());
+        assert!(proof.matches_funding_delta_v2(&before, &after, origin));
+        after.fee.paid += 1;
+        after.fee.remaining -= 1;
+        assert!(!proof.matches_funding_delta_v2(&before, &after, origin));
+        assert!(!proof.matches_funding_delta_v2(&before, &before, origin));
+    }
 
     #[test]
     fn first_delivery_releases_only_its_own_capacity_in_every_dimension() {
