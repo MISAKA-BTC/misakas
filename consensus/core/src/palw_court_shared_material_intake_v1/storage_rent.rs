@@ -6,7 +6,8 @@ use super::{
 use crate::palw_batch_court_v1::{
     BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
     carriage::{
-        BATCH_COURT_CARRIER_MAGIC_V1, BATCH_STOP_WIRE_OVERHEAD_V1, BatchCourtWireV1, BatchMaterialControlV1, batch_stop_wire_shape_v1,
+        BATCH_COURT_CARRIER_MAGIC_V1, BATCH_STOP_WIRE_OVERHEAD_V1, BATCH_VERIFY_NUMERICAL_TAG_V1,
+        BatchCourtWireV1, BatchMaterialControlV1, batch_stop_wire_shape_v1,
         decode_batch_court_payload_v1,
     },
 };
@@ -89,7 +90,7 @@ impl PreparedBatchCarrierV1 {
         let storage_rent = match &wire {
             BatchCourtWireV1::Respond(control) => material_batch_storage_rent_v1(&control.intake).map_err(Decode)?,
             BatchCourtWireV1::Stop(stop) => Some(storage_rent_for_bytes_v1(stop.operands.len() as u64).map_err(Decode)?),
-            BatchCourtWireV1::Open(_) => None,
+            BatchCourtWireV1::Open(_) | BatchCourtWireV1::VerifyNumerical(_) => None,
         };
         Ok(Some(Self { carrier: carrier.id(), wire, storage_rent }))
     }
@@ -170,8 +171,8 @@ impl ValidatedBatchCarrierV1 {
             return Ok(None);
         };
         let mut q = TirNativeRequestsV1::new();
-        let kind = body.first();
-        if matches!(kind, Some(0 | 1)) {
+        let kind = body.first().copied();
+        if matches!(kind, Some(0 | 1 | BATCH_VERIFY_NUMERICAL_TAG_V1)) {
             q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(Resource)?;
         }
         match kind {
@@ -183,6 +184,7 @@ impl ValidatedBatchCarrierV1 {
                 batch_stop_wire_shape_v1(&validated.tx.payload).map_err(|why| Decode(why.to_string()))?;
                 q.exact_v1::<u8>(validated.tx.payload.len() as u64 - BATCH_STOP_WIRE_OVERHEAD_V1)
             }
+            Some(BATCH_VERIFY_NUMERICAL_TAG_V1) => Ok(()),
             _ => return Err(Decode("unknown Batch Court carrier kind".into())),
         }
         .map_err(Resource)?;

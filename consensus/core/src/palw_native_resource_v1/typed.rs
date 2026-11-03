@@ -101,7 +101,8 @@ fixed_native!(
     crate::Hash64,
     kaspa_hashes::Hash,
     kaspa_math::Uint512,
-    kaspa_math::Uint576
+    kaspa_math::Uint576,
+    crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1
 );
 impl<T: NativeHeapV1, const N: usize> NativeHeapV1 for [T; N] {
     fn native_members_v1(&self) -> Option<u64> {

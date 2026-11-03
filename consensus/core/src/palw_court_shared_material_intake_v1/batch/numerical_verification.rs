@@ -8,20 +8,27 @@ use crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1;
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{self, Read};
 
-const SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/batch-numerical-verification/v1/mldsa87";
+pub const BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/batch-numerical-verification/v1/mldsa87";
 const SIGNATURE_BYTES: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 // Version, four identifiers, leaf, filer outpoint, vector length and signature.
 const SIGNED_BODY_BYTES: u64 = (2 + 4 * 64 + 8 + 64 + 4 + 4 + SIGNATURE_BYTES) as u64;
 
 /// The native profile supplies the replay ceilings and the costs outside the
 /// arithmetic meter. Admission and acceptance use the same service quote.
-#[derive(Clone, Copy)]
-pub(crate) struct NumericalBatchReplayBudgetV1 {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumericalBatchReplayBudgetV1 {
     pub work: PalwTirBuilderWorkLimitsV1,
     pub workspace_bytes: u64,
     /// Non-arithmetic work, including signature, source and evidence checks.
     pub base_work: u64,
     pub io: u64,
+}
+
+/// Resolved by the native rules, with the exact service profile it prices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumericalBatchReplayProfileV1 {
+    pub service_profile: Hash64,
+    pub budget: NumericalBatchReplayBudgetV1,
 }
 
 impl NumericalBatchReplayBudgetV1 {
@@ -58,7 +65,7 @@ impl NumericalBatchReplayBudgetV1 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
-pub(crate) struct SignedNumericalBatchVerificationV1 {
+pub struct SignedNumericalBatchVerificationV1 {
     pub version: u16,
     pub claim: Hash64,
     pub scope: Hash64,
@@ -70,7 +77,7 @@ pub(crate) struct SignedNumericalBatchVerificationV1 {
 }
 
 impl SignedNumericalBatchVerificationV1 {
-    pub(crate) fn signing_message_v1(&self, network: Hash64) -> Result<Hash64, String> {
+    pub fn signing_message_v1(&self, network: Hash64) -> Result<Hash64, String> {
         if self.version != 1 || [network, self.claim, self.scope, self.notice, self.policy].contains(&Hash64::default()) {
             return Err("numerical Batch verification has an invalid signing scope".into());
         }
@@ -90,7 +97,7 @@ impl SignedNumericalBatchVerificationV1 {
                 pubkey,
                 self.signing_message_v1(network)?.as_byte_slice(),
                 &self.signature,
-                SIGNATURE_CONTEXT_V1,
+                BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1,
             )
         {
             return Err("invalid numerical Batch verification signature".into());
@@ -116,6 +123,27 @@ impl BorshDeserialize for SignedNumericalBatchVerificationV1 {
             signature: read_batch_signature_v1(r)?,
         })
     }
+}
+
+/// The template and accepting fold read the same rooted reservation.
+pub(crate) fn reserved_numerical_verification_slot_v1<'a>(
+    state: &'a crate::palw_state_v2::PalwChainStateV2,
+    signed: &SignedNumericalBatchVerificationV1,
+    daa: u64,
+) -> Result<&'a crate::palw_court_service_v1::ServicePacket, String> {
+    use crate::palw_court_shared_tir_state_v1::context;
+    let context = context(state, signed.claim)?;
+    let service = state.court_service_state_v1().ok_or("numerical Batch verification has no service book")?;
+    context.check_binding(service)?;
+    let binding = service.claims.get(&signed.claim).ok_or("numerical Batch verification has no original binding")?;
+    let (packet, _) = batch_numerical_service_ids_v1(signed.claim, signed.scope)
+        .map_err(|_| "numerical Batch verification packet identities are invalid")?;
+    if signed.scope != context.scope_id || !binding.packet_ids.contains(&packet) || service.book.assigned_daa(&packet) != Some(daa) {
+        return Err("numerical Batch verification is outside its reserved slot".into());
+    }
+    service.book.packet(&packet)
+        .filter(|packet| packet.cost.bytes == SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1)
+        .ok_or_else(|| "numerical Batch verification has no correctly sized slot".into())
 }
 
 /// Authenticate the verification control and charge the originally booked
@@ -149,15 +177,9 @@ pub(crate) fn verify_rooted_numerical_batch_v1(
     if (notice.claim, notice.scope_id, notice.opened_by) != (signed.claim, signed.scope, signed.filer) {
         return Err(invalid("numerical Batch verification differs from its accepted notice"));
     }
-    let service = state.court_service_state_v1().ok_or_else(|| invalid("numerical Batch verification has no service book"))?;
-    context.check_binding(service).map_err(E::Decode)?;
-    let binding = service.claims.get(&signed.claim).ok_or_else(|| invalid("numerical Batch verification has no original binding"))?;
-    let (packet, _) = batch_numerical_service_ids_v1(signed.claim, signed.scope)
-        .map_err(|_| invalid("numerical Batch verification packet identities are invalid"))?;
     let cost = budget.service_cost_v1().ok_or_else(|| invalid("invalid numerical Batch replay budget"))?;
-    if !binding.packet_ids.contains(&packet) || service.book.assigned_daa(&packet) != Some(rules.at.daa_score)
-        || service.book.packet(&packet).is_none_or(|packet| packet.cost != cost)
-    {
+    let packet = reserved_numerical_verification_slot_v1(state, signed, rules.at.daa_score).map_err(E::Decode)?;
+    if packet.cost != cost {
         return Err(invalid("numerical Batch verification exceeds its reserved slot"));
     }
     signed.verify_signature_v1(rules.network_domain, &bond.pubkey).map_err(E::Decode)?;
@@ -183,11 +205,40 @@ mod tests {
         };
         let net = h(8);
         intent.signature = libcrux_ml_dsa::ml_dsa_87::sign(
-            &keys.signing_key, intent.signing_message_v1(net).unwrap().as_byte_slice(), SIGNATURE_CONTEXT_V1, [124; 32],
+            &keys.signing_key, intent.signing_message_v1(net).unwrap().as_byte_slice(), BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1, [124; 32],
         ).unwrap().as_ref().to_vec();
         let bytes = borsh::to_vec(&intent).unwrap();
         assert_eq!(bytes.len() as u64, SIGNED_BODY_BYTES);
         assert_eq!(borsh::from_slice::<SignedNumericalBatchVerificationV1>(&bytes).unwrap(), intent);
+        use crate::palw_batch_court_v1::carriage::{
+            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1, decode_batch_court_payload_v1,
+        };
+        let wire = BatchCourtWireV1::VerifyNumerical(intent.clone());
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(&wire).unwrap());
+        assert_eq!(payload[BATCH_COURT_CARRIER_MAGIC_V1.len()], BATCH_VERIFY_NUMERICAL_TAG_V1);
+        assert_eq!(payload.len() as u64, NumericalBatchReplayBudgetV1::test_only_v1().service_cost_v1().unwrap().bytes);
+        assert_eq!(decode_batch_court_payload_v1(&payload).unwrap(), Some(wire.clone()));
+        use crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1;
+        use crate::palw_state_v2::PalwBlockContextV2;
+        use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint,
+            TransactionOutput, UtxoEntry, ValidatedTransaction};
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(TransactionOutpoint::new(h(10), 0), vec![], 0, 0)],
+            vec![TransactionOutput::new(1, ScriptPublicKey::default())],
+            0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload.clone(),
+        );
+        let utxo = UtxoEntry::new(4, ScriptPublicKey::default(), 1, false);
+        let tx = ValidatedTransaction::new(PopulatedTransaction::new(&tx, vec![utxo]), 3);
+        let at = PalwBlockContextV2 { block: h(11), daa_score: 8, blue_score: 9, subsidy: 0 };
+        let handoff = ValidatedBatchCarrierV1::prepare_v1(&tx, 1, at).unwrap().unwrap();
+        assert_eq!(handoff.wire_at_v1(&at).unwrap(), &wire);
+        assert!(handoff.wire_at_v1(&PalwBlockContextV2 { daa_score: 9, ..at }).is_err());
+        assert!(handoff.storage_debit_v1(None).unwrap().is_none());
+        assert_eq!((handoff.fee_v1().withheld_storage_rent, handoff.fee_v1().collectible_fee), (0, 2));
+        payload.pop();
+        assert!(decode_batch_court_payload_v1(&payload).is_err());
         let key = keys.verification_key.as_ref();
         assert!(intent.verify_signature_v1(net, key).is_ok());
         assert!(intent.verify_signature_v1(h(9), key).is_err());

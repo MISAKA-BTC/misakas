@@ -853,7 +853,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         let split = accepted.fee_v1();
         assert_eq!(split, material_batch_carrier_fee_v1(&tx, fee - preceding).unwrap());
         let rehearsal = crate::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
-            &b.state, &params, point, &accepted, false, false, false, false, &extras,
+            &b.state, &params, point, &accepted, false, false, false, false, b.extras,
         );
         let folded = b.apply_batch_court_carrier_v1(point, &accepted);
         assert_eq!(rehearsal.is_ok(), folded.is_ok());
@@ -999,5 +999,42 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         panic!("Batch demand did not stay rooted");
     };
     assert_eq!(rooted.request_root, request_root);
+    use crate::palw_batch_court_v1::carriage::{BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1, SignedNumericalBatchVerificationV1};
+    let service = b.state.court_service_state_v1().unwrap();
+    let booked = service.book.assigned_daa(&verification).unwrap();
+    let point = at(frame, booked - context.original_accepted_daa);
+    let rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 {
+        network_domain: network, at: point, court: fx.rules.court, step_ladder: fx.rules.maximum_leaves,
+        prompt_ids_merkle: false, held_regime: false, decode_close_convicts_only: false,
+        fp_decode_from_daa: None, cell_closure_from_daa: None, memory_routing_from_daa: None,
+        tir_active: true, gen_active: false, task_heads_active: false, improvement_active: false, constraint_active: false,
+    };
+    let mut signed = SignedNumericalBatchVerificationV1 {
+        version: 1, claim, scope: scope_id, notice: notice_id, leaf: notice_leaf,
+        policy: crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(&rules).unwrap(),
+        filer: who, signature: vec![],
+    };
+    signed.signature = sign(signed.signing_message_v1(network).unwrap(), BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1);
+    let verify = BatchCourtWireV1::VerifyNumerical(signed);
+    assert!(template_ready(&b.state, &point, &verify).is_ok());
+    assert!(template_ready(&b.state, &finish_at, &verify).is_err());
+    let extras = PalwTransitionExtrasV1 { native_court_rules_v1: Some(rules), ..extras.clone() };
+    let mut missing = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
+    assert!(matches!(apply(&mut missing, &point, &verify, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "numerical Batch receipt has no matching native replay profile"));
+    let extras = PalwTransitionExtrasV1 {
+        batch_numerical_profile_v1: Some(NumericalBatchReplayProfileV1 { service_profile: service.profile_id, budget: replay_budget }),
+        ..extras
+    };
+    let mut incomplete = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
+    let mut forged = verify.clone();
+    let BatchCourtWireV1::VerifyNumerical(control) = &mut forged else { unreachable!() };
+    control.signature[0] ^= 1;
+    assert!(matches!(apply(&mut incomplete, &point, &forged, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "invalid numerical Batch verification signature"));
+    assert!(matches!(apply(&mut incomplete, &point, &verify, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "selected Batch material is missing" || why == "selected Batch FullIds are missing"));
+    assert_eq!(incomplete.state.state_root(), b.state.state_root());
+    assert!(incomplete.state.staged_court_row_v1(&Key::CourtBatchNumericalReceipt(claim)).is_none());
     set_material_intake_test_schedule_v1(None);
 }

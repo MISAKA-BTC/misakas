@@ -7,6 +7,9 @@ use std::io::{self, Read};
 pub use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{
     BatchStopSigningV1, batch_payload::MAX_BATCH_STOP_EOG_OPENING_BYTES_V1,
 };
+pub use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::{
+    BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1, SignedNumericalBatchVerificationV1,
+};
 
 const SIG: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 pub const BATCH_DEMAND_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/batch-demand/v1/mldsa87";
@@ -87,7 +90,10 @@ pub enum BatchCourtWireV1 {
     Open(SignedBatchDemandV1),
     Respond(BatchMaterialControlV1),
     Stop(BatchStopControlV1),
+    VerifyNumerical(SignedNumericalBatchVerificationV1),
 }
+
+pub(crate) const BATCH_VERIFY_NUMERICAL_TAG_V1: u8 = 3;
 
 /// The signed Stop operands are framed before the original-specific EOG
 /// size and native terminal slot are resolved.

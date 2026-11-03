@@ -4113,3 +4113,28 @@ terminal credit remain separate outstanding work.
 B0 and relay agreed at virtual DAA 19,740. The additional selected block
 had no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-numerical-price-live.C6ZsYY/page.json`.
+
+## Dispatch the signed numerical Batch carrier
+
+BCT1 appends tag 3, VerifyNumerical, without changing the previous
+three tags. Its fixed signed envelope is decoded through the existing
+bounded UTXO handoff and carries no Begin storage debit. The template
+checks the current assignment. In accepting order, the fold requires
+native rules at the same point and a replay profile matching the rooted
+service book. The numerical verifier still checks the exact booked
+cost, signer and original notice before replay and receipt insertion.
+The production processor supplies no numerical profile pending
+measurement and admission of that profile.
+
+The extracted suite passed 56 tests. The numerical test uses a real
+signature, checks the full BCT1 tag and size, refuses truncated
+carriage, and exercises UTXO handoff, accepting point and fees. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-carrier.y7oTgK/tests.log`.
+The native test additionally covers slot selection, missing profile,
+forged signature and incomplete material without a receipt. That
+integrated fixture has not run. A complete numerical case, terminal
+settlement and public activation still need verification.
+
+B0 and relay agreed at virtual DAA 19,742. The four additional
+selected blocks contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-carrier-live.gjtGVL/page.json`.

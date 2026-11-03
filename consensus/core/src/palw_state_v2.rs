@@ -14539,7 +14539,7 @@ pub fn palw_batch_template_slot_v1(
 ) -> Result<(), String> {
     use crate::palw_batch_court_v1::{
         BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
-        carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, decode_batch_court_carrier_v1},
+        carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1, decode_batch_court_carrier_v1},
         rooted::reserved_open_slot_v1,
     };
     use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_requests_v1};
@@ -14556,9 +14556,10 @@ pub fn palw_batch_template_slot_v1(
     }
     let mut q = TirNativeRequestsV1::new();
     q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(|why| why.to_string())?;
-    match payload.first() {
+    match payload.first().copied() {
         Some(0) => q.exact_v1::<BatchRangeV1>(MAX_BATCH_RANGES_V1 as u64),
         Some(1) => q.exact_v1::<u8>(u64::from(MAX_BATCH_PART_BYTES_V1)),
+        Some(BATCH_VERIFY_NUMERICAL_TAG_V1) => Ok(()),
         _ => return Err("unknown Batch template carrier kind".into()),
     }
     .map_err(|why| why.to_string())?;
@@ -14595,6 +14596,13 @@ pub fn palw_batch_template_slot_v1(
             .map_err(|why| why.to_string())
         }
         BatchCourtWireV1::Stop(_) => Err("unexpected decoded Batch Stop during template slot check".into()),
+        BatchCourtWireV1::VerifyNumerical(signed) => {
+            use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::reserved_numerical_verification_slot_v1;
+            if state.staged_court_row_v1(&Key::CourtBatchNumericalReceipt(signed.claim)).is_some() {
+                return Err("numerical Batch verification is already accepted".into());
+            }
+            reserved_numerical_verification_slot_v1(state, &signed, at.daa_score).map(|_| ())
+        }
     }
 }
 
@@ -20840,6 +20848,8 @@ pub struct PalwTransitionExtrasV1 {
     pub staged_tir_route_active: bool,
     /// Prospective BCT1 gate, resolved by the block processor.
     pub batch_court_active_v1: bool,
+    /// Native-resolved replay ceilings, pinned to the original service profile.
+    pub batch_numerical_profile_v1: Option<crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1>,
     /// The accepted UTXO facts, in accepted carrier order. The index is the
     /// count of already accepted ordinary objects immediately before the carrier.
     pub batch_court_carriers_v1: Vec<(usize, crate::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1)>,

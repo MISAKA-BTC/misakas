@@ -1146,16 +1146,15 @@ impl TransitionBuilder<'_> {
                 Ok(())
             }
             BatchCourtWireV1::Stop(control) => self.install_batch_stop_receipt_v1(at, &control.operands),
+            BatchCourtWireV1::VerifyNumerical(signed) => self.install_batch_numerical_receipt_v1(at, signed),
         }
     }
 
-    /// Native verification writer. The caller supplies the selected profile's
-    /// admitted budget. The result is retained independently of settlement.
-    pub(super) fn install_batch_numerical_receipt_v1(
+    /// Native verification writer. The result is retained independently of settlement.
+    fn install_batch_numerical_receipt_v1(
         &mut self,
         at: &PalwBlockContextV2,
         signed: &crate::palw_court_shared_material_intake_v1::batch::numerical_verification::SignedNumericalBatchVerificationV1,
-        budget: crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1;
         use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::verify_rooted_numerical_batch_v1;
@@ -1164,6 +1163,9 @@ impl TransitionBuilder<'_> {
             self.extras.batch_court_active_v1 && &rules.at == at
                 && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
         }).ok_or_else(|| refused("numerical Batch receipt requires active native rules at the accepting point"))?;
+        let profile = self.extras.batch_numerical_profile_v1.filter(|profile| {
+            self.state.court_service_state_v1().is_some_and(|service| service.profile_id == profile.service_profile)
+        }).ok_or_else(|| refused("numerical Batch receipt has no matching native replay profile"))?;
         let key = PalwStagedCourtKeyV1::CourtBatchNumericalReceipt(signed.claim);
         let digest = crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-numerical-receipt/v1", signed)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
@@ -1173,7 +1175,7 @@ impl TransitionBuilder<'_> {
                 _ => Err(refused("accepted numerical Batch receipt is immutable")),
             };
         }
-        let finding = verify_rooted_numerical_batch_v1(&self.state, self.params, &rules, signed, budget)
+        let finding = verify_rooted_numerical_batch_v1(&self.state, self.params, &rules, signed, profile.budget)
             .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
         if (finding.claim, finding.scope, finding.notice, finding.leaf, finding.at)
             != (signed.claim, signed.scope, signed.notice, signed.leaf, *at)
