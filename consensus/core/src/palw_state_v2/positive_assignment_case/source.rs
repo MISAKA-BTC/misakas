@@ -151,10 +151,14 @@ impl NativeAssignedCourtV2 {
         let wire_work = (raw.len() as u64).checked_add(opening_hash_bytes).ok_or_else(capacity)?;
         let ledger_work = source.work.court_body_work(wire_work).map_err(refuse)?;
         let metered_roles = source.work.court_operation_work(u64::from(request_key.is_some()), controls, 0, 0).map_err(refuse)?;
+        let visited =
+            self.source_ledger.as_ref().map_or(0, NativeSourceLedgerV2::quoted_units_v2).checked_add(controls).ok_or_else(capacity)?;
+        let projection_work = source.work.court_operation_work(0, visited, 0, 0).map_err(refuse)?;
         self.remaining_work = self
             .remaining_work
             .checked_sub(ledger_work)
             .and_then(|n| n.checked_sub(metered_roles))
+            .and_then(|n| n.checked_sub(projection_work))
             .ok_or_else(|| refuse("source ledger replay work cap"))?;
         let additional_work = work_before.checked_sub(self.remaining_work).ok_or_else(capacity)?;
 
@@ -255,6 +259,61 @@ impl NativeAssignedCourtV2 {
         {
             return Err(refuse("replayed source fee differs from the checked native opening"));
         }
+        let empty = misaka_palw_positive_contract::reservations::RemainingCapacity {
+            transmitted_bytes: 0,
+            additional_work: 0,
+            retained_bytes: 0,
+        };
+        let max_visited = context
+            .geometry
+            .source_units(SourceKind::ArtifactInventory)
+            .checked_add(context.geometry.source_units(SourceKind::Input))
+            .ok_or_else(capacity)?
+            .min(source.max_responses);
+        let (outstanding, frames) = ledger
+            .try_fold_pending_after_v2(&update, (empty, 0u64), |(mut total, frames), unit| {
+                let opening = context.geometry.canonical_opening_bytes_v2(unit.kind, unit.unit)?;
+                let add = |a: u64, b: u64| a.checked_add(b).ok_or(SourceErrorV2::Budget);
+                let body = add(opening, SOURCE_RESPONSE_BODY_OVERHEAD_V2)?;
+                if body > limits.max_native_body_bytes {
+                    return Err(SourceErrorV2::Budget);
+                }
+                let schedule = &source.work;
+                let scan = add(source.max_units_per_request.min(context.geometry.source_units(unit.kind)), 32)?;
+                let initial = schedule.court_body_work(body).map_err(|_| SourceErrorV2::Budget)?;
+                let opening_work = schedule.court_body_work(add(opening, 32 * 128)?).map_err(|_| SourceErrorV2::Budget)?;
+                let replay_work = schedule.court_body_work(add(body, 32 * 128)?).map_err(|_| SourceErrorV2::Budget)?;
+                let controls = add(add(scan, scan)?, add(max_visited, scan)?)?;
+                let scan_work = schedule.court_operation_work(0, controls, 0, 0).map_err(|_| SourceErrorV2::Budget)?;
+                total.transmitted_bytes = add(total.transmitted_bytes, body)?;
+                total.retained_bytes = add(total.retained_bytes, body)?;
+                total.additional_work = add(total.additional_work, add(add(initial, opening_work)?, add(replay_work, scan_work)?)?)?;
+                Ok((total, add(frames, 1)?))
+            })
+            .map_err(refuse)?;
+        let (events, bytes) = if update.changes_case() { (1, raw.len() as u64) } else { (0, 0) };
+        let history = ledger.history();
+        if (history.entries().len() as u64)
+            .checked_add(events)
+            .and_then(|n| n.checked_add(frames))
+            .is_none_or(|n| n > limits.max_history_events)
+            || history
+                .retained_bytes()
+                .checked_add(bytes)
+                .and_then(|n| n.checked_add(outstanding.retained_bytes))
+                .is_none_or(|n| n > limits.max_history_bytes)
+        {
+            return Err(refuse("source history must retain capacity for its outstanding responses"));
+        }
+        outstanding.check(&update.usage(), &prior.service.budget).map_err(refuse)?;
+        if outstanding.additional_work > self.remaining_work {
+            return Err(refuse("remaining responses exceed the native Case replay work"));
+        }
+        let journal_bytes = frames
+            .checked_mul(super::super::positive_assignment_materials::ASSIGNED_CASE_FOLLOWUP_RECORD_OVERHEAD_V2 as u64)
+            .and_then(|overhead| overhead.checked_add(outstanding.retained_bytes))
+            .ok_or_else(capacity)?;
+        self.source_reserve = AssignedSourceJournalReserveV2 { frames, bytes: journal_bytes, work: outstanding.additional_work };
         let pending = ledger.pending_fee_after_v2(&update).map_err(refuse)?;
         if self.settled_source_fee > funding.fee.paid
             || update
@@ -720,6 +779,9 @@ impl NativeAssignedCourtV2 {
             .ok_or_else(capacity)?;
         let successor =
             self.qualify_case_relay_successor_v2(state, backing, &funding, (debit, continuation), (daa, accepting_block), relay_heap)?;
+        if self.source_reserve.work > self.remaining_work {
+            return Err(refuse("source payment must retain work for outstanding responses"));
+        }
         Ok(CaseSourcePaymentV2 { funding, debit, successor, source_paid: total })
     }
 
@@ -877,7 +939,7 @@ impl TransitionBuilder<'_> {
         }
         self.write_assignment_aux_v2(NativeRowBody::Funding(payment.funding))?;
         self.write_assignment_aux_v2(NativeRowBody::Case(prior))?;
-        self.write_assigned_case_payment_journal_v2(backing)
+        self.write_assigned_case_payment_journal_v2(backing, &machine.source_reserve)
     }
 }
 
@@ -961,6 +1023,14 @@ pub fn qualify_case_source_spend_v2(
         &receipts,
         (summary.heap, daa, None),
     )?;
+    let extent = borsh::object_length(transaction)
+        .map_err(refuse)?
+        .checked_add(super::super::positive_assignment_materials::ASSIGNED_CASE_FOLLOWUP_RECORD_OVERHEAD_V2)
+        .ok_or_else(capacity)?;
+    let bytes =
+        backing.records().iter().try_fold(extent as u64, |n, record| n.checked_add(record.raw().len() as u64)).ok_or_else(capacity)?;
+    let frames = pin.head.sequence.checked_add(1).ok_or_else(capacity)?;
+    machine.source_reserve.check_journal_v2(backing.material(), frames, bytes)?;
     Ok(QualifiedCaseSourceSpendV2 {
         transaction: transaction.id(),
         carrier_hash: crate::hashing::tx::hash(transaction),

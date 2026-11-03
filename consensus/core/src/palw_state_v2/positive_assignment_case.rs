@@ -156,6 +156,31 @@ pub(super) struct NativeAssignedCaseCacheV2 {
     _lease: NativeDemandLeaseV1,
 }
 
+/// Journal slots, encoded bytes and replay work owed to accepted requests.
+pub(super) struct AssignedSourceJournalReserveV2 {
+    pub(super) frames: u64,
+    pub(super) bytes: u64,
+    pub(super) work: u64,
+}
+
+impl AssignedSourceJournalReserveV2 {
+    pub(super) const EMPTY: Self = Self { frames: 0, bytes: 0, work: 0 };
+
+    pub(super) fn check_journal_v2(
+        &self,
+        material: &AssignmentAdmissionMaterialV2,
+        frames: u64,
+        bytes: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if frames.checked_add(self.frames).is_none_or(|n| n > u64::from(material.assignment_policy.max_history_frames))
+            || bytes.checked_add(self.bytes).is_none_or(|n| n > material.positive_policy.max_case_journal_bytes)
+        {
+            return Err(refuse("Case journal must retain capacity for its outstanding responses"));
+        }
+        Ok(())
+    }
+}
+
 /// Arithmetic replay keeps the checked state and its native allocation owner
 /// together. Source charges and Gate C votes have separate replay owners.
 struct NativeAssignedCourtV2 {
@@ -171,6 +196,7 @@ struct NativeAssignedCourtV2 {
     source_responses: BTreeMap<Digest, source::CheckedAssignedSourceResponseV2>,
     source_ledger: Option<crate::palw_positive_source_v2::NativeSourceLedgerV2>,
     settled_source_fee: u64,
+    source_reserve: AssignedSourceJournalReserveV2,
     derived_heap: u64,
     checker_heap: u64,
     available_heap: u64,
@@ -1345,6 +1371,7 @@ fn prepare_initial_case_checker_v2(
         source_responses: BTreeMap::new(),
         source_ledger: None,
         settled_source_fee: 0,
+        source_reserve: AssignedSourceJournalReserveV2::EMPTY,
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1587,7 +1614,10 @@ fn replay_assigned_court_history_v2(
     let material = backing.material();
     let pin = *backing.pin();
     let limits = case_replay_body_limits_v2(&material.positive_policy);
+    let mut retained = backing.records().first().ok_or_else(missing)?.raw().len() as u64;
     for (index, record) in backing.records().iter().enumerate().skip(1) {
+        retained = retained.checked_add(record.raw().len() as u64).ok_or_else(missing)?;
+        let frames = index as u64 + 1;
         let carriage = record.carriage();
         let prefix = carriage.prefix_state().map_err(|_| missing())?;
         let a = assignment(prefix, backing.assignment().id())?;
@@ -1607,6 +1637,7 @@ fn replay_assigned_court_history_v2(
                 None => state,
             };
             machine.replay_case_source_payment_v2(backing, prefix, after, &prior, carriage)?;
+            machine.source_reserve.check_journal_v2(material, frames, retained)?;
             continue;
         }
         let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
@@ -1653,6 +1684,10 @@ fn replay_assigned_court_history_v2(
         }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
+        }
+        machine.source_reserve.check_journal_v2(material, frames, retained)?;
+        if machine.source_reserve.work > machine.remaining_work {
+            return Err(refuse("Case replay must retain work for its outstanding responses"));
         }
     }
     check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))?;
@@ -1755,6 +1790,7 @@ impl TransitionBuilder<'_> {
                 self.prepare_assigned_case_journal_v2(
                     backing,
                     misaka_palw_positive_contract::journal::CaseJournalEventKind::NativeBody,
+                    &machine.source_reserve,
                 )
             })
             .transpose()?;

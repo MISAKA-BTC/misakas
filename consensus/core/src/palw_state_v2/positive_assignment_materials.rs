@@ -271,6 +271,12 @@ impl TransitionBuilder<'_> {
     }
 }
 
+pub(super) const ASSIGNED_CASE_FOLLOWUP_RECORD_OVERHEAD_V2: usize =
+    misaka_palw_positive_contract::journal::CASE_JOURNAL_MIN_RECORD_BYTES
+        + misaka_palw_positive_contract::journal::CASE_JOURNAL_AUX_MATERIAL_BYTES
+        + 4
+        + crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
+
 pub(super) struct PreparedAssignedCaseJournalV2 {
     record: misaka_palw_positive_contract::journal::CaseJournalRecord,
     limits: misaka_palw_positive_contract::journal::CaseJournalLimits,
@@ -698,10 +704,12 @@ impl TransitionBuilder<'_> {
     pub(super) fn write_assigned_case_payment_journal_v2(
         &mut self,
         backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
+        source_reserve: &super::positive_assignment_case::AssignedSourceJournalReserveV2,
     ) -> Result<(), PalwStateV2Error> {
         let prepared = self.prepare_assigned_case_journal_v2(
             backing,
             misaka_palw_positive_contract::journal::CaseJournalEventKind::NativeTransaction,
+            source_reserve,
         )?;
         self.write_and_emit_positive_case_material_v2(&prepared.record, prepared.limits)
     }
@@ -710,20 +718,17 @@ impl TransitionBuilder<'_> {
         &mut self,
         backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
         kind: misaka_palw_positive_contract::journal::CaseJournalEventKind,
+        source_reserve: &super::positive_assignment_case::AssignedSourceJournalReserveV2,
     ) -> Result<PreparedAssignedCaseJournalV2, PalwStateV2Error> {
         use crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
         use misaka_palw_positive_contract::journal::{
-            CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES, CaseJournalAux, CaseJournalEventKind, CaseJournalHeader,
-            CaseJournalLimits, CaseJournalRecord,
+            CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord,
         };
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
         let action = self.assignment_active_raw.clone().ok_or_else(|| failure("Case journal has no actual carrier"))?;
         let pin = backing.pin();
         let policy = &backing.material().positive_policy;
         let sequence = pin.head.sequence.checked_add(1).ok_or_else(|| failure("Case journal sequence"))?;
-        if sequence > u64::from(backing.material().assignment_policy.max_history_frames) {
-            return Err(failure("Case journal exceeds original event count"));
-        }
         let boundary = self.current_positive_case_boundary_v2(pin.case)?;
         let body = action.transaction().payload.get(3..).ok_or_else(|| failure("Case journal has no literal native body"))?;
         let payload_bytes = match kind {
@@ -733,7 +738,7 @@ impl TransitionBuilder<'_> {
             }
         };
         let extent = payload_bytes
-            .checked_add(CASE_JOURNAL_MIN_RECORD_BYTES + CASE_JOURNAL_AUX_MATERIAL_BYTES + 4 + ASSIGNED_CASE_BOUNDARY_BYTES_V2)
+            .checked_add(ASSIGNED_CASE_FOLLOWUP_RECORD_OVERHEAD_V2)
             .ok_or_else(|| failure("Case journal record extent"))?;
         let retained = backing
             .records()
@@ -741,9 +746,7 @@ impl TransitionBuilder<'_> {
             .map(|record| record.raw().len() as u64)
             .try_fold(extent as u64, u64::checked_add)
             .ok_or_else(|| failure("Case journal cumulative extent"))?;
-        if retained > policy.max_case_journal_bytes {
-            return Err(failure("Case journal exceeds original storage"));
-        }
+        source_reserve.check_journal_v2(backing.material(), sequence, retained)?;
         let mut quote = native_writers::NativeWriteQuoteV1::new("Case literal journal bytes");
         quote.exact::<u8>((payload_bytes + ASSIGNED_CASE_BOUNDARY_BYTES_V2) as u64)?;
         quote.exact::<CaseJournalAux>(1)?;

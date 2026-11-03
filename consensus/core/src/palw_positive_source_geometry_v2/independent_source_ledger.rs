@@ -1748,10 +1748,21 @@ fn independent_reconstructed_full_source_history_and_identical_case_do_not_trans
 
 #[test]
 fn pending_unit_view_releases_only_first_actual_receipt_and_keeps_other_earned_duties() {
+    let projected_units = |ledger: &NativeSourceLedgerV2,
+                           update: &kaspa_consensus_core::palw_positive_source_v2::PreparedSourceUpdateV2| {
+        ledger
+            .try_fold_pending_after_v2(update, Vec::new(), |mut units, unit| {
+                units.push(unit.unit);
+                Ok(units)
+            })
+            .unwrap()
+    };
     let (f, values, geometry, mut ledger, mut history) = ledger_fixture(service_budget());
     let request = f.request(SourceKind::ArtifactInventory, 0, 3);
     history.add_request(request, 51);
     let update = ledger.prepare_request(&geometry, &history, history.requests[0].event()).unwrap();
+    assert_eq!(projected_units(&ledger, &update), vec![0, 1, 2]);
+    assert_eq!(ledger.pending_units_v2().count(), 0);
     ledger.apply(update).unwrap();
     let pending: Vec<_> = ledger.pending_units_v2().collect();
     assert_eq!(pending.iter().map(|u| u.unit).collect::<Vec<_>>(), vec![0, 1, 2]);
@@ -1759,6 +1770,8 @@ fn pending_unit_view_releases_only_first_actual_receipt_and_keeps_other_earned_d
     let opening = borsh::to_vec(&open_artifact_leaf_v1(&values, 1).unwrap()).unwrap();
     history.add_response(request, f.result.miner, &opening);
     let update = ledger.prepare_response(&geometry, &history, history.responses[0].event()).unwrap();
+    assert_eq!(projected_units(&ledger, &update), vec![0, 2]);
+    assert_eq!(ledger.pending_units_v2().count(), 3);
     ledger.apply(update).unwrap();
     assert_eq!(ledger.pending_units_v2().map(|u| u.unit).collect::<Vec<_>>(), vec![0, 2]);
     assert_eq!(ledger.retained_receipts_v2().count(), 1);
@@ -1767,6 +1780,7 @@ fn pending_unit_view_releases_only_first_actual_receipt_and_keeps_other_earned_d
     history.mark_last_response_noop();
     let repeated = ledger.prepare_response(&geometry, &history, history.responses[1].event()).unwrap();
     assert!(!repeated.changes_case());
+    assert_eq!(projected_units(&ledger, &repeated), vec![0, 2]);
     ledger.apply(repeated).unwrap();
     assert_eq!(ledger.usage(), before);
     assert_eq!(ledger.pending_units_v2().map(|u| u.unit).collect::<Vec<_>>(), vec![0, 2]);
