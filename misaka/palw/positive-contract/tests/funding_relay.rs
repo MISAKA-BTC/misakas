@@ -454,19 +454,28 @@ fn registration_fee_floor_matches_literal_payload_and_pending_row_images() {
         literal.purpose_signature = auth.purpose_signature;
         literal.relay_signature = custody.relay_signature;
         let frame_bytes = borsh::object_length(&literal).unwrap() as u64;
-        let mut retained_bytes = frame_bytes + 3;
+        let mut aux_bytes = 0;
+        let mut delta_bytes = 0;
         for row in [NativeRowBody::FundingRelayAuthorization(auth), NativeRowBody::FundingRelayCustody(custody)] {
-            retained_bytes += row.key().encode().len() as u64;
-            retained_bytes += NativeRowValue::new(row).unwrap().encode().unwrap().len() as u64;
+            let key = row.key().encode();
+            let value = NativeRowValue::new(row).unwrap().encode().unwrap();
+            aux_bytes += (key.len() + value.len()) as u64;
+            // Same Borsh field layout as a fresh KernelRouteRow delta entry.
+            delta_bytes += borsh::object_length(&(0u8, 151u8, key, None::<Vec<u8>>, Some(value))).unwrap() as u64;
         }
-        let database_bytes = retained_bytes + 66;
+        let retained_bytes = frame_bytes + 3 + aux_bytes;
+        let database_bytes = frame_bytes + 3 + 66 + delta_bytes;
+        let batch_bytes = database_bytes + 8;
+        let storage = FundingRelayStorageExtentV2::for_terms(&terms).unwrap();
+        assert_eq!(storage, FundingRelayStorageExtentV2::from_encoded(frame_bytes + 3, aux_bytes, delta_bytes).unwrap());
+        assert_eq!(storage.material_put_bytes, frame_bytes + 3 + 66 + 4);
         let usage = FundingRelayUsageV2 {
             frame_bytes,
             decoded_bytes: size_of::<FundingRelayRegistrationBodyV2>() as u64,
             heap_bytes: 32_000,
             retained_bytes,
             database_bytes,
-            batch_bytes: database_bytes,
+            batch_bytes,
             replay_reads: 1,
             replay_work: 1,
             signatures: 2,
@@ -479,7 +488,7 @@ fn registration_fee_floor_matches_literal_payload_and_pending_row_images() {
             FundingRelayUsageV2 { frame_bytes: frame_bytes - 1, ..usage },
             FundingRelayUsageV2 { retained_bytes: retained_bytes - 1, ..usage },
             FundingRelayUsageV2 { database_bytes: database_bytes - 1, ..usage },
-            FundingRelayUsageV2 { batch_bytes: database_bytes - 1, ..usage },
+            FundingRelayUsageV2 { batch_bytes: batch_bytes - 1, ..usage },
         ] {
             assert!(fees.quote(&policy, &physical, &terms, undersized, 50).is_err());
         }

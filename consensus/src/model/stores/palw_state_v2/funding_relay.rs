@@ -8,7 +8,10 @@ use kaspa_consensus_core::{
 };
 use kaspa_database::{prelude::*, registry::DatabaseStorePrefixes};
 use misaka_palw_positive_contract::{
-    assignment::funding_relay::{FUNDING_RELAY_MAX_BODY_BYTES_V2, FundingRelayRegistrationBodyV2},
+    assignment::{
+        funding_relay::FundingRelayRegistrationBodyV2,
+        funding_relay_policy::{FUNDING_RELAY_MATERIAL_KEY_BYTES_V2, FundingRelayStorageExtentV2},
+    },
     identity::Digest,
     native::KERNEL_AUX_TABLE,
     rows::{NativeRowBody, NativeRowValue},
@@ -17,8 +20,8 @@ use rocksdb::WriteBatch;
 
 const RELAY_MATERIAL_SUFFIX: u8 = 0x4c;
 
-fn key(id: Digest) -> [u8; 66] {
-    let mut bytes = [0; 66];
+fn key(id: Digest) -> [u8; FUNDING_RELAY_MATERIAL_KEY_BYTES_V2] {
+    let mut bytes = [0; FUNDING_RELAY_MATERIAL_KEY_BYTES_V2];
     bytes[0] = u8::from(DatabaseStorePrefixes::PalwStateV2Tip);
     bytes[1] = RELAY_MATERIAL_SUFFIX;
     bytes[2..].copy_from_slice(&id.0);
@@ -64,7 +67,7 @@ impl DbPalwStateV2Store {
         if count % 2 != 0 || count / 2 > carriers.len() {
             return Err(invalid("new rows lack complete carrier pairs"));
         }
-        type Record<'a> = ([u8; 66], &'a [u8]);
+        type Record<'a> = ([u8; FUNDING_RELAY_MATERIAL_KEY_BYTES_V2], &'a [u8]);
         let count = count / 2;
         let scratch = (size_of::<Record<'_>>() as u64)
             .checked_mul(count as u64)
@@ -132,34 +135,26 @@ impl DbPalwStateV2Store {
                 return Err(invalid("actual charge differs from the canonical registration reference"));
             }
             let key = key(auth.material.digest);
-            if payload.len() > FUNDING_RELAY_MAX_BODY_BYTES_V2 + 3 {
-                return Err(invalid("literal material exceeds maximum size"));
-            }
-            // Charge the contribution of both complete Borsh delta entries,
-            // including their length and option framing, in addition to the
-            // raw material key/value. The common delta wrapper already exists
-            // for this block. Up to four additional bytes can be needed to
-            // grow its RocksDB value-length varint.
             let auth_extent = borsh::object_length(entry).map_err(|_| invalid("authorization delta size"))? as u64;
             let custody_extent = borsh::object_length(custody_entry).map_err(|_| invalid("custody delta size"))? as u64;
-            let raw_extent = (payload.len() + key.len()) as u64;
-            let database_extent = raw_extent
-                .checked_add(auth_extent)
-                .and_then(|n| n.checked_add(custody_extent))
-                .ok_or_else(|| capacity("registration database extent overflow"))?;
-            let batch_extent = database_extent.checked_add(8).ok_or_else(|| capacity("registration batch extent overflow"))?;
-            if database_extent > auth.quote.usage.database_bytes || batch_extent > auth.quote.usage.batch_bytes {
-                return Err(invalid("registration exceeds its quoted database or batch extent"));
+            let aux_extent = (auth_key.len() + auth_bytes.len() + custody_key.len() + custody_bytes.len()) as u64;
+            let delta_extent =
+                auth_extent.checked_add(custody_extent).ok_or_else(|| capacity("registration delta extent overflow"))?;
+            let measured = FundingRelayStorageExtentV2::from_encoded(payload.len() as u64, aux_extent, delta_extent)
+                .map_err(|_| invalid("invalid encoded registration extent"))?;
+            let expected =
+                FundingRelayStorageExtentV2::for_terms(&auth.terms).map_err(|_| invalid("invalid registration quote extent"))?;
+            if measured != expected {
+                return Err(invalid("encoded registration extent differs from preflight"));
             }
+            measured.check_usage(&auth.quote.usage).map_err(|_| invalid("registration exceeds its quoted storage extent"))?;
             if let Some(saved) = self.db.get_pinned(key)? {
                 if saved.as_ref() != payload {
                     return Err(invalid("content address already contains different bytes"));
                 }
                 continue;
             }
-            // RocksDB Put adds its type, one-byte key length and two-byte
-            // value length to this fixed-size relay key/value.
-            added = added.checked_add(raw_extent + 4).ok_or_else(|| capacity("batch extent overflow"))?;
+            added = added.checked_add(measured.material_put_bytes).ok_or_else(|| capacity("batch extent overflow"))?;
             pending.push((key, payload));
         }
         if pending.is_empty() {

@@ -259,9 +259,9 @@ impl FundingRelayFeeScheduleV2 {
     }
 
     /// Cost already implied by an op14 and its two pending rows. This covers
-    /// the exact literal lifecycle payload and canonical aux key/value images.
-    /// It leaves framing overhead, additional accepted history, batch
-    /// overhead and replay work to the actual storage and allocation owners.
+    /// the literal lifecycle payload, canonical aux images, both delta
+    /// entries and their marginal batch framing. Other accepted history and
+    /// replay work still need the actual storage and allocation owners.
     pub fn minimum_registration_fee(
         &self,
         policy: &FundingRelayPolicyV2,
@@ -274,15 +274,15 @@ impl FundingRelayFeeScheduleV2 {
             return Err(ContractError::Identity);
         }
         let retention_daa = policy.retention_quote(terms)?;
-        let RegistrationStorageFloor { body_bytes, retained_bytes, database_bytes } = RegistrationStorageFloor::derive(terms)?;
-        if body_bytes > physical.max_frame_bytes
-            || retained_bytes > physical.max_retained_bytes
-            || database_bytes > physical.max_database_bytes
-            || database_bytes > physical.max_batch_bytes
+        let storage = FundingRelayStorageExtentV2::for_terms(terms)?;
+        if storage.body_bytes > physical.max_frame_bytes
+            || storage.retained_bytes > physical.max_retained_bytes
+            || storage.database_bytes > physical.max_database_bytes
+            || storage.batch_bytes > physical.max_batch_bytes
         {
             return Err(ContractError::Budget);
         }
-        self.storage_price(2, body_bytes, retained_bytes, database_bytes, retention_daa)
+        self.storage_price(2, storage.body_bytes, storage.retained_bytes, storage.database_bytes, retention_daa)
     }
 
     pub fn quote(
@@ -299,14 +299,7 @@ impl FundingRelayFeeScheduleV2 {
         if self.id() != policy.metadata_fee_schedule || physical.id() != policy.physical_custody_profile {
             return Err(ContractError::Identity);
         }
-        let floor = RegistrationStorageFloor::derive(terms)?;
-        if usage.frame_bytes < floor.body_bytes
-            || usage.retained_bytes < floor.retained_bytes
-            || usage.database_bytes < floor.database_bytes
-            || usage.batch_bytes < floor.database_bytes
-        {
-            return Err(ContractError::Budget);
-        }
+        FundingRelayStorageExtentV2::for_terms(terms)?.check_usage(&usage)?;
         let retention_daa = policy.retention_quote(terms)?;
         let fee = sum([
             self.storage_price(usage.signatures, usage.frame_bytes, usage.retained_bytes, usage.database_bytes, retention_daa)?,
@@ -327,33 +320,67 @@ impl FundingRelayFeeScheduleV2 {
         })
     }
 }
-struct RegistrationStorageFloor {
-    body_bytes: u64,
-    retained_bytes: u64,
-    database_bytes: u64,
+pub const FUNDING_RELAY_MATERIAL_KEY_BYTES_V2: usize = 66;
+
+/// Minimum native extents for a new registration with both rows absent.
+/// Charge the same extents even when the local DB already holds the payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FundingRelayStorageExtentV2 {
+    pub body_bytes: u64,
+    pub retained_bytes: u64,
+    pub database_bytes: u64,
+    pub batch_bytes: u64,
+    pub material_put_bytes: u64,
 }
-impl RegistrationStorageFloor {
-    fn derive(terms: &FundingRelayTermsV2) -> Result<Self, ContractError> {
-        const LIFECYCLE_PREFIX_BYTES: u64 = 3;
+
+impl FundingRelayStorageExtentV2 {
+    const LIFECYCLE_PREFIX_BYTES: u64 = 3;
+
+    pub fn for_terms(terms: &FundingRelayTermsV2) -> Result<Self, ContractError> {
         const NATIVE_AUX_KEY_BYTES: u64 = 74;
         const AUTHORIZATION_BYTES_WITHOUT_TERMS: u64 = 8956;
         const UNBOUND_CUSTODY_BYTES: u64 = 5334;
-        const MATERIAL_DB_KEY_BYTES: u64 = 66;
-        const SIGNATURES: u32 = 2;
+        // Borsh KernelRouteRow insertion: kind, table, two Vec length
+        // prefixes, and the absent-old/present-new Option tags.
+        const DELTA_ENTRY_FRAMING_BYTES: u64 = 1 + 1 + 4 + 4 + 1 + 1;
 
         let terms_bytes = borsh::object_length(terms).map_err(|_| ContractError::NonCanonical)? as u64;
-        let body_bytes = sum([5, terms_bytes, mul(u64::from(SIGNATURES), crate::identity::SIGNATURE_BYTES as u64)?])?;
-        let retained_bytes = sum([
-            LIFECYCLE_PREFIX_BYTES,
-            body_bytes,
-            NATIVE_AUX_KEY_BYTES,
-            AUTHORIZATION_BYTES_WITHOUT_TERMS,
-            terms_bytes,
-            NATIVE_AUX_KEY_BYTES,
-            UNBOUND_CUSTODY_BYTES,
-        ])?;
-        let database_bytes = sum([retained_bytes, MATERIAL_DB_KEY_BYTES])?;
-        Ok(Self { body_bytes, retained_bytes, database_bytes })
+        let body_bytes = sum([5, terms_bytes, mul(2, crate::identity::SIGNATURE_BYTES as u64)?])?;
+        let payload_bytes = sum([Self::LIFECYCLE_PREFIX_BYTES, body_bytes])?;
+        let aux_bytes =
+            sum([NATIVE_AUX_KEY_BYTES, AUTHORIZATION_BYTES_WITHOUT_TERMS, terms_bytes, NATIVE_AUX_KEY_BYTES, UNBOUND_CUSTODY_BYTES])?;
+        let delta_bytes = sum([aux_bytes, 2 * DELTA_ENTRY_FRAMING_BYTES])?;
+        Self::from_encoded(payload_bytes, aux_bytes, delta_bytes)
+    }
+
+    /// Build the same extent from the actual carrier and two canonical delta
+    /// entries. Their common block delta wrapper exists without this relay.
+    pub fn from_encoded(payload_bytes: u64, aux_bytes: u64, delta_bytes: u64) -> Result<Self, ContractError> {
+        let body_bytes = payload_bytes.checked_sub(Self::LIFECYCLE_PREFIX_BYTES).ok_or(ContractError::Budget)?;
+        // Every admissible op14 has a two-byte RocksDB value-length varint.
+        if !(128..16_384).contains(&payload_bytes) || body_bytes > FUNDING_RELAY_MAX_BODY_BYTES_V2 as u64 || delta_bytes < aux_bytes {
+            return Err(ContractError::Budget);
+        }
+        let retained_bytes = sum([payload_bytes, aux_bytes])?;
+        let raw_extent = sum([payload_bytes, FUNDING_RELAY_MATERIAL_KEY_BYTES_V2 as u64])?;
+        let database_bytes = sum([raw_extent, delta_bytes])?;
+        // Raw Put type + one-byte key length + two-byte value length.
+        let material_put_bytes = sum([raw_extent, 4])?;
+        // The existing block delta Put's value-length varint can grow by up to
+        // four bytes as its u32 value size increases.
+        let batch_bytes = sum([database_bytes, 4, 4])?;
+        Ok(Self { body_bytes, retained_bytes, database_bytes, batch_bytes, material_put_bytes })
+    }
+
+    pub fn check_usage(self, usage: &FundingRelayUsageV2) -> Result<(), ContractError> {
+        if usage.frame_bytes < self.body_bytes
+            || usage.retained_bytes < self.retained_bytes
+            || usage.database_bytes < self.database_bytes
+            || usage.batch_bytes < self.batch_bytes
+        {
+            return Err(ContractError::Budget);
+        }
+        Ok(())
     }
 }
 

@@ -668,3 +668,26 @@ contract relay cases passed on the same source map, including atomic
 read/work boundary checks. The native occupancy and RocksDB staging
 paths were typechecked. Documentation checking found zero new issues
 against the existing 43.
+
+## Shared relay preflight and persistence footprint
+
+The minimum charge and full quote now use the same storage extent as
+the native WriteBatch gate. It covers the literal payload, both
+pending row images, both Borsh delta entry envelopes, the raw
+material key and its Put framing, and a four-byte bound for growth of
+the existing block delta's value-length field. The RocksDB staging
+path measures the actual encoded entries and requires their extent
+to equal the preflight calculation. A local identical payload still
+uses the same canonical quote.
+
+The four target variants are checked against independently encoded
+row images and the fresh delta field layout. Each extent rejects a
+quote one byte below its boundary. This measures the marginal
+registration footprint. The ordinary whole-block write owner still
+reserves its full batch and lifetime. Replay work, actual debit
+scheduling and native custody remain separate prerequisites.
+
+All ten contract relay cases and Core/Consensus library Clippy passed
+on one frozen source map. The RocksDB path was typechecked. No live
+registration or debit was executed. Documentation checking found
+zero new issues against the existing 43.
