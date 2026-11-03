@@ -150,10 +150,15 @@ fn retention_prune_plan_with_material_v1(
     free: u64,
     reserve: u64,
 ) -> (Vec<usize>, u64) {
-    let mut doomed: Vec<usize> = Vec::new();
+    let mut doomed = Vec::new();
+    let mut pressure_candidates = Vec::new();
     let mut freed = 0u64;
     for (i, c) in claims.iter().enumerate() {
-        if !matches!(material_owed(&c.claim), Ok(false)) || chain(&c.claim).as_ref().is_some_and(|view| view.da_owed) {
+        if !matches!(material_owed(&c.claim), Ok(false)) {
+            continue;
+        }
+        let view = chain(&c.claim);
+        if view.as_ref().is_some_and(|view| view.da_owed) {
             continue;
         }
         let due = match c.kind {
@@ -163,49 +168,35 @@ fn retention_prune_plan_with_material_v1(
                 Some((&PalwClaimSourceV2::Attempt, &PalwClaimPhaseV2::Provisional)),
                 attempt_horizon,
             ),
-            RetainedKindV1::FreePrompt => {
-                let view = chain(&c.claim);
-                !view.as_ref().is_some_and(|view| view.da_owed)
-                    && crate::palw_producer::retained_capture_prune_due_v1(
-                        c.age,
-                        view.as_ref().map(|view| (&view.source, &view.phase)),
-                        attempt_horizon,
-                    )
-            }
+            RetainedKindV1::FreePrompt => crate::palw_producer::retained_capture_prune_due_v1(
+                c.age,
+                view.as_ref().map(|view| (&view.source, &view.phase)),
+                attempt_horizon,
+            ),
             // The panel prunes its foreign copies by age as it writes them; here they only yield space.
             RetainedKindV1::Foreign => false,
         };
         if due {
             doomed.push(i);
             freed = freed.saturating_add(c.bytes);
+        } else if free < reserve && c.kind != RetainedKindV1::FreePrompt {
+            pressure_candidates.push(i);
         }
     }
-    // **The space rule**: the oldest re-makeable bytes first — own attempt captures, then foreign copies,
-    // only captures whose actual obligations have ended (RFC08 material audit).
+    // The space rule picks the oldest eligible attempts first, then eligible
+    // foreign copies. DA-owed copies were excluded above in both cases.
     let mut short = reserve.saturating_sub(free.saturating_add(freed));
     if short > 0 {
-        let age = |c: &RetainedClaimV1| c.age.unwrap_or(Duration::MAX);
-        let rank: Vec<u8> = claims
-            .iter()
-            .map(|c| if c.kind == RetainedKindV1::Foreign { retained_foreign_rank_v1(chain(&c.claim).as_ref()) } else { 0 })
-            .collect();
-        for kind in [RetainedKindV1::Attempt, RetainedKindV1::Foreign] {
-            let mut order: Vec<usize> = (0..claims.len())
-                .filter(|i| {
-                    claims[*i].kind == kind
-                        && !doomed.contains(i)
-                        && matches!(material_owed(&claims[*i].claim), Ok(false))
-                        && !chain(&claims[*i].claim).as_ref().is_some_and(|view| view.da_owed)
-                })
-                .collect();
-            order.sort_by(|a, b| (rank[*a], age(&claims[*b])).cmp(&(rank[*b], age(&claims[*a]))));
-            for i in order {
-                if short == 0 {
-                    break;
-                }
-                doomed.push(i);
-                short = short.saturating_sub(claims[i].bytes);
+        pressure_candidates.sort_unstable_by_key(|&i| {
+            let c = &claims[i];
+            (c.kind == RetainedKindV1::Foreign, std::cmp::Reverse(c.age.unwrap_or(Duration::MAX)), i)
+        });
+        for i in pressure_candidates {
+            if short == 0 {
+                break;
             }
+            doomed.push(i);
+            short = short.saturating_sub(claims[i].bytes);
         }
     }
     (doomed, short)
@@ -247,19 +238,6 @@ fn prune_retained_claims_v1(
         removed += usize::from(removed_file);
     }
     (removed, bytes)
-}
-
-/// **How late the space rule takes a foreign copy** (P2-7; lower goes first): `0`, nothing an R-core
-/// session can still demand of it; `1`, a session can (`da_owed`) and it is an attempt claim's, which
-/// any node re-makes from its block; `2`, a session can and it is a free-prompt claim's, whose job is
-/// not chain data — for a full-mask signer the one copy it answers from, so taking it is an S4 the
-/// signer could not avoid if the producer withholds (the P2-7 review's LOW).
-pub(crate) fn retained_foreign_rank_v1(view: Option<&RetainedChainViewV1>) -> u8 {
-    match view {
-        Some(view) if view.da_owed && matches!(view.source, PalwClaimSourceV2::FreePrompt { .. }) => 2,
-        Some(view) if view.da_owed => 1,
-        _ => 0,
-    }
 }
 
 /// Read `dir` (and `dir/foreign`) into retained claims; `.partial` files older than an hour are
@@ -617,6 +595,31 @@ mod tests {
     }
 
     #[test]
+    fn pressure_plan_reads_each_eligible_row_once_and_preserves_order() {
+        use std::cell::Cell;
+
+        let claims = [
+            claim(101, RetainedKindV1::Foreign, 10, 120),
+            claim(102, RetainedKindV1::Attempt, 10, 30),
+            claim(103, RetainedKindV1::Attempt, 10, 30),
+            claim(104, RetainedKindV1::Attempt, 10, 90),
+            claim(105, RetainedKindV1::Foreign, 10, 130),
+        ];
+        let chain_reads = Cell::new(0);
+        let obligation_reads = Cell::new(0);
+        let chain = |_: &Hash64| {
+            chain_reads.set(chain_reads.get() + 1);
+            None
+        };
+        let owed = |_: &Hash64| {
+            obligation_reads.set(obligation_reads.get() + 1);
+            Ok(false)
+        };
+        assert_eq!(retention_prune_plan_with_material_v1(&claims, chain, owed, 60 * MIN, 0, 40), (vec![3, 1, 2, 4], 0));
+        assert_eq!((chain_reads.get(), obligation_reads.get()), (claims.len(), claims.len()));
+    }
+
+    #[test]
     fn retention_reclaim_reports_only_files_it_removed() {
         let dir = tempfile::tempdir().unwrap();
         let mut row = claim(1, RetainedKindV1::Attempt, 400, 90);
@@ -724,16 +727,6 @@ mod tests {
         assert_eq!((doomed, short), (vec![], 15 * GIB), "an old own attempt is pinned by both age and pressure");
         let (doomed, short) = retention_prune_plan_v1(&own, |_| Some(attempt(false)), 60 * MIN, 0, 15 * GIB);
         assert_eq!((doomed, short), (vec![0], 5 * GIB), "the same capture yields once its actual obligation ends");
-        assert_eq!(
-            [
-                retained_foreign_rank_v1(None),
-                retained_foreign_rank_v1(Some(&view(false))),
-                retained_foreign_rank_v1(Some(&attempt(false))),
-                retained_foreign_rank_v1(Some(&attempt(true))),
-                retained_foreign_rank_v1(Some(&view(true))),
-            ],
-            [0, 0, 0, 1, 2]
-        );
     }
 
     /// **The directory is read by its bytes and names**: an `FPC1` material is a free-prompt capture, a
