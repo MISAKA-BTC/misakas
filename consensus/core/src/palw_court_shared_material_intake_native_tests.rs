@@ -991,6 +991,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let response_deadline = at(frame, NOTICE_WINDOW_DAA + 12).daa_score;
     let (target, body) = plan.ranges_v1().iter().find_map(|&(target, _)| {
         let body = match target {
+            MaterialTargetV1::Parameter { leaf } => borsh::to_vec(&fx.execution.param_opening(leaf).unwrap()).unwrap(),
             MaterialTargetV1::PromptFlat => borsh::to_vec(&fx.execution.prompt).unwrap(),
             MaterialTargetV1::PromptTile { tile } => borsh::to_vec(
                 &crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
