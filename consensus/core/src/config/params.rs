@@ -4352,7 +4352,9 @@ mod positive_court_v2;
 pub use positive_court_v2::{PositiveCourtFenceV2, PositiveCourtPolicyV2};
 mod positive_assignment_v2;
 mod positive_funding_relay_v2;
-pub use positive_assignment_v2::{AssignmentNativePreimagesV2, PositiveAssignmentFenceV2, PositiveAssignmentRuleScopeV2};
+pub use positive_assignment_v2::{
+    AssignmentNativePreimagesV2, AssignmentServiceCapacityV2, PositiveAssignmentFenceV2, PositiveAssignmentRuleScopeV2,
+};
 pub use positive_funding_relay_v2::{AssignmentFundingRelayProfileV2, PositiveFundingRelayFenceV2, PositiveFundingRelayRuleScopeV2};
 mod mirror;
 mod validation;

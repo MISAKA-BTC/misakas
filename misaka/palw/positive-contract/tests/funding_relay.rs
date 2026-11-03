@@ -412,14 +412,18 @@ fn pending_and_current_row_shapes_preserve_original_exclusive_clocks() {
     let (auth, mut custody) = relay_pair(terms());
     let origin =
         AcceptedOrigin { accepting_block: NativeHash64([43; 64]), ..row_origin(auth.terms.funding_outpoint.transaction, 150) };
+    let RelayTargetV2::InitialAssignment { bundle, .. } = auth.terms.target else { unreachable!() };
     custody.binding = Some(FundingRelayBindingV2 {
         origin,
         original_funding: auth.terms.funding_outpoint,
         predecessor: None,
-        original_contract: d(50),
+        original_contract: bundle,
         reservation: AcceptedMaterial { origin, digest: d(51) },
     });
     custody.check_pair(&auth).unwrap();
+    let mut foreign = custody.clone();
+    foreign.binding.as_mut().unwrap().original_contract = d(50);
+    assert!(foreign.check_pair(&auth).is_err());
     // Stored original acceptance remains valid shape after new-intake expiry;
     // no current-clock API deletes a live signature or unlocks its account.
     let mut invalid = auth.clone();

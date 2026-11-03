@@ -11013,6 +11013,7 @@ pub struct PalwChainStateV2 {
     receipt_targets: BTreeMap<Hash64, PalwClassTargetV2>,
     capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     claims: BTreeMap<Hash64, PalwClaimStateV2>,
+    claims_by_job: BTreeSet<(Hash64, Hash64)>,
     panels: BTreeMap<Hash64, PalwPanelStateV2>,
     court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
@@ -11539,6 +11540,8 @@ pub struct PalwChainStateV2 {
     /// Empty on every network (nothing installs a row yet); enters the root (`funded_escrow/v1`) and the carriage (tail `0xFB`) only
     /// when non-empty.
     funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
+    // Derived from every retained escrow, including settled rows awaiting retirement.
+    funded_escrows_by_claim: BTreeSet<(Hash64, Hash64)>,
     /// **G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry** — recorded tag-230 roots and their digest/path
     /// disclosure cases ([`crate::palw_court_model_scope_routes_v1::readiness_disclosure`]). Written only past `palw_court_model_scope_v1` with an ADOPTED draw cap (unadopted: nothing is
     /// ever written), journaled as delta 230; enters the root (`d2_readiness/v1`) and the carriage (tail `0xE5`) only when non-empty.
@@ -14259,12 +14262,14 @@ mod funded_escrow;
 mod positive_assignment;
 mod positive_assignment_backing;
 mod positive_assignment_case;
+pub use positive_assignment_case::qualify_worker_payment_candidate_v2;
+pub use positive_assignment_case::source::{QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2};
 mod positive_assignment_funds;
 mod positive_assignment_materials;
 mod positive_assignment_raw;
 pub use positive_assignment_backing::{
     AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignedCaseBackingV2,
-    NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2,
+    NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2, NativePositiveDecisionHistoryV2,
 };
 pub use positive_assignment_funds::{
     AssignmentMoneyOwnerErrorV2, qualify_rooted_assignment_candidate_v2, validate_assignment_once_reference_v2,
@@ -14938,7 +14943,7 @@ pub fn palw_v2_preview_initial_relay_fee_v2(
     if action.transaction().payload.get(7) != Some(&14) {
         return Err(PalwStateV2Error::KernelRouteRefused("relay fee preview requires op14".into()));
     }
-    let fees = builder.install_initial_funding_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
+    let fees = builder.install_initial_assignment_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
     let state = builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)?;
     Ok((state, fees))
 }
@@ -21332,6 +21337,7 @@ pub struct PalwTransitionExtrasV1 {
     /// Raw native actions replayed at exact positions in the accepted object
     /// fold. This is not a vector of prepared or previously accepted rows.
     pub positive_assignment_actions: Vec<PositiveAssignmentScheduledActionV2>,
+    pub positive_decision_histories: Vec<NativePositiveDecisionHistoryV2>,
     /// **G14 r5 (lane r5-escrow-settlement): how long a SETTLED funded-escrow row stays rooted after its settling spend** — the
     /// processor's `2 × pruning_depth` (DAA advances at least as fast as blue score, so by then the pruning point has passed the
     /// settling block and a pruned node's carriage no longer needs the row). `None` below `palw_tir_public_conviction_v1` (no row
@@ -23500,11 +23506,14 @@ fn apply_kernel_route_row_v1(
         // GAP 8: a ledger row applied or reverted outside the fold — the cached ledger is no longer the rows'.
         kernel.ledger_cache.clear();
     }
-    let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
     let k = (table, key.to_vec());
-    if map.get(&k) != expected.as_ref() {
+    let actual = if ledger_table { kernel.rows.get(&k) } else { kernel.aux.get(&k) };
+    if actual != expected.as_ref() {
         return Err(PalwStateV2Error::DeltaMismatch("a kernel route row does not match the delta's expectation"));
     }
+    kernel.update_positive_aux_indexes_v2(&k, install.as_deref())
+        .map_err(|_| PalwStateV2Error::DeltaMismatch("a Positive indexed row does not match its canonical key"))?;
+    let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
     match install {
         Some(bytes) => {
             map.insert(k, bytes.clone());
@@ -23661,7 +23670,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ReceiptTarget { key, old, new } => swap_write!(state.receipt_targets, key, old, new),
         PalwDeltaEntryV2::Capability { key, old, new } => swap_write!(state.capabilities, key, old, new),
-        PalwDeltaEntryV2::Claim { key, old, new } => swap_write!(state.claims, key, old, new),
+        PalwDeltaEntryV2::Claim { key, old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.claims.get(key) != expected.as_ref() {
+                return Err(PalwStateV2Error::DeltaMismatch("an entry's old value is not this state's value"));
+            }
+            state.replace_claim_row_v2(*key, install.clone());
+        }
         PalwDeltaEntryV2::Payout { key, old, new } => swap_write!(state.pending_payouts, key, old, new),
         PalwDeltaEntryV2::Panel { key, old, new } => swap_write!(state.panels, key, old, new),
         PalwDeltaEntryV2::Court { key, old, new } => {
@@ -23927,7 +23942,11 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         PalwDeltaEntryV2::TirDesignated { key, old, new } => swap_write!(state.tir_designated.records, key, old, new),
-        PalwDeltaEntryV2::FundedEscrow { key, old, new } => swap_write!(state.funded_escrows, key, old, new),
+        PalwDeltaEntryV2::FundedEscrow { key, old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            expect_matches(&state.funded_escrows.get(key).copied(), expected)?;
+            state.replace_funded_escrow_v1(*key, *install);
+        }
         PalwDeltaEntryV2::D2Readiness { key, old, new } => swap_write!(state.d2_readiness, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
@@ -26105,6 +26124,8 @@ impl PalwStateCarriageV2 {
                         .filter(|((table, _), _)| *table != crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1)
                         .map(|(key, row)| (key.clone(), row.clone()))
                         .collect(),
+                    positive_job_owners_v2: route.positive_job_owners_v2.clone(),
+                    positive_gate_c_schedule_v2: route.positive_gate_c_schedule_v2.clone(),
                     ledger_cache: Default::default(),
                 }
             }),
@@ -26258,6 +26279,7 @@ impl PalwStateCarriageV2 {
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
         palw_improve_eval_fold_v1::palw_improve_eval_carriage_consistent_v1(&self.improvement_eval_jobs, &self.improvement_epochs)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let claims_by_job = self.claims.iter().filter_map(|(id, row)| (row.job_identity != ZERO_HASH64).then_some((row.job_identity, *id))).collect();
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -26270,6 +26292,7 @@ impl PalwStateCarriageV2 {
             receipt_targets: self.receipt_targets,
             capabilities: self.capabilities,
             claims: self.claims,
+            claims_by_job,
             pending_payouts: self.pending_payouts,
             certified_families: self.certified_families,
             fp_certified_families: self.fp_certified_families,
@@ -26396,6 +26419,7 @@ impl PalwStateCarriageV2 {
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
             tir_designated: self.tir_designated,
+            funded_escrows_by_claim: self.funded_escrows.iter().map(|(id, row)| (row.claim, *id)).collect(),
             funded_escrows: self.funded_escrows,
             d2_readiness: self.d2_readiness,
             fp_public_jobs: self.fp_public_jobs,

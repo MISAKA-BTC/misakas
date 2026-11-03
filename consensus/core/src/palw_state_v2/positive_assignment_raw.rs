@@ -4,9 +4,13 @@ use super::*;
 use crate::tx::{Transaction, UtxoEntry};
 use crate::{
     block::BlockTransactionsV3,
-    config::params::{AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, Params, PositiveAssignmentRuleScopeV2},
+    config::params::{
+        AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, AssignmentServiceCapacityV2, Params,
+        PositiveAssignmentRuleScopeV2,
+    },
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1},
     palw_positive_assignment_certification_v2::{AssignmentGateCClockErrorV2, AssignmentGateCClockV2},
+    palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentRegisteredDescriptorV2},
     palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
 };
@@ -43,6 +47,7 @@ pub struct NativeAssignmentRulesV2 {
     network: Digest,
     prompt_form: PalwPromptIdsFormV1,
     gate_c: Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>,
+    service_capacity: Option<(u64, AssignmentServiceCapacityV2)>,
 }
 impl NativeAssignmentRulesV2 {
     pub fn resolve(params: &Params, daa: u64, network: Hash64, prompt_form: PalwPromptIdsFormV1) -> Option<Self> {
@@ -60,6 +65,7 @@ impl NativeAssignmentRulesV2 {
             network: Digest(network.as_bytes()),
             prompt_form,
             gate_c,
+            service_capacity: fence.service_capacity.map(|capacity| (daa, capacity)),
         })
     }
     /// Reconstruct original decode rules from a checked rooted material pair.
@@ -83,9 +89,20 @@ impl NativeAssignmentRulesV2 {
             network: material.network,
             prompt_form: material.network_prompt_form,
             gate_c: Some(material.certification_policy),
+            service_capacity: None,
         })
     }
-    pub fn original_material(&self) -> Option<AcceptedMaterial> {
+    /// New joins use today's shared supply while preserving the original
+    /// contract and rules that govern already accepted obligations.
+    pub fn with_current_service_capacity_v2(mut self, params: &Params, daa: u64) -> Self {
+        self.service_capacity =
+            params.palw_positive_assignment_v2_at(daa).and_then(|fence| fence.service_capacity).map(|capacity| (daa, capacity));
+        self
+    }
+    pub(super) fn service_capacity_at_v2(&self, daa: u64) -> Option<AssignmentServiceCapacityV2> {
+        self.service_capacity.filter(|(at, _)| *at == daa).map(|(_, capacity)| capacity)
+    }
+    pub(super) fn original_material(&self) -> Option<AcceptedMaterial> {
         self.original_material.map(|(material, _)| material)
     }
     pub(super) fn original_history_storage_limit_v2(&self) -> Option<u64> {
@@ -119,7 +136,7 @@ impl NativeAssignmentRulesV2 {
     ) -> Result<AssignmentBodyLimitsV2, crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyErrorV2> {
         AssignmentBodyLimitsV2::from_policy(&self.policy)
     }
-    pub(super) fn certification_policy(&self) -> Option<&crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1> {
+    pub(crate) fn certification_policy(&self) -> Option<&crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1> {
         self.gate_c.as_ref()
     }
     pub fn gate_c_clock(&self, quoted_result_daa: u64) -> Result<AssignmentGateCClockV2, AssignmentGateCClockErrorV2> {
@@ -145,7 +162,9 @@ struct PositiveAssignmentRawDataV2 {
     rules: NativeAssignmentRulesV2,
     case_backing: Option<Arc<NativeAssignedCaseBackingV2>>,
     original_open: Option<Arc<NativeAcceptedCaseCarriageV2>>,
+    original_admission: Option<Arc<AssignmentAdmissionMaterialV2>>,
     signed_anchor: Option<(BlockHash, u64)>,
+    registered_class: Option<AssignmentRegisteredDescriptorV2>,
     relay_carrier_fees: Option<FundingRelayCarrierFeesV2>,
     pending_relay_replay: Option<NativePendingRelayReplayV2>,
     case_relay_contract: Option<(AssignmentId, AcceptedMaterial)>,
@@ -184,7 +203,9 @@ impl PositiveAssignmentRawActionV2 {
             rules,
             case_backing: None,
             original_open: None,
+            original_admission: None,
             signed_anchor: None,
+            registered_class: None,
             relay_carrier_fees: None,
             pending_relay_replay: None,
             case_relay_contract: None,
@@ -218,6 +239,26 @@ impl PositiveAssignmentRawActionV2 {
     pub(super) fn signed_anchor_clock_v2(&self) -> Option<(BlockHash, u64)> {
         self.0.signed_anchor
     }
+    /// Carry the selected-parent archive's registration data to the exact
+    /// accepted prefix, where the fold checks the current rooted class again.
+    pub fn with_registered_class_v2(mut self, descriptor: AssignmentRegisteredDescriptorV2) -> Result<Self, NativeCoverageV1> {
+        let invalid = || NativeCoverageV1::unsupported::<Self>("Assignment class carriage", "wrong operation, clock or shared owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
+        if data.registered_class.is_some()
+            || data.body[data.index as usize].payload.get(7) != Some(&8)
+            || descriptor.registration.origin.accepted_daa > data.origin.accepted_daa
+            || descriptor.registration.origin.accepting_block == data.origin.accepting_block
+        {
+            return Err(invalid());
+        }
+        data.registered_class = Some(descriptor);
+        Ok(self)
+    }
+
+    pub(super) fn registered_class_v2(&self) -> Option<AssignmentRegisteredDescriptorV2> {
+        self.0.registered_class
+    }
+
     /// Transport the fee partition observed at the actual UTXO fee sink.
     pub fn with_relay_carrier_fees_v2(mut self, fees: FundingRelayCarrierFeesV2) -> Result<Self, NativeCoverageV1> {
         let invalid = || NativeCoverageV1::unsupported::<Self>("relay carrier fees", "wrong operation, gross fee or shared owner");
@@ -254,8 +295,6 @@ impl PositiveAssignmentRawActionV2 {
         self.0.pending_relay_replay
     }
 
-    /// Transport the contract pin recovered from the selected parent's
-    /// authenticated Open. The fold compares it with the live Assignment.
     pub fn with_case_relay_contract_v2(
         mut self,
         assignment: AssignmentId,
@@ -278,11 +317,11 @@ impl PositiveAssignmentRawActionV2 {
     }
 
     /// Retain the original accepted op8 and executed prefix for op9 replay.
-    pub fn with_original_open_carriage_v2(mut self, carriage: NativeAcceptedCaseCarriageV2) -> Result<Self, NativeCoverageV1> {
+    pub fn with_original_open_carriage_v2(mut self, carriage: NativeAcceptedCaseCarriageV2, admission: AssignmentAdmissionMaterialV2) -> Result<Self, NativeCoverageV1> {
         let error =
             || NativeCoverageV1::unsupported::<Self>("original Assignment carriage", "wrong operation, origin or shared owner");
         let data = Arc::get_mut(&mut self.0).ok_or_else(error)?;
-        if data.original_open.is_some()
+        if data.original_open.is_some() || data.original_admission.is_some()
             || data.rules.original_material().map(|material| material.origin) != Some(carriage.origin())
             || data.body[data.index as usize].payload.get(7) != Some(&9)
         {
@@ -291,12 +330,21 @@ impl PositiveAssignmentRawActionV2 {
         let bytes = (std::mem::size_of::<NativeAcceptedCaseCarriageV2>()
             + std::mem::size_of::<[usize; 2]>()
             + std::mem::align_of::<NativeAcceptedCaseCarriageV2>()) as u64;
+        let coverage = admission.native_heap_v1("original Assignment admission");
+        let heap = coverage.bytes().ok_or(coverage)?;
+        let bytes = bytes.checked_add(heap)
+            .and_then(|n| n.checked_add((std::mem::size_of::<AssignmentAdmissionMaterialV2>() + 2 * std::mem::size_of::<usize>()) as u64))
+            .ok_or_else(error)?;
         Arc::get_mut(&mut data._decode).ok_or_else(error)?.grow_memory_v1(bytes)?;
+        data.original_admission = Some(Arc::new(admission));
         data.original_open = Some(Arc::new(carriage));
         Ok(self)
     }
     pub(super) fn original_open_carriage_v2(&self) -> Option<&NativeAcceptedCaseCarriageV2> {
         self.0.original_open.as_deref()
+    }
+    pub(super) fn original_admission_v2(&self) -> Option<&AssignmentAdmissionMaterialV2> {
+        self.0.original_admission.as_deref()
     }
     pub fn with_native_case_backing_v2(
         mut self,
@@ -361,8 +409,14 @@ impl PartialEq for PositiveAssignmentRawActionV2 {
             && self.current_output() == other.current_output()
             && self.rules() == other.rules()
             && self.signed_anchor_clock_v2() == other.signed_anchor_clock_v2()
+            && self.registered_class_v2() == other.registered_class_v2()
             && self.relay_carrier_fees_v2() == other.relay_carrier_fees_v2()
             && self.pending_relay_replay_v2() == other.pending_relay_replay_v2()
+            && match (&self.0.original_admission, &other.0.original_admission) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
             && match (&self.0.original_open, &other.0.original_open) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -385,7 +439,18 @@ impl NativeHeapV1 for NativeAssignmentRulesV2 {
     fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
         // All fields are bounded fixed policy/preimage values. No Params or
         // peer variable collection is hidden behind this immutable descriptor.
-        let Self { scope, policy, positive, preimages, funding_relay_profile, original_material, network, prompt_form, gate_c } = self;
+        let Self {
+            scope,
+            policy,
+            positive,
+            preimages,
+            funding_relay_profile,
+            original_material,
+            network,
+            prompt_form,
+            gate_c,
+            service_capacity,
+        } = self;
         fn require_fixed_copy<T: Copy>(_: &T) {}
         require_fixed_copy(scope);
         require_fixed_copy(funding_relay_profile);
@@ -394,6 +459,7 @@ impl NativeHeapV1 for NativeAssignmentRulesV2 {
         require_fixed_copy(network);
         require_fixed_copy(prompt_form);
         require_fixed_copy(gate_c);
+        require_fixed_copy(service_capacity);
         if let Some(AssignmentNativePreimagesV2 { assignment_fees, physical, source_policy, case_fees, cancellation }) = preimages {
             require_fixed_copy(assignment_fees);
             require_fixed_copy(physical);
@@ -455,7 +521,9 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             rules,
             case_backing,
             original_open,
+            original_admission,
             signed_anchor: _,
+            registered_class: _,
             relay_carrier_fees: _,
             pending_relay_replay: _,
             case_relay_contract: _,
@@ -469,6 +537,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             .add::<Self>(rules.native_heap_v1(path), path)
             .add::<Self>(case_backing.native_heap_v1(path), path)
             .add::<Self>(original_open.native_heap_v1(path), path)
+            .add::<Self>(original_admission.native_heap_v1(path), path)
     }
 }
 impl NativeHeapV1 for PositiveAssignmentScheduledActionV2 {

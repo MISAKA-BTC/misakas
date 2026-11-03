@@ -51,8 +51,12 @@ fn policy(positive: &PositiveCourtFenceV2) -> AssignmentPolicyV2 {
 fn selected(at: u64) -> Params {
     let mut p = TESTNET_PARAMS;
     let positive = PositiveCourtFenceV2::unapproved_probe_at(ForkActivation::new(at));
-    let assignment =
-        PositiveAssignmentFenceV2 { activation: ForkActivation::new(at), policy: policy(&positive), native_preimages: None };
+    let assignment = PositiveAssignmentFenceV2 {
+        activation: ForkActivation::new(at),
+        policy: policy(&positive),
+        native_preimages: None,
+        service_capacity: None,
+    };
     p.palw_positive_court_v2 = Some(positive);
     p.palw_positive_assignment_v2 = Some(assignment);
     p

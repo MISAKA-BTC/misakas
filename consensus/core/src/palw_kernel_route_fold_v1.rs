@@ -216,6 +216,32 @@ impl PalwChainStateV2 {
     }
 }
 
+fn legacy_kernel_claim_alias_v2(table: u8, key: &[u8], value: &[u8]) -> Option<Hash64> {
+    use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1};
+    let subject = match table {
+        TABLE_CLAIMS_V1 | TABLE_OPV_CLAIMS_V1 => key,
+        TABLE_JOB_CLAIMS_V1 => value,
+        TABLE_PROOF_SEALS_V1 => key.get(..64)?,
+        _ => return None,
+    };
+    subject.try_into().ok().map(Hash64::from_bytes)
+}
+
+fn legacy_kernel_job_alias_v2(table: u8, key: &[u8], value: &[u8]) -> Option<Hash64> {
+    use misaka_palw_kernel::rows::{
+        TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_JOB_ESCROWS_V1, TABLE_JOBS_V1, TABLE_PIPELINE_JOBS_V1, TABLE_SEALS_V1,
+    };
+    let subject = match table {
+        TABLE_JOBS_V1 | TABLE_PIPELINE_JOBS_V1 | TABLE_JOB_CLAIMS_V1 | TABLE_JOB_ESCROWS_V1 => key,
+        TABLE_SEALS_V1 => key.get(..64)?,
+        // ClaimRowV1 begins with producer, class_binding_id and job_id,
+        // three fixed 64-byte digests preceding the variable-sized body.
+        TABLE_CLAIMS_V1 => value.get(128..192)?,
+        _ => return None,
+    };
+    subject.try_into().ok().map(Hash64::from_bytes)
+}
+
 impl TransitionBuilder<'_> {
     /// **The one writer of the kernel route's rows**, journaled `KernelRouteRow` (the ledger's tables below 32, the consensus tables
     /// from 32). The route's header must exist.
@@ -241,6 +267,14 @@ impl TransitionBuilder<'_> {
     }
 
     fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
+        if let Some(value) = new.as_deref() {
+            if let Some(claim) = legacy_kernel_claim_alias_v2(table, &key, value) {
+                self.reject_positive_claim_alias_v2(claim)?;
+            }
+            if let Some(job) = legacy_kernel_job_alias_v2(table, &key, value) {
+                self.reject_positive_job_alias_v2(job)?;
+            }
+        }
         let cohort_update =
             super::palw_claim_local_execution_cohort_census_v15::prepare_writer_v15(self, table, &key, new.as_deref())?;
         let compact_update =
@@ -253,10 +287,13 @@ impl TransitionBuilder<'_> {
             // A ledger row changes: the cached ledger is no longer the rows' (the flush sets it again once it has written them).
             kernel.ledger_cache.clear();
         }
+        let map_key = (table, key.clone());
+        kernel.update_positive_aux_indexes_v2(&map_key, new.as_deref())
+            .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid Positive indexed row: {error:?}")))?;
         let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
         let old = match &new {
-            Some(bytes) => map.insert((table, key.clone()), bytes.clone()),
-            None => map.remove(&(table, key.clone())),
+            Some(bytes) => map.insert(map_key, bytes.clone()),
+            None => map.remove(&map_key),
         };
         let compact_native_changed = old != new;
         if compact_native_changed {
@@ -2805,6 +2842,10 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0018 Gate C: certifications are drawn, decided and — when certified — credited (safe weight, settled anchor, the held
     // issuance-funded reward). A no-op below `palw_independently_work_certified_v1`.
     super::palw_security_certification_fold_v1::sweep_security_certification_v1(builder, ctx)?;
+    builder.decide_due_positive_certification_failures_v2(ctx)?;
+    for history in &builder.extras.positive_decision_histories {
+        builder.process_positive_certification_history_v2(ctx, &history.0)?;
+    }
     // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
     // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
     super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;

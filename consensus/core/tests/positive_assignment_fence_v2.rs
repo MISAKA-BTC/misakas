@@ -11,8 +11,12 @@ fn d(n: u8) -> Digest {
 fn selected(at: u64) -> Params {
     let mut p = TESTNET_PARAMS;
     let positive = PositiveCourtFenceV2::unapproved_probe_at(ForkActivation::new(at));
-    let assignment =
-        PositiveAssignmentFenceV2 { activation: ForkActivation::new(at), policy: policy(&positive), native_preimages: None };
+    let assignment = PositiveAssignmentFenceV2 {
+        activation: ForkActivation::new(at),
+        policy: policy(&positive),
+        native_preimages: None,
+        service_capacity: None,
+    };
     p.palw_positive_court_v2 = Some(positive);
     p.palw_positive_assignment_v2 = Some(assignment);
     p
@@ -304,6 +308,27 @@ fn scheduled_native_preimages_do_not_change_the_genesis_handshake_identity() {
     assert_eq!(p.palw_positive_assignment_rule_scope_v2_at(99), None);
     assert_eq!(p.consensus_identity_id(), other.consensus_identity_id());
     assert_ne!(p.consensus_params_id(), other.consensus_params_id());
+}
+
+#[test]
+fn assignment_service_capacity_is_committed_only_with_the_fired_profile() {
+    let mut a = selected(100);
+    let before = a.consensus_params_id();
+    let genesis = a.consensus_identity_id();
+    a.palw_positive_assignment_v2.as_mut().unwrap().service_capacity = Some(AssignmentServiceCapacityV2 {
+        source_work: 1,
+        source_bytes: 2,
+        source_retained: 3,
+        prover_work: 4,
+        prover_bytes: 5,
+        prover_retained: 6,
+    });
+    assert_ne!(a.consensus_params_id(), before);
+    assert_eq!(a.consensus_identity_id(), genesis);
+    assert!(a.palw_positive_assignment_rule_scope_v2_at(99).is_none());
+    let scope = a.palw_positive_assignment_rule_scope_v2_at(100).unwrap();
+    a.palw_positive_assignment_v2.as_mut().unwrap().service_capacity.as_mut().unwrap().prover_retained += 1;
+    assert_ne!(a.palw_positive_assignment_rule_scope_v2_at(100), Some(scope));
 }
 
 #[path = "../../../misaka/palw/positive-contract/tests/support/assignment.rs"]

@@ -106,6 +106,27 @@ pub enum PositiveNativeOperationV2 {
     } = 7,
 }
 
+impl PositiveNativeOperationV2 {
+    /// The fixed journal subject carried by a follow-up. Full operation
+    /// authentication remains the native Case writer's responsibility.
+    pub fn case_target_v2(&self) -> Result<Option<(CaseId, Option<ResultId>)>, NativeBodyErrorV2> {
+        Ok(Some(match self {
+            Self::ResultAdmission { .. } => return Ok(None),
+            Self::WitnessCommit { witness, .. } => (witness.case, Some(witness.result)),
+            Self::ExactFrame { frame, .. } => {
+                let evidence = misaka_palw_positive_contract::wire::EvidenceFrame::decode(frame, MAX_OPAQUE_BYTES_V2)
+                    .map_err(|_| NativeBodyErrorV2::Wire)?;
+                let header = evidence.header();
+                (header.case, Some(header.result))
+            }
+            Self::SourceRequest { request, .. } => (request.case, None),
+            Self::SourceResponse { case, .. } => (*case, None),
+            Self::Finish { case, result, .. } | Self::Expire { case, result } => (*case, Some(*result)),
+            Self::PositiveCourtAttestation { attestation, .. } => (attestation.case, Some(attestation.result)),
+        }))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NativeBodySummaryV2 {
     pub kind: u8,
@@ -149,6 +170,12 @@ fn version(version: u16, revision: u16) -> Result<(), NativeBodyErrorV2> {
 const MINER_RESULT_BYTES: u64 = 4 + 16 * 64 + 32 + 4 * 4;
 const SERVICE_BYTES: u64 = 4 + 4 * 64 + 7 * 8 + 4 + 8;
 const CONSENT_BYTES: u64 = 4 + 4 * 64 + 3 * 8 + 4;
+// Each assigned Court carrier has a version, revision, kind and one opaque Vec.
+const SIGNED_OPAQUE_BODY_OVERHEAD_V2: u64 = 2 + 2 + 1 + 4 + SIGNATURE_BYTES as u64;
+pub(crate) const EXACT_FRAME_BODY_OVERHEAD_V2: u64 = SIGNED_OPAQUE_BODY_OVERHEAD_V2;
+pub(crate) const WITNESS_BODY_OVERHEAD_V2: u64 = SIGNED_OPAQUE_BODY_OVERHEAD_V2 + 4 + 6 * 64 + 4 + 1 + 4 * 64;
+pub(crate) const SOURCE_REQUEST_BODY_BYTES_V2: u64 = 5 + 4 + 3 * 64 + 1 + 2 * 8 + 64 + SIGNATURE_BYTES as u64;
+pub(crate) const SOURCE_RESPONSE_BODY_OVERHEAD_V2: u64 = 5 + 2 * 64 + 4;
 /// Existing body0 payload width, excluding its 5-byte version/revision/kind.
 /// Assigned Result syntax shares this scanner without accepting a separate op0.
 pub(super) const RESULT_ADMISSION_PAYLOAD_BYTES_V2: u64 =

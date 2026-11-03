@@ -1,6 +1,42 @@
 //! Prospective claim contract/continuation writers. All failures precede claim acceptance writes.
 use super::*;
 use crate::palw_staged_court_state_v1::*;
+/// Subject-bearing keys in the legacy alias scan. Layout, container,
+/// service, and draft-part keys use other identity namespaces.
+pub(super) fn staged_legacy_alias_subject_v2(key: PalwStagedCourtKeyV1) -> Option<Hash64> {
+    use PalwStagedCourtKeyV1::*;
+    match key {
+        Claim(id)
+        | Owner(id, _)
+        | InventoryOpen(id, _)
+        | Inventory(id)
+        | TirAcquisition(id, _, _)
+        | TirRawChunk(id)
+        | TirAcceptedBody(id)
+        | TirPreparation(id, _)
+        | TirClaim(id)
+        | TirWitness(id, _)
+        | CourtDutyClock(id)
+        | CourtSharedContext(id)
+        | CourtSharedQuery(id)
+        | CourtSharedIds(id)
+        | CourtSharedStream(id)
+        | CourtSharedChunk(id, _)
+        | CourtSharedResponse(id, _)
+        | CourtEndArchive(id)
+        | CourtCloseReceipt(id, _)
+        | CourtSharedRoot(id, _)
+        | CourtSharedRound(id)
+        | CourtSharedBottom(id)
+        | CourtArchiveProgress(id, _)
+        | CourtMaterialDraft(id, _)
+        | CourtMaterial(id, _)
+        | CourtMaterialLedger(id, _) => Some(id),
+        TirOwnerSchedule(id) => Some(id),
+        TirLayout(_) | TirContainer(_) | VerifiedTokenizerRegistration(..) | CourtService | CourtMaterialPart(..) => None,
+    }
+}
+
 /// Same finite material/source floor used by native admission and the actual
 /// terminal retirement reader. Trace TTL alone is not a retirement contract.
 pub(super) fn staged_retirement_floor_from_sources_v1(
@@ -1235,6 +1271,20 @@ impl TransitionBuilder<'_> {
         key: PalwStagedCourtKeyV1,
         new: Option<PalwStagedCourtRowV1>,
     ) -> Result<(), PalwStateV2Error> {
+        if let Some(row) = &new {
+            let subject = staged_legacy_alias_subject_v2(key);
+            if let Some(subject) = subject {
+                self.reject_positive_claim_alias_v2(subject)?;
+                self.reject_positive_job_alias_v2(subject)?;
+            }
+            // A duty/query can be keyed by its own identity. Check the same
+            // claim that the native service index will record for the row.
+            if let Some((claim, _)) = court_service_claim_index_entry_v1(key, row)
+                && Some(claim) != subject
+            {
+                self.reject_positive_claim_alias_v2(claim)?;
+            }
+        }
         if matches!(key, PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(..))
             || matches!(&new, Some(PalwStagedCourtRowV1::VerifiedTokenizerRegistration(_)))
         {

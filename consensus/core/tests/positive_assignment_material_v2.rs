@@ -219,8 +219,12 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
     use kaspa_consensus_core::config::params::{AssignmentFundingRelayProfileV2, PositiveAssignmentFenceV2, TESTNET_PARAMS};
     let mut params = TESTNET_PARAMS;
     params.palw_positive_court_v2 = Some(PositiveCourtFenceV2 { activation: ForkActivation::new(0), policy: positive.clone() });
-    params.palw_positive_assignment_v2 =
-        Some(PositiveAssignmentFenceV2 { activation: ForkActivation::new(0), policy, native_preimages: Some(native.clone()) });
+    params.palw_positive_assignment_v2 = Some(PositiveAssignmentFenceV2 {
+        activation: ForkActivation::new(0),
+        policy,
+        native_preimages: Some(native.clone()),
+        service_capacity: None,
+    });
     if requires_relay {
         params.palw_positive_funding_relay_v2 = Some(funding_relay_fixture::relay_fence(0));
     }
@@ -302,7 +306,7 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
             transmitted_bytes: 20,
             additional_work: 10,
             retained_bytes: 10,
-            retention_until: 500,
+            retention_until: 450,
             fee: 20,
             witness_attempts: 2,
         },
@@ -318,8 +322,8 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
         max_build_work: 10,
         max_submitted_bytes: 10,
         max_retained_bytes: 10,
-        retention_until_daa: 500,
-        build_before_daa: 400,
+        retention_until_daa: 450,
+        build_before_daa: 250,
         max_service_fee: 20,
         cancellation_policy: policy.cancellation_policy,
     };
@@ -363,7 +367,7 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
         registered_tokenizer: d(44),
         registration: reference(45),
     };
-    let material = AssignmentAdmissionMaterialV2 {
+    let mut material = AssignmentAdmissionMaterialV2 {
         version: 2,
         revision: 1,
         assignment: id,
@@ -413,7 +417,7 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
             heap_bytes: 8192,
         },
     };
-    let row = AssignmentRow {
+    let mut row = AssignmentRow {
         bundle,
         source_consent: source,
         prover_consent: prover,
@@ -434,16 +438,35 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
         last_event: origin(),
         admission_material: AcceptedMaterial { origin: origin(), digest: material.id() },
     };
+    let reservation = reservation_bytes(&row, &material);
+    let digest = assignment_custody_bytes_id_v2(&reservation);
+    material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize] = digest;
+    material.custody.reservation = AcceptedMaterial { origin: row.origin, digest };
+    row.reservation = material.custody.reservation;
+    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &material).unwrap()).unwrap();
+    let digest = assignment_custody_bytes_id_v2(&liability);
+    material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::LiabilityCustody as usize] = digest;
+    material.custody.liability = AcceptedMaterial { origin: row.origin, digest };
+    row.liability = material.custody.liability;
+    row.admission_material.digest = material.id();
     (row, material, job)
 }
 fn limits() -> AssignmentOpenLimitsV2 {
     AssignmentOpenLimitsV2::within_payload(16 << 10)
 }
-fn payload(m: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
+fn reservation_bytes(row: &AssignmentRow, material: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
+    let mut reservation = b"PC2ACOH1".to_vec();
+    reservation.extend_from_slice(&0u32.to_le_bytes());
+    borsh::to_writer(&mut reservation, &AssignmentReservationCustodyV2::derive(row, material)).unwrap();
+    reservation
+}
+
+fn payload(row: &AssignmentRow, m: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
+    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(row, m).unwrap()).unwrap();
     misaka_palw_positive_contract::assignment::open_material::encode_assignment_open_v2(
         &borsh::to_vec(m).unwrap(),
         &[2, 0, 1, 0, 8],
-        [&[1], &[2]],
+        [&reservation_bytes(row, m), &liability],
         limits(),
     )
     .unwrap()
@@ -452,7 +475,7 @@ fn payload(m: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
 fn frozen_original_policy_survives_future_policy_change_and_rejects_substitution() {
     let (row, material, _job) = fixture();
     material.check_row(&row).unwrap();
-    let raw = payload(&material);
+    let raw = payload(&row, &material);
     let view = AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 8], limits()).unwrap();
     assert_eq!(view.material, material);
     let mut future = material.assignment_policy;
@@ -471,13 +494,78 @@ fn frozen_original_policy_survives_future_policy_change_and_rejects_substitution
     assert!(substituted.check_row(&row).is_err());
 }
 #[test]
+fn native_open_price_is_bound_to_literal_body_and_full_history_capacity() {
+    use kaspa_consensus_core::{
+        palw_positive_court_v2::coordinator::assignment_body::{
+            AssignmentBodyLimitsV2, PositiveAssignmentNativeBodyV2, PositiveAssignmentNativeOperationV2, encode_assignment_body_v2,
+        },
+        palw_tir_class_v1::PalwTirLayoutV1,
+    };
+    use misaka_palw_positive_contract::{
+        identity::SIGNATURE_BYTES,
+        rows::{MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES},
+    };
+
+    let (mut row, material, _) = fixture();
+    row.bundle.terms.max_assignment_fee = 2_000_000_000;
+    row.bundle.terms.max_assignment_capital = 2_000_000;
+    row.bundle.terms.max_assignment_locked = 3_000_000_000;
+    let policy = &material.assignment_policy;
+    let preimages = &material.native_preimages;
+    let limits = AssignmentBodyLimitsV2::from_policy(policy).unwrap();
+    let mut layout = PalwTirLayoutV1 {
+        version: 1,
+        max_context: 16,
+        checkpoint_interval: 4,
+        h_tile: 4,
+        commit_tiles: vec![4, 8],
+        state_tiles: vec![2],
+    };
+    let body = |layout: &PalwTirLayoutV1| {
+        encode_assignment_body_v2(
+            &PositiveAssignmentNativeBodyV2 {
+                version: 2,
+                revision: 1,
+                operation: PositiveAssignmentNativeOperationV2::AcceptCanonicalAssignment {
+                    bundle: row.bundle,
+                    source: row.source_consent,
+                    prover: row.prover_consent,
+                    signatures: [[0; SIGNATURE_BYTES]; 3],
+                    layout: borsh::to_vec(layout).unwrap(),
+                },
+            },
+            limits,
+        )
+        .unwrap()
+    };
+    let quote = |body: &[u8], now| {
+        quote_native_assignment_open_v2(policy, &row.bundle.terms, &preimages.assignment_fees, &preimages.physical, body, now)
+    };
+    let first = body(&layout);
+    let (price, decode_heap) = quote(&first, 10).unwrap();
+    assert_eq!(quote(&first, 11).unwrap(), (price, decode_heap));
+    assert_eq!(price.usage.admission_bytes, first.len() as u64);
+    assert_eq!(price.usage.signatures, 3);
+    assert!(decode_heap <= price.usage.heap_bytes);
+    let joins = (policy.max_role_candidates - 3).min(policy.max_prover_joins);
+    let retained_rows = u64::from(5 + policy.max_history_frames + policy.max_role_candidates + joins)
+        * (MAX_NATIVE_KEY_BYTES + MAX_NATIVE_ROW_BYTES) as u64;
+    assert_eq!(price.usage.retained_bytes, retained_rows + price.usage.replay_bytes / 2);
+    layout.commit_tiles.push(16);
+    let (larger, _) = quote(&body(&layout), 10).unwrap();
+    assert_eq!(larger.usage.admission_bytes, price.usage.admission_bytes + 4);
+    assert_ne!(larger.id(), price.id());
+    assert!(quote(&first[..first.len() - 1], 10).is_err());
+}
+
+#[test]
 fn native_open_quote_covers_control_envelope_and_complete_journal_record() {
     use misaka_palw_positive_contract::assignment::{
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2, journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2,
     };
 
-    let (_, mut material, _) = fixture();
-    let inner_bytes = payload(&material).len() as u64;
+    let (row, mut material, _) = fixture();
+    let inner_bytes = payload(&row, &material).len() as u64;
     let payload_bytes = inner_bytes + ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64;
     let record_bytes = payload_bytes + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
     assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
@@ -502,7 +590,7 @@ fn native_open_quote_covers_control_envelope_and_complete_journal_record() {
 #[test]
 fn custody_and_literal_transaction_cannot_be_replaced_or_missing() {
     let (row, material, _job) = fixture();
-    let raw = payload(&material);
+    let raw = payload(&row, &material);
     assert!(AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 9], limits()).is_err());
     assert!(AssignmentOpenViewV2::decode(&[2, 0, 1, 0, 8], limits()).is_err());
     let mut hostile = raw.clone();
@@ -530,6 +618,55 @@ fn custody_and_literal_transaction_cannot_be_replaced_or_missing() {
     row_with_matching_pin.admission_material.digest = premature.id();
     assert!(premature.check_row(&row_with_matching_pin).is_err());
 }
+#[test]
+fn reservation_rejects_rehashed_budget_and_extra_cohort_tail() {
+    let (row, material, _) = fixture();
+    let actual = reservation_bytes(&row, &material);
+    let mut forged = actual.clone();
+    *forged.last_mut().unwrap() ^= 1;
+    let mut padded = actual;
+    padded.push(0);
+    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &material).unwrap()).unwrap();
+    for reservation in [&forged, &padded] {
+        let mut row = row.clone();
+        let mut material = material.clone();
+        let digest = assignment_custody_bytes_id_v2(reservation);
+        material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize] = digest;
+        material.custody.reservation.digest = digest;
+        row.reservation = material.custody.reservation;
+        row.admission_material.digest = material.id();
+        let raw = encode_assignment_open_v2(&borsh::to_vec(&material).unwrap(), &[2, 0, 1, 0, 8], [reservation, &liability], limits())
+            .unwrap();
+        assert!(material.check_row(&row).is_ok());
+        assert!(AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 8], limits()).is_err());
+    }
+}
+
+#[test]
+fn original_liability_rejects_a_rehashed_clock_from_another_policy() {
+    let (mut row, mut material, _) = fixture();
+    let mut changed = material.clone();
+    changed.certification_policy.prosecution_window_daa += 1;
+    let bytes = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &changed).unwrap()).unwrap();
+    let digest = assignment_custody_bytes_id_v2(&bytes);
+    material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::LiabilityCustody as usize] = digest;
+    material.custody.liability.digest = digest;
+    row.liability = material.custody.liability;
+    row.admission_material.digest = material.id();
+    let raw = encode_assignment_open_v2(
+        &borsh::to_vec(&material).unwrap(),
+        &[2, 0, 1, 0, 8],
+        [&reservation_bytes(&row, &material), &bytes],
+        limits(),
+    )
+    .unwrap();
+    assert!(material.check_row(&row).is_ok());
+    assert!(matches!(
+        AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 8], limits()),
+        Err(misaka_palw_positive_contract::ContractError::Identity)
+    ));
+}
+
 #[test]
 fn bounded_fixed_codec_and_original_job_profile_are_checked() {
     let (row, material, job) = fixture();
@@ -631,7 +768,7 @@ fn original_control_carriage_borrows_exact_body_and_rejects_detached_subject_or_
         assert!(AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, 2048).is_err());
     }
     let (row, material, _) = fixture_with_relay(true);
-    let open = payload(&material);
+    let open = payload(&row, &material);
     let envelope = encode_assignment_control_v2(
         &AssignmentControlBoundaryV2 { assignment: row.id(), origin: row.origin, ..boundary }.canonical_bytes().unwrap(),
         &open,

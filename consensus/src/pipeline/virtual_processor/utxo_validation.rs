@@ -6,9 +6,11 @@ use crate::{
     errors::{
         BlockProcessResult,
         RuleError::{
-            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment, BadPalwCommitmentShape, BadUTXOCommitment,
-            ComputeOverlayRetired, IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext, UnauthorizedUnbondRequestInBlock,
-            UnverifiablePrecommitEvidenceInBlock, UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
+            BadAcceptedIDMerkleRoot, BadCoinbaseTransaction, BadOverlayCommitment,
+            BadPalwCommitmentShape, BadUTXOCommitment, ComputeOverlayRetired,
+            IneligibleAttestationInBlock, InvalidTransactionsInUtxoContext,
+            UnauthorizedUnbondRequestInBlock, UnverifiablePrecommitEvidenceInBlock,
+            UnverifiableSlashingEvidenceInBlock, WrongHeaderPruningPoint,
         },
     },
     model::stores::{
@@ -34,21 +36,24 @@ use kaspa_consensus_core::{
     api::args::TransactionValidationArgs,
     coinbase::*,
     dns_finality::{
-        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation, BondStatus, DnsParams, EpochTally,
-        FeeSplitParams, OverlaySnapshot, PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
-        UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs, bond_release_daa_score,
-        decode_attestation_shard, deferred_quality_bonus_outputs_for_block, effective_bond_status, epochs_finalized_at,
-        precommit_evidence_from_accepted_txs, precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
-        resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool, stake_attestation_message,
-        stake_precommit_message, unbond_request_message, unbond_requests_from_accepted_txs, validator_id_from_pubkey,
+        ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BlockEpochContribution, BondMutation,
+        BondStatus, DnsParams, EpochTally, FeeSplitParams, OverlaySnapshot,
+        PRECOMMIT_MLDSA87_CONTEXT, RewardedEpochSet, SlashingSideEffect, StakeAttestation,
+        UNBOND_REQUEST_CONTEXT, attestations_from_accepted_txs, bond_mutations_from_accepted_txs,
+        bond_release_daa_score, decode_attestation_shard, deferred_quality_bonus_outputs_for_block,
+        effective_bond_status, epochs_finalized_at, precommit_evidence_from_accepted_txs,
+        precommit_fault, recompute_epoch_tallies, reserve_drip_outputs_for_block,
+        resolve_slashing_side_effects, slashing_evidence_from_accepted_txs, split_validator_pool,
+        stake_attestation_message, stake_precommit_message, unbond_request_message,
+        unbond_requests_from_accepted_txs, validator_id_from_pubkey,
         validator_participation_reward_outputs, victim_compensation_outputs,
     },
     header::Header,
     muhash::MuHashExtensions,
     subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
     tx::{
-        MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry,
-        ValidatedTransaction, VerifiableTransaction,
+        MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint,
+        TransactionOutput, UtxoEntry, ValidatedTransaction, VerifiableTransaction,
     },
     utxo::{
         utxo_diff::UtxoDiff,
@@ -78,13 +83,24 @@ pub(crate) mod crescendo {
 
     impl _CrescendoLogger {
         pub fn _new() -> Self {
-            Self { steps: Arc::new(AtomicU8::new(Self::_ACTIVATE)) }
+            Self {
+                steps: Arc::new(AtomicU8::new(Self::_ACTIVATE)),
+            }
         }
 
         const _ACTIVATE: u8 = 0;
 
         pub fn _report_activation(&self) -> bool {
-            if self.steps.compare_exchange(Self::_ACTIVATE, Self::_ACTIVATE + 1, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            if self
+                .steps
+                .compare_exchange(
+                    Self::_ACTIVATE,
+                    Self::_ACTIVATE + 1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+            {
                 info!(target: CRESCENDO_KEYWORD, "[Crescendo] [--------- Crescendo activated for UTXO state processing rules ---------]");
                 true
             } else {
@@ -105,7 +121,8 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// mempool or selected-parent snapshot may manufacture this provenance.
     pub positive_accepting_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
     /// Disposable reward calculation only. Never forwarded to the accepted fold.
-    pub positive_relay_preview_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    pub positive_relay_preview_point:
+        Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
     pub positive_native_carriers: positive_native_context_v2::PositiveCarrierCompanionsV2,
     pub relay_fee_plan: Option<NativeRelayFeePlanV2>,
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
@@ -174,7 +191,8 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// **RFC-0009: the merged V4 receipt blocks and how each is paid** — `{ block → (miner leg script, builder fee bps) }`, from the same
     /// selected-parent state, mergeset and non-DAA set the entitlement above reads. Empty on every shipped preset (the fence is dormant), where
     /// the coinbase is built exactly as before.
-    pub palw_v2_receipt_v4_payouts: BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
+    pub palw_v2_receipt_v4_payouts:
+        BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
     /// **Audit C-08 part three: what a released bond's spend must destroy, per outpoint.**
     ///
     /// The lock keeps a live bond's collateral unspendable; this is the other end. A bond that was
@@ -214,15 +232,18 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
     /// every shipped preset walks the mergeset exactly as before.
     pub palw_round_verdicts: Option<PalwRoundVerdictsV1>,
-    pub palw_round_fee_incomes: Vec<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1>,
+    pub palw_round_fee_incomes:
+        Vec<kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1>,
     /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow spend locks** — the selected parent's unsettled rooted rows by
     /// outpoint (set by the walk from the same parent state as `palw_v2_locked_bonds`), and the TFO1 carriers' own funding outputs
     /// accepted earlier in THIS mergeset (grown by `calculate_utxo_state`). Empty below `palw_tir_public_conviction_v1`.
     pub palw_escrow_locks: PalwEscrowSpendLocksV1,
     /// The qualified escrow spends this block accepted, in acceptance order — handed to the fold as
     /// `PalwTransitionExtrasV1::funded_escrow_settlements`, so the row settles in the same rooted delta as the UTXO spend.
-    pub palw_escrow_settlements: Vec<kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
-    pub palw_assignment_settlements: Vec<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
+    pub palw_escrow_settlements:
+        Vec<kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>,
+    pub palw_assignment_settlements:
+        Vec<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
 }
 
 /// **G14 lane escrow-rfc08 (RFC-0035 A): what the funded-escrow half of the spend filter reads.**
@@ -283,6 +304,20 @@ impl PalwEscrowSpendLocksV1 {
         daa_score: u64,
         bond_burn: u64,
     ) -> Option<TransactionOutpoint> {
+        self.refusal_with_qualified_case_v2(tx, input_amounts, daa_score, bond_burn, None, None)
+    }
+
+    pub(super) fn refusal_with_qualified_case_v2(
+        &self,
+        tx: &Transaction,
+        input_amounts: impl IntoIterator<Item = u64>,
+        daa_score: u64,
+        bond_burn: u64,
+        qualified_case: Option<TransactionOutpoint>,
+        qualified_worker: Option<
+            &kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2,
+        >,
+    ) -> Option<TransactionOutpoint> {
         if self.assignment_invalid {
             return tx.inputs.first().map(|i| i.previous_outpoint);
         }
@@ -297,7 +332,10 @@ impl PalwEscrowSpendLocksV1 {
             if self.provisional.contains(&outpoint) {
                 return Some(outpoint);
             }
-            if self.positive_case.contains_key(&outpoint) || self.assignment_prover.contains_key(&outpoint) {
+            let case_locked = self.positive_case.contains_key(&outpoint);
+            if self.assignment_prover.contains_key(&outpoint)
+                || (case_locked && qualified_case != Some(outpoint))
+            {
                 return Some(outpoint);
             }
             // Cross-purpose exclusivity: neither legacy escrow nor A/C may
@@ -309,7 +347,16 @@ impl PalwEscrowSpendLocksV1 {
                 }
             }
             if let Some((row, authorization)) = self.assignment.get(&outpoint) {
-                let Some(authorization) = authorization else { return Some(outpoint) };
+                if qualified_worker.is_some_and(|plan| {
+                    plan.burned_now == 0
+                        && plan.matches_populated_spend_v2(row, tx, &amounts, daa_score)
+                }) {
+                    first_rooted.get_or_insert(outpoint);
+                    continue;
+                }
+                let Some(authorization) = authorization else {
+                    return Some(outpoint);
+                };
                 match kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
                     row,
                     authorization,
@@ -336,7 +383,9 @@ impl PalwEscrowSpendLocksV1 {
                     Err(_) => return Some(outpoint),
                     Ok(plan) => {
                         first_rooted.get_or_insert(outpoint);
-                        let Some(sum) = escrow_burn.checked_add(plan.burned_now) else { return Some(outpoint) };
+                        let Some(sum) = escrow_burn.checked_add(plan.burned_now) else {
+                            return Some(outpoint);
+                        };
                         escrow_burn = sum;
                     }
                 }
@@ -346,8 +395,13 @@ impl PalwEscrowSpendLocksV1 {
             return None;
         }
         let input_sum = amounts.iter().try_fold(0u64, |sum, a| sum.checked_add(*a));
-        let output_sum = tx.outputs.iter().try_fold(0u64, |sum, o| sum.checked_add(o.value));
-        let fee = input_sum.zip(output_sum).and_then(|(i, o)| i.checked_sub(o));
+        let output_sum = tx
+            .outputs
+            .iter()
+            .try_fold(0u64, |sum, o| sum.checked_add(o.value));
+        let fee = input_sum
+            .zip(output_sum)
+            .and_then(|(i, o)| i.checked_sub(o));
         let owed = bond_burn.checked_add(escrow_burn);
         match (fee, owed) {
             (Some(fee), Some(owed)) if fee >= owed => None,
@@ -382,12 +436,18 @@ pub(super) struct PalwRoundVerdictsV1 {
 
 impl PalwRoundVerdictsV1 {
     pub(super) fn has_fee_gated_body(&self) -> bool {
-        self.fee_budget.is_some() && self.permitted.iter().any(|block| self.fee_recipients.contains_key(block))
+        self.fee_budget.is_some()
+            && self
+                .permitted
+                .iter()
+                .any(|block| self.fee_recipients.contains_key(block))
     }
 
     pub(super) fn relay_plan_changes_fee_admission(&self, plan: &NativeRelayFeePlanV2) -> bool {
         self.fee_budget.is_some()
-            && plan.debits_any_carrier(|block| self.permitted.contains(&block) && self.fee_recipients.contains_key(&block))
+            && plan.debits_any_carrier(|block| {
+                self.permitted.contains(&block) && self.fee_recipients.contains_key(&block)
+            })
     }
 }
 
@@ -415,7 +475,10 @@ impl<'a> UtxoProcessingContext<'a> {
         std::mem::take(&mut self.mergeset_acceptance_data)
     }
 
-    pub fn new(ghostdag_data: Refs<'a, GhostdagData>, selected_parent_multiset_hash: MuHash) -> Self {
+    pub fn new(
+        ghostdag_data: Refs<'a, GhostdagData>,
+        selected_parent_multiset_hash: MuHash,
+    ) -> Self {
         let mergeset_size = ghostdag_data.mergeset_size();
         Self {
             ghostdag_data,
@@ -455,7 +518,10 @@ impl<'a> UtxoProcessingContext<'a> {
     }
 }
 
-pub(super) fn relay_acceptance_matches(original: &[MergesetBlockAcceptanceData], replay: &[MergesetBlockAcceptanceData]) -> bool {
+pub(super) fn relay_acceptance_matches(
+    original: &[MergesetBlockAcceptanceData],
+    replay: &[MergesetBlockAcceptanceData],
+) -> bool {
     original.len() == replay.len()
         && original.iter().zip(replay).all(|(before, after)| {
             before.block_hash == after.block_hash
@@ -463,16 +529,24 @@ pub(super) fn relay_acceptance_matches(original: &[MergesetBlockAcceptanceData],
                     .accepted_transactions
                     .iter()
                     .map(|tx| (tx.transaction_id, tx.index_within_block))
-                    .eq(after.accepted_transactions.iter().map(|tx| (tx.transaction_id, tx.index_within_block)))
+                    .eq(after
+                        .accepted_transactions
+                        .iter()
+                        .map(|tx| (tx.transaction_id, tx.index_within_block)))
         })
 }
 
 #[cfg(test)]
 #[test]
 fn relay_acceptance_replay_checks_carrier_block_index_and_order() {
-    let block =
-        |word, entries| MergesetBlockAcceptanceData { block_hash: BlockHash::from_u64_word(word), accepted_transactions: entries };
-    let tx = |word, index| AcceptedTxEntry { transaction_id: BlockHash::from_u64_word(word), index_within_block: index };
+    let block = |word, entries| MergesetBlockAcceptanceData {
+        block_hash: BlockHash::from_u64_word(word),
+        accepted_transactions: entries,
+    };
+    let tx = |word, index| AcceptedTxEntry {
+        transaction_id: BlockHash::from_u64_word(word),
+        index_within_block: index,
+    };
     let original = vec![block(1, vec![tx(2, 0), tx(3, 1)]), block(4, vec![])];
     assert!(relay_acceptance_matches(&original, &original.clone()));
     let mut replay = original.clone();
@@ -490,8 +564,14 @@ fn relay_acceptance_replay_checks_carrier_block_index_and_order() {
 /// **Audit C-08 part three: what `tx` must leave unclaimed, in total** — the sum over its inputs of
 /// every released PALW bond's slashed sompi in `burns` (`palw_v2_bond_burn_obligations`). Usually
 /// zero, because usually no input is a bond.
-pub(crate) fn palw_bond_burn_owed(tx: &Transaction, burns: &std::collections::HashMap<TransactionOutpoint, u64>) -> u64 {
-    tx.inputs.iter().filter_map(|input| burns.get(&input.previous_outpoint)).fold(0u64, |a, b| a.saturating_add(*b))
+pub(crate) fn palw_bond_burn_owed(
+    tx: &Transaction,
+    burns: &std::collections::HashMap<TransactionOutpoint, u64>,
+) -> u64 {
+    tx.inputs
+        .iter()
+        .filter_map(|input| burns.get(&input.previous_outpoint))
+        .fold(0u64, |a, b| a.saturating_add(*b))
 }
 
 /// **Audit C-08 part three, the one rule: a released bond's spend must destroy what the bond
@@ -500,12 +580,21 @@ pub(crate) fn palw_bond_burn_owed(tx: &Transaction, burns: &std::collections::Ha
 /// must cover `owed` ([`palw_bond_burn_owed`]). `input_amounts` are the spent entries' amounts, in
 /// any order. Asked by the block path's per-transaction check (`BondSpendFilter`) and by the
 /// mempool (ADR-0109 D3's burn half), so the two cannot disagree about which spend pays.
-pub(crate) fn palw_bond_burn_paid(tx: &Transaction, input_amounts: impl IntoIterator<Item = u64>, owed: u64) -> TxResult<()> {
+pub(crate) fn palw_bond_burn_paid(
+    tx: &Transaction,
+    input_amounts: impl IntoIterator<Item = u64>,
+    owed: u64,
+) -> TxResult<()> {
     if owed == 0 {
         return Ok(());
     }
-    let total_in: u64 = input_amounts.into_iter().fold(0u64, |a, amount| a.saturating_add(amount));
-    let total_out: u64 = tx.outputs.iter().fold(0u64, |a, o| a.saturating_add(o.value));
+    let total_in: u64 = input_amounts
+        .into_iter()
+        .fold(0u64, |a, amount| a.saturating_add(amount));
+    let total_out: u64 = tx
+        .outputs
+        .iter()
+        .fold(0u64, |a, o| a.saturating_add(o.value));
     let left = total_in.saturating_sub(total_out);
     if left < owed {
         return Err(TxRuleError::BondBurnNotPaid { owed, left });
@@ -541,6 +630,18 @@ pub(crate) struct BondSpendFilter<'a> {
     palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
     /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow locks.** `None` where none exists (below the fence, and wherever no
     /// row or same-mergeset carrier exists — every network today), which leaves this filter's answers exactly as before.
+    worker_spends: Option<
+        &'a std::collections::HashMap<
+            TransactionId,
+            kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2,
+        >,
+    >,
+    case_spends: Option<
+        &'a std::collections::HashMap<
+            TransactionId,
+            kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2,
+        >,
+    >,
     escrow: Option<&'a PalwEscrowSpendLocksV1>,
 }
 
@@ -554,16 +655,40 @@ impl<'a> BondSpendFilter<'a> {
         palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
         palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
     ) -> Self {
-        Self { bond_view: None, daa_score, palw_locked, palw_burns, escrow: None }
+        Self {
+            bond_view: None,
+            daa_score,
+            palw_locked,
+            palw_burns,
+            worker_spends: None,
+            case_spends: None,
+            escrow: None,
+        }
     }
 
     /// **G14 lane escrow-rfc08: the first input of `tx` that spends a locked funded-escrow outpoint without qualification**, or
     /// `None`. A provisional (same-mergeset) lock refuses every spend; a rooted row admits exactly the spend
     /// `palw_escrow_qualified_spend_v1` qualifies against it, with the actual populated entries. The input's script check is NOT
     /// touched — it runs in the ordinary validator after this.
-    fn escrow_refusal(&self, tx: &Transaction, entries: &[UtxoEntry]) -> Option<TransactionOutpoint> {
+    fn escrow_refusal(
+        &self,
+        tx: &Transaction,
+        entries: &[UtxoEntry],
+    ) -> Option<TransactionOutpoint> {
         let locks = self.escrow?;
-        locks.refusal_with_bond_burn(tx, entries.iter().map(|entry| entry.amount), self.daa_score, self.burn_owed(tx))
+        let qualified = self
+            .case_spends
+            .and_then(|spends| spends.get(&tx.id()))
+            .filter(|spend| spend.matches_v2(tx, entries))
+            .map(|spend| spend.debit_v2());
+        locks.refusal_with_qualified_case_v2(
+            tx,
+            entries.iter().map(|entry| entry.amount),
+            self.daa_score,
+            self.burn_owed(tx),
+            qualified,
+            self.worker_spends.and_then(|spends| spends.get(&tx.id())),
+        )
     }
 
     /// **G14 r5: what this transaction's qualified escrow settlements destroy** (their scheduled burns) — the same plans the
@@ -622,8 +747,10 @@ impl<'a> BondSpendFilter<'a> {
         }
         self.bond_view.is_some_and(|view| {
             view.get(outpoint).is_some_and(|bond| {
-                let releasable = effective_bond_status(bond, self.daa_score) == BondStatus::Unbonding
-                    && bond_release_daa_score(bond).is_some_and(|release| self.daa_score >= release);
+                let releasable = effective_bond_status(bond, self.daa_score)
+                    == BondStatus::Unbonding
+                    && bond_release_daa_score(bond)
+                        .is_some_and(|release| self.daa_score >= release);
                 !releasable
             })
         })
@@ -635,7 +762,10 @@ impl VirtualStateProcessor {
     /// native allocation is later accepted or refused. Native admission must
     /// separately require this declaration to equal its own derived plan rent.
     fn palw_tir_public_declared_rent_v1(&self, tx: &Transaction, daa: u64) -> u64 {
-        if !self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(daa)) {
+        if !self
+            .palw_tir_public_conviction_v1
+            .is_some_and(|f| f.is_active(daa))
+        {
             return 0;
         }
         if tx.subnetwork_id == kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT {
@@ -705,8 +835,15 @@ impl VirtualStateProcessor {
 
     /// The amount the recipient can actually collect, shared by Round fee
     /// admission, template preflight and the final coinbase reward calculation.
-    pub(super) fn palw_collectible_transaction_fee_v1(&self, tx: &Transaction, fee: u64, bond_burned: u64, daa: u64) -> u64 {
-        let rent_active = self.palw_certification_rent_at(daa) || self.palw_model_lines_active_at(daa);
+    pub(super) fn palw_collectible_transaction_fee_v1(
+        &self,
+        tx: &Transaction,
+        fee: u64,
+        bond_burned: u64,
+        daa: u64,
+    ) -> u64 {
+        let rent_active =
+            self.palw_certification_rent_at(daa) || self.palw_model_lines_active_at(daa);
         let rent = if rent_active && tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
             kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_in_context_v2(
                 std::slice::from_ref(tx),
@@ -731,7 +868,11 @@ impl VirtualStateProcessor {
         } else {
             0
         };
-        fee.saturating_sub(bond_burned.saturating_add(rent).saturating_add(self.palw_tir_public_declared_rent_v1(tx, daa)))
+        fee.saturating_sub(
+            bond_burned
+                .saturating_add(rent)
+                .saturating_add(self.palw_tir_public_declared_rent_v1(tx, daa)),
+        )
     }
 
     /// Calculates UTXO state and transaction acceptance data relative to the selected parent state
@@ -755,16 +896,237 @@ impl VirtualStateProcessor {
     ) -> kaspa_consensus_core::palw_state_v2::PalwFundedOriginalCandidateV1 {
         // Actual processor configuration only. Never derive a policy body from
         // the carrier's signed profile IDs or a caller graph/count declaration.
-        let court = self.palw_court_params_at(accepting_daa).and_then(Result::ok);
-        let native = court.as_ref().map(|c| (c, self.palw_court_step_ladder_at(accepting_daa, c)));
-        let accounting =
-            validated.tx.payload.starts_with(b"FPA1") && self.palw_fp_answer_accounting_v1.is_some_and(|f| f.is_active(accepting_daa));
+        let court = self
+            .palw_court_params_at(accepting_daa)
+            .and_then(Result::ok);
+        let native = court
+            .as_ref()
+            .map(|c| (c, self.palw_court_step_ladder_at(accepting_daa, c)));
+        let accounting = validated.tx.payload.starts_with(b"FPA1")
+            && self
+                .palw_fp_answer_accounting_v1
+                .is_some_and(|f| f.is_active(accepting_daa));
         let inspect = if accounting {
             kaspa_consensus_core::palw_state_v2::palw_funded_original_answer_candidate_v1
         } else {
             kaspa_consensus_core::palw_state_v2::palw_funded_original_candidate_v1
         };
-        inspect(state, self.palw_network_domain_v2(), accepting_daa, validated, self.palw_state_params_v2.as_ref(), native)
+        inspect(
+            state,
+            self.palw_network_domain_v2(),
+            accepting_daa,
+            validated,
+            self.palw_state_params_v2.as_ref(),
+            native,
+        )
+    }
+
+    /// Qualify only a literal op12 whose first input is the rooted Case coin.
+    /// Local archive/capacity faults propagate outside transaction rejection so
+    /// pruning or resource pressure cannot change the accepted UTXO set.
+    pub(super) fn prepare_worker_payment_v2(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        parent: BlockHash,
+        tx: &Transaction,
+        amounts: &[u64],
+        daa: u64,
+        locks: &PalwEscrowSpendLocksV1,
+    ) -> Result<
+        Option<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
+        NativeCoverageV1,
+    > {
+        use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::palw_state_v2::{
+            NativeAssignedCaseBackingV2, PalwBlockContextV2, PalwStateV2Error,
+            qualify_worker_payment_candidate_v2,
+        };
+        use misaka_palw_positive_contract::identity::{CaseId, Digest};
+
+        let Some((funding, _)) = tx
+            .inputs
+            .first()
+            .and_then(|input| locks.assignment.get(&input.previous_outpoint))
+        else {
+            return Ok(None);
+        };
+        if locks.assignment_invalid
+            || !self
+                .palw_state_params_v2
+                .as_ref()
+                .is_some_and(|params| params.settlement_once_active_at(daa))
+            || tx.payload.get(..3) != Some(&[1, 0, 176])
+            || tx.payload.get(7) != Some(&12)
+            || tx.payload.get(8..72) != Some(funding.assignment.0.0.as_slice())
+            || tx.payload.get(72) != Some(&1)
+            || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+        {
+            return Ok(None);
+        }
+        let Some(case) = tx
+            .payload
+            .get(73..137)
+            .and_then(|raw| <[u8; 64]>::try_from(raw).ok())
+            .map(|raw| CaseId(Digest(raw)))
+        else {
+            return Ok(None);
+        };
+        let unavailable = |why| {
+            NativeCoverageV1::unsupported::<Self>("worker payment selected-parent archive", why)
+        };
+        let backing = match self.prepare_committed_case_history_v2(parent, state, (case, None)) {
+            Ok(Some(NativeAssignedCaseBackingV2::Committed(backing))) => backing,
+            Ok(_) | Err(E::InvalidContinuation) => return Ok(None),
+            Err(E::Resource(why)) => return Err(why),
+            Err(_) => return Err(unavailable("committed worker Case history unavailable")),
+        };
+        let blue_score = self
+            .headers_store
+            .get_blue_score(parent)
+            .map_err(|_| unavailable("selected-parent header unavailable"))?;
+        // Unaccepted spend preview, using the parent history clock and validation DAA.
+        let point = PalwBlockContextV2 {
+            block: parent,
+            daa_score: daa,
+            blue_score,
+            subsidy: 0,
+        };
+        match qualify_worker_payment_candidate_v2(state, &point, &backing, tx, amounts) {
+            Ok(plan) => Ok(Some(plan)),
+            Err(PalwStateV2Error::NativeResource(why)) => Err(why),
+            Err(PalwStateV2Error::NativeContextUnavailable(_)) => {
+                Err(unavailable("worker Case replay context unavailable"))
+            }
+            Err(_) => Ok(None),
+        }
+    }
+
+    fn prepare_case_source_spends_v2(
+        &self,
+        state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        parent: BlockHash,
+        txs: &[Transaction],
+        view: &impl UtxoView,
+        daa: u64,
+        locks: &PalwEscrowSpendLocksV1,
+    ) -> Result<
+        (
+            std::collections::HashMap<
+                TransactionId,
+                kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2,
+            >,
+            Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+        ),
+        NativeCoverageV1,
+    > {
+        use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::reserve_native_requests_v1,
+            palw_state_v2::{
+                PalwStateV2Error, QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2,
+            },
+        };
+        let mut spends = std::collections::HashMap::new();
+        let mut owner: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1> =
+            None;
+        let Some(state) = state else {
+            return Ok((spends, owner));
+        };
+        if locks.positive_case.is_empty()
+            || locks.assignment_invalid
+            || !self
+                .palw_state_params_v2
+                .as_ref()
+                .is_some_and(|params| params.settlement_once_active_at(daa))
+        {
+            return Ok((spends, owner));
+        }
+        let unavailable =
+            |detail| NativeCoverageV1::unsupported::<Self>("Case source spend archive", detail);
+        for tx in txs {
+            if tx.payload.get(..3) != Some(&[1, 0, 176])
+                || tx.payload.get(7) != Some(&12)
+                || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            {
+                continue;
+            }
+            let Some(funding) = tx
+                .inputs
+                .first()
+                .and_then(|input| locks.positive_case.get(&input.previous_outpoint))
+            else {
+                continue;
+            };
+            // The fixed op12 Case field follows its version, kind and
+            // Assignment ID. Reject foreign/missing Case tags before I/O.
+            if tx.payload.get(72) != Some(&1)
+                || tx.payload.get(73..137) != Some(funding.consent.case.0.0.as_slice())
+            {
+                continue;
+            }
+            let bytes = (tx.inputs.len() as u64)
+                .checked_mul(size_of::<UtxoEntry>() as u64)
+                .ok_or_else(|| {
+                    NativeCoverageV1::overflow::<UtxoEntry>("Case source populated inputs")
+                })?;
+            let mut entry_owner = reserve_native_requests_v1(bytes)?
+                .ok_or_else(|| unavailable("populated input owner"))?;
+            let mut entries = Vec::new();
+            entries
+                .try_reserve_exact(tx.inputs.len())
+                .map_err(|_| unavailable("populated input allocation"))?;
+            for input in &tx.inputs {
+                let Some(entry) = view.get(&input.previous_outpoint) else {
+                    break;
+                };
+                entry_owner.grow_memory_v1(entry.script_public_key.script().len() as u64)?;
+                entries.push(entry);
+            }
+            if entries.len() != tx.inputs.len() {
+                continue;
+            }
+            let backing = match self.prepare_committed_case_history_v2(
+                parent,
+                state,
+                (funding.consent.case, None),
+            ) {
+                Ok(Some(
+                    kaspa_consensus_core::palw_state_v2::NativeAssignedCaseBackingV2::Committed(
+                        backing,
+                    ),
+                )) => backing,
+                Err(E::Resource(why)) => return Err(why),
+                Err(E::InvalidContinuation) => continue,
+                _ => {
+                    return Err(unavailable(
+                        "actual selected-parent Case history is unavailable",
+                    ));
+                }
+            };
+            let spend = match qualify_case_source_spend_v2(state, &backing, tx, &entries, daa) {
+                Ok(spend) => spend,
+                Err(PalwStateV2Error::NativeResource(why)) => return Err(why),
+                Err(PalwStateV2Error::NativeContextUnavailable(_)) => {
+                    return Err(unavailable("Case replay context is unavailable"));
+                }
+                Err(_) => continue,
+            };
+            let bytes = (4 * size_of::<(TransactionId, QualifiedCaseSourceSpendV2)>()) as u64;
+            match &mut owner {
+                Some(lease) => lease.grow_memory_v1(bytes)?,
+                None => {
+                    owner = Some(
+                        reserve_native_requests_v1(bytes)?
+                            .ok_or_else(|| unavailable("qualified spend map owner"))?,
+                    )
+                }
+            }
+            spends
+                .try_reserve(1)
+                .map_err(|_| unavailable("qualified spend map allocation"))?;
+            spends.insert(tx.id(), spend);
+        }
+        Ok((spends, owner))
     }
 
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
@@ -773,12 +1135,14 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
+        case_source_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<(), NativeCoverageV1> {
         self.calculate_utxo_state_with_funded_candidates_v1(
             ctx,
             selected_parent_utxo_view,
             selected_parent_bond_view,
             pov_daa_score,
+            case_source_state,
             None,
         )
     }
@@ -792,28 +1156,50 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
+        case_source_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
     ) -> Result<(), NativeCoverageV1> {
         let relay_plan = ctx.relay_fee_plan.take();
-        let accepting = ctx.positive_accepting_point.or(ctx.positive_relay_preview_point);
+        let accepting = ctx
+            .positive_accepting_point
+            .or(ctx.positive_relay_preview_point);
         let selected_parent = ctx.selected_parent();
-        let match_relay = |ordinal, carrier_block, tx: &Transaction, gross, burn, before_relay| match &relay_plan {
-            Some(plan) => plan.match_carrier(ordinal, accepting, selected_parent, carrier_block, tx, gross, burn, before_relay),
-            None => Ok(None),
-        };
+        let match_relay =
+            |ordinal, carrier_block, tx: &Transaction, gross, burn, before_relay| match &relay_plan
+            {
+                Some(plan) => plan.match_carrier(
+                    ordinal,
+                    accepting,
+                    selected_parent,
+                    carrier_block,
+                    tx,
+                    gross,
+                    burn,
+                    before_relay,
+                ),
+                None => Ok(None),
+            };
         let mut applied_relay_debits = 0;
-        let selected_parent_transactions = self.block_transactions_store.get(ctx.selected_parent()).unwrap();
-        let validated_coinbase = ValidatedTransaction::new_coinbase(&selected_parent_transactions[0]);
+        let selected_parent_transactions = self
+            .block_transactions_store
+            .get(ctx.selected_parent())
+            .unwrap();
+        let validated_coinbase =
+            ValidatedTransaction::new_coinbase(&selected_parent_transactions[0]);
 
-        ctx.mergeset_diff.add_transaction(&validated_coinbase, pov_daa_score).unwrap();
-        ctx.multiset_hash.add_transaction(&validated_coinbase, pov_daa_score);
+        ctx.mergeset_diff
+            .add_transaction(&validated_coinbase, pov_daa_score)
+            .unwrap();
+        ctx.multiset_hash
+            .add_transaction(&validated_coinbase, pov_daa_score);
         let validated_coinbase_id = validated_coinbase.id();
         ctx.accepted_tx_ids.push(validated_coinbase_id);
 
         // Lane accept-order: the order this block applies its mergeset in — the consensus order, made
         // parents-first past `palw_lane_accept_parents_first` at this block's DAA score. Read once, and
         // by both loops below, so the gate view and the acceptance walk see one order.
-        let acceptance_order = self.acceptance_ordered_mergeset_without_selected_parent(&ctx.ghostdag_data, pov_daa_score);
+        let acceptance_order = self
+            .acceptance_ordered_mergeset_without_selected_parent(&ctx.ghostdag_data, pov_daa_score);
 
         // kaspa-pq (ADR-0016 §D.2, bond spend-gate mergeset hardening): above the fence, build the
         // POST-ACCEPTANCE bond view the per-tx spend-skip is evaluated against = the selected-parent
@@ -865,11 +1251,23 @@ impl VirtualStateProcessor {
         let unpermitted_rounds: BlockHashSet = ctx
             .palw_round_verdicts
             .as_ref()
-            .map(|verdicts| verdicts.round_blocks.difference(&verdicts.permitted).copied().collect())
+            .map(|verdicts| {
+                verdicts
+                    .round_blocks
+                    .difference(&verdicts.permitted)
+                    .copied()
+                    .collect()
+            })
             .unwrap_or_default();
-        for (i, (merged_block, transactions_owner)) in once((ctx.selected_parent(), selected_parent_transactions))
-            .chain(acceptance_order.iter().copied().map(|b| (b, self.block_transactions_store.get(b).unwrap())))
-            .enumerate()
+        for (i, (merged_block, transactions_owner)) in
+            once((ctx.selected_parent(), selected_parent_transactions))
+                .chain(
+                    acceptance_order
+                        .iter()
+                        .copied()
+                        .map(|b| (b, self.block_transactions_store.get(b).unwrap())),
+                )
+                .enumerate()
         {
             // Keep the original admitted body alive. A round without a permit
             // needs only a borrowed coinbase view, not another owning render.
@@ -886,7 +1284,11 @@ impl VirtualStateProcessor {
 
             // No need to fully validate selected parent transactions since selected parent txs were already validated
             // as part of selected parent UTXO state verification with the exact same UTXO context.
-            let validation_flags = if is_selected_parent { TxValidationFlags::SkipScriptChecks } else { TxValidationFlags::Full };
+            let validation_flags = if is_selected_parent {
+                TxValidationFlags::SkipScriptChecks
+            } else {
+                TxValidationFlags::Full
+            };
             // kaspa-pq bond spend-gate (mergeset hardening): gate every accepted mergeset tx (incl.
             // the selected parent's body, also accepted here) against the post-acceptance view, so a
             // merge-blue spend of a non-releasable bond's output-0 is skipped. `None` (inert) below
@@ -896,6 +1298,50 @@ impl VirtualStateProcessor {
             // keeps every shipped network byte-identical to the legacy own-body-only gate.
             // G14 lane escrow-rfc08: the funded-escrow half joins only when it holds a lock, so every network without one builds
             // exactly the filter it built before.
+            let (case_spends, _case_spends_lease) = self.prepare_case_source_spends_v2(
+                case_source_state,
+                selected_parent,
+                txs,
+                &composed_view,
+                pov_daa_score,
+                &ctx.palw_escrow_locks,
+            )?;
+            let mut worker_spends = std::collections::HashMap::new();
+            if let Some(state) = case_source_state
+                && !ctx.palw_escrow_locks.assignment.is_empty()
+            {
+                for tx in txs {
+                    if tx.inputs.first().is_none_or(|input| {
+                        !ctx.palw_escrow_locks
+                            .assignment
+                            .contains_key(&input.previous_outpoint)
+                    }) {
+                        continue;
+                    }
+                    let amounts: Vec<_> = tx
+                        .inputs
+                        .iter()
+                        .filter_map(|input| {
+                            composed_view
+                                .get(&input.previous_outpoint)
+                                .map(|entry| entry.amount)
+                        })
+                        .collect();
+                    if amounts.len() != tx.inputs.len() {
+                        continue;
+                    }
+                    if let Some(plan) = self.prepare_worker_payment_v2(
+                        state,
+                        selected_parent,
+                        tx,
+                        &amounts,
+                        pov_daa_score,
+                        &ctx.palw_escrow_locks,
+                    )? {
+                        worker_spends.insert(tx.id(), plan);
+                    }
+                }
+            }
             let escrow_locked = !ctx.palw_escrow_locks.is_empty();
             let bond_filter = (bond_gate_view.is_some()
                 || !ctx.palw_v2_locked_bonds.is_empty()
@@ -906,10 +1352,18 @@ impl VirtualStateProcessor {
                     daa_score: pov_daa_score,
                     palw_locked: &ctx.palw_v2_locked_bonds,
                     palw_burns: &ctx.palw_v2_bond_burns,
+                    worker_spends: Some(&worker_spends),
+                    case_spends: Some(&case_spends),
                     escrow: escrow_locked.then_some(&ctx.palw_escrow_locks),
                 });
-            let (mut validated_transactions, mut inner_multiset) =
-                self.validate_transactions_with_muhash_in_parallel(txs, &composed_view, pov_daa_score, validation_flags, bond_filter);
+            let (mut validated_transactions, mut inner_multiset) = self
+                .validate_transactions_with_muhash_in_parallel(
+                    txs,
+                    &composed_view,
+                    pov_daa_score,
+                    validation_flags,
+                    bond_filter,
+                );
 
             // A permit grants execution rights, but cannot mint monetary R.
             // Reserve the entire actual collectible native fee before any
@@ -919,30 +1373,58 @@ impl VirtualStateProcessor {
             let mut round_income = None;
             if let Some(verdicts) = ctx.palw_round_verdicts.as_mut()
                 && verdicts.permitted.contains(&merged_block)
-                && let (Some(bond), Some(budget)) = (verdicts.fee_recipients.get(&merged_block), verdicts.fee_budget.as_mut())
+                && let (Some(bond), Some(budget)) = (
+                    verdicts.fee_recipients.get(&merged_block),
+                    verdicts.fee_budget.as_mut(),
+                )
             {
                 let first_ordinal = ctx.accepted_tx_ids.len();
-                let maximum = validated_transactions.iter().enumerate().try_fold(Some(0u64), |sum, (offset, (tx, _))| {
-                    let Some(sum) = sum else { return Ok::<_, NativeCoverageV1>(None) };
-                    let burned = bond_filter
-                        .map(|filter| filter.burn_owed(tx.tx).saturating_add(filter.escrow_burned(tx.tx, &tx.entries)))
-                        .unwrap_or(0);
-                    let before_relay = self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score);
-                    let fees = match_relay(first_ordinal + offset, merged_block, tx.tx, tx.calculated_fee, burned, before_relay)?;
-                    Ok(sum.checked_add(fees.map_or(before_relay, |fees| fees.credited_tip())))
-                })?;
-                let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
-                    block: merged_block,
-                    bond: *bond,
-                    maximum_sompi,
-                    actual_sompi: maximum_sompi,
+                let maximum = validated_transactions.iter().enumerate().try_fold(
+                    Some(0u64),
+                    |sum, (offset, (tx, _))| {
+                        let Some(sum) = sum else {
+                            return Ok::<_, NativeCoverageV1>(None);
+                        };
+                        let burned = bond_filter
+                            .map(|filter| {
+                                filter
+                                    .burn_owed(tx.tx)
+                                    .saturating_add(filter.escrow_burned(tx.tx, &tx.entries))
+                            })
+                            .unwrap_or(0);
+                        let before_relay = self.palw_collectible_transaction_fee_v1(
+                            tx.tx,
+                            tx.calculated_fee,
+                            burned,
+                            pov_daa_score,
+                        );
+                        let fees = match_relay(
+                            first_ordinal + offset,
+                            merged_block,
+                            tx.tx,
+                            tx.calculated_fee,
+                            burned,
+                            before_relay,
+                        )?;
+                        Ok(sum.checked_add(fees.map_or(before_relay, |fees| fees.credited_tip())))
+                    },
+                )?;
+                let income = maximum.map(|maximum_sompi| {
+                    kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
+                        block: merged_block,
+                        bond: *bond,
+                        maximum_sompi,
+                        actual_sompi: maximum_sompi,
+                    }
                 });
                 if income.is_some_and(|income| budget.admit(income).is_ok()) {
                     round_income = income;
                 } else {
                     validated_transactions.clear();
                     inner_multiset = MuHash::new();
-                    info!("[palw-round-lane] Round {merged_block} native body refused: recipient reward budget exhausted");
+                    info!(
+                        "[palw-round-lane] Round {merged_block} native body refused: recipient reward budget exhausted"
+                    );
                 }
             }
 
@@ -964,7 +1446,10 @@ impl VirtualStateProcessor {
             //      `pov_daa_score` is path-identical, so the conjunction preserves c==v.
             // Below either fence `finality_fee` stays 0 ⇒ byte-identical splits.
             let finality_fee_active = pov_daa_score >= self.evm_activation_daa_score
-                && self.dns_params.as_ref().is_some_and(|p| pov_daa_score >= p.finality_fee_activation_daa_score);
+                && self
+                    .dns_params
+                    .as_ref()
+                    .is_some_and(|p| pov_daa_score >= p.finality_fee_activation_daa_score);
             // ADR-0075 SA-1/SA-2: what each accepted transaction paid, kept for the walk that
             // grades a certification (see `UtxoProcessingContext::palw_v2_accepted_tx_fees`).
             // Off — and the map empty — unless the rent fence is armed, so every shipped preset
@@ -973,13 +1458,17 @@ impl VirtualStateProcessor {
             // same way, behind their own fence; the map is collected when either fence is armed.
             let collect_carrier_fees = self.palw_certification_rent_at(pov_daa_score)
                 || self.palw_model_lines_active_at(pov_daa_score)
-                || self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
+                || self
+                    .palw_tir_public_conviction_v1
+                    .is_some_and(|f| f.is_active(pov_daa_score));
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
             // G14 lane escrow-rfc08 (RFC-0035 A): past the fence, each accepted TFO1 carrier whose literal payer-signed terms pair
             // to its own funding output locks THAT output for the rest of this mergeset (never another outpoint). Collected here and
             // applied after this merged block, so the filter borrowed above is not mutated while it is read.
-            let escrow_fence_active = self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
+            let escrow_fence_active = self
+                .palw_tir_public_conviction_v1
+                .is_some_and(|f| f.is_active(pov_daa_score));
             let mut new_provisional_escrows: Vec<TransactionOutpoint> = Vec::new();
             for (validated_tx, original_index) in validated_transactions.iter() {
                 let accepted_ordinal = ctx.accepted_tx_ids.len();
@@ -1008,6 +1497,7 @@ impl VirtualStateProcessor {
                             daa_score: point.daa_score,
                             palw_locked: &ctx.palw_v2_locked_bonds,
                             palw_burns: &ctx.palw_v2_bond_burns,
+                            worker_spends: Some(&worker_spends), case_spends: Some(&case_spends),
                             escrow: locked.then_some(&ctx.palw_escrow_locks),
                         });
                     ctx.positive_native_carriers.capture(
@@ -1035,9 +1525,15 @@ impl VirtualStateProcessor {
                     // A rooted row's outpoint reaches acceptance only under a qualified plan (the filter refused the rest); the
                     // plan is re-derived from the same row and the same actual entries and handed to the fold.
                     if !ctx.palw_escrow_locks.rows.is_empty() {
-                        let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();
+                        let amounts: Vec<u64> = validated_tx
+                            .entries
+                            .iter()
+                            .map(|entry| entry.amount)
+                            .collect();
                         for input in validated_tx.tx.inputs.iter() {
-                            if let Some(row) = ctx.palw_escrow_locks.rows.get(&input.previous_outpoint) {
+                            if let Some(row) =
+                                ctx.palw_escrow_locks.rows.get(&input.previous_outpoint)
+                            {
                                 let plan = kaspa_consensus_core::palw_funded_escrow_v1::palw_escrow_qualified_spend_v1(
                                     row,
                                     validated_tx.tx,
@@ -1063,10 +1559,28 @@ impl VirtualStateProcessor {
                         }
                     }
                 }
-                if !ctx.palw_escrow_locks.assignment.is_empty() {
-                    let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();
+                if let Some(spend) = case_spends.get(&validated_tx.tx.id())
+                    && let Some(continued) = spend.continuation_v2()
+                {
+                    new_provisional_escrows.push(continued);
+                }
+                if let Some(plan) = worker_spends.get(&validated_tx.tx.id()) {
+                    if let Some(point) = plan.new.current_outpoint {
+                        new_provisional_escrows.push(kaspa_consensus_core::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2(point));
+                    }
+                    ctx.palw_assignment_settlements.push(plan.clone());
+                } else if !ctx.palw_escrow_locks.assignment.is_empty() {
+                    let amounts: Vec<u64> = validated_tx
+                        .entries
+                        .iter()
+                        .map(|entry| entry.amount)
+                        .collect();
                     for input in &validated_tx.tx.inputs {
-                        if let Some((row, Some(authorization))) = ctx.palw_escrow_locks.assignment.get(&input.previous_outpoint) {
+                        if let Some((row, Some(authorization))) = ctx
+                            .palw_escrow_locks
+                            .assignment
+                            .get(&input.previous_outpoint)
+                        {
                             let plan = kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
                                 row,
                                 authorization,
@@ -1080,9 +1594,9 @@ impl VirtualStateProcessor {
                                     kaspa_consensus_core::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2(point),
                                 );
                             }
-                            escrow_burned = escrow_burned
-                                .checked_add(plan.burned_now)
-                                .expect("the shared filter checked the combined fee/burn allocation");
+                            escrow_burned = escrow_burned.checked_add(plan.burned_now).expect(
+                                "the shared filter checked the combined fee/burn allocation",
+                            );
                             ctx.palw_assignment_settlements.push(plan);
                         }
                     }
@@ -1119,7 +1633,9 @@ impl VirtualStateProcessor {
                         );
                     }
                 }
-                ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
+                ctx.mergeset_diff
+                    .add_transaction(validated_tx, pov_daa_score)
+                    .unwrap();
                 ctx.accepted_tx_ids.push(validated_tx.id());
 
                 // **Audit C-08 part three: the miner does not collect what the chain destroyed.**
@@ -1129,7 +1645,10 @@ impl VirtualStateProcessor {
                 // REDIRECTION to the block's miner rather than a destruction, and `slashed`'s own
                 // documentation ("enters circulation nowhere") would still be false. Burned by
                 // don't-mint, the mechanism the §F service share already uses.
-                let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0).saturating_add(escrow_burned);
+                let owed = bond_filter
+                    .map(|f| f.burn_owed(validated_tx.tx))
+                    .unwrap_or(0)
+                    .saturating_add(escrow_burned);
                 if collect_carrier_fees {
                     palw_record_accepted_carrier_fees_v1(
                         validated_tx,
@@ -1157,26 +1676,48 @@ impl VirtualStateProcessor {
                 // above the rent is ordinary carriage and stays with the miner, which is why an
                 // ordinary court move or a free-prompt commitment — objects no rule prices — burn
                 // nothing at all.
-                let before_relay =
-                    self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
-                let fees =
-                    match_relay(accepted_ordinal, merged_block, validated_tx.tx, validated_tx.calculated_fee, owed, before_relay)?;
+                let before_relay = self.palw_collectible_transaction_fee_v1(
+                    validated_tx.tx,
+                    validated_tx.calculated_fee,
+                    owed,
+                    pov_daa_score,
+                );
+                let fees = match_relay(
+                    accepted_ordinal,
+                    merged_block,
+                    validated_tx.tx,
+                    validated_tx.calculated_fee,
+                    owed,
+                    before_relay,
+                )?;
                 applied_relay_debits += usize::from(fees.is_some());
                 let credited_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
                 if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
                 {
-                    ctx.positive_native_carriers.record_relay_carrier_fees_v2(validated_tx.id(), owed, before_relay, credited_tip);
+                    ctx.positive_native_carriers.record_relay_carrier_fees_v2(
+                        validated_tx.id(),
+                        owed,
+                        before_relay,
+                        credited_tip,
+                    );
                 }
                 block_fee += credited_tip;
                 // Finality classifies collectible fees, never destroyed bond/rent funds — past `palw_tir_public_conviction_v1` only
                 // (AUDIT-8b, 2026-10-27): below it the finality share reads the raw fee, exactly as the live chain does.
-                let finality_base = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score)) {
+                let finality_base = if self
+                    .palw_tir_public_conviction_v1
+                    .is_some_and(|f| f.is_active(pov_daa_score))
+                {
                     credited_tip
                 } else {
                     validated_tx.calculated_fee - fees.map_or(0, |fees| fees.relay_charge())
                 };
-                finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, finality_base, finality_fee_active);
+                finality_fee += palw_finality_collectible_fee_v1(
+                    validated_tx.tx,
+                    finality_base,
+                    finality_fee_active,
+                );
             }
 
             if let Some(income) = round_income {
@@ -1186,33 +1727,54 @@ impl VirtualStateProcessor {
                         "Round reserve and final credited fees differ",
                     ));
                 }
-                debug_assert_eq!(income.actual_sompi, block_fee, "preflight and actual collectible fees share one rule");
+                debug_assert_eq!(
+                    income.actual_sompi, block_fee,
+                    "preflight and actual collectible fees share one rule"
+                );
                 ctx.palw_round_fee_incomes.push(income);
             }
-            ctx.palw_escrow_locks.provisional.extend(new_provisional_escrows);
+            ctx.palw_escrow_locks
+                .provisional
+                .extend(new_provisional_escrows);
 
-            ctx.mergeset_acceptance_data.push(MergesetBlockAcceptanceData {
-                block_hash: merged_block,
-                // For the selected parent, we prepend the coinbase tx
-                accepted_transactions: is_selected_parent
-                    .then_some(AcceptedTxEntry { transaction_id: validated_coinbase_id, index_within_block: 0 })
-                    .into_iter()
-                    .chain(
-                        validated_transactions
-                            .into_iter()
-                            .map(|(tx, tx_idx)| AcceptedTxEntry { transaction_id: tx.id(), index_within_block: tx_idx }),
-                    )
-                    .collect(),
-            });
+            ctx.mergeset_acceptance_data
+                .push(MergesetBlockAcceptanceData {
+                    block_hash: merged_block,
+                    // For the selected parent, we prepend the coinbase tx
+                    accepted_transactions: is_selected_parent
+                        .then_some(AcceptedTxEntry {
+                            transaction_id: validated_coinbase_id,
+                            index_within_block: 0,
+                        })
+                        .into_iter()
+                        .chain(validated_transactions.into_iter().map(|(tx, tx_idx)| {
+                            AcceptedTxEntry {
+                                transaction_id: tx.id(),
+                                index_within_block: tx_idx,
+                            }
+                        }))
+                        .collect(),
+                });
 
-            let coinbase_data = self.coinbase_manager.deserialize_coinbase_payload(&txs[0].payload).unwrap();
+            let coinbase_data = self
+                .coinbase_manager
+                .deserialize_coinbase_payload(&txs[0].payload)
+                .unwrap();
             ctx.mergeset_rewards.insert(
                 merged_block,
-                BlockRewardData::new(coinbase_data.subsidy, block_fee, finality_fee, coinbase_data.miner_data.script_public_key),
+                BlockRewardData::new(
+                    coinbase_data.subsidy,
+                    block_fee,
+                    finality_fee,
+                    coinbase_data.miner_data.script_public_key,
+                ),
             );
         }
 
-        if relay_plan.as_ref().is_some_and(|plan| plan.debit_count() != applied_relay_debits) {
+        if relay_plan
+            .as_ref()
+            .is_some_and(|plan| plan.debit_count() != applied_relay_debits)
+        {
             return Err(NativeCoverageV1::unsupported::<Self>(
                 "relay fee plan input",
                 "planned debit is outside final UTXO acceptance",
@@ -1224,7 +1786,12 @@ impl VirtualStateProcessor {
         // `dns_activation_daa_score` (= 0 on every current network), so it runs
         // from genesis everywhere (the 4-way reserve/victim split is the part
         // fenced behind `pos_v2_activation_daa_score` — see below).
-        self.apply_slashing_side_effects(ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score);
+        self.apply_slashing_side_effects(
+            ctx,
+            selected_parent_utxo_view,
+            selected_parent_bond_view,
+            pov_daa_score,
+        );
         Ok(())
     }
 
@@ -1269,11 +1836,15 @@ impl VirtualStateProcessor {
         // `pos_v2_activation_daa_score`, so `compute_slashing_distribution` degenerates to the pre-v2
         // 2-way (reporter + burn) on the devnet/simnet preset (fence = `u64::MAX`). On mainnet/testnet
         // (`PRODUCTION_DNS_PARAMS`, fence = 0) the full 4-way split runs from block 1.
-        let (security_reserve_bps, victim_epoch_pool_bps) = if pov_daa_score >= dns_params.pos_v2_activation_daa_score {
-            (dns_params.reward_params.security_reserve_bps, dns_params.reward_params.victim_epoch_pool_bps)
-        } else {
-            (0, 0)
-        };
+        let (security_reserve_bps, victim_epoch_pool_bps) =
+            if pov_daa_score >= dns_params.pos_v2_activation_daa_score {
+                (
+                    dns_params.reward_params.security_reserve_bps,
+                    dns_params.reward_params.victim_epoch_pool_bps,
+                )
+            } else {
+                (0, 0)
+            };
         // **MSK-26A (2026-09 pre-freeze security review): the UTXO side-effect obeys the same
         // genuineness rule the bond-REGISTRY mutation already does.** `resolve_slashing_side_effects`
         // verifies no signature — it slashes any accepted evidence whose bond resolves Active — so a
@@ -1296,19 +1867,21 @@ impl VirtualStateProcessor {
         // byte-identical to before the field existed; construction and validation read the same
         // fence, so they compute one commitment.
         let proved_txs: Vec<Transaction>;
-        let evidence_txs: &[Transaction] =
-            if self.palw_slashing_evidence_utxo_genuine.is_some_and(|fence| fence.is_active(pov_daa_score)) {
-                proved_txs = proved_slashing_evidence_txs(
-                    &accepted_txs,
-                    selected_parent_bond_view,
-                    self.genesis.hash,
-                    pov_daa_score,
-                    dns_params.evidence_window_blocks,
-                );
-                &proved_txs
-            } else {
-                &accepted_txs
-            };
+        let evidence_txs: &[Transaction] = if self
+            .palw_slashing_evidence_utxo_genuine
+            .is_some_and(|fence| fence.is_active(pov_daa_score))
+        {
+            proved_txs = proved_slashing_evidence_txs(
+                &accepted_txs,
+                selected_parent_bond_view,
+                self.genesis.hash,
+                pov_daa_score,
+                dns_params.evidence_window_blocks,
+            );
+            &proved_txs
+        } else {
+            &accepted_txs
+        };
         let mut effects = resolve_slashing_side_effects(
             evidence_txs,
             selected_parent_bond_view,
@@ -1327,7 +1900,9 @@ impl VirtualStateProcessor {
             if effect.victim_epoch_pool_sompi == 0 {
                 continue;
             }
-            let slashed_payload = selected_parent_bond_view.get(&effect.bond_outpoint).map(|b| b.owner_reward_spk_payload);
+            let slashed_payload = selected_parent_bond_view
+                .get(&effect.bond_outpoint)
+                .map(|b| b.owner_reward_spk_payload);
             effect.victim_outputs = self.slashed_epoch_victim_outputs(
                 dns_params,
                 ctx.selected_parent(),
@@ -1341,7 +1916,9 @@ impl VirtualStateProcessor {
         // the slashed bonds' reserve shares (0 when fenced). Feeds the reserve-balance recurrence
         // (`commit_utxo_state` persists `parent_balance + reserve_accrual − drip`). The reserve share
         // is NOT minted (it leaves the supply with the bond removal until it later drips back out).
-        ctx.reserve_accrual = effects.iter().fold(0u64, |acc, e| acc.saturating_add(e.security_reserve_sompi));
+        ctx.reserve_accrual = effects
+            .iter()
+            .fold(0u64, |acc, e| acc.saturating_add(e.security_reserve_sompi));
         apply_slashing_effects_to_state(
             &effects,
             selected_parent_utxo_view,
@@ -1400,22 +1977,36 @@ impl VirtualStateProcessor {
         victim_pool: u64,
     ) -> Vec<TransactionOutput> {
         let epoch_len = dns_params.epoch_length_blocks.max(1);
-        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        let finalization_depth = dns_params
+            .reward_uniqueness_window_blocks
+            .saturating_add(dns_params.max_reorg_horizon_blocks);
         let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
         let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
 
         // Gather the selected-parent window's per-block contributions (sink-parent first, then
         // ancestors), stopping at the window edge or the v2 fence.
-        let contributions = self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
+        let contributions =
+            self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
 
         let bonds = bond_view.records();
-        let tallies = recompute_epoch_tallies(parent_daa, epoch_len, finalization_depth, &contributions, &bonds);
-        let included =
-            tallies.into_iter().find(|(epoch, _)| *epoch == slashed_epoch).map(|(_, tally)| tally.included).unwrap_or_default();
+        let tallies = recompute_epoch_tallies(
+            parent_daa,
+            epoch_len,
+            finalization_depth,
+            &contributions,
+            &bonds,
+        );
+        let included = tallies
+            .into_iter()
+            .find(|(epoch, _)| *epoch == slashed_epoch)
+            .map(|(_, tally)| tally.included)
+            .unwrap_or_default();
         // Drop the slashed (equivocating) validator — it earns no victim compensation in its own
         // misbehavior epoch. Matched by the owner reward payload carried in the accumulator.
-        let honest: Vec<_> =
-            included.into_iter().filter(|(payload, _)| slashed_payload.is_none_or(|sp| payload.as_bytes() != sp)).collect();
+        let honest: Vec<_> = included
+            .into_iter()
+            .filter(|(payload, _)| slashed_payload.is_none_or(|sp| payload.as_bytes() != sp))
+            .collect();
         let total_honest_stake: u128 = honest.iter().map(|(_, stake)| *stake as u128).sum();
         victim_compensation_outputs(victim_pool, &honest, total_honest_stake)
     }
@@ -1449,16 +2040,27 @@ impl VirtualStateProcessor {
             return (Vec::new(), 0);
         }
         let epoch_len = dns_params.epoch_length_blocks.max(1);
-        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        let finalization_depth = dns_params
+            .reward_uniqueness_window_blocks
+            .saturating_add(dns_params.max_reorg_horizon_blocks);
         let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
-        let Some((e_min, e_max)) = epochs_finalized_at(parent_daa, daa_score, epoch_len, finalization_depth) else {
+        let Some((e_min, e_max)) =
+            epochs_finalized_at(parent_daa, daa_score, epoch_len, finalization_depth)
+        else {
             return (Vec::new(), 0);
         };
 
         let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
-        let contributions = self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
+        let contributions =
+            self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
         let bonds = bond_view.records();
-        let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
+        let tallies = recompute_epoch_tallies(
+            daa_score,
+            epoch_len,
+            finalization_depth,
+            &contributions,
+            &bonds,
+        );
 
         // **The cap is a RATE limit, and a rate must not depend on how many epoch thresholds one
         // block happens to cross** (mainnet audit, 2026-09-06, M-1).
@@ -1480,7 +2082,10 @@ impl VirtualStateProcessor {
         // after it is arithmetic, and lives in `reserve_drip_outputs_for_block` so the per-block
         // rate limit can be stated over a MULTI-epoch crossing — the shape a fixture on a linear
         // chain cannot build and the shape the defect only appears in.
-        let finalized: Vec<(u64, EpochTally)> = tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
+        let finalized: Vec<(u64, EpochTally)> = tallies
+            .into_iter()
+            .filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max)
+            .collect();
         let bounds = self
             .palw_validator_payout_bounds
             .is_some_and(|fence| fence.is_active(daa_score))
@@ -1508,16 +2113,29 @@ impl VirtualStateProcessor {
         // Verify header UTXO commitment
         let expected_commitment = ctx.multiset_hash.finalize();
         if expected_commitment != header.utxo_commitment {
-            return Err(BadUTXOCommitment(header.hash, header.utxo_commitment, expected_commitment));
+            return Err(BadUTXOCommitment(
+                header.hash,
+                header.utxo_commitment,
+                expected_commitment,
+            ));
         }
-        trace!("correct commitment: {}, {}", header.hash, expected_commitment);
+        trace!(
+            "correct commitment: {}, {}",
+            header.hash, expected_commitment
+        );
 
         // Verify header accepted_id_merkle_root
-        let expected_accepted_id_merkle_root =
-            self.calc_accepted_id_merkle_root(ctx.accepted_tx_ids.iter().copied(), ctx.selected_parent());
+        let expected_accepted_id_merkle_root = self.calc_accepted_id_merkle_root(
+            ctx.accepted_tx_ids.iter().copied(),
+            ctx.selected_parent(),
+        );
 
         if expected_accepted_id_merkle_root != header.accepted_id_merkle_root {
-            return Err(BadAcceptedIDMerkleRoot(header.hash, header.accepted_id_merkle_root, expected_accepted_id_merkle_root));
+            return Err(BadAcceptedIDMerkleRoot(
+                header.hash,
+                header.accepted_id_merkle_root,
+                expected_accepted_id_merkle_root,
+            ));
         }
 
         // kaspa-pq ADR-0022: verify the DNS/PoS-v2 overlay-state commitment (as-of the
@@ -1526,7 +2144,8 @@ impl VirtualStateProcessor {
         // the pruning point and this same check on the first post-pruning block verifies
         // them against its header. Gated on the overlay being active (`dns_params`).
         if self.dns_params.is_some() {
-            let snap = self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view)?;
+            let snap =
+                self.compute_overlay_snapshot(ctx.selected_parent(), selected_parent_bond_view)?;
             let expected_overlay = snap.commitment_root();
             if expected_overlay != header.overlay_commitment_root {
                 // Per-component digests (ADR-0022 divergence triage): the root alone only says
@@ -1541,7 +2160,9 @@ impl VirtualStateProcessor {
                     "[overlay-diag] block {} sp={} sp_daa={} bonds={} reserve={} window={} empty_root={} header_root={} computed_root={} bonds_root={} window_root={} bond_detail={:?} window_detail={:?}",
                     header.hash,
                     ctx.selected_parent(),
-                    self.headers_store.get_daa_score(ctx.selected_parent()).unwrap_or(u64::MAX),
+                    self.headers_store
+                        .get_daa_score(ctx.selected_parent())
+                        .unwrap_or(u64::MAX),
                     snap.bonds.len(),
                     snap.reserve_balance,
                     snap.window.len(),
@@ -1567,10 +2188,19 @@ impl VirtualStateProcessor {
                         .collect::<Vec<_>>(),
                     snap.window
                         .iter()
-                        .map(|c| (c.block_hash, c.block_daa_score, c.rewarded_keys.len(), c.quality_subpool))
+                        .map(|c| (
+                            c.block_hash,
+                            c.block_daa_score,
+                            c.rewarded_keys.len(),
+                            c.quality_subpool
+                        ))
                         .collect::<Vec<_>>()
                 );
-                return Err(BadOverlayCommitment(header.hash, header.overlay_commitment_root, expected_overlay));
+                return Err(BadOverlayCommitment(
+                    header.hash,
+                    header.overlay_commitment_root,
+                    expected_overlay,
+                ));
             }
         }
 
@@ -1581,7 +2211,11 @@ impl VirtualStateProcessor {
         // check so the fan-out below can assume every included attestation is
         // eligible (its bond resolves to Active with a valid signature).
         // Inert below activation.
-        self.check_attestation_reward_eligibility(&txs, selected_parent_bond_view, header.daa_score)?;
+        self.check_attestation_reward_eligibility(
+            &txs,
+            selected_parent_bond_view,
+            header.daa_score,
+        )?;
 
         // kaspa-pq Phase 10/11 (ADR-0009 §"SlashingEvidencePayload"): reject a
         // block whose slashing evidence is not genuine, so a forged evidence
@@ -1605,7 +2239,9 @@ impl VirtualStateProcessor {
         // closure and not a value: a value would have to be produced here, and there is no
         // per-block class-target store to produce it from yet. Wiring the call now means the
         // remaining work is that store and the fence, not finding this line again.
-        let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
+        let commitment_bound = self
+            .palw_block_commitment
+            .is_some_and(|fence| fence.is_bound(header.daa_score));
         // **ADR-0072 SA-4: which attempt id is a lane HERE.**
         //
         // Threaded for the same reason `pre_ghostdag_validation` and the pruning proof thread it,
@@ -1620,7 +2256,8 @@ impl VirtualStateProcessor {
         // `Unfenced` on every shipped preset (`palw_attempt_activation` is `None` everywhere),
         // which is byte-identical to what this call did before.
         let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
-            self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
+            self.palw_attempt_activation
+                .map(|fence| fence.is_active(header.daa_score)),
         );
         kaspa_pow::palw_admission::check_palw_block_admission_v2(
             header,
@@ -1636,7 +2273,8 @@ impl VirtualStateProcessor {
             // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
             // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
             |key, message, signature, context| {
-                kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context).unwrap_or(false)
+                kaspa_txscript::verify_mldsa87_with_context(key, message, signature, context)
+                    .unwrap_or(false)
             },
         )
         .map_err(|e| BadPalwCommitmentShape(e.to_string()))?;
@@ -1653,10 +2291,15 @@ impl VirtualStateProcessor {
         // shipped chain carried one of these transactions (ADR-0134 §2).
         self.check_compute_overlay_retired(&txs, header.daa_score)?;
         if self.dns_retired_at(header.daa_score)
-            && let Some(tx) =
-                txs.iter().find(|tx| kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id))
+            && let Some(tx) = txs.iter().find(|tx| {
+                kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(
+                    &tx.subnetwork_id,
+                )
+            })
         {
-            return Err(kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()));
+            return Err(
+                kaspa_consensus_core::errors::block::RuleError::DnsParticipationRetired(tx.id()),
+            );
         }
 
         // kaspa-pq Phase 10/11 + Phase 13 (ADR-0009 Addendum B §B.5 / ADR-0018
@@ -1670,7 +2313,10 @@ impl VirtualStateProcessor {
         // `(bond, epoch)` keys are stashed for `commit_utxo_state` (§B.3(c)).
         // RFC-0008 v2: the stored set is the DAG's own; the EXEC blocks this block's anchor covered join it (they are outside the DAA).
         let mergeset_non_daa = self.palw_exec_v2_non_daa(
-            &self.daa_excluded_store.get_mergeset_non_daa(header.hash).unwrap(),
+            &self
+                .daa_excluded_store
+                .get_mergeset_non_daa(header.hash)
+                .unwrap(),
             &ctx.ghostdag_data,
             header.daa_score,
         );
@@ -1688,13 +2334,14 @@ impl VirtualStateProcessor {
                 &self.palw_round_blocks_of(&ctx.ghostdag_data),
             )
         });
-        let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
-            &txs,
-            selected_parent_bond_view,
-            header.daa_score,
-            ctx.selected_parent(),
-            validator_pool,
-        );
+        let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self
+            .validator_reward_outputs_for_block(
+                &txs,
+                selected_parent_bond_view,
+                header.daa_score,
+                ctx.selected_parent(),
+                validator_pool,
+            );
         let (newly_included_stake, expected_stake) = if self.dns_retired_at(header.daa_score) {
             self.native_inclusion_ratio(
                 &ctx.ghostdag_data,
@@ -1720,10 +2367,17 @@ impl VirtualStateProcessor {
         // fence = 0) it is populated from block 1. (Below `dns_activation` the pool is
         // already 0, since `validator_pool` is.) Does NOT affect the coinbase, so
         // construction == validation is untouched.
-        ctx.validator_quality_subpool =
-            self.dns_params.as_ref().filter(|p| header.daa_score >= p.pos_v2_activation_daa_score).map_or(0, |p| {
-                split_validator_pool(validator_pool as u128, p.reward_params.validator_participation_bps).1.min(u64::MAX as u128)
-                    as u64
+        ctx.validator_quality_subpool = self
+            .dns_params
+            .as_ref()
+            .filter(|p| header.daa_score >= p.pos_v2_activation_daa_score)
+            .map_or(0, |p| {
+                split_validator_pool(
+                    validator_pool as u128,
+                    p.reward_params.validator_participation_bps,
+                )
+                .1
+                .min(u64::MAX as u128) as u64
             });
 
         // kaspa-pq ADR-0018 "本格版" (PoS-v2, Phase 4): append the security-reserve **drip** outputs
@@ -1742,7 +2396,9 @@ impl VirtualStateProcessor {
                 parent_balance,
             );
             validator_reward_outputs.extend(drip_outputs);
-            ctx.reserve_balance_after = parent_balance.saturating_add(ctx.reserve_accrual).saturating_sub(drip_total);
+            ctx.reserve_balance_after = parent_balance
+                .saturating_add(ctx.reserve_accrual)
+                .saturating_sub(drip_total);
         }
         // ADR-0042 Decision 10: borrow the V2 escrow releases LAST in the iterator below,
         // matching construction without an intermediate script copy. Keep the native source
@@ -1752,8 +2408,11 @@ impl VirtualStateProcessor {
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         // ADR-0060 Decision 1.4: a heartbeat block's own payload declares ZERO subsidy — the
         // expected coinbase must expect the same bytes the body rule already enforced.
-        let own_subsidy = if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-            && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
+        let own_subsidy = if header.pow_algo_id
+            == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && self
+                .palw_heartbeat_lane
+                .is_some_and(|fence| fence.is_active(header.daa_score))
         {
             0
         } else {
@@ -1766,7 +2425,9 @@ impl VirtualStateProcessor {
             &ctx.ghostdag_data,
             &ctx.mergeset_rewards,
             &mergeset_non_daa,
-            validator_reward_outputs.iter().chain(ctx.palw_v2_payout_outputs.iter()),
+            validator_reward_outputs
+                .iter()
+                .chain(ctx.palw_v2_payout_outputs.iter()),
             carve.as_ref(),
             (newly_included_stake, expected_stake),
             ctx.palw_v2_escrow_withheld,
@@ -1782,11 +2443,18 @@ impl VirtualStateProcessor {
 
         // Verify all transactions are valid in context
         let current_utxo_view = selected_parent_utxo_view.compose(&ctx.mergeset_diff);
-        let validated_transactions =
-            self.validate_transactions_in_parallel(&txs, &current_utxo_view, header.daa_score, TxValidationFlags::Full);
+        let validated_transactions = self.validate_transactions_in_parallel(
+            &txs,
+            &current_utxo_view,
+            header.daa_score,
+            TxValidationFlags::Full,
+        );
         if validated_transactions.len() < txs.len() - 1 {
             // Some non-coinbase transactions are invalid
-            return Err(InvalidTransactionsInUtxoContext(txs.len() - 1 - validated_transactions.len(), txs.len() - 1));
+            return Err(InvalidTransactionsInUtxoContext(
+                txs.len() - 1 - validated_transactions.len(),
+                txs.len() - 1,
+            ));
         }
 
         Ok(())
@@ -1797,9 +2465,14 @@ impl VirtualStateProcessor {
         header: &Header,
         ghostdag_data: CompactGhostdagData,
     ) -> BlockProcessResult<PruningPointReply> {
-        let reply = self.pruning_point_manager.expected_header_pruning_point(ghostdag_data);
+        let reply = self
+            .pruning_point_manager
+            .expected_header_pruning_point(ghostdag_data);
         if reply.pruning_point != header.pruning_point {
-            return Err(WrongHeaderPruningPoint(reply.pruning_point, header.pruning_point));
+            return Err(WrongHeaderPruningPoint(
+                reply.pruning_point,
+                header.pruning_point,
+            ));
         }
         Ok(reply)
     }
@@ -1841,15 +2514,19 @@ impl VirtualStateProcessor {
         palw_round_blocks: &BlockHashSet,
         // RFC-0009: the merged V4 receipt blocks' split payouts, threaded to `expected_coinbase_transaction`. Empty where the fence is
         // dormant.
-        palw_receipt_v4_payouts: &BlockHashMap<kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout>,
+        palw_receipt_v4_payouts: &BlockHashMap<
+            kaspa_consensus_core::palw_receipt_v4::PalwReceiptV4Payout,
+        >,
     ) -> BlockProcessResult<()> {
         // Admission precedes the one input-script copy and lives through the
         // comparison. Malformed payloads and local capacity keep distinct causes.
-        let _miner_script_lease =
-            self.coinbase_manager.reserve_coinbase_payload_decode_v2(&coinbase.payload).map_err(|error| match error {
-                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
-                    crate::errors::RuleError::LocalNativeCapacityUnavailable(why)
-                }
+        let _miner_script_lease = self
+            .coinbase_manager
+            .reserve_coinbase_payload_decode_v2(&coinbase.payload)
+            .map_err(|error| match error {
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
+                    why,
+                ) => crate::errors::RuleError::LocalNativeCapacityUnavailable(why),
                 kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
                     crate::errors::RuleError::BadCoinbasePayload(why)
                 }
@@ -1860,7 +2537,9 @@ impl VirtualStateProcessor {
             .map_err(crate::errors::RuleError::BadCoinbasePayload)?
             .miner_data;
         let mut validator_output_count = 0usize;
-        let validator_reward_outputs = validator_reward_outputs.into_iter().inspect(|_| validator_output_count += 1);
+        let validator_reward_outputs = validator_reward_outputs
+            .into_iter()
+            .inspect(|_| validator_output_count += 1);
         let comparison = self
             .coinbase_manager
             .compare_coinbase_transaction_v2(
@@ -1882,9 +2561,9 @@ impl VirtualStateProcessor {
                 palw_receipt_v4_payouts,
             )
             .map_err(|error| match error {
-                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => {
-                    crate::errors::RuleError::LocalNativeCapacityUnavailable(why)
-                }
+                kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(
+                    why,
+                ) => crate::errors::RuleError::LocalNativeCapacityUnavailable(why),
                 kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => {
                     crate::errors::RuleError::BadCoinbasePayload(why)
                 }
@@ -1978,7 +2657,17 @@ impl VirtualStateProcessor {
         }
         if self.dns_retired_at(daa_score) {
             // Historical quality liabilities are paid once at their original finalization crossing.
-            return (self.deferred_quality_bonus_outputs(dns_params, daa_score, selected_parent, bond_view), Vec::new(), 0, 0);
+            return (
+                self.deferred_quality_bonus_outputs(
+                    dns_params,
+                    daa_score,
+                    selected_parent,
+                    bond_view,
+                ),
+                Vec::new(),
+                0,
+                0,
+            );
         }
         let window = dns_params.reward_uniqueness_window_blocks;
 
@@ -1989,7 +2678,11 @@ impl VirtualStateProcessor {
         // reward and StakeScore agree on what counts. A non-canonical or duplicate target earns
         // nothing (it is simply absent from `creditable`), and so never enters `rewarded_keys`
         // (hence never the §D bounty, §E pool, cross-block dedup, or the deferred bonus).
-        let creditable = self.canonical_anchors_in_window(selected_parent, dns_params, dns_params.stake_score_window_blue_score);
+        let creditable = self.canonical_anchors_in_window(
+            selected_parent,
+            dns_params,
+            dns_params.stake_score_window_blue_score,
+        );
 
         // Resolve eligible, recent, CANONICAL attestations (canonical order). Recency
         // (§B.3(c)): an attestation whose target is older than the window earns
@@ -2013,17 +2706,27 @@ impl VirtualStateProcessor {
                 dropped.push((att.epoch, "epoch_not_creditable_at_selected_parent"));
                 continue;
             };
-            if att.target_hash != anchor.anchor_hash || att.target_daa_score != anchor.anchor_daa_score {
+            if att.target_hash != anchor.anchor_hash
+                || att.target_daa_score != anchor.anchor_daa_score
+            {
                 dropped.push((att.epoch, "target_is_not_this_chains_canonical_anchor"));
                 continue;
             }
-            if bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score).is_none() {
+            if bond_view
+                .active_bond_at(&att.bond_outpoint, att.target_daa_score)
+                .is_none()
+            {
                 dropped.push((att.epoch, "bond_not_active_at_target"));
             }
             if let Some(bond) = bond_view.active_bond_at(&att.bond_outpoint, att.target_daa_score) {
                 // ADR-0018 §E: carry the bond's stake — the proportional weight in the
                 // participation distribution (against the expected-stake denominator).
-                attestations.push((att.bond_outpoint, att.epoch, bond.owner_reward_spk_payload, bond.amount));
+                attestations.push((
+                    att.bond_outpoint,
+                    att.epoch,
+                    bond.owner_reward_spk_payload,
+                    bond.amount,
+                ));
             }
         }
 
@@ -2066,7 +2769,8 @@ impl VirtualStateProcessor {
         } else {
             10_000
         };
-        let (participation_pool, _quality_bonus_pool) = split_validator_pool(validator_pool as u128, participation_bps);
+        let (participation_pool, _quality_bonus_pool) =
+            split_validator_pool(validator_pool as u128, participation_bps);
 
         // ADR-0018 §D base inclusion bounty: the stake this block NEWLY includes — the
         // same recency-filtered attestations under the same within-block + cross-block
@@ -2076,14 +2780,20 @@ impl VirtualStateProcessor {
         let mut seen_in_block = RewardedEpochSet::new();
         let mut newly_included_stake: u128 = 0;
         for (bond_outpoint, epoch, _payload, stake) in &attestations {
-            if already_rewarded.contains(bond_outpoint, *epoch) || !seen_in_block.insert(*bond_outpoint, *epoch) {
+            if already_rewarded.contains(bond_outpoint, *epoch)
+                || !seen_in_block.insert(*bond_outpoint, *epoch)
+            {
                 continue;
             }
             newly_included_stake += *stake as u128;
         }
 
-        let (mut outputs, rewarded_keys) =
-            validator_participation_reward_outputs(participation_pool, expected_stake, &attestations, &already_rewarded);
+        let (mut outputs, rewarded_keys) = validator_participation_reward_outputs(
+            participation_pool,
+            expected_stake,
+            &attestations,
+            &already_rewarded,
+        );
         // Eligible but unpaid: the §B.3(c) cross-block dedup already rewarded this (bond, epoch)
         // in the window, or the whole-output pool cap truncated the tail. Both are legitimate —
         // and both are also exactly how two nodes end up building different coinbases, so the
@@ -2103,16 +2813,27 @@ impl VirtualStateProcessor {
         // the selected-parent window. Inert below the v2 fence. The finalized epochs are old
         // (buried by `reward_window + max_reorg_horizon`) and disjoint from the participation
         // epochs (recent, within `reward_window`), so the two output sets never double-pay.
-        outputs.extend(self.deferred_quality_bonus_outputs(dns_params, daa_score, selected_parent, bond_view));
+        outputs.extend(self.deferred_quality_bonus_outputs(
+            dns_params,
+            daa_score,
+            selected_parent,
+            bond_view,
+        ));
 
         // An attestation that a block INCLUDED but this node will not reward — for any reason
         // other than plain staleness — is the precursor to a coinbase mismatch, and until now it
         // left no trace at all. Staleness is routine (a miner may include an old shard; it simply
         // earns nothing), so it is counted and not named; the other three mean this node's view
         // of the chain differs from the includer's, which is exactly what a mismatch is made of.
-        let stale = dropped.iter().filter(|(_, why)| *why == "stale_beyond_reward_window").count();
-        let disagreements: Vec<String> =
-            dropped.iter().filter(|(_, why)| *why != "stale_beyond_reward_window").map(|(e, why)| format!("epoch{e}:{why}")).collect();
+        let stale = dropped
+            .iter()
+            .filter(|(_, why)| *why == "stale_beyond_reward_window")
+            .count();
+        let disagreements: Vec<String> = dropped
+            .iter()
+            .filter(|(_, why)| *why != "stale_beyond_reward_window")
+            .map(|(e, why)| format!("epoch{e}:{why}"))
+            .collect();
         if !disagreements.is_empty() {
             info!(
                 "[validator-fanout] daa={daa_score} rewarding {} attestation(s), {} stale, but {} included one(s) this node does not consider rewardable: [{}]",
@@ -2178,12 +2899,16 @@ impl VirtualStateProcessor {
             return Vec::new();
         }
         let epoch_len = dns_params.epoch_length_blocks.max(1);
-        let finalization_depth = dns_params.reward_uniqueness_window_blocks.saturating_add(dns_params.max_reorg_horizon_blocks);
+        let finalization_depth = dns_params
+            .reward_uniqueness_window_blocks
+            .saturating_add(dns_params.max_reorg_horizon_blocks);
         let parent_daa = self.headers_store.get_daa_score(selected_parent).unwrap();
 
         // The inclusive epoch range this block newly finalizes (thresholds crossed in
         // `(parent_daa, daa_score]`); `None` ⇒ this block finalizes nothing (the common case).
-        let Some((e_min, e_max)) = epochs_finalized_at(parent_daa, daa_score, epoch_len, finalization_depth) else {
+        let Some((e_min, e_max)) =
+            epochs_finalized_at(parent_daa, daa_score, epoch_len, finalization_depth)
+        else {
             return Vec::new();
         };
 
@@ -2191,9 +2916,16 @@ impl VirtualStateProcessor {
         // walk + pure core the Phase-1 accumulator uses), anchored at the selected parent so
         // construction and validation read the identical buried history.
         let walk_bound = finalization_depth.saturating_add(epoch_len.saturating_mul(2));
-        let contributions = self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
+        let contributions =
+            self.selected_chain_epoch_contributions(selected_parent, parent_daa, walk_bound);
         let bonds = bond_view.records();
-        let tallies = recompute_epoch_tallies(daa_score, epoch_len, finalization_depth, &contributions, &bonds);
+        let tallies = recompute_epoch_tallies(
+            daa_score,
+            epoch_len,
+            finalization_depth,
+            &contributions,
+            &bonds,
+        );
 
         // Pay each crossed epoch in `[e_min, e_max]` that met φS.
         //
@@ -2203,12 +2935,19 @@ impl VirtualStateProcessor {
         // and a per-epoch bound would bound nothing. The DAG's job ends at the list below; the
         // budget is carried across it in `deferred_quality_bonus_outputs_for_block`, so the coinbase
         // this node builds cannot exceed the isolation cap this node then applies to it.
-        let finalized: Vec<(u64, EpochTally)> = tallies.into_iter().filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max).collect();
+        let finalized: Vec<(u64, EpochTally)> = tallies
+            .into_iter()
+            .filter(|(epoch, _)| *epoch >= e_min && *epoch <= e_max)
+            .collect();
         let bounds = self
             .palw_validator_payout_bounds
             .is_some_and(|fence| fence.is_active(daa_score))
             .then_some(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_DEFERRED_VALIDATOR_PAYOUTS);
-        deferred_quality_bonus_outputs_for_block(dns_params.stake_event_quality_floor_bps, bounds, &finalized)
+        deferred_quality_bonus_outputs_for_block(
+            dns_params.stake_event_quality_floor_bps,
+            bounds,
+            &finalized,
+        )
     }
 
     /// kaspa-pq DNS-finality (E1/E3 §6.1/§6.2): classify ONE selected mempool tx for
@@ -2230,7 +2969,9 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> AttestationShardDecision {
         if self.dns_retired_at(daa_score)
-            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(&tx.subnetwork_id)
+            && kaspa_consensus_core::palw_native_settlement_v1::creates_dns_participation(
+                &tx.subnetwork_id,
+            )
         {
             return AttestationShardDecision::Drop {
                 reason: AttestationDropReason::DnsRetired,
@@ -2238,7 +2979,10 @@ impl VirtualStateProcessor {
                 epoch: 0,
             };
         }
-        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        let activated = self
+            .dns_params
+            .as_ref()
+            .is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         classify_attestation_shard_for_template(tx, bond_view, self.genesis.hash, activated)
     }
 
@@ -2269,7 +3013,10 @@ impl VirtualStateProcessor {
         // A non-shard tx yields no attestations → `attestation_reward_eligibility`
         // returns Ok, so it is retained. A shard tx is retained iff *all* its
         // attestations are eligible.
-        txs.retain(|tx| attestation_reward_eligibility(std::slice::from_ref(tx), bond_view, net_id, true).is_ok());
+        txs.retain(|tx| {
+            attestation_reward_eligibility(std::slice::from_ref(tx), bond_view, net_id, true)
+                .is_ok()
+        });
     }
 
     /// kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4): the Model-B
@@ -2296,7 +3043,10 @@ impl VirtualStateProcessor {
         daa_score: u64,
     ) -> BlockProcessResult<()> {
         // Fold the gate: configured overlay AND past activation.
-        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        let activated = self
+            .dns_params
+            .as_ref()
+            .is_some_and(|p| daa_score >= p.dns_activation_daa_score);
         // ADR-0009 Addendum A.3: the network_id discriminator is the genesis hash.
         attestation_reward_eligibility(txs, selected_parent_bond_view, self.genesis.hash, activated)
             .map_err(|(bond_tx, epoch)| IneligibleAttestationInBlock(bond_tx, epoch))
@@ -2317,7 +3067,9 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
+        let Some(params) = self.dns_params.as_ref() else {
+            return Ok(());
+        };
         let activated = daa_score >= params.dns_activation_daa_score;
         slashing_evidence_genuine(
             txs,
@@ -2344,7 +3096,9 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let Some(params) = self.dns_params.as_ref() else { return Ok(()) };
+        let Some(params) = self.dns_params.as_ref() else {
+            return Ok(());
+        };
         let activated = daa_score >= params.dns_activation_daa_score;
         precommit_evidence_genuine(
             txs,
@@ -2370,8 +3124,15 @@ impl VirtualStateProcessor {
     /// enters a block** — a certificate, challenge, capability, commitment or verdict (the VLT's
     /// five subnetworks) is refused as a block rule. Below the fence they are accepted and do
     /// nothing, as they always did on every shipped chain.
-    fn check_compute_overlay_retired(&self, txs: &[Transaction], daa_score: u64) -> BlockProcessResult<()> {
-        if !self.palw_compute_overlay_retired.is_some_and(|f| f.is_active(daa_score)) {
+    fn check_compute_overlay_retired(
+        &self,
+        txs: &[Transaction],
+        daa_score: u64,
+    ) -> BlockProcessResult<()> {
+        if !self
+            .palw_compute_overlay_retired
+            .is_some_and(|f| f.is_active(daa_score))
+        {
             return Ok(());
         }
         match txs.iter().find(|tx| tx.subnetwork_id.is_compute_overlay()) {
@@ -2390,9 +3151,18 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         daa_score: u64,
     ) -> BlockProcessResult<()> {
-        let activated = self.dns_params.as_ref().is_some_and(|p| daa_score >= p.dns_activation_daa_score);
-        unbond_request_authorized(txs, selected_parent_bond_view, self.genesis.hash.as_byte_slice(), daa_score, activated)
-            .map_err(|(tx_id, bond_outpoint)| UnauthorizedUnbondRequestInBlock(tx_id, bond_outpoint))
+        let activated = self
+            .dns_params
+            .as_ref()
+            .is_some_and(|p| daa_score >= p.dns_activation_daa_score);
+        unbond_request_authorized(
+            txs,
+            selected_parent_bond_view,
+            self.genesis.hash.as_byte_slice(),
+            daa_score,
+            activated,
+        )
+        .map_err(|(tx_id, bond_outpoint)| UnauthorizedUnbondRequestInBlock(tx_id, bond_outpoint))
     }
 
     /// Validates transactions against the provided `utxo_view` and returns a vector with all transactions
@@ -2405,14 +3175,23 @@ impl VirtualStateProcessor {
         flags: TxValidationFlags,
     ) -> Vec<(ValidatedTransaction<'a>, u32)> {
         self.thread_pool.install(|| {
-            txs
-                .par_iter() // We can do this in parallel without complications since block body validation already ensured
-                            // that all txs within each block are independent
+            txs.par_iter() // We can do this in parallel without complications since block body validation already ensured
+                // that all txs within each block are independent
                 .enumerate()
                 .skip(1) // Skip the coinbase tx.
                 // `None`: the own-body / template path is not mergeset acceptance; the legacy
                 // own-body bond gate (below the fence) covers it, see `verify_expected_utxo_state`.
-                .filter_map(|(i, tx)| self.validate_transaction_in_utxo_context(tx, &utxo_view, pov_daa_score, flags, None).ok().map(|vtx| (vtx, i as u32)))
+                .filter_map(|(i, tx)| {
+                    self.validate_transaction_in_utxo_context(
+                        tx,
+                        &utxo_view,
+                        pov_daa_score,
+                        flags,
+                        None,
+                    )
+                    .ok()
+                    .map(|vtx| (vtx, i as u32))
+                })
                 .collect()
         })
     }
@@ -2430,16 +3209,24 @@ impl VirtualStateProcessor {
         bond_filter: Option<BondSpendFilter>,
     ) -> (SmallVec<[(ValidatedTransaction<'a>, u32); 2]>, MuHash) {
         self.thread_pool.install(|| {
-            txs
-                .par_iter() // We can do this in parallel without complications since block body validation already ensured
-                            // that all txs within each block are independent
+            txs.par_iter() // We can do this in parallel without complications since block body validation already ensured
+                // that all txs within each block are independent
                 .enumerate()
                 .skip(1) // Skip the coinbase tx.
-                .filter_map(|(i, tx)| self.validate_transaction_in_utxo_context(tx, &utxo_view, pov_daa_score, flags, bond_filter).ok().map(|vtx| {
-                    let mh = MuHash::from_transaction(&vtx, pov_daa_score);
-                    (smallvec![(vtx, i as u32)], mh)
-                }
-                ))
+                .filter_map(|(i, tx)| {
+                    self.validate_transaction_in_utxo_context(
+                        tx,
+                        &utxo_view,
+                        pov_daa_score,
+                        flags,
+                        bond_filter,
+                    )
+                    .ok()
+                    .map(|vtx| {
+                        let mh = MuHash::from_transaction(&vtx, pov_daa_score);
+                        (smallvec![(vtx, i as u32)], mh)
+                    })
+                })
                 .reduce(
                     || (smallvec![], MuHash::new()),
                     |mut a, mut b| {
@@ -2478,9 +3265,14 @@ impl VirtualStateProcessor {
         // the whole block — any tx whose input spends a known non-releasable bond's locked output-0.
         // Inert when `bond_filter` is `None` (every path except fence-active mergeset acceptance).
         if let Some(filter) = bond_filter
-            && let Some(input) = transaction.inputs.iter().find(|input| filter.locks(&input.previous_outpoint))
+            && let Some(input) = transaction
+                .inputs
+                .iter()
+                .find(|input| filter.locks(&input.previous_outpoint))
         {
-            return Err(TxRuleError::SpendsNonReleasableBond(input.previous_outpoint));
+            return Err(TxRuleError::SpendsNonReleasableBond(
+                input.previous_outpoint,
+            ));
         }
         // **Audit C-08 part three: a released bond's spend must destroy what the bond lost.**
         //
@@ -2490,11 +3282,17 @@ impl VirtualStateProcessor {
         // false at the only moment it means anything. The rule is `palw_bond_burn_paid`, which the
         // mempool asks too.
         if let Some(filter) = bond_filter {
-            palw_bond_burn_paid(transaction, entries.iter().map(|e| e.amount), filter.burn_owed(transaction))?;
+            palw_bond_burn_paid(
+                transaction,
+                entries.iter().map(|e| e.amount),
+                filter.burn_owed(transaction),
+            )?;
         }
         // G14 lane escrow-rfc08 (RFC-0035 A): a locked funded-escrow outpoint is spent only by a qualified settlement — checked
         // natively against the rooted row and these actual entries, before (and in addition to) the ordinary script check below.
-        if let Some(outpoint) = bond_filter.and_then(|filter| filter.escrow_refusal(transaction, &entries)) {
+        if let Some(outpoint) =
+            bond_filter.and_then(|filter| filter.escrow_refusal(transaction, &entries))
+        {
             return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
         }
         let populated_tx = PopulatedTransaction::new(transaction, entries);
@@ -2507,13 +3305,24 @@ impl VirtualStateProcessor {
         // byte-identical to the base maturity rule at ANY knob value; the settlement is enforced
         // at mempool admission (see `validate_mempool_transaction_impl`), where policy divergence
         // cannot split acceptance.
-        let res =
-            self.transaction_validator.validate_populated_transaction_and_get_fee(&populated_tx, pov_daa_score, flags, None, None);
+        let res = self
+            .transaction_validator
+            .validate_populated_transaction_and_get_fee(
+                &populated_tx,
+                pov_daa_score,
+                flags,
+                None,
+                None,
+            );
         match res {
             Ok(calculated_fee) => Ok(ValidatedTransaction::new(populated_tx, calculated_fee)),
             Err(tx_rule_error) => {
                 // TODO (relaxed): aggregate by error types and log through the monitor (in order to not flood the logs)
-                info!("Rejecting transaction {} due to transaction rule error: {}", transaction.id(), tx_rule_error);
+                info!(
+                    "Rejecting transaction {} due to transaction rule error: {}",
+                    transaction.id(),
+                    tx_rule_error
+                );
                 Err(tx_rule_error)
             }
         }
@@ -2559,32 +3368,108 @@ impl VirtualStateProcessor {
         args: &TransactionValidationArgs,
         palw_burns: Option<&std::collections::HashMap<TransactionOutpoint, u64>>,
         palw_escrow: Option<&PalwEscrowSpendLocksV1>,
+        case_source_parent: Option<(
+            BlockHash,
+            &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        )>,
     ) -> TxResult<()> {
         self.populate_mempool_transaction_in_utxo_context(mutable_tx, utxo_view)?;
         if let Some(burns) = palw_burns {
             let owed = palw_bond_burn_owed(&mutable_tx.tx, burns);
             // Every entry is populated here (`populate_…` refused a missing one).
-            palw_bond_burn_paid(&mutable_tx.tx, mutable_tx.entries.iter().flatten().map(|entry| entry.amount), owed)?;
+            palw_bond_burn_paid(
+                &mutable_tx.tx,
+                mutable_tx
+                    .entries
+                    .iter()
+                    .flatten()
+                    .map(|entry| entry.amount),
+                owed,
+            )?;
         }
         // **G14 lane escrow-rfc08 round 2: the escrow half of the mempool gate** — the tip's unsettled rooted rows, asked with the
         // block path's own rule and the actual populated amounts, before the script check. A locked-escrow spend the merge would
         // skip is refused here instead of relayed. `None` (no lock) everywhere below `palw_tir_public_conviction_v1`.
-        if let Some(locks) = palw_escrow
-            && let Some(outpoint) = locks.refusal_with_bond_burn(
-                &mutable_tx.tx,
-                mutable_tx.entries.iter().flatten().map(|entry| entry.amount),
+        if let Some(locks) = palw_escrow {
+            let tx = &mutable_tx.tx;
+            let mut qualified = None;
+            if let Some(first) = tx
+                .inputs
+                .first()
+                .filter(|input| locks.positive_case.contains_key(&input.previous_outpoint))
+                && let Some((parent, state)) = case_source_parent
+                && tx.payload.get(7) == Some(&12)
+            {
+                let (proofs, _proof_owner) = self
+                    .prepare_case_source_spends_v2(
+                        Some(state),
+                        parent,
+                        std::slice::from_ref(tx.as_ref()),
+                        utxo_view,
+                        pov_daa_score,
+                        locks,
+                    )
+                    .map_err(|_| TxRuleError::SpendsLockedPalwEscrow(first.previous_outpoint))?;
+                if let Some(proof) = proofs.get(&tx.id())
+                    && tx
+                        .inputs
+                        .iter()
+                        .zip(&mutable_tx.entries)
+                        .all(|(input, entry)| {
+                            utxo_view.get(&input.previous_outpoint).as_ref() == entry.as_ref()
+                        })
+                {
+                    qualified = Some(proof.debit_v2());
+                }
+            }
+            let worker = if let Some((parent, state)) = case_source_parent
+                && let Some(first) = tx.inputs.first()
+                && locks.assignment.contains_key(&first.previous_outpoint)
+                && tx
+                    .inputs
+                    .iter()
+                    .zip(&mutable_tx.entries)
+                    .all(|(input, entry)| {
+                        utxo_view.get(&input.previous_outpoint).as_ref() == entry.as_ref()
+                    }) {
+                let amounts: Vec<u64> = mutable_tx
+                    .entries
+                    .iter()
+                    .flatten()
+                    .map(|entry| entry.amount)
+                    .collect();
+                self.prepare_worker_payment_v2(state, parent, tx, &amounts, pov_daa_score, locks)
+                    .map_err(|_| TxRuleError::SpendsLockedPalwEscrow(first.previous_outpoint))?
+            } else {
+                None
+            };
+            if let Some(outpoint) = locks.refusal_with_qualified_case_v2(
+                tx,
+                mutable_tx
+                    .entries
+                    .iter()
+                    .flatten()
+                    .map(|entry| entry.amount),
                 pov_daa_score,
-                palw_burns.map(|burns| palw_bond_burn_owed(&mutable_tx.tx, burns)).unwrap_or(0),
-            )
-        {
-            return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
+                palw_burns
+                    .map(|burns| palw_bond_burn_owed(tx, burns))
+                    .unwrap_or(0),
+                qualified,
+                worker.as_ref(),
+            ) {
+                return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
+            }
         }
 
         // ADR-0134: a compute-overlay transaction is not admitted to the mempool past the
         // retirement — the block rule above would refuse the template that carried it.
-        let retired_here = self.palw_compute_overlay_retired.is_some_and(|f| f.is_active(pov_daa_score));
+        let retired_here = self
+            .palw_compute_overlay_retired
+            .is_some_and(|f| f.is_active(pov_daa_score));
         if retired_here && mutable_tx.tx.subnetwork_id.is_compute_overlay() {
-            return Err(TxRuleError::ComputeOverlayRetired(mutable_tx.tx.subnetwork_id.clone()));
+            return Err(TxRuleError::ComputeOverlayRetired(
+                mutable_tx.tx.subnetwork_id.clone(),
+            ));
         }
 
         // Calc the contextual storage mass
@@ -2598,19 +3483,25 @@ impl VirtualStateProcessor {
         mutable_tx.tx.set_mass(contextual_mass.storage_mass);
 
         // At this point we know all UTXO entries are populated, so we can safely pass the tx as verifiable
-        let mass_and_feerate_threshold = args
-            .feerate_threshold
-            .map(|threshold| (contextual_mass.max(mutable_tx.calculated_non_contextual_masses.unwrap()), threshold));
-        let calculated_fee = self.transaction_validator.validate_populated_transaction_and_get_fee(
-            &mutable_tx.as_verifiable(),
-            pov_daa_score,
-            TxValidationFlags::SkipMassCheck, // we can skip the mass check since we just set it
-            mass_and_feerate_threshold,
-            // POLICY path (mempool admission → relay → template inclusion): the settlement layer
-            // where node-local anchor timing is safe — a policy disagreement keeps a tx out of a
-            // mempool, never out of a block's acceptance.
-            self.dns_coinbase_settlement_at(Some(pov_daa_score)).as_ref(),
-        )?;
+        let mass_and_feerate_threshold = args.feerate_threshold.map(|threshold| {
+            (
+                contextual_mass.max(mutable_tx.calculated_non_contextual_masses.unwrap()),
+                threshold,
+            )
+        });
+        let calculated_fee = self
+            .transaction_validator
+            .validate_populated_transaction_and_get_fee(
+                &mutable_tx.as_verifiable(),
+                pov_daa_score,
+                TxValidationFlags::SkipMassCheck, // we can skip the mass check since we just set it
+                mass_and_feerate_threshold,
+                // POLICY path (mempool admission → relay → template inclusion): the settlement layer
+                // where node-local anchor timing is safe — a policy disagreement keeps a tx out of a
+                // mempool, never out of a block's acceptance.
+                self.dns_coinbase_settlement_at(Some(pov_daa_score))
+                    .as_ref(),
+            )?;
         mutable_tx.calculated_fee = Some(calculated_fee);
         Ok(())
     }
@@ -2631,10 +3522,18 @@ impl VirtualStateProcessor {
         selected_parent: kaspa_consensus_core::BlockHash,
     ) -> kaspa_consensus_core::AcceptedIdMerkleRoot {
         use kaspa_hashes::{AcceptedIdMerkleBranchHash64, HasherBase};
-        let parent_root = self.headers_store.get_header(selected_parent).unwrap().accepted_id_merkle_root;
-        let leaves_root = kaspa_consensus_core::merkle::calc_accepted_id_merkle_root_pre_crescendo(accepted_tx_ids.collect());
+        let parent_root = self
+            .headers_store
+            .get_header(selected_parent)
+            .unwrap()
+            .accepted_id_merkle_root;
+        let leaves_root = kaspa_consensus_core::merkle::calc_accepted_id_merkle_root_pre_crescendo(
+            accepted_tx_ids.collect(),
+        );
         let mut hasher = AcceptedIdMerkleBranchHash64::new();
-        hasher.update(parent_root.as_byte_slice()).update(leaves_root.as_byte_slice());
+        hasher
+            .update(parent_root.as_byte_slice())
+            .update(leaves_root.as_byte_slice());
         hasher.finalize()
     }
 }
@@ -2676,7 +3575,9 @@ impl AttestationDropReason {
     ///   shard itself — it can never become eligible as-is → `Terminal` (evict at once).
     /// - `BondNotActiveAtTarget` depends on the template's selected-parent bond VIEW, which a
     ///   reorg / a few more blocks can change → `Quarantine` (do not hard-evict; let TTL govern).
-    pub(crate) fn template_drop_kind(self) -> kaspa_consensus_core::block::AttestationTemplateDropKind {
+    pub(crate) fn template_drop_kind(
+        self,
+    ) -> kaspa_consensus_core::block::AttestationTemplateDropKind {
         use kaspa_consensus_core::block::AttestationTemplateDropKind;
         match self {
             AttestationDropReason::DnsRetired
@@ -2700,7 +3601,11 @@ pub(crate) enum AttestationShardDecision {
     /// A shard tx all of whose attestations are §B.4-eligible — kept.
     KeepEligible { attestation_count: usize },
     /// A shard tx with ≥1 ineligible (or malformed) attestation — dropped + refilled.
-    Drop { reason: AttestationDropReason, bond: TransactionOutpoint, epoch: u64 },
+    Drop {
+        reason: AttestationDropReason,
+        bond: TransactionOutpoint,
+        epoch: u64,
+    },
 }
 
 /// kaspa-pq DNS-finality (E1/§6.1): classify ONE attestation against the bond view
@@ -2740,7 +3645,15 @@ fn classify_one_attestation(
         att.bond_outpoint,
     )
     .as_bytes();
-    if !matches!(verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT), Ok(true)) {
+    if !matches!(
+        verify_mldsa87_with_context(
+            &bond.validator_pubkey,
+            &digest,
+            &att.signature,
+            ATTESTATION_MLDSA87_CONTEXT
+        ),
+        Ok(true)
+    ) {
         return Err(AttestationDropReason::BadSignature);
     }
     Ok(())
@@ -2776,10 +3689,16 @@ pub(crate) fn classify_attestation_shard_for_template(
     };
     for att in shard.attestations.iter() {
         if let Err(reason) = classify_one_attestation(att, bond_view, net_id) {
-            return AttestationShardDecision::Drop { reason, bond: att.bond_outpoint, epoch: att.epoch };
+            return AttestationShardDecision::Drop {
+                reason,
+                bond: att.bond_outpoint,
+                epoch: att.epoch,
+            };
         }
     }
-    AttestationShardDecision::KeepEligible { attestation_count: shard.attestations.len() }
+    AttestationShardDecision::KeepEligible {
+        attestation_count: shard.attestations.len(),
+    }
 }
 
 /// Pure core of the ADR-0009 Addendum B §B.4 reward-eligibility rule, split
@@ -2863,14 +3782,36 @@ pub(super) fn proved_slash_targets(
         // and here the question is per-tx — a forged one must not condemn a genuine sibling.
         let one = std::slice::from_ref(tx);
         for ev in slashing_evidence_from_accepted_txs(one) {
-            let older = ev.attestation_a.target_daa_score < including_daa && ev.attestation_b.target_daa_score < including_daa;
-            if older && slashing_evidence_genuine(one, bond_view, net_id, including_daa, evidence_window_blocks, true).is_ok() {
+            let older = ev.attestation_a.target_daa_score < including_daa
+                && ev.attestation_b.target_daa_score < including_daa;
+            if older
+                && slashing_evidence_genuine(
+                    one,
+                    bond_view,
+                    net_id,
+                    including_daa,
+                    evidence_window_blocks,
+                    true,
+                )
+                .is_ok()
+            {
                 proved.insert(ev.bond_outpoint);
             }
         }
         for ev in precommit_evidence_from_accepted_txs(one) {
-            let older = ev.precommit_a.target_daa_score < including_daa && ev.precommit_b.target_daa_score < including_daa;
-            if older && precommit_evidence_genuine(one, bond_view, net_id, including_daa, evidence_window_blocks, true).is_ok() {
+            let older = ev.precommit_a.target_daa_score < including_daa
+                && ev.precommit_b.target_daa_score < including_daa;
+            if older
+                && precommit_evidence_genuine(
+                    one,
+                    bond_view,
+                    net_id,
+                    including_daa,
+                    evidence_window_blocks,
+                    true,
+                )
+                .is_ok()
+            {
                 proved.insert(ev.bond_outpoint);
             }
         }
@@ -2898,7 +3839,14 @@ pub(super) fn proved_slashing_evidence_txs(
 ) -> Vec<Transaction> {
     txs.iter()
         .filter(|tx| {
-            !proved_slash_targets(std::slice::from_ref(*tx), bond_view, net_id, including_daa, evidence_window_blocks).is_empty()
+            !proved_slash_targets(
+                std::slice::from_ref(*tx),
+                bond_view,
+                net_id,
+                including_daa,
+                evidence_window_blocks,
+            )
+            .is_empty()
         })
         .cloned()
         .collect()
@@ -2926,7 +3874,10 @@ fn slashing_evidence_genuine(
         // max_reorg_horizon + evidence_window` guarantees a fresh evidence still finds the staked
         // output-0 present for the slashing side-effect to remove). A stale equivocation dredged up
         // long after the fact to grief a since-honest validator is rejected.
-        let newest_target = ev.attestation_a.target_daa_score.max(ev.attestation_b.target_daa_score);
+        let newest_target = ev
+            .attestation_a
+            .target_daa_score
+            .max(ev.attestation_b.target_daa_score);
         if including_daa.saturating_sub(newest_target) > evidence_window_blocks {
             return Err(ev.bond_outpoint.transaction_id);
         }
@@ -2941,7 +3892,10 @@ fn slashing_evidence_genuine(
             // Active or Unbonding, the same set `resolve_slashing_side_effects` can slash. An
             // equivocation by a bond that was still Pending (never activated) or already Slashed at
             // that target had no stake at risk, so it is not slashable.
-            if !matches!(effective_bond_status(bond, att.target_daa_score), BondStatus::Active | BondStatus::Unbonding) {
+            if !matches!(
+                effective_bond_status(bond, att.target_daa_score),
+                BondStatus::Active | BondStatus::Unbonding
+            ) {
                 return Err(ev.bond_outpoint.transaction_id);
             }
             let digest = stake_attestation_message(
@@ -2954,7 +3908,12 @@ fn slashing_evidence_genuine(
             )
             .as_bytes();
             if !matches!(
-                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &att.signature, ATTESTATION_MLDSA87_CONTEXT),
+                verify_mldsa87_with_context(
+                    &bond.validator_pubkey,
+                    &digest,
+                    &att.signature,
+                    ATTESTATION_MLDSA87_CONTEXT
+                ),
                 Ok(true)
             ) {
                 return Err(ev.bond_outpoint.transaction_id);
@@ -2997,7 +3956,10 @@ fn precommit_evidence_genuine(
         let Some(bond) = bond_view.get(&ev.bond_outpoint) else {
             return Err(ev.bond_outpoint.transaction_id);
         };
-        let newest_target = ev.precommit_a.target_daa_score.max(ev.precommit_b.target_daa_score);
+        let newest_target = ev
+            .precommit_a
+            .target_daa_score
+            .max(ev.precommit_b.target_daa_score);
         if including_daa.saturating_sub(newest_target) > evidence_window_blocks {
             return Err(ev.bond_outpoint.transaction_id);
         }
@@ -3010,7 +3972,10 @@ fn precommit_evidence_genuine(
             if p.bond_outpoint != ev.bond_outpoint || p.validator_id != bond.validator_pubkey_hash {
                 return Err(ev.bond_outpoint.transaction_id);
             }
-            if !matches!(effective_bond_status(bond, p.target_daa_score), BondStatus::Active | BondStatus::Unbonding) {
+            if !matches!(
+                effective_bond_status(bond, p.target_daa_score),
+                BondStatus::Active | BondStatus::Unbonding
+            ) {
                 return Err(ev.bond_outpoint.transaction_id);
             }
             // The claimed snapshot commitment is echoed into the digest exactly like the claimed
@@ -3029,7 +3994,12 @@ fn precommit_evidence_genuine(
             )
             .as_bytes();
             if !matches!(
-                verify_mldsa87_with_context(&bond.validator_pubkey, &digest, &p.signature, PRECOMMIT_MLDSA87_CONTEXT),
+                verify_mldsa87_with_context(
+                    &bond.validator_pubkey,
+                    &digest,
+                    &p.signature,
+                    PRECOMMIT_MLDSA87_CONTEXT
+                ),
                 Ok(true)
             ) {
                 return Err(ev.bond_outpoint.transaction_id);
@@ -3068,7 +4038,10 @@ fn unbond_request_authorized(
         let Some(bond) = bond_view.get(&req.bond_outpoint) else {
             return Err((tx_id, req.bond_outpoint));
         };
-        if !matches!(effective_bond_status(bond, daa_score), BondStatus::Pending | BondStatus::Active) {
+        if !matches!(
+            effective_bond_status(bond, daa_score),
+            BondStatus::Pending | BondStatus::Active
+        ) {
             return Err((tx_id, req.bond_outpoint));
         }
         // (b) the signing key must be THIS bond's owner.
@@ -3077,7 +4050,15 @@ fn unbond_request_authorized(
         }
         // (c) the owner's signature over the network- and bond-bound digest must verify (audit M-04).
         let digest = unbond_request_message(net_id, req.bond_outpoint).as_bytes();
-        if !matches!(verify_mldsa87_with_context(&req.owner_pubkey, &digest, &req.signature, UNBOND_REQUEST_CONTEXT), Ok(true)) {
+        if !matches!(
+            verify_mldsa87_with_context(
+                &req.owner_pubkey,
+                &digest,
+                &req.signature,
+                UNBOND_REQUEST_CONTEXT
+            ),
+            Ok(true)
+        ) {
             return Err((tx_id, req.bond_outpoint));
         }
     }
@@ -3119,14 +4100,21 @@ fn apply_slashing_effects_to_state<V: UtxoView>(
             continue;
         };
         // Remove S (the locked stake) from the diff and the multiset.
-        diff.remove_utxo(&effect.bond_outpoint, &entry).expect("composed view reported the bond output-0 present");
+        diff.remove_utxo(&effect.bond_outpoint, &entry)
+            .expect("composed view reported the bond output-0 present");
         multiset.remove_utxo(&effect.bond_outpoint, &entry);
 
         // Mint the reporter reward R at (slashing_tx_id, 0), if non-zero.
         if let Some(out) = &effect.reporter_output {
             let mint_outpoint = TransactionOutpoint::new(effect.slashing_tx_id, 0);
-            let mint_entry = UtxoEntry::new(out.value, out.script_public_key.clone(), mint_daa_score, false);
-            diff.add_utxo(mint_outpoint, mint_entry.clone()).expect("slashing tx declares no outputs, so (slashing_tx_id, 0) is free");
+            let mint_entry = UtxoEntry::new(
+                out.value,
+                out.script_public_key.clone(),
+                mint_daa_score,
+                false,
+            );
+            diff.add_utxo(mint_outpoint, mint_entry.clone())
+                .expect("slashing tx declares no outputs, so (slashing_tx_id, 0) is free");
             multiset.add_utxo(&mint_outpoint, &mint_entry);
         }
 
@@ -3140,7 +4128,12 @@ fn apply_slashing_effects_to_state<V: UtxoView>(
         // the slash stays value-conserving.
         for (i, out) in effect.victim_outputs.iter().enumerate() {
             let mint_outpoint = TransactionOutpoint::new(effect.slashing_tx_id, 2 + i as u32);
-            let mint_entry = UtxoEntry::new(out.value, out.script_public_key.clone(), mint_daa_score, false);
+            let mint_entry = UtxoEntry::new(
+                out.value,
+                out.script_public_key.clone(),
+                mint_daa_score,
+                false,
+            );
             diff.add_utxo(mint_outpoint, mint_entry.clone())
                 .expect("slashing tx declares no outputs, so (slashing_tx_id, 2+i) is free");
             multiset.add_utxo(&mint_outpoint, &mint_entry);
@@ -3155,7 +4148,10 @@ pub(super) fn palw_record_accepted_carrier_fees_v1(
     raw: &mut std::collections::HashMap<TransactionId, u64>,
     rent_available: &mut std::collections::HashMap<TransactionId, u64>,
 ) {
-    let available = tx.calculated_fee.checked_sub(bond_burn).expect("native accepted bond spend paid its mandatory burn");
+    let available = tx
+        .calculated_fee
+        .checked_sub(bond_burn)
+        .expect("native accepted bond spend paid its mandatory burn");
     raw.insert(tx.id(), tx.calculated_fee);
     rent_available.insert(tx.id(), available);
 }
@@ -3166,12 +4162,29 @@ pub(in crate::pipeline::virtual_processor) fn palw_carrier_rent_available_v1(
     carrier: TransactionId,
     priced: bool,
 ) -> u64 {
-    if priced { available.get(&carrier).copied().unwrap_or(0) } else { super::processor::PALW_RENT_UNPRICED }
+    if priced {
+        available.get(&carrier).copied().unwrap_or(0)
+    } else {
+        super::processor::PALW_RENT_UNPRICED
+    }
 }
 
 /// A bridge's finality share is a subset of the same collectible amount used for total fees.
-pub(super) fn palw_finality_collectible_fee_v1(tx: &Transaction, collectible: u64, active: bool) -> u64 {
-    if active && tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some()) { collectible } else { 0 }
+pub(super) fn palw_finality_collectible_fee_v1(
+    tx: &Transaction,
+    collectible: u64,
+    active: bool,
+) -> u64 {
+    if active
+        && tx
+            .outputs
+            .iter()
+            .any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
+    {
+        collectible
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -3202,7 +4215,12 @@ mod tests {
 
         collected.iter().tuple_windows().for_each(|(prev, curr)| {
             // Data was originally sorted, so we check if they remain sorted after filtering
-            assert!(prev < curr, "expected {} < {} if original sort was preserved", prev, curr);
+            assert!(
+                prev < curr,
+                "expected {} < {} if original sort was preserved",
+                prev,
+                curr
+            );
         });
 
         let reduced: SmallVec<[u16; 2]> = data
@@ -3226,7 +4244,12 @@ mod tests {
 
         reduced.iter().tuple_windows().for_each(|(prev, curr)| {
             // Data was originally sorted, so we check if they remain sorted after filtering
-            assert!(prev < curr, "expected {} < {} if original sort was preserved", prev, curr);
+            assert!(
+                prev < curr,
+                "expected {} < {} if original sort was preserved",
+                prev,
+                curr
+            );
         });
     }
 
@@ -3249,8 +4272,9 @@ mod tests {
         use kaspa_consensus_core::{
             BlockHash,
             dns_finality::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
-                StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_shard_tx,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
+                STAKE_VALIDATOR_PUBKEY_LEN, StakeAttestation, StakeBondRecord,
+                single_attestation_shard, stake_attestation_shard_tx,
             },
             tx::TransactionOutpoint,
         };
@@ -3300,15 +4324,23 @@ mod tests {
             // Even an attestation referencing an unknown bond passes when the
             // gate is closed (the `false` arg below). Current nets run with the
             // gate open (dns_activation = 0); this covers the pre-activation path.
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
-            assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), false), Ok(()));
+            let tx =
+                stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
+            assert_eq!(
+                eligibility(&[tx], &ActiveBondView::new(), NET(), false),
+                Ok(())
+            );
         }
 
         #[test]
         fn rejects_attestation_with_unknown_bond() {
             // Activated + empty bond view ⇒ the bond does not resolve ⇒ reject.
-            let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
-            assert_eq!(eligibility(&[tx], &ActiveBondView::new(), NET(), true), Err((Hash64::from_bytes([1; 64]), 1)));
+            let tx =
+                stake_attestation_shard_tx(&single_attestation_shard(attestation(outpoint(1))));
+            assert_eq!(
+                eligibility(&[tx], &ActiveBondView::new(), NET(), true),
+                Err((Hash64::from_bytes([1; 64]), 1))
+            );
         }
 
         #[test]
@@ -3318,13 +4350,19 @@ mod tests {
             let op = outpoint(2);
             let view = ActiveBondView::from_records([(op, active_bond(op))]);
             let tx = stake_attestation_shard_tx(&single_attestation_shard(attestation(op)));
-            assert_eq!(eligibility(&[tx], &view, NET(), true), Err((Hash64::from_bytes([2; 64]), 1)));
+            assert_eq!(
+                eligibility(&[tx], &view, NET(), true),
+                Err((Hash64::from_bytes([2; 64]), 1))
+            );
         }
 
         #[test]
         fn ok_when_no_attestation_shards() {
             // Activated but no shard txs ⇒ nothing to check ⇒ Ok.
-            assert_eq!(eligibility(&[], &ActiveBondView::new(), NET(), true), Ok(()));
+            assert_eq!(
+                eligibility(&[], &ActiveBondView::new(), NET(), true),
+                Ok(())
+            );
         }
     }
 
@@ -3336,15 +4374,21 @@ mod tests {
     mod classify_attestation_shard_for_template {
         use super::super::{AttestationDropReason, AttestationShardDecision};
 
-        fn classify(tx: &Transaction, view: &ActiveBondView, net: BlockHash, activated: bool) -> AttestationShardDecision {
+        fn classify(
+            tx: &Transaction,
+            view: &ActiveBondView,
+            net: BlockHash,
+            activated: bool,
+        ) -> AttestationShardDecision {
             super::super::classify_attestation_shard_for_template(tx, view, net, activated)
         }
         use kaspa_consensus_core::{
             BlockHash,
             constants::TX_VERSION,
             dns_finality::{
-                ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
-                STAKE_VALIDATOR_PUBKEY_LEN, StakeAttestation, StakeBondRecord, single_attestation_shard, stake_attestation_message,
+                ATTESTATION_MLDSA87_CONTEXT, ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1,
+                STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, StakeAttestation,
+                StakeBondRecord, single_attestation_shard, stake_attestation_message,
                 stake_attestation_shard_tx, validator_id_from_pubkey,
             },
             subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
@@ -3361,7 +4405,10 @@ mod tests {
 
         // A bond whose validator key is `kp`, Active from genesis. `validator_pubkey_hash`
         // binds the pubkey so the P-1A id check passes for a matching `validator_id`.
-        fn active_bond_with_key(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> StakeBondRecord {
+        fn active_bond_with_key(
+            op: TransactionOutpoint,
+            kp: &mldsa::MLDSA87KeyPair,
+        ) -> StakeBondRecord {
             let validator_pubkey = kp.verification_key.as_ref().to_vec();
             StakeBondRecord {
                 version: DNS_PAYLOAD_VERSION_V1,
@@ -3393,9 +4440,21 @@ mod tests {
             // Zero, as every below-fence signer emits: the classifier under test pins the
             // below-fence path, where a non-zero VSC is itself a drop reason.
             let vsc = Hash64::default();
-            let digest = stake_attestation_message(NET().as_byte_slice(), epoch, target_hash, target_daa_score, vsc, bond_outpoint);
-            let sig = mldsa::sign(&kp.signing_key, digest.as_bytes().as_slice(), ATTESTATION_MLDSA87_CONTEXT, [0x55u8; 32])
-                .expect("ml-dsa-87 sign");
+            let digest = stake_attestation_message(
+                NET().as_byte_slice(),
+                epoch,
+                target_hash,
+                target_daa_score,
+                vsc,
+                bond_outpoint,
+            );
+            let sig = mldsa::sign(
+                &kp.signing_key,
+                digest.as_bytes().as_slice(),
+                ATTESTATION_MLDSA87_CONTEXT,
+                [0x55u8; 32],
+            )
+            .expect("ml-dsa-87 sign");
             StakeAttestation {
                 version: DNS_PAYLOAD_VERSION_V1,
                 validator_id,
@@ -3416,12 +4475,22 @@ mod tests {
             let kp = mldsa::generate_key_pair([9u8; 32]);
             let op = outpoint(9);
             let view = ActiveBondView::from_records([(op, active_bond_with_key(op, &kp))]);
-            let mut att = signed_attestation(&kp, validator_id_from_pubkey(kp.verification_key.as_ref()), op, 1, 10_000);
+            let mut att = signed_attestation(
+                &kp,
+                validator_id_from_pubkey(kp.verification_key.as_ref()),
+                op,
+                1,
+                10_000,
+            );
             att.validator_set_commitment = Hash64::from_bytes([0x66; 64]);
             let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
             assert_eq!(
                 classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::NonZeroValidatorSetCommitment, bond: op, epoch: 1 }
+                AttestationShardDecision::Drop {
+                    reason: AttestationDropReason::NonZeroValidatorSetCommitment,
+                    bond: op,
+                    epoch: 1
+                }
             );
         }
 
@@ -3430,16 +4499,36 @@ mod tests {
             // Gate closed ⇒ even an ineligible shard is `KeepNonShard` (byte-identical
             // to the pre-classifier behavior, which kept everything).
             let kp = mldsa::generate_key_pair([1u8; 32]);
-            let att = signed_attestation(&kp, validator_id_from_pubkey(kp.verification_key.as_ref()), outpoint(1), 1, 10_000);
+            let att = signed_attestation(
+                &kp,
+                validator_id_from_pubkey(kp.verification_key.as_ref()),
+                outpoint(1),
+                1,
+                10_000,
+            );
             let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(classify(&tx, &ActiveBondView::new(), NET(), false), AttestationShardDecision::KeepNonShard);
+            assert_eq!(
+                classify(&tx, &ActiveBondView::new(), NET(), false),
+                AttestationShardDecision::KeepNonShard
+            );
         }
 
         #[test]
         fn keep_non_shard_for_native_tx() {
             // A non-shard (native) tx is always `KeepNonShard`, gate open or not.
-            let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_NATIVE, 0, vec![]);
-            assert_eq!(classify(&tx, &ActiveBondView::new(), NET(), true), AttestationShardDecision::KeepNonShard);
+            let tx = Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                SUBNETWORK_ID_NATIVE,
+                0,
+                vec![],
+            );
+            assert_eq!(
+                classify(&tx, &ActiveBondView::new(), NET(), true),
+                AttestationShardDecision::KeepNonShard
+            );
         }
 
         // T0: active bond + valid sig + correct id ⇒ KeepEligible.
@@ -3452,7 +4541,12 @@ mod tests {
             // Correct id (matches the bond's validator_pubkey_hash) + a real signature.
             let att = signed_attestation(&kp, bond.validator_pubkey_hash, op, 1, 10_000);
             let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
-            assert_eq!(classify(&tx, &view, NET(), true), AttestationShardDecision::KeepEligible { attestation_count: 1 });
+            assert_eq!(
+                classify(&tx, &view, NET(), true),
+                AttestationShardDecision::KeepEligible {
+                    attestation_count: 1
+                }
+            );
         }
 
         // T1: inactive-bond-at-target ⇒ Drop(BondNotActiveAtTarget). The bond activates
@@ -3469,7 +4563,11 @@ mod tests {
             let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
             assert_eq!(
                 classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::BondNotActiveAtTarget, bond: op, epoch: 1 }
+                AttestationShardDecision::Drop {
+                    reason: AttestationDropReason::BondNotActiveAtTarget,
+                    bond: op,
+                    epoch: 1
+                }
             );
         }
 
@@ -3486,7 +4584,11 @@ mod tests {
             let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
             assert_eq!(
                 classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::ValidatorIdMismatch, bond: op, epoch: 1 }
+                AttestationShardDecision::Drop {
+                    reason: AttestationDropReason::ValidatorIdMismatch,
+                    bond: op,
+                    epoch: 1
+                }
             );
         }
 
@@ -3502,7 +4604,11 @@ mod tests {
             let tx = stake_attestation_shard_tx(&single_attestation_shard(att));
             assert_eq!(
                 classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::BadSignature, bond: op, epoch: 1 }
+                AttestationShardDecision::Drop {
+                    reason: AttestationDropReason::BadSignature,
+                    bond: op,
+                    epoch: 1
+                }
             );
         }
 
@@ -3510,9 +4616,21 @@ mod tests {
         // is not a decodable StakeAttestationShardPayload.
         #[test]
         fn drop_malformed_payload() {
-            let tx = Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, 0, vec![0xde, 0xad]);
+            let tx = Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+                0,
+                vec![0xde, 0xad],
+            );
             match classify(&tx, &ActiveBondView::new(), NET(), true) {
-                AttestationShardDecision::Drop { reason: AttestationDropReason::MalformedPayload, epoch, .. } => {
+                AttestationShardDecision::Drop {
+                    reason: AttestationDropReason::MalformedPayload,
+                    epoch,
+                    ..
+                } => {
                     assert_eq!(epoch, 0);
                 }
                 other => panic!("expected Drop(MalformedPayload), got {other:?}"),
@@ -3525,10 +4643,22 @@ mod tests {
         #[test]
         fn h5_drop_reason_template_kind_mapping() {
             use kaspa_consensus_core::block::AttestationTemplateDropKind;
-            assert_eq!(AttestationDropReason::MalformedPayload.template_drop_kind(), AttestationTemplateDropKind::Terminal);
-            assert_eq!(AttestationDropReason::ValidatorIdMismatch.template_drop_kind(), AttestationTemplateDropKind::Terminal);
-            assert_eq!(AttestationDropReason::BadSignature.template_drop_kind(), AttestationTemplateDropKind::Terminal);
-            assert_eq!(AttestationDropReason::BondNotActiveAtTarget.template_drop_kind(), AttestationTemplateDropKind::Quarantine);
+            assert_eq!(
+                AttestationDropReason::MalformedPayload.template_drop_kind(),
+                AttestationTemplateDropKind::Terminal
+            );
+            assert_eq!(
+                AttestationDropReason::ValidatorIdMismatch.template_drop_kind(),
+                AttestationTemplateDropKind::Terminal
+            );
+            assert_eq!(
+                AttestationDropReason::BadSignature.template_drop_kind(),
+                AttestationTemplateDropKind::Terminal
+            );
+            assert_eq!(
+                AttestationDropReason::BondNotActiveAtTarget.template_drop_kind(),
+                AttestationTemplateDropKind::Quarantine
+            );
         }
 
         // A garbage 64-byte pubkey in the bond cannot pass the id check anyway, so this
@@ -3546,7 +4676,11 @@ mod tests {
             // against the mismatched bond key ⇒ BadSignature.
             assert_eq!(
                 classify(&tx, &view, NET(), true),
-                AttestationShardDecision::Drop { reason: AttestationDropReason::BadSignature, bond: op, epoch: 1 }
+                AttestationShardDecision::Drop {
+                    reason: AttestationDropReason::BadSignature,
+                    bond: op,
+                    epoch: 1
+                }
             );
         }
     }
@@ -3560,8 +4694,9 @@ mod tests {
         use kaspa_consensus_core::{
             constants::TX_VERSION,
             dns_finality::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
-                StakeBondRecord, StakeUnbondRequestPayload, UNBOND_REQUEST_CONTEXT, unbond_request_message, validator_id_from_pubkey,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
+                STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord, StakeUnbondRequestPayload,
+                UNBOND_REQUEST_CONTEXT, unbond_request_message, validator_id_from_pubkey,
             },
             subnets::SUBNETWORK_ID_STAKE_UNBOND,
             tx::{Transaction, TransactionOutpoint},
@@ -3600,7 +4735,11 @@ mod tests {
             }
         }
 
-        fn unbond_tx(op: TransactionOutpoint, owner_pubkey: Vec<u8>, signature: Vec<u8>) -> Transaction {
+        fn unbond_tx(
+            op: TransactionOutpoint,
+            owner_pubkey: Vec<u8>,
+            signature: Vec<u8>,
+        ) -> Transaction {
             let payload = borsh::to_vec(&StakeUnbondRequestPayload {
                 version: DNS_PAYLOAD_VERSION_V1,
                 bond_outpoint: op,
@@ -3608,20 +4747,45 @@ mod tests {
                 signature,
             })
             .unwrap();
-            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_STAKE_UNBOND, 0, payload)
+            Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                SUBNETWORK_ID_STAKE_UNBOND,
+                0,
+                payload,
+            )
         }
 
         fn signed_unbond_tx(op: TransactionOutpoint, kp: &mldsa::MLDSA87KeyPair) -> Transaction {
             let digest = unbond_request_message(NET_ID, op).as_bytes();
-            let sig = mldsa::sign(&kp.signing_key, &digest, UNBOND_REQUEST_CONTEXT, [0x99u8; 32]).expect("sign");
-            unbond_tx(op, kp.verification_key.as_ref().to_vec(), sig.as_ref().to_vec())
+            let sig = mldsa::sign(
+                &kp.signing_key,
+                &digest,
+                UNBOND_REQUEST_CONTEXT,
+                [0x99u8; 32],
+            )
+            .expect("sign");
+            unbond_tx(
+                op,
+                kp.verification_key.as_ref().to_vec(),
+                sig.as_ref().to_vec(),
+            )
         }
 
         #[test]
         fn noop_when_not_activated() {
             let op = outpoint(1);
-            let tx = unbond_tx(op, vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN], vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
-            assert_eq!(authz(&[tx], &ActiveBondView::new(), NET_ID, 10_000, false), Ok(()));
+            let tx = unbond_tx(
+                op,
+                vec![0u8; STAKE_VALIDATOR_PUBKEY_LEN],
+                vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            );
+            assert_eq!(
+                authz(&[tx], &ActiveBondView::new(), NET_ID, 10_000, false),
+                Ok(())
+            );
         }
 
         #[test]
@@ -3629,14 +4793,26 @@ mod tests {
             let op = outpoint(2);
             let kp = owner_kp(2);
             let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
-            assert_eq!(authz(&[signed_unbond_tx(op, &kp)], &view, NET_ID, 10_000, true), Ok(()));
+            assert_eq!(
+                authz(&[signed_unbond_tx(op, &kp)], &view, NET_ID, 10_000, true),
+                Ok(())
+            );
         }
 
         #[test]
         fn rejects_unknown_bond() {
             let op = outpoint(3);
             let kp = owner_kp(3);
-            assert!(authz(&[signed_unbond_tx(op, &kp)], &ActiveBondView::new(), NET_ID, 10_000, true).is_err());
+            assert!(
+                authz(
+                    &[signed_unbond_tx(op, &kp)],
+                    &ActiveBondView::new(),
+                    NET_ID,
+                    10_000,
+                    true
+                )
+                .is_err()
+            );
         }
 
         #[test]
@@ -3646,7 +4822,16 @@ mod tests {
             let owner = owner_kp(4);
             let attacker = owner_kp(40);
             let view = ActiveBondView::from_records([(op, bond_owned_by(op, &owner))]);
-            assert!(authz(&[signed_unbond_tx(op, &attacker)], &view, NET_ID, 10_000, true).is_err());
+            assert!(
+                authz(
+                    &[signed_unbond_tx(op, &attacker)],
+                    &view,
+                    NET_ID,
+                    10_000,
+                    true
+                )
+                .is_err()
+            );
         }
 
         #[test]
@@ -3654,7 +4839,11 @@ mod tests {
             let op = outpoint(5);
             let kp = owner_kp(5);
             let view = ActiveBondView::from_records([(op, bond_owned_by(op, &kp))]);
-            let tx = unbond_tx(op, kp.verification_key.as_ref().to_vec(), vec![0u8; STAKE_ATTESTATION_SIG_LEN]);
+            let tx = unbond_tx(
+                op,
+                kp.verification_key.as_ref().to_vec(),
+                vec![0u8; STAKE_ATTESTATION_SIG_LEN],
+            );
             assert!(authz(&[tx], &view, NET_ID, 10_000, true).is_err());
         }
 
@@ -3681,8 +4870,9 @@ mod tests {
             BlockHash,
             constants::TX_VERSION,
             dns_finality::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
-                SlashingEvidencePayload, StakeAttestation, StakeBondRecord,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
+                STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload, StakeAttestation,
+                StakeBondRecord,
             },
             subnets::SUBNETWORK_ID_SLASHING_EVIDENCE,
             tx::{Transaction, TransactionOutpoint},
@@ -3733,7 +4923,15 @@ mod tests {
                 attestation_b: attestation(op, 0x99),
                 reporter_reward_spk_payload: [0xee; 64],
             };
-            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_SLASHING_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
+            Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                SUBNETWORK_ID_SLASHING_EVIDENCE,
+                0,
+                borsh::to_vec(&ev).unwrap(),
+            )
         }
 
         const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
@@ -3746,14 +4944,31 @@ mod tests {
         #[test]
         fn noop_when_not_activated() {
             // Forged evidence passes when the gate is closed (every current net).
-            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, false), Ok(()));
+            assert_eq!(
+                genuine(
+                    &[evidence_tx(outpoint(1))],
+                    &ActiveBondView::new(),
+                    NET(),
+                    FRESH_DAA,
+                    WINDOW,
+                    false
+                ),
+                Ok(())
+            );
         }
 
         #[test]
         fn rejects_evidence_with_unknown_bond() {
             // Activated + empty bond view ⇒ bond unknown ⇒ reject.
             assert_eq!(
-                genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true),
+                genuine(
+                    &[evidence_tx(outpoint(1))],
+                    &ActiveBondView::new(),
+                    NET(),
+                    FRESH_DAA,
+                    WINDOW,
+                    true
+                ),
                 Err(Hash64::from_bytes([1; 64]))
             );
         }
@@ -3764,7 +4979,10 @@ mod tests {
             // verification ⇒ a forged evidence cannot slash the bond.
             let op = outpoint(2);
             let view = ActiveBondView::from_records([(op, active_bond(op))]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(
+                genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true),
+                Err(Hash64::from_bytes([2; 64]))
+            );
         }
 
         #[test]
@@ -3774,7 +4992,10 @@ mod tests {
             let op = outpoint(2);
             let view = ActiveBondView::from_records([(op, active_bond(op))]);
             let stale_daa = 10_000 + WINDOW + 1; // target=10_000; diff = WINDOW+1 > WINDOW.
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), stale_daa, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(
+                genuine(&[evidence_tx(op)], &view, NET(), stale_daa, WINDOW, true),
+                Err(Hash64::from_bytes([2; 64]))
+            );
         }
 
         #[test]
@@ -3786,12 +5007,18 @@ mod tests {
             bond.validator_pubkey_hash = Hash64::from_bytes([0xa1; 64]); // match the attestation's validator_id
             bond.activation_daa_score = 50_000; // Pending at target 10_000
             let view = ActiveBondView::from_records([(op, bond)]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(
+                genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true),
+                Err(Hash64::from_bytes([2; 64]))
+            );
         }
 
         #[test]
         fn ok_when_no_slashing_evidence() {
-            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true), Ok(()));
+            assert_eq!(
+                genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true),
+                Ok(())
+            );
         }
     }
 
@@ -3805,8 +5032,9 @@ mod tests {
             BlockHash,
             constants::TX_VERSION,
             dns_finality::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload, STAKE_ATTESTATION_SIG_LEN,
-                STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord, StakePrecommitPayload,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, PrecommitEvidencePayload,
+                STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord,
+                StakePrecommitPayload,
             },
             subnets::SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
             tx::{Transaction, TransactionOutpoint},
@@ -3817,7 +5045,12 @@ mod tests {
             TransactionOutpoint::new(Hash64::from_bytes([b; 64]), 0)
         }
 
-        fn precommit(bond_outpoint: TransactionOutpoint, epoch: u64, anchor: u8, lock_anchor: u8) -> StakePrecommitPayload {
+        fn precommit(
+            bond_outpoint: TransactionOutpoint,
+            epoch: u64,
+            anchor: u8,
+            lock_anchor: u8,
+        ) -> StakePrecommitPayload {
             StakePrecommitPayload {
                 version: DNS_PAYLOAD_VERSION_V1,
                 validator_id: Hash64::from_bytes([0xa1; 64]),
@@ -3859,7 +5092,15 @@ mod tests {
                 precommit_b: precommit(op, 3, 0x99, 0xc0),
                 reporter_reward_spk_payload: [0xee; 64],
             };
-            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_PRECOMMIT_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
+            Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
+                0,
+                borsh::to_vec(&ev).unwrap(),
+            )
         }
 
         const NET: fn() -> BlockHash = || Hash64::from_bytes([0x07; 64]);
@@ -3868,13 +5109,30 @@ mod tests {
 
         #[test]
         fn noop_when_not_activated() {
-            assert_eq!(genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, false), Ok(()));
+            assert_eq!(
+                genuine(
+                    &[evidence_tx(outpoint(1))],
+                    &ActiveBondView::new(),
+                    NET(),
+                    FRESH_DAA,
+                    WINDOW,
+                    false
+                ),
+                Ok(())
+            );
         }
 
         #[test]
         fn rejects_evidence_with_unknown_bond() {
             assert_eq!(
-                genuine(&[evidence_tx(outpoint(1))], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true),
+                genuine(
+                    &[evidence_tx(outpoint(1))],
+                    &ActiveBondView::new(),
+                    NET(),
+                    FRESH_DAA,
+                    WINDOW,
+                    true
+                ),
                 Err(Hash64::from_bytes([1; 64]))
             );
         }
@@ -3886,7 +5144,10 @@ mod tests {
             // bond for the price of one transaction.
             let op = outpoint(2);
             let view = ActiveBondView::from_records([(op, active_bond(op))]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(
+                genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true),
+                Err(Hash64::from_bytes([2; 64]))
+            );
         }
 
         #[test]
@@ -3897,14 +5158,27 @@ mod tests {
             let mut bond = active_bond(op);
             bond.validator_pubkey_hash = Hash64::from_bytes([0xff; 64]);
             let view = ActiveBondView::from_records([(op, bond)]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(
+                genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true),
+                Err(Hash64::from_bytes([2; 64]))
+            );
         }
 
         #[test]
         fn rejects_stale_evidence_outside_the_window() {
             let op = outpoint(2);
             let view = ActiveBondView::from_records([(op, active_bond(op))]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), 10_000 + WINDOW + 1, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(
+                genuine(
+                    &[evidence_tx(op)],
+                    &view,
+                    NET(),
+                    10_000 + WINDOW + 1,
+                    WINDOW,
+                    true
+                ),
+                Err(Hash64::from_bytes([2; 64]))
+            );
         }
 
         #[test]
@@ -3913,12 +5187,18 @@ mod tests {
             let mut bond = active_bond(op);
             bond.activation_daa_score = 50_000; // still Pending at the precommits' target
             let view = ActiveBondView::from_records([(op, bond)]);
-            assert_eq!(genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true), Err(Hash64::from_bytes([2; 64])));
+            assert_eq!(
+                genuine(&[evidence_tx(op)], &view, NET(), FRESH_DAA, WINDOW, true),
+                Err(Hash64::from_bytes([2; 64]))
+            );
         }
 
         #[test]
         fn ok_when_no_precommit_evidence() {
-            assert_eq!(genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true), Ok(()));
+            assert_eq!(
+                genuine(&[], &ActiveBondView::new(), NET(), FRESH_DAA, WINDOW, true),
+                Ok(())
+            );
         }
     }
 
@@ -3937,7 +5217,10 @@ mod tests {
     mod bond_spend_filter {
         use super::super::{BondSpendFilter, PalwEscrowSpendLocksV1};
         use kaspa_consensus_core::{
-            dns_finality::{ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN, StakeBondRecord},
+            dns_finality::{
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_VALIDATOR_PUBKEY_LEN,
+                StakeBondRecord,
+            },
             tx::{Transaction, TransactionOutpoint, UtxoEntry},
         };
         use kaspa_hashes::Hash64;
@@ -3976,16 +5259,39 @@ mod tests {
             let mut releasable = bond(releasable_op);
             releasable.unbond_request_daa_score = Some(1_000); // release = 1_000 + 5_000 = 6_000 ≤ DAA.
 
-            let view = ActiveBondView::from_records([(active, bond(active)), (pending_op, pending), (releasable_op, releasable)]);
+            let view = ActiveBondView::from_records([
+                (active, bond(active)),
+                (pending_op, pending),
+                (releasable_op, releasable),
+            ]);
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter =
-                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let filter = BondSpendFilter {
+                bond_view: Some(&view),
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: None,
+            };
 
-            assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
-            assert!(filter.locks(&pending_op), "Pending bond's output-0 must be locked");
-            assert!(!filter.locks(&releasable_op), "a releasable (Unbonding past release) bond is spendable");
-            assert!(!filter.locks(&outpoint(9)), "a non-bond outpoint is never locked");
+            assert!(
+                filter.locks(&active),
+                "Active bond's output-0 must be locked (skip the spend)"
+            );
+            assert!(
+                filter.locks(&pending_op),
+                "Pending bond's output-0 must be locked"
+            );
+            assert!(
+                !filter.locks(&releasable_op),
+                "a releasable (Unbonding past release) bond is spendable"
+            );
+            assert!(
+                !filter.locks(&outpoint(9)),
+                "a non-bond outpoint is never locked"
+            );
         }
 
         /// **Audit C-08: the second bond model in the same filter, and each side inert alone.**
@@ -4004,24 +5310,48 @@ mod tests {
             let no_burns = std::collections::HashMap::new();
 
             // Both models live: each locks its own, and nothing else.
-            let both =
-                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
+            let both = BondSpendFilter {
+                bond_view: Some(&view),
+                daa_score: DAA,
+                palw_locked: &palw,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: None,
+            };
             assert!(both.locks(&dns_op));
             assert!(both.locks(&palw_op));
             assert!(!both.locks(&outpoint(9)));
 
             // No V2 bundle: byte-identical to the legacy gate — the PALW outpoint is just an
             // outpoint.
-            let dns_only =
-                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let dns_only = BondSpendFilter {
+                bond_view: Some(&view),
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: None,
+            };
             assert!(dns_only.locks(&dns_op));
             assert!(!dns_only.locks(&palw_op));
 
             // DNS mergeset gate closed (or no DNS params at all): the V2 registry still locks.
-            let palw_only =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
+            let palw_only = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &palw,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: None,
+            };
             assert!(palw_only.locks(&palw_op));
-            assert!(!palw_only.locks(&dns_op), "a DNS bond is not this model's business when the DNS view is absent");
+            assert!(
+                !palw_only.locks(&dns_op),
+                "a DNS bond is not this model's business when the DNS view is absent"
+            );
         }
 
         /// **Audit C-08 part three: a RELEASED bond owes what it lost, and the filter can say so.**
@@ -4033,13 +5363,23 @@ mod tests {
         /// moment it means anything.
         #[test]
         fn a_released_bond_owes_the_burn_and_an_ordinary_transaction_owes_nothing() {
-            use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, scriptvec};
+            use kaspa_consensus_core::tx::{
+                ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, scriptvec,
+            };
 
             let bond_op = outpoint(4);
             let other = outpoint(5);
             let empty = std::collections::HashSet::new();
             let burns: std::collections::HashMap<_, _> = [(bond_op, 900u64)].into_iter().collect();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &burns, escrow: None };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: None,
+            };
 
             let spend = |ops: Vec<TransactionOutpoint>| {
                 Transaction::new(
@@ -4052,7 +5392,10 @@ mod tests {
                             sig_op_count: 0,
                         })
                         .collect(),
-                    vec![TransactionOutput::new(1, ScriptPublicKey::new(0, scriptvec!(0x51)))],
+                    vec![TransactionOutput::new(
+                        1,
+                        ScriptPublicKey::new(0, scriptvec!(0x51)),
+                    )],
                     0,
                     kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
                     0,
@@ -4060,15 +5403,35 @@ mod tests {
                 )
             };
 
-            assert_eq!(filter.burn_owed(&spend(vec![bond_op])), 900, "a released bond's spend owes what it lost");
-            assert_eq!(filter.burn_owed(&spend(vec![other])), 0, "an ordinary spend owes nothing");
+            assert_eq!(
+                filter.burn_owed(&spend(vec![bond_op])),
+                900,
+                "a released bond's spend owes what it lost"
+            );
+            assert_eq!(
+                filter.burn_owed(&spend(vec![other])),
+                0,
+                "an ordinary spend owes nothing"
+            );
             // Obligations ADD: one transaction releasing two slashed bonds destroys both.
-            let two: std::collections::HashMap<_, _> = [(bond_op, 900u64), (other, 100)].into_iter().collect();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &two, escrow: None };
+            let two: std::collections::HashMap<_, _> =
+                [(bond_op, 900u64), (other, 100)].into_iter().collect();
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &two,
+                worker_spends: None,
+                case_spends: None,
+                escrow: None,
+            };
             assert_eq!(filter.burn_owed(&spend(vec![bond_op, other])), 1_000);
             // And a LOCKED bond never reaches this question — it cannot be spent at all, so it
             // appears in no obligation map. The two answers are disjoint by construction.
-            assert!(!filter.locks(&bond_op), "a bond that owes a burn is one that may be spent");
+            assert!(
+                !filter.locks(&bond_op),
+                "a bond that owes a burn is one that may be spent"
+            );
         }
 
         /// A corrupt native projection refuses the same actual input in both shared filter entry points.
@@ -4076,9 +5439,11 @@ mod tests {
         fn malformed_assignment_money_projection_fails_closed_in_the_shared_filter() {
             use kaspa_consensus_core::tx::{TransactionInput, TransactionOutput};
             let op = outpoint(4);
-            let payload =
-                kaspa_hashes::blake2b_512_address_payload(&[17; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
-            let script = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let payload = kaspa_hashes::blake2b_512_address_payload(
+                &[17; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN],
+            );
+            let script =
+                kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
             let transaction = Transaction::new(
                 0,
                 vec![TransactionInput::new(op, vec![], 0, 0)],
@@ -4090,8 +5455,14 @@ mod tests {
             );
             let entries = vec![UtxoEntry::new(100, script, DAA - 1, false)];
             let no_locks = PalwEscrowSpendLocksV1::default();
-            assert_eq!(no_locks.refusal(&transaction, entries.iter().map(|entry| entry.amount), DAA), None);
-            let malformed = PalwEscrowSpendLocksV1 { assignment_invalid: true, ..Default::default() };
+            assert_eq!(
+                no_locks.refusal(&transaction, entries.iter().map(|entry| entry.amount), DAA),
+                None
+            );
+            let malformed = PalwEscrowSpendLocksV1 {
+                assignment_invalid: true,
+                ..Default::default()
+            };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
             let filter = BondSpendFilter {
@@ -4099,6 +5470,8 @@ mod tests {
                 daa_score: DAA,
                 palw_locked: &empty,
                 palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
                 escrow: Some(&malformed),
             };
             assert_eq!(filter.escrow_refusal(&transaction, &entries), Some(op));
@@ -4112,11 +5485,15 @@ mod tests {
         #[test]
         fn funded_escrow_locks_refuse_unqualified_spends_and_leave_the_payer_fallback() {
             use kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1;
-            use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+            use kaspa_consensus_core::tx::{
+                ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry,
+            };
 
-            let payload =
-                kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
-            let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let payload = kaspa_hashes::blake2b_512_address_payload(
+                &[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN],
+            );
+            let payer =
+                kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
             let escrow_op = outpoint(11);
             let row = PalwFundedEscrowRowV1::fresh_v1(
                 Hash64::from_u64_word(1),
@@ -4142,7 +5519,10 @@ mod tests {
                 )
             };
             let entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false)];
-            let theft = tx(vec![TransactionOutput::new(1_000, ScriptPublicKey::default())]);
+            let theft = tx(vec![TransactionOutput::new(
+                1_000,
+                ScriptPublicKey::default(),
+            )]);
             let payer_return = tx(vec![TransactionOutput::new(1_000, payer.clone())]);
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
@@ -4156,18 +5536,39 @@ mod tests {
                 positive_case: Default::default(),
                 assignment_prover: Default::default(),
             };
-            let filter =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: Some(&rooted),
+            };
             assert_eq!(
                 filter.escrow_refusal(&theft, &entries),
                 Some(escrow_op),
                 "a non-qualified spend of a rooted escrow is skipped"
             );
-            assert_eq!(filter.escrow_refusal(&payer_return, &entries), None, "the payer return after the hard deadline qualifies");
+            assert_eq!(
+                filter.escrow_refusal(&payer_return, &entries),
+                None,
+                "the payer return after the hard deadline qualifies"
+            );
             // Before the hard deadline even the payer's own return is a settlement, and the schedule is typed-missing.
-            let early =
-                BondSpendFilter { bond_view: None, daa_score: 100, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
-            assert_eq!(early.escrow_refusal(&payer_return, &entries), Some(escrow_op));
+            let early = BondSpendFilter {
+                bond_view: None,
+                daa_score: 100,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: Some(&rooted),
+            };
+            assert_eq!(
+                early.escrow_refusal(&payer_return, &entries),
+                Some(escrow_op)
+            );
 
             // The same mergeset: the carrier's own output is provisionally locked against every spend, the payer's included.
             let provisional = PalwEscrowSpendLocksV1 {
@@ -4183,13 +5584,30 @@ mod tests {
                 daa_score: DAA,
                 palw_locked: &empty,
                 palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
                 escrow: Some(&provisional),
             };
-            assert_eq!(filter.escrow_refusal(&payer_return, &entries), Some(escrow_op));
-            assert_eq!(filter.escrow_refusal(&tx_spending(outpoint(12)), &entries), None, "another outpoint is never locked by it");
+            assert_eq!(
+                filter.escrow_refusal(&payer_return, &entries),
+                Some(escrow_op)
+            );
+            assert_eq!(
+                filter.escrow_refusal(&tx_spending(outpoint(12)), &entries),
+                None,
+                "another outpoint is never locked by it"
+            );
 
             // The next block after a refused contract: no row, no provisional lock — the ordinary payer fallback is spendable.
-            let none = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let none = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: None,
+            };
             assert_eq!(none.escrow_refusal(&payer_return, &entries), None);
             assert_eq!(
                 none.escrow_refusal(&theft, &entries),
@@ -4217,11 +5635,15 @@ mod tests {
         #[test]
         fn audit_a2_a_transaction_spending_two_escrow_rows_is_refused() {
             use kaspa_consensus_core::palw_funded_escrow_v1::PalwFundedEscrowRowV1;
-            use kaspa_consensus_core::tx::{Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+            use kaspa_consensus_core::tx::{
+                Transaction, TransactionInput, TransactionOutput, UtxoEntry,
+            };
 
-            let payload =
-                kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
-            let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let payload = kaspa_hashes::blake2b_512_address_payload(
+                &[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN],
+            );
+            let payer =
+                kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
             let (a_op, b_op) = (outpoint(11), outpoint(13));
             let row = |contract: u64, op: TransactionOutpoint| {
                 PalwFundedEscrowRowV1::fresh_v1(
@@ -4240,7 +5662,10 @@ mod tests {
             let spend = |inputs: Vec<TransactionOutpoint>, outputs: Vec<TransactionOutput>| {
                 Transaction::new(
                     0,
-                    inputs.into_iter().map(|op| TransactionInput::new(op, vec![], 0, 0)).collect(),
+                    inputs
+                        .into_iter()
+                        .map(|op| TransactionInput::new(op, vec![], 0, 0))
+                        .collect(),
                     outputs,
                     0,
                     kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
@@ -4249,7 +5674,9 @@ mod tests {
                 )
             };
             let locks = PalwEscrowSpendLocksV1 {
-                rows: [(a_op, row(1, a_op)), (b_op, row(21, b_op))].into_iter().collect(),
+                rows: [(a_op, row(1, a_op)), (b_op, row(21, b_op))]
+                    .into_iter()
+                    .collect(),
                 provisional: Default::default(),
                 assignment: Default::default(),
                 assignment_invalid: false,
@@ -4258,21 +5685,50 @@ mod tests {
             };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
-            let two_entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(1_000, payer.clone(), 100, false)];
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: Some(&locks),
+            };
+            let two_entries = vec![
+                UtxoEntry::new(1_000, payer.clone(), 100, false),
+                UtxoEntry::new(1_000, payer.clone(), 100, false),
+            ];
             let both = spend(
                 vec![a_op, b_op],
-                vec![TransactionOutput::new(1_000, payer.clone()), TransactionOutput::new(1_000, payer.clone())],
+                vec![
+                    TransactionOutput::new(1_000, payer.clone()),
+                    TransactionOutput::new(1_000, payer.clone()),
+                ],
             );
-            assert_eq!(filter.escrow_refusal(&both, &two_entries), Some(b_op), "the second escrow row of one transaction is refused");
+            assert_eq!(
+                filter.escrow_refusal(&both, &two_entries),
+                Some(b_op),
+                "the second escrow row of one transaction is refused"
+            );
             let one_entry = vec![UtxoEntry::new(1_000, payer.clone(), 100, false)];
             assert_eq!(
-                filter.escrow_refusal(&spend(vec![a_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry),
+                filter.escrow_refusal(
+                    &spend(
+                        vec![a_op],
+                        vec![TransactionOutput::new(1_000, payer.clone())]
+                    ),
+                    &one_entry
+                ),
                 None
             );
             assert_eq!(
-                filter.escrow_refusal(&spend(vec![b_op], vec![TransactionOutput::new(1_000, payer.clone())]), &one_entry),
+                filter.escrow_refusal(
+                    &spend(
+                        vec![b_op],
+                        vec![TransactionOutput::new(1_000, payer.clone())]
+                    ),
+                    &one_entry
+                ),
                 None
             );
         }
@@ -4285,11 +5741,15 @@ mod tests {
             use kaspa_consensus_core::palw_funded_escrow_v1::{
                 PalwEscrowSpendPathV1, PalwFundedEscrowRowV1, palw_escrow_relay_template_payload_v1,
             };
-            use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+            use kaspa_consensus_core::tx::{
+                ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry,
+            };
 
-            let payload =
-                kaspa_hashes::blake2b_512_address_payload(&[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN]);
-            let payer = kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
+            let payload = kaspa_hashes::blake2b_512_address_payload(
+                &[9u8; kaspa_consensus_core::mldsa87_primitives::MLDSA87_PUBKEY_LEN],
+            );
+            let payer =
+                kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk(&payload.as_bytes());
             let escrow_op = outpoint(21);
             let row = PalwFundedEscrowRowV1::fresh_v1(
                 Hash64::from_u64_word(5),
@@ -4313,13 +5773,23 @@ mod tests {
             };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                worker_spends: None,
+                case_spends: None,
+                escrow: Some(&locks),
+            };
             let relay_op = outpoint(22);
             let spend = |out0: TransactionOutput, payload: Vec<u8>| {
                 Transaction::new(
                     0,
-                    vec![TransactionInput::new(escrow_op, vec![], 0, 0), TransactionInput::new(relay_op, vec![], 0, 0)],
+                    vec![
+                        TransactionInput::new(escrow_op, vec![], 0, 0),
+                        TransactionInput::new(relay_op, vec![], 0, 0),
+                    ],
                     vec![out0, TransactionOutput::new(40, ScriptPublicKey::default())],
                     0,
                     kaspa_consensus_core::subnets::SUBNETWORK_ID_NATIVE,
@@ -4327,24 +5797,51 @@ mod tests {
                     payload,
                 )
             };
-            let entries =
-                vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(50, ScriptPublicKey::default(), 100, false)];
-            let template =
-                palw_escrow_relay_template_payload_v1(row.contract_id, escrow_op, PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline);
+            let entries = vec![
+                UtxoEntry::new(1_000, payer.clone(), 100, false),
+                UtxoEntry::new(50, ScriptPublicKey::default(), 100, false),
+            ];
+            let template = palw_escrow_relay_template_payload_v1(
+                row.contract_id,
+                escrow_op,
+                PalwEscrowSpendPathV1::PayerReturnAfterHardDeadline,
+            );
             let cases = [
-                (spend(TransactionOutput::new(1_000, ScriptPublicKey::default()), vec![]), Some(escrow_op)),
-                (spend(TransactionOutput::new(1_000, payer.clone()), vec![]), None),
-                (spend(TransactionOutput::new(1_000, payer.clone()), template), None),
-                (spend(TransactionOutput::new(1_000, payer.clone()), vec![7]), Some(escrow_op)),
+                (
+                    spend(
+                        TransactionOutput::new(1_000, ScriptPublicKey::default()),
+                        vec![],
+                    ),
+                    Some(escrow_op),
+                ),
+                (
+                    spend(TransactionOutput::new(1_000, payer.clone()), vec![]),
+                    None,
+                ),
+                (
+                    spend(TransactionOutput::new(1_000, payer.clone()), template),
+                    None,
+                ),
+                (
+                    spend(TransactionOutput::new(1_000, payer.clone()), vec![7]),
+                    Some(escrow_op),
+                ),
             ];
             for (tx, expected) in cases {
                 let mempool = locks.refusal(&tx, entries.iter().map(|e| e.amount), DAA);
                 assert_eq!(mempool, expected);
-                assert_eq!(filter.escrow_refusal(&tx, &entries), mempool, "mempool and block filter answer alike");
+                assert_eq!(
+                    filter.escrow_refusal(&tx, &entries),
+                    mempool,
+                    "mempool and block filter answer alike"
+                );
             }
             assert_eq!(
                 PalwEscrowSpendLocksV1::default().refusal(
-                    &spend(TransactionOutput::new(1, ScriptPublicKey::default()), vec![]),
+                    &spend(
+                        TransactionOutput::new(1, ScriptPublicKey::default()),
+                        vec![]
+                    ),
                     [1_000u64, 50],
                     DAA
                 ),
@@ -4381,8 +5878,9 @@ mod tests {
             BlockHash,
             constants::TX_VERSION,
             dns_finality::{
-                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN,
-                SlashingEvidencePayload, StakeAttestation, StakeBondRecord, resolve_slashing_side_effects,
+                ActiveBondView, BondStatus, DNS_PAYLOAD_VERSION_V1, STAKE_ATTESTATION_SIG_LEN,
+                STAKE_VALIDATOR_PUBKEY_LEN, SlashingEvidencePayload, StakeAttestation,
+                StakeBondRecord, resolve_slashing_side_effects,
             },
             subnets::SUBNETWORK_ID_SLASHING_EVIDENCE,
             tx::{Transaction, TransactionOutpoint},
@@ -4439,7 +5937,15 @@ mod tests {
                 attestation_b: attestation(op, 0x99),
                 reporter_reward_spk_payload: [0xee; 64],
             };
-            Transaction::new(TX_VERSION, vec![], vec![], 0, SUBNETWORK_ID_SLASHING_EVIDENCE, 0, borsh::to_vec(&ev).unwrap())
+            Transaction::new(
+                TX_VERSION,
+                vec![],
+                vec![],
+                0,
+                SUBNETWORK_ID_SLASHING_EVIDENCE,
+                0,
+                borsh::to_vec(&ev).unwrap(),
+            )
         }
 
         #[test]
@@ -4451,15 +5957,25 @@ mod tests {
             // The registry path (bond status) correctly refuses the forgery: `proved_slash_targets`
             // re-verifies the signatures, they are garbage, so no bond is proved slashable.
             let proved = proved_slash_targets(&txs, &view, NET(), FRESH_DAA, WINDOW);
-            assert!(proved.is_empty(), "the registry path must not prove a forged slash");
+            assert!(
+                proved.is_empty(),
+                "the registry path must not prove a forged slash"
+            );
 
             // The UTXO side-effect path slashes anyway: it verifies no signature, so it removes the
             // honest bond's whole staked output-0 and mints the attacker a reporter reward. THIS is
             // the bug — an honest bond slashed by forged evidence.
             let effects = resolve_slashing_side_effects(&txs, &view, FRESH_DAA, REPORTER_BPS, 0, 0);
-            assert_eq!(effects.len(), 1, "0e8ec984e slashes the honest bond's UTXO on unchecked evidence");
+            assert_eq!(
+                effects.len(),
+                1,
+                "0e8ec984e slashes the honest bond's UTXO on unchecked evidence"
+            );
             assert_eq!(effects[0].bond_outpoint, op);
-            assert_eq!(effects[0].slashed_amount_sompi, 100_000_000_000, "the whole stake leaves the supply");
+            assert_eq!(
+                effects[0].slashed_amount_sompi, 100_000_000_000,
+                "the whole stake leaves the supply"
+            );
             assert_eq!(
                 effects[0].reporter_output.as_ref().map(|o| o.value),
                 Some(10_000_000_000),
@@ -4473,7 +5989,9 @@ mod tests {
         use kaspa_consensus_core::{
             dns_finality::SlashingSideEffect,
             muhash::MuHashExtensions,
-            tx::{ScriptPublicKey, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry},
+            tx::{
+                ScriptPublicKey, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry,
+            },
             utxo::{utxo_collection::UtxoCollection, utxo_diff::UtxoDiff},
         };
         use kaspa_hashes::Hash64;
@@ -4503,7 +6021,12 @@ mod tests {
 
         // An effect slashing `amount`, paying a reporter `reward` (≤ amount) to
         // spk(0xee) minted at (tx, 0); `reward == 0` ⇒ no reporter output.
-        fn effect(bond: TransactionOutpoint, amount: u64, reward: u64, tx: TransactionId) -> SlashingSideEffect {
+        fn effect(
+            bond: TransactionOutpoint,
+            amount: u64,
+            reward: u64,
+            tx: TransactionId,
+        ) -> SlashingSideEffect {
             SlashingSideEffect {
                 bond_outpoint: bond,
                 slashed_amount_sompi: amount,
@@ -4542,7 +6065,13 @@ mod tests {
             let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
             let mut multiset = multiset_of(&[(bond_op, entry.clone())]);
 
-            apply(&[effect(bond_op, amount, reward, tx)], &base, &mut diff, &mut multiset, MINT_DAA);
+            apply(
+                &[effect(bond_op, amount, reward, tx)],
+                &base,
+                &mut diff,
+                &mut multiset,
+                MINT_DAA,
+            );
 
             let mint_op = TransactionOutpoint::new(tx, 0);
             let mint_entry = UtxoEntry::new(reward, spk(0xee), MINT_DAA, false);
@@ -4555,7 +6084,10 @@ mod tests {
 
             // Commitment now equals a set that only ever held the reporter mint:
             // the removal cancelled the bond and the net set is exactly R.
-            assert_eq!(multiset.finalize(), multiset_of(&[(mint_op, mint_entry)]).finalize());
+            assert_eq!(
+                multiset.finalize(),
+                multiset_of(&[(mint_op, mint_entry)]).finalize()
+            );
         }
 
         #[test]
@@ -4575,13 +6107,25 @@ mod tests {
             let mut eff = effect(bond_op, amount, 100, tx);
             eff.security_reserve_sompi = 200;
             eff.victim_epoch_pool_sompi = 700;
-            eff.victim_outputs = vec![TransactionOutput::new(300, spk(0xc1)), TransactionOutput::new(400, spk(0xc2))];
+            eff.victim_outputs = vec![
+                TransactionOutput::new(300, spk(0xc1)),
+                TransactionOutput::new(400, spk(0xc2)),
+            ];
 
             apply(&[eff], &base, &mut diff, &mut multiset, MINT_DAA);
 
-            let r = (TransactionOutpoint::new(tx, 0), UtxoEntry::new(100, spk(0xee), MINT_DAA, false));
-            let v1 = (TransactionOutpoint::new(tx, 2), UtxoEntry::new(300, spk(0xc1), MINT_DAA, false));
-            let v2 = (TransactionOutpoint::new(tx, 3), UtxoEntry::new(400, spk(0xc2), MINT_DAA, false));
+            let r = (
+                TransactionOutpoint::new(tx, 0),
+                UtxoEntry::new(100, spk(0xee), MINT_DAA, false),
+            );
+            let v1 = (
+                TransactionOutpoint::new(tx, 2),
+                UtxoEntry::new(300, spk(0xc1), MINT_DAA, false),
+            );
+            let v2 = (
+                TransactionOutpoint::new(tx, 3),
+                UtxoEntry::new(400, spk(0xc2), MINT_DAA, false),
+            );
 
             // Bond removed; reporter + two victims minted; index 1 unused; reserve (200) NOT minted.
             assert_eq!(diff.remove.get(&bond_op), Some(&entry));
@@ -4604,7 +6148,13 @@ mod tests {
             let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
             let mut multiset = multiset_of(&[(bond_op, entry.clone())]);
 
-            apply(&[effect(bond_op, 1_000, 0, tx)], &base, &mut diff, &mut multiset, MINT_DAA);
+            apply(
+                &[effect(bond_op, 1_000, 0, tx)],
+                &base,
+                &mut diff,
+                &mut multiset,
+                MINT_DAA,
+            );
 
             // Stake removed, nothing minted; commitment back to the empty set.
             assert_eq!(diff.remove.get(&bond_op), Some(&entry));
@@ -4624,7 +6174,13 @@ mod tests {
             let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
             let mut multiset = MuHash::new();
 
-            apply(&[effect(bond_op, 1_000, 250, tx)], &base, &mut diff, &mut multiset, MINT_DAA);
+            apply(
+                &[effect(bond_op, 1_000, 250, tx)],
+                &base,
+                &mut diff,
+                &mut multiset,
+                MINT_DAA,
+            );
 
             assert!(diff.add.is_empty());
             assert!(diff.remove.is_empty());
@@ -4644,7 +6200,16 @@ mod tests {
             let mut diff = UtxoDiff::new(HashMap::new(), HashMap::new());
             let mut multiset = multiset_of(&[(op_a, e_a.clone()), (op_b, e_b.clone())]);
 
-            apply(&[effect(op_a, amt_a, rew_a, tx_a), effect(op_b, amt_b, 0, tx_b)], &base, &mut diff, &mut multiset, MINT_DAA);
+            apply(
+                &[
+                    effect(op_a, amt_a, rew_a, tx_a),
+                    effect(op_b, amt_b, 0, tx_b),
+                ],
+                &base,
+                &mut diff,
+                &mut multiset,
+                MINT_DAA,
+            );
 
             let mint_a = TransactionOutpoint::new(tx_a, 0);
             let mint_a_entry = UtxoEntry::new(rew_a, spk(0xee), MINT_DAA, false);
@@ -4656,7 +6221,10 @@ mod tests {
             assert_eq!(diff.add.get(&mint_a), Some(&mint_a_entry));
 
             // Net committed set = a's reporter mint only.
-            assert_eq!(multiset.finalize(), multiset_of(&[(mint_a, mint_a_entry)]).finalize());
+            assert_eq!(
+                multiset.finalize(),
+                multiset_of(&[(mint_a, mint_a_entry)]).finalize()
+            );
         }
     }
 }

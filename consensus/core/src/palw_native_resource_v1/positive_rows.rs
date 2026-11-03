@@ -208,24 +208,28 @@ fn positive_aux_coverage_v1(aux: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<
 }
 impl NativeHeapV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        let Self { header, rows, aux, ledger_cache } = self;
+        let Self { header, rows, aux, ledger_cache, positive_job_owners_v2, positive_gate_c_schedule_v2 } = self;
         let mut sum = NativeCoverageV1::zero();
         sum = sum.add::<Self>(header.native_heap_v1(path), path);
         sum = sum.add::<Self>(rows.native_heap_v1(path), path);
         sum = sum.add::<Self>(aux.native_heap_v1(path), path);
         sum = sum.add::<Self>(ledger_cache.native_heap_v1(path), path);
+        sum = sum.add::<Self>(positive_job_owners_v2.native_heap_v1(path), path);
+        sum = sum.add::<Self>(positive_gate_c_schedule_v2.native_heap_v1(path), path);
         sum.add::<Self>(positive_aux_coverage_v1(aux, path).1, path)
     }
     fn native_members_v1(&self) -> Option<u64> {
-        let Self { header, rows, aux, ledger_cache } = self;
+        let Self { header, rows, aux, ledger_cache, positive_job_owners_v2, positive_gate_c_schedule_v2 } = self;
         header
             .native_members_v1()?
             .checked_add(rows.native_members_v1()?)?
             .checked_add(aux.native_members_v1()?)?
-            .checked_add(ledger_cache.native_members_v1()?)
+            .checked_add(ledger_cache.native_members_v1()?)?
+            .checked_add(positive_job_owners_v2.native_members_v1()?)?
+            .checked_add(positive_gate_c_schedule_v2.native_members_v1()?)
     }
     fn native_components_v1(&self) -> Vec<super::NativeFieldInventoryV1> {
-        let Self { header, rows, aux, ledger_cache } = self;
+        let Self { header, rows, aux, ledger_cache, positive_job_owners_v2, positive_gate_c_schedule_v2 } = self;
         let derived = "PalwKernelRouteStateV1.aux151.typed-workspace";
         let (entries, heap) = positive_aux_coverage_v1(aux, derived);
         vec![
@@ -233,6 +237,8 @@ impl NativeHeapV1 for crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
             super::NativeFieldInventoryV1::of("PalwKernelRouteStateV1.rows", rows),
             super::NativeFieldInventoryV1::of("PalwKernelRouteStateV1.aux", aux),
             super::NativeFieldInventoryV1::of("PalwKernelRouteStateV1.ledger_cache", ledger_cache),
+            super::NativeFieldInventoryV1::of("PalwKernelRouteStateV1.positive_job_owners_v2", positive_job_owners_v2),
+            super::NativeFieldInventoryV1::of("PalwKernelRouteStateV1.positive_gate_c_schedule_v2", positive_gate_c_schedule_v2),
             super::NativeFieldInventoryV1 {
                 component: derived.into(),
                 native_type: std::any::type_name::<NativeRowValue>().into(),

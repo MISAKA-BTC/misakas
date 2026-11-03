@@ -3,6 +3,32 @@
 use super::*;
 
 impl PalwChainStateV2 {
+    pub(super) fn has_claim_for_job_v2(&self, job: Hash64) -> bool {
+        if job == ZERO_HASH64 {
+            return self.claims.len() > self.claims_by_job.len();
+        }
+        let last = Hash64::from_bytes([u8::MAX; 64]);
+        self.claims_by_job.range((job, ZERO_HASH64)..=(job, last)).next().is_some()
+    }
+
+    pub(super) fn replace_claim_row_v2(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Option<PalwClaimStateV2> {
+        let new_job = new.as_ref().map(|row| row.job_identity).filter(|job| *job != ZERO_HASH64);
+        let old = match new {
+            Some(row) => self.claims.insert(key, row),
+            None => self.claims.remove(&key),
+        };
+        let old_job = old.as_ref().map(|row| row.job_identity).filter(|job| *job != ZERO_HASH64);
+        if old_job != new_job {
+            if let Some(job) = old_job {
+                self.claims_by_job.remove(&(job, key));
+            }
+            if let Some(job) = new_job {
+                self.claims_by_job.insert((job, key));
+            }
+        }
+        old
+    }
+
     /// The empty state a V2 network boots from. No bonds, no classes, no weight, frontier at the
     /// zero point.
     pub fn genesis() -> Self {
@@ -17,6 +43,7 @@ impl PalwChainStateV2 {
             capabilities: BTreeMap::new(),
             pending_payouts: BTreeMap::new(),
             claims: BTreeMap::new(),
+            claims_by_job: BTreeSet::new(),
             panels: BTreeMap::new(),
             court_sessions: BTreeMap::new(),
             epoch_counters: BTreeMap::new(),
@@ -145,6 +172,7 @@ impl PalwChainStateV2 {
             legacy_disputes: BTreeMap::new(),
             tir_designated: Default::default(),
             funded_escrows: BTreeMap::new(),
+            funded_escrows_by_claim: BTreeSet::new(),
             d2_readiness: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
             panel_da_disclosures: BTreeMap::new(),
@@ -1971,10 +1999,7 @@ impl PalwChainStateV2 {
         liability: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
         open_courts: u32,
     ) {
-        match claim {
-            Some(claim) => self.claims.insert(claim_id, claim),
-            None => self.claims.remove(&claim_id),
-        };
+        self.replace_claim_row_v2(claim_id, claim);
         match panel {
             Some(panel) => self.panels.insert(claim_id, panel),
             None => self.panels.remove(&claim_id),
@@ -2000,7 +2025,7 @@ impl PalwChainStateV2 {
     /// Tests only (G14 r6): replace a claim row in place (e.g. voided by a conviction the test does not fold).
     #[cfg(test)]
     pub(crate) fn set_claim_for_tests(&mut self, claim_id: Hash64, claim: PalwClaimStateV2) {
-        self.claims.insert(claim_id, claim);
+        self.replace_claim_row_v2(claim_id, Some(claim));
     }
 
     /// **What `bond` can still lock for a `Valid` signature at `now_daa`**: its posted collateral

@@ -168,13 +168,27 @@ impl TransitionBuilder<'_> {
         if &decoded != body {
             return Err(refused("raw op12 body changed"));
         }
+        if let PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, case: Some(case), receipts } = &body.operation
+            && let Some(NativeRowBody::Funding(funding)) =
+                PositiveRowsV2::new(&self.state).read(NativeRowKey::Funding(*case)).map_err(refused)?.map(|row| row.body)
+            && funding.current_outpoint.is_some_and(|point| {
+                tx.inputs.first().is_some_and(|input| input.previous_outpoint == native_assignment_outpoint_v2(point))
+            })
+        {
+            return self.apply_case_source_settlement_v2(ctx, action, *assignment, *case, receipts);
+        }
         if self.native_writers_tracking_v1() {
             let mut quote = native_writers::NativeWriteQuoteV1::new("Assignment settlement input amount workspace");
             quote.exact::<u64>(action.entries().len() as u64)?;
             self.admit_native_write_v1(quote)?;
         }
         let amounts: Vec<u64> = action.entries().iter().map(|entry| entry.amount).collect();
-        let plan = qualify_rooted_assignment_candidate_v2(&self.state, tx, &amounts, ctx.daa_score, limits).map_err(refused)?;
+        let plan = match &body.operation {
+            PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, case: Some(case), receipts } => {
+                self.qualify_replayed_worker_payment_v2(ctx, action, *assignment, *case, receipts, &amounts)?
+            }
+            _ => qualify_rooted_assignment_candidate_v2(&self.state, tx, &amounts, ctx.daa_score, limits).map_err(refused)?,
+        };
         self.commit_authorized_assignment_spend_v2(ctx, action, &plan)
     }
 

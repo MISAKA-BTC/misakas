@@ -135,7 +135,7 @@ pub(super) fn response_data<'a>(case: CaseId, event: &SourceResponseEventV2<'a>)
 }
 /// Borrow the raw G14 bytes from a retained, literal native op4. No copies or
 /// new request/receipt identities are created when comparing a completed unit.
-pub(super) fn response_body_data(case: CaseId, body: &[u8]) -> Result<(RequestId, &[u8]), SourceErrorV2> {
+pub(crate) fn response_body_data(case: CaseId, body: &[u8]) -> Result<(RequestId, &[u8]), SourceErrorV2> {
     if body.len() < 137 || body[..5] != [2, 0, 1, 0, 4] || body[5..69] != case.0.0 {
         return Err(SourceErrorV2::Binding);
     }

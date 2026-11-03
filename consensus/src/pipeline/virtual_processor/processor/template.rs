@@ -48,7 +48,9 @@ impl VirtualStateProcessor {
                 },
             )?;
         if own.is_none() {
-            return Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable));
+            return Err(RuleError::LocalNativeStateContextUnavailable(
+                Fault::HistoryUnavailable,
+            ));
         }
         Ok(())
     }
@@ -61,7 +63,10 @@ impl VirtualStateProcessor {
         let extras = self.palw_kernel_route_extras_at(virtual_state.daa_score)?;
         let mass = extras.native_carriage_mass?;
         let service = extras.native_carriage_service?;
-        let queue = extras.native_final.as_ref().map(|f| f.policy.queue_policy.clone());
+        let queue = extras
+            .native_final
+            .as_ref()
+            .map(|f| f.policy.queue_policy.clone());
         let parent = virtual_state.ghostdag_data.selected_parent;
         let parent_daa = self.headers_store.get_daa_score(parent).ok()?;
         let (at, state) = prepared.state.as_ref()?;
@@ -103,8 +108,11 @@ impl VirtualStateProcessor {
         virtual_state: &VirtualState,
         utxo_view: &V,
     ) -> Vec<TxResult<u64>> {
-        self.thread_pool
-            .install(|| txs.par_iter().map(|tx| self.validate_block_template_transaction(tx, virtual_state, &utxo_view)).collect())
+        self.thread_pool.install(|| {
+            txs.par_iter()
+                .map(|tx| self.validate_block_template_transaction(tx, virtual_state, &utxo_view))
+                .collect()
+        })
     }
 
     pub(super) fn validate_block_template_transaction(
@@ -116,11 +124,12 @@ impl VirtualStateProcessor {
         // No need to validate the transaction in isolation since we rely on the mining manager to submit transactions
         // which were previously validated through `validate_mempool_transaction_and_populate`, hence we only perform
         // in-context validations
-        self.transaction_validator.validate_tx_in_header_context_with_args(
-            tx,
-            virtual_state.daa_score,
-            virtual_state.past_median_time,
-        )?;
+        self.transaction_validator
+            .validate_tx_in_header_context_with_args(
+                tx,
+                virtual_state.daa_score,
+                virtual_state.past_median_time,
+            )?;
         // **The 2026-09-23 Position route matrix, P-B3, at the template** (the review's MEDIUM
         // point): the mempool asked the lifecycle gate when the carrier entered, and the class can
         // regress between that and this template (Held tracks load and panel drawability). Asked
@@ -128,30 +137,82 @@ impl VirtualStateProcessor {
         // rather than mined into a fold that drops it. Node-local like the mempool check: a block
         // another node mines is judged by the fold alone. `None` below the audit fence (testnet-11).
         if let Some(refusal) = self.palw_mempool_market_refusal(tx, virtual_state.daa_score) {
-            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal));
+            return Err(
+                kaspa_consensus_core::errors::tx::TxRuleError::PalwModelMarketNotEligible(refusal),
+            );
         }
         // **MSK-26A: never lead a template with a DNS slashing/precommit evidence that is not genuine
         // at the tip** — the mining manager evicts it (P-B3 pattern). Node policy, not a block rule.
-        if let Some(refusal) = self.palw_slashing_evidence_mempool_refusal(tx, virtual_state.daa_score) {
-            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(refusal));
+        if let Some(refusal) =
+            self.palw_slashing_evidence_mempool_refusal(tx, virtual_state.daa_score)
+        {
+            return Err(
+                kaspa_consensus_core::errors::tx::TxRuleError::PalwSlashingEvidenceNotGenuine(
+                    refusal,
+                ),
+            );
         }
-        let ValidatedTransaction { calculated_fee, .. } =
+        let ValidatedTransaction { calculated_fee, entries, .. } =
             // `None`: mempool/template single-tx context, not mergeset acceptance (bond spend-gate inert here).
             self.validate_transaction_in_utxo_context(tx, utxo_view, virtual_state.daa_score, TxValidationFlags::Full, None)?;
+        if let Some(gate) = self
+            .palw_mempool_bond_gate(virtual_state.daa_score)
+            .map_err(PalwLocalTransitionFaultV1::into_tx_rule_error_v1)?
+            && let Some(first) = tx.inputs.first()
+            && gate
+                .escrow
+                .assignment
+                .contains_key(&first.previous_outpoint)
+        {
+            use kaspa_consensus_core::errors::tx::TxRuleError;
+            let locked = || TxRuleError::SpendsLockedPalwEscrow(first.previous_outpoint);
+            let (parent, state) = gate.case_source_parent.as_ref().ok_or_else(locked)?;
+            if *parent != virtual_state.ghostdag_data.selected_parent {
+                return Err(locked());
+            }
+            let amounts: Vec<u64> = entries.iter().map(|entry| entry.amount).collect();
+            let worker = self
+                .prepare_worker_payment_v2(
+                    state,
+                    *parent,
+                    tx,
+                    &amounts,
+                    virtual_state.daa_score,
+                    &gate.escrow,
+                )
+                .map_err(|_| locked())?;
+            if let Some(outpoint) = gate.escrow.refusal_with_qualified_case_v2(
+                tx,
+                amounts,
+                virtual_state.daa_score,
+                super::super::utxo_validation::palw_bond_burn_owed(tx, &gate.burns),
+                None,
+                worker.as_ref(),
+            ) {
+                return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
+            }
+        }
         // **ADR-0152 H-1 at the template** (P2-9 review, finding 5): the tip moves after admission —
         // the first accusation of a claim opens its session and every other one becomes a drop — so
         // the gate is asked again here, and a refused carrier is `InvalidInBlockTemplate`: the mining
         // manager evicts it rather than leading a template with it. `None` below R-core+.
         if let Some(refusal) = self.palw_mempool_h1_carrier_refusal(tx, virtual_state.daa_score) {
-            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal));
+            return Err(
+                kaspa_consensus_core::errors::tx::TxRuleError::PalwH1CarrierRefused(refusal),
+            );
         }
         if let Some(refusal) = self.palw_mempool_kernel_route_refusal(tx, virtual_state.daa_score) {
-            return Err(kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal));
+            return Err(
+                kaspa_consensus_core::errors::tx::TxRuleError::PalwKernelRouteRefused(refusal),
+            );
         }
         Ok(calculated_fee)
     }
 
-    pub(super) fn latest_ready_epoch_for_template_snapshot(&self, virtual_state: &VirtualState) -> Option<u64> {
+    pub(super) fn latest_ready_epoch_for_template_snapshot(
+        &self,
+        virtual_state: &VirtualState,
+    ) -> Option<u64> {
         let dns_params = self.dns_params.as_ref()?;
         ready_epoch_from_tip_blue_score(
             virtual_state.ghostdag_data.blue_score,
@@ -170,7 +231,12 @@ impl VirtualStateProcessor {
         // payload by `evm_template_fields`; ignored pre-activation.
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, move |_, _| tx_selector)
+        self.build_block_template_with_selector_provider(
+            miner_data,
+            build_mode,
+            evm_template_data,
+            move |_, _| tx_selector,
+        )
     }
 
     pub fn build_block_template_with_selector_factory(
@@ -180,9 +246,14 @@ impl VirtualStateProcessor {
         build_mode: TemplateBuildMode,
         evm_template_data: kaspa_consensus_core::evm::EvmTemplateData,
     ) -> Result<BlockTemplate, RuleError> {
-        self.build_block_template_with_selector_provider(miner_data, build_mode, evm_template_data, |latest_ready_epoch, native| {
-            tx_selector_factory.build_selector_with_native_carriage(latest_ready_epoch, native)
-        })
+        self.build_block_template_with_selector_provider(
+            miner_data,
+            build_mode,
+            evm_template_data,
+            |latest_ready_epoch, native| {
+                tx_selector_factory.build_selector_with_native_carriage(latest_ready_epoch, native)
+            },
+        )
     }
 
     /// **ADR-0060 Decision 1: adapt a standard template into the heartbeat lane's shape.**
@@ -201,7 +272,10 @@ impl VirtualStateProcessor {
     /// `HeartbeatTooEarly` by every validating node. The lane facts are computed from the
     /// CURRENT virtual POV; if the virtual moves between this call and submission the block is
     /// refused and the caller simply rebuilds, the same staleness contract every template has.
-    pub fn heartbeat_adapt_block_template(&self, mut template: BlockTemplate) -> Result<(BlockTemplate, u64), RuleError> {
+    pub fn heartbeat_adapt_block_template(
+        &self,
+        mut template: BlockTemplate,
+    ) -> Result<(BlockTemplate, u64), RuleError> {
         use kaspa_consensus_core::palw_heartbeat_v1 as hb;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
         // **Refuse when the lane is not open, rather than hand back a block every peer rejects.**
@@ -211,7 +285,10 @@ impl VirtualStateProcessor {
         // told `UnknownPowAlgoId` — work burned against a rule this node could answer before the
         // first hash. Answering with the validator's own error keeps the two sides saying one
         // thing.
-        if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
+        if !self
+            .palw_heartbeat_lane
+            .is_some_and(|fence| fence.is_active(virtual_state.daa_score))
+        {
             return Err(RuleError::UnknownPowAlgoId(hb::PALW_HEARTBEAT_ALGO_ID));
         }
         // **The SAME one-block-deep question validation asks** (ADR-0066 Decision 2): the selected
@@ -222,7 +299,9 @@ impl VirtualStateProcessor {
         let parent = self
             .headers_store
             .get_header(virtual_state.ghostdag_data.selected_parent)
-            .map_err(|_| RuleError::MissingParents(vec![virtual_state.ghostdag_data.selected_parent]))?;
+            .map_err(|_| {
+                RuleError::MissingParents(vec![virtual_state.ghostdag_data.selected_parent])
+            })?;
         // The slot: at or after the selected parent's timestamp plus the interval its lane sets —
         // through the SAME function `pre_pow_validation` calls, with the same two fence answers.
         // ADR-0138 §3c changed that interval, and a template built on the old one would be refused
@@ -239,8 +318,12 @@ impl VirtualStateProcessor {
         // slot, read from the SAME decision the DAA score is computed from (`DaaWindow::clock`,
         // i.e. `palw_clock_step_v1`) for THIS template's own parents — not the virtual's, which may
         // have moved since the template was built.
-        let clock_cursor_governs = self.palw_clock_cursor.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
-        let anchor_clock_active = self.palw_anchor_clock.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let clock_cursor_governs = self
+            .palw_clock_cursor
+            .is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let anchor_clock_active = self
+            .palw_anchor_clock
+            .is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let parent_advances_daa = crate::processes::difficulty::palw_lane_advances_daa_v1(
             parent.pow_algo_id,
             parent.daa_score,
@@ -252,7 +335,9 @@ impl VirtualStateProcessor {
             // Past the cursor: the template's own timestamp, or the next slot if that is later — the
             // shape the slot rule's answer always had (`Ok` → the template's time, `Err` → the
             // boundary), so a caller that waits for `earliest` waits for exactly the slot.
-            let slot = self.palw_clock_step_for_parents(template.block.header.direct_parents())?.next_slot_ms();
+            let slot = self
+                .palw_clock_step_for_parents(template.block.header.direct_parents())?
+                .next_slot_ms();
             template.block.header.timestamp.max(slot.unwrap_or(0))
         } else {
             match hb::check_heartbeat_slot_v2(
@@ -263,7 +348,9 @@ impl VirtualStateProcessor {
                 template.block.header.timestamp,
             ) {
                 Ok(()) => template.block.header.timestamp,
-                Err(early) => early.last_heartbeat_timestamp.saturating_add(early.interval_ms),
+                Err(early) => early
+                    .last_heartbeat_timestamp
+                    .saturating_add(early.interval_ms),
             }
         };
         let built_at = template.block.header.timestamp;
@@ -292,19 +379,31 @@ impl VirtualStateProcessor {
         // re-serialisation below keeps it, or the beat would commit a UTXO state for blocks it does not name. Read only past the fence:
         // below it (and where it is not armed) the miner data is exactly the template's, a trailer in a miner's tag being its bytes.
         let exec_v2 = self.palw_exec_v2_active_at(template.block.header.daa_score);
-        template.reserve_current_coinbase_change_v2().map_err(RuleError::LocalNativeCapacityUnavailable)?;
+        template
+            .reserve_current_coinbase_change_v2()
+            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
         let coinbase = &mut template.block.transactions[0];
-        let miner_data = match kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(&coinbase.payload)
+        let miner_data = match kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_split(
+            &coinbase.payload,
+        )
+        .ok()
+        .filter(|_| exec_v2)
+        .and_then(|(_, anchor)| anchor)
+        .and_then(|anchor| {
+            kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_append(
+                &template.miner_data.extra_data,
+                &anchor,
+            )
             .ok()
-            .filter(|_| exec_v2)
-            .and_then(|(_, anchor)| anchor)
-            .and_then(|anchor| {
-                kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_append(&template.miner_data.extra_data, &anchor).ok()
-            }) {
+        }) {
             Some(extra) => MinerData::new(template.miner_data.script_public_key.clone(), extra),
             None => template.miner_data.clone(),
         };
-        let zeroed = kaspa_consensus_core::coinbase::CoinbaseData { blue_score, subsidy: 0, miner_data };
+        let zeroed = kaspa_consensus_core::coinbase::CoinbaseData {
+            blue_score,
+            subsidy: 0,
+            miner_data,
+        };
         coinbase.payload = self.coinbase_manager.serialize_coinbase_payload(&zeroed).map_err(|why| match why {
             kaspa_consensus_core::errors::coinbase::CoinbaseError::LocalNativeCapacityUnavailable(why) => {
                 RuleError::LocalNativeCapacityUnavailable(why)
@@ -312,7 +411,8 @@ impl VirtualStateProcessor {
             why => RuleError::BadCoinbasePayload(why),
         })?;
         coinbase.finalize();
-        template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
+        template.block.header.hash_merkle_root =
+            calc_hash_merkle_root(template.block.transactions.iter());
         template.block.header.finalize();
         Ok((template, earliest))
     }
@@ -322,7 +422,9 @@ impl VirtualStateProcessor {
     pub(super) fn template_now(&self) -> u64 {
         #[cfg(test)]
         {
-            let simulated = self.template_clock.load(std::sync::atomic::Ordering::Relaxed);
+            let simulated = self
+                .template_clock
+                .load(std::sync::atomic::Ordering::Relaxed);
             if simulated != 0 {
                 return simulated;
             }
@@ -415,7 +517,9 @@ impl VirtualStateProcessor {
         // returned to the mining manager so it can evict terminal drops and quarantine
         // transient ones — otherwise a dropped shard stays in the mempool and is
         // re-selected into every subsequent template forever (the live-testnet stall).
-        let mut dropped_attestation_shards: Vec<kaspa_consensus_core::block::AttestationTemplateDrop> = Vec::new();
+        let mut dropped_attestation_shards: Vec<
+            kaspa_consensus_core::block::AttestationTemplateDrop,
+        > = Vec::new();
         // Classify one selected tx for the template. `true` ⇒ keep (push to txs +
         // calculated_fees in lockstep); `false` ⇒ reject back to the selector (it will
         // refill from the next candidate) and DO NOT push, so `txs` and `calculated_fees`
@@ -428,17 +532,29 @@ impl VirtualStateProcessor {
                              dropped_id_mismatch: &mut usize,
                              dropped_bad_sig: &mut usize,
                              dropped_malformed: &mut usize,
-                             dropped_attestation_shards: &mut Vec<kaspa_consensus_core::block::AttestationTemplateDrop>|
+                             dropped_attestation_shards: &mut Vec<
+            kaspa_consensus_core::block::AttestationTemplateDrop,
+        >|
          -> bool {
-            use crate::pipeline::virtual_processor::utxo_validation::{AttestationDropReason, AttestationShardDecision};
-            match this.classify_attestation_shard_for_template(tx, &template_bond_view, virtual_state.daa_score) {
+            use crate::pipeline::virtual_processor::utxo_validation::{
+                AttestationDropReason, AttestationShardDecision,
+            };
+            match this.classify_attestation_shard_for_template(
+                tx,
+                &template_bond_view,
+                virtual_state.daa_score,
+            ) {
                 AttestationShardDecision::KeepNonShard => true,
                 AttestationShardDecision::KeepEligible { .. } => {
                     *shards_seen += 1;
                     *shards_kept += 1;
                     true
                 }
-                AttestationShardDecision::Drop { reason, bond, epoch } => {
+                AttestationShardDecision::Drop {
+                    reason,
+                    bond,
+                    epoch,
+                } => {
                     *shards_seen += 1;
                     match reason {
                         AttestationDropReason::BondNotActiveAtTarget => *dropped_bond_inactive += 1,
@@ -446,13 +562,18 @@ impl VirtualStateProcessor {
                         AttestationDropReason::BadSignature => *dropped_bad_sig += 1,
                         // Below-fence-only (audit #4 relocated); counted with malformed — the
                         // shard is intrinsically unusable as-is, same hygiene class.
-                        AttestationDropReason::NonZeroValidatorSetCommitment => *dropped_malformed += 1,
-                        AttestationDropReason::DnsRetired | AttestationDropReason::MalformedPayload => *dropped_malformed += 1,
+                        AttestationDropReason::NonZeroValidatorSetCommitment => {
+                            *dropped_malformed += 1
+                        }
+                        AttestationDropReason::DnsRetired
+                        | AttestationDropReason::MalformedPayload => *dropped_malformed += 1,
                     }
-                    dropped_attestation_shards.push(kaspa_consensus_core::block::AttestationTemplateDrop {
-                        tx_id: tx.id(),
-                        kind: reason.template_drop_kind(),
-                    });
+                    dropped_attestation_shards.push(
+                        kaspa_consensus_core::block::AttestationTemplateDrop {
+                            tx_id: tx.id(),
+                            kind: reason.template_drop_kind(),
+                        },
+                    );
                     debug!(
                         "[attestation-template] dropping ineligible shard tx {} (reason={:?}, bond={}, epoch={})",
                         tx.id(),
@@ -470,23 +591,29 @@ impl VirtualStateProcessor {
         // tracked separately from validation-`invalid_transactions` so the
         // `is_successful`/`InvalidTransactionsInNewBlock` decision is unaffected — a
         // dropped-but-valid shard is a refill, not a template failure.
-        let mut dropped_shard_ids: std::collections::HashSet<kaspa_consensus_core::tx::TransactionId> =
-            std::collections::HashSet::new();
+        let mut dropped_shard_ids: std::collections::HashSet<
+            kaspa_consensus_core::tx::TransactionId,
+        > = std::collections::HashSet::new();
         // **P-B1: one payout-queue budget across the template's market carriers.** A carrier that
         // does not fit alone was refused by `validate_block_template_transaction` (and is evicted);
         // one that fits alone but not after the carriers already kept is only deferred: its slot is
         // freed for the refill and it stays in the pool for a later template. `None` below the fence.
         let mut market_budget = self.palw_template_market_budget(virtual_state.daa_score);
         let mut market_deferred = 0usize;
-        let mut market_deferred_ids: std::collections::HashSet<kaspa_consensus_core::tx::TransactionId> =
-            std::collections::HashSet::new();
+        let mut market_deferred_ids: std::collections::HashSet<
+            kaspa_consensus_core::tx::TransactionId,
+        > = std::collections::HashSet::new();
         let mut market_room_for = |tx: &Transaction| -> bool {
             match market_budget.as_mut() {
                 Some(budget) => budget.admit(tx).is_ok(),
                 None => true,
             }
         };
-        let results = self.validate_block_template_transactions_in_parallel(&txs, &virtual_state, &virtual_utxo_view);
+        let results = self.validate_block_template_transactions_in_parallel(
+            &txs,
+            &virtual_state,
+            &virtual_utxo_view,
+        );
         for (tx, res) in txs.iter().zip(results) {
             match res {
                 Err(e) => {
@@ -521,7 +648,9 @@ impl VirtualStateProcessor {
             }
         }
 
-        let mut has_rejections = !invalid_transactions.is_empty() || !dropped_shard_ids.is_empty() || !market_deferred_ids.is_empty();
+        let mut has_rejections = !invalid_transactions.is_empty()
+            || !dropped_shard_ids.is_empty()
+            || !market_deferred_ids.is_empty();
         if has_rejections {
             txs.retain(|tx| {
                 !invalid_transactions.contains_key(&tx.id())
@@ -533,8 +662,11 @@ impl VirtualStateProcessor {
         while has_rejections {
             has_rejections = false;
             let next_batch = tx_selector.select_transactions(); // Note that once next_batch is empty the loop will exit
-            let next_batch_results =
-                self.validate_block_template_transactions_in_parallel(&next_batch, &virtual_state, &virtual_utxo_view);
+            let next_batch_results = self.validate_block_template_transactions_in_parallel(
+                &next_batch,
+                &virtual_state,
+                &virtual_utxo_view,
+            );
             for (tx, res) in next_batch.into_iter().zip(next_batch_results) {
                 match res {
                     Err(e) => {
@@ -584,7 +716,12 @@ impl VirtualStateProcessor {
         if shards_seen > 0 {
             info!(
                 "[attestation-template] shards seen={} kept={} dropped(bond_inactive={}, id_mismatch={}, bad_sig={}, malformed={})",
-                shards_seen, shards_kept, dropped_bond_inactive, dropped_id_mismatch, dropped_bad_sig, dropped_malformed
+                shards_seen,
+                shards_kept,
+                dropped_bond_inactive,
+                dropped_id_mismatch,
+                dropped_bad_sig,
+                dropped_malformed
             );
         }
 
@@ -593,8 +730,10 @@ impl VirtualStateProcessor {
         // and context
         match (build_mode, tx_selector.is_successful()) {
             (TemplateBuildMode::Standard, false) => {
-                return Err(RuleError::InvalidTransactionsInNewBlock(invalid_transactions)
-                    .with_attestation_template_drops(&dropped_attestation_shards));
+                return Err(
+                    RuleError::InvalidTransactionsInNewBlock(invalid_transactions)
+                        .with_attestation_template_drops(&dropped_attestation_shards),
+                );
             }
             (TemplateBuildMode::Standard, true) | (TemplateBuildMode::Infallible, _) => {}
         }
@@ -615,15 +754,19 @@ impl VirtualStateProcessor {
         // ADR-0109 Decision 1: every lock the virtual set holds is claimed here, unasked — read under
         // the same lock as `virtual_utxo_view`, so `prepare_deposit_claims` below validates each
         // claim against exactly the generation it was read from.
-        let evm_template_data = self.with_indexed_deposit_claims(evm_template_data, virtual_state.daa_score);
+        let evm_template_data =
+            self.with_indexed_deposit_claims(evm_template_data, virtual_state.daa_score);
         // ADR-0109 Decision 2: under `Label` the anchor's distance decides nothing here; under `Pause`
         // (the behaviour before ADR-0109) a stale anchor empties the payload.
-        let bridge_finality_fresh = self.evm_bridge_finality == kaspa_consensus_core::evm::EvmBridgeFinalityPolicy::Label
+        let bridge_finality_fresh = self.evm_bridge_finality
+            == kaspa_consensus_core::evm::EvmBridgeFinalityPolicy::Label
             || self.bridge_finality_is_fresh(virtual_state.ghostdag_data.selected_parent);
         let evm_template_data = if bridge_finality_fresh {
             evm_template_data
         } else {
-            if !evm_template_data.transactions.is_empty() || !evm_template_data.system_ops.is_empty() {
+            if !evm_template_data.transactions.is_empty()
+                || !evm_template_data.system_ops.is_empty()
+            {
                 warn!(
                     "EVM lane producer paused: DNS finality is unconfirmed or stale at DAA {}; emitting an empty EVM payload this template (txs={}, deposit_claims={})",
                     virtual_state.daa_score,
@@ -633,8 +776,11 @@ impl VirtualStateProcessor {
             }
             kaspa_consensus_core::evm::EvmTemplateData::default()
         };
-        let prepared_claims =
-            crate::processes::evm::prepare_deposit_claims(&evm_template_data.system_ops, virtual_utxo_view, virtual_state.daa_score);
+        let prepared_claims = crate::processes::evm::prepare_deposit_claims(
+            &evm_template_data.system_ops,
+            virtual_utxo_view,
+            virtual_state.daa_score,
+        );
 
         // At this point we can safely drop the read lock
         drop(virtual_read);
@@ -666,7 +812,13 @@ impl VirtualStateProcessor {
                 invalid_transactions.insert(tx.id(), e);
             }
         }
-        if !invalid_transactions.is_empty() { Err(RuleError::InvalidTransactionsInNewBlock(invalid_transactions)) } else { Ok(()) }
+        if !invalid_transactions.is_empty() {
+            Err(RuleError::InvalidTransactionsInNewBlock(
+                invalid_transactions,
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     pub(crate) fn build_block_template_from_virtual_state(
@@ -737,16 +889,29 @@ impl VirtualStateProcessor {
         // built after a granted beat carries the tick. Decided on the virtual's own clock decision —
         // the one this block's DAA score was computed from. **The lead cap**: such a step stamped past
         // this node's clock plus 132 s is refused by every header stage, so it is refused here.
-        let lead_capped = self.palw_clock_lead_cap.is_some_and(|fence| fence.is_active(virtual_state.daa_score));
+        let lead_capped = self
+            .palw_clock_lead_cap
+            .is_some_and(|fence| fence.is_active(virtual_state.daa_score));
         let clock = if self.palw_clock_floor.is_some() || lead_capped {
-            Some(self.window_manager.block_daa_window(&virtual_state.ghostdag_data)?.clock)
+            Some(
+                self.window_manager
+                    .block_daa_window(&virtual_state.ghostdag_data)?
+                    .clock,
+            )
         } else {
             None
         };
-        let timestamp = self.palw_template_stamp_v1(clock, lead_capped, virtual_state.past_median_time, self.template_now())?;
+        let timestamp = self.palw_template_stamp_v1(
+            clock,
+            lead_capped,
+            virtual_state.past_median_time,
+            self.template_now(),
+        )?;
         let pruning_point = self.pruning_point_store.read().pruning_point().unwrap();
-        let header_pruning_point =
-            self.pruning_point_manager.expected_header_pruning_point(virtual_state.ghostdag_data.to_compact()).pruning_point;
+        let header_pruning_point = self
+            .pruning_point_manager
+            .expected_header_pruning_point(virtual_state.ghostdag_data.to_compact())
+            .pruning_point;
         // kaspa-pq Phase 10/11 (ADR-0009 Addendum B §B.4/§B.5): the validator
         // reward fan-out for this template. The template extends the current
         // tip, so the bond set as-of its selected parent is the `StakeBonds`
@@ -767,7 +932,11 @@ impl VirtualStateProcessor {
         // pre-built `txs` (and an empty `calculated_fees`) without going through the
         // selection-loop classifier; there dropping a shard is harmless to fee
         // alignment (no fees are tracked). In debug builds we assert the post-state.
-        self.retain_reward_eligible_attestation_shards(&mut txs, &template_bond_view, virtual_state.daa_score);
+        self.retain_reward_eligible_attestation_shards(
+            &mut txs,
+            &template_bond_view,
+            virtual_state.daa_score,
+        );
         // The §6.2 selection loop already aligns the two on the production path; assert
         // that invariant in debug builds (skipped when `calculated_fees` is the test
         // helper's empty sentinel, which legitimately does not track per-tx fees).
@@ -845,7 +1014,8 @@ impl VirtualStateProcessor {
         // committed reserve balance (= the template's selected parent). Inert below the v2 fence.
         let mut validator_reward_outputs = validator_reward_outputs;
         if let Some(dns_params) = self.dns_params.as_ref() {
-            let parent_balance = self.dns_reserve_balance_for_native_v1(virtual_state.ghostdag_data.selected_parent)?;
+            let parent_balance = self
+                .dns_reserve_balance_for_native_v1(virtual_state.ghostdag_data.selected_parent)?;
             let (drip_outputs, _) = self.reserve_drip_outputs(
                 dns_params,
                 virtual_state.daa_score,
@@ -870,7 +1040,9 @@ impl VirtualStateProcessor {
         // the same state the payouts came from, so the two halves cannot disagree.
         let palw_escrow_withheld = palw_at_selected_parent
             .as_ref()
-            .map(|(block, state)| self.palw_v2_escrow_withheld_at(state, *block, virtual_state.daa_score))
+            .map(|(block, state)| {
+                self.palw_v2_escrow_withheld_at(state, *block, virtual_state.daa_score)
+            })
             .unwrap_or(0);
         // Launch blockers §8, construction side: the merged blues this template may not pay. Same
         // state, same question, same answer as the validating walk — a template that disagreed
@@ -911,11 +1083,16 @@ impl VirtualStateProcessor {
             .palw_exec_v2_virtual_anchor
             .lock()
             .clone()
-            .filter(|(selected_parent, _)| *selected_parent == virtual_state.ghostdag_data.selected_parent)
+            .filter(|(selected_parent, _)| {
+                *selected_parent == virtual_state.ghostdag_data.selected_parent
+            })
             .filter(|_| self.palw_exec_v2_active_at(virtual_state.daa_score))
         {
             Some((_, anchor)) => {
-                match kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_append(&miner_data.extra_data, &anchor) {
+                match kaspa_consensus_core::palw_exec_v2_anchor::palw_exec_v2_anchor_append(
+                    &miner_data.extra_data,
+                    &anchor,
+                ) {
                     Ok(extra) => MinerData::new(miner_data.script_public_key.clone(), extra),
                     Err(_) => miner_data.clone(),
                 }
@@ -966,11 +1143,15 @@ impl VirtualStateProcessor {
         } else {
             BLOCK_VERSION
         };
-        let parents_by_level = self.parents_manager.calc_block_parents(pruning_point, &virtual_state.parents);
+        let parents_by_level = self
+            .parents_manager
+            .calc_block_parents(pruning_point, &virtual_state.parents);
         let hash_merkle_root = calc_hash_merkle_root(txs.iter());
 
-        let accepted_id_merkle_root = self
-            .calc_accepted_id_merkle_root(virtual_state.accepted_tx_ids.iter().copied(), virtual_state.ghostdag_data.selected_parent);
+        let accepted_id_merkle_root = self.calc_accepted_id_merkle_root(
+            virtual_state.accepted_tx_ids.iter().copied(),
+            virtual_state.ghostdag_data.selected_parent,
+        );
         let utxo_commitment = virtual_state.multiset.clone().finalize();
         let header = Header::new_finalized(
             version,
@@ -987,9 +1168,11 @@ impl VirtualStateProcessor {
             {
                 let declared = kaspa_consensus_core::pow_layer0::required_algo_id_for_mode(
                     self.palw_required_algo_id,
-                    self.pow_palw_ollama_activation.is_active(virtual_state.daa_score),
+                    self.pow_palw_ollama_activation
+                        .is_active(virtual_state.daa_score),
                     self.pow_palw_activation.is_active(virtual_state.daa_score),
-                    self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),
+                    self.pow_blake2b_sha3_activation
+                        .is_active(virtual_state.daa_score),
                 );
                 // **ADR-0072 SA-4: past the fence, the template declares the OPEN attempt lane.**
                 //
@@ -998,9 +1181,14 @@ impl VirtualStateProcessor {
                 // the chain would stop at the fence rather than cross it. Only the attempt id is
                 // rewritten: the receipt and heartbeat lanes are other fences' business.
                 let lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
-                    self.palw_attempt_activation.map(|fence| fence.is_active(virtual_state.daa_score)),
+                    self.palw_attempt_activation
+                        .map(|fence| fence.is_active(virtual_state.daa_score)),
                 );
-                if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(declared) { lane.attempt_algo_id() } else { declared }
+                if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(declared) {
+                    lane.attempt_algo_id()
+                } else {
+                    declared
+                }
             },
             virtual_state.daa_score,
             virtual_state.ghostdag_data.blue_work,
@@ -1022,8 +1210,12 @@ impl VirtualStateProcessor {
         // (header unchanged) when the overlay is dormant. Appended after the EVM fields;
         // `with_overlay_commitment` re-finalizes over the full preimage.
         let header = if self.dns_params.is_some() {
-            let overlay_root =
-                self.compute_overlay_snapshot(virtual_state.ghostdag_data.selected_parent, &template_bond_view)?.commitment_root();
+            let overlay_root = self
+                .compute_overlay_snapshot(
+                    virtual_state.ghostdag_data.selected_parent,
+                    &template_bond_view,
+                )?
+                .commitment_root();
             header.with_overlay_commitment(overlay_root)
         } else {
             header
@@ -1046,8 +1238,14 @@ impl VirtualStateProcessor {
             None => header,
         };
         let selected_parent_hash = virtual_state.ghostdag_data.selected_parent;
-        let selected_parent_timestamp = self.headers_store.get_timestamp(selected_parent_hash).unwrap();
-        let selected_parent_daa_score = self.headers_store.get_daa_score(selected_parent_hash).unwrap();
+        let selected_parent_timestamp = self
+            .headers_store
+            .get_timestamp(selected_parent_hash)
+            .unwrap();
+        let selected_parent_daa_score = self
+            .headers_store
+            .get_daa_score(selected_parent_hash)
+            .unwrap();
         let mut template_block = MutableBlock::new(header, txs);
         template_block.evm_payload = evm_payload;
         Ok(BlockTemplate::new(

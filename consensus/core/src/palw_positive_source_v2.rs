@@ -623,6 +623,49 @@ impl NativeSourceLedgerV2 {
     pub fn retained_unions_v2(&self) -> impl Iterator<Item = SourceUnionRow> + '_ {
         self.sources.keys().filter_map(|&(kind, source)| self.source_union(kind, source))
     }
+    /// Iterate the actual pending set after this proposal without applying it.
+    pub fn try_fold_pending_after_v2<T>(
+        &self,
+        update: &PreparedSourceUpdateV2,
+        initial: T,
+        mut fold: impl FnMut(T, PendingSourceUnitV2) -> Result<T, SourceErrorV2>,
+    ) -> Result<T, SourceErrorV2> {
+        self.validate_prepared(update)?;
+        let completed = update.receipt.as_ref().map(|r| (r.kind, r.source, r.unit));
+        let mut output = initial;
+        for pending in self.pending_units_v2() {
+            if Some((pending.kind, pending.source, pending.unit)) != completed {
+                output = fold(output, pending)?;
+            }
+        }
+        if let SourceChange::Request { reservations, .. } = &update.change {
+            for &((kind, source, unit), reservation) in reservations {
+                output = fold(output, PendingSourceUnitV2 { kind, source, unit, fee: reservation.quote })?;
+            }
+        }
+        Ok(output)
+    }
+
+    pub(crate) fn quoted_units_v2(&self) -> u64 {
+        self.reservations.len() as u64
+    }
+
+    /// Outstanding first-response fees after this exact proposal, before any
+    /// native debit or receipt write. The source owner still verifies funding.
+    pub(crate) fn pending_fee_after_v2(&self, update: &PreparedSourceUpdateV2) -> Result<u64, SourceErrorV2> {
+        self.validate_prepared(update)?;
+        match &update.change {
+            SourceChange::Request { reservations, .. } => {
+                reservations.iter().try_fold(self.pending_fee, |total, (_, fee)| add(total, fee.quote.amount))
+            }
+            SourceChange::Response => self
+                .pending_fee
+                .checked_sub(update.fee_intent.as_ref().ok_or(SourceErrorV2::Binding)?.amount)
+                .ok_or(SourceErrorV2::Binding),
+            SourceChange::None => Ok(self.pending_fee),
+        }
+    }
+
     pub fn validate_prepared(&self, update: &PreparedSourceUpdateV2) -> Result<(), SourceErrorV2> {
         if !Arc::ptr_eq(&self.seal, &update.seal)
             || update.revision != self.revision

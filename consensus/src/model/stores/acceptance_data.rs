@@ -69,6 +69,34 @@ impl DbAcceptanceDataStore {
         Ok(accepted_origin_from_bytes_v2(&bytes, ordinal)?.map(|(block, entry)| (block, entry, bytes.len() as u64)))
     }
 
+    /// Lend the canonical persisted record without allocating its vectors or
+    /// seeding the ordinary acceptance cache during a paid archive replay.
+    pub(crate) fn with_accepted_archive_v2<T>(
+        &self,
+        accepting: BlockHash,
+        maximum_bytes: u64,
+        visit: impl FnOnce(AcceptanceArchiveViewV2<'_>) -> T,
+    ) -> Result<T, StoreError> {
+        self.try_with_accepted_archive_v2(accepting, maximum_bytes, visit)?
+            .ok_or_else(|| StoreError::LocalResourceUnavailable("acceptance archive exceeds replay byte limit".into()))
+    }
+
+    /// A paid extent violation is distinct from an unavailable local record.
+    pub(crate) fn try_with_accepted_archive_v2<T>(
+        &self,
+        accepting: BlockHash,
+        maximum_bytes: u64,
+        visit: impl FnOnce(AcceptanceArchiveViewV2<'_>) -> T,
+    ) -> Result<Option<T>, StoreError> {
+        let prefix = [u8::from(DatabaseStorePrefixes::AcceptanceData)];
+        let key = kaspa_database::prelude::DbKey::new(&prefix, accepting);
+        let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
+        if bytes.len() as u64 > maximum_bytes {
+            return Ok(None);
+        }
+        Ok(Some(visit(AcceptanceArchiveViewV2::new(&bytes)?)))
+    }
+
     pub fn insert_batch(
         &self,
         batch: &mut WriteBatch,
@@ -107,16 +135,69 @@ impl AcceptanceDataStore for DbAcceptanceDataStore {
     }
 }
 
+type ArchiveOriginV2 = (BlockHash, AcceptedTxEntry);
+
+/// A canonical pinned bincode record. This view never owns a decoded Vec.
+pub(crate) struct AcceptanceArchiveViewV2<'a>(&'a [u8]);
+
+impl<'a> AcceptanceArchiveViewV2<'a> {
+    fn new(raw: &'a [u8]) -> Result<Self, StoreError> {
+        visit_acceptance_bytes_v2(raw, |_, _| false)?;
+        Ok(Self(raw))
+    }
+
+    pub(crate) fn visit_origins_v2(&self, visit: impl FnMut(u64, ArchiveOriginV2) -> bool) -> Result<(), StoreError> {
+        visit_acceptance_bytes_v2(self.0, visit)
+    }
+
+    pub(crate) fn byte_len_v2(&self) -> u64 {
+        self.0.len() as u64
+    }
+
+    /// The archived input may refer to a transaction earlier in the same
+    /// accepting prefix. The bound is exclusive and spans all mergeset blocks.
+    pub(crate) fn find_before_v2(
+        &self,
+        before: u32,
+        transaction: kaspa_consensus_core::TransactionId,
+    ) -> Result<Option<ArchiveOriginV2>, StoreError> {
+        let mut found = None;
+        visit_acceptance_bytes_v2(self.0, |ordinal, origin| {
+            if ordinal >= u64::from(before) {
+                return true;
+            }
+            if origin.1.transaction_id == transaction {
+                found = Some(origin);
+                return true;
+            }
+            false
+        })?;
+        Ok(found)
+    }
+}
+
+fn accepted_origin_from_bytes_v2(raw: &[u8], ordinal: u32) -> Result<Option<ArchiveOriginV2>, StoreError> {
+    let mut found = None;
+    visit_acceptance_bytes_v2(raw, |at, origin| {
+        if at == u64::from(ordinal) {
+            found = Some(origin);
+        }
+        false
+    })?;
+    Ok(found)
+}
+
 /// bincode v1 fixed-int sequence and byte-string framing. Both BlockHash
-/// and TransactionId serialize as a length-prefixed Hash64.
-fn accepted_origin_from_bytes_v2(mut raw: &[u8], ordinal: u32) -> Result<Option<(BlockHash, AcceptedTxEntry)>, StoreError> {
+/// and TransactionId serialize as a length-prefixed Hash64. Only a validated
+/// view uses early exit, so a bad tail cannot pass an ordinal lookup.
+fn visit_acceptance_bytes_v2(mut raw: &[u8], mut stop: impl FnMut(u64, ArchiveOriginV2) -> bool) -> Result<(), StoreError> {
     fn invalid() -> StoreError {
         StoreError::DataInconsistency("malformed accepted origin record".into())
     }
     fn take<const N: usize>(raw: &mut &[u8]) -> Result<[u8; N], StoreError> {
-        let (head, tail) = raw.split_at_checked(N).ok_or_else(invalid)?;
+        let (head, tail) = raw.split_first_chunk::<N>().ok_or_else(invalid)?;
         *raw = tail;
-        head.try_into().map_err(|_| invalid())
+        Ok(*head)
     }
     fn hash(raw: &mut &[u8]) -> Result<BlockHash, StoreError> {
         if u64::from_le_bytes(take(raw)?) != 64 {
@@ -127,32 +208,26 @@ fn accepted_origin_from_bytes_v2(mut raw: &[u8], ordinal: u32) -> Result<Option<
 
     const ENTRY_BYTES: usize = 8 + 64 + 4;
     let count = u64::from_le_bytes(take(&mut raw)?);
-    let mut offset = u64::from(ordinal);
-    let mut found = None;
+    let mut ordinal = 0u64;
     for _ in 0..count {
         let block = hash(&mut raw)?;
         let entries = u64::from_le_bytes(take(&mut raw)?);
         let extent = usize::try_from(entries).ok().and_then(|n| n.checked_mul(ENTRY_BYTES)).ok_or_else(invalid)?;
         let (body, tail) = raw.split_at_checked(extent).ok_or_else(invalid)?;
         raw = tail;
-        if body.chunks_exact(ENTRY_BYTES).any(|entry| entry[..8] != 64u64.to_le_bytes()) {
-            return Err(invalid());
-        }
-        if found.is_none() {
-            if offset < entries {
-                let mut entry = &body[offset as usize * ENTRY_BYTES..];
-                let transaction_id = hash(&mut entry)?;
-                let index_within_block = u32::from_le_bytes(take(&mut entry)?);
-                found = Some((block, AcceptedTxEntry { transaction_id, index_within_block }));
-            } else {
-                offset -= entries;
+        for mut entry in body.chunks_exact(ENTRY_BYTES) {
+            let transaction_id = hash(&mut entry)?;
+            let index_within_block = u32::from_le_bytes(take(&mut entry)?);
+            if stop(ordinal, (block, AcceptedTxEntry { transaction_id, index_within_block })) {
+                return Ok(());
             }
+            ordinal = ordinal.checked_add(1).ok_or_else(invalid)?;
         }
     }
     if !raw.is_empty() {
         return Err(invalid());
     }
-    Ok(found)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -182,6 +257,13 @@ mod tests {
             assert_eq!((actual_carrier, actual.transaction_id, actual.index_within_block), (block(carrier), block(tx), index));
         }
         assert!(accepted_origin_from_bytes_v2(&raw, 3).unwrap().is_none());
+        let archive = AcceptanceArchiveViewV2::new(&raw).unwrap();
+        assert!(archive.find_before_v2(1, block(4)).unwrap().is_none());
+        let (creator, entry) = archive.find_before_v2(2, block(4)).unwrap().unwrap();
+        assert_eq!((creator, entry.index_within_block), (block(2), 7));
+        assert!(archive.find_before_v2(2, block(6)).unwrap().is_none());
+        assert_eq!(archive.find_before_v2(3, block(6)).unwrap().unwrap().0, block(5));
+        assert!(AcceptanceArchiveViewV2::new(&raw[..raw.len() - 1]).is_err());
         assert!(accepted_origin_from_bytes_v2(&raw[..raw.len() - 1], 0).is_err());
         let dir = kaspa_database::utils::get_kaspa_tempdir();
         let open = |create| {
@@ -203,6 +285,14 @@ mod tests {
             (carrier, accepted.transaction_id, accepted.index_within_block, stored_bytes),
             (block(5), block(6), 3, raw.len() as u64)
         );
+
+        assert!(store.with_accepted_archive_v2(accepting, raw.len() as u64 - 1, |_| ()).is_err());
+        let earlier = store
+            .with_accepted_archive_v2(accepting, raw.len() as u64, |view| view.find_before_v2(2, block(4)))
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!((earlier.0, earlier.1.index_within_block), (block(2), 7));
 
         let mut bad = raw;
         let first_entry_offset = 8 + 2 * (8 + 64 + 8);

@@ -357,6 +357,31 @@ impl FundingRelayFeeScheduleV2 {
 }
 pub const FUNDING_RELAY_MATERIAL_KEY_BYTES_V2: usize = 66;
 
+/// Canonical retained bytes for the initial Case package and the maximum
+/// number of bound successors. Count both signed rows and both archive
+/// key/value records so original acceptance remains replayable after a move.
+/// The native writer must still own the live slots and DB quota.
+pub fn case_relay_bound_retained_bytes_v2(max_continuations: u32) -> Result<u64, ContractError> {
+    const DIGEST: u64 = 64;
+    const OUTPOINT: u64 = DIGEST + 4;
+    const ORIGIN: u64 = 3 * DIGEST + 2 * 4 + 2 * 8;
+    // Version/revision, ten digests, two outpoints, purpose/template and
+    // five u64 fields. The target enum below supplies the remaining bytes.
+    const FIXED_TERMS: u64 = 2 * 2 + 10 * DIGEST + 2 * OUTPOINT + 2 + 5 * 8;
+    const INITIAL_CASE: u64 = 1 + 3 * DIGEST;
+    const CONTINUATION: u64 = 1 + 2 * OUTPOINT + 2 * DIGEST;
+    // Accepted origin, original coin, predecessor Option tag, contract
+    // digest and reservation material (origin and digest). The enclosing
+    // binding Option tag already exists in a pending custody row.
+    const INITIAL_BINDING: u64 = ORIGIN + OUTPOINT + 1 + DIGEST + (ORIGIN + DIGEST);
+    let initial = FundingRelayStorageExtentV2::for_terms_bytes(FIXED_TERMS + INITIAL_CASE)?;
+    let continuation = FundingRelayStorageExtentV2::for_terms_bytes(FIXED_TERMS + CONTINUATION)?;
+    let archive_keys = 2 * FUNDING_RELAY_MATERIAL_KEY_BYTES_V2 as u64;
+    let initial_bytes = sum([initial.retained_bytes, archive_keys, INITIAL_BINDING])?;
+    let successor_bytes = sum([continuation.retained_bytes, archive_keys, INITIAL_BINDING, OUTPOINT])?;
+    sum([initial_bytes, mul(u64::from(max_continuations), successor_bytes)?])
+}
+
 /// Minimum native extents for a new registration with both rows absent.
 /// Charge the same extents even when the local DB already holds the payload.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -373,6 +398,11 @@ impl FundingRelayStorageExtentV2 {
     const LIFECYCLE_PREFIX_BYTES: u64 = 3;
 
     pub fn for_terms(terms: &FundingRelayTermsV2) -> Result<Self, ContractError> {
+        let terms_bytes = borsh::object_length(terms).map_err(|_| ContractError::NonCanonical)? as u64;
+        Self::for_terms_bytes(terms_bytes)
+    }
+
+    fn for_terms_bytes(terms_bytes: u64) -> Result<Self, ContractError> {
         const NATIVE_AUX_KEY_BYTES: u64 = 74;
         const AUTHORIZATION_BYTES_WITHOUT_TERMS: u64 = 8956;
         const UNBOUND_CUSTODY_BYTES: u64 = 5334;
@@ -380,7 +410,6 @@ impl FundingRelayStorageExtentV2 {
         // prefixes, and the absent-old/present-new Option tags.
         const DELTA_ENTRY_FRAMING_BYTES: u64 = 1 + 1 + 4 + 4 + 1 + 1;
 
-        let terms_bytes = borsh::object_length(terms).map_err(|_| ContractError::NonCanonical)? as u64;
         let body_bytes = sum([5, terms_bytes, mul(2, crate::identity::SIGNATURE_BYTES as u64)?])?;
         let payload_bytes = sum([Self::LIFECYCLE_PREFIX_BYTES, body_bytes])?;
         let aux_bytes =

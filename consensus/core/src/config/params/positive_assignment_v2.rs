@@ -12,7 +12,35 @@ pub struct PositiveAssignmentFenceV2 {
     /// Complete finite native price/physical preimages. None is a probe only,
     /// never an executable funding or capacity promise.
     pub native_preimages: Option<AssignmentNativePreimagesV2>,
+    /// Explicit capacity preimage for new source/prover commitments.
+    pub service_capacity: Option<AssignmentServiceCapacityV2>,
 }
+/// Shared capacity for outstanding source and prover duties. Units match
+/// the native signed consents. Commitments remain occupied while their
+/// authoritative Assignment or joined funding row is retained.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssignmentServiceCapacityV2 {
+    pub source_work: u64,
+    pub source_bytes: u64,
+    pub source_retained: u64,
+    pub prover_work: u64,
+    pub prover_bytes: u64,
+    pub prover_retained: u64,
+}
+
+impl AssignmentServiceCapacityV2 {
+    pub(crate) fn dimensions_v2(self) -> [u64; 6] {
+        [self.source_work, self.source_bytes, self.source_retained, self.prover_work, self.prover_bytes, self.prover_retained]
+    }
+
+    pub(crate) fn validate_v2(self) -> Result<(), PalwModeV2Error> {
+        if self.dimensions_v2().into_iter().any(|n| n == 0 || n == u64::MAX) {
+            return Err(PalwModeV2Error::Invalid("assignment2 service capacity must be finite and nonzero"));
+        }
+        Ok(())
+    }
+}
+
 /// Immutable, versioned native funding inputs. Actual derived usage, leases,
 /// source/Case/P owners and current coins remain separately required.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -145,6 +173,9 @@ impl Params {
         fence.policy.validate_shape().map_err(|_| PalwModeV2Error::Invalid("assignment2 unsupported/non-finite policy"))?;
         if let Some(preimages) = &fence.native_preimages {
             preimages.validate(&fence.policy)?;
+        }
+        if let Some(capacity) = fence.service_capacity {
+            capacity.validate_v2()?;
         }
         let Some(positive) = self.palw_positive_court_v2.as_ref() else {
             return Err(PalwModeV2Error::Invalid("assignment2 requires the exact Positive policy"));

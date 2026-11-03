@@ -832,6 +832,10 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Result<(), PalwStateV2Error> {
+        if let Some(claim) = &new {
+            self.reject_positive_claim_alias_v2(key)?;
+            self.reject_positive_job_alias_v2(claim.job_identity)?;
+        }
         if new.is_none()
             && let Some(old) = self.state.claims.get(&key)
         {
@@ -974,10 +978,7 @@ impl<'a> TransitionBuilder<'a> {
         if let Some(claim) = &new {
             super::palw_claim_local_prefix_financial_archive_v4::on_terminal_v4(self, key, claim)?;
         }
-        let old = match &new {
-            Some(record) => self.state.claims.insert(key, record.clone()),
-            None => self.state.claims.remove(&key),
-        };
+        let old = self.state.replace_claim_row_v2(key, new.clone());
         // ADR-0160 F-W: the bond's staged weight, held reservation and capped term follow the record.
         self.weight_cap_on_write(old.as_ref(), new.as_ref());
         // Audit #13b: the registry's in-flight index, where this fold has built it, moves with
