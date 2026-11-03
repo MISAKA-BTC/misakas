@@ -3804,11 +3804,57 @@ pub(super) struct NativeRelayFeePlanEntryV2 {
     pub(super) fees: misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
 }
 
-pub(super) struct NativeRelayFeePlanV2 {
-    pub(super) entries: Vec<NativeRelayFeePlanEntryV2>,
+pub(in crate::pipeline::virtual_processor) struct NativeRelayFeePlanV2 {
+    entries: Vec<NativeRelayFeePlanEntryV2>,
     _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 impl NativeRelayFeePlanV2 {
+    pub(in crate::pipeline::virtual_processor) fn debit_count(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Rebind a proposed partition to the UTXO walk's actual fees and position.
+    /// The Round lookahead and the eventual fee sink can check the same entry.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::pipeline::virtual_processor) fn match_carrier(
+        &self,
+        ordinal: usize,
+        accepting: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+        selected_parent: BlockHash,
+        carrier_block: BlockHash,
+        tx: &kaspa_consensus_core::tx::Transaction,
+        gross: u64,
+        mandatory_burn: u64,
+        before_relay: u64,
+    ) -> Result<
+        Option<misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        use misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2;
+        let Ok(index) = self.entries.binary_search_by_key(&ordinal, |entry| entry.origin.accepted_tx_ordinal as usize) else {
+            return Ok(None);
+        };
+        let entry = &self.entries[index];
+        let origin = entry.origin;
+        if accepting.is_none_or(|point| {
+            point.block.as_bytes() != origin.accepting_block.0
+                || point.daa_score != origin.accepted_daa
+                || point.blue_score != origin.accepted_blue_score
+        }) || selected_parent != entry.selected_parent
+            || carrier_block.as_bytes() != origin.carrier_block.0
+            || tx.id().as_bytes() != origin.carrier_transaction.0
+            || origin.event_ordinal != 0
+            || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            || tx.payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 14])
+            || FundingRelayCarrierFeesV2::new(gross, mandatory_burn, before_relay, before_relay).ok()
+                != Some(entry.fees.before_registration())
+        {
+            return Err(NativeCoverageV1::unsupported::<Self>("relay fee plan input", "actual UTXO carrier, origin or fee differs"));
+        }
+        Ok(Some(entry.fees))
+    }
+
     fn record(&mut self, entry: NativeRelayFeePlanEntryV2) -> Result<(), PalwLocalTransitionFaultV1> {
         use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
         if entry.fees.relay_charge() == 0 {
@@ -3862,6 +3908,44 @@ fn relay_fee_plan_keeps_only_debits_from_one_ordered_accepting_prefix() {
     plan.record(entry(3, parent, 5, 11)).unwrap();
     assert!(plan.record(entry(4, parent, 5, 10)).is_err());
     assert_eq!(plan.entries.iter().map(|entry| entry.fees.relay_charge()).collect::<Vec<_>>(), vec![7, 6]);
+}
+
+#[cfg(test)]
+#[test]
+fn relay_fee_plan_matches_actual_carrier_position_and_all_prior_fees() {
+    use kaspa_consensus_core::{palw_state_v2::PalwBlockContextV2, subnets::SUBNETWORK_ID_PALW_LIFECYCLE, tx::Transaction};
+    use misaka_palw_positive_contract::{
+        assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
+        rows::{AcceptedOrigin, NativeHash64},
+    };
+    let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0, vec![1, 0, 176, 2, 0, 1, 0, 14]);
+    let parent = BlockHash::from_u64_word(2);
+    let carrier = BlockHash::from_u64_word(3);
+    let point = PalwBlockContextV2 { block: BlockHash::from_u64_word(4), daa_score: 5, blue_score: 6, subsidy: 0 };
+    let fees = FundingRelayCarrierFeesV2::new(20, 2, 17, 10).unwrap();
+    let mut plan = NativeRelayFeePlanV2 { entries: Vec::with_capacity(1), _lease: None };
+    plan.record(NativeRelayFeePlanEntryV2 {
+        origin: AcceptedOrigin {
+            accepting_block: NativeHash64(point.block.as_bytes()),
+            carrier_block: NativeHash64(carrier.as_bytes()),
+            carrier_transaction: NativeHash64(tx.id().as_bytes()),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: point.daa_score,
+            accepted_blue_score: point.blue_score,
+        },
+        selected_parent: parent,
+        fees,
+    })
+    .unwrap();
+    assert_eq!(plan.match_carrier(0, Some(point), parent, carrier, &tx, 20, 2, 17).unwrap(), None);
+    assert_eq!(plan.match_carrier(1, Some(point), parent, carrier, &tx, 20, 2, 17).unwrap(), Some(fees));
+    assert!(plan.match_carrier(1, None, parent, carrier, &tx, 20, 2, 17).is_err());
+    assert!(plan.match_carrier(1, Some(point), carrier, carrier, &tx, 20, 2, 17).is_err());
+    assert!(plan.match_carrier(1, Some(point), parent, parent, &tx, 20, 2, 17).is_err());
+    for (gross, burn, before) in [(21, 2, 17), (20, 3, 17), (20, 2, 18)] {
+        assert!(plan.match_carrier(1, Some(point), parent, carrier, &tx, gross, burn, before).is_err());
+    }
 }
 
 pub(super) enum NativeAssignmentRehearsalResultV2 {

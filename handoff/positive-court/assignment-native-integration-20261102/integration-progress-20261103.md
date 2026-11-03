@@ -1021,3 +1021,26 @@ typechecks passed. The isolated collector runtime test compiled the exact
 collector and test source in a small harness. It passed the zero-charge,
 wrong-prefix, repeated-ordinal and capacity cases. The complete native
 planning traversal did not execute in a block.
+
+## UTXO consumption of a supplied relay fee plan
+
+The shared UTXO walk can now take one native fee plan. Both Round fee
+admission and the final fee sink verify each matching accepted ordinal
+against the accepting point, selected parent, carrier block, exact txid,
+op14 kind, gross fee, mandatory burn and pre-relay collectible amount. The
+Round reserve and coinbase reward entry use the same verified net tip.
+Finality fees also exclude the relay debit, including under the older
+gross-fee classification rule. Unused entries or an inconsistent Round
+reserve abort the local transition before publication. The fee sink still
+forwards the observed partition to the final native PALW fold.
+
+The current candidate and virtual callers still start without a plan. They
+need the pre-coinbase orchestration that generates and hands off the plan,
+handles changes to the Round acceptance prefix, and supplies the matching
+template context. No live relay debit is claimed in this step.
+
+Strict Contract/Core/Consensus library Clippy and all Consensus test-target
+typechecks passed. The isolated exact-source collector and UTXO carrier
+matcher ran two tests. They covered matched and mismatched prefixes,
+ordinal, and gross, mandatory and pre-relay fee mismatches. Full native
+UTXO, Round and coinbase execution with a plan was not run.

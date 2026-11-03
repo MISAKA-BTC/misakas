@@ -1,7 +1,7 @@
 #[path = "positive_native_context_v2.rs"]
 pub(super) mod positive_native_context_v2;
 
-use super::VirtualStateProcessor;
+use super::{VirtualStateProcessor, processor::palw_accept::NativeRelayFeePlanV2};
 use crate::{
     errors::{
         BlockProcessResult,
@@ -27,6 +27,7 @@ use crate::{
     },
 };
 use kaspa_consensus_core::BlockHash;
+use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
@@ -104,6 +105,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// mempool or selected-parent snapshot may manufacture this provenance.
     pub positive_accepting_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
     pub positive_native_carriers: positive_native_context_v2::PositiveCarrierCompanionsV2,
+    pub relay_fee_plan: Option<NativeRelayFeePlanV2>,
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
     pub mergeset_rewards: BlockHashMap<BlockRewardData>,
     pub pruning_sample_from_pov: Option<BlockHash>,
@@ -385,6 +387,7 @@ impl<'a> UtxoProcessingContext<'a> {
             mergeset_diff: UtxoDiff::default(),
             positive_accepting_point: None,
             positive_native_carriers: Default::default(),
+            relay_fee_plan: None,
             accepted_tx_ids: Vec::with_capacity(1), // We expect at least the selected parent coinbase tx
             mergeset_rewards: BlockHashMap::with_capacity(mergeset_size),
             mergeset_acceptance_data: Vec::with_capacity(mergeset_size),
@@ -691,14 +694,14 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
-    ) {
+    ) -> Result<(), NativeCoverageV1> {
         self.calculate_utxo_state_with_funded_candidates_v1(
             ctx,
             selected_parent_utxo_view,
             selected_parent_bond_view,
             pov_daa_score,
             None,
-        );
+        )
     }
 
     /// Borrow branch PALW state only while actual native validated inputs live.
@@ -711,7 +714,15 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
-    ) {
+    ) -> Result<(), NativeCoverageV1> {
+        let relay_plan = ctx.relay_fee_plan.take();
+        let accepting = ctx.positive_accepting_point;
+        let selected_parent = ctx.selected_parent();
+        let match_relay = |ordinal, carrier_block, tx: &Transaction, gross, burn, before_relay| match &relay_plan {
+            Some(plan) => plan.match_carrier(ordinal, accepting, selected_parent, carrier_block, tx, gross, burn, before_relay),
+            None => Ok(None),
+        };
+        let mut applied_relay_debits = 0;
         let selected_parent_transactions = self.block_transactions_store.get(ctx.selected_parent()).unwrap();
         let validated_coinbase = ValidatedTransaction::new_coinbase(&selected_parent_transactions[0]);
 
@@ -831,12 +842,16 @@ impl VirtualStateProcessor {
                 && verdicts.permitted.contains(&merged_block)
                 && let (Some(bond), Some(budget)) = (verdicts.fee_recipients.get(&merged_block), verdicts.fee_budget.as_mut())
             {
-                let maximum = validated_transactions.iter().try_fold(0u64, |sum, (tx, _)| {
+                let first_ordinal = ctx.accepted_tx_ids.len();
+                let maximum = validated_transactions.iter().enumerate().try_fold(Some(0u64), |sum, (offset, (tx, _))| {
+                    let Some(sum) = sum else { return Ok::<_, NativeCoverageV1>(None) };
                     let burned = bond_filter
                         .map(|filter| filter.burn_owed(tx.tx).saturating_add(filter.escrow_burned(tx.tx, &tx.entries)))
                         .unwrap_or(0);
-                    sum.checked_add(self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score))
-                });
+                    let before_relay = self.palw_collectible_transaction_fee_v1(tx.tx, tx.calculated_fee, burned, pov_daa_score);
+                    let fees = match_relay(first_ordinal + offset, merged_block, tx.tx, tx.calculated_fee, burned, before_relay)?;
+                    Ok(sum.checked_add(fees.map_or(before_relay, |fees| fees.credited_tip())))
+                })?;
                 let income = maximum.map(|maximum_sompi| kaspa_consensus_core::palw_bond_budget_v1::PalwRoundFeeIncomeV1 {
                     block: merged_block,
                     bond: *bond,
@@ -888,6 +903,7 @@ impl VirtualStateProcessor {
             let escrow_fence_active = self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score));
             let mut new_provisional_escrows: Vec<TransactionOutpoint> = Vec::new();
             for (validated_tx, original_index) in validated_transactions.iter() {
+                let accepted_ordinal = ctx.accepted_tx_ids.len();
                 // The Full-script seal is provenance only. Each borrow ends
                 // before the ordinary acceptance code mutates this prefix.
                 // Failed extra validation leaves the ordinary UTXO path intact.
@@ -1051,9 +1067,10 @@ impl VirtualStateProcessor {
                 // nothing at all.
                 let before_relay =
                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
-                // No allocation is published until the pre-coinbase owner
-                // supplies a qualified debit for this exact accepted carrier.
-                let credited_tip = before_relay;
+                let fees =
+                    match_relay(accepted_ordinal, merged_block, validated_tx.tx, validated_tx.calculated_fee, owed, before_relay)?;
+                applied_relay_debits += usize::from(fees.is_some());
+                let credited_tip = fees.map_or(before_relay, |fees| fees.credited_tip());
                 if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
                 {
@@ -1065,12 +1082,18 @@ impl VirtualStateProcessor {
                 let finality_base = if self.palw_tir_public_conviction_v1.is_some_and(|f| f.is_active(pov_daa_score)) {
                     credited_tip
                 } else {
-                    validated_tx.calculated_fee
+                    validated_tx.calculated_fee - fees.map_or(0, |fees| fees.relay_charge())
                 };
                 finality_fee += palw_finality_collectible_fee_v1(validated_tx.tx, finality_base, finality_fee_active);
             }
 
             if let Some(income) = round_income {
+                if relay_plan.is_some() && income.actual_sompi != block_fee {
+                    return Err(NativeCoverageV1::unsupported::<Self>(
+                        "relay fee plan input",
+                        "Round reserve and final credited fees differ",
+                    ));
+                }
                 debug_assert_eq!(income.actual_sompi, block_fee, "preflight and actual collectible fees share one rule");
                 ctx.palw_round_fee_incomes.push(income);
             }
@@ -1097,12 +1120,20 @@ impl VirtualStateProcessor {
             );
         }
 
+        if relay_plan.as_ref().is_some_and(|plan| plan.debit_count() != applied_relay_debits) {
+            return Err(NativeCoverageV1::unsupported::<Self>(
+                "relay fee plan input",
+                "planned debit is outside final UTXO acceptance",
+            ));
+        }
+
         // kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): apply the
         // slashing side-effect over the fully-applied mergeset. Gated on
         // `dns_activation_daa_score` (= 0 on every current network), so it runs
         // from genesis everywhere (the 4-way reserve/victim split is the part
         // fenced behind `pos_v2_activation_daa_score` — see below).
         self.apply_slashing_side_effects(ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score);
+        Ok(())
     }
 
     /// kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): the atomic

@@ -1342,5 +1342,29 @@
     "stored_sha256": "2ff507ae87d3de31a1683ac99b5ccf922d2894f7bbc54a15dedfdc808f8a437c",
     "raw_bytes": 546096,
     "stored_bytes": 37283
+  },
+  {
+    "raw_name": "relay-utxo-fee-plan-clippy.log",
+    "stored_name": "relay-utxo-fee-plan-clippy.log.gz",
+    "raw_sha256": "fa7916edf68c06e3f96459950271f5e8c329f8e5a54cbdce18e71d5718b21ff4",
+    "stored_sha256": "a28a7ac68df84a90d0211d4bddf32951952b5bd686245355aba3f3a538e8ed95",
+    "raw_bytes": 340747,
+    "stored_bytes": 23534
+  },
+  {
+    "raw_name": "relay-utxo-fee-plan-runtime.log",
+    "stored_name": "relay-utxo-fee-plan-runtime.log.gz",
+    "raw_sha256": "e090d211a118cb207efcf00dea82ab5fed39684c366819e0e6d683b806ec6205",
+    "stored_sha256": "6227aa742517ce6c602704d85dca7fa0d4dee5baf71fd84176eae9f67deaed0b",
+    "raw_bytes": 376,
+    "stored_bytes": 214
+  },
+  {
+    "raw_name": "relay-utxo-fee-plan-test-check.log",
+    "stored_name": "relay-utxo-fee-plan-test-check.log.gz",
+    "raw_sha256": "08f67a2a693cda4f64504597de9be9c207fba625256638c012e3baf189759ec2",
+    "stored_sha256": "6c38c67b5104b1202bb129931e8a1fcff26e87e8c606160626499addc9f85b75",
+    "raw_bytes": 542103,
+    "stored_bytes": 36827
   }
 ]

@@ -2540,7 +2540,7 @@ impl VirtualStateProcessor {
                     if palw_state.is_some() && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(pov_daa_score) {
                         ctx.positive_accepting_point = Some(positive_point);
                     }
-                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
+                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
                     if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
                         return Err(fault.into());
                     }
@@ -3946,7 +3946,8 @@ impl VirtualStateProcessor {
             .and_then(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score));
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score);
+        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score)
+            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
         if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
             return Err(RuleError::LocalNativeCapacityUnavailable(fault));
         }
