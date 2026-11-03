@@ -20,15 +20,43 @@ fn refused(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(format!("RFC-0035 A funded escrow: {why:?}"))
 }
 
+impl PalwChainStateV2 {
+    pub(super) fn has_funded_escrow_for_claim_v1(&self, claim: Hash64) -> bool {
+        let first = (claim, Hash64::from_bytes([0; 64]));
+        let last = (claim, Hash64::from_bytes([u8::MAX; 64]));
+        self.funded_escrows_by_claim.range(first..=last).next().is_some()
+    }
+
+    pub(super) fn replace_funded_escrow_v1(&mut self, key: Hash64, new: Option<PalwFundedEscrowRowV1>) {
+        let old = match new {
+            Some(row) => self.funded_escrows.insert(key, row),
+            None => self.funded_escrows.remove(&key),
+        };
+        let old_claim = old.map(|row| row.claim);
+        let new_claim = new.map(|row| row.claim);
+        if old_claim != new_claim {
+            if let Some(claim) = old_claim {
+                self.funded_escrows_by_claim.remove(&(claim, key));
+            }
+            if let Some(claim) = new_claim {
+                self.funded_escrows_by_claim.insert((claim, key));
+            }
+        }
+    }
+}
+
 impl TransitionBuilder<'_> {
     /// The one writer: refuses any transition the row rules do not define, journals the rest.
     pub(super) fn write_funded_escrow_v1(&mut self, key: Hash64, new: Option<PalwFundedEscrowRowV1>) -> Result<(), PalwStateV2Error> {
         let old = self.state.funded_escrows.get(&key).copied();
         palw_escrow_row_transition_v1(&key, old.as_ref(), new.as_ref()).map_err(refused)?;
-        match new {
-            Some(row) => self.state.funded_escrows.insert(key, row),
-            None => self.state.funded_escrows.remove(&key),
-        };
+        if self.native_writers_tracking_v1() {
+            let install = old.is_none() && new.is_some();
+            let mut quote = native_writers::NativeWriteQuoteV1::new("native funded escrow writer");
+            quote.member_if::<Hash64, PalwFundedEscrowRowV1>(install)?.member_if::<(Hash64, Hash64), ()>(install)?.slots(1)?;
+            self.admit_native_write_v1(quote)?;
+        }
+        self.state.replace_funded_escrow_v1(key, new);
         self.entries.push(PalwDeltaEntryV2::FundedEscrow { key, old, new });
         Ok(())
     }
@@ -223,6 +251,10 @@ mod tests {
         assert!(b.install_funded_escrow_v1(row()).is_err(), "a contract is escrowed once");
         let installed = b.state.clone();
         let install_delta = delta(b.entries.clone());
+        assert!(installed.has_funded_escrow_for_claim_v1(row().claim));
+        assert!(!installed.has_funded_escrow_for_claim_v1(h(50_000)));
+        let replayed = apply_delta_v2(&parent, &install_delta, &p).unwrap();
+        assert!(replayed.has_funded_escrow_for_claim_v1(row().claim));
         assert_eq!(palw_escrow_rows_by_outpoint_v1(installed.funded_escrows_v1()).len(), 1);
 
         let tx = Transaction::new(
@@ -248,6 +280,9 @@ mod tests {
         assert_eq!(palw_escrow_rows_by_outpoint_v1(undone.funded_escrows_v1()).len(), 1, "lock restored");
         assert_eq!(undone.state_root(), installed.state_root());
         let before = revert_delta_v2(&installed, &install_delta, &p).unwrap();
+        assert!(settled.has_funded_escrow_for_claim_v1(row().claim));
+        assert!(undone.has_funded_escrow_for_claim_v1(row().claim));
+        assert!(!before.has_funded_escrow_for_claim_v1(row().claim));
         assert!(before.funded_escrows_v1().is_empty());
         assert_eq!(before.state_root(), parent.state_root(), "an empty table roots exactly as before");
     }
@@ -465,6 +500,7 @@ mod tests {
         let s4 = b.state.clone();
         let d4 = delta(b.entries.clone());
         assert!(s4.funded_escrows_v1().is_empty());
+        assert!(!s4.has_funded_escrow_for_claim_v1(open_row().claim));
         assert_eq!(s4.state_root(), genesis.state_root(), "a retired table roots as the empty one");
 
         // Undo every step.
@@ -487,6 +523,9 @@ mod tests {
             let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
             let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
             assert_eq!(&back.funded_escrows, state.funded_escrows_v1());
+            let restored = back.into_state(&p, Some(state.state_root())).unwrap();
+            assert_eq!(restored.has_funded_escrow_for_claim_v1(open_row().claim), !state.funded_escrows_v1().is_empty());
+            assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&restored)).unwrap(), bytes);
         }
     }
 

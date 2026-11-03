@@ -207,6 +207,56 @@ impl NativeAssignedCaseSessionV2<'_> {
     }
 }
 
+/// Probe each existing staged namespace by its ordered subject prefix.
+/// A large unrelated archive cannot enlarge this into a full key walk.
+fn has_legacy_staged_alias_v2<V>(
+    rows: &std::collections::BTreeMap<crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, V>,
+    subject: Hash64,
+) -> bool {
+    use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as K;
+    let exact = [
+        K::Claim(subject),
+        K::Inventory(subject),
+        K::TirRawChunk(subject),
+        K::TirAcceptedBody(subject),
+        K::TirClaim(subject),
+        K::CourtDutyClock(subject),
+        K::CourtSharedContext(subject),
+        K::CourtSharedQuery(subject),
+        K::CourtSharedIds(subject),
+        K::CourtSharedStream(subject),
+        K::CourtSharedRound(subject),
+        K::CourtSharedBottom(subject),
+        K::CourtEndArchive(subject),
+    ];
+    if exact.iter().any(|key| rows.contains_key(key)) {
+        return true;
+    }
+    let low = Hash64::from_bytes([0; 64]);
+    let high = Hash64::from_bytes([u8::MAX; 64]);
+    let first_bond = PALW_BOND_KEY_V2_MIN;
+    let last_bond = PalwBondKeyV2(TransactionOutpoint::new(high, u32::MAX));
+    let first_side = PalwCourtSideV1::Challenger;
+    let last_side = PalwCourtSideV1::Executor;
+    [
+        (K::Owner(subject, first_bond), K::Owner(subject, last_bond)),
+        (K::InventoryOpen(subject, first_bond), K::InventoryOpen(subject, last_bond)),
+        (K::TirAcquisition(subject, first_bond, low), K::TirAcquisition(subject, last_bond, high)),
+        (K::TirPreparation(subject, low), K::TirPreparation(subject, high)),
+        (K::TirWitness(subject, first_bond), K::TirWitness(subject, last_bond)),
+        (K::CourtSharedChunk(subject, 0), K::CourtSharedChunk(subject, u64::MAX)),
+        (K::CourtSharedResponse(subject, first_bond), K::CourtSharedResponse(subject, last_bond)),
+        (K::CourtCloseReceipt(subject, first_side), K::CourtCloseReceipt(subject, last_side)),
+        (K::CourtSharedRoot(subject, 0), K::CourtSharedRoot(subject, u64::MAX)),
+        (K::CourtArchiveProgress(subject, first_side), K::CourtArchiveProgress(subject, last_side)),
+        (K::CourtMaterialDraft(subject, low), K::CourtMaterialDraft(subject, high)),
+        (K::CourtMaterial(subject, low), K::CourtMaterial(subject, high)),
+        (K::CourtMaterialLedger(subject, first_bond), K::CourtMaterialLedger(subject, last_bond)),
+    ]
+    .into_iter()
+    .any(|(first, last)| rows.range(first..=last).next().is_some())
+}
+
 /// Exact native aliases must be absent in EVERY old entry surface. A zero
 /// unresolved counter alone is deliberately not accepted as evidence of this.
 fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &MinerResultCommit) -> Result<(), PalwStateV2Error> {
@@ -221,42 +271,11 @@ fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &M
         || state.staged_tir_by_claim.contains_key(&claim)
         || state.staged_court_service_by_claim.contains_key(&claim)
         || state.open_courts_by_claim.get(&claim).is_some_and(|n| *n != 0)
-        || state.funded_escrows.values().any(|row| row.claim == claim)
+        || state.has_funded_escrow_for_claim_v1(claim)
     {
         return Err(refuse("legacy claim/TFO/service/funds alias is not closed initial topology"));
     }
-    use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as K;
-    if state.staged_courts.keys().any(|key| match key {
-        K::Claim(id)
-        | K::Inventory(id)
-        | K::TirRawChunk(id)
-        | K::TirAcceptedBody(id)
-        | K::TirClaim(id)
-        | K::CourtDutyClock(id)
-        | K::CourtSharedContext(id)
-        | K::CourtSharedQuery(id)
-        | K::CourtSharedIds(id)
-        | K::CourtSharedStream(id)
-        | K::CourtSharedRound(id)
-        | K::CourtSharedBottom(id)
-        | K::CourtEndArchive(id) => *id == claim || *id == job,
-        K::Owner(id, _)
-        | K::InventoryOpen(id, _)
-        | K::TirAcquisition(id, _, _)
-        | K::TirPreparation(id, _)
-        | K::TirWitness(id, _)
-        | K::CourtSharedChunk(id, _)
-        | K::CourtSharedResponse(id, _)
-        | K::CourtCloseReceipt(id, _)
-        | K::CourtSharedRoot(id, _)
-        | K::CourtArchiveProgress(id, _)
-        | K::CourtMaterialDraft(id, _)
-        | K::CourtMaterial(id, _)
-        | K::CourtMaterialLedger(id, _) => *id == claim || *id == job,
-        // Global material parts/service and class registrations cannot be
-        // interpreted as a claim alias; their referencing claim route is above.
-        K::TirLayout(_) | K::TirContainer(_) | K::CourtService | K::CourtMaterialPart(_, _) => false,
-    }) {
+    if has_legacy_staged_alias_v2(&state.staged_courts, claim) || has_legacy_staged_alias_v2(&state.staged_courts, job) {
         return Err(refuse("actual staged native alias"));
     }
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
@@ -274,8 +293,8 @@ fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &M
         || ledger.job_claims.contains_key(&job)
         || ledger.job_claims.values().any(|id| *id == claim)
         || ledger.job_escrows.contains_key(&job)
-        || ledger.seals.keys().any(|(id, _)| *id == job)
-        || ledger.proof_seals.keys().any(|(id, _)| *id == claim)
+        || ledger.seals.range((job, [0; 64])..=(job, [u8::MAX; 64])).next().is_some()
+        || ledger.proof_seals.range((claim, [0; 64])..=(claim, [u8::MAX; 64])).next().is_some()
         || ledger.opv.claims.contains_key(&claim)
     {
         return Err(refuse("kernel job/claim/OPV alias"));
@@ -797,5 +816,61 @@ impl TransitionBuilder<'_> {
         _body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
         Err(missing())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as K;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn staged_alias_probes_cover_subject_namespaces_and_boundaries() {
+        let subject = Hash64::from_bytes([2; 64]);
+        let other = Hash64::from_bytes([3; 64]);
+        let high = Hash64::from_bytes([u8::MAX; 64]);
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(high, u32::MAX));
+        let side = PalwCourtSideV1::Executor;
+        let aliases = [
+            K::Claim(subject),
+            K::Owner(subject, bond),
+            K::InventoryOpen(subject, bond),
+            K::Inventory(subject),
+            K::TirAcquisition(subject, bond, high),
+            K::TirRawChunk(subject),
+            K::TirAcceptedBody(subject),
+            K::TirPreparation(subject, high),
+            K::TirClaim(subject),
+            K::TirWitness(subject, bond),
+            K::CourtDutyClock(subject),
+            K::CourtSharedContext(subject),
+            K::CourtSharedQuery(subject),
+            K::CourtSharedIds(subject),
+            K::CourtSharedStream(subject),
+            K::CourtSharedChunk(subject, u64::MAX),
+            K::CourtSharedResponse(subject, bond),
+            K::CourtEndArchive(subject),
+            K::CourtCloseReceipt(subject, side),
+            K::CourtSharedRoot(subject, u64::MAX),
+            K::CourtSharedRound(subject),
+            K::CourtSharedBottom(subject),
+            K::CourtArchiveProgress(subject, side),
+            K::CourtMaterialDraft(subject, high),
+            K::CourtMaterial(subject, high),
+            K::CourtMaterialLedger(subject, bond),
+        ];
+        for key in aliases {
+            let rows = BTreeMap::from([(key, ())]);
+            assert!(has_legacy_staged_alias_v2(&rows, subject), "{key:?}");
+            assert!(!has_legacy_staged_alias_v2(&rows, other), "{key:?}");
+        }
+        let rows = BTreeMap::from([
+            (K::TirLayout(subject), ()),
+            (K::TirContainer(subject), ()),
+            (K::CourtService, ()),
+            (K::CourtMaterialPart(subject, 0), ()),
+        ]);
+        assert!(!has_legacy_staged_alias_v2(&rows, subject));
     }
 }

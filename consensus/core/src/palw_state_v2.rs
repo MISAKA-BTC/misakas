@@ -11299,6 +11299,8 @@ pub struct PalwChainStateV2 {
     /// Empty on every network (nothing installs a row yet); enters the root (`funded_escrow/v1`) and the carriage (tail `0xFB`) only
     /// when non-empty.
     funded_escrows: BTreeMap<Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>,
+    // Derived from every retained escrow, including settled rows awaiting retirement.
+    funded_escrows_by_claim: BTreeSet<(Hash64, Hash64)>,
     /// **G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry** — recorded tag-230 roots and their digest/path
     /// disclosure cases ([`crate::palw_court_model_scope_routes_v1::readiness_disclosure`]). Written only past `palw_court_model_scope_v1` with an ADOPTED draw cap (unadopted: nothing is
     /// ever written), journaled as delta 230; enters the root (`d2_readiness/v1`) and the carriage (tail `0xE5`) only when non-empty.
@@ -23348,7 +23350,11 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::LegacyDispute { key, old, new } => swap_write!(state.legacy_disputes, key, old, new),
         PalwDeltaEntryV2::TirDesignated { key, old, new } => swap_write!(state.tir_designated.records, key, old, new),
-        PalwDeltaEntryV2::FundedEscrow { key, old, new } => swap_write!(state.funded_escrows, key, old, new),
+        PalwDeltaEntryV2::FundedEscrow { key, old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            expect_matches(&state.funded_escrows.get(key).copied(), expected)?;
+            state.replace_funded_escrow_v1(*key, *install);
+        }
         PalwDeltaEntryV2::D2Readiness { key, old, new } => swap_write!(state.d2_readiness, key, old, new),
         // RFC-0010: the permissionless Panel engine's keyed decomposition (see `palw_panel_v3_fold_v1`).
         PalwDeltaEntryV2::PanelV3Cursor { old, new } => palw_panel_v3_fold_v1::apply_cursor_entry_v1(state, old, new, revert)?,
@@ -25816,6 +25822,7 @@ impl PalwStateCarriageV2 {
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
             tir_designated: self.tir_designated,
+            funded_escrows_by_claim: self.funded_escrows.iter().map(|(id, row)| (row.claim, *id)).collect(),
             funded_escrows: self.funded_escrows,
             d2_readiness: self.d2_readiness,
             fp_public_jobs: self.fp_public_jobs,

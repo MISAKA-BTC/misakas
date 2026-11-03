@@ -140,6 +140,7 @@ impl PalwChainStateV2 {
             legacy_disputes: BTreeMap::new(),
             tir_designated: Default::default(),
             funded_escrows: BTreeMap::new(),
+            funded_escrows_by_claim: BTreeSet::new(),
             d2_readiness: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
             panel_da_disclosures: BTreeMap::new(),
