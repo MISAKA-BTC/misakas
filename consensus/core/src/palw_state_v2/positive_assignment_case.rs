@@ -815,6 +815,179 @@ impl CaseJournalSourceV2 for NativeAssignedArchiveV2<'_> {
     }
 }
 
+/// Authenticate the same initial checker that a cold Case replay will use.
+/// The derivation uses the original registered program and job inputs before
+/// op8, while payer identity comes from the actual state immediately before
+/// op9. A stored coverage descriptor is only a comparison target.
+fn verify_initial_case_checker_v2(
+    backing: &NativeCommittedAssignedCaseV2,
+    bundle: &PositiveRowBundleV2,
+) -> Result<(), PalwStateV2Error> {
+    use crate::{
+        palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1},
+        palw_positive_assignment_material_v2::AssignmentSourceQuoteDescriptorV2,
+        palw_positive_assignment_resources_v2::{AssignmentResourceErrorV2, ReservedAssignmentDerivedResourcesV2},
+        palw_positive_court_v2::coordinator::assignment_body::{
+            PositiveAssignmentNativeOperationV2 as Op, decode_assignment_body_v2, scan_assignment_body_v2,
+        },
+        palw_tir_class_v1::PalwTirLayoutV1,
+    };
+
+    let capacity = || {
+        PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+        )
+    };
+    let reserve = |bytes| reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity);
+    let material = backing.material();
+    let row = backing.assignment();
+    let policy = &material.assignment_policy;
+    let positive = &material.positive_policy;
+    let physical = &material.native_preimages;
+    let max_heap = positive.max_case_heap_bytes.min(policy.max_heap_bytes).min(physical.physical.max_heap_bytes);
+    let retained = backing.native_heap_v1("retained initial Case archive");
+    let retained = retained.bytes().ok_or(PalwStateV2Error::NativeResource(retained))?;
+    let mut heap = max_heap.checked_sub(retained).ok_or_else(capacity)?;
+    let rules = NativeAssignmentRulesV2::from_original_material_data_v2(row, material).map_err(refuse)?;
+    let limits = rules.body_limits().map_err(refuse)?;
+    let open = backing.open_carriage();
+    let first = backing.records().first().ok_or_else(missing)?.carriage();
+    let native_body = |tx: &crate::tx::Transaction| {
+        tx.payload.get(..3) == Some(&[1, 0, 176]) && tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+    };
+    if !native_body(open.transaction())
+        || !native_body(first.transaction())
+        || open.origin() != row.origin
+        || first.origin() != bundle.result.origin
+        || backing.pin().scope != bundle.result.result.scope
+    {
+        return Err(refuse("initial Case carrier origins and scope"));
+    }
+    let open_raw = &open.transaction().payload[3..];
+    let bind_raw = &first.transaction().payload[3..];
+    let open_shape = scan_assignment_body_v2(open_raw, limits).map_err(refuse)?;
+    let bind_shape = scan_assignment_body_v2(bind_raw, limits).map_err(refuse)?;
+    let decode_heap = open_shape
+        .heap
+        .checked_add(bind_shape.heap)
+        .and_then(|n| n.checked_add((2 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64))
+        .ok_or_else(capacity)?;
+    heap = heap.checked_sub(decode_heap).ok_or_else(capacity)?;
+    let _decode = reserve(decode_heap)?;
+    let open_body = decode_assignment_body_v2(open_raw, limits).map_err(refuse)?;
+    let bind_body = decode_assignment_body_v2(bind_raw, limits).map_err(refuse)?;
+    let Op::AcceptCanonicalAssignment { bundle: signed, source, prover, signatures, layout } = &open_body.operation else {
+        return Err(refuse("original op8 body"));
+    };
+    let Op::AdmitAssignedResult { assignment: id, payload } = &bind_body.operation else {
+        return Err(refuse("original op9 body"));
+    };
+    if signed != &row.bundle
+        || source != &row.source_consent
+        || prover != &row.prover_consent
+        || *id != row.id()
+        || payload.result != bundle.result.result
+        || payload.service != bundle.case.service
+        || payload.result.case_id() != backing.pin().case
+        || payload.result.id() != backing.pin().result
+    {
+        return Err(refuse("initial Case and original Assignment identities"));
+    }
+    let bind_prefix = first.prefix_state().map_err(|_| missing())?;
+    let prior = assignment(bind_prefix, *id)?;
+    if prior.status != AssignmentStatusV2::Open
+        || prior.bundle != row.bundle
+        || prior.admission_material != row.admission_material
+        || prior.worker_key != row.worker_key
+    {
+        return Err(refuse("original op9 did not consume the same open Assignment"));
+    }
+    let NativeRowBody::AssignmentFunding(funding) = required(bind_prefix, NativeRowKey::AssignmentFunding(*id))? else {
+        return Err(refuse("original Case payer row"));
+    };
+    if funding.authorization != row.bundle.funding || funding.funding_origin != row.origin {
+        return Err(refuse("original Case payer identity"));
+    }
+    payload
+        .consent
+        .authenticate(
+            &payload.result,
+            &payload.service,
+            &payload.basis,
+            first.origin().accepted_daa,
+            &funding.payer_key,
+            &payload.payer_signature,
+        )
+        .map_err(refuse)?;
+    let layout_quote = preflight_native_value_v1::<PalwTirLayoutV1>(layout.as_slice(), layout.len() as u64).map_err(refuse)?;
+    let layout_heap = layout_quote.logical_requests_v1();
+    heap = heap.checked_sub(layout_heap).ok_or_else(capacity)?;
+    let _layout = reserve(layout_heap)?;
+    let layout: PalwTirLayoutV1 = borsh::from_slice(layout).map_err(refuse)?;
+    let open_prefix = open.prefix_state().map_err(|_| missing())?;
+    let registered = open_prefix.tir_class_v1(&Hash64::from_bytes(row.bundle.terms.registered_class.0)).ok_or_else(missing)?;
+    let prompt_form = registered.facts.prompt_ids_form(material.network_prompt_form);
+    if prompt_form != material.class_prompt_form {
+        return Err(refuse("original Case prompt commitment form"));
+    }
+    let reserved = ReservedAssignmentDerivedResourcesV2::derive(
+        open_prefix,
+        signed.terms,
+        &layout,
+        policy,
+        positive,
+        &physical.source_policy,
+        material.network_prompt_form,
+        heap,
+    )
+    .map_err(|why| match why {
+        AssignmentResourceErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+        AssignmentResourceErrorV2::MissingNativeLease | AssignmentResourceErrorV2::ConstructionCap { .. } => capacity(),
+        other => refuse(other),
+    })?;
+    let resources = reserved.resources();
+    let binding = resources.binding();
+    material.job.check_native(binding.job()).map_err(refuse)?;
+    binding.authenticate_bundle_roles(open_prefix, signed, signatures).map_err(refuse)?;
+    binding.check_result(&payload.result).map_err(refuse)?;
+    if material.source != AssignmentSourceQuoteDescriptorV2::from(resources.source_quote())
+        || payload.basis.source_catalog != material.source.digest
+        || payload.basis.policy != row.positive_policy
+        || payload.basis.schedule != policy.case_fee_schedule
+    {
+        return Err(refuse("original Case source and policy"));
+    }
+    // The preparation retains another class, job, and plan while the original
+    // derivation is still live. Reuse the typed program/StepSpace quote for
+    // that second owner and reserve it before authenticating the Result.
+    let derived_heap = reserved.allocation_quote().total_requests;
+    let checker_heap = derived_heap.checked_add(size_of::<PreparedCheck>() as u64).ok_or_else(capacity)?;
+    if heap.checked_sub(derived_heap).is_none_or(|left| checker_heap > left) {
+        return Err(capacity());
+    }
+    let _checker = reserve(checker_heap)?;
+    let prepared = PreparedCheck::authenticate(
+        binding.admission(),
+        resources.class(),
+        Hash64::from_bytes(binding.admission().artifact.0),
+        binding.job(),
+        prompt_form,
+        resources.check_limits(),
+        payload.result.clone(),
+        &row.worker_key,
+        &payload.miner_signature,
+    )
+    .map_err(refuse)?;
+    let coverage = prepared.descriptor();
+    if coverage != bundle.case.coverage
+        || coverage.mandatory_relations != payload.basis.mandatory_relations
+        || coverage.profile != payload.basis.profile
+    {
+        return Err(refuse("independently prepared Case coverage differs from initial and rooted coverage"));
+    }
+    Ok(())
+}
+
 impl TransitionBuilder<'_> {
     fn check_case_predecessor_v2(
         &self,
@@ -837,13 +1010,13 @@ impl TransitionBuilder<'_> {
         if backing.parent() != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
             return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
         }
-        let (_, _, current) = rooted_bundle(&self.state, assignment)?;
+        let (_, bundle, current) = rooted_bundle(&self.state, assignment)?;
         if current != pin {
             // A preceding operation in this block can advance the head. Its
             // unpublished material must be replayed before this operation.
             return Err(missing());
         }
-        Ok(())
+        verify_initial_case_checker_v2(backing, &bundle)
     }
 }
 
