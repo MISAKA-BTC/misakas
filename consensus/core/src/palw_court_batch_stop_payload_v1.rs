@@ -19,7 +19,8 @@ const INTENT_BYTES: usize = STOP_INTENT_BYTES_V1 as usize;
 const STOP_REASON_OFFSET: usize = 2 + 5 * 64 + 4;
 const EOG_MAX: usize = ROOTED_TOKENIZER_LIMITS_V1.eog_ids as usize;
 const SIBLINGS_MAX: usize = step_leg_max_opening_siblings_v1(ROOTED_TOKENIZER_LIMITS_V1.vocab as u64 + 1);
-pub(crate) const MAX_BATCH_STOP_OPERANDS_BYTES_V1: usize = INTENT_BYTES + 4 + EOG_MAX * 4 + 76 + SIBLINGS_MAX * 64 + 4;
+pub const MAX_BATCH_STOP_EOG_OPENING_BYTES_V1: usize = 4 + EOG_MAX * 4 + 76 + SIBLINGS_MAX * 64;
+pub(crate) const MAX_BATCH_STOP_OPERANDS_BYTES_V1: usize = INTENT_BYTES + MAX_BATCH_STOP_EOG_OPENING_BYTES_V1 + 4;
 
 /// Stateless framing only. The registered row supplies the exact EOG size
 /// during native verification, after locating the actual original.

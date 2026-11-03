@@ -1755,6 +1755,22 @@ enum PalwCmd {
         #[arg(long)]
         maximum_fee_sompi: Option<u64>,
     },
+    /// Sign and fund the booked Batch Stop with a local Borsh EOG opening.
+    BatchStop {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        eog_opening: std::path::PathBuf,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
     /// Sign and fund one reserved Batch Court response. Preview unless --submit is set.
     BatchRespond {
         #[command(flatten)]
@@ -3741,6 +3757,9 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi, .. }) => {
             Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
                 submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchStop { key, bond, claim, eog_opening, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::stop(ctx, &key.source(), &bond, &claim, &eog_opening, submit, maximum_fee_sompi).await })
         }
         Command::Palw(PalwCmd::TirRegistration {
             key,

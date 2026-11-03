@@ -4005,15 +4005,15 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1;
         // Root enumeration is a bounded operator/Panel read, with one in
         // flight across connections even if the initiating client disconnects.
-        static BATCH_OPEN_QUOTE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        static BATCH_QUOTE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
         let (target, permit) = if !request.batch_open.is_empty() {
             if !self.config.unsafe_rpc {
-                return Err(RpcError::General("Batch Open quotes require operator RPC".into()));
+                return Err(RpcError::General("Batch Court quotes require operator RPC".into()));
             }
-            let target = palw_batch_open_target(&request)?;
-            let permit = BATCH_OPEN_QUOTE
+            let target = palw_batch_quote_target(&request)?;
+            let permit = BATCH_QUOTE
                 .try_acquire()
-                .map_err(|_| RpcError::General("Batch Open quote is busy".into()))?;
+                .map_err(|_| RpcError::General("Batch Court quote is busy".into()))?;
             (target, Some(permit))
         } else {
             let target = match (
@@ -6206,16 +6206,19 @@ fn palw_batch_view_target(text: &str) -> RpcResult<kaspa_consensus_core::palw_co
     text.parse().map_err(|why: &'static str| RpcError::General(why.into()))
 }
 
-fn palw_batch_open_target(
+fn palw_batch_quote_target(
     request: &GetPalwCourtStateRequest,
 ) -> RpcResult<kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1> {
     use kaspa_consensus_core::{palw_batch_court_v1::MAX_BATCH_RANGES_V1, palw_user_views_v1::PalwCourtTargetV1};
     use kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1;
-    let invalid = || RpcError::General("a Batch Open needs a claim, ordinal and notice/leaf/target=bytes or notice/stop-full-ids".into());
+    let invalid = || RpcError::General("a Batch quote needs a claim and stop, or a claim, ordinal and notice/leaf/target=bytes or notice/stop-full-ids".into());
     if !request.session_hex.is_empty() || !request.batch_target.is_empty() || request.batch_open.len() > 4_096 {
         return Err(invalid());
     }
     let claim = palw_user_view_hash64("claim", &request.claim_hex)?;
+    if request.batch_open == "stop" {
+        return request.batch_ordinal.is_empty().then_some(PalwCourtTargetV1::BatchStop { claim }).ok_or_else(invalid);
+    }
     let ordinal = palw_batch_view_ordinal(&request.batch_ordinal)?;
     let (notice, selection) = request.batch_open.split_once('/').ok_or_else(invalid)?;
     let notice = palw_user_view_hash64("notice", notice)?;
@@ -6252,26 +6255,32 @@ fn numerical_batch_open_selector_is_bounded_and_exclusive() {
     let notice = "cd".repeat(64);
     let mut request = GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), batch_ordinal: "0".into(),
         batch_open: format!("{notice}/18446744073709551615/unit:3=8,prompt-flat=4"), ..Default::default() };
-    assert!(matches!(palw_batch_open_target(&request), Ok(PalwCourtTargetV1::NumericalBatchOpen {
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::NumericalBatchOpen {
         ordinal: 0, leaf: u64::MAX, lengths, ..
     }) if lengths.len() == 2 && lengths[0].1 == 8));
     request.batch_target = "full-ids".into();
-    assert!(palw_batch_open_target(&request).is_err());
+    assert!(palw_batch_quote_target(&request).is_err());
     request.batch_target.clear();
     for entries in ["", "unit:1=0", "unit:1=4294967296", "unit:1=2,"] {
         request.batch_open = format!("{notice}/1/{entries}");
-        assert!(palw_batch_open_target(&request).is_err());
+        assert!(palw_batch_quote_target(&request).is_err());
     }
     request.batch_open = format!("{notice}/1/{}unit:1=2", "unit:1=2,".repeat(64));
-    assert!(palw_batch_open_target(&request).is_err());
+    assert!(palw_batch_quote_target(&request).is_err());
     request.batch_open = format!("{notice}/stop-full-ids");
-    assert!(palw_batch_open_target(&request).is_err());
+    assert!(palw_batch_quote_target(&request).is_err());
     request.batch_ordinal = u64::MAX.to_string();
-    assert!(matches!(palw_batch_open_target(&request), Ok(PalwCourtTargetV1::BatchStopFullIdsOpen { .. })));
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchStopFullIdsOpen { .. })));
     for selection in ["stop-full-ids/full-ids=1", "1/full-ids=1"] {
         request.batch_open = format!("{notice}/{selection}");
-        assert!(palw_batch_open_target(&request).is_err());
+        assert!(palw_batch_quote_target(&request).is_err());
     }
+    request.batch_open = "stop".into();
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_ordinal.clear();
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchStop { .. })));
+    request.batch_target = "full-ids".into();
+    assert!(palw_batch_quote_target(&request).is_err());
 }
 
 /// `(available, found, now_daa, view_json)` of a consensus user-view answer (`None`: no PALW tip).

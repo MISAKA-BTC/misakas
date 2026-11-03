@@ -5,8 +5,12 @@ use kaspa_consensus_core::{
     palw_batch_court_v1::{
         BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1,
         MAX_BATCH_RANGES_V1,
-        carriage::{BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1},
+        carriage::{
+            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1,
+            BatchStopSigningV1, MAX_BATCH_STOP_EOG_OPENING_BYTES_V1, SignedBatchDemandV1,
+        },
     },
+    palw_freeprompt_v3::PalwFpStopReasonV3,
     palw_court_shared_material_intake_v1::{
         BATCH_STOP_ORDINAL_V1, MATERIAL_BATCH_CONTEXT_V1, MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1,
         SignedMaterialIntakeV1, batch_stop_full_ids_range_v1, material_batch_carrier_fee_v1, material_batch_draft_id_v1,
@@ -423,6 +427,93 @@ async fn fund_control(
     }
     let tx = key.build_palw_batch_court_tx(wire, outpoint, &entry, fee).map_err(refused)?;
     Ok((tx, fee, rent))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StopQuote {
+    assigned_daa: String,
+    scope_id: String,
+    policy_id: String,
+    network_domain: String,
+    semantics_id: String,
+    signer: String,
+    position: u32,
+    stop_reason: String,
+    table_root: String,
+    vocab: u32,
+    eog_opening_bytes: u64,
+    carrier_bytes: u64,
+}
+
+pub(crate) async fn stop(
+    ctx: &Ctx,
+    key_source: &KeySource,
+    bond: &str,
+    claim: &str,
+    eog_path: &Path,
+    submit: bool,
+    maximum_fee: Option<u64>,
+) -> CliResult {
+    use crate::palw_user::parse_hash;
+    let claim = parse_hash("claim", claim)?;
+    let request = GetPalwCourtStateRequest { claim_hex: claim.to_string(), batch_open: "stop".into(), ..Default::default() };
+    let (nv, key, filer) = crate::palw_user::bond_signer_v1(ctx, key_source, bond).await?;
+    let (now, raw) = read_quote(&nv, request.clone()).await?;
+    let doc: serde_json::Value = serde_json::from_str(&raw).map_err(|why| refused(why.to_string()))?;
+    if doc["version"] != 1 || doc["kind"] != "palwBatchStop" || doc["claimId"] != request.claim_hex || doc["nowDaa"] != now
+        || doc["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
+    {
+        return Err(refused("the node returned a different Batch Stop case"));
+    }
+    if let Some(error) = doc["error"].as_str() {
+        return Err(refused(error));
+    }
+    let quote: StopQuote = serde_json::from_value(doc["stop"].clone()).map_err(|why| refused(why.to_string()))?;
+    let network = crate::bond::network_domain(&nv);
+    let assigned_daa = quote.assigned_daa.parse::<u64>().map_err(|_| refused("invalid Batch Stop DAA"))?;
+    if quote.signer != bond_text(filer) || quote.network_domain != network.to_string() {
+        return Err(refused("the Batch Stop signer or network differs from the quote"));
+    }
+    if now > assigned_daa || submit && now != assigned_daa {
+        return Err(refused(format!("Batch Stop is booked at DAA {assigned_daa}, current fold DAA is {now}")));
+    }
+    if !(1..=MAX_BATCH_STOP_EOG_OPENING_BYTES_V1 as u64).contains(&quote.eog_opening_bytes) {
+        return Err(refused("the quoted EOG opening exceeds the Batch Stop bound"));
+    }
+    let mut eog = Vec::new();
+    std::fs::File::open(eog_path)
+        .and_then(|file| file.take(quote.eog_opening_bytes + 1).read_to_end(&mut eog))
+        .map_err(|why| refused(format!("{}: {why}", eog_path.display())))?;
+    if eog.len() as u64 != quote.eog_opening_bytes {
+        return Err(refused("local EOG opening length differs from the original's reservation"));
+    }
+    let signing = BatchStopSigningV1 {
+        claim, filer, scope_id: parse_hash("scope", &quote.scope_id)?, policy_id: parse_hash("policy", &quote.policy_id)?,
+        semantics_id: parse_hash("semantics", &quote.semantics_id)?, position: quote.position,
+        stop_reason: match quote.stop_reason.as_str() {
+            "exact-budget-reached" => PalwFpStopReasonV3::ExactBudgetReached,
+            "end-of-generation" => PalwFpStopReasonV3::EndOfGeneration,
+            _ => return Err(refused("unknown native stop reason")),
+        },
+        table_root: parse_hash("table root", &quote.table_root)?, vocab: quote.vocab,
+    };
+    let wire = signing.build_v1(network, &eog, |message, context| key.sign_with_context(message.as_byte_slice(), context).to_vec())
+        .map_err(refused)?;
+    let wire_len = borsh::object_length(&wire).map_err(|why| refused(why.to_string()))? + BATCH_COURT_CARRIER_MAGIC_V1.len();
+    if wire_len as u64 != quote.carrier_bytes {
+        return Err(refused("signed Batch Stop length differs from its reservation"));
+    }
+    let (tx, fee, rent) = fund_control(&nv, &key, &wire, maximum_fee).await?;
+    if submit {
+        if read_quote(&nv, request).await? != (now, raw) {
+            return Err(refused("the Batch Stop reservation or selected tip changed before submission"));
+        }
+        nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|why| refused(why.to_string()))?;
+    }
+    println!("{}", serde_json::json!({ "submitted": submit, "txid": tx.id().to_string(), "assignedDaa": assigned_daa,
+        "observedDaa": now, "feeSompi": fee, "storageRentSompi": rent, "claimId": claim.to_string() }));
+    Ok(())
 }
 
 fn bond_text(bond: PalwBondKeyV2) -> String {

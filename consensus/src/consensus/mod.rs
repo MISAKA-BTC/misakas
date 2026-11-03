@@ -4256,6 +4256,9 @@ impl ConsensusApi for Consensus {
         &self,
         target: kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1,
     ) -> Result<Option<(u64, Option<String>)>, String> {
+        if let kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1::BatchStop { claim } = target {
+            return self.virtual_processor.palw_batch_stop_quote_v1_impl(claim);
+        }
         self.virtual_processor.palw_user_view_v1_impl(|state, params, clock, _| {
             kaspa_consensus_core::palw_user_views_v1::palw_court_state_json_v1(state, params, target, clock).map(|doc| doc.to_string())
         })

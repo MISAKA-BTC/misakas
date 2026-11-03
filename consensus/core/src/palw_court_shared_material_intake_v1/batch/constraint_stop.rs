@@ -45,15 +45,73 @@ pub(crate) fn quote_batch_stop_full_ids_open_v1(
     use crate::palw_batch_court_v1::carriage::quote_batch_open_v1;
     let context = crate::palw_court_shared_tir_state_v1::context(state, claim)?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
-    let registration = crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(state, claim)?
-        .ok_or("Batch Stop has no verified tokenizer registration for the original")?;
-    let original = frame.original_v1();
-    let bounds = registration.opening_bounds_for_generated_ids_v1(original.decode_tokens_executed);
-    let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(context.scope_id, original, bounds)
-        .ok_or("Batch Stop original is outside the constrained Stop profile")?;
+    let (plan, _) = rooted_stop_plan_v1(state, context.scope_id, frame.original_v1())?;
     let range = batch_stop_full_ids_range_v1(claim, plan.generated_ids)?;
     let open = quote_batch_open_v1(state, claim, notice, BATCH_STOP_ORDINAL_V1, vec![range])?;
     Ok((plan.generated_ids, open))
+}
+
+fn rooted_stop_plan_v1<'a>(
+    state: &'a PalwChainStateV2,
+    scope: Hash64,
+    original: &PalwFreePromptCommitmentV3,
+) -> Result<(ConstraintStopBatchOperandsV1, &'a crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1), String> {
+    let claim = fp_claim_id_v3(original);
+    let registration = crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(state, claim)?
+        .ok_or("Batch Stop has no verified tokenizer registration for the original")?;
+    let bounds = registration.opening_bounds_for_generated_ids_v1(original.decode_tokens_executed);
+    let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(scope, original, bounds)
+        .ok_or("Batch Stop original is outside the constrained Stop profile")?;
+    Ok((plan, registration))
+}
+
+pub(crate) fn quote_batch_stop_v1(
+    state: &PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    claim: Hash64,
+    now: u64,
+    rules_at: impl FnOnce(u64) -> Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>,
+) -> Result<serde_json::Value, String> {
+    use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
+    use crate::palw_state_v2::PalwBondStatusV2;
+    if state.staged_court_row_v1(&Key::CourtBatchStopReceipt(claim)).is_some() {
+        return Err("Batch Stop already has a retained verdict".into());
+    }
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim)?;
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
+    let original = frame.original_v1();
+    let (plan, registration) = rooted_stop_plan_v1(state, context.scope_id, original)?;
+    let (_, stop) = plan.packet_ids_v1(BATCH_STOP_ORDINAL_V1)?;
+    let service = state.court_service_row_v3_v1().ok_or("Batch Stop has no rooted causal service book")?;
+    let at = service.state.book.assigned_daa(&stop).ok_or("Batch Stop has no assigned DAA")?;
+    if now > at {
+        return Err("Batch Stop reserved DAA has passed".into());
+    }
+    let filer = plan.check_rooted_slot_v1(state, at, plan.carrier_bytes_v1())?;
+    check_stop_filer_v1(frame, filer)?;
+    let bond = state.bond(&filer).ok_or("Batch Stop filer absent")?;
+    if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
+        return Err("Batch Stop filer is no longer eligible".into());
+    }
+    let rules = rules_at(at).filter(|rules| rules.at.daa_score == at && rules.tir_active && rules.constraint_active
+        && rules.step_ladder == frame.plan_v1().owner_work.rules.max_step_leaf_count
+        && plan.carrier_bytes_v1() <= rules.court.max_close_bytes()).ok_or("Batch Stop lacks native rules at the reserved DAA")?;
+    let facts = registration.facts_v1();
+    let semantics = state.claim_semantics_v1(&claim).ok_or("Batch Stop immutable semantics absent")?;
+    Ok(serde_json::json!({
+        "assignedDaa": at.to_string(), "scopeId": context.scope_id.to_string(),
+        "policyId": crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(&rules)?.to_string(),
+        "networkDomain": rules.network_domain.to_string(), "semanticsId": semantics.commitment().to_string(),
+        "signer": crate::palw_user_views_v1::palw_bond_key_text_v1(&filer),
+        "position": plan.generated_ids,
+        "stopReason": match original.stop_reason {
+            PalwFpStopReasonV3::ExactBudgetReached => "exact-budget-reached",
+            PalwFpStopReasonV3::EndOfGeneration => "end-of-generation",
+        },
+        "tableRoot": facts.statement.table_root.to_string(), "vocab": facts.statement.vocab,
+        "eogOpeningBytes": registration.opening_bounds_for_generated_ids_v1(plan.generated_ids).eog_opening_bytes,
+        "carrierBytes": plan.carrier_bytes_v1(),
+    }))
 }
 
 /// Template eligibility uses rooted availability and the exact reserved
@@ -82,25 +140,30 @@ pub(crate) fn check_batch_stop_slot_v1(
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
     let context = crate::palw_court_shared_tir_state_v1::context(state, claim)?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
+    check_stop_filer_v1(frame, filer)?;
+    if !matches!(state.staged_court_row_v1(&Key::CourtSharedIds(claim)), Some(Row::CourtSharedIds(_))) {
+        return Err("Batch Stop has no accepted FullIds".into());
+    }
+    let original = frame.original_v1();
+    let (plan, registration) = rooted_stop_plan_v1(state, context.scope_id, original)?;
+    let bounds = registration.opening_bounds_for_generated_ids_v1(original.decode_tokens_executed);
+    if plan.check_rooted_slot_v1(state, at, carrier_bytes)? != filer {
+        return Err("Batch Stop filer differs from the signer of the accepted notice".into());
+    }
+    Ok(bounds)
+}
+
+fn check_stop_filer_v1(
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    filer: crate::palw_state_v2::PalwBondKeyV2,
+) -> Result<(), String> {
     if filer == frame.custody_v1().pledge_v1().producer
         || frame.original_custody_v1().credit_v1(&filer).is_some()
         || frame.original_custody_v1().grant_v1(&filer).is_some()
     {
         return Err("Batch Stop filer is liable on this claim".into());
     }
-    if !matches!(state.staged_court_row_v1(&Key::CourtSharedIds(claim)), Some(Row::CourtSharedIds(_))) {
-        return Err("Batch Stop has no accepted FullIds".into());
-    }
-    let registration = crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(state, claim)?
-        .ok_or("Batch Stop has no verified tokenizer registration for the original")?;
-    let original = frame.original_v1();
-    let bounds = registration.opening_bounds_for_generated_ids_v1(original.decode_tokens_executed);
-    let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(context.scope_id, original, bounds)
-        .ok_or("Batch Stop original is outside the constrained Stop profile")?;
-    if plan.check_rooted_slot_v1(state, at, carrier_bytes)? != filer {
-        return Err("Batch Stop filer differs from the signer of the accepted notice".into());
-    }
-    Ok(bounds)
+    Ok(())
 }
 
 pub(crate) struct ConstraintStopBatchOperandsV1 {

@@ -364,6 +364,7 @@ pub enum PalwCourtTargetV1 {
     BatchResponse { claim: Hash64, ordinal: u64, target: MaterialTargetV1 },
     NumericalBatchOpen { claim: Hash64, ordinal: usize, notice: Hash64, leaf: u64, lengths: Vec<(MaterialTargetV1, u64)> },
     BatchStopFullIdsOpen { claim: Hash64, notice: Hash64 },
+    BatchStop { claim: Hash64 },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -380,6 +381,7 @@ pub fn palw_court_state_json_v1(
         PalwCourtTargetV1::Claim(c) => (c, None),
         PalwCourtTargetV1::Session(s) => (state.court_session(&s)?.claim, Some(s)),
         PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => return batch_response_json_v1(state, claim, ordinal, target, now),
+        PalwCourtTargetV1::BatchStop { .. } => return None, // Requires the node's native rules at the reserved DAA.
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
             return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
         }
@@ -424,6 +426,25 @@ pub fn palw_court_state_json_v1(
         "dispute": dispute_json(state, &claim_id),
         "courtClocks": claim.map(|c| court_clocks_json(state, params, &claim_id, c)).unwrap_or(Value::Null),
     }))
+}
+
+pub fn palw_batch_stop_quote_json_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim: Hash64,
+    now: u64,
+    rules_at: impl FnOnce(u64) -> Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>,
+) -> Value {
+    use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::quote_batch_stop_v1;
+    let (stop, error) = match quote_batch_stop_v1(state, params, claim, now, rules_at) {
+        Ok(stop) => (stop, None),
+        Err(error) => (Value::Null, Some(error)),
+    };
+    json!({
+        "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchStop", "nowDaa": now,
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "claimId": claim.to_string(), "stop": stop, "error": error,
+    })
 }
 
 fn numerical_batch_open_json_v1(

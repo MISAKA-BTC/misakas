@@ -14,6 +14,58 @@ use crate::{
 #[path = "palw_court_batch_stop_payload_v1.rs"]
 pub(crate) mod batch_payload;
 
+/// The signed fields and tokenizer context returned for a booked Stop.
+pub struct BatchStopSigningV1 {
+    pub claim: Hash64,
+    pub scope_id: Hash64,
+    pub policy_id: Hash64,
+    pub semantics_id: Hash64,
+    pub position: u32,
+    pub stop_reason: PalwFpStopReasonV3,
+    pub filer: PalwBondKeyV2,
+    pub table_root: Hash64,
+    pub vocab: u32,
+}
+
+impl BatchStopSigningV1 {
+    /// Authenticate the local EOG opening and sign the existing EOG-only wire.
+    /// The accepting node verifies this carrier against its own retained original.
+    pub fn build_v1(
+        self,
+        network: Hash64,
+        eog_bytes: &[u8],
+        sign: impl FnOnce(Hash64, &[u8]) -> Vec<u8>,
+    ) -> Result<crate::palw_batch_court_v1::carriage::BatchCourtWireV1, String> {
+        use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchStopControlV1};
+        use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+        if self.position == 0 || eog_bytes.len() > batch_payload::MAX_BATCH_STOP_EOG_OPENING_BYTES_V1 {
+            return Err("Batch Stop position or EOG opening length".into());
+        }
+        let mut intent = SignedConstraintStopIntentV1 {
+            version: 1, claim: self.claim, scope_id: self.scope_id, policy_id: self.policy_id, semantics_id: self.semantics_id,
+            material_id: Hash64::default(), position: self.position, stop_reason: self.stop_reason, filer: self.filer,
+            signature: vec![0; MLDSA87_SIGNATURE_LEN],
+        };
+        let mut operands = borsh::to_vec(&intent).map_err(|why| why.to_string())?;
+        operands.extend_from_slice(eog_bytes);
+        let empty_renderings: &[crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1] = &[];
+        operands.extend_from_slice(&0u32.to_le_bytes());
+        let decoded = batch_payload::BatchStopPayloadV1::decode_v1(&operands, eog_bytes.len() as u64)
+            .map_err(|why| why.to_string())?;
+        if !decoded.eog.verifies(&self.table_root, self.vocab) {
+            return Err("Batch Stop EOG opening does not match the quoted token table".into());
+        }
+        let material = Material { eog: &decoded.eog, renderings: empty_renderings };
+        intent.material_id = material.identity(replay::WorkBudget { max_material_bytes: eog_bytes.len() as u64 + 4, max_calls: 0 })?;
+        intent.signature = sign(intent.signing_message(network)?, CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1);
+        if intent.signature.len() != MLDSA87_SIGNATURE_LEN {
+            return Err("Batch Stop signer returned the wrong signature length".into());
+        }
+        let operands = borsh::to_vec(&(&intent, &decoded.eog, empty_renderings)).map_err(|why| why.to_string())?;
+        Ok(BatchCourtWireV1::Stop(BatchStopControlV1 { operands }))
+    }
+}
+
 /// From the accepted BCT1 operand bytes to a native finding. The caller
 /// still owns the terminal state transition and any resulting economic effect.
 pub(crate) fn verify_rooted_batch_stop_v1(

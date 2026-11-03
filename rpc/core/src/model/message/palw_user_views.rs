@@ -92,7 +92,7 @@ pub struct GetPalwCourtStateRequest {
     pub batch_ordinal: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub batch_target: String,
-    /// Open selector `notice/leaf/target=bytes,target=bytes` or `notice/stop-full-ids`.
+    /// Batch quote selector: `notice/leaf/target=bytes,target=bytes`, `notice/stop-full-ids`, or `stop`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub batch_open: String,
 }

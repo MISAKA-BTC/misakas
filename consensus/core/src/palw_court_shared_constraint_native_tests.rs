@@ -476,6 +476,20 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::BatchStopPayloadV1;
     let wire=borsh::to_vec(&(&end_only,&eog,eog_only.renderings)).unwrap();
     {
+        use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchStopSigningV1};
+        let signing = || BatchStopSigningV1 {
+            claim, scope_id: scope, policy_id: end_only.policy_id, semantics_id: end_only.semantics_id,
+            position: end_only.position, stop_reason: stop, filer: end_only.filer, table_root: table.root(), vocab: table.vocab(),
+        };
+        let signed = signing().build_v1(rules.network_domain, &borsh::to_vec(&eog).unwrap(), |message, context| {
+            libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, message.as_byte_slice(), context, [97; 32]).unwrap().as_ref().to_vec()
+        }).unwrap();
+        let BatchCourtWireV1::Stop(signed) = signed else { panic!("expected Stop") };
+        assert_eq!(signed.operands, wire);
+        assert!(signing().build_v1(rules.network_domain, &borsh::to_vec(&eog_bad).unwrap(),
+            |_, _| panic!("invalid opening must be rejected before signing")).is_err());
+    }
+    {
         use crate::palw_batch_court_v1::carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, BatchStopControlV1};
         let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
         payload.extend(borsh::to_vec(&BatchCourtWireV1::Stop(BatchStopControlV1 { operands: wire.clone() })).unwrap());

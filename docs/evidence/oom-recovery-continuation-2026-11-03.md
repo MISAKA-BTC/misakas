@@ -3534,3 +3534,27 @@ B0 and relay agreed at virtual DAA 19,721, with no new Qwen carrier
 in the scanned page. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-fullids-live.PzdOSG/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-fullids-open.BhowUP/tests.log`.
+
+## Sign and fund a booked Batch Stop
+
+The operator Court RPC can quote the original's booked Stop after
+accepted FullIds. It checks the causal reservation and the notice
+signer, and uses the same network policy resolver as the accepting fold
+at the assigned DAA. `misaka palw batch-stop --eog-opening FILE` checks
+the selected snapshot and local EOG opening, builds the existing signed
+EOG-only carrier and funds its fee. With `--submit` it checks the exact
+fold DAA and rereads the quote before broadcast. The local EOG file must
+be produced by the Panel or operator.
+
+The extracted signing and protocol suite passed 45 checks. The added
+test compares the carrier operands byte for byte with the native intent
+for both stop reasons, using a real token table opening and ML-DSA
+signing. Altered and truncated openings fail before signing. Six
+separate selector and request checks passed. The added native fixture,
+complete Node/CLI build and wallet-funded filing remain unverified.
+
+B0 and relay agreed at virtual DAA 19,722, with no new Qwen carrier
+in the scanned page. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-filing-live.8Lq7Zo/page.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-signing.TyGvQf/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-quote-selector.iQo28j/tests.log`.
