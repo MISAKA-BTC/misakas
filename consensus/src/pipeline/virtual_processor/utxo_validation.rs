@@ -807,6 +807,10 @@ impl VirtualStateProcessor {
             palw_native_resource_v1::reserve_native_requests_v1,
             palw_state_v2::{PalwStateV2Error, QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2},
         };
+        use misaka_palw_positive_contract::{
+            assignment::funding_relay::{RelayFundingPurposeV2, RelayTargetV2},
+            rows::{NativeHash64, NativeOutpoint},
+        };
         let mut spends = std::collections::HashMap::new();
         let mut owner: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1> = None;
         let Some(state) = state else { return Ok((spends, owner)) };
@@ -863,6 +867,33 @@ impl VirtualStateProcessor {
                 Err(PalwStateV2Error::NativeContextUnavailable(_)) => return Err(unavailable("Case replay context is unavailable")),
                 Err(_) => continue,
             };
+            if let Some(reservation) = spend.successor_relay_v2() {
+                let point = spend.continuation_v2().ok_or_else(|| unavailable("successor relay has no qualified output"))?;
+                let output = tx.outputs.get(point.index as usize).ok_or_else(|| unavailable("qualified successor output missing"))?;
+                let successor = NativeOutpoint { transaction: NativeHash64(point.transaction_id.as_bytes()), index: point.index };
+                let current = spend.debit_v2();
+                let target = RelayTargetV2::Continuation {
+                    original_funding: funding.original_outpoint,
+                    predecessor: NativeOutpoint { transaction: NativeHash64(current.transaction_id.as_bytes()), index: current.index },
+                    parent_spend: successor.transaction,
+                    original_contract: funding.consent.id().0,
+                };
+                let archive = self.check_pending_funding_relay_archive_v2(
+                    parent,
+                    daa,
+                    state,
+                    RelayFundingPurposeV2::CaseC,
+                    successor,
+                    |terms| {
+                        terms.target == target
+                            && terms.assignment == backing.assignment().id()
+                            && terms.expected_amount == output.value
+                    },
+                )?;
+                if archive.is_none_or(|archive| archive.reservation != reservation) {
+                    return Err(unavailable("qualified successor differs from its accepted registration"));
+                }
+            }
             let bytes = (4 * size_of::<(TransactionId, QualifiedCaseSourceSpendV2)>()) as u64;
             match &mut owner {
                 Some(lease) => lease.grow_memory_v1(bytes)?,

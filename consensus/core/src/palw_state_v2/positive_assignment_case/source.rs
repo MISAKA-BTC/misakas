@@ -1076,6 +1076,7 @@ pub struct QualifiedCaseSourceSpendV2 {
     inputs: Digest,
     debit: crate::tx::TransactionOutpoint,
     continuation: Option<crate::tx::TransactionOutpoint>,
+    successor_relay: Option<AcceptedMaterial>,
 }
 impl QualifiedCaseSourceSpendV2 {
     pub fn matches_v2(&self, transaction: &crate::tx::Transaction, entries: &[crate::tx::UtxoEntry]) -> bool {
@@ -1090,6 +1091,12 @@ impl QualifiedCaseSourceSpendV2 {
     }
     pub fn continuation_v2(&self) -> Option<crate::tx::TransactionOutpoint> {
         self.continuation
+    }
+    /// The pending registration selected by the literal successor output.
+    /// Consensus must authenticate its accepted carrier before allowing the
+    /// locked input to be spent.
+    pub fn successor_relay_v2(&self) -> Option<AcceptedMaterial> {
+        self.successor_relay
     }
 }
 
@@ -1126,6 +1133,7 @@ pub fn qualify_case_source_spend_v2(
             .map_err(refuse)?,
         debit: native_assignment_outpoint_v2(payment.debit),
         continuation: payment.funding.current_outpoint.map(native_assignment_outpoint_v2),
+        successor_relay: payment.successor.as_ref().map(|successor| successor.custody.reservation),
     })
 }
 

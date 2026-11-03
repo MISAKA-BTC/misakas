@@ -518,10 +518,10 @@ impl VirtualStateProcessor {
         self.verify_pending_relay_archive_v2(parent, state, &auth, &custody, body, Some(payload), workspace).map(Some)
     }
 
-    /// Initial F must use a registration rooted in its selected parent's
-    /// state. Rebuild the fixed literal package from that row pair and compare
-    /// it with the archive before handing off any replay data.
-    fn check_initial_f_relay_archive_v2(
+    /// A funding output must use a registration rooted in its selected
+    /// parent. Rebuild the fixed literal package from that row pair and
+    /// compare it with the archive before handing off any replay data.
+    pub(in crate::pipeline::virtual_processor) fn check_pending_funding_relay_archive_v2(
         &self,
         parent: BlockHash,
         now: u64,
@@ -536,7 +536,7 @@ impl VirtualStateProcessor {
             native::NativeRowKey,
             rows::NativeRowBody,
         };
-        let fault = |why| NativeCoverageV1::unsupported::<Self>("initial funding relay archive", why);
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("pending funding relay archive", why);
         let workspace = pending_funding_relay_archive_workspace_v2();
         let _lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(workspace)?)?;
         let rows = PositiveRowsV2::new(state);
@@ -1097,7 +1097,7 @@ impl PositiveCarrierPhaseTwoV2 {
                 let funding = NativeOutpoint { transaction: NativeHash64(tx.id().as_bytes()), index };
                 let now = point.daa_score;
                 if let Some(bundle) = initial_a {
-                    pending_relay = processor.check_initial_f_relay_archive_v2(
+                    pending_relay = processor.check_pending_funding_relay_archive_v2(
                         carrier.prefix.selected_parent,
                         now,
                         state,
@@ -1117,7 +1117,7 @@ impl PositiveCarrierPhaseTwoV2 {
                 }
                 if let Some((assignment, result, consent)) = initial_c {
                     let target = RelayTargetV2::InitialCase { result, funding_scope: consent.scope, consent: consent.id() };
-                    pending_relay = processor.check_initial_f_relay_archive_v2(
+                    pending_relay = processor.check_pending_funding_relay_archive_v2(
                         carrier.prefix.selected_parent,
                         now,
                         state,
