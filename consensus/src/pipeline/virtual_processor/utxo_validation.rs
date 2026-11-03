@@ -104,6 +104,8 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Actual accepting block only, set by the owning chain walk. No virtual,
     /// mempool or selected-parent snapshot may manufacture this provenance.
     pub positive_accepting_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
+    /// Disposable reward calculation only. Never forwarded to the accepted fold.
+    pub positive_relay_preview_point: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
     pub positive_native_carriers: positive_native_context_v2::PositiveCarrierCompanionsV2,
     pub relay_fee_plan: Option<NativeRelayFeePlanV2>,
     pub mergeset_acceptance_data: Vec<MergesetBlockAcceptanceData>,
@@ -416,6 +418,7 @@ impl<'a> UtxoProcessingContext<'a> {
             multiset_hash: selected_parent_multiset_hash,
             mergeset_diff: UtxoDiff::default(),
             positive_accepting_point: None,
+            positive_relay_preview_point: None,
             positive_native_carriers: Default::default(),
             relay_fee_plan: None,
             accepted_tx_ids: Vec::with_capacity(1), // We expect at least the selected parent coinbase tx
@@ -778,7 +781,7 @@ impl VirtualStateProcessor {
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
     ) -> Result<(), NativeCoverageV1> {
         let relay_plan = ctx.relay_fee_plan.take();
-        let accepting = ctx.positive_accepting_point;
+        let accepting = ctx.positive_accepting_point.or(ctx.positive_relay_preview_point);
         let selected_parent = ctx.selected_parent();
         let match_relay = |ordinal, carrier_block, tx: &Transaction, gross, burn, before_relay| match &relay_plan {
             Some(plan) => plan.match_carrier(ordinal, accepting, selected_parent, carrier_block, tx, gross, burn, before_relay),
@@ -969,7 +972,7 @@ impl VirtualStateProcessor {
                 // The Full-script seal is provenance only. Each borrow ends
                 // before the ordinary acceptance code mutates this prefix.
                 // Failed extra validation leaves the ordinary UTXO path intact.
-                if let Some(point) = ctx.positive_accepting_point
+                if let Some(point) = accepting
                     && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
                     && kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&validated_tx.tx.payload)
                     && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(point.daa_score)

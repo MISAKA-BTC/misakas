@@ -1067,3 +1067,26 @@ Strict Contract/Core/Consensus library Clippy and all Consensus test-target
 typechecks passed. The exact-source acceptance comparison ran one isolated
 test with changed carrier indices, transaction order, block identity and
 missing merged groups. No full candidate with a relay fee plan ran.
+
+## Scoped virtual relay fee preview
+
+The virtual UTXO walk now supplies the template's mergeset rewards with the
+same planned relay debit and the same acceptance replay checks used for a
+candidate. It uses the virtual DAA, blue score and difficulty bits, and keeps
+the reserved scratch origin separate from actual accepted origins. Its output
+is the net reward projection. The candidate independently derives its own
+plan and checks the observed registration and custody writes.
+
+This preview covers the initial relay path with no interleaved legacy PALW
+objects or other Positive actions, outside the timestamp-dependent execution
+lane and the own-attempt-dependent DNS-retirement overlay carve. Ordinary
+payments can share the mergeset. Mixed acceptance, the Round monetary budget,
+and the overlay carve still need construction parity. The public activation
+fences remain closed.
+
+Strict Contract/Core/Consensus library Clippy and all Consensus test targets
+typechecked. Three isolated tests exercised the exact-source fee-plan
+matcher, including rejection across template and actual origins, and the
+acceptance replay comparator. An actual funded template and its acceptance
+on another node have yet to run. The compressed verification record pins
+the commands, source map and logs.

@@ -2541,23 +2541,8 @@ impl VirtualStateProcessor {
                         ctx.positive_accepting_point = Some(positive_point);
                     }
                     self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
-                    let take_assignment_actions = |ctx: &mut UtxoProcessingContext<'_>| {
-                        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
-                        if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
-                            return Err(fault);
-                        }
-                        std::mem::take(&mut ctx.positive_native_carriers)
-                            .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, positive_point, ctx.selected_parent())
-                            .map_err(|why| {
-                                NativeCoverageV1::unsupported::<Self>("Positive carrier phase-two provenance", &format!("{why:?}"))
-                            })?
-                            .into_assignment_raw_actions_v2(
-                                self,
-                                &(&selected_parent_utxo_view).compose(&ctx.mergeset_diff),
-                                palw_state.as_deref(),
-                            )
-                    };
-                    let mut assignment_raw_actions = take_assignment_actions(&mut ctx)?;
+                    let mut assignment_raw_actions =
+                        self.take_assignment_actions_v2(&mut ctx, positive_point, &selected_parent_utxo_view, palw_state.as_deref())?;
                     if let Some(state) = palw_state.as_deref()
                         && let Some(plan) =
                             self.preview_candidate_relay_fees_v2(&ctx, state, &positive_point, &header, &assignment_raw_actions)?
@@ -2567,16 +2552,20 @@ impl VirtualStateProcessor {
                         let parent_multiset = self.utxo_multisets_store.get(selected_parent).map_err(|why| {
                             NativeCoverageV1::unsupported::<Self>("relay fee replay parent MuHash", &why.to_string())
                         })?;
-                        let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan)?;
-                        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
-                        if !super::utxo_validation::relay_acceptance_matches(&original, &ctx.mergeset_acceptance_data) {
-                            return Err(NativeCoverageV1::unsupported::<Self>(
-                                "relay fee replay",
-                                "accepted blocks, transactions or carrier positions changed",
-                            )
-                            .into());
-                        }
-                        assignment_raw_actions = take_assignment_actions(&mut ctx)?;
+                        self.replay_relay_utxo_fees_v2(
+                            &mut ctx,
+                            &selected_parent_utxo_view,
+                            bond_view,
+                            positive_point,
+                            parent_multiset,
+                            plan,
+                        )?;
+                        assignment_raw_actions = self.take_assignment_actions_v2(
+                            &mut ctx,
+                            positive_point,
+                            &selected_parent_utxo_view,
+                            palw_state.as_deref(),
+                        )?;
                     }
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
@@ -2788,7 +2777,7 @@ impl VirtualStateProcessor {
                                     &ctx.palw_escrow_settlements,
                                     assignment_raw_actions,
                                     &ctx.accepted_tx_ids,
-                                    false,
+                                    palw_accept::NativeAssignmentRehearsalModeV2::Observed,
                                 )?;
                                 let palw_accept::NativeAssignmentRehearsalResultV2::Observed(assignment_raw_schedule) =
                                     assignment_rehearsal
@@ -3841,6 +3830,47 @@ impl VirtualStateProcessor {
         Ok(new_virtual_state)
     }
 
+    fn take_assignment_actions_v2(
+        &self,
+        ctx: &mut UtxoProcessingContext<'_>,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        selected_parent_utxo_view: &impl UtxoView,
+        state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+    ) -> Result<
+        Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1,
+    > {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
+            return Err(fault);
+        }
+        std::mem::take(&mut ctx.positive_native_carriers)
+            .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, point, ctx.selected_parent())
+            .map_err(|why| NativeCoverageV1::unsupported::<Self>("Positive carrier phase-two provenance", &format!("{why:?}")))?
+            .into_assignment_raw_actions_v2(self, &selected_parent_utxo_view.compose(&ctx.mergeset_diff), state)
+    }
+
+    fn replay_relay_utxo_fees_v2(
+        &self,
+        ctx: &mut UtxoProcessingContext<'_>,
+        selected_parent_utxo_view: &(impl UtxoView + Sync),
+        bond_view: &ActiveBondView,
+        point: kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        parent_multiset: MuHash,
+        plan: palw_accept::NativeRelayFeePlanV2,
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan)?;
+        self.calculate_utxo_state(ctx, selected_parent_utxo_view, bond_view, point.daa_score)?;
+        if !super::utxo_validation::relay_acceptance_matches(&original, &ctx.mergeset_acceptance_data) {
+            return Err(NativeCoverageV1::unsupported::<Self>(
+                "relay fee replay",
+                "accepted blocks, transactions or carrier positions changed",
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn calculate_virtual_state(
         &self,
         virtual_stores: &VirtualStores,
@@ -3959,9 +3989,53 @@ impl VirtualStateProcessor {
             .as_ref()
             .and_then(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score));
 
+        let daa = virtual_daa_window.daa_score;
+        // The reserved origin distinguishes scratch records from every real block.
+        // The preview uses the real virtual bits. Timestamp-dependent Round
+        // inputs and the own-attempt-dependent overlay carve need later inputs.
+        if virtual_palw_state.is_some()
+            && ctx.can_replay_relay_fees()
+            && self.palw_execution_lane_at(daa).is_none()
+            && !self.dns_retired_at(daa)
+            && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
+            && self.palw_positive_assignment_params_v2.as_ref().is_some_and(|params| {
+                params.palw_positive_assignment_v2_at(daa).is_some() && params.palw_positive_funding_relay_v2_at(daa).is_some()
+            })
+        {
+            ctx.positive_relay_preview_point = Some(kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                block: kaspa_consensus_core::blockhash::ORIGIN,
+                daa_score: daa,
+                blue_score: virtual_ghostdag_data.blue_score,
+                subsidy: self.coinbase_manager.calc_block_subsidy(daa),
+            });
+        }
+        let relay_parent_multiset = ctx.positive_relay_preview_point.map(|_| ctx.multiset_hash.clone());
+
         // Calc virtual UTXO state relative to selected parent
         self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score)
             .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+        if let (Some(point), Some(parent_multiset), Some((_, state))) =
+            (ctx.positive_relay_preview_point, relay_parent_multiset, virtual_palw_state.as_ref())
+        {
+            let actions = self
+                .take_assignment_actions_v2(&mut ctx, point, &selected_parent_utxo_view, Some(state))
+                .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+            let plan = self
+                .preview_template_relay_fees_v2(&ctx, state, virtual_bits, &actions)
+                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
+            drop(actions);
+            if let Some(plan) = plan {
+                self.replay_relay_utxo_fees_v2(
+                    &mut ctx,
+                    &selected_parent_utxo_view,
+                    selected_parent_bond_view,
+                    point,
+                    parent_multiset,
+                    plan,
+                )
+                .map_err(RuleError::LocalNativeCapacityUnavailable)?;
+            }
+        }
         if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
             return Err(RuleError::LocalNativeCapacityUnavailable(fault));
         }

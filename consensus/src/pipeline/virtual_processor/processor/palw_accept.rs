@@ -618,25 +618,40 @@ impl VirtualStateProcessor {
         header: &Header,
         actions: &[kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2],
     ) -> Result<Option<NativeRelayFeePlanV2>, PalwLocalTransitionFaultV1> {
-        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
         if !ctx.can_replay_relay_fees()
             || !actions.iter().any(|action| action.relay_carrier_fees_v2().is_some())
             || self.palw_committed_root_v1(state) != header.palw_state_root
         {
             return Ok(None);
         }
-        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
-        let bytes = (actions.len() as u64)
-            .checked_mul(size_of::<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>() as u64)
-            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("candidate relay preview actions"))?;
-        let fault = |why| NativeCoverageV1::unsupported::<Self>("candidate relay preview actions", why);
-        let _lease = reserve_native_requests_v1(bytes)?.ok_or_else(|| fault("preview owner is not armed"))?;
-        let mut preview_actions = Vec::new();
-        preview_actions.try_reserve_exact(actions.len()).map_err(|_| fault("preview allocation refused"))?;
-        if preview_actions.capacity() > actions.len() {
-            return Err(fault("preview allocation exceeds reserved capacity").into());
+        self.preview_relay_fees_v2(ctx, state, point, Self::palw_own_attempt_class_of_header_v1(header), actions, None)
+    }
+
+    pub(super) fn preview_template_relay_fees_v2(
+        &self,
+        ctx: &UtxoProcessingContext<'_>,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        bits: u32,
+        actions: &[kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2],
+    ) -> Result<Option<NativeRelayFeePlanV2>, PalwLocalTransitionFaultV1> {
+        let Some(point) = ctx.positive_relay_preview_point.as_ref() else { return Ok(None) };
+        if actions.is_empty() || actions.iter().any(|action| action.relay_carrier_fees_v2().is_none()) {
+            return Ok(None);
         }
-        preview_actions.extend_from_slice(actions);
+        self.preview_relay_fees_v2(ctx, state, point, None, actions, Some(bits))
+    }
+
+    fn preview_relay_fees_v2(
+        &self,
+        ctx: &UtxoProcessingContext<'_>,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        own_attempt_class: Option<kaspa_hashes::Hash64>,
+        actions: &[kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2],
+        template_bits: Option<u32>,
+    ) -> Result<Option<NativeRelayFeePlanV2>, PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
         let objects = self.palw_v2_objects_of_block(
             &ctx.mergeset_acceptance_data,
             state,
@@ -645,18 +660,34 @@ impl VirtualStateProcessor {
             &ctx.palw_v2_accepted_tx_fees,
             &ctx.palw_v2_rent_available_fees,
         )?;
+        // The producer can attach its own attempt after template construction.
+        // Mixed object application can depend on that attempt's class.
+        if template_bits.is_some() && !objects.is_empty() {
+            return Ok(None);
+        }
+        let bytes = (actions.len() as u64)
+            .checked_mul(size_of::<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>() as u64)
+            .ok_or_else(|| NativeCoverageV1::overflow::<Self>("relay preview actions"))?;
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("relay preview actions", why);
+        let _lease = reserve_native_requests_v1(bytes)?.ok_or_else(|| fault("preview owner is not armed"))?;
+        let mut preview_actions = Vec::new();
+        preview_actions.try_reserve_exact(actions.len()).map_err(|_| fault("preview allocation refused"))?;
+        if preview_actions.capacity() > actions.len() {
+            return Err(fault("preview allocation exceeds reserved capacity").into());
+        }
+        preview_actions.extend_from_slice(actions);
         let (_, NativeAssignmentRehearsalResultV2::Planned(plan)) = self.palw_v2_accepted_objects_and_raw_assignments_v2(
             state,
             state_params,
             point,
             objects,
             point.block,
-            Self::palw_own_attempt_class_of_header_v1(header),
+            own_attempt_class,
             &ctx.palw_round_fee_incomes,
             &ctx.palw_escrow_settlements,
             preview_actions,
             &ctx.accepted_tx_ids,
-            true,
+            template_bits.map_or(NativeAssignmentRehearsalModeV2::CandidateFees, NativeAssignmentRehearsalModeV2::TemplateFees),
         )?
         else {
             return Err(fault("ordered preview returned an observed schedule").into());
@@ -677,9 +708,13 @@ impl VirtualStateProcessor {
         escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
         actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
         accepted_ids: &[TransactionId],
-        plan_relay_fees: bool,
+        mode: NativeAssignmentRehearsalModeV2,
     ) -> Result<(PalwAcceptedObjectsAndOriginalsV2, NativeAssignmentRehearsalResultV2), PalwLocalTransitionFaultV1> {
-        if actions.is_empty() && !plan_relay_fees {
+        use kaspa_consensus_core::{blockhash::ORIGIN, palw_native_resource_v1::NativeCoverageV1};
+        if matches!(mode, NativeAssignmentRehearsalModeV2::TemplateFees(_)) != (point.block == ORIGIN) {
+            return Err(NativeCoverageV1::unsupported::<Self>("relay rehearsal", "preview and accepted block contexts differ").into());
+        }
+        if actions.is_empty() && matches!(mode, NativeAssignmentRehearsalModeV2::Observed) {
             return Ok((
                 self.palw_v2_accepted_objects_and_originals(
                     state,
@@ -694,7 +729,7 @@ impl VirtualStateProcessor {
                 NativeAssignmentRehearsalResultV2::Observed(Vec::new()),
             ));
         }
-        let mut raw = NativeAssignmentRehearsalV2::new(actions, accepted_ids, plan_relay_fees)?;
+        let mut raw = NativeAssignmentRehearsalV2::new(actions, accepted_ids, mode)?;
         let legacy = kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
             self.palw_v2_accepted_objects_and_refunds_inner(
                 state,
@@ -828,6 +863,14 @@ impl VirtualStateProcessor {
         // The old path's synthetic chain point; unused past the fence.
         let mut rehearsal = *point;
         let mut fee_extras = self.palw_transition_extras_for(point).into_legacy_extras();
+        if let Some(NativeAssignmentRehearsalModeV2::TemplateFees(bits)) = assignment_actions.as_ref().map(|raw| raw.mode) {
+            if let Some(work_target) = fee_extras.work_target.as_mut() {
+                work_target.block_bits = bits;
+            }
+            if let Some(economic_payout) = fee_extras.economic_payout.as_mut() {
+                economic_payout.block_bits = bits;
+            }
+        }
         // Resolve against the accepted parent before pre-object preparation or
         // synthetic rehearsals move the state. Rehearsals retain this same context.
         self.palw_attach_source_bootstrap_context_v1(state, point, &mut fee_extras);
@@ -4000,6 +4043,12 @@ fn relay_fee_plan_matches_actual_carrier_position_and_all_prior_fees() {
     for (gross, burn, before) in [(21, 2, 17), (20, 3, 17), (20, 2, 18)] {
         assert!(plan.match_carrier(1, Some(point), parent, carrier, &tx, gross, burn, before).is_err());
     }
+
+    let preview = PalwBlockContextV2 { block: kaspa_consensus_core::blockhash::ORIGIN, ..point };
+    assert!(plan.match_carrier(1, Some(preview), parent, carrier, &tx, 20, 2, 17).is_err());
+    plan.entries[0].origin.accepting_block = NativeHash64(preview.block.as_bytes());
+    assert_eq!(plan.match_carrier(1, Some(preview), parent, carrier, &tx, 20, 2, 17).unwrap(), Some(fees));
+    assert!(plan.match_carrier(1, Some(point), parent, carrier, &tx, 20, 2, 17).is_err());
 }
 
 pub(super) enum NativeAssignmentRehearsalResultV2 {
@@ -4012,7 +4061,14 @@ impl NativeAssignmentRehearsalResultV2 {
     }
 }
 
-/// Native-only cursor over actual accepted carrier ordinals. A rejected legacy
+#[derive(Clone, Copy)]
+pub(super) enum NativeAssignmentRehearsalModeV2 {
+    Observed,
+    CandidateFees,
+    TemplateFees(u32),
+}
+
+/// Native-only cursor over accepted carrier ordinals. A rejected legacy
 /// object contributes no final object slot; its position still advances raw
 /// actions against the correct current prefix in the rehearsal.
 pub(super) struct NativeAssignmentRehearsalV2<'a> {
@@ -4020,12 +4076,13 @@ pub(super) struct NativeAssignmentRehearsalV2<'a> {
     cursor: usize,
     accepted_ids: &'a [TransactionId],
     result: NativeAssignmentRehearsalResultV2,
+    mode: NativeAssignmentRehearsalModeV2,
 }
 impl<'a> NativeAssignmentRehearsalV2<'a> {
     fn new(
         actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
         accepted_ids: &'a [TransactionId],
-        plan_relay_fees: bool,
+        mode: NativeAssignmentRehearsalModeV2,
     ) -> Result<Self, PalwLocalTransitionFaultV1> {
         let mut previous = None;
         for action in &actions {
@@ -4041,7 +4098,7 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             previous = Some(ordinal);
         }
         use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
-        let result = if plan_relay_fees {
+        let result = if !matches!(mode, NativeAssignmentRehearsalModeV2::Observed) {
             let count = actions.iter().filter(|action| action.relay_carrier_fees_v2().is_some()).count();
             let bytes = (count as u64)
                 .checked_mul(size_of::<NativeRelayFeePlanEntryV2>() as u64)
@@ -4067,7 +4124,7 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             })?;
             NativeAssignmentRehearsalResultV2::Observed(schedule)
         };
-        Ok(Self { actions, cursor: 0, accepted_ids, result })
+        Ok(Self { actions, cursor: 0, accepted_ids, result, mode })
     }
     #[allow(clippy::too_many_arguments)]
     fn before(
