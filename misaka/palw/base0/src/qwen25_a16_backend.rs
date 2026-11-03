@@ -1161,8 +1161,8 @@ impl Qwen25A16Backend {
                 while at < tokens.len() {
                     let end = (at + self.prefill_run_positions.max(1)).min(tokens.len());
                     let is_last = end == tokens.len();
-                    let (logits, _) = engine
-                        .forward_prefill_planned(plan, cache, &tokens[at..end], first + at, is_last)
+                    let logits = engine
+                        .forward_prefill_planned_logits(plan, cache, &tokens[at..end], first + at, is_last)
                         .map_err(|e| format!("the prefill run at {}: {e:?}", first + at))?;
                     if is_last {
                         last = logits;

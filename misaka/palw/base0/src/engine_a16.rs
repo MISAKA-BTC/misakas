@@ -2026,6 +2026,31 @@ impl<'a> A16Engine<'a> {
         first_position: usize,
         with_post: bool,
     ) -> Result<(Vec<i32>, Vec<A16TraceV1>), A16EngineError> {
+        self.forward_prefill_planned_inner(plan, cache, tokens, first_position, with_post, true)
+    }
+
+    /// The ordinary inference prefill. Keep only the live layer's operands
+    /// and return the same logits and KV updates as the capture path.
+    pub(crate) fn forward_prefill_planned_logits(
+        &self,
+        plan: &A16ProfilePlanV1,
+        cache: &mut A16Cache,
+        tokens: &[usize],
+        first_position: usize,
+        with_post: bool,
+    ) -> Result<Vec<i32>, A16EngineError> {
+        self.forward_prefill_planned_inner(plan, cache, tokens, first_position, with_post, false).map(|(logits, _)| logits)
+    }
+
+    fn forward_prefill_planned_inner(
+        &self,
+        plan: &A16ProfilePlanV1,
+        cache: &mut A16Cache,
+        tokens: &[usize],
+        first_position: usize,
+        with_post: bool,
+        capture: bool,
+    ) -> Result<(Vec<i32>, Vec<A16TraceV1>), A16EngineError> {
         if plan.layer_count != self.artifact.shape.n_layers {
             return Err(A16EngineError::MalformedParams("plan/artifact layer count"));
         }
@@ -2042,18 +2067,22 @@ impl<'a> A16Engine<'a> {
             .map(|i| self.artifact.rope.row(first_position + i).ok_or(A16EngineError::PositionOutOfRange))
             .collect::<Result<_, _>>()?;
         let sink = |i: usize| first_position + i == 0;
-        let mut traces = vec![A16TraceV1::default(); tokens.len()];
+        let mut traces = if capture { vec![A16TraceV1::default(); tokens.len()] } else { Vec::new() };
         let mut hs: Vec<Vec<i32>> = Vec::with_capacity(tokens.len());
         for (i, token) in tokens.iter().enumerate() {
             let rows = self.walk_table(&plan.pre, None, *token, sink(i), rope[i].0, rope[i].1, None, plan.attn_history)?;
             hs.push(rows.last().cloned().unwrap_or_default());
-            traces[i].pre = rows;
+            if let Some(trace) = traces.get_mut(i) {
+                trace.pre = rows;
+            }
         }
         for li in 0..plan.layer_count {
             let per_position = self.walk_layer_batched(plan, &hs, tokens, first_position, &rope, li, cache)?;
             for (i, rows) in per_position.into_iter().enumerate() {
                 hs[i] = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty layer table"))?;
-                traces[i].attn.push(rows);
+                if let Some(trace) = traces.get_mut(i) {
+                    trace.attn.push(rows);
+                }
             }
         }
         if !with_post {
@@ -2071,7 +2100,9 @@ impl<'a> A16Engine<'a> {
             plan.attn_history,
         )?;
         let logits = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty post table"))?;
-        traces[last].post = rows;
+        if let Some(trace) = traces.get_mut(last) {
+            trace.post = rows;
+        }
         Ok((logits, traces))
     }
 
@@ -3481,11 +3512,17 @@ mod profile_plan_tests {
                             }
                             let mut got = Vec::new();
                             let mut logits = Vec::new();
+                            let mut ordinary = passed.clone();
                             for (at, chunk) in tokens.chunks(run).enumerate() {
                                 let first = start + at * run;
                                 let last = first + chunk.len() == start + tokens.len();
                                 let (l, traces) =
                                     engine.forward_prefill_planned(&plan, &mut passed, chunk, first, last).expect("one pass");
+                                assert_eq!(
+                                    engine.forward_prefill_planned_logits(&plan, &mut ordinary, chunk, first, last).expect("ordinary"),
+                                    l,
+                                    "ordinary prefill returns the same logits"
+                                );
                                 if last {
                                     logits = l;
                                 } else {
@@ -3505,6 +3542,7 @@ mod profile_plan_tests {
                                 }
                             }
                             assert_eq!(passed.contents_as_i32(), stepped.contents_as_i32(), "{at}: the cache left behind");
+                            assert_eq!(ordinary.contents_as_i32(), passed.contents_as_i32(), "{at}: ordinary prefill KV state");
                             checked += 1;
                         }
                     }
