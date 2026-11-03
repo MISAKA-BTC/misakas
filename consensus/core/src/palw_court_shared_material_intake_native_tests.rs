@@ -181,7 +181,7 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
     use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, palw_tir_public_body_hash_v1};
     use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
-    use super::super::palw_court_shared_material_intake_fold_v1::{material_intake, material_intake_pipelined, MaterialIntakeEffectV1 as E};
+    use super::super::palw_court_shared_material_intake_fold_v1::{material_intake, material_intake_pipelined_codec_test as material_intake_pipelined, MaterialIntakeEffectV1 as E};
     let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_wide_v1(Some((7, 1)), 4);
     let frame = &fx.frame;
     let (mut state, params, extras, claim, scope_id) = material_intake_world(&fx);
@@ -217,6 +217,11 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     let tail = &body[last * PART..];
     let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(material_intake(&mut builder, &at(frame, 1), &begin).is_err());
+    let delivery = batch::MaterialBatchDeliveryV1::new(set.request_id(ordinal).unwrap(), &begin, body.len() as u64).unwrap();
+    let before_unfunded = builder.state.state_root();
+    assert!(super::super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
+        &mut builder, &at(frame, 1), &begin, &delivery).is_err());
+    assert_eq!(builder.state.state_root(), before_unfunded);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 1), &begin).unwrap(), E::Begun);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail)).unwrap(), E::Part);
     let partial_root = builder.state.state_root();

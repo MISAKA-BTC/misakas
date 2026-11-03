@@ -31,6 +31,8 @@ use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART
 use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Query, PalwTirPublicSourceV1 as Source};
 use borsh::{BorshDeserialize, BorshSerialize};
 
+pub(crate) mod batch;
+
 pub const MATERIAL_INTAKE_CONTEXT_V1: &[u8] = b"misaka-palw/material-intake/v1/mldsa87";
 pub(crate) const MATERIAL_INTAKE_CONTEXT_V2: &[u8] = b"misaka-palw/material-intake/v2/mldsa87";
 pub(crate) const MATERIAL_PIPELINED_VERSION: u16 = 2;

@@ -2268,3 +2268,28 @@ The producer journal confirms the submission. The exact fold refusal
 was not observed. See
 `/private/tmp/misaka-t12-oom-20261102/g14-intake-budget-live.pHse47/page.json`
 and the sibling `journal.txt`.
+
+## Signed Batch delivery and the original service book
+
+The candidate projects one declared material body into Begin, parallel
+part slots and a Finish that depends on every part. The exact Borsh
+sizes include the ML-DSA signature for every control. The proposed
+native adapter checks the exact action, reserved DAA, signed byte
+budget and ownership of the packet by the original claim's rooted
+service binding. The existing native fold still checks the signature,
+persisted draft and material authentication. The branch projection does
+not itself reserve the maximum native branch at original admission,
+authenticate the demand root in the wire, or install an active
+dispatcher.
+
+The extracted Core scheduling and Batch delivery tests ran seven
+checks. Under a two-control fixture profile the two parts use the same
+DAA in either arrival order, with Begin and Finish on separate DAA.
+The test rejects an underpriced envelope and wrong demand, signer,
+draft and slot. The isolated harness does not run the full fold.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-signed-batch-delivery.66FDlS/tests.log`.
+
+B0 and relay agreed at DAA 19,680, with no new Qwen carrier since the
+previous cursor. The StepRun integration metadata queue expired before
+compilation at 68% reported memory availability, with other rustc
+processes using about 8.6 GB RSS in total.

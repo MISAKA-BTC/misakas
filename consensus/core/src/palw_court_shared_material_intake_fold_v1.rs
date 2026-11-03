@@ -42,16 +42,31 @@ pub(super) fn material_intake(
     material_intake_atomic(b, ctx, s)
 }
 
-/// Candidate native adapter. Its future caller must bind the authenticated
-/// action to the funded Batch demand and its reserved service slot.
+/// Candidate native adapter for a demand and response declaration authenticated
+/// by the Batch coordinator. The native intake still verifies the action,
+/// original data and accepted predecessor rows before writing.
 pub(super) fn material_intake_pipelined(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
+    delivery: &m::batch::MaterialBatchDeliveryV1,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
-    if s.version != m::MATERIAL_PIPELINED_VERSION {
-        return Err(refused("pipelined material intake requires version 2"));
+    let service = b.state.court_service_state_v1().ok_or_else(|| refused("Batch material has no rooted service book"))?;
+    let binding = service.claims.get(&s.claim).ok_or_else(|| refused("Batch material original has no service binding"))?;
+    let id = delivery.check_slot_v1(&service.book, ctx.daa_score, s).map_err(refused)?;
+    if !binding.packet_ids.contains(&id) {
+        return Err(refused("Batch material slot is not funded by this original"));
     }
+    material_intake_atomic(b, ctx, s)
+}
+
+#[cfg(test)]
+pub(super) fn material_intake_pipelined_codec_test(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    assert_eq!(s.version, m::MATERIAL_PIPELINED_VERSION);
     material_intake_atomic(b, ctx, s)
 }
 
