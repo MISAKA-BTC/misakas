@@ -170,6 +170,10 @@ fn version(version: u16, revision: u16) -> Result<(), NativeBodyErrorV2> {
 const MINER_RESULT_BYTES: u64 = 4 + 16 * 64 + 32 + 4 * 4;
 const SERVICE_BYTES: u64 = 4 + 4 * 64 + 7 * 8 + 4 + 8;
 const CONSENT_BYTES: u64 = 4 + 4 * 64 + 3 * 8 + 4;
+// Each assigned Court carrier has a version, revision, kind and one opaque Vec.
+const SIGNED_OPAQUE_BODY_OVERHEAD_V2: u64 = 2 + 2 + 1 + 4 + SIGNATURE_BYTES as u64;
+pub(crate) const EXACT_FRAME_BODY_OVERHEAD_V2: u64 = SIGNED_OPAQUE_BODY_OVERHEAD_V2;
+pub(crate) const WITNESS_BODY_OVERHEAD_V2: u64 = SIGNED_OPAQUE_BODY_OVERHEAD_V2 + 4 + 6 * 64 + 4 + 1 + 4 * 64;
 /// Existing body0 payload width, excluding its 5-byte version/revision/kind.
 /// Assigned Result syntax shares this scanner without accepting a separate op0.
 pub(super) const RESULT_ADMISSION_PAYLOAD_BYTES_V2: u64 =

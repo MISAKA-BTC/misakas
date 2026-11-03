@@ -65,6 +65,9 @@ pub(super) fn assignment_horizon_v2(
 ) -> Result<crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2, PalwStateV2Error> {
     let preimages = rules.native_preimages().ok_or_else(|| refusal("missing original Case cost preimages"))?;
     let certification = rules.certification_policy().ok_or_else(|| refusal("missing actual original Gate C policy"))?;
+    resources
+        .check_court_replay_work_v2(&preimages.source_policy.work, rules.assignment_policy(), rules.positive_policy())
+        .map_err(assignment_resource_error)?;
     crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2::derive(
         bundle,
         source,

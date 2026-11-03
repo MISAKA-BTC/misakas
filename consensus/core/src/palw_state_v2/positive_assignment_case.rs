@@ -1196,7 +1196,7 @@ impl NativeAssignedCourtV2 {
         material: &AssignmentAdmissionMaterialV2,
     ) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
         use crate::{
-            palw_positive_assignment_resources_v2::AssignmentWorkQuantitiesV2,
+            palw_positive_assignment_resources_v2::ASSIGNED_COURT_ROLE_SIGNATURES_V2,
             palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, scan_native_body_v2},
         };
         let capacity = || {
@@ -1207,32 +1207,19 @@ impl NativeAssignedCourtV2 {
         let policy = &material.positive_policy;
         let bytes = body_bytes.len() as u64;
         let schedule = &material.native_preimages.source_policy.work;
-        let codec_work = schedule
-            .charge(AssignmentWorkQuantitiesV2 {
-                codec_steps: bytes,
-                hash_bytes: bytes,
-                signatures: 0,
-                elements: 0,
-                terms: 0,
-                io_bytes: 0,
-                controls: 1,
-            })
-            .map_err(refuse)?;
+        let codec_work = schedule.court_body_work(bytes).map_err(refuse)?;
         self.remaining_work = self.remaining_work.checked_sub(codec_work).ok_or_else(|| refuse("Case replay codec work"))?;
         let shape = scan_native_body_v2(body_bytes, case_replay_body_limits_v2(policy)).map_err(refuse)?;
         let is_witness = shape.kind == 1;
         let is_frame = shape.kind == 2;
         let check = self.check_limits;
         let authentication_work = schedule
-            .charge(AssignmentWorkQuantitiesV2 {
-                codec_steps: 0,
-                hash_bytes: 0,
-                signatures: shape.signatures + u64::from(is_witness || is_frame) * 3,
-                elements: if is_frame { check.max_elements_per_leaf } else { 0 },
-                terms: if is_frame { check.max_terms_per_leaf } else { 0 },
-                io_bytes: 0,
-                controls: if is_witness || is_frame { u64::from(material.assignment_policy.max_role_candidates) } else { 0 },
-            })
+            .court_operation_work(
+                shape.signatures + u64::from(is_witness || is_frame) * ASSIGNED_COURT_ROLE_SIGNATURES_V2,
+                if is_witness || is_frame { u64::from(material.assignment_policy.max_role_candidates) } else { 0 },
+                if is_frame { check.max_elements_per_leaf } else { 0 },
+                if is_frame { check.max_terms_per_leaf } else { 0 },
+            )
             .map_err(refuse)?;
         self.remaining_work =
             self.remaining_work.checked_sub(authentication_work).ok_or_else(|| refuse("Case replay operation work"))?;

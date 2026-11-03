@@ -64,6 +64,9 @@ pub struct AssignmentWorkQuantitiesV2 {
     pub io_bytes: u64,
     pub controls: u64,
 }
+/// Conservative signature precharge beyond the signature carried in the body.
+pub(crate) const ASSIGNED_COURT_ROLE_SIGNATURES_V2: u64 = 3;
+
 impl AssignmentWorkScheduleV2 {
     pub fn id(&self) -> Digest {
         hash(b"misaka/positive/assignment-work-schedule/v2/r1", self)
@@ -99,6 +102,36 @@ impl AssignmentWorkScheduleV2 {
         .into_iter()
         .try_fold(0u64, |total, (rate, amount)| {
             amount.checked_mul(rate).and_then(|n| total.checked_add(n)).ok_or(AssignmentResourceErrorV2::Budget)
+        })
+    }
+
+    pub(crate) fn court_body_work(&self, body_bytes: u64) -> Result<u64, AssignmentResourceErrorV2> {
+        self.charge(AssignmentWorkQuantitiesV2 {
+            codec_steps: body_bytes,
+            hash_bytes: body_bytes,
+            signatures: 0,
+            elements: 0,
+            terms: 0,
+            io_bytes: 0,
+            controls: 1,
+        })
+    }
+
+    pub(crate) fn court_operation_work(
+        &self,
+        carrier_signatures: u64,
+        role_candidates: u64,
+        elements: u64,
+        terms: u64,
+    ) -> Result<u64, AssignmentResourceErrorV2> {
+        self.charge(AssignmentWorkQuantitiesV2 {
+            codec_steps: 0,
+            hash_bytes: 0,
+            signatures: carrier_signatures,
+            elements,
+            terms,
+            io_bytes: 0,
+            controls: role_candidates,
         })
     }
 }
@@ -422,6 +455,49 @@ impl AssignmentDerivedResourcesV2 {
             .map_err(|_| AssignmentResourceErrorV2::Budget)?;
         Ok(quote.total_packet_bytes)
     }
+    /// Work reserved by the native replay meter for every Witness and exact
+    /// frame at the admitted bounds. Other operations use the same live meter.
+    pub(crate) fn check_court_replay_work_v2(
+        &self,
+        schedule: &AssignmentWorkScheduleV2,
+        assignment: &AssignmentPolicyV2,
+        positive: &PositiveCourtPolicyV2,
+    ) -> Result<(), AssignmentResourceErrorV2> {
+        use crate::palw_positive_court_v2::coordinator::native_body::{EXACT_FRAME_BODY_OVERHEAD_V2, WITNESS_BODY_OVERHEAD_V2};
+
+        let budget = || AssignmentResourceErrorV2::Budget;
+        let frame_bytes = self.check_limits.max_part_bytes.checked_add(EXACT_FRAME_BODY_OVERHEAD_V2).ok_or_else(budget)?;
+        let witness_bytes = misaka_palw_positive_contract::record::wire_size(self.binding.job().exact_decode_tokens)
+            .map_err(|_| budget())?
+            .checked_add(WITNESS_BODY_OVERHEAD_V2)
+            .ok_or_else(budget)?;
+        let frame_work = schedule
+            .court_body_work(frame_bytes)?
+            .checked_add(schedule.court_operation_work(
+                1 + ASSIGNED_COURT_ROLE_SIGNATURES_V2,
+                u64::from(assignment.max_role_candidates),
+                self.check_limits.max_elements_per_leaf,
+                self.check_limits.max_terms_per_leaf,
+            )?)
+            .ok_or_else(budget)?;
+        let witness_work = schedule
+            .court_body_work(witness_bytes)?
+            .checked_add(schedule.court_operation_work(
+                1 + ASSIGNED_COURT_ROLE_SIGNATURES_V2,
+                u64::from(assignment.max_role_candidates),
+                0,
+                0,
+            )?)
+            .ok_or_else(budget)?;
+        let all_frame_work = frame_work.checked_mul(self.all_attempt_relations).ok_or_else(budget)?;
+        let all_witness_work = witness_work.checked_mul(u64::from(positive.max_attempts)).ok_or_else(budget)?;
+        let work = all_frame_work.checked_add(all_witness_work).ok_or_else(budget)?;
+        if work > positive.max_case_work.min(assignment.max_replay_work) {
+            return Err(budget());
+        }
+        Ok(())
+    }
+
     pub fn all_attempt_cost(&self) -> CostEnvelope {
         self.all_attempt_cost
     }
