@@ -1668,3 +1668,25 @@ The [integrated Clippy result](archive-custody-clippy-20261103.json.gz) exits
 zero on the existing A0 source map with unchanged inputs and warnings denied
 for Contract, Core and Consensus. The test-target and runtime stages use the
 same source pin and have not reported a verdict at this checkpoint.
+
+### Prospective Positive job ownership
+
+The [Positive job ownership candidate](positive-job-ownership-candidate-20261103.tar.gz)
+adds a derived, nonserialized index over canonical Result aux rows. Native
+writer, delta replay and revert, canonical decode and served-row restore
+maintain it. Prospective Case intake rejects a job already occupied by a
+Positive Result. Legacy native claims, the staged subject writer and six
+Kernel job-bearing tables check ownership before writing. The native writer,
+wire preflight and resident-state census price the index.
+
+The two isolated exact-function regressions passed using production contract
+and hash types. They cover a mismatched Result/key, partial revert where
+another Result keeps the same job occupied, and the six Kernel subjects.
+The reconciled Core library and focused funding-relay test targets typechecked.
+The added native cold decode regression and the job ingress changes still
+need integrated execution. The candidate is separate from the pinned A0 build.
+
+The [integrated test-target check](archive-custody-check-20261103.json.gz)
+exited zero with identical source maps. The native store execution stage has
+started compiling. The EVM-off Linux relay run was still compiling Consensus
+at this checkpoint. Neither has reported a runtime verdict.
