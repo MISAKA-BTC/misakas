@@ -9288,7 +9288,7 @@ impl PalwPanelService {
                     report.failures.len()
                 );
                 pool_books.material.admit(claim, bytes);
-                pool_books.material.evict_after_gossip(claim, first_seen);
+                pool_books.material.evict_after_gossip(claim, &mut first_seen);
                 drop(http_admission);
             }
             let current_daa = session.get_virtual_daa_score();
