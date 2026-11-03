@@ -690,19 +690,24 @@ pub(crate) fn reserve_rooted_batch_repair_v1(
 ) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
     use crate::palw_native_resource_v1::{TirNativeRequestsV1, btree_node_envelope_bytes_v1, reserve_native_requests_v1};
     type Id = [u8; 64];
-    let largest = service
-        .claims
-        .values()
-        .filter(|binding| {
-            service.book.has_missed_slot_v1(&binding.packet_ids)
-                && state
-                    .staged_court_range_v1(&Key::CourtBatchDemand(binding.claim, 0), &Key::CourtBatchDemand(binding.claim, u64::MAX))
-                    .next()
-                    .is_some()
-        })
-        .map(|binding| binding.packet_ids.len())
-        .max()
-        .unwrap_or(0) as u64;
+    let mut largest = 0;
+    let mut route_largest = 0;
+    for binding in service.claims.values().filter(|binding| service.book.has_missed_slot_v1(&binding.packet_ids)) {
+        let claim = binding.claim;
+        let count = binding.packet_ids.len() as u64;
+        if state
+            .staged_court_range_v1(&Key::CourtBatchDemand(claim, 0), &Key::CourtBatchDemand(claim, u64::MAX))
+            .next().is_some()
+        {
+            largest = largest.max(count);
+        }
+        if state.court_shared_initial_notice_v1(claim).is_some()
+            && crate::palw_court_shared_tir_state_v1::context(state, claim).is_ok_and(|context| context.batch_notice_only_v1())
+        {
+            largest = largest.max(count);
+            route_largest = route_largest.max(count);
+        }
+    }
     if largest == 0 {
         return Ok(None);
     }
@@ -711,6 +716,8 @@ pub(crate) fn reserve_rooted_batch_repair_v1(
         + btree_node_envelope_bytes_v1::<(Hash64, Hash64), &MaterialDraftV1>();
     let mut q = TirNativeRequestsV1::new();
     q.add_v1(TirNativeRequestsV1::product_v1(largest, per_slot as u64)?)?;
+    q.add_v1(TirNativeRequestsV1::product_v1(route_largest, (2 * btree_node_envelope_bytes_v1::<Id, ()>()) as u64)?)?;
+    q.vec_v1::<Id>(route_largest)?;
     q.vec_v1::<(Id, Id, u64, u64)>(largest)?;
     reserve_native_requests_v1(q.bytes_v1())
 }
@@ -728,8 +735,17 @@ pub(crate) fn repair_rooted_batch_slots_v1(
     let first_demand = Key::CourtBatchDemand(claim, 0);
     let last_demand = Key::CourtBatchDemand(claim, u64::MAX);
     let demands = || state.staged_court_range_v1(&first_demand, &last_demand);
-    if demands().next().is_none() {
+    let has_demand = demands().next().is_some();
+    let route = selected_batch_repair_route_v1(state, claim)?;
+    if route.is_none() && !has_demand {
         return book.repair_missing_ordered_v1(ids, hard, edges);
+    }
+    let mut repairable = ids.clone();
+    if let Some((scope, target)) = route {
+        exclude_inactive_batch_route_v1(claim, scope, target, ids, edges, &mut repairable)?;
+    }
+    if !has_demand {
+        return book.repair_missing_ordered_v1(&repairable, hard, edges);
     }
     let mut retained = BTreeMap::new();
     for (key, row) in state.staged_court_range_v1(
@@ -747,7 +763,6 @@ pub(crate) fn repair_rooted_batch_slots_v1(
     }
     let schedule = super::material_intake_schedule_v1().map_err(|_| InvalidState)?;
     let full_ids = MaterialTargetV1::FullIds.id_v1(claim).map_err(|_| InvalidState)?;
-    let mut repairable = ids.clone();
     let mut expires = BTreeMap::new();
     let mut bound = |id, before| {
         if !ids.contains(&id) || expires.insert(id, before).is_some() {
@@ -852,6 +867,86 @@ pub(crate) fn repair_rooted_batch_slots_v1(
             Ok(())
         },
     )
+}
+
+fn selected_batch_repair_route_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+) -> Result<Option<(Hash64, crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1)>, ServiceRefusal> {
+    use crate::palw_court_shared_tir_state_v1 as shared;
+    let Some((_, key)) = state.court_shared_initial_notice_v1(claim) else { return Ok(None) };
+    let Ok(context) = shared::context(state, claim) else { return Ok(None) };
+    if !context.batch_notice_only_v1() {
+        return Ok(None);
+    }
+    let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(key) else { return Err(ServiceRefusal::InvalidState) };
+    let target = crate::palw_batch_court_v1::rooted::checked_initial_notice_target_v1(state, context, notice, notice.request_id)
+        .map_err(|_| ServiceRefusal::InvalidState)?
+        .ok_or(ServiceRefusal::InvalidState)?;
+    Ok(Some((context.scope_id, target)))
+}
+
+/// The common terminal and non-Batch obligations stay repairable. Keep the
+/// unused route's packets and edges in the book for reorg and audit.
+fn exclude_inactive_batch_route_v1(
+    claim: Hash64,
+    scope: Hash64,
+    target: crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1,
+    owned: &std::collections::BTreeSet<[u8; 64]>,
+    edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
+    repairable: &mut std::collections::BTreeSet<[u8; 64]>,
+) -> Result<(), ServiceRefusal> {
+    use crate::palw_batch_court_v1::rooted::batch_open_packet_v1;
+    use crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1;
+    use ServiceRefusal::InvalidState;
+    let (numerical, terminal) = admission::batch_numerical_service_ids_v1(claim, scope).map_err(|_| InvalidState)?;
+    let parents = edges.get(&terminal).ok_or(InvalidState)?;
+    if !owned.contains(&terminal) || !parents.contains(&numerical) {
+        return Err(InvalidState);
+    }
+    let stop = match parents.as_slice() {
+        [_] if matches!(target, BatchNoticeTargetV1::Numerical { .. }) => return Ok(()),
+        [first, second] if *first == numerical && *second != numerical => *second,
+        [first, second] if *second == numerical && *first != numerical => *first,
+        _ => return Err(InvalidState),
+    };
+    let numerical_open = batch_open_packet_v1(claim, scope, 0).map_err(|_| InvalidState)?.as_bytes();
+    let stop_open = batch_open_packet_v1(claim, scope, constraint_stop::BATCH_STOP_ORDINAL_V1)
+        .map_err(|_| InvalidState)?.as_bytes();
+    let mut pending = Vec::with_capacity(owned.len());
+    let mut ancestors = |root| {
+        let mut seen = std::collections::BTreeSet::from([root]);
+        pending.push(root);
+        while let Some(id) = pending.pop() {
+            if !owned.contains(&id) || id == terminal {
+                return Err(InvalidState);
+            }
+            for &parent in edges.get(&id).into_iter().flatten() {
+                if !owned.contains(&parent) {
+                    return Err(InvalidState);
+                }
+                if seen.insert(parent) {
+                    pending.push(parent);
+                }
+            }
+        }
+        Ok(seen)
+    };
+    let numerical_route = ancestors(numerical)?;
+    let stop_route = ancestors(stop)?;
+    if !numerical_route.contains(&numerical_open) || !stop_route.contains(&stop_open)
+        || numerical_route.contains(&stop_open) || stop_route.contains(&numerical_open)
+    {
+        return Err(InvalidState);
+    }
+    let (active, inactive) = match target {
+        BatchNoticeTargetV1::Numerical { .. } => (numerical_route, stop_route),
+        BatchNoticeTargetV1::StopFullIds => (stop_route, numerical_route),
+    };
+    for id in inactive.difference(&active) {
+        repairable.remove(id);
+    }
+    Ok(())
 }
 
 fn exclude_unused_response_parts_v1(
@@ -1212,6 +1307,52 @@ mod tests {
             assert!(action.verify_batch_v1(network, other_request, key.verification_key.as_ref()).is_err());
             assert!(action.verify_v1(network, key.verification_key.as_ref()).is_err());
         }
+    }
+
+    #[test]
+    fn missed_inactive_route_does_not_block_selected_finish_repair() {
+        use crate::palw_batch_court_v1::rooted::batch_open_packet_v1;
+        use crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1;
+        let h = Hash64::from_u64_word;
+        let (claim, scope) = (h(71), h(72));
+        let (verify, terminal) = admission::batch_numerical_service_ids_v1(claim, scope).unwrap();
+        let numerical_open = batch_open_packet_v1(claim, scope, 0).unwrap().as_bytes();
+        let stop_open = batch_open_packet_v1(claim, scope, constraint_stop::BATCH_STOP_ORDINAL_V1).unwrap().as_bytes();
+        let (finish, stop, unrelated) = (h(73).as_bytes(), h(74).as_bytes(), h(75).as_bytes());
+        let cost = ServiceCost { bytes: 1, work: 1, io: 1, controls: 1 };
+        let node = |id, release_daa, service_before, predecessors| CausalServicePacketV1 {
+            packet: ServicePacket { id, release_daa, service_before, cost }, predecessors,
+        };
+        let graph = [
+            node(numerical_open, 10, 12, vec![]),
+            node(finish, 15, 20, vec![numerical_open]),
+            node(verify, 20, 22, vec![finish]),
+            node(stop_open, 11, 13, vec![]),
+            node(stop, 21, 23, vec![stop_open]),
+            node(terminal, 23, 25, vec![verify, stop]),
+            node(unrelated, 22, 25, vec![]),
+        ];
+        let owned = graph.iter().map(|node| node.packet.id).collect::<std::collections::BTreeSet<_>>();
+        let edges = graph.iter().map(|node| (node.packet.id, node.predecessors.clone())).collect::<BTreeMap<_, _>>();
+        let mut book = ServiceReservations::new(cost).unwrap();
+        book.reserve_causal_v1(&graph, 25).unwrap();
+        for at in [10, 16] {
+            book.observe_block(at, h(at).as_bytes(), ServiceCost::default()).unwrap();
+        }
+        let original = book.clone();
+        assert_eq!(book.repair_missing_ordered_v1(&owned, 25, &edges), Err(ServiceRefusal::DeadlineExhausted));
+        assert_eq!(book, original);
+        let mut selected = owned.clone();
+        exclude_inactive_batch_route_v1(claim, scope, BatchNoticeTargetV1::Numerical { leaf: 0 }, &owned, &edges, &mut selected).unwrap();
+        assert!(selected.contains(&terminal) && selected.contains(&unrelated));
+        assert!(!selected.contains(&stop_open) && !selected.contains(&stop));
+        assert_eq!(book.repair_missing_ordered_v1(&selected, 25, &edges), Ok(1));
+        assert_eq!(book.assigned_daa(&finish), Some(17));
+        assert_eq!(book.assigned_daa(&stop_open), original.assigned_daa(&stop_open));
+        let mut selected = owned.clone();
+        exclude_inactive_batch_route_v1(claim, scope, BatchNoticeTargetV1::StopFullIds, &owned, &edges, &mut selected).unwrap();
+        assert!(!selected.contains(&numerical_open) && !selected.contains(&finish) && !selected.contains(&verify));
+        assert!(selected.contains(&stop_open) && selected.contains(&stop) && selected.contains(&terminal));
     }
 
     #[test]

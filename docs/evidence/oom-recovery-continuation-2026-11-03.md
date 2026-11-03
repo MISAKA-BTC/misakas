@@ -3864,3 +3864,26 @@ B0 and relay still agreed at virtual DAA 19,731. The scan returned no
 additional selected blocks. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-signed-phase.CmDSmR/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-signed-phase-live.UdYiPy/page.json`.
+
+## Repair only the route selected by the initial notice
+
+The recovery sweep resolves the accepted Batch-only notice even
+before its first Open. It follows the original service row's causal
+edges and excludes packets specific to the unselected numerical or
+Stop route from the repair set. Shared predecessors, the common
+terminal and independent obligations remain repairable. Inactive
+packets, their original capacity and their recorded dependencies
+stay in the rooted service row for replay and reorg.
+
+The extracted suite passed 52 tests. The added regression shows
+that ordinary repair fails atomically when an unused Stop Open
+expires, while the selected numerical Finish can move to DAA 17
+under the new filter. It checks the inverse route selection and
+retention of the unused slot's assignment. The test exercises the
+real scheduler and extracted route filter. The native state lookup
+and combined-route fold have not run in the integrated node.
+
+B0 and relay agreed at virtual DAA 19,732. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-route-repair.YBjLTB/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-route-repair-live.maEHcy/page.json`.
