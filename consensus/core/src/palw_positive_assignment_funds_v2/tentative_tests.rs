@@ -187,6 +187,32 @@ fn payer_signed_partial_op12_projects_without_inventing_acceptance() {
 }
 
 #[test]
+fn unconsumed_assignment_refund_preserves_service_and_liability_on_the_continuation() {
+    let (row, mut tx, _, fixture_auth) = fixture(&[17; PUBKEY_BYTES]);
+    let receipt = fixture_auth.dues[0].receipt;
+    let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&row.authorization.refund_payload.0);
+    tx.outputs = vec![TransactionOutput::new(125, spk.clone()), TransactionOutput::new(50, spk)];
+    tx.finalize();
+    let qualify = |tx: &Transaction| qualify_unconsumed_assignment_refund_v2(row.clone(), receipt, tx, &[175, 10], 20, 16000, 100);
+    let plan = qualify(&tx).unwrap();
+    assert_eq!((plan.returned_now, plan.continued_now, plan.burned_now, plan.paid_now), (125, 50, 0, 0));
+    assert_eq!((plan.new.worker.remaining, plan.new.surplus.remaining), (0, 0));
+    assert_eq!((plan.new.fee, plan.new.capital), (row.fee, row.capital));
+    assert_eq!((plan.new.earned_service_due, plan.new.liability_floor), (5, 30));
+    assert_eq!(plan.new.current_outpoint, Some(point(TransactionOutpoint::new(tx.id(), 1))));
+    assert!(plan.matches_cooperative_refund_v2(&row, &tx, &[175, 10], 20));
+    assert!(!plan.matches_cooperative_refund_v2(&row, &tx, &[174, 11], 20));
+    assert!(!plan.matches_cooperative_refund_v2(&row, &tx, &[175, 10], 21));
+
+    let mut wrong = tx.clone();
+    wrong.outputs[0].value += 1;
+    wrong.outputs[1].value -= 1;
+    wrong.finalize();
+    assert!(matches!(qualify(&wrong), Err(AssignmentFundsErrorV2::Output)));
+    assert!(!plan.matches_cooperative_refund_v2(&row, &wrong, &[175, 10], 20));
+}
+
+#[test]
 fn tentative_plan_rejects_changed_payload_duplicate_dues_and_unsafe_debit() {
     let (row, transaction, _, auth) = fixture(&[17; PUBKEY_BYTES]);
     let mut changed = transaction.clone();
