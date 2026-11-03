@@ -1712,6 +1712,30 @@ fn foreign_gc_rereads_accepted_retention_after_restart_and_branch_change() {
 }
 
 #[test]
+fn foreign_gc_count_candidates_require_a_fresh_discharge_before_unlink() {
+    let dir = std::env::temp_dir().join(format!("seat-r-count-retention-{}-{:?}", std::process::id(), std::thread::current().id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let claim = h(0x20609);
+    let material = dir.join(format!("{claim}.material"));
+    std::fs::write(&material, b"accepted material").unwrap();
+    let now = std::time::SystemTime::now();
+    for after in [Ok(true), Err("branch snapshot changed".to_string())] {
+        let inspected = std::cell::Cell::new(false);
+        // A fresh file goes through the count sweep only. Its selected-chain
+        // obligation changes between the scan and the attempted unlink.
+        prune_foreign_retention_v1(&dir, &HashSet::new(), now, 0, |id| {
+            assert_eq!(*id, claim);
+            if inspected.replace(true) { after.clone() } else { Ok(false) }
+        });
+        assert!(material.exists(), "{after:?} cannot authorize deletion");
+    }
+    prune_foreign_retention_v1(&dir, &HashSet::new(), now, 0, |_| Ok(false));
+    assert!(!material.exists(), "a healthy discharge still permits reclamation");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn foreign_gc_read_failures_keep_material_but_healthy_absence_does_not_pin_forever() {
     let dir = std::env::temp_dir().join(format!("seat-r-read-failure-{}-{:?}", std::process::id(), std::thread::current().id()));
     let _ = std::fs::remove_dir_all(&dir);

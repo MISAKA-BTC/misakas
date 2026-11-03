@@ -2218,24 +2218,19 @@ fn prune_foreign_retention_v1(
         let name = path.file_name()?.to_str()?;
         name.get(..name.find('.')?)?.parse::<Hash64>().ok()
     };
+    // Cached duties assist the chain read. A missing/changed snapshot cannot
+    // discharge an obligation, and a later healthy read can still release it.
+    let reclaimable = |path: &std::path::Path| {
+        claim_of(path).is_none_or(|claim| !pinned.contains(&claim) && matches!(chain_owed(&claim), Ok(false)))
+    };
     let mut kept: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        // Cached duties are only an assist: a restart, cache eviction or a
-        // reorg may leave them empty while the stored acceptance still owes DA.
-        if let Some(claim) = claim_of(&path) {
-            if pinned.contains(&claim) {
-                continue;
-            }
-            match chain_owed(&claim) {
-                Ok(false) => {}
-                // A cold/failed/changed read cannot discharge an obligation.
-                // Re-read next pass; no permanent unknown-claim pin is created.
-                Ok(true) | Err(_) => continue,
-            }
-        }
         let Ok(meta) = entry.metadata() else { continue };
         let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        if !reclaimable(&path) {
+            continue;
+        }
         if modified < cutoff {
             let _ = std::fs::remove_file(&path);
             continue;
@@ -2244,7 +2239,9 @@ fn prune_foreign_retention_v1(
     }
     if kept.len() > max_files {
         kept.sort_by_key(|(at, _)| *at);
-        for (_, path) in kept.iter().take(kept.len() - max_files) {
+        // Acceptance can change while reading and sorting the directory.
+        // Check each count candidate again immediately before unlinking it.
+        for (_, path) in kept.iter().filter(|(_, path)| reclaimable(path)).take(kept.len() - max_files) {
             let _ = std::fs::remove_file(path);
         }
     }
