@@ -59,3 +59,33 @@ Read-only Explorer analysis found 329 old selected-parent links before the neare
 Thirteen journal samples from the killed public95 process show 9.58–9.88 GiB of anonymous RSS and about 0.08 GiB of file-backed RSS in the last 13 minutes. This shows sustained anonymous pressure ahead of the cgroup kill; the journal still does not identify the allocating subsystem. B0's direct `getPalwKernelFinals` response at DAA 19,519 reported zero Finals. The V2 execution observation was unavailable, consistent with `palw_exec_payload_v2: None` in the T12 preset. That setting and the separate 20,000 DAA retention activation have not changed.
 
 Separate from the `ad9016` Linux build, `b646e3370` extends allocation-free protobuf preflight to duplicate singular and same-variant oneof fragments. `7b98a0c70` reserves EVM and overlay reply serialization buffers before allocation and transfers the reservation through the existing output owner. The combined lightweight harness passed 39 tests, including admission before either reply buffer and cleanup under cancellation; three production flow tests passed. Separate real plain/gzip frame tests at 256 MiB and near 320 MiB passed on the updated schema quote. These tests leave live inbound admission and source snapshot materialization as separate work.
+
+## Trusted B0 relay and dedicated Explorer connection — 01:20 UTC
+
+The isolated `ad9016` Linux build completed normally and produced executable SHA256
+`227360a9bca06ee999e674174949b7a222092034a428117499019caee6361b7b`.
+Original IBM B0 exited normally after one SIGINT. A verified independent 9.5 GB
+native consensus copy was created before the original was restarted. B0 resumed
+with the same executable, APP and actor configuration, and returned to synced
+status after a single ephemeral reconnection to its previous 113 peer. The
+copy and resumed-original receipt SHAs are `800ed0c271ed16a9a138b48e0377fceb18df1d74997c895292b7500a56c1e1aa`
+and `f87a336c999946e63dcb33ef623f331d218d7a9e03084513135a63bbcce8898e`.
+
+A separate unsigned process opened the copy under an 8 GiB cgroup memory
+limit. Its only P2P connection was the resumed B0. Three live comparisons and
+a final unsigned PALW template matched B0 at DAA 19,528. The current canary
+SHA is `e1328dd4e08ecdc13ed0bfd1a6a8c8977d5f700e0f85f553fbed1fed0c774320`.
+The relay then accepted newer blocks, with about 1.1 GB cgroup usage and no
+swap at 01:20 UTC. The observed canary had zero OOM events. This is a trusted
+donor replica, with no model signing or submissions. Fresh IBD and convergence
+of both original branches are still separate checks.
+
+The dedicated 113 tunnel confirmed the same synced and indexed relay through
+both gRPC and JSON at DAA 19,529. Its receipt SHA is
+`55195a105da29a431279eb890d074354132f091a05fd6aec30916074674babff`.
+The old shared tunnel and other site were unchanged. The two existing
+Explorer writer owners were identified and the no-force stop policy was
+prepared while they were still running. Two read-only reorg plans stopped
+when the relay advanced during per-candidate checks; their receipts record
+zero SQL writes. The guarded backup, repair and public cutover had not
+occurred at this cutoff.
