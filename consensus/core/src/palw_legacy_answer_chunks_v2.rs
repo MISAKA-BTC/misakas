@@ -104,6 +104,32 @@ pub struct PalwLegacyAnswerProgressV2 {
     pub received: u32,
 }
 
+/// Fixed-size pin for the accepted manifest a queued chunk was built against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwLegacyAnswerManifestPinV2 {
+    digest: Hash64,
+    pub deadline_daa: u64,
+}
+
+impl PalwLegacyAnswerManifestPinV2 {
+    pub fn new(declaration: &PalwLegacyAnswerDeclarationV2, deadline_daa: u64) -> std::io::Result<Self> {
+        struct Writer(blake2b_simd::State);
+        impl std::io::Write for Writer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.update(bytes);
+                Ok(bytes.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut writer = Writer(blake2b_simd::Params::new().key(b"misaka-node/provider-da-manifest/v1").to_state());
+        declaration.serialize(&mut writer)?;
+        Ok(Self { digest: Hash64::from_bytes(*writer.0.finalize().as_array()), deadline_daa })
+    }
+}
+
 impl PalwLegacyAnswerProgressV2 {
     pub fn next_index(&self) -> Option<u8> {
         (0..self.declaration.chunk_digests.len().min(PALW_LEGACY_ANSWER_MAX_CHUNKS_V2 as usize))
@@ -219,6 +245,20 @@ impl PalwPendingLegacyAnswerV2 {
             received: self.parts.keys().fold(0, |bits, &i| bits | 1u32.checked_shl(u32::from(i)).unwrap_or(0)),
         }
     }
+    pub(crate) fn matches_queued_chunk_v2(
+        &self,
+        chunk: &PalwLegacyAnswerChunkV2,
+        pin: PalwLegacyAnswerManifestPinV2,
+        now_daa: u64,
+        duty_deadline: u64,
+    ) -> bool {
+        now_daa < self.deadline_daa
+            && self.deadline_daa <= duty_deadline
+            && PalwLegacyAnswerManifestPinV2::new(&self.declaration, self.deadline_daa).ok() == Some(pin)
+            && (0..usize::from(chunk.index)).all(|i| self.parts.contains_key(&(i as u8)))
+            && self.check_chunk(chunk).is_ok()
+    }
+
     pub fn check_chunk(&self, chunk: &PalwLegacyAnswerChunkV2) -> Result<(), String> {
         let d = &self.declaration;
         d.check(u64::from(PALW_LEGACY_ANSWER_MAX_CHUNKS_V2) * u64::from(PALW_LEGACY_ANSWER_CHUNK_BYTES_V2))?;
@@ -301,6 +341,29 @@ mod tests {
             discloser: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(101), 0)),
             signature: vec![8; 4627],
         }
+    }
+
+    #[test]
+    fn provider_da_chunk_requires_same_manifest_deadline_and_next_part() {
+        let (declaration, chunks) =
+            palw_legacy_answer_split_v2(&answer(), PALW_LEGACY_ANSWER_CHUNK_BYTES_V2, PALW_LEGACY_ANSWER_MAX_BYTES_V2, |_| {
+                Ok(vec![9; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN])
+            })
+            .unwrap();
+        assert!(chunks.len() >= 2);
+        let pin = PalwLegacyAnswerManifestPinV2::new(&declaration, 90).unwrap();
+        let mut pending = PalwPendingLegacyAnswerV2 { declaration, deadline_daa: 90, parts: BTreeMap::new() };
+        assert!(pending.matches_queued_chunk_v2(&chunks[0], pin, 89, 90));
+        assert!(!pending.matches_queued_chunk_v2(&chunks[1], pin, 89, 90));
+        assert!(!pending.matches_queued_chunk_v2(&chunks[0], pin, 90, 90));
+        pending.parts.insert(0, chunks[0].bytes.clone());
+        assert!(!pending.matches_queued_chunk_v2(&chunks[0], pin, 89, 90));
+        assert!(pending.matches_queued_chunk_v2(&chunks[1], pin, 89, 90));
+        pending.declaration.signature[0] ^= 1;
+        assert!(!pending.matches_queued_chunk_v2(&chunks[1], pin, 89, 90));
+        pending.declaration.signature[0] ^= 1;
+        pending.deadline_daa -= 1;
+        assert!(!pending.matches_queued_chunk_v2(&chunks[1], pin, 88, 90));
     }
 
     #[test]

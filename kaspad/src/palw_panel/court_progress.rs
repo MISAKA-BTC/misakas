@@ -1684,7 +1684,7 @@ impl PalwPanelService {
                             match built {
                                 // A `Flat` built for an earlier unit answers this one.
                                 Ok(None) => {}
-                                Ok(Some(object)) => {
+                                Ok(Some(super::court_outbox::ProviderDaBuiltAnswerV1 { object, manifest })) => {
                                     let request_key = key;
                                     let key = da_answer_chunks::object_queue_key_v2(duty, &object);
                                     info!(
@@ -1695,7 +1695,7 @@ impl PalwPanelService {
                                     let flat = super::court_outbox::ProviderDaStampV1::is_flat(&object);
                                     let due = palw_disclosure_answer_due_v1(duty);
                                     if let Some(roots) = provider_roots {
-                                        let stamp = super::court_outbox::ProviderDaStampV1 { duty: (**duty).clone(), roots };
+                                        let stamp = super::court_outbox::ProviderDaStampV1 { duty: (**duty).clone(), roots, manifest };
                                         if let Err(why) = court_outbox.try_push_provider_da(key, object, due, stamp) {
                                             debug!("[{PALW_PANEL}] provider DA answer queue admission deferred: {why}");
                                             continue;

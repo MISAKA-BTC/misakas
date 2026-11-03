@@ -1215,6 +1215,46 @@ impl VirtualStateProcessor {
         self.palw_disclosure_duties_v1_at(&state, chain_point, candidate_daa, mine)
     }
 
+    pub(crate) fn palw_provider_da_answer_current_v1(
+        &self,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
+        roots: &kaspa_consensus_core::palw_evidence_v1::ClaimRoots,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+        manifest: Option<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2>,
+    ) -> Result<Option<u64>, String> {
+        use kaspa_consensus_core::{palw_producer_v2::palw_provider_da_answer_matches_v1, palw_state_v2::PalwTransitionExtrasV1};
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        let epoch = || {
+            let (import, stable) = self.pruning_import_status().map_err(|_| "provider DA import status unavailable")?;
+            (stable && import.active.is_none()).then_some(import.epoch).ok_or("provider DA import is not stable")
+        };
+        let before_epoch = epoch()?;
+        let before = self.lkg_virtual_state.load_full();
+        let sink = before.ghostdag_data.selected_parent;
+        let now = before.daa_score;
+        let (at, state) = self
+            .palw_v2_gc_reader_state_v1()
+            .map_err(|_| "provider DA resident state unavailable")?
+            .ok_or("provider DA resident state absent")?;
+        if at != sink {
+            return Err("provider DA resident state differs from selected sink".into());
+        }
+        // The existing duty projection reads these same fence values for
+        // in-run rows and for the covering signer's escaped second clock.
+        let extras = PalwTransitionExtrasV1 {
+            fp_da_pins_active: self.palw_fp_da_pins_at(now),
+            audit_2026_09_23_active: self.palw_audit_2026_09_23_at(now),
+            settled_anchor_depth: self.palw_settled_anchor_depth_at(now),
+            ..Default::default()
+        };
+        let matches = roots.network_domain == self.palw_network_domain_v2()
+            && palw_provider_da_answer_matches_v1(&state, params, &extras, duty, roots, object, manifest, now);
+        if before_epoch != epoch()? || !Arc::ptr_eq(&before, &self.lkg_virtual_state.load_full()) {
+            return Err("provider DA accepted view changed".into());
+        }
+        Ok(matches.then_some(now))
+    }
+
     /// [`Self::palw_disclosure_duties_v1_impl`] on a given state, for the block at `now_daa` on
     /// `chain_point` — the one place the fold's extras are resolved for the duty read (the real-claim
     /// tests call it on the state they folded).

@@ -13334,7 +13334,7 @@ impl PalwPanelService {
         duties: &[&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1],
         flat_queued: bool,
     ) -> Result<
-        (Vec<Result<Option<PalwConsensusObjectV2>, String>>, Option<misaka_palw_remote::evidence::ClaimRoots>),
+        (Vec<Result<Option<court_outbox::ProviderDaBuiltAnswerV1>, String>>, Option<misaka_palw_remote::evidence::ClaimRoots>),
         PalwDaClaimHoldV1,
     > {
         use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
@@ -13552,7 +13552,7 @@ impl PalwPanelService {
                             false,
                             |message, context| sign(message, context),
                         )?;
-                        da_answer_chunks::next_answer_object_v2(
+                        let object = da_answer_chunks::next_answer_object_v2(
                             object,
                             progress.as_ref(),
                             session.get_virtual_daa_score(),
@@ -13560,8 +13560,21 @@ impl PalwPanelService {
                             maximum,
                             &network_domain,
                             |message, context| sign(message, context),
-                        )
-                        .map(Some)
+                        )?;
+                        let manifest =
+                            if provider_roots.is_some() && matches!(&object, PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. }) {
+                                let progress = progress.as_ref().ok_or("provider DA chunk has no accepted manifest")?;
+                                Some(
+                                    kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2::new(
+                                        &progress.declaration,
+                                        progress.deadline_daa,
+                                    )
+                                    .map_err(|error| error.to_string())?,
+                                )
+                            } else {
+                                None
+                            };
+                        Ok(Some(court_outbox::ProviderDaBuiltAnswerV1 { object, manifest }))
                     }
                 })
                 .collect();
@@ -13578,33 +13591,18 @@ impl PalwPanelService {
         object: &PalwConsensusObjectV2,
     ) -> Result<(kaspa_consensusmanager::ConsensusProxy, u64), String> {
         let active = self.consensus_manager.consensus().unguarded_session();
-        let view = || {
-            active.with_consensus_api_v1(|c| {
-                let (import, stable) = c.pruning_import_status().map_err(|error| error.to_string())?;
-                if !stable || import.active.is_some() {
-                    return Err("provider DA awaits a stable import".to_owned());
-                }
-                Ok((import.epoch, c.get_sink(), c.get_virtual_daa_score()))
-            })
-        };
-        let before = view()?;
-        let duty = &stamp.duty;
-        let roots = Self::provider_claim_roots_in_v1(&active, stamp.roots.network_domain, duty.claim_id, Some(duty.accepted_block));
-        let current = active.palw_disclosure_duties_v1(vec![duty.discloser]).duties;
-        if !stamp.matches_view(before.2, roots, &current) {
-            return Err("provider DA carrier, roots or due duty changed".into());
-        }
-        if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = duty.unit {
-            let progress = active.palw_legacy_answer_progress_v2((duty.claim_id, unit, duty.discloser))?;
-            if !stamp.matches_progress(object, before.2, progress.as_ref()) {
-                return Err("provider DA multipart progress changed".into());
-            }
-        }
+        let now = active
+            .with_consensus_api_v1(|consensus| {
+                consensus.palw_provider_da_answer_current_v1(&stamp.duty, &stamp.roots, object, stamp.manifest)
+            })?
+            .ok_or("provider DA carrier, roots, duty or multipart stage changed")?;
         let latest = self.consensus_manager.consensus().unguarded_session();
-        if view()? != before || !active.with_consensus_api_v1(|a| latest.with_consensus_api_v1(|b| std::ptr::eq(a, b))) {
-            return Err("provider DA active view changed".into());
+        if !palw_disclosure_due_v1(&stamp.duty, now)
+            || !active.with_consensus_api_v1(|a| latest.with_consensus_api_v1(|b| std::ptr::eq(a, b)))
+        {
+            return Err("provider DA duty is outside its turn or the active consensus changed".into());
         }
-        Ok((active, before.2))
+        Ok((active, now))
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;

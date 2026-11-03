@@ -13336,6 +13336,25 @@ pub fn palw_da_covering_signers_v1(
         .collect()
 }
 
+/// Single-unit counterpart to the batched covering-signer projection.
+pub(crate) fn palw_da_covering_signer_rank_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    claim_id: Hash64,
+    unit: &crate::palw_da_rcore_v1::PalwDaUnitV1,
+    seat: PalwBondKeyV2,
+    now_daa: u64,
+) -> Option<u16> {
+    let read = PalwFoldReadV1::outside(state, params, extras);
+    state
+        .slashable_locks
+        .range(..=(seat, claim_id))
+        .filter(|((_, claim), lock)| *claim == claim_id && read.da_lock_covers_v1(lock, std::slice::from_ref(unit), now_daa))
+        .position(|((bond, _), _)| *bond == seat)
+        .map(|rank| rank.min(usize::from(u16::MAX)) as u16)
+}
+
 /// **ADR-0152 X7, for callers outside the fold (P2-7's retention duty): does `seat` hold a live lock
 /// on `claim_id` as the DA court reads one?** ([`PalwFoldReadV1::da_lock_live_v1`].) A signer
 /// keeps what it would answer from for as long as this holds and a session can still open.

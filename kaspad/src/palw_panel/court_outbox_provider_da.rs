@@ -4,7 +4,7 @@
 use super::{CourtMoveKeyV1, CourtMoveV1, Hash64, PalwConsensusObjectV2};
 use kaspa_consensus_core::{
     palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaUnitV1},
-    palw_legacy_answer_chunks_v2::{PalwLegacyAnswerProgressV2, palw_legacy_answer_chunk_digest_v2},
+    palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2,
     palw_native_resource_v1::NativeHeapV1,
     palw_producer_v2::PalwDisclosureDutyV1,
     palw_step_refute::PalwTraceEventDisclosureV1,
@@ -14,9 +14,15 @@ use misaka_palw_remote::evidence::ClaimRoots;
 
 const MAX_PROVIDER_DA_ANSWERS: usize = 64;
 
+pub(in crate::palw_panel) struct ProviderDaBuiltAnswerV1 {
+    pub object: PalwConsensusObjectV2,
+    pub manifest: Option<PalwLegacyAnswerManifestPinV2>,
+}
+
 pub(in crate::palw_panel) struct ProviderDaStampV1 {
     pub duty: PalwDisclosureDutyV1,
     pub roots: ClaimRoots,
+    pub manifest: Option<PalwLegacyAnswerManifestPinV2>,
 }
 
 impl ProviderDaStampV1 {
@@ -39,31 +45,7 @@ impl ProviderDaStampV1 {
             _ => return false,
         };
         (claim, unit, discloser) == (self.duty.claim_id, self.duty.unit, self.duty.discloser)
-    }
-
-    pub(in crate::palw_panel) fn matches_view(&self, now: u64, roots: Option<ClaimRoots>, duties: &[PalwDisclosureDutyV1]) -> bool {
-        roots == Some(self.roots) && duties.contains(&self.duty) && super::super::palw_disclosure_due_v1(&self.duty, now)
-    }
-
-    pub(in crate::palw_panel) fn matches_progress(
-        &self,
-        object: &PalwConsensusObjectV2,
-        now: u64,
-        progress: Option<&PalwLegacyAnswerProgressV2>,
-    ) -> bool {
-        use PalwConsensusObjectV2 as O;
-        match object {
-            O::LegacyHeldAnsweredV2 { .. } | O::LegacyHeldAnswerDeclaredV2 { .. } => progress.is_none(),
-            O::LegacyHeldAnswerChunkV2 { chunk } => progress.is_some_and(|p| {
-                p.next_index() == Some(chunk.index)
-                    && now < p.deadline_daa
-                    && p.deadline_daa <= self.duty.deadline_daa
-                    && super::super::da_answer_chunks::chunk_is_pending_v2(chunk, Some(p))
-                    && p.declaration.chunk_digests.get(chunk.index as usize)
-                        == Some(&palw_legacy_answer_chunk_digest_v2(chunk.index, &chunk.bytes))
-            }),
-            _ => true,
-        }
+            && self.manifest.is_some() == matches!(object, O::LegacyHeldAnswerChunkV2 { .. })
     }
 }
 
@@ -204,44 +186,22 @@ mod tests {
             free_prompt: false,
             job_identity: hash(11),
         };
-        (ProviderDaStampV1 { duty, roots }, chunk)
-    }
-
-    #[test]
-    fn provider_da_rejects_reorg_carrier_expiry_and_changed_manifest() {
-        let (stamp, chunk) = fixture();
-        let roots = Some(stamp.roots);
-        assert!(stamp.matches_view(100, roots, std::slice::from_ref(&stamp.duty)));
-        assert!(!stamp.matches_view(101, roots, std::slice::from_ref(&stamp.duty)));
-        assert!(!stamp.matches_view(100, None, std::slice::from_ref(&stamp.duty)));
-        let mut alternate = stamp.duty.clone();
-        alternate.accepted_block = Hash64::from_u64_word(12);
-        assert!(!stamp.matches_view(100, roots, &[alternate]));
-
-        let digest = palw_legacy_answer_chunk_digest_v2(chunk.index, &chunk.bytes);
-        let mut progress = PalwLegacyAnswerProgressV2 {
-            declaration: PalwLegacyAnswerDeclarationV2 {
-                version: 2,
-                claim: chunk.claim,
-                unit: chunk.unit,
-                discloser: chunk.discloser,
-                part_bytes: 1,
-                total_bytes: 1,
-                chunk_digests: vec![digest],
-                answer_digest: chunk.answer_digest,
-                signature: vec![],
-            },
-            deadline_daa: 99,
-            received: 0,
+        let declaration = PalwLegacyAnswerDeclarationV2 {
+            version: 2,
+            claim: chunk.claim,
+            unit: chunk.unit,
+            discloser: chunk.discloser,
+            part_bytes: 1,
+            total_bytes: 1,
+            chunk_digests: vec![kaspa_consensus_core::palw_legacy_answer_chunks_v2::palw_legacy_answer_chunk_digest_v2(
+                0,
+                &chunk.bytes,
+            )],
+            answer_digest: chunk.answer_digest,
+            signature: vec![],
         };
-        let object = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk) };
-        assert!(stamp.matches_progress(&object, 98, Some(&progress)));
-        assert!(!stamp.matches_progress(&object, 99, Some(&progress)));
-        progress.received = 1;
-        assert!(!stamp.matches_progress(&object, 98, Some(&progress)));
-        progress.received = 0;
-        progress.declaration.chunk_digests[0] = Hash64::from_u64_word(13);
-        assert!(!stamp.matches_progress(&object, 98, Some(&progress)));
+        let manifest = Some(PalwLegacyAnswerManifestPinV2::new(&declaration, 99).unwrap());
+        (ProviderDaStampV1 { duty, roots, manifest }, chunk)
     }
 
     #[test]

@@ -25,7 +25,7 @@ use source_response::CourtSourceResponsesV1;
 #[path = "court_outbox_provider_da.rs"]
 mod provider_da;
 use provider_da::ProviderDaGuardsV1;
-pub(super) use provider_da::ProviderDaStampV1;
+pub(super) use provider_da::{ProviderDaBuiltAnswerV1, ProviderDaStampV1};
 pub(super) use source_response::{SourceResponseFaultV1, SourceResponseSnapshotV1, is_source_response_v1};
 
 /// This invalidates only the local pending execution. It is neither a claim
