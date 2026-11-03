@@ -75,7 +75,7 @@ fn peel<'a>(mut ty: &'a Type, repeated: bool) -> (&'a Type, bool) {
 fn field_body(desc: &Descriptor, ty: &Type, state: proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     let (element, boxed) = peel(ty, desc.repeated);
     let q = quote!(kaspa_utils_tower::wire_preflight);
-    let array = if desc.repeated { quote!(estimate.array::<#element>(1, #state)?;) } else { quote!() };
+    let array = if desc.repeated { quote!(estimate.unmerged.array::<#element>(1, #state)?;) } else { quote!() };
     match desc.kind.as_str() {
         "bytes" | "string" => {
             let utf8 = if desc.kind == "string" {
@@ -84,22 +84,24 @@ fn field_body(desc: &Descriptor, ty: &Type, state: proc_macro2::TokenStream) -> 
                 quote!()
             };
             let blob_state = if desc.repeated { quote!(&mut #q::FieldState::default()) } else { state };
-            quote! { let value = cursor.bytes(wire)?; #utf8 #array estimate.blob(value.len(), #blob_state)?; }
+            // Prost constructs the new heap-backed value before pushing it.
+            // Its bytes can coexist with both Vec backing allocations.
+            quote! { let value = cursor.bytes(wire)?; #utf8 estimate.unmerged.blob(value.len(), #blob_state)?; #array }
         }
         "message" => {
-            let unique = if desc.repeated { quote!() } else { quote!((#state).singular_message_once()?;) };
+            let add_child =
+                if desc.repeated { quote!(estimate.child(child)?;) } else { quote!(estimate.grouped_child(child, #state)?;) };
             // For Vec<Box<M>>, the array stores pointers and each child owns M.
             let (inner, inner_boxed) = peel(element, false);
             let box_bytes = if boxed || inner_boxed {
-                quote!(estimate.owned(std::mem::size_of::<#inner>() as u64, std::mem::size_of::<#inner>() as u64)?;)
+                quote!(estimate.unmerged.owned(std::mem::size_of::<#inner>() as u64, std::mem::size_of::<#inner>() as u64)?;)
             } else {
                 quote!()
             };
             quote! {
-                #unique
                 let value = cursor.bytes(wire)?;
-                let child = <#inner as #q::WirePreflight>::wire_heap_bound(value, depth.checked_add(1).ok_or(#q::PreflightError("protobuf recursion overflow"))?)?;
-                #box_bytes estimate.child(child)?; #array
+                let child = <#inner as #q::WirePreflight>::wire_fragment_bound(value, depth.checked_add(1).ok_or(#q::PreflightError("protobuf recursion overflow"))?)?;
+                #box_bytes #add_child #array
             }
         }
         kind => {
@@ -110,7 +112,7 @@ fn field_body(desc: &Descriptor, ty: &Type, state: proc_macro2::TokenStream) -> 
                 _ => panic!("unsupported prost memory field kind {kind}"),
             };
             if desc.repeated {
-                quote! { let count = cursor.scalar_count(wire, #wire, depth)?; estimate.array::<#element>(count, #state)?; }
+                quote! { let count = cursor.scalar_count(wire, #wire, depth)?; estimate.unmerged.array::<#element>(count, #state)?; }
             } else {
                 quote!(cursor.scalar(wire, #wire)?;)
             }
@@ -138,10 +140,8 @@ fn instrument(items: &mut Vec<Item>) {
                         let tags = desc.tags;
                         assert!(!tags.is_empty(), "oneof must list its wire tags");
                         cases.push(quote!(#(#tags)|* => {
-                            if <#oneof as kaspa_utils_tower::wire_preflight::OneofPreflight>::is_message_tag(tag) {
-                                states[#index].singular_message_once()?;
-                            }
-                            estimate.child(<#oneof as kaspa_utils_tower::wire_preflight::OneofPreflight>::wire_field_bound(tag, wire, &mut cursor, depth)?)?;
+                            let fragment = <#oneof as kaspa_utils_tower::wire_preflight::OneofPreflight>::wire_field_fragment(tag, wire, &mut cursor, depth)?;
+                            estimate.oneof_child(fragment, &mut states[#index], tag)?;
                         },));
                     } else {
                         let tag = desc.tag.expect("prost field tag");
@@ -152,14 +152,14 @@ fn instrument(items: &mut Vec<Item>) {
                 let generated = quote! {
                     #[allow(unused_mut, unused_variables)]
                     impl kaspa_utils_tower::wire_preflight::WirePreflight for #name {
-                        fn wire_heap_bound(bytes: &[u8], depth: usize) -> kaspa_utils_tower::wire_preflight::Result<kaspa_utils_tower::wire_preflight::HeapBound> {
+                        fn wire_fragment_bound(bytes: &[u8], depth: usize) -> kaspa_utils_tower::wire_preflight::Result<kaspa_utils_tower::wire_preflight::FragmentBound> {
                             let mut cursor = kaspa_utils_tower::wire_preflight::Cursor::new(bytes, depth)?;
-                            let mut estimate = kaspa_utils_tower::wire_preflight::HeapBound::default();
+                            let mut estimate = kaspa_utils_tower::wire_preflight::FragmentBound::default();
                             let mut states = [kaspa_utils_tower::wire_preflight::FieldState::default(); #slots];
                             while let Some((tag, wire)) = cursor.key()? {
                                 match tag { #(#cases)* _ => cursor.skip(tag, wire, depth)?, }
                             }
-                            Ok(estimate)
+                            estimate.finish_fields(&states)
                         }
                     }
                 };
@@ -168,13 +168,9 @@ fn instrument(items: &mut Vec<Item>) {
             Item::Enum(oneof) if derive(&oneof.attrs, "Oneof") => {
                 let name = &oneof.ident;
                 let mut cases = Vec::new();
-                let mut message_tags = Vec::new();
                 for variant in &oneof.variants {
                     let desc = descriptor(&variant.attrs);
                     let tag = desc.tag.expect("prost oneof tag");
-                    if desc.kind == "message" {
-                        message_tags.push(tag);
-                    }
                     let Fields::Unnamed(fields) = &variant.fields else { panic!("prost oneof tuple") };
                     assert_eq!(fields.unnamed.len(), 1);
                     let body = field_body(&desc, &fields.unnamed.first().unwrap().ty, quote!(&mut state));
@@ -183,14 +179,11 @@ fn instrument(items: &mut Vec<Item>) {
                 let generated = quote! {
                     #[allow(unused_mut, unused_variables)]
                     impl kaspa_utils_tower::wire_preflight::OneofPreflight for #name {
-                        fn is_message_tag(tag: u32) -> bool {
-                            false #(|| tag == #message_tags)*
-                        }
-                        fn wire_field_bound(tag: u32, wire: kaspa_utils_tower::wire_preflight::WireType, cursor: &mut kaspa_utils_tower::wire_preflight::Cursor<'_>, depth: usize) -> kaspa_utils_tower::wire_preflight::Result<kaspa_utils_tower::wire_preflight::HeapBound> {
-                            let mut estimate = kaspa_utils_tower::wire_preflight::HeapBound::default();
+                        fn wire_field_fragment(tag: u32, wire: kaspa_utils_tower::wire_preflight::WireType, cursor: &mut kaspa_utils_tower::wire_preflight::Cursor<'_>, depth: usize) -> kaspa_utils_tower::wire_preflight::Result<kaspa_utils_tower::wire_preflight::FragmentBound> {
+                            let mut estimate = kaspa_utils_tower::wire_preflight::FragmentBound::default();
                             let mut state = kaspa_utils_tower::wire_preflight::FieldState::default();
                             match tag { #(#cases)* _ => return Err(kaspa_utils_tower::wire_preflight::PreflightError("unknown oneof schema tag")), }
-                            Ok(estimate)
+                            estimate.finish_fields(&[state])
                         }
                     }
                 };

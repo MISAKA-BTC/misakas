@@ -95,7 +95,7 @@ fn packed_scalar_batch_charges_intermediate_reallocation_overlap() {
 }
 
 #[test]
-fn duplicate_blob_fields_remain_bounded_but_nested_merge_is_explicitly_unsupported() {
+fn duplicate_blob_fields_and_nested_fragments_are_bounded() {
     let mut wire = Vec::new();
     for n in [1, 9, 17, 33, 65, 129] {
         wire.extend(field(3, &vec![7; n]));
@@ -104,12 +104,25 @@ fn duplicate_blob_fields_remain_bounded_but_nested_merge_is_explicitly_unsupport
     for n in [1, 5, 17, 65] {
         wire.extend(field(1, &Node { values: vec![1; n], blobs: vec![vec![2; n]], ..Default::default() }.encode_to_vec()));
     }
-    assert!(Node::decode(wire.as_slice()).is_ok(), "this is valid protobuf with merge semantics");
-    assert_eq!(Node::wire_heap_bound(&wire, 0).unwrap_err().0, "unsupported repeated singular/message-oneof merge");
+    compare::<Node>(&wire);
 }
 
 #[test]
-fn singular_merged_256_by_three_fragments_require_explicit_unsupported() {
+fn repeated_blob_and_string_growth_counts_value_during_parent_reallocation() {
+    let n = 64 * 1024;
+    let blobs = Node { blobs: vec![vec![], vec![], vec![], vec![], vec![1; n]], ..Default::default() };
+    let labels =
+        Node { labels: vec![String::new(), String::new(), String::new(), String::new(), "x".repeat(n)], ..Default::default() };
+    for (wire, element) in
+        [(blobs.encode_to_vec(), std::mem::size_of::<Vec<u8>>()), (labels.encode_to_vec(), std::mem::size_of::<String>())]
+    {
+        let bound = compare::<Node>(&wire);
+        assert_eq!(bound.peak_bytes, (n + (4 + 8) * element) as u64);
+    }
+}
+
+#[test]
+fn singular_merged_256_by_three_fragments_cover_reallocation() {
     let child = Node { values: vec![1; 256], ..Default::default() }.encode_to_vec();
     let fragment = field(1, &child);
     let independent = Node::wire_heap_bound(&fragment, 0).unwrap().retained_bytes * 3;
@@ -121,11 +134,12 @@ fn singular_merged_256_by_three_fragments_require_explicit_unsupported() {
     let actual = decoded.retained_heap_bytes();
     println!("singular merge: independent={independent} actual={actual}");
     assert!(independent < actual, "the old fragment-sum estimate must reproduce the undercount");
-    assert!(Node::wire_heap_bound(&wire, 0).is_err(), "unsupported merge must not return a false heap bound");
+    let bound = compare::<Node>(&wire);
+    assert!(bound.peak_bytes >= (512 + 1024) * 8 + std::mem::size_of::<Node>() as u64);
 }
 
 #[test]
-fn real_p2p_oneof_merged_256_by_three_fragments_require_explicit_unsupported() {
+fn real_p2p_oneof_merged_256_by_three_fragments_cover_reallocation() {
     let fragment = p2p::KaspadMessage {
         payload: Some(p2p::kaspad_message::Payload::BlockHeaders(p2p::BlockHeadersMessage {
             block_headers: vec![p2p::BlockHeader::default(); 256],
@@ -142,7 +156,43 @@ fn real_p2p_oneof_merged_256_by_three_fragments_require_explicit_unsupported() {
     let actual = decoded.retained_heap_bytes();
     println!("P2P oneof merge: independent={independent} actual={actual}");
     assert!(independent < actual, "the old fragment-sum estimate must reproduce the undercount");
-    assert!(p2p::KaspadMessage::wire_heap_bound(&wire, 0).is_err(), "unsupported merge must not return a false heap bound");
+    let bound = compare::<p2p::KaspadMessage>(&wire);
+    assert!(bound.peak_bytes >= (512 + 1024) * std::mem::size_of::<p2p::BlockHeader>() as u64);
+}
+
+#[test]
+fn nested_merge_does_not_multiply_large_unrelated_fields() {
+    let leaf = Node { values: vec![7; 256], ..Default::default() }.encode_to_vec();
+    let child = field(1, &leaf).repeat(3);
+    let merged = field(1, &child).repeat(3);
+    let mut wire = field(3, &vec![1; 2 << 20]);
+    let blob = compare::<Node>(&wire);
+    wire.extend_from_slice(&merged);
+    let only_merges = compare::<Node>(&merged);
+    let combined = compare::<Node>(&wire);
+    assert_eq!(combined.retained_bytes, blob.retained_bytes + only_merges.retained_bytes);
+    assert_eq!(combined.peak_bytes, blob.retained_bytes + only_merges.peak_bytes);
+    let decoded = Node::decode(wire.as_slice()).unwrap();
+    assert_eq!(decoded.child.unwrap().child.unwrap().values.len(), 9 * 256);
+}
+
+#[test]
+fn oneof_variant_switch_keeps_overlap_and_starts_new_merge_group() {
+    use super::fixtures::node::Choice;
+    let nested =
+        Node { choice: Some(Choice::Nested(Box::new(Node { values: vec![7; 256], ..Default::default() }))), ..Default::default() }
+            .encode_to_vec();
+    let text = Node { choice: Some(Choice::Text("x".repeat(8192))), ..Default::default() }.encode_to_vec();
+    let mut wire = nested.repeat(3);
+    wire.extend_from_slice(&text);
+    let switch = compare::<Node>(&wire);
+    assert!(switch.peak_bytes >= 8192 + 1024 * 8 + std::mem::size_of::<Node>() as u64);
+    wire.extend_from_slice(&nested.repeat(2));
+    let bound = compare::<Node>(&wire);
+    let decoded = Node::decode(wire.as_slice()).unwrap();
+    let Some(Choice::Nested(final_node)) = decoded.choice else { panic!("oneof did not switch back") };
+    assert_eq!(final_node.values.len(), 512, "earlier variant contents must be discarded");
+    assert!(bound.peak_bytes >= switch.peak_bytes);
 }
 
 #[test]

@@ -88,27 +88,93 @@ impl HeapBound {
 pub struct FieldState {
     capacity: u64,
     elements: u64,
-    message_seen: bool,
+    fragment_seen: bool,
+    fragment_tag: u32,
+    fragment_mass: u64,
+    fragment_extra_retained: u64,
+    fragment_extra_peak: u64,
 }
-impl FieldState {
-    /// Prost merges repeated occurrences of a singular message into one value.
-    /// Independent fragment bounds cannot model that value's aggregate Vec
-    /// growth. Until merge-aware state exists, do not return a false bound.
-    pub fn singular_message_once(&mut self) -> Result<()> {
-        if self.message_seen {
-            return Err(PreflightError("unsupported repeated singular/message-oneof merge"));
+
+/// An unmerged estimate plus separately computed margins for affected fields.
+/// Keep the unscaled capacity mass when returning to a containing fragment;
+/// otherwise nested merged messages would multiply the same bytes repeatedly.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FragmentBound {
+    pub unmerged: HeapBound,
+    extra_retained: u64,
+    extra_peak: u64,
+}
+impl FragmentBound {
+    pub fn child(&mut self, child: Self) -> Result<()> {
+        self.unmerged.child(child.unmerged)?;
+        self.add_margin(child.extra_retained, child.extra_peak)
+    }
+
+    pub fn grouped_child(&mut self, child: Self, field: &mut FieldState) -> Result<()> {
+        self.unmerged.child(child.unmerged)?;
+        field.fragment_mass = add(field.fragment_mass, child.unmerged.retained_bytes)?;
+        if field.fragment_seen {
+            // For each leaf allocation, the standalone capacities across its
+            // fragments cover all inserted elements (or replacement lengths).
+            // A merged Vec's capacity is at most twice that mass. On growth,
+            // the old capacity is smaller than the required length and can
+            // overlap the new allocation, so use three times the mass at peak.
+            // Box and oneof replacement allocations are also in the mass.
+            // The raw quote already charges the fragment capacities as each
+            // fragment is processed. Add only the extra one/two copies here.
+            field.fragment_extra_retained = field.fragment_mass;
+            field.fragment_extra_peak = mul(field.fragment_mass, 2)?;
+        } else {
+            field.fragment_seen = true;
+            field.fragment_extra_retained = child.extra_retained;
+            field.fragment_extra_peak = child.extra_peak;
         }
-        self.message_seen = true;
         Ok(())
+    }
+
+    pub fn oneof_child(&mut self, child: Self, field: &mut FieldState, tag: u32) -> Result<()> {
+        if field.fragment_seen && field.fragment_tag != tag {
+            // A different variant replaces the old one. Keep its full quote
+            // (construction may overlap), but do not merge later fragments
+            // back into a value that prost has already discarded.
+            self.add_margin(field.fragment_extra_retained, field.fragment_extra_peak)?;
+            *field = FieldState::default();
+        }
+        field.fragment_tag = tag;
+        self.grouped_child(child, field)
+    }
+
+    fn add_margin(&mut self, retained: u64, peak: u64) -> Result<()> {
+        self.extra_retained = add(self.extra_retained, retained)?;
+        self.extra_peak = add(self.extra_peak, peak)?;
+        Ok(())
+    }
+
+    pub fn finish_fields(mut self, fields: &[FieldState]) -> Result<Self> {
+        for field in fields {
+            self.add_margin(field.fragment_extra_retained, field.fragment_extra_peak)?;
+        }
+        Ok(self)
+    }
+
+    fn bound(self) -> Result<HeapBound> {
+        Ok(HeapBound {
+            retained_bytes: add(self.unmerged.retained_bytes, self.extra_retained)?,
+            peak_bytes: add(self.unmerged.peak_bytes, self.extra_peak)?,
+        })
     }
 }
 
 pub trait WirePreflight {
-    fn wire_heap_bound(bytes: &[u8], depth: usize) -> Result<HeapBound>;
+    fn wire_heap_bound(bytes: &[u8], depth: usize) -> Result<HeapBound> {
+        Self::wire_fragment_bound(bytes, depth)?.bound()
+    }
+    #[doc(hidden)]
+    fn wire_fragment_bound(bytes: &[u8], depth: usize) -> Result<FragmentBound>;
 }
 pub trait OneofPreflight {
-    fn is_message_tag(tag: u32) -> bool;
-    fn wire_field_bound(tag: u32, wire: WireType, cursor: &mut Cursor<'_>, depth: usize) -> Result<HeapBound>;
+    fn wire_field_fragment(tag: u32, wire: WireType, cursor: &mut Cursor<'_>, depth: usize) -> Result<FragmentBound>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
