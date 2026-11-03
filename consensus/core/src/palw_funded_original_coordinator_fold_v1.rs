@@ -15,9 +15,13 @@
 // existing writer), then the rooted escrow row (`install_funded_escrow_v1`). Any error restores the checkpoint, so FP, frame,
 // preparation, rooted graph identity, consents and the escrow row commit together or not at all (RFC-0035 §3 "一括更新").
 use crate::palw_funded_original_coordinator_v1::{
-    PALW_FUNDED_ROLE_FEE_CAPITAL_BODIES_V1, PALW_FUNDED_ROLE_SEMANTIC_PROVIDER_V1, PALW_FUNDED_ROLE_SERVICE_OPERATOR_V1,
-    PALW_FUNDED_ROLE_WHOLE_BRANCH_V1, PalwFundedOriginalMissingV1 as FundedMissingV1, palw_funded_original_schedule_v1,
+    FundedBatchScheduleV1, PALW_FUNDED_ROLE_FEE_CAPITAL_BODIES_V1, PALW_FUNDED_ROLE_SEMANTIC_PROVIDER_V1,
+    PALW_FUNDED_ROLE_SERVICE_OPERATOR_V1, PALW_FUNDED_ROLE_WHOLE_BRANCH_V1, PalwFundedOriginalMissingV1 as FundedMissingV1,
+    palw_funded_original_schedule_v1,
 };
+use crate::palw_court_shared_material_intake_v1::batch::admission::BatchAdmissionQuoteV1;
+use crate::palw_court_service_release_v1::CourtServiceRowV3;
+use crate::palw_funded_original_admission_v1::{FundedAdmissionDerivationV1, FundedAdmissionScheduleV1};
 
 /// Typed refusal of the coordinator. `Missing` = a contract/value does not exist (never a fraud finding); `Invalid` = the carrier or
 /// its consents do not match the native derivation; `State` = an inner native error; `Resource` = local coverage (never invalid).
@@ -66,23 +70,41 @@ fn requirements_refusal(e: PreparedRequirementsErrorV1) -> FundedOriginalRefusal
 /// The checked, not-yet-written funded original: native requirements (frame + Source tickets alive) and the fresh escrow row.
 /// No Clone/Borsh; consumed only by [`install_original_admission_v1`] inside the same checkpoint.
 pub(super) struct FundedOriginalPlanV1 {
-    requirements: PreparedOriginalRequirementsV1,
     row: crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1,
     /// The row that the reservation and payer checks read.
     service_before: Option<Row>,
-    /// G14 item 1 (lane r5): every legal branch, its packets, resources and capital, derived from the native preparation.
-    derivation: crate::palw_funded_original_admission_v1::FundedAdmissionDerivationV1,
-    admission: crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1,
-    signers: std::collections::BTreeSet<PalwBondKeyV2>,
+    service: FundedOriginalServiceV1,
+}
+enum FundedOriginalServiceV1 {
+    Legacy {
+        requirements: PreparedOriginalRequirementsV1,
+        derivation: FundedAdmissionDerivationV1,
+        admission: FundedAdmissionScheduleV1,
+        signers: std::collections::BTreeSet<PalwBondKeyV2>,
+    },
+    Batch {
+        geometry: PreparedOriginalGeometryV1,
+        book: CourtServiceRowV3,
+        quote: BatchAdmissionQuoteV1,
+    },
 }
 impl FundedOriginalPlanV1 {
+    fn frame_v1(&self) -> &Frame {
+        match &self.service {
+            FundedOriginalServiceV1::Legacy { requirements, .. } => requirements.frame_v1(),
+            FundedOriginalServiceV1::Batch { geometry, .. } => geometry.frame_v1(),
+        }
+    }
     #[cfg(test)]
     pub(super) fn row_v1(&self) -> &crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1 {
         &self.row
     }
     #[cfg(test)]
     pub(super) fn derivation_v1(&self) -> &crate::palw_funded_original_admission_v1::FundedAdmissionDerivationV1 {
-        &self.derivation
+        let FundedOriginalServiceV1::Legacy { derivation, .. } = &self.service else {
+            panic!("expected a legacy source derivation");
+        };
+        derivation
     }
 }
 
@@ -160,7 +182,7 @@ impl OriginalAdmissionV1 {
     pub(super) fn frame_v1(&self) -> &Frame {
         match self {
             Self::Plain(p) => p.frame_v1(),
-            Self::Funded(f) => f.requirements.frame_v1(),
+            Self::Funded(f) => f.frame_v1(),
         }
     }
 }
@@ -185,6 +207,68 @@ pub(super) fn admit_original_v1(
     }
 }
 
+fn prepare_funded_batch_book_v1(
+    b: &TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    geometry: &PreparedOriginalGeometryV1,
+    admission: &FundedAdmissionScheduleV1,
+    batch: FundedBatchScheduleV1,
+) -> Result<(CourtServiceRowV3, BatchAdmissionQuoteV1, Hash64, u64), FundedOriginalRefusalV1> {
+    use crate::palw_batch_court_v1::BatchCourtErrorV1;
+    use crate::palw_court_shared_material_intake_v1::{
+        batch::{
+            Stage,
+            admission::{BatchDeliveryV1, reserve_native_batch_delivery_v1},
+            constraint_stop::ConstraintStopBatchOperandsV1,
+        },
+        material_intake_schedule_v1,
+    };
+    let missing = FundedOriginalRefusalV1::Missing(FundedMissingV1::BatchSchedule);
+    let service = b.state.court_service_state_v1().ok_or(FundedOriginalRefusalV1::Missing(FundedMissingV1::SharedServiceNamespace))?;
+    if !b.extras.batch_court_active_v1 || !b.extras.tir_public_conviction_active
+        || b.extras.batch_numerical_profile_v1.is_none_or(|profile| {
+            profile.service_profile != service.profile_id || profile.budget != batch.delivery.numerical_verification
+        })
+    {
+        return Err(missing);
+    }
+    let storage = material_intake_schedule_v1().map_err(|_| FundedOriginalRefusalV1::Missing(FundedMissingV1::BatchSchedule))?;
+    let envelope = geometry.streaming_batch_envelope_v1(b, ctx, batch.cover, batch.maximum_ranges).map_err(geometry_refusal)?;
+    let frame = geometry.frame_v1();
+    let stop = ConstraintStopBatchOperandsV1::derive_v1(
+        &b.state, b.extras, ctx.daa_score, envelope.scope_v1(), frame.original_v1(), frame.header_v1(),
+    );
+    let (base, book, base_scope) = crate::palw_funded_original_admission_v1::funded_batch_base_candidate_v1(
+        &b.state, frame, admission,
+    ).map_err(admission_refusal)?;
+    let (quote, book) = reserve_native_batch_delivery_v1(
+        book, frame, &envelope,
+        stop.as_ref().map(|stop| (stop, batch.stop_verification, batch.stop_filing)),
+        batch.delivery, storage,
+        |stage, bytes| {
+            let (index, units, work_rate, io_rate) = match stage {
+                BatchDeliveryV1::Open { range_count, .. } => (0, range_count as u64, batch.open_work_per_range, 0),
+                BatchDeliveryV1::Response { stage: Stage::Begin, .. } => (1, 0, 0, 0),
+                BatchDeliveryV1::Response { stage: Stage::Part(_), .. } => (2, 0, 0, 0),
+                BatchDeliveryV1::Response { stage: Stage::Finish, maximum_body_bytes, .. } => {
+                    (3, maximum_body_bytes, batch.finish_work_per_byte, batch.finish_io_per_byte)
+                }
+            };
+            let mut cost = batch.carrier_costs[index];
+            let price = |base: u64, rate| units.checked_mul(rate).and_then(|extra| base.checked_add(extra))
+                .ok_or_else(|| "Batch delivery service cost overflows".to_string());
+            cost.bytes = bytes;
+            cost.work = price(cost.work, work_rate)?;
+            cost.io = price(cost.io, io_rate)?;
+            Ok(cost)
+        },
+    ).map_err(|why| match why {
+        BatchCourtErrorV1::LocalResource(coverage) => FundedOriginalRefusalV1::Resource(coverage),
+        other => FundedOriginalRefusalV1::State(refused(format!("Batch Court admission reservation refused: {other:?}"))),
+    })?;
+    Ok((book, quote, base_scope, base.capital_sompi))
+}
+
 /// **The coordinator's checks — reads only; nothing is written.** Order: pairing/literal → schedule (typed-missing in production)
 /// → native geometry and requirements (budgets from the schedule) → actor catalog (current authority, re-signed source pledge) and
 /// each missing role contract → source graph (service namespace) → native expected scope → existing TFO1 inspection of the actual
@@ -203,6 +287,10 @@ pub(super) fn coordinate_funded_original_v1(
         return Err(Invalid("funded pairing, literal TFP1 and prepared original differ"));
     }
     let schedule = palw_funded_original_schedule_v1(b.extras).map_err(M)?;
+    let batch_schedule = schedule.batch_v1();
+    if b.extras.batch_court_active_v1 != batch_schedule.is_some() {
+        return Err(M(FundedMissingV1::BatchSchedule));
+    }
     let required_amount = schedule.required_amount_sompi().ok_or(Invalid("schedule amount overflow"))?;
     if required_amount == 0 {
         return Err(M(FundedMissingV1::Schedule));
@@ -210,20 +298,8 @@ pub(super) fn coordinate_funded_original_v1(
     let network = b.extras.tir_public_network_domain_v1.ok_or(M(FundedMissingV1::NetworkDomain))?;
     // Native geometry and requirements, all from the successful preparation; the budgets are part of the schedule.
     let geometry = prepared.enrich_native_geometry_v1(b, ctx).map_err(geometry_refusal)?;
-    let requirements = geometry
-        .prepare_requirements_v1(
-            b,
-            ctx,
-            PreparedRequirementBudgetsV1 {
-                numerical: schedule.numerical_budget(),
-                input: schedule.input_budget(),
-                source: schedule.source_budget(),
-            },
-        )
-        .map_err(requirements_refusal)?;
-    // Responsible actors: current authority re-derived (producer bond active, key, operator, pledge signature) and every role the
-    // catalog names as un-contracted must be adopted by the schedule — never assumed for an unconsenting future actor.
-    let actors = requirements.actor_catalog_v1(b, ctx).map_err(geometry_refusal)?;
+    // Resolve the producer's signed source pledge and role authority for both routes.
+    let actors = PreparedActorCatalogV1::derive_v1(&geometry, b, ctx).map_err(geometry_refusal)?;
     for missing in actors.missing_contracts_v1() {
         let (bit, typed) = match missing {
             PreparedRoleContractMissingV1::CanonicalWholeBranchActorAssignment => {
@@ -244,11 +320,7 @@ pub(super) fn coordinate_funded_original_v1(
         }
     }
     let source_actor = actors.source_actor_v1();
-    // The complete native source graph (all query families, scoped to the CURRENT service namespace). Its relative scope is the
-    // graph identity the payer must have signed; the graph itself is re-derivable from the rooted frame (RFC-0035 §3 last bullet).
-    let graph = requirements.source_graph_v1().map_err(requirements_refusal)?;
-    graph.check_v3().map_err(|_| Invalid("native source graph"))?;
-    let frame = requirements.frame_v1();
+    let frame = geometry.frame_v1();
     let plan = frame.plan_v1();
     let pledge = frame.custody_v1().pledge_v1();
     if pledge.producer != source_actor.bond || pledge.id_v1() != source_actor.pledge_id {
@@ -266,48 +338,66 @@ pub(super) fn coordinate_funded_original_v1(
             return Err(Invalid("a responsible actor has no current authority"));
         }
     }
-    // Every legal branch (liable signer × turn, every native source-graph node, retention), its resources and capital; then a
-    // dry-run reservation of ALL of them in a clone of the rooted book (all-or-nothing). The install re-derives against the book
-    // as it stands at the install point.
-    let derivation = crate::palw_funded_original_admission_v1::derive_funded_admission_v1(
-        claim,
-        plan.allocation_id,
-        plan.source_id,
-        plan.terms.accepted_daa,
-        &signers,
-        graph,
-        &admission,
-    )
-    .map_err(admission_refusal)?;
-    let (_, full) = funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers)?;
-    funded_journal_row_candidate_v1(b, &requirements, &derivation, full)?;
+    let (job_identity, execution_root, source_id, deposit, material_until) = (
+        pledge.job_identity, frame.original_v1().execution_root, plan.source_id,
+        plan.terms.plan.deposit_sompi, plan.terms.material_until_daa,
+    );
+    let (service, relative_graph_id, capital) = if let Some(batch) = batch_schedule {
+        let (book, quote, base_scope, capital) = prepare_funded_batch_book_v1(b, ctx, &geometry, &admission, batch)?;
+        (FundedOriginalServiceV1::Batch { geometry, book, quote }, base_scope, capital)
+    } else {
+        let requirements = geometry.prepare_requirements_v1(b, ctx, PreparedRequirementBudgetsV1 {
+            numerical: schedule.numerical_budget(),
+            input: schedule.input_budget(),
+            source: schedule.source_budget(),
+        }).map_err(requirements_refusal)?;
+        let graph = requirements.source_graph_v1().map_err(requirements_refusal)?;
+        let plan = requirements.frame_v1().plan_v1();
+        let derivation = crate::palw_funded_original_admission_v1::derive_funded_admission_v1(
+            claim, plan.allocation_id, source_id, plan.terms.accepted_daa, &signers, graph, &admission,
+        ).map_err(admission_refusal)?;
+        let relative_graph_id = graph.scope_v3();
+        let (_, full) = funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers)?;
+        funded_journal_row_candidate_v1(b, &requirements, &derivation, full)?;
+        let capital = derivation.capital_sompi;
+        (FundedOriginalServiceV1::Legacy { requirements, derivation, admission, signers }, relative_graph_id, capital)
+    };
     // Capital (RFC-0035 §7.1): Σ branch capital (≥ the schedule floor), less the producer deposit the native work room already
     // holds, plus the fee once.
     let required_amount = crate::palw_funded_original_admission_v1::funded_required_amount_v1(
         schedule.fee_sompi(),
         schedule.capital_floor_sompi(),
-        derivation.capital_sompi,
-        plan.terms.plan.deposit_sompi,
+        capital,
+        deposit,
     )
     .ok_or(Invalid("required capital overflow"))?;
     if required_amount == 0 {
         return Err(M(FundedMissingV1::Schedule));
     }
-    let hard = crate::palw_funded_escrow_v1::palw_funded_escrow_hard_deadline_v1(b.params.claim_hard_deadline_v1(), ctx.daa_score)
-        .map_err(|_| M(FundedMissingV1::HardDeadline))?;
-    let expected = crate::palw_court_original_escrow_v1::OriginalFundingScopeV1 {
+    let hard = match &service {
+        FundedOriginalServiceV1::Batch { .. } => ctx.daa_score.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+            .ok_or(M(FundedMissingV1::HardDeadline))?,
+        FundedOriginalServiceV1::Legacy { .. } => {
+            crate::palw_funded_escrow_v1::palw_funded_escrow_hard_deadline_v1(b.params.claim_hard_deadline_v1(), ctx.daa_score)
+                .map_err(|_| M(FundedMissingV1::HardDeadline))?
+        }
+    };
+    let mut expected = crate::palw_court_original_escrow_v1::OriginalFundingScopeV1 {
         claim,
-        job_identity: pledge.job_identity,
-        execution_root: frame.original_v1().execution_root,
-        source_id: plan.source_id,
-        relative_graph_id: graph.scope_v3(),
+        job_identity,
+        execution_root,
+        source_id,
+        relative_graph_id,
         fee_profile_id: schedule.fee_profile_id(),
         capital_profile_id: schedule.capital_profile_id(),
         retention_profile_id: schedule.retention_profile_id(),
         settlement_policy_id: schedule.settlement_policy_id(),
         required_amount_sompi: required_amount,
-        required_material_until_daa: plan.terms.material_until_daa.max(hard),
+        required_material_until_daa: material_until.max(hard),
     };
+    if let FundedOriginalServiceV1::Batch { quote, .. } = &service {
+        expected = expected.with_native_batch_v1(quote).map_err(|_| Invalid("native Batch funding scope"))?;
+    }
     // Existing TFO1 inspection of the ACTUAL carrier (literal payload, index, amount, payer P2PKH), then the payer's signature over
     // exactly this native scope, network and acceptance interval.
     let envelope = pairing.envelope();
@@ -348,7 +438,7 @@ pub(super) fn coordinate_funded_original_v1(
     #[allow(clippy::drop_non_drop)]
     drop(funding);
     let service_before = b.state.staged_court_row_v1(&Key::CourtService).cloned();
-    Ok(FundedOriginalPlanV1 { requirements, row, service_before, derivation, admission, signers })
+    Ok(FundedOriginalPlanV1 { row, service_before, service })
 }
 
 /// **Install** at the existing original install point (after `reserve_for_claim` / `write_claim`), inside the same checkpoint.
@@ -361,7 +451,7 @@ pub(super) fn install_original_admission_v1(
     match admission {
         OriginalAdmissionV1::Plain(prepared) => install_prepared_original_v1(b, ctx, prepared, prompt),
         OriginalAdmissionV1::Funded(plan) => {
-            let FundedOriginalPlanV1 { requirements, row, service_before, derivation, admission, signers } = *plan;
+            let FundedOriginalPlanV1 { row, service_before, service } = *plan;
             if row.accepted_daa != ctx.daa_score || b.state.claim(&row.claim).is_none() || !row.liability_open {
                 return Err(refused("RFC-0035 A funded install lacks this block's native FP acceptance"));
             }
@@ -369,29 +459,43 @@ pub(super) fn install_original_admission_v1(
             if b.state.staged_court_row_v1(&Key::CourtService) != service_before.as_ref() {
                 return Err(refused("RFC-0035 A funded install: the rooted service row differs from the payer precheck"));
             }
-            let (after_signer, full) =
-                funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers).map_err(FundedOriginalRefusalV1::into_state_v1)?;
-            let journal_row = funded_journal_row_candidate_v1(b, &requirements, &derivation, full)
-                .map_err(FundedOriginalRefusalV1::into_state_v1)?;
-            requirements.into_geometry_v1().install_native_v1(b, ctx, prompt)?;
-            // The ordinary install may have written court-f02's per-signer binding (only with a pinned F02 profile): it must be
-            // exactly the signer prefix of this candidate; anything else is refused (the checkpoint restores every write).
-            let now = b.state.staged_court_row_v1(&Key::CourtService);
-            let signer_prefix = match (service_before.as_ref(), now) {
-                (Some(Row::CourtServiceV3(before)), Some(Row::CourtServiceV3(after))) => {
-                    after.state == after_signer && before.causal == after.causal && before.resolved == after.resolved
-                }
-                (Some(Row::CourtService(_)), Some(Row::CourtService(after))) => **after == after_signer,
-                _ => false,
-            };
-            if now != service_before.as_ref() && !signer_prefix {
-                return Err(refused("RFC-0035 A funded install: the court service book moved under the all-branch reservation"));
-            }
-            // Write the same row shape validated before payer consent.
-            b.write_staged_row_v1(Key::CourtService, Some(journal_row))?;
             let claim_id = row.claim;
-            // G14 lane F03b (ADR-0192 A/A): the shared frontier rides the same all-branch book (idempotent with the plain hook).
-            super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, claim_id)?;
+            match service {
+                FundedOriginalServiceV1::Legacy { requirements, derivation, admission, signers } => {
+                    let (after_signer, full) =
+                        funded_book_candidate_v1(b, &requirements, &derivation, &admission, &signers).map_err(FundedOriginalRefusalV1::into_state_v1)?;
+                    let journal_row = funded_journal_row_candidate_v1(b, &requirements, &derivation, full)
+                        .map_err(FundedOriginalRefusalV1::into_state_v1)?;
+                    requirements.into_geometry_v1().install_native_v1(b, ctx, prompt)?;
+                    // The ordinary install may have written court-f02's per-signer binding (only with a pinned F02 profile): it must be
+                    // exactly the signer prefix of this candidate; anything else is refused (the checkpoint restores every write).
+                    let now = b.state.staged_court_row_v1(&Key::CourtService);
+                    let signer_prefix = match (service_before.as_ref(), now) {
+                        (Some(Row::CourtServiceV3(before)), Some(Row::CourtServiceV3(after))) => {
+                            after.state == after_signer && before.causal == after.causal && before.resolved == after.resolved
+                        }
+                        (Some(Row::CourtService(_)), Some(Row::CourtService(after))) => **after == after_signer,
+                        _ => false,
+                    };
+                    if now != service_before.as_ref() && !signer_prefix {
+                        return Err(refused("RFC-0035 A funded install: the court service book moved under the all-branch reservation"));
+                    }
+                    // Write the same row shape validated before payer consent.
+                    b.write_staged_row_v1(Key::CourtService, Some(journal_row))?;
+                    // G14 lane F03b (ADR-0192 A/A): the shared frontier rides the same all-branch book (idempotent with the plain hook).
+                    super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, claim_id)?;
+                }
+                FundedOriginalServiceV1::Batch { geometry, book, quote } => {
+                    let claim = b.state.claim(&claim_id).ok_or(PalwStateV2Error::MissingClaim(claim_id))?;
+                    if crate::palw_court_clock_v2::palw_claim_route_hard_v2(b.params, claim) != Some(row.hard_deadline_daa) {
+                        return Err(refused("Batch Court requires the original's fixed dispute clock"));
+                    }
+                    geometry.install_batch_frame_v1(b, ctx, prompt)?;
+                    super::palw_court_service_lifecycle_fold_v1::install_prepared_batch_frontier_v1(
+                        b, ctx, service_before.as_ref(), book, &quote,
+                    )?;
+                }
+            }
             b.install_funded_escrow_v1(row)?;
             // The paired object's checkpoint restores the complete install if
             // either reserved capacity or the distinct-claim cap refuses it.

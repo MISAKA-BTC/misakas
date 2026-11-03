@@ -137,6 +137,21 @@ impl PreparedOriginalGeometryV1 {
         result
     }
 
+    fn install_batch_frame_v1(
+        self,
+        b: &mut TransitionBuilder<'_>,
+        ctx: &PalwBlockContextV2,
+        prompt: &PalwFpClaimPromptV1,
+    ) -> Result<(), PalwStateV2Error> {
+        let Self { prepared, source } = self;
+        if prepared.at != *ctx {
+            return Err(refused("native prepared Batch original changes accepting point"));
+        }
+        let result = install_original_frame_rows_v1(b, ctx, prepared.frame, prompt);
+        drop(source);
+        result
+    }
+
     pub(super) fn source_v1(
         &self,
     ) -> &crate::palw_native_resource_v1::NativeRetainedV1<

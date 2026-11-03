@@ -250,7 +250,7 @@
                 // Feed the actual numerical input geometry into the Batch
                 // scheduler while the original still has no Claim row.
                 use crate::palw_court_shared_material_intake_v1::{
-                    MaterialIntakeScheduleV1,
+                    material_intake_schedule_v1,
                     batch::admission::{
                         NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1, batch_numerical_service_ids_v1,
                         reserve_native_batch_delivery_v1,
@@ -268,7 +268,7 @@
                         finish_daa: 16, verification_daa: 16, stop_daa: 16, terminal_daa: 16,
                     },
                 };
-                let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 720, cover: budgets.1 };
+                let storage = material_intake_schedule_v1().unwrap();
                 let journal = funded_journal_row_candidate_v1(&b, &req, &derivation, full.clone()).unwrap();
                 let expected_edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
                     req.source_graph_v1().unwrap(), &derivation,
@@ -314,7 +314,7 @@
                     required_amount_sompi: crate::palw_funded_original_admission_v1::funded_required_amount_v1(
                         700, 300, base.capital_sompi, deposit,
                     ).unwrap(),
-                    required_material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa.max(hard),
+                    required_material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa.max(ctx.daa_score + 10_000),
                 }.with_native_batch_v1(&quote).unwrap();
                 assert!(matches!(prepare_funding_v1(
                     funded.inspect_carrier_v1(pairing.carrier()).unwrap(), &funded.funding, &funded.payer_pubkey,
@@ -331,6 +331,35 @@
                     &batch_scope, t.network_domain, ctx.daa_score,
                 ).unwrap();
                 assert_eq!(checked.actual().outpoint(), batch_pairing.outpoint());
+                let batch_schedule = schedule(all_roles).with_batch_v1(FundedBatchScheduleV1 {
+                    cover: streaming_budget, maximum_ranges: 4_096, delivery: costs,
+                    carrier_costs: [cost(0); 4], open_work_per_range: 0, finish_work_per_byte: 0, finish_io_per_byte: 0,
+                    stop_verification: cost(1), stop_filing: cost(1),
+                });
+                let batch_extras = |pairing: &PalwFundedOriginalPairingV1| {
+                    let mut e = with(Some(batch_schedule), pairing);
+                    e.tir_public_conviction_active = true;
+                    e.batch_court_active_v1 = true;
+                    e.batch_numerical_profile_v1 = Some(crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1 {
+                        service_profile: batch.state.profile_id, budget: costs.numerical_verification,
+                    });
+                    e
+                };
+                let batch_params = params.clone().with_court_clock_v2_from_daa(Some(ctx.daa_score));
+                let old_extras = batch_extras(&pairing);
+                let mut refused = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &old_extras).unwrap();
+                let before = refused.state.state_root();
+                assert!(super::super::apply_object(&mut refused, &ctx, &object).is_err());
+                assert_eq!(refused.state.state_root(), before);
+                let funded_extras = batch_extras(&batch_pairing);
+                let mut accepted = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &funded_extras).unwrap();
+                super::super::apply_object(&mut accepted, &ctx, &object).unwrap();
+                assert_eq!(accepted.state.claim(&claim).unwrap().accepted_block, ctx.block);
+                let installed = crate::palw_court_shared_tir_state_v1::context(&accepted.state, claim).unwrap();
+                assert!(installed.batch_notice_only_v1());
+                assert_eq!(installed.hard_daa, ctx.daa_score + 10_000);
+                assert_eq!(accepted.state.court_service_row_v3_v1(), Some(&batch));
+                assert_eq!(accepted.state.funded_escrows_v1()[&checked.consent().terms.id_v1()].funding_outpoint, batch_pairing.outpoint());
                 assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
                 assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
                 assert_eq!(batch.causal[&terminal], [verification]);

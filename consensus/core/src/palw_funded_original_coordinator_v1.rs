@@ -46,6 +46,7 @@ pub enum PalwFundedOriginalMissingV1 {
     /// G14 item 1 (lane r5): the all-branch admission values (service profile, per-branch packet/heap/retention costs and
     /// capital) are not adopted.
     AdmissionSchedule,
+    BatchSchedule,
 }
 
 /// Bit for each role contract a schedule adopts (test-only values; see [`PalwFundedOriginalScheduleV1`]).
@@ -70,6 +71,24 @@ pub struct PalwFundedOriginalScheduleV1 {
     source: SourceBudgetV1,
     adopted_roles: u8,
     admission: Option<crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1>,
+    batch: Option<FundedBatchScheduleV1>,
+}
+
+/// Native admission inputs. The chain's policy resolver selects these values
+/// at the original's accepting point.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FundedBatchScheduleV1 {
+    pub cover: crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1,
+    pub maximum_ranges: usize,
+    pub delivery: crate::palw_court_shared_material_intake_v1::batch::admission::NativeBatchDeliveryCostsV1,
+    /// Open, Begin, Part, Finish respectively. Carrier bytes are supplied by
+    /// expansion. Open prices its range list and Finish the whole response.
+    pub carrier_costs: [crate::palw_court_service_v1::ServiceCost; 4],
+    pub open_work_per_range: u64,
+    pub finish_work_per_byte: u64,
+    pub finish_io_per_byte: u64,
+    pub stop_verification: crate::palw_court_service_v1::ServiceCost,
+    pub stop_filing: crate::palw_court_service_v1::ServiceCost,
 }
 
 /// `SourceGraphBudgetV3` has no `PartialEq`; its four bounds are kept here and rebuilt on read.
@@ -113,6 +132,7 @@ impl PalwFundedOriginalScheduleV1 {
             },
             adopted_roles,
             admission: None,
+            batch: None,
         }
     }
     /// **Production constructor (lane VAL, 2026-10-26)**: refuses unset profile ids, a zero or unbounded fee/capital, a budget
@@ -170,6 +190,7 @@ impl PalwFundedOriginalScheduleV1 {
             },
             adopted_roles,
             admission: Some(admission),
+            batch: None,
         })
     }
     /// **TEST ONLY.** Adds the all-branch admission values (lane r5). Without them the coordinator refuses `AdmissionSchedule`.
@@ -180,6 +201,13 @@ impl PalwFundedOriginalScheduleV1 {
     }
     pub fn admission_v1(&self) -> Option<crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1> {
         self.admission
+    }
+    pub(crate) fn with_batch_v1(mut self, batch: FundedBatchScheduleV1) -> Self {
+        self.batch = Some(batch);
+        self
+    }
+    pub(crate) fn batch_v1(&self) -> Option<FundedBatchScheduleV1> {
+        self.batch
     }
     pub fn fee_sompi(&self) -> u64 {
         self.fee_sompi

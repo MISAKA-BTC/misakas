@@ -761,6 +761,19 @@ pub(super) fn install_original_v1(
     frame: Frame,
     prompt: &PalwFpClaimPromptV1,
 ) -> Result<(), PalwStateV2Error> {
+    let claim = frame.plan_v1().original_claim;
+    install_original_frame_rows_v1(b, ctx, frame, prompt)?;
+    super::palw_court_service_lifecycle_fold_v1::install_court_service_binding_v1(b, ctx, claim)?;
+    super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, claim)?;
+    Ok(())
+}
+
+fn install_original_frame_rows_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    frame: Frame,
+    prompt: &PalwFpClaimPromptV1,
+) -> Result<(), PalwStateV2Error> {
     let native = rules(b)?;
     frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
     let p = frame.plan_v1();
@@ -846,16 +859,8 @@ pub(super) fn install_original_v1(
     keep_original_prompt_ids_v1(b, &frame, native.prompt_form, prompt)?;
     // The native dispatcher atomically owns the ordinary FP writes and these two
     // rows. Neither a separately submitted quote nor a historical FP can enter.
-    let original_claim = p.original_claim;
     b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(Box::new(prep).into())))?;
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
-    // G14 lane court-f02 (RFC-0028): ordinary admission installs the original's court service binding once its frame row exists.
-    // Dormant (no row) below `palw_tir_public_conviction_v1` or without a pinned service profile.
-    super::palw_court_service_lifecycle_fold_v1::install_court_service_binding_v1(b, ctx, original_claim)?;
-    // G14 lane F03b (ADR-0192 A/A): the claim-common shared frontier, fixed here from the original alone (dormant without a
-    // binding or below the shared lifecycle fences).
-    super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, original_claim)?;
-    Ok(())
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))
 }
 
 /// **G14 G-T3: the ORIGINAL frame keeps its own public replay input** — the prompt ids the claim was accepted with, under the

@@ -112,6 +112,7 @@ impl borsh::BorshSerialize for BatchRelativeGraphV1<'_> {
 
 /// Costs supplied by the versioned native profile. A reservation covers
 /// delivery and these service stages, without recording a verdict or credit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NativeBatchDeliveryCostsV1 {
     pub numerical_verification: NumericalBatchReplayBudgetV1,
     pub terminal: ServiceCost,
@@ -122,7 +123,7 @@ pub(crate) struct NativeBatchDeliveryCostsV1 {
 
 /// Widths of the service phases and deliberate wait between phases. Absolute
 /// windows are written into the packets so repair cannot consume the waits.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct NativeBatchDeliveryTimingV1 {
     pub open_daa: u64,
     pub provider_wait_daa: u64,

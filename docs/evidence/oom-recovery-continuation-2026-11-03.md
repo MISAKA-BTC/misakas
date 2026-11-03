@@ -4389,3 +4389,27 @@ The IBM Linux check of `587a1808c` remained active under invocation
 `460e5e2f1da647b784dd040aab7462cf`, with 104 RocksDB objects observed.
 This source change is outside that snapshot. No public carrier was
 submitted during this step.
+
+## Use the signed Batch reservation at the paired original admission seam
+
+The paired FP object now selects Batch only when the native schedule
+and fence agree. It derives the bounded numerical envelope from the
+prepared original, reads the rooted tokenizer registration for a
+constrained Stop, and reserves the delivery and independent replay
+before checking the payer's exact TFO1 output and signature. A missing
+or mismatched replay profile refuses the candidate. At installation it
+checks the fixed original dispute clock and writes the frame, Batch
+frontier, service book and funded escrow inside the paired checkpoint.
+Ordinary originals continue to use the legacy frontier hooks.
+
+The tiny TIR fixture now calls the actual object fold twice. It asserts
+that an old payer scope is refused with the same state root, then that a
+signed Batch scope admits the original and roots its full service book,
+frontier and matching escrow. This fixture uses synthetic service rates
+and has not run. Rust parsing and whitespace checks passed. Neither the
+production schedule resolver nor the preset activation guard has been
+armed. No public carrier was submitted.
+
+The earlier isolated IBM check continued on `587a1808c`, invocation
+`460e5e2f1da647b784dd040aab7462cf`, with 146 RocksDB objects observed.
+It does not include this coordinator change.
