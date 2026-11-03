@@ -3370,3 +3370,25 @@ B0 and relay agreed at virtual DAA 19,716. The scanned interval had no
 new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-preclaim-graph-live.SXiyAc/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-preclaim-graph-quota.6LSqsO/tests.log`.
+
+## Resource and carrier rent quote at Batch admission
+
+The admission planner now returns the scheduled DAA and aggregate wire,
+work, I/O and control costs of the candidate graph. It totals the maximum
+retained response and signed Stop operands, and computes payload byte-DAA
+from each assigned Begin or Stop slot to the material horizon. It uses
+the same per-byte rent formula as the accepting carrier. Carrier rent
+is a separate amount from escrow capital. Payload byte-DAA does not
+include archive extensions, metadata or database amplification.
+
+The extracted suite passed 39 checks. It covers the 10,000 DAA maximum
+case, Stop operand pricing, rent overflow before reservation and retention
+overflow during candidate validation, with no mutation on refusal. The
+native original fixture asserts the same quote against the prepared
+numerical envelope but was not run in this check. The complete production
+profile must still use these resources and independently fund all duties
+and archive horizons before activating original admission.
+
+B0 and relay agreed at virtual DAA 19,717 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-preclaim-budget-live.LFkTrt/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-preclaim-budget.S3FmZc/tests.log`.

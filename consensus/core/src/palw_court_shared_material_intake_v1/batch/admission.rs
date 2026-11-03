@@ -29,9 +29,26 @@ pub(crate) struct BatchAdmissionV1<'a> {
     pub scope: Hash64,
     pub window: BatchCourtWindowV1,
     pub demands: &'a [MaximumBatchDemandV1<'a>],
+    pub retained_controls: &'a [BatchRetainedControlV1],
     pub terminal: [u8; 64],
     pub recovery_daa: u64,
     pub maximum_packets: usize,
+}
+
+/// A native control with signed operands retained after filing, such as Stop.
+pub(crate) struct BatchRetainedControlV1 {
+    pub packet: [u8; 64],
+    pub payload_bytes: u64,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct BatchAdmissionQuoteV1 {
+    pub required_daa: u64,
+    pub service: ServiceCost,
+    pub retained_payload_bytes: u64,
+    pub retained_payload_byte_daa: u64,
+    /// Maximum sum of carrier storage charges, independent of escrow funding.
+    pub carrier_storage_rent_sompi: u64,
 }
 
 impl BatchAdmissionV1<'_> {
@@ -44,14 +61,14 @@ impl BatchAdmissionV1<'_> {
         graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
         cost: impl FnMut(u64) -> Result<ServiceCost, String>,
-    ) -> Result<(u64, crate::palw_court_service_release_v1::CourtServiceRowV3), BatchCourtErrorV1> {
+    ) -> Result<(BatchAdmissionQuoteV1, crate::palw_court_service_release_v1::CourtServiceRowV3), BatchCourtErrorV1> {
         let binding = candidate.state.claims.get_mut(&self.claim).ok_or(BatchCourtErrorV1::CaseGraph)?;
         if binding.original_accepted_daa != self.window.claim_accepted_daa
             || binding.original_accepted_daa.checked_add(DISPUTE_WINDOW_DAA) != Some(binding.hard_deadline_daa)
         {
             return Err(BatchCourtErrorV1::Window);
         }
-        let (required, graph) = self.reserve_v1(&mut candidate.state.book, graph, storage, cost)?;
+        let (quote, graph) = self.reserve_v1(&mut candidate.state.book, graph, storage, cost)?;
         let (graph, _graph_lease) = graph.into_parts_v1();
         for node in graph {
             binding.packet_ids.insert(node.packet.id);
@@ -62,7 +79,7 @@ impl BatchAdmissionV1<'_> {
             }
         }
         candidate.check().map_err(|_| BatchCourtErrorV1::CaseGraph)?;
-        Ok((required, candidate))
+        Ok((quote, candidate))
     }
 
     /// Add exact worst-case BCT1 byte sizes and causal edges to the native
@@ -74,7 +91,7 @@ impl BatchAdmissionV1<'_> {
         graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
         cost: impl FnMut(u64) -> Result<ServiceCost, String>,
-    ) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+    ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         self.reserve_with_v1(book, graph, storage, cost, reserve_native_requests_v1)
     }
 
@@ -85,19 +102,24 @@ impl BatchAdmissionV1<'_> {
         storage: MaterialIntakeScheduleV1,
         mut cost: impl FnMut(u64) -> Result<ServiceCost, String>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
-    ) -> Result<(u64, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
+    ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, Window};
         let a = self.window.claim_accepted_daa;
         let hard = a.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
         let first = a.checked_add(NOTICE_WINDOW_DAA + 1).ok_or(Clock)?;
         let before = hard.min(self.window.collect_until_daa).checked_sub(self.recovery_daa).ok_or(Window)?;
-        if self.demands.is_empty() || self.demands.len() > self.maximum_packets || graph.len() > self.maximum_packets {
+        if self.demands.is_empty()
+            || self.demands.len() > self.maximum_packets
+            || graph.len() > self.maximum_packets
+            || self.retained_controls.len() > graph.len()
+        {
             return Err(CaseGraph);
         }
 
         // Count the complete expansion before allocating graph/index scratch.
         let mut packets = graph.len();
         let mut ranges = 0usize;
+        let mut retained_payload_bytes = 0u64;
         for demand in self.demands {
             if !(1..=MAX_BATCH_RANGES_V1).contains(&demand.range_maximums.len()) || demand.verification == self.terminal {
                 return Err(CaseGraph);
@@ -106,6 +128,7 @@ impl BatchAdmissionV1<'_> {
                 if !(1..=super::MATERIAL_PIPELINED_MAX_BYTES).contains(&bytes) {
                     return Err(DeliveryCost);
                 }
+                retained_payload_bytes = retained_payload_bytes.checked_add(bytes).ok_or(DeliveryCost)?;
                 n.checked_add(bytes.div_ceil(PART)).ok_or(DeliveryCost)
             })?;
             if parts > MAX_BATCH_PARTS_V1 as u64 {
@@ -125,6 +148,18 @@ impl BatchAdmissionV1<'_> {
         if native_nodes.len() != graph.len() {
             return Err(CaseGraph);
         }
+        // The profile supplies each retained control once in canonical packet order.
+        if self.retained_controls.windows(2).any(|pair| pair[0].packet >= pair[1].packet) {
+            return Err(CaseGraph);
+        }
+        for control in self.retained_controls {
+            let index = *native_nodes.get(&control.packet).ok_or(CaseGraph)?;
+            if !(1..=graph[index].packet.cost.bytes).contains(&control.payload_bytes) {
+                return Err(DeliveryCost);
+            }
+            retained_payload_bytes = retained_payload_bytes.checked_add(control.payload_bytes).ok_or(DeliveryCost)?;
+        }
+        let carrier_storage_rent_sompi = storage.rent_for_bytes_v1(retained_payload_bytes).map_err(|_| DeliveryCost)?;
         let mut ordinals = BTreeSet::new();
         for demand in self.demands {
             if !ordinals.insert(demand.ordinal) || !native_nodes.contains_key(&demand.verification) {
@@ -158,7 +193,7 @@ impl BatchAdmissionV1<'_> {
                 response[0].predecessors.push(open);
                 let finish = response[response.len() - 1].packet.id;
                 graph[verification].predecessors.push(finish);
-                spans.push((response[0].packet.id, finish));
+                spans.push((response[0].packet.id, finish, maximum));
                 graph.append(&mut response);
             }
         }
@@ -167,20 +202,49 @@ impl BatchAdmissionV1<'_> {
             verifications.remove(predecessor);
         }
         terminal_predecessors.extend(verifications);
-        let required = self.window.reserve_latest_notice_checked_v1(book, &graph, self.terminal, self.recovery_daa, |book, _| {
-            for (begin, finish) in spans {
-                let begin = book.assigned_daa(&begin).ok_or(ServiceRefusal::InvalidState)?;
-                let finish = book.assigned_daa(&finish).ok_or(ServiceRefusal::InvalidState)?;
-                let expires = storage
-                    .draft_expires_v1(begin, hard, self.window.material_until_daa)
-                    .map_err(|_| ServiceRefusal::DeadlineExhausted)?;
-                if finish >= expires {
-                    return Err(ServiceRefusal::DeadlineExhausted);
-                }
-            }
-            Ok(())
+        let service = graph.iter().try_fold(ServiceCost::default(), |sum, node| {
+            let cost = node.packet.cost;
+            Ok::<_, BatchCourtErrorV1>(ServiceCost {
+                bytes: sum.bytes.checked_add(cost.bytes).ok_or(DeliveryCost)?,
+                work: sum.work.checked_add(cost.work).ok_or(DeliveryCost)?,
+                io: sum.io.checked_add(cost.io).ok_or(DeliveryCost)?,
+                controls: sum.controls.checked_add(cost.controls).ok_or(DeliveryCost)?,
+            })
         })?;
-        Ok((required, NativeRetainedV1::from_owner_reserved_v1(graph, lease)))
+        let mut retained_payload_byte_daa = 0u64;
+        let required_daa =
+            self.window.reserve_latest_notice_checked_v1(book, &graph, self.terminal, self.recovery_daa, |book, _| {
+                let mut account_retained = |start, bytes: u64| {
+                    let duration = self.window.material_until_daa.checked_sub(start).ok_or(ServiceRefusal::DeadlineExhausted)?;
+                    let holding = bytes.checked_mul(duration).ok_or(ServiceRefusal::InvalidBudget)?;
+                    retained_payload_byte_daa = retained_payload_byte_daa.checked_add(holding).ok_or(ServiceRefusal::InvalidBudget)?;
+                    Ok(())
+                };
+                for (begin, finish, bytes) in spans {
+                    let begin = book.assigned_daa(&begin).ok_or(ServiceRefusal::InvalidState)?;
+                    let finish = book.assigned_daa(&finish).ok_or(ServiceRefusal::InvalidState)?;
+                    let expires = storage
+                        .draft_expires_v1(begin, hard, self.window.material_until_daa)
+                        .map_err(|_| ServiceRefusal::DeadlineExhausted)?;
+                    if finish >= expires {
+                        return Err(ServiceRefusal::DeadlineExhausted);
+                    }
+                    account_retained(begin, bytes)?;
+                }
+                for control in self.retained_controls {
+                    let at = book.assigned_daa(&control.packet).ok_or(ServiceRefusal::InvalidState)?;
+                    account_retained(at, control.payload_bytes)?;
+                }
+                Ok::<_, ServiceRefusal>(())
+            })?;
+        let quote = BatchAdmissionQuoteV1 {
+            required_daa,
+            service,
+            retained_payload_bytes,
+            retained_payload_byte_daa,
+            carrier_storage_rent_sompi,
+        };
+        Ok((quote, NativeRetainedV1::from_owner_reserved_v1(graph, lease)))
     }
 }
 
@@ -198,7 +262,7 @@ fn expansion_workspace_v1(
         demands.iter().try_fold(0u64, |n, demand| n.checked_add(demand.predecessors.len() as u64)).ok_or_else(overflow)?;
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<CausalServicePacketV1>(packets as u64)?; // original, expanded and one response during append
-    q.exact_v1::<(Id, Id)>(ranges as u64)?;
+    q.exact_v1::<(Id, Id, u64)>(ranges as u64)?;
     q.add_v1((graph.len() as u64).checked_mul(btree_node_envelope_bytes_v1::<Id, usize>() as u64).ok_or_else(overflow)?)?;
     let per_demand = btree_node_envelope_bytes_v1::<u64, ()>() + btree_node_envelope_bytes_v1::<Id, ()>();
     q.add_v1((demands.len() as u64).checked_mul(per_demand as u64).ok_or_else(overflow)?)?;
@@ -232,7 +296,7 @@ mod tests {
         };
         let graph = |before| vec![node(terminal, before), node(verification, before)];
         let schedule = MaterialIntakeScheduleV1 {
-            sompi_per_byte: 0,
+            sompi_per_byte: 2,
             draft_ttl_daa: 3,
             cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
                 max_original_leaves: 1,
@@ -253,6 +317,7 @@ mod tests {
             scope: h(2),
             window,
             demands: &demands,
+            retained_controls: &[],
             terminal,
             recovery_daa: 6_873,
             maximum_packets: 7,
@@ -271,11 +336,23 @@ mod tests {
         );
         assert!(matches!(denied, Err(BatchCourtErrorV1::LocalResource(_))));
         assert_eq!(book, empty);
+        let unbounded = BatchAdmissionV1 { window: BatchCourtWindowV1 { material_until_daa: u64::MAX, ..window }, ..plan };
+        assert!(matches!(
+            unbounded.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidBudget))
+        ));
+        assert_eq!(book, empty);
         let short = BatchAdmissionV1 { recovery_daa: plan.recovery_daa + 1, ..plan };
         assert!(short.reserve_v1(&mut book, graph(3_128), schedule, |n| Ok(cost(n))).is_err());
         assert_eq!(book, empty);
         let expired = MaterialIntakeScheduleV1 { draft_ttl_daa: 2, ..schedule };
         assert!(plan.reserve_v1(&mut book, graph(3_129), expired, |n| Ok(cost(n))).is_err());
+        assert_eq!(book, empty);
+        let unaffordable = MaterialIntakeScheduleV1 { sompi_per_byte: u64::MAX, ..schedule };
+        assert!(matches!(
+            plan.reserve_v1(&mut book, graph(3_129), unaffordable, |n| Ok(cost(n))),
+            Err(BatchCourtErrorV1::DeliveryCost)
+        ));
         assert_eq!(book, empty);
         let capped = BatchAdmissionV1 { maximum_packets: 6, ..plan };
         assert!(matches!(capped.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))), Err(BatchCourtErrorV1::CaseGraph)));
@@ -289,8 +366,14 @@ mod tests {
             ));
             assert_eq!(book, empty);
         }
-        let (required, graph) = plan.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))).unwrap();
-        assert_eq!(required, 10_000);
+        let (quote, graph) = plan.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))).unwrap();
+        assert_eq!(quote.required_daa, 10_000);
+        assert_eq!(quote.service.controls, 7);
+        assert_eq!(quote.service.bytes, graph.iter().map(|node| node.packet.cost.bytes).sum::<u64>());
+        assert_eq!(quote.retained_payload_bytes, PART + 1);
+        assert_eq!(quote.carrier_storage_rent_sompi, (PART + 1) * 2);
+        let begin = book.assigned_daa(&graph[3].packet.id).unwrap();
+        assert_eq!(quote.retained_payload_byte_daa, (PART + 1) * (window.material_until_daa - begin));
         assert_eq!(graph.len(), 7);
         assert_eq!(book.assigned_daa(&terminal), Some(3_128));
         assert_eq!(book.assigned_daa(&verification), Some(3_127));

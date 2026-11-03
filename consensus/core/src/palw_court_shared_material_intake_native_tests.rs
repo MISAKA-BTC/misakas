@@ -756,14 +756,16 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let plan = BatchAdmissionV1 {
         claim, scope: scope_id, window,
         demands: &[MaximumBatchDemandV1 { ordinal, range_maximums: &[PART as u64], predecessors: &[], verification }],
+        retained_controls: &[],
         terminal, recovery_daa: 1, maximum_packets: 6,
     };
     let graph = [verification, terminal].into_iter().map(|id| CausalServicePacketV1 {
         packet: ServicePacket { id, release_daa: open_at.daa_score, service_before: context.hard_daa - 1, cost: cost(1) },
         predecessors: vec![],
     }).collect();
-    let (required, service) = plan.reserve_for_original_v1(service, graph, storage, |bytes| Ok(cost(bytes))).unwrap();
-    assert!(required <= 10_000);
+    let (quote, service) = plan.reserve_for_original_v1(service, graph, storage, |bytes| Ok(cost(bytes))).unwrap();
+    assert!(quote.required_daa <= 10_000);
+    assert_eq!(quote.carrier_storage_rent_sompi, PART as u64 * storage.sompi_per_byte);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
 
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);

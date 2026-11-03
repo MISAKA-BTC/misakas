@@ -1,5 +1,8 @@
 //! Native inputs for one constrained Stop branch of the Batch graph.
-use super::{BatchResponsePositionV1, Stage, admission::MaximumBatchDemandV1};
+use super::{
+    BatchResponsePositionV1, Stage,
+    admission::{BatchRetainedControlV1, MaximumBatchDemandV1},
+};
 use crate::{
     Hash64,
     palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations, causal::CausalServicePacketV1},
@@ -102,7 +105,7 @@ impl ConstraintStopBatchOperandsV1 {
         window: Range<u64>,
         verification_cost: ServiceCost,
         stop_cost: ServiceCost,
-    ) -> Result<(MaximumBatchDemandV1<'_>, [CausalServicePacketV1; 2]), String> {
+    ) -> Result<(MaximumBatchDemandV1<'_>, [CausalServicePacketV1; 2], BatchRetainedControlV1), String> {
         if stop_cost.bytes < self.carrier_bytes_v1() {
             return Err("Batch Stop cost omits signed carrier bytes".into());
         }
@@ -116,6 +119,7 @@ impl ConstraintStopBatchOperandsV1 {
                 CausalServicePacketV1 { packet: packet(verification, verification_cost), predecessors: vec![] },
                 CausalServicePacketV1 { packet: packet(stop, stop_cost), predecessors: vec![verification] },
             ],
+            BatchRetainedControlV1 { packet: stop, payload_bytes: self.signed_operands_bytes },
         ))
     }
 
@@ -229,7 +233,7 @@ mod tests {
         let before = 9_999;
         let stop_bytes = operands.carrier_bytes_v1();
         assert!(operands.graph_v1(first..before, cost(1), cost(stop_bytes - 1)).is_err());
-        let (demand, [verification, stop]) = operands.graph_v1(first..before, cost(1), cost(stop_bytes)).unwrap();
+        let (demand, [verification, stop], retained) = operands.graph_v1(first..before, cost(1), cost(stop_bytes)).unwrap();
         let mut terminal = stop.clone();
         terminal.packet.id = h(4).as_bytes();
         terminal.predecessors = vec![stop.packet.id];
@@ -237,6 +241,7 @@ mod tests {
             claim,
             scope,
             demands: &[demand],
+            retained_controls: &[retained],
             terminal: terminal.packet.id,
             recovery_daa: 1,
             maximum_packets: 8,
@@ -248,7 +253,7 @@ mod tests {
             },
         };
         let storage = MaterialIntakeScheduleV1 {
-            sompi_per_byte: 0,
+            sompi_per_byte: 2,
             draft_ttl_daa: 8,
             cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
                 max_original_leaves: 1,
@@ -260,15 +265,16 @@ mod tests {
         let mut book = ServiceReservations::new(cost(64 * 1024)).unwrap();
         let verify_id = verification.packet.id;
         let stop_id = stop.packet.id;
-        let (required, graph) =
-            plan.reserve_v1(&mut book, vec![terminal, stop, verification], storage, |bytes| Ok(cost(bytes))).unwrap();
+        let (quote, graph) = plan.reserve_v1(&mut book, vec![terminal, stop, verification], storage, |bytes| Ok(cost(bytes))).unwrap();
         let verify_daa = book.assigned_daa(&verify_id).unwrap();
         let stop_daa = book.assigned_daa(&stop_id).unwrap();
         let finish = graph.iter().find(|node| node.packet.id == verify_id).unwrap().predecessors[0];
         assert!(book.assigned_daa(&finish).unwrap() < verify_daa);
         assert!(verify_daa < stop_daa);
         assert!(stop_daa < book.assigned_daa(&plan.terminal).unwrap());
-        assert!(required <= 10_000);
+        assert!(quote.required_daa <= 10_000);
+        assert_eq!(quote.retained_payload_bytes, operands.full_ids_range[0] + operands.signed_operands_bytes);
+        assert_eq!(quote.carrier_storage_rent_sompi, quote.retained_payload_bytes * 2);
         let finish_daa = book.assigned_daa(&finish).unwrap();
         let owned: BTreeSet<_> = graph.iter().map(|node| node.packet.id).collect();
         let mut causal: BTreeMap<_, _> = graph.iter().map(|node| (node.packet.id, node.predecessors.clone())).collect();

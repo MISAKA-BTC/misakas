@@ -139,6 +139,10 @@ pub struct MaterialIntakeScheduleV1 {
     pub cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
 }
 impl MaterialIntakeScheduleV1 {
+    fn rent_for_bytes_v1(self, bytes: u64) -> Result<u64, String> {
+        self.sompi_per_byte.checked_mul(bytes).ok_or_else(|| "Batch storage rent overflow".into())
+    }
+
     pub(crate) fn draft_expires_v1(self, begun_daa: u64, hard_daa: u64, material_until_daa: u64) -> Result<u64, &'static str> {
         let expires_daa =
             begun_daa.checked_add(self.draft_ttl_daa).ok_or("material TTL overflow")?.min(hard_daa).min(material_until_daa);

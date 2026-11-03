@@ -231,7 +231,7 @@
                 let notice = bound.original_accepted_daa + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
                 let terminal = h(0xB47C).as_bytes();
                 let plan = BatchAdmissionV1 {
-                    claim, scope: envelope.scope, demands: &demands, terminal, recovery_daa: 1, maximum_packets: 32_768,
+                    claim, scope: envelope.scope, demands: &demands, retained_controls: &[], terminal, recovery_daa: 1, maximum_packets: 32_768,
                     window: crate::palw_batch_court_v1::BatchCourtWindowV1 {
                         claim_accepted_daa: bound.original_accepted_daa, challenge_opened_daa: notice,
                         collect_until_daa: bound.hard_deadline_daa, material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa,
@@ -243,10 +243,11 @@
                     predecessors: vec![],
                 }).collect();
                 let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 100, cover: budgets.1 };
-                let (daa, batch) = plan.reserve_for_original_v1(
+                let (quote, batch) = plan.reserve_for_original_v1(
                     crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&full), graph, storage, |bytes| Ok(cost(bytes)),
                 ).unwrap();
-                assert!(daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
+                assert!(quote.required_daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
+                assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
                 assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
                 // The served book itself is untouched by the dry run.
                 assert!(b.state.court_service_state_v1().unwrap().claims.is_empty());

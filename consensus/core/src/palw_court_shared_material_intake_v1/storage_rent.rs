@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 fn storage_rent_for_bytes_v1(bytes: u64) -> Result<u64, String> {
     let schedule = material_intake_schedule_v1().map_err(|_| "Batch storage rent schedule absent")?;
-    schedule.sompi_per_byte.checked_mul(bytes).ok_or_else(|| "Batch storage rent overflow".into())
+    schedule.rent_for_bytes_v1(bytes)
 }
 
 /// Quote the existing per-byte storage rate for a V3 material declaration.
