@@ -7,7 +7,7 @@ use misaka_palw_positive_contract::{
     assignment::{
         journal::*,
         open_material::{AssignmentOpenLimitsV2, AssignmentOpenViewV2},
-        rows::AssignmentJournalFrameRow,
+        rows::{AssignmentJournalFrameRow, AssignmentUseRow},
     },
     native::KERNEL_AUX_TABLE,
     rows::{NativeRowBody, NativeRowValue},
@@ -111,7 +111,7 @@ impl PositiveAssignmentMaterialOutcomeV2 {
                 _ => {}
             }
         }
-        validate_case_materials_v2(&self.case_records, entries)?;
+        validate_case_materials_v2(&self.case_records, &self.records, entries)?;
         Ok(())
     }
 }
@@ -248,19 +248,22 @@ impl NativeHeapV1 for PositiveCaseAcceptedMaterialV2 {
 }
 fn validate_case_materials_v2(
     records: &[PositiveCaseAcceptedMaterialV2],
+    assignment_records: &[PositiveAssignmentAcceptedMaterialV2],
     entries: &[PalwDeltaEntryV2],
 ) -> Result<(), PalwStateV2Error> {
-    use misaka_palw_positive_contract::journal::CaseJournalRecordView;
+    use misaka_palw_positive_contract::journal::{CaseJournalEventKind, CaseJournalRecordView};
     let failure = |why| PalwStateV2Error::DeltaMismatch(why);
     for record in records {
         let view = CaseJournalRecordView::decode(&record.raw, record.limits).map_err(|_| failure("accepted Case material changed"))?;
         if view.header() != record.header || record.delta_end > entries.len() {
             return Err(failure("Case material header/watermark changed"));
         }
+        let assigned_initial = record.header.kind == CaseJournalEventKind::NativeTransaction && record.header.sequence == 1;
+        let mut consumed = None;
         let mut case = false;
         let mut head = false;
         for entry in entries.iter().take(record.delta_end) {
-            let PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(bytes), .. } = entry else {
+            let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new: Some(bytes) } = entry else {
                 continue;
             };
             if *table != KERNEL_AUX_TABLE {
@@ -284,36 +287,92 @@ fn validate_case_materials_v2(
                 {
                     head = true
                 }
+                NativeRowBody::AssignmentUse(row)
+                    if assigned_initial
+                        && row.case == record.header.case
+                        && row.result == record.header.result
+                        && row.origin == record.header.origin =>
+                {
+                    if old.is_some() || consumed.replace(row).is_some() {
+                        return Err(failure("initial Case must consume one new AssignmentUse"));
+                    }
+                }
                 _ => {}
             }
         }
         if !case || !head {
             return Err(failure("Case material missing atomic Case/head mutation"));
         }
+        if assigned_initial {
+            let use_row = consumed.ok_or_else(|| failure("initial Case is missing its atomic AssignmentUse"))?;
+            check_initial_case_bind_result_v2(view, &use_row, assignment_records, record.delta_end)?;
+        }
     }
-    for entry in entries {
+    for (offset, entry) in entries.iter().enumerate() {
         let PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(bytes), .. } = entry else {
             continue;
         };
         if *table != KERNEL_AUX_TABLE {
             continue;
         }
-        if let NativeRowBody::JournalHead(h) = NativeRowValue::decode(key, bytes).map_err(|_| failure("invalid Case head delta"))?.body
-        {
-            let mut count = 0;
-            for record in records {
-                let view = CaseJournalRecordView::decode(&record.raw, record.limits).map_err(|_| failure("Case material decode"))?;
-                if view.head() == h.head && view.history() == h.history {
-                    count += 1;
+        match NativeRowValue::decode(key, bytes).map_err(|_| failure("invalid Case head delta"))?.body {
+            NativeRowBody::JournalHead(h) => {
+                let mut count = 0;
+                for record in records {
+                    let view =
+                        CaseJournalRecordView::decode(&record.raw, record.limits).map_err(|_| failure("Case material decode"))?;
+                    if view.head() == h.head && view.history() == h.history {
+                        count += 1;
+                    }
+                }
+                if count != 1 {
+                    return Err(failure("Case head must have exactly one retained native material record"));
                 }
             }
-            if count != 1 {
-                return Err(failure("Case head must have exactly one retained native material record"));
+            NativeRowBody::AssignmentUse(row) => {
+                let count = records
+                    .iter()
+                    .filter(|record| {
+                        record.delta_end > offset
+                            && record.header.sequence == 1
+                            && record.header.kind == CaseJournalEventKind::NativeTransaction
+                            && record.header.case == row.case
+                            && record.header.result == row.result
+                            && record.header.origin == row.origin
+                    })
+                    .count();
+                if count != 1 {
+                    return Err(failure("AssignmentUse must have exactly one atomic initial Case record"));
+                }
             }
+            _ => {}
         }
     }
     Ok(())
 }
+/// The Case record carries the same BindResult frame the Assignment journal
+/// committed at this event. Check that cross-link while both native outcomes
+/// and their exact pre-commit delta are still owned by the writer.
+fn check_initial_case_bind_result_v2(
+    record: misaka_palw_positive_contract::journal::CaseJournalRecordView<'_>,
+    use_row: &AssignmentUseRow,
+    assignment_records: &[PositiveAssignmentAcceptedMaterialV2],
+    case_delta_end: usize,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, initial_assigned_case_bind_header_v2};
+
+    let boundary = record
+        .aux()
+        .find_map(|aux| AssignmentCaseBoundaryV2::decode(aux.preimage()).ok())
+        .ok_or(PalwStateV2Error::DeltaMismatch("initial Case boundary is missing"))?;
+    let bind = initial_assigned_case_bind_header_v2(record, boundary, use_row)
+        .map_err(|_| PalwStateV2Error::DeltaMismatch("initial Case references a different Assignment BindResult"))?;
+    if !assignment_records.iter().any(|r| r.header == bind && r.delta_end <= case_delta_end) {
+        return Err(PalwStateV2Error::DeltaMismatch("initial Case BindResult is missing from its atomic Assignment journal"));
+    }
+    Ok(())
+}
+
 impl TransitionBuilder<'_> {
     pub(super) fn unpublished_positive_case_materials_v2(
         &self,
@@ -552,5 +611,46 @@ impl TransitionBuilder<'_> {
         self.admit_native_write_v1(quote)?;
         encode_assignment_control_v2(&boundary, inner, max_payload)
             .map_err(|_| PalwStateV2Error::DeltaMismatch("Assignment control envelope encoding"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use misaka_palw_positive_contract::{
+        assignment::AssignmentId,
+        identity::{CaseId, Digest, ResultId},
+        native::NativeRowKey,
+        rows::{AcceptedMaterial, AcceptedOrigin, NativeHash64},
+    };
+
+    #[test]
+    fn orphan_assignment_consumption_cannot_publish_without_its_case_record() {
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64([1; 64]),
+            carrier_block: NativeHash64([2; 64]),
+            carrier_transaction: NativeHash64([3; 64]),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: 10,
+            accepted_blue_score: 11,
+        };
+        let consumed = AssignmentUseRow {
+            assignment: AssignmentId(Digest([4; 64])),
+            case: CaseId(Digest([5; 64])),
+            result: ResultId(Digest([6; 64])),
+            origin,
+            binding: AcceptedMaterial { origin, digest: Digest([7; 64]) },
+        };
+        let delta = PalwDeltaEntryV2::KernelRouteRow {
+            table: KERNEL_AUX_TABLE,
+            key: NativeRowKey::AssignmentUse(consumed.assignment).encode(),
+            old: None,
+            new: Some(NativeRowValue::new(NativeRowBody::AssignmentUse(consumed)).unwrap().encode().unwrap()),
+        };
+        assert!(matches!(
+            PositiveAssignmentMaterialOutcomeV2::default().validate_v2(&[delta]),
+            Err(PalwStateV2Error::DeltaMismatch("AssignmentUse must have exactly one atomic initial Case record"))
+        ));
     }
 }
