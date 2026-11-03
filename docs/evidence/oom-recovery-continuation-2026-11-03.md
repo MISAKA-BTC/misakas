@@ -1260,6 +1260,8 @@ The final source rerun produced the same evidence SHA-256,
 `cb590e8ef93865ccbd8efc31d2487441aeb4fbd5ba5a4bd207815fcba92cec3c`,
 in 74.0 seconds including compilation, with a sampled builder peak
 RSS of 1.91 GB and zero swap growth.
+The separate single-row parity test also passed with odd-tail
+Merkle leaves.
 This is one original rooted arithmetic relation. Independent live
 assignment, full-job normal evidence, carrier fold, credit and payment
 remain open.
@@ -1280,3 +1282,13 @@ the query was below the retained root. The authenticated registration
 bytes establish the declaration's historical origin at DAA 508.
 They do not install a native origin row or qualify the codec 0
 capture for strict fresh IBD. The live import remains blocked.
+
+B1's archive also supplied the DAA 2,844 checkpoint header, the
+level-zero GHOSTDAG row and its selected-parent header. Native
+rehashing confirmed both block identities and their direct-parent
+link, including a same-DAA edge. B0 and the relay then returned the
+same immediate selected child of the checkpoint at DAA 2,845.
+The offline snapshot reconstructed the exact PALW root committed
+by that child. The checkpoint's own header commits its parent's
+root, so comparing against that header gives a different value.
+The strict historical declaration refusal still reproduces.
