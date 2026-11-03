@@ -1821,3 +1821,40 @@ The reader supplies raw history data for the native Case factory. It
 still needs connection to that factory, authentic original carriage
 replay and a real integrated RocksDB run. The preceding macOS build
 continued on its separate source pin.
+
+### Accepted native Case carriages and pinned ingress checks
+
+The integrated changes at `558b79e9c` cover scoped prover lookup, literal
+Case source limits, expiration of an incomplete Case and binding Gate C
+to the actual accepted Result. The same change includes diagnostics
+that report both sides of a refused state allocation. The diagnostic
+does not change the amount reserved before construction.
+
+At `f2cff7b27`, the native archive reads rooted Case journal records
+from RocksDB in verified execution order. Each record must have a
+unique boundary preimage for its Case and origin. The reader then
+reconstructs the real accepted transaction, populated inputs, fee and
+pre-event state, and compares the original carrier with the journal.
+Each event draws from the remaining archive work and heap allowance.
+The temporary decoded delta is counted alongside the state being
+rewound or replayed. The returned records supply data to the future
+Case factory connection.
+
+[Carriage validation](case-carriage-validation-20261103.tar.gz) includes
+a passing isolated check of the exact boundary selector against the
+production boundary codec and journal wire code. It checks the accepted
+case, altered preimage, wrong Case and two competing boundaries. The
+Consensus test target typechecked with the candidate files and existing
+dependency metadata. These checks did not execute the integrated
+RocksDB replay or attach the recovered data to the native Case writer.
+
+The [pinned ingress runtime](ingress-pinned-runtime-20261103.tar.gz)
+records five passing Core tests on the same binary built from
+`6323c1e17` Rust sources. These cover legacy primary and kernel
+ingress guards, installed/removed/cold-decoded Result job lookup,
+staged aliases, legacy job lookup and undo, and the exact Result and
+liability required for Gate C. The Cargo sweep stopped after the first
+case at the next command's initial host free-space check. The other
+four test cases ran directly from the already built, hash-pinned binary
+under a no-build disk guard. Neither the newer combined commits nor
+the unrun Clippy and archive suites are credited with a runtime pass.
