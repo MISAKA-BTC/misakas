@@ -434,20 +434,16 @@ pub fn qualify_assignment_funding_output_v2(
     })
 }
 
-/// Additional prover's OWN funded op13 purpose, with no worker-success leg.
-/// Current native registration and the literal join signature are mandatory at
-/// the native writer; this function qualifies only the actual separate coins.
-#[allow(clippy::too_many_arguments)]
-pub fn qualify_assignment_prover_funding_output_v2(
+/// Validate a joined prover's own composed coin before deriving the priced
+/// capacity requirement. This creates no lock or qualifying admission.
+pub(crate) fn check_assignment_prover_funding_carriage_v2(
     bundle: &AssignmentAdmissionBundleV2,
     join: &misaka_palw_positive_contract::assignment::role_actions::AssignmentProverJoinV2,
     payer_key: &[u8; PUBKEY_BYTES],
     transaction: &Transaction,
     current_entry: Option<&UtxoEntry>,
-    required_fee: u64,
-    required_capital: u64,
     now: u64,
-) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
+) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
     join.check(bundle, now)?;
     let refund = Digest(kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes());
     if principal(payer_key) != join.payer {
@@ -462,18 +458,35 @@ pub fn qualify_assignment_prover_funding_output_v2(
     {
         return Err(AssignmentFundsErrorV2::CurrentUtxo);
     }
+    Ok((point(TransactionOutpoint::new(transaction.id(), join.funding_output_index)), output.value))
+}
+
+/// Additional prover's OWN funded op13 purpose, with no worker-success leg.
+/// Current native registration and the literal join signature are mandatory at
+/// the native writer; this function qualifies only the actual separate coins.
+#[allow(clippy::too_many_arguments)]
+pub fn qualify_assignment_prover_funding_output_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    join: &misaka_palw_positive_contract::assignment::role_actions::AssignmentProverJoinV2,
+    payer_key: &[u8; PUBKEY_BYTES],
+    transaction: &Transaction,
+    current_entry: Option<&UtxoEntry>,
+    required_fee: u64,
+    required_capital: u64,
+    now: u64,
+) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
+    let (outpoint, amount) = check_assignment_prover_funding_carriage_v2(bundle, join, payer_key, transaction, current_entry, now)?;
     let required = add([required_fee, required_capital])?;
-    if required_fee > join.max_fee || required_capital > join.max_capital || output.value < required || output.value > join.max_locked
-    {
+    if required_fee > join.max_fee || required_capital > join.max_capital || amount < required || amount > join.max_locked {
         return Err(AssignmentFundsErrorV2::Contract(ContractError::Budget));
     }
     Ok(AssignmentFundingOutputV2 {
-        outpoint: point(TransactionOutpoint::new(transaction.id(), join.funding_output_index)),
-        amount: output.value,
+        outpoint,
+        amount,
         worker: 0,
         fee: required_fee,
         capital: required_capital,
-        surplus: output.value - required,
+        surplus: amount - required,
     })
 }
 

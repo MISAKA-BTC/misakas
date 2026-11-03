@@ -453,3 +453,28 @@ finite cap configuration and the joined-role/funding schema. The new
 native census was typechecked. No accepted native op8 history or
 resource release was exercised. No new documentation issues appeared
 against the 43 existing missing references.
+
+## Joined prover qualification at the actual op13 prefix
+
+Op13 now checks the original rooted profile and requires either an
+unexpired Open Assignment with no Case reference or an active Case
+with the exact consumed Case/Result pair. It compares the original
+shared attempt cap, cumulative frame/retention extent and the current
+role and join counts. Original and retired joined accounts stay in the
+counts. The cross-Assignment census now counts a prospective joined
+prover using the same native role keys as op8. It does not allocate a
+second Assignment, poster, worker or class slot.
+
+The accepted-carrier path verifies the literal join signature against the
+current registered prover key, reads that prover's own composed funding
+output, checks the signed amount envelope and uses the common purpose
+lock check. Both the preflight and the priced funding helper share
+these coin and payer checks. No role or lock is written by op13 yet.
+Actual cumulative fee/capital and service reservation, relay custody,
+journal publication and join recovery remain open.
+
+Core and Consensus library Clippy passed with warnings denied. Thirteen
+contract cases passed on the same source map, including join consent and
+separate account invariants. The new native preflight was typechecked.
+No native op13 acceptance, lock or journal mutation was executed.
+The documentation check found zero new issues.

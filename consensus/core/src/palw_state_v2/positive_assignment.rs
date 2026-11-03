@@ -234,7 +234,8 @@ impl TransitionBuilder<'_> {
     /// cannot make room while funded roles or recovery material still exist.
     fn check_assignment_live_slots_v2(
         &mut self,
-        terms: &misaka_palw_positive_contract::assignment::AssignmentTermsV2,
+        prover: NativeOutpoint,
+        new_assignment: Option<&misaka_palw_positive_contract::assignment::AssignmentTermsV2>,
         rules: &NativeAssignmentRulesV2,
     ) -> Result<(), PalwStateV2Error> {
         let policy = rules.assignment_policy();
@@ -250,7 +251,7 @@ impl TransitionBuilder<'_> {
         quote.grown::<u8>(1024)?;
         quote.exact::<u8>(2 * misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES as u64)?;
         self.admit_native_write_v1(quote)?;
-        let mut start = NativeRowKey::Assignment(terms.id()).encode();
+        let mut start = NativeRowKey::Assignment(AssignmentId(Digest([0; 64]))).encode();
         start.truncate(start.len() - 64);
         let start = (KERNEL_AUX_TABLE, start);
         let route = self.state.kernel_route.as_ref().ok_or_else(missing_assignment_history)?;
@@ -270,19 +271,18 @@ impl TransitionBuilder<'_> {
                 return Err(refusal("wrong native live Assignment row kind"));
             };
             let occupied = &existing.bundle.terms;
-            let prover = if occupied.prover == terms.prover {
+            let prover_occupied = if occupied.prover == prover {
                 true
             } else {
-                let key =
-                    NativeRowKey::AssignmentRole { assignment: existing.id(), role: AssignmentRoleV2::Prover, bond: terms.prover };
+                let key = NativeRowKey::AssignmentRole { assignment: existing.id(), role: AssignmentRoleV2::Prover, bond: prover };
                 rows.read(key).map_err(refusal)?.is_some()
             };
             let uses = [
-                true,
-                occupied.poster == terms.poster,
-                occupied.worker == terms.worker,
-                prover,
-                occupied.registered_class == terms.registered_class,
+                new_assignment.is_some(),
+                new_assignment.is_some_and(|terms| occupied.poster == terms.poster),
+                new_assignment.is_some_and(|terms| occupied.worker == terms.worker),
+                prover_occupied,
+                new_assignment.is_some_and(|terms| occupied.registered_class == terms.registered_class),
             ];
             for (slots, occupied) in available.iter_mut().zip(uses) {
                 if occupied {
@@ -391,7 +391,7 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial Assignment/funding/journal mismatch"));
         }
         self.require_absent_assignment_key_v2(NativeRowKey::Assignment(id))?;
-        self.check_assignment_live_slots_v2(&row.bundle.terms, rules)?;
+        self.check_assignment_live_slots_v2(row.bundle.terms.prover, Some(&row.bundle.terms), rules)?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentFunding(id))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentUse(id))?;
         plan.funding.validate_shape().map_err(refusal)?;
@@ -631,8 +631,13 @@ impl TransitionBuilder<'_> {
 
 impl TransitionBuilder<'_> {
     /// Check original and joined roles by bounded Assignment-specific keys.
-    /// Closing changes no existing duty, earned balance, capital or lease.
-    fn check_assignment_close_roles_v2(&self, row: &AssignmentRow, max_roles: u32, max_joins: u32) -> Result<(), PalwStateV2Error> {
+    /// This census covers retired roles as long as their accounts are retained.
+    fn assignment_role_accounts_v2(
+        &self,
+        row: &AssignmentRow,
+        max_roles: u32,
+        max_joins: u32,
+    ) -> Result<(u32, u32), PalwStateV2Error> {
         let id = row.id();
         let rows = PositiveRowsV2::new(&self.state);
         let route = self.state.kernel_route.as_ref().ok_or_else(missing_assignment_history)?;
@@ -659,8 +664,11 @@ impl TransitionBuilder<'_> {
                 AssignmentRoleAuthorizationV2::Initial => initial |= 1 << (role.role as u8),
                 AssignmentRoleAuthorizationV2::Joined(join) => {
                     joins = joins.checked_add(1).ok_or_else(|| refusal("Assignment join count overflow"))?;
-                    if joins > max_joins || join.case.is_some() || join.cancellation_policy != row.bundle.cancellation_policy {
-                        return Err(refusal("joined role does not meet original pre-Case cancellation scope"));
+                    if joins > max_joins
+                        || join.case.is_some_and(|(case, result)| row.status != (AssignmentStatusV2::Consumed { case, result }))
+                        || join.cancellation_policy != row.bundle.cancellation_policy
+                    {
+                        return Err(refusal("joined role does not meet original Assignment scope"));
                     }
                     let funding = rows
                         .read(NativeRowKey::AssignmentProverFunding { assignment: id, prover: role.bond })
@@ -699,7 +707,87 @@ impl TransitionBuilder<'_> {
         if funding_count != joins as usize {
             return Err(refusal("unmatched joined Assignment funding account"));
         }
-        Ok(())
+        Ok((roles, joins))
+    }
+
+    fn check_assignment_prover_join_v2(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+        consent: &misaka_palw_positive_contract::assignment::role_actions::AssignmentProverJoinV2,
+        signature: &[u8; SIGNATURE_BYTES],
+    ) -> Result<(), PalwStateV2Error> {
+        use misaka_palw_positive_contract::messages::ClaimStatus;
+
+        let id = consent.assignment;
+        let row = self.assignment_row_v2(id)?.ok_or_else(|| refusal("missing accepted Assignment"))?;
+        let rules = action.rules();
+        if rules.original_material() != Some(row.admission_material) {
+            return Err(missing_assignment_history());
+        }
+        match row.status {
+            AssignmentStatusV2::Open if consent.case.is_none() && ctx.daa_score < row.bundle.terms.result_before_daa => {}
+            AssignmentStatusV2::Consumed { case, result } if consent.case == Some((case, result)) => {
+                let rooted = PositiveRowsV2::new(&self.state)
+                    .read(NativeRowKey::Case(case))
+                    .map_err(refusal)?
+                    .ok_or_else(missing_assignment_history)?;
+                let NativeRowBody::Case(rooted) = rooted.body else {
+                    return Err(refusal("wrong assigned Case row kind"));
+                };
+                if rooted.result != result
+                    || !matches!(rooted.status, ClaimStatus::ResultCommitted | ClaimStatus::Pending)
+                    || ctx.daa_score >= rooted.service.deadline
+                {
+                    return Err(refusal("assigned Case no longer accepts additional prover work"));
+                }
+            }
+            _ => return Err(refusal("join does not match the current open Assignment or active Case")),
+        }
+        consent.check(&row.bundle, ctx.daa_score).map_err(refusal)?;
+        if consent.max_attempts > row.prover_consent.max_attempts {
+            return Err(refusal("joined role exceeds the original shared attempt cap"));
+        }
+        self.require_absent_assignment_key_v2(NativeRowKey::AssignmentRole {
+            assignment: id,
+            role: AssignmentRoleV2::Prover,
+            bond: consent.prover,
+        })?;
+        self.require_absent_assignment_key_v2(NativeRowKey::AssignmentProverFunding { assignment: id, prover: consent.prover })?;
+        let policy = rules.assignment_policy();
+        let head = self.assignment_head_v2(id)?;
+        self.check_assignment_next_journal_extent_v2(
+            &row,
+            &head,
+            policy,
+            rules.original_history_storage_limit_v2().ok_or_else(missing_assignment_history)?,
+            action.transaction().payload[3..].len(),
+        )?;
+        let (roles, joins) = self.assignment_role_accounts_v2(&row, policy.max_role_candidates, policy.max_prover_joins)?;
+        if roles >= policy.max_role_candidates || joins >= policy.max_prover_joins {
+            return Err(refusal("original Assignment role or join cap exhausted"));
+        }
+        self.check_assignment_live_slots_v2(consent.prover, None, rules)?;
+
+        let bond = self.state.bond(&native_bond(consent.prover)).ok_or_else(|| refusal("missing current prover bond"))?;
+        if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
+            return Err(refusal("current prover cannot accept work"));
+        }
+        let key: &[u8; PUBKEY_BYTES] = bond.pubkey.as_slice().try_into().map_err(refusal)?;
+        consent.authenticate(&row.bundle, key, signature, ctx.daa_score).map_err(refusal)?;
+        let (outpoint, amount) = crate::palw_positive_assignment_funds_v2::check_assignment_prover_funding_carriage_v2(
+            &row.bundle,
+            consent,
+            key,
+            action.transaction(),
+            action.current_output(),
+            ctx.daa_score,
+        )
+        .map_err(refusal)?;
+        if amount == 0 || amount > consent.max_locked {
+            return Err(refusal("joined funding amount exceeds the signed nonzero envelope"));
+        }
+        self.require_assignment_output_unlocked_v2(outpoint)
     }
 
     /// A native close only stops new work. A later independent settlement
@@ -761,7 +849,7 @@ impl TransitionBuilder<'_> {
             }
             _ => {}
         }
-        self.check_assignment_close_roles_v2(&row, policy.max_role_candidates, policy.max_prover_joins)?;
+        self.assignment_role_accounts_v2(&row, policy.max_role_candidates, policy.max_prover_joins)?;
         // The enclosing raw checkpoint rolls back both rows and retained bytes.
         let payload = self.encode_assignment_control_payload_v2(id, literal, policy.max_frame_bytes)?;
         let frame = assignment_frame_v2(id, head.next_ordinal, head.last_frame, kind, origin, &payload, policy.max_frame_bytes)
@@ -885,7 +973,7 @@ impl TransitionBuilder<'_> {
                     // This reads the CURRENT prefix; later registration/nonce
                     // changes cannot authorize the earlier carrier.
                     self.require_absent_assignment_key_v2(NativeRowKey::Assignment(bundle.terms.id()))?;
-                    self.check_assignment_live_slots_v2(&bundle.terms, rules)?;
+                    self.check_assignment_live_slots_v2(bundle.terms.prover, Some(&bundle.terms), rules)?;
                     let class = Hash64::from_bytes(bundle.terms.registered_class.0);
                     if self.state.class(&class).is_none() || !self.state.tir_classes.contains_key(&class) {
                         return Err(refusal("actual registered TIR class missing at this accepted prefix"));
@@ -996,19 +1084,7 @@ impl TransitionBuilder<'_> {
                     self.close_positive_assignment_v2(ctx, action, &body.operation)
                 }
                 O::JoinAssignmentProver { consent, signature } => {
-                    let row = self.assignment_row_v2(consent.assignment)?.ok_or_else(|| refusal("missing accepted Assignment"))?;
-                    let bond = self.state.bond(&native_bond(consent.prover)).ok_or_else(|| refusal("missing current prover bond"))?;
-                    if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
-                        return Err(refusal("current prover cannot accept work"));
-                    }
-                    consent.check(&row.bundle, ctx.daa_score).map_err(refusal)?;
-                    // The actual priced construction/join reservation owner
-                    // must precede role-purpose crypto and fund mutation.
-                    let _untrusted_signature = signature;
-                    self.require_absent_assignment_key_v2(NativeRowKey::AssignmentProverFunding {
-                        assignment: consent.assignment,
-                        prover: consent.prover,
-                    })?;
+                    self.check_assignment_prover_join_v2(ctx, action, consent, signature)?;
                     Err(refusal("native cumulative join capacity/funds/material owner is not yet resolved"))
                 }
                 O::SettleAssignment { .. } => self.settle_positive_assignment_raw_funds_v2(ctx, action, &body),

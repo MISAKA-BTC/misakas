@@ -806,5 +806,21 @@
     "stored_sha256": "adb008e05bd64bc1b7500045f132fb71d69e8c4b7c161016cf1233816ff97a9c",
     "raw_bytes": 54566,
     "stored_bytes": 4407
+  },
+  {
+    "raw_name": "assignment-join-preflight-clippy-first.log",
+    "stored_name": "assignment-join-preflight-clippy-first.log.gz",
+    "raw_sha256": "666bced0e75b575206dd178a159cf0f8d4489977cafd06cc8e5cb9df1bebd601",
+    "stored_sha256": "40be8915f9549aa22facef5a26f3d4037bceffe5c364b1de80ecc9b37bcc3de7",
+    "raw_bytes": 341727,
+    "stored_bytes": 23615
+  },
+  {
+    "raw_name": "assignment-join-preflight-contract-first.log",
+    "stored_name": "assignment-join-preflight-contract-first.log.gz",
+    "raw_sha256": "91dfdbe22d03be48f1319e8b06ecdf6963a10028e206ff1a2baee582b582be6e",
+    "stored_sha256": "6602cf744966ba823e3617afaa04fb8634a5943f2f53e5af270b8cf5af973cf9",
+    "raw_bytes": 54566,
+    "stored_bytes": 4396
   }
 ]
