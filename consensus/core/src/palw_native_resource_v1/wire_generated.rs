@@ -5365,6 +5365,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 let key = <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
                 key.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)
             }
+            33 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -5639,6 +5640,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV
             37 => <Box<crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2> as NativeWireScanV1>::scan_native_wire_v1(reader),
             38 => <Box<crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader),
             39 => <Box<crate::palw_batch_court_v1::rooted::RootedBatchDemandV1> as NativeWireScanV1>::scan_native_wire_v1(reader),
+            40 => <Box<crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(reader),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

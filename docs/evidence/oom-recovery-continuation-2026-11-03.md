@@ -2959,3 +2959,27 @@ fixture and full processor build remain unrun. See
 B0 and relay agreed at DAA 19,703 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-carrier-adjudication-live.QMbPer/page.json`.
+
+## Branch-retained Batch Stop receipt
+
+The native Stop dispatcher journals one fixed-size receipt per
+original after adjudication. The receipt records the original Source,
+signed operand digest, accepting point, retention horizon and
+optional fault position. The writer accepts identical data again
+at the same accepting point and refuses replacement. The generic
+row writer cannot introduce a Stop receipt. Replay checks the
+insertion point and retention boundary. Snapshot validation binds
+a live receipt to its retained original. The appended key and row
+tags are 33 and 40. The existing service hold and expiry index
+include the receipt. This path journals the finding only, pending
+the separate terminal economic effects.
+
+The extracted suite passed 38 checks. The new fixture verifies
+fixed receipt round-trip, key and clock checks, and bounded
+truncation handling. The native enum tags, full journal replay,
+restart and pruned IBD remain unrun in the integrated build.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-receipt.6afeYq/tests.log`.
+
+B0 and relay agreed at DAA 19,704 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-receipt-live.AbQR12/page.json`.

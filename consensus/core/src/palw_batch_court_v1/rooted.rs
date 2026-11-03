@@ -8,6 +8,70 @@ use crate::{BlockHash, Hash64};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io;
 
+/// One immutable constrained Stop finding on the accepting branch.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct RootedBatchStopReceiptV1 {
+    pub version: u16,
+    pub claim: Hash64,
+    pub source_id: Hash64,
+    pub operands_digest: Hash64,
+    pub at: PalwBlockContextV2,
+    pub material_until_daa: u64,
+    pub fault_position: Option<u32>,
+}
+
+impl RootedBatchStopReceiptV1 {
+    pub(crate) fn check(&self, key: &Key) -> Result<(), String> {
+        if self.version != 1
+            || *key != Key::CourtBatchStopReceipt(self.claim)
+            || [self.claim, self.source_id, self.operands_digest, self.at.block].contains(&Hash64::default())
+            || self.at.daa_score >= self.material_until_daa
+        {
+            return Err("invalid rooted Batch Stop receipt".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, self.claim)
+            .ok_or("Batch Stop receipt lost its original frame")?;
+        let point = state.last_point().ok_or("Batch Stop receipt has no accepted snapshot")?;
+        let original = frame.original_v1();
+        let plan = frame.plan_v1();
+        if !original.job.is_constraint()
+            || self.source_id != plan.source_id
+            || self.material_until_daa != plan.terms.material_until_daa
+            || self.at.daa_score < plan.terms.accepted_daa
+            || self.at.daa_score
+                >= plan
+                    .terms
+                    .accepted_daa
+                    .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+                    .ok_or("Batch Stop receipt original clock overflows")?
+            || self.at.daa_score > point.daa_score
+            || self.at.blue_score > point.blue_score
+            || (self.at.blue_score == point.blue_score && self.at != *point)
+            || self.fault_position.is_some_and(|position| position >= original.decode_tokens_executed)
+        {
+            return Err("Batch Stop receipt differs from its retained original or accepting point".into());
+        }
+        Ok(())
+    }
+}
+
+impl NativeWireScanV1 for RootedBatchStopReceiptV1 {
+    fn scan_native_wire_v1<R: io::Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        let mut shape = u16::scan_native_wire_v1(reader)?;
+        for _ in 0..3 {
+            shape = shape.merge(Hash64::scan_native_wire_v1(reader)?)?;
+        }
+        shape = shape.merge(PalwBlockContextV2::scan_native_wire_v1(reader)?)?;
+        shape = shape.merge(u64::scan_native_wire_v1(reader)?)?;
+        shape.merge(Option::<u32>::scan_native_wire_v1(reader)?)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct RootedBatchDemandV1 {
     pub version: u16,
@@ -149,6 +213,36 @@ impl crate::palw_native_resource_v1::NativeHeapV1 for RootedBatchDemandV1 {
 mod tests {
     use super::*;
     use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchRangeAuthenticationV1};
+
+    #[test]
+    fn batch_stop_receipt_has_a_fixed_bounded_row_and_original_key() {
+        let h = Hash64::from_u64_word;
+        let receipt = RootedBatchStopReceiptV1 {
+            version: 1,
+            claim: h(1),
+            source_id: h(2),
+            operands_digest: h(3),
+            at: PalwBlockContextV2 { block: h(4), daa_score: 4_000, blue_score: 5_000, subsidy: 0 },
+            material_until_daa: 11_000,
+            fault_position: Some(2),
+        };
+        let key = Key::CourtBatchStopReceipt(receipt.claim);
+        assert_eq!(borsh::to_vec(&key).unwrap()[0], 33);
+        assert_eq!(borsh::to_vec(&Row::CourtBatchStopReceipt(Box::new(receipt.clone()))).unwrap()[0], 40);
+        let bytes = borsh::to_vec(&receipt).unwrap();
+        let restored: RootedBatchStopReceiptV1 = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(restored, receipt);
+        assert!(restored.check(&key).is_ok());
+        assert!(restored.check(&Key::CourtBatchStopReceipt(h(5))).is_err());
+        assert!(RootedBatchStopReceiptV1 { material_until_daa: receipt.at.daa_score, ..receipt }.check(&key).is_err());
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        let shape = RootedBatchStopReceiptV1::scan_native_wire_v1(&mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(shape.collection_entries, 0);
+        let truncated = &bytes[..bytes.len() - 1];
+        let mut reader = NativeWireReaderV1::new(truncated, truncated.len() as u64);
+        assert!(RootedBatchStopReceiptV1::scan_native_wire_v1(&mut reader).is_err());
+    }
 
     #[test]
     fn rooted_batch_request_round_trip_binds_key_and_bounded_wire() {

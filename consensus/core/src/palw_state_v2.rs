@@ -22744,6 +22744,18 @@ pub(crate) fn replay_delta_owned_v1(
     let mut tokenizer_registration_changed = false;
     for entry in &delta.entries {
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
+            && (matches!(key, CourtKey::CourtBatchStopReceipt(_))
+                || matches!(old, Some(CourtRow::CourtBatchStopReceipt(_)))
+                || matches!(new, Some(CourtRow::CourtBatchStopReceipt(_))))
+        {
+            let row = match (old, new) {
+                (None, Some(CourtRow::CourtBatchStopReceipt(row))) if row.at == delta.point => row,
+                (Some(CourtRow::CourtBatchStopReceipt(row)), None) if delta.point.daa_score >= row.material_until_daa => row,
+                _ => return Err(PalwStateV2Error::DeltaMismatch("Batch Stop receipt changes its accepting point or retention")),
+            };
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
             && (matches!(key, CourtKey::VerifiedTokenizerRegistration(..))
                 || matches!(old, Some(CourtRow::VerifiedTokenizerRegistration(_)))
                 || matches!(new, Some(CourtRow::VerifiedTokenizerRegistration(_))))
