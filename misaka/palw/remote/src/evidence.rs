@@ -160,7 +160,7 @@ pub fn fetch_material_any(
 
 pub mod fs {
     use super::*;
-    use std::fs::OpenOptions;
+    use std::fs::{File, OpenOptions};
     use std::io::{self, Read};
     use std::path::{Path, PathBuf};
 
@@ -172,8 +172,7 @@ pub mod fs {
         TooLarge(u64),
     }
 
-    /// Check the opened file before allocating, and never read a growing file to EOF.
-    pub(crate) fn read_bounded_file(path: &Path, max: usize) -> Result<Vec<u8>, BoundedFileError> {
+    pub(crate) fn open_bounded_file(path: &Path, max: usize) -> Result<(File, u64), BoundedFileError> {
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -181,7 +180,7 @@ pub mod fs {
             use std::os::unix::fs::OpenOptionsExt;
             options.custom_flags(libc::O_NONBLOCK);
         }
-        let mut file = options.open(path)?;
+        let file = options.open(path)?;
         let meta = file.metadata()?;
         if !meta.is_file() {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "provider path is not a regular file").into());
@@ -189,11 +188,17 @@ pub mod fs {
         if meta.len() > max as u64 {
             return Err(BoundedFileError::TooLarge(meta.len()));
         }
-        let mut bytes = vec![0; meta.len() as usize];
+        Ok((file, meta.len()))
+    }
+
+    /// Check the opened file before allocating, and never read a growing file to EOF.
+    pub(crate) fn read_bounded_file(path: &Path, max: usize) -> Result<Vec<u8>, BoundedFileError> {
+        let (mut file, len) = open_bounded_file(path, max)?;
+        let mut bytes = vec![0; len as usize];
         file.read_exact(&mut bytes)?;
         if file.read(&mut [0])? != 0 {
             if bytes.len() == max {
-                return Err(BoundedFileError::TooLarge(meta.len().saturating_add(1)));
+                return Err(BoundedFileError::TooLarge(len.saturating_add(1)));
             }
             return Err(io::Error::new(io::ErrorKind::InvalidData, "provider file grew during the read").into());
         }

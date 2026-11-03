@@ -1103,6 +1103,7 @@ impl RetentionMonitor {
 
 pub mod server {
     use super::*;
+    use crate::evidence::fs::{BoundedFileError, open_bounded_file, read_bounded_file};
 
     #[derive(Clone, Debug)]
     pub struct ServerConfig {
@@ -1283,20 +1284,24 @@ pub mod server {
             let listing = crate::evidence::fs::FsProvider::new(root.to_path_buf()).list_redemptions().unwrap_or_default().join("\n");
             return respond(&mut stream, 200, listing.as_bytes());
         }
+        let cap = match &target {
+            Target::Manifest(_) => MANIFEST_MAX_BYTES,
+            Target::Chunk(..) => cfg.limits.max_chunk_bytes as usize,
+            Target::Redemption(_) | Target::RedemptionIndex => REDEMPTION_MAX_BYTES,
+            Target::Material(path) if path.ends_with("manifest") => crate::public_material::MATERIAL_MANIFEST_MAX_BYTES,
+            Target::Material(_) => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
+        };
         match method {
-            "GET" | "HEAD" => match std::fs::read(&file) {
-                Ok(bytes) if method == "HEAD" => respond(&mut stream, 200, &[]).map(|_| drop(bytes)),
-                Ok(bytes) => respond(&mut stream, 200, &bytes),
-                Err(_) => respond(&mut stream, 404, b"not found"),
-            },
+            "GET" | "HEAD" => {
+                let stored =
+                    if method == "HEAD" { open_bounded_file(&file, cap).map(|_| Vec::new()) } else { read_bounded_file(&file, cap) };
+                match stored {
+                    Ok(bytes) => respond(&mut stream, 200, &bytes),
+                    Err(BoundedFileError::TooLarge(_)) => respond(&mut stream, 413, b"too large"),
+                    Err(_) => respond(&mut stream, 404, b"not found"),
+                }
+            }
             "PUT" => {
-                let cap = match &target {
-                    Target::Manifest(_) => MANIFEST_MAX_BYTES,
-                    Target::Chunk(..) => cfg.limits.max_chunk_bytes as usize,
-                    Target::Redemption(_) | Target::RedemptionIndex => REDEMPTION_MAX_BYTES,
-                    Target::Material(path) if path.ends_with("manifest") => crate::public_material::MATERIAL_MANIFEST_MAX_BYTES,
-                    Target::Material(_) => crate::public_material::MATERIAL_UNIT_MAX_BYTES,
-                };
                 if content_length > cap {
                     // Drain (a bounded amount of) what the client is still sending before answering: closing on unread data resets the
                     // connection and the client would never see the 413.
@@ -1360,7 +1365,8 @@ pub mod server {
                         }
                         let id = manifest_id_v1(&manifest);
                         for entry in &manifest.chunks {
-                            let stored = std::fs::read(crate::evidence::fs::chunk_path(root, id, entry.index));
+                            let stored =
+                                read_bounded_file(&crate::evidence::fs::chunk_path(root, id, entry.index), entry.len as usize);
                             match stored {
                                 Ok(bytes) if manifest.verify_chunk(entry.index, &bytes).is_ok() => {}
                                 _ => {
@@ -1712,6 +1718,76 @@ mod tests {
 
     fn mixed_all<'a>(a: &'a HttpProvider, b: &'a HttpProvider, c: &'a FsProvider) -> Vec<&'a dyn EvidenceProvider> {
         vec![a, b, c]
+    }
+
+    #[test]
+    fn reference_provider_bounds_existing_files_and_manifest_backing_reads() {
+        use crate::evidence::fs;
+        use crate::public_material::{MaterialEntryV1, MaterialManifestV1, material_manifest_path, material_unit_path, unit_hash_v1};
+
+        let dir = scratch("bounded-server");
+        let mut config = server::ServerConfig::default();
+        config.limits.max_chunk_bytes = 4000;
+        let handle = server::start("127.0.0.1:0", dir.clone(), config).unwrap();
+        let origin = handle.url();
+        let http = StdHttp::default();
+        let request = |method: &str, path: &str, body| http.request(method, &format!("{origin}/{path}"), body, 4096).unwrap();
+
+        let manifest = manifest();
+        let id = manifest_id_v1(&manifest);
+        let claim_hex = claim_hex();
+        let claim = h(7);
+        let chunk_rel = format!("chunks/{id}/0.chunk");
+        let manifest_rel = format!("claims/{claim_hex}.manifest");
+        let unit_rel = material_unit_path(&claim, "held-leaf-1");
+        let material_rel = material_manifest_path(&claim);
+        let chunks = chunks();
+        fs::publish(&dir, &claim_hex, &manifest, &chunks).unwrap();
+        let response = request("GET", &chunk_rel, None);
+        assert_eq!((response.status, response.body), (200, chunks[0].clone()));
+        let response = request("HEAD", &chunk_rel, None);
+        assert_eq!((response.status, response.body.len()), (200, 0));
+
+        for path in [&chunk_rel, &manifest_rel, &unit_rel, &material_rel] {
+            let file = dir.join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::File::create(file).unwrap().set_len(5u64 << 30).unwrap();
+            for method in ["GET", "HEAD"] {
+                assert_eq!(request(method, path, None).status, 413, "{method} {path}");
+            }
+        }
+        let manifest_bytes = borsh::to_vec(&manifest).unwrap();
+        assert_eq!(request("PUT", &manifest_rel, Some(&manifest_bytes)).status, 409);
+        std::fs::write(dir.join(&chunk_rel), &chunks[0]).unwrap();
+        assert_eq!(request("PUT", &manifest_rel, Some(&manifest_bytes)).status, 201);
+
+        let material_bytes = b"unit";
+        let material_manifest = |stem: &str| {
+            borsh::to_vec(&MaterialManifestV1::KernelClaim {
+                version: 1,
+                network_domain: h(9),
+                claim,
+                positions: vec![(0, 1)],
+                entries: vec![MaterialEntryV1 {
+                    stem: stem.into(),
+                    len: material_bytes.len() as u32,
+                    hash: unit_hash_v1(material_bytes),
+                }],
+                retain_until_daa: 10_000,
+            })
+            .unwrap()
+        };
+        let unit_manifest = material_manifest("held-leaf-1");
+        assert_eq!(request("PUT", &material_rel, Some(&unit_manifest)).status, 409);
+        std::fs::write(dir.join(&unit_rel), material_bytes).unwrap();
+        assert_eq!(request("PUT", &material_rel, Some(&unit_manifest)).status, 201);
+
+        std::fs::write(dir.join("material/escaped.unit"), material_bytes).unwrap();
+        let escaping_manifest = material_manifest("../escaped");
+        assert_eq!(request("PUT", &material_rel, Some(&escaping_manifest)).status, 409);
+        assert_eq!(request("GET", &material_rel, None).body, unit_manifest);
+        handle.stop();
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
