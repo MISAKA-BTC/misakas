@@ -23,6 +23,9 @@
 use crate::BlockHash;
 use crate::Hash64;
 use crate::palw_court_shared_tir_state_v1 as shared;
+use crate::palw_native_resource_v1::{
+    NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, reserve_native_pending_requests_v1, reserve_native_requests_v1,
+};
 use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1 as PromptForm, PalwPromptIdsOpeningV1};
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2};
@@ -391,44 +394,63 @@ impl MaterialDraftV1 {
         self.check_pipelined_geometry(part.offset, part.bytes.len(), already_accepted)
     }
 
-    /// Reassemble the retained prefix for V1 or the completed canonical body for V2.
+    /// Reassemble the retained prefix for V1 or the complete body for a pipelined draft.
     pub fn body(&self, state: &PalwChainStateV2) -> Result<Vec<u8>, String> {
-        self.body_reserved(state).map(|(bytes, _)| bytes)
+        self.body_reserved(state).map(|(bytes, _)| bytes).map_err(|error| error.to_string())
     }
 
     pub(crate) fn body_reserved(
         &self,
         state: &PalwChainStateV2,
-    ) -> Result<(Vec<u8>, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>), String> {
-        self.check(&Key::CourtMaterialDraft(self.claim, self.draft_id))?;
+    ) -> Result<(Vec<u8>, Option<NativeDemandLeaseV1>), NativeDecodeErrorV1<String>> {
+        let reserve =
+            if self.version == MATERIAL_BATCH_VERSION { reserve_native_pending_requests_v1 } else { reserve_native_requests_v1 };
+        self.body_reserved_with_v1(state, reserve)
+    }
+
+    pub(super) fn body_reserved_with_v1(
+        &self,
+        state: &PalwChainStateV2,
+        reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<(Vec<u8>, Option<NativeDemandLeaseV1>), NativeDecodeErrorV1<String>> {
+        use NativeDecodeErrorV1::{Decode, Resource};
+        let bad = |reason: &str| Decode(reason.into());
+        self.check(&Key::CourtMaterialDraft(self.claim, self.draft_id)).map_err(Decode)?;
         if self.pipelined() && self.accepted_bytes != self.total_bytes {
-            return Err("pipelined material is incomplete".into());
+            return Err(bad("pipelined material is incomplete"));
         }
-        let n = usize::try_from(self.accepted_bytes).map_err(|_| "material prefix exceeds address space")?;
-        let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
-        q.exact_v1::<u8>(self.accepted_bytes).map_err(|e| e.to_string())?;
-        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e| e.to_string())?;
+        let n = usize::try_from(self.accepted_bytes)
+            .map_err(|_| Resource(NativeCoverageV1::overflow::<Vec<u8>>("material body address space")))?;
+        let lease = reserve(self.accepted_bytes).map_err(Resource)?;
         let mut bytes = Vec::new();
-        bytes.try_reserve_exact(n).map_err(|_| "material prefix allocation refused")?;
+        bytes.try_reserve_exact(n).map_err(|_| {
+            Resource(NativeCoverageV1::unsupported::<Vec<u8>>("material body", "prefix allocation refused"))
+        })?;
         let (mut at, mut head) = (0u64, Hash64::default());
         while at < self.accepted_bytes {
             let Some(Row::CourtMaterialPart(part)) = state.staged_court_row_v1(&Key::CourtMaterialPart(self.draft_id, at)) else {
-                return Err("material prefix part missing".into());
+                return Err(bad("material prefix part missing"));
             };
-            part.check(&Key::CourtMaterialPart(self.draft_id, at))?;
+            part.check(&Key::CourtMaterialPart(self.draft_id, at)).map_err(Decode)?;
             if self.pipelined() {
-                at = self.check_pipelined_part(&Key::CourtMaterialPart(self.draft_id, at), part, at)?;
+                at = self.check_pipelined_part(&Key::CourtMaterialPart(self.draft_id, at), part, at).map_err(Decode)?;
             } else {
                 if part.version != 1 || part.previous != head || part.claim != self.claim {
-                    return Err("material prefix chain mismatch".into());
+                    return Err(bad("material prefix chain mismatch"));
                 }
-                head = material_part_digest_v1(part)?;
-                at = at.checked_add(part.bytes.len() as u64).ok_or("material prefix overflow")?;
+                at = at.checked_add(part.bytes.len() as u64).ok_or_else(|| bad("material prefix overflow"))?;
+                if at > self.accepted_bytes {
+                    return Err(bad("material part exceeds the retained prefix"));
+                }
+                head = material_part_digest_v1(part).map_err(Decode)?;
             }
             bytes.extend_from_slice(&part.bytes);
         }
         if at != self.accepted_bytes || !self.pipelined() && head != self.head {
-            return Err("material prefix head mismatch".into());
+            return Err(bad("material prefix head mismatch"));
+        }
+        if let Some(lease) = &lease {
+            lease.materialized_v1();
         }
         Ok((bytes, lease))
     }

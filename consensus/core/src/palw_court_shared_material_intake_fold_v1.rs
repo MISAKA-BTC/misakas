@@ -278,17 +278,26 @@ fn material_intake_inner(
                 )
             }
             .map_err(refused)?;
-            let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
-            q.exact_v1::<u8>(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
-            let _raw =
-                crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+            use crate::palw_native_resource_v1::{
+                NativeCoverageV1, reserve_native_pending_requests_v1, reserve_native_requests_v1,
+            };
+            let reserve = if request_root.is_some() { reserve_native_pending_requests_v1 } else { reserve_native_requests_v1 };
+            let raw = reserve(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+            let mut retained_bytes = Vec::new();
+            retained_bytes.try_reserve_exact(bytes.len()).map_err(|_| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<u8>>("material part", "allocation refused"))
+            })?;
+            retained_bytes.extend_from_slice(bytes);
+            if let Some(lease) = &raw {
+                lease.materialized_v1();
+            }
             let part = m::MaterialPartV1 {
                 version: draft.version,
                 claim: s.claim,
                 draft_id: *draft_id,
                 offset: *offset,
                 previous: if draft.pipelined() { Hash64::default() } else { draft.head },
-                bytes: bytes.clone(),
+                bytes: retained_bytes,
                 daa: ctx.daa_score,
                 expires_daa: draft.expires_daa,
             };
@@ -314,13 +323,15 @@ fn material_intake_inner(
             {
                 return Err(refused("material Finish of an expired or incomplete draft"));
             }
-            let (body, _body_lease) = draft.body_reserved(&b.state).map_err(refused)?;
+            use super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2;
+            let (body, _body_lease) = draft.body_reserved(&b.state).map_err(|error| {
+                if request_root.is_some() { shared_ids_auth_fault_v2(error) } else { refused(error.to_string()) }
+            })?;
             if crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) != draft.body_hash {
                 return Err(refused("material body checksum mismatch"));
             }
             match s.target {
                 m::MaterialTargetV1::FullIds => {
-                    use super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2;
                     let ids = if request_root.is_some() {
                         crate::palw_court_shared_tir_stream_state_v1::decode_ids_body_classified_v1(&source, &body)
                             .map_err(shared_ids_auth_fault_v2)?

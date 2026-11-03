@@ -2759,3 +2759,28 @@ and public quote were not run. See
 B0 and relay agreed on DAA 19,697 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-full-ids-body-live.219trY/page.json`.
+
+## Batch response assembly under memory pressure
+
+Batch Part copying and completed draft assembly reserve memory before
+allocating. A reservation or allocation refusal in these paths is a
+local resource fault. The accepting fold's checkpoint is restored on
+failure, so the same block can be retried without consuming the
+draft. Malformed, missing or incomplete material remains a decode
+refusal. The body assembly also checks a legacy part's endpoint
+against the retained prefix before appending bytes. The older public
+body reader keeps its string error interface.
+
+The extracted suite passed 35 checks. Its new fixture uses the actual
+body assembly logic with a lightweight retained-row map and injected
+reservation result. It refuses a complete draft under pressure,
+reassembles the same two parts in canonical order on retry, and
+rejects an incomplete draft before requesting memory. The native
+notice-to-Finish fixture now checks draft resource refusal against
+the real rooted state before attempting Finish. The integrated
+fixture, live process quota and full processor build remain unverified.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-body-retry.gcSBn5/tests.log`.
+
+B0 and relay agreed at DAA 19,698 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-body-retry-live.j55Mpe/page.json`.

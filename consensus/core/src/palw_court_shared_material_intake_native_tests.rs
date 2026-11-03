@@ -827,6 +827,22 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(b.state.state_root(), after_begin);
     let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
     apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 3), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
+    let draft_key = Key::CourtMaterialDraft(claim, draft_id);
+    let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&draft_key) else { panic!("missing Batch draft") };
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
+    let after_part = b.state.state_root();
+    let refused = draft.body_reserved_with_v1(&b.state, |bytes| {
+        assert_eq!(bytes, body.len() as u64);
+        Err(NativeCoverageV1::unsupported::<Vec<u8>>("Batch test", "no assembly capacity"))
+    });
+    assert!(matches!(refused, Err(NativeDecodeErrorV1::Resource(_))));
+    assert_eq!(b.state.state_root(), after_part);
+    let mut incomplete = (**draft).clone();
+    incomplete.accepted_bytes -= 1;
+    assert!(matches!(
+        incomplete.body_reserved_with_v1(&b.state, |_| panic!("incomplete draft must fail before allocation")),
+        Err(NativeDecodeErrorV1::Decode(_)),
+    ));
     apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 4), &respond(MaterialActionV1::Finish { draft_id }), 1, 0).unwrap();
     let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
     let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
