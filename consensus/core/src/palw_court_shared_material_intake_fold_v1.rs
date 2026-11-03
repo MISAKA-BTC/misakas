@@ -51,15 +51,43 @@ pub(super) fn material_intake_pipelined(
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
     ordinal: u64,
-    delivery: &m::batch::MaterialBatchDeliveryV1,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let key = Key::CourtBatchDemand(s.claim, ordinal);
     let Some(Row::CourtBatchDemand(demand)) = b.state.staged_court_row_v1(&key) else {
         return Err(refused("Batch material has no accepted demand"));
     };
-    if demand.request_root != delivery.request_root_v1() || demand.scope_id != s.scope_id {
+    if demand.scope_id != s.scope_id {
         return Err(refused("Batch material differs from the retained request"));
+    }
+    let request_root = demand.request_root;
+    let context = shared::context(&b.state, s.claim).map_err(refused)?;
+    let retained;
+    let declaration = match &s.action {
+        m::MaterialActionV1::Begin { .. } => s,
+        m::MaterialActionV1::Part { draft_id, .. } | m::MaterialActionV1::Finish { draft_id } => {
+            let draft = own_draft(b, s, *draft_id, Some(request_root))?;
+            retained = m::SignedMaterialIntakeV1 {
+                version: draft.version,
+                claim: draft.claim,
+                scope_id: draft.scope_id,
+                target: draft.target,
+                submitter: draft.submitter,
+                action: m::MaterialActionV1::Begin { total_bytes: draft.total_bytes, body_hash: draft.body_hash },
+                signature: Vec::new(),
+            };
+            &retained
+        }
+    };
+    let m::MaterialActionV1::Begin { total_bytes, .. } = declaration.action else {
+        return Err(refused("Batch material declaration missing"));
+    };
+    // This is an exact slot lookup. Begin separately checks the native
+    // target ceiling before writing; subsequent steps use that retained draft.
+    let delivery = m::batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand.demand, declaration, total_bytes)
+        .map_err(refused)?;
+    if delivery.request_root_v1() != request_root {
+        return Err(refused("Batch material delivery root differs from the retained demand"));
     }
     let service = b.state.court_service_state_v1().ok_or_else(|| refused("Batch material has no rooted service book"))?;
     let binding = service.claims.get(&s.claim).ok_or_else(|| refused("Batch material original has no service binding"))?;
@@ -73,7 +101,7 @@ pub(super) fn material_intake_pipelined(
             .check_draft_schedule_v1(&service.book, schedule)
             .map_err(|err| refused(format!("Batch material draft schedule: {err:?}")))?;
     }
-    material_intake_atomic(b, ctx, s, Some(delivery.request_root_v1()), storage_debit)
+    material_intake_atomic(b, ctx, s, Some((request_root, ordinal)), storage_debit)
 }
 
 #[cfg(test)]
@@ -84,18 +112,18 @@ pub(super) fn material_intake_pipelined_codec_test(
     request_root: Hash64,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     assert_eq!(s.version, m::MATERIAL_BATCH_VERSION);
-    material_intake_atomic(b, ctx, s, Some(request_root), None)
+    material_intake_atomic(b, ctx, s, Some((request_root, 0)), None)
 }
 
 fn material_intake_atomic(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
-    request_root: Option<Hash64>,
+    batch_request: Option<(Hash64, u64)>,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let saved = b.try_checkpoint()?;
-    let result = material_intake_inner(b, ctx, s, request_root, storage_debit);
+    let result = material_intake_inner(b, ctx, s, batch_request, storage_debit);
     if result.is_err() {
         b.restore(saved);
     }
@@ -106,9 +134,10 @@ fn material_intake_inner(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
-    request_root: Option<Hash64>,
+    batch_request: Option<(Hash64, u64)>,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    let request_root = batch_request.map(|(root, _)| root);
     if !b.extras.staged_tir_route_active {
         return Err(refused("material intake is dormant below palw_staged_tir_route_v1"));
     }
@@ -206,9 +235,9 @@ fn material_intake_inner(
             // A positive charge is rooted only after an exact accepted carrier
             // fee allocation. The legacy route still has no debit source.
             if fee > 0 {
-                let root = request_root.ok_or_else(|| refused("material storage fee has no Batch demand"))?;
+                let (root, ordinal) = batch_request.ok_or_else(|| refused("material storage fee has no Batch demand"))?;
                 let debit = storage_debit.ok_or_else(|| refused("Batch material storage fee has no accepted carrier debit"))?;
-                debit.check_v1(s, root, ctx, fee).map_err(refused)?;
+                debit.check_v1(s, root, ordinal, ctx, fee).map_err(refused)?;
             }
             b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
             b.write_staged_row_v1(key, Some(Row::CourtMaterialDraft(Box::new(draft))))?;

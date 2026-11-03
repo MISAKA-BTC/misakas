@@ -241,10 +241,10 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     let tail = &body[last * PART..];
     let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(material_intake(&mut builder, &at(frame, 1), &begin).is_err());
-    let delivery = batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand, &begin, body.len() as u64).unwrap();
     let before_unfunded = builder.state.state_root();
-    assert!(super::super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
-        &mut builder, &at(frame, 1), &begin, 0, &delivery, None).is_err());
+    use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchMaterialControlV1};
+    let wire = BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: 0, intake: begin.clone() });
+    assert!(builder.apply_batch_court_wire_v1(&at(frame, 1), &wire, None).is_err());
     assert_eq!(builder.state.state_root(), before_unfunded);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 1), &begin, request_root).unwrap(), E::Begun);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail), request_root).unwrap(), E::Part);
@@ -695,4 +695,107 @@ fn material_intake_measure_wall_time_and_retained_bytes() {
             canonical_row_bytes={rows} delta_entries={entries} delta_bytes={deltas} sompi_per_byte_test={}", targets.len(), schedule.sompi_per_byte);
     }
     crate::palw_court_shared_material_intake_v1::set_material_intake_test_schedule_v1(None);
+}
+
+#[test]
+fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
+    use crate::palw_batch_court_v1::carriage::{
+        BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1,
+    };
+    use crate::palw_batch_court_v1::rooted::{batch_case_id_v1, batch_open_packet_v1};
+    use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1};
+    use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations, causal::CausalServicePacketV1};
+    use crate::palw_court_shared_material_intake_v1::*;
+    use crate::palw_court_shared_tir_frontier_v1::{SHARED_REQUEST_CONTEXT_V1, SignedSharedRequestV1};
+    use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, palw_tir_public_body_hash_v1};
+
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_material_frame_fixture_v1(true);
+    let frame = &fx.frame;
+    let (mut state, params, extras, claim, scope_id) = material_intake_world(&fx);
+    let network = extras.tir_public_network_domain_v1.unwrap();
+    let context = crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap().clone();
+    let who = outsider();
+    let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([105; 32]);
+    state.bonds.get_mut(&who).unwrap().pubkey = keys.verification_key.as_ref().to_vec();
+    let sign = |message: Hash64, context: &[u8]| {
+        libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key, message.as_byte_slice(), context, [106; 32])
+            .unwrap().as_ref().to_vec()
+    };
+    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, context.profile_id).unwrap();
+    let notice_id = set.request_id(0).unwrap();
+    let mut notice = SignedSharedRequestV1 { version: 1, scope: scope_id, ordinal: 0, request_id: notice_id, signer: who, signature: vec![] };
+    notice.signature = sign(notice.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
+    let notice_at = at(frame, 1);
+    let open_at = at(frame, 2);
+    let begin_at = at(frame, 3);
+    let response_deadline = at(frame, 7).daa_score;
+    let target = MaterialTargetV1::PromptFlat;
+    let body = borsh::to_vec(&fx.execution.prompt).unwrap();
+    assert!(body.len() <= PART);
+    let hash = palw_tir_public_body_hash_v1(&body);
+    let ordinal = 0;
+    let demand = BatchDemandV1 {
+        case_id: batch_case_id_v1(claim, scope_id, notice_id, notice_at.block, notice_at.daa_score).unwrap(),
+        case_window: BatchCourtWindowV1 {
+            claim_accepted_daa: context.original_accepted_daa,
+            challenge_opened_daa: notice_at.daa_score,
+            collect_until_daa: context.hard_daa,
+            material_until_daa: context.material_until_daa,
+        },
+        opened_daa: open_at.daa_score, response_deadline_daa: response_deadline, maximum_bytes: body.len() as u64,
+        part_bytes: PART as u32,
+        ranges: vec![BatchRangeV1 { id: target.id_v1(claim).unwrap(), bytes: body.len() as u32,
+            authentication: BatchRangeAuthenticationV1::WholeRange }],
+    };
+    let request_root = demand.checked_request_root_v1().unwrap();
+    let mut open = SignedBatchDemandV1 { version: 1, claim, scope_id, ordinal, notice_id, signer: who, demand, signature: vec![] };
+    open.signature = sign(open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
+    let respond = |action| {
+        let mut intake = SignedMaterialIntakeV1 { version: MATERIAL_BATCH_VERSION, claim, scope_id, target, submitter: who,
+            action, signature: vec![] };
+        intake.signature = sign(intake.batch_signing_message_v1(network, request_root).unwrap(), MATERIAL_BATCH_CONTEXT_V1);
+        BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: ordinal, intake })
+    };
+    let begin = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
+    let BatchCourtWireV1::Respond(control) = &begin else { unreachable!() };
+    let delivery = batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(&context, &open.demand, &control.intake, body.len() as u64).unwrap();
+    let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
+    let open_id = batch_open_packet_v1(claim, scope_id, ordinal).unwrap().as_bytes();
+    let mut graph = delivery.service_graph_v1(begin_at.daa_score, response_deadline, |bytes| Ok(cost(bytes))).unwrap();
+    graph[0].predecessors.push(open_id);
+    graph.push(CausalServicePacketV1 {
+        packet: ServicePacket { id: open_id, release_daa: open_at.daa_score, service_before: begin_at.daa_score,
+            cost: cost(borsh::object_length(&open).unwrap() as u64
+                + crate::palw_batch_court_v1::carriage::BATCH_OPEN_WIRE_OVERHEAD_V1) },
+        predecessors: vec![],
+    });
+    // Inject the candidate reservation in the fixture before its accepting
+    // fold. The Batch opening and response are verified by the real adapters.
+    let mut service = state.court_service_state_v1().unwrap().clone();
+    service.book = ServiceReservations::new(cost(64 * 1024)).unwrap();
+    service.book.reserve_causal_v1(&graph, context.hard_daa).unwrap();
+    service.claims.get_mut(&claim).unwrap().packet_ids = graph.iter().map(|n| n.packet.id).collect();
+    state.staged_courts.insert(Key::CourtService, Row::CourtService(Box::new(service).into()));
+
+    material_test_schedule();
+    let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    super::super::palw_court_shared_tir_fold_v1::request(&mut b, &notice_at, claim, &notice).unwrap();
+    let opening = BatchCourtWireV1::Open(open);
+    b.apply_batch_court_wire_v1(&open_at, &opening, None).unwrap();
+    let after_open = b.state.state_root();
+    b.apply_batch_court_wire_v1(&open_at, &opening, None).unwrap();
+    assert_eq!(b.state.state_root(), after_open);
+    b.apply_batch_court_wire_v1(&begin_at, &begin, None).unwrap();
+    let draft_id = material_batch_draft_id_v1(request_root, claim, target, who, body.len() as u64, hash).unwrap();
+    b.apply_batch_court_wire_v1(&at(frame, 4), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), None).unwrap();
+    b.apply_batch_court_wire_v1(&at(frame, 5), &respond(MaterialActionV1::Finish { draft_id }), None).unwrap();
+    let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
+    let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
+    assert_eq!(material.bytes, body);
+    let Some(Row::CourtBatchDemand(rooted)) = b.state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)) else {
+        panic!("Batch demand did not stay rooted");
+    };
+    assert_eq!(rooted.request_root, request_root);
+    set_material_intake_test_schedule_v1(None);
 }

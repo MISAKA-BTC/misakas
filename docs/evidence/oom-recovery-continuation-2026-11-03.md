@@ -2443,3 +2443,30 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-demand.VEvPYM/tests.log`.
 B0 and relay agreed at DAA 19,684 with no new Qwen carrier since the
 previous cursor. The previous metadata queue expired before starting a
 compiler at 74% reported memory availability.
+
+## Signed Batch opening and bounded native carrier
+
+The RFC now specifies the handoff from a timely notice to a signed Batch
+opening and the separate Node adjudication. The isolated candidate uses
+one BCT1 carrier for opening, response, and fee parsing. It checks the
+accepted notice issuer and original opening slot before retaining a demand.
+Response handling derives its slot from that demand and the declaration or
+draft. Reservation sizes include the BCT1 envelope and the response
+ordinal. The storage debit checks the ordinal, root, signed operation,
+accepting point, and amount against the same carrier.
+
+The extracted suite passed 25 checks, including bounded decoding,
+request/root/signer substitution, native carrier fee allocation, and
+scheduler recovery. The candidate adds a Core test from a signed accepted
+notice through Begin, Part, and Finish in a seeded service book. The
+extracted run does not execute that Core test or the public transaction
+validator. Full maximum-branch admission and public activation are pending.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-signed-rooted-open.ttr8c3/tests-final.log`.
+
+B0 and relay agreed at DAA 19,685. The new Qwen carrier at DAA 19,683 was
+referenced at DAA 19,684 with signed retention 40,291. Both readers returned
+no accepted claim row for it. The producer journal records submission
+with local validation and public acceptance pending. The sampled lines
+do not establish a rejection cause.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-signed-open-live.0A5OPd/page.json`
+and the accompanying `journal.txt`.

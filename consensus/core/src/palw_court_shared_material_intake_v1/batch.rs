@@ -5,6 +5,7 @@ use super::{
     MaterialTargetV1, SignedMaterialIntakeV1, material_batch_draft_id_v1,
 };
 use crate::Hash64;
+use crate::palw_batch_court_v1::carriage::BATCH_RESPONSE_WIRE_OVERHEAD_V1;
 use crate::palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1};
 use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1};
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
@@ -159,7 +160,8 @@ impl MaterialBatchDeliveryV1 {
             };
             let minimum = borsh::object_length(&envelope).map_err(|e| e.to_string())? as u64
                 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64
-                + payload;
+                + payload
+                + BATCH_RESPONSE_WIRE_OVERHEAD_V1;
             let cost = cost(minimum)?;
             if cost.bytes < minimum || cost.controls != 1 || cost.work == 0 {
                 return Err("Batch delivery service cost omits signed control".into());
@@ -303,7 +305,7 @@ impl MaterialBatchDeliveryV1 {
         if !(self.release_daa..self.service_before).contains(&daa) || book.assigned_daa(&id) != Some(daa) {
             return Err("Batch material action has no assigned service at this DAA".into());
         }
-        let bytes = borsh::object_length(signed).map_err(|e| e.to_string())? as u64;
+        let bytes = borsh::object_length(signed).map_err(|e| e.to_string())? as u64 + BATCH_RESPONSE_WIRE_OVERHEAD_V1;
         if book.packet(&id).is_none_or(|packet| packet.cost.bytes < bytes) {
             return Err("Batch material action exceeds its booked signed bytes".into());
         }
@@ -722,7 +724,10 @@ mod tests {
         for (index, (offset, len)) in [(0, PART), (PART, 1)].into_iter().enumerate().rev() {
             action.action = Action::Part { draft_id: delivery.draft, offset, bytes: vec![0; len as usize] };
             assert_eq!(delivery.check_slot_v1(&book, 12, &action).unwrap(), graph[index + 1].packet.id);
-            assert_eq!(borsh::object_length(&action).unwrap() as u64, graph[index + 1].packet.cost.bytes);
+            assert_eq!(
+                borsh::object_length(&action).unwrap() as u64 + BATCH_RESPONSE_WIRE_OVERHEAD_V1,
+                graph[index + 1].packet.cost.bytes
+            );
         }
         action.action = Action::Part { draft_id: Hash64::from_u64_word(8), offset: 0, bytes: vec![0; PART as usize] };
         assert!(delivery.check_slot_v1(&book, 12, &action).is_err());

@@ -9,6 +9,7 @@ use kaspa_hashes::blake2b_512_keyed;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
+pub mod carriage;
 pub(crate) mod rooted;
 
 pub const MAX_BATCH_RANGES_V1: usize = 64;

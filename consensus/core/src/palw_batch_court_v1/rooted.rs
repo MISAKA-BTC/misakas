@@ -63,7 +63,7 @@ impl RootedBatchDemandV1 {
         Ok(())
     }
 
-    pub(crate) fn check_adoption(&self, state: &PalwChainStateV2, at: &PalwBlockContextV2) -> Result<(), String> {
+    pub(crate) fn check_adoption(&self, state: &PalwChainStateV2, at: &PalwBlockContextV2, signed_bytes: u64) -> Result<(), String> {
         self.check(&self.key())?;
         self.check_context(state)?;
         if (self.opened_block, self.demand.opened_daa) != (at.block, at.daa_score) {
@@ -74,10 +74,9 @@ impl RootedBatchDemandV1 {
         let binding = service.claims.get(&self.claim).ok_or("Batch demand has no original binding")?;
         let packet_id = batch_open_packet_v1(self.claim, self.scope_id, self.ordinal)?.as_bytes();
         let packet = service.book.packet(&packet_id).ok_or("Batch demand has no reserved opening packet")?;
-        let encoded_bytes = borsh::object_length(&self.demand).map_err(|err| err.to_string())? as u64;
         if !binding.packet_ids.contains(&packet_id)
             || service.book.assigned_daa(&packet_id) != Some(at.daa_score)
-            || packet.cost.bytes < encoded_bytes
+            || packet.cost.bytes < signed_bytes
         {
             return Err("Batch demand opening lacks reserved original capacity".into());
         }

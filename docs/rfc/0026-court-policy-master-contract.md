@@ -196,7 +196,7 @@ fixture での `close_cone_acquit` の軽さ(`docs/measurements/2026-10-19-court
 
 ### 11.1 申立てと対話の起点
 
-- `a` は original claim の実 accepting-chain DAA。`a + 3,120` は検出した疑いについて適格者が最初の異議を申し立てる期限。RFC-0031 A の候補は終端を含む。申立てには対象の original、認証済みの適格性・署名・原資、後続の開示や検査に進める具体的な根拠が必要。最終裁定は後続対話で行う。[RFC-0031](0031-shared-court-initial-notice-boundary.md)
+- `a` は original claim の実 accepting-chain DAA。`a + 3,120` は検出した疑いについて適格者が最初の異議を申し立てる期限。RFC-0031 A の候補は終端を含む。申立てには対象の original、認証済みの適格性・署名・原資、後続の開示や検査に進める具体的な根拠が必要。この段階で記録するのは検出の根拠と係争の開始であり、申立てだけで不正を確定したり slash したりしない。Node が後続対話で受理した資料に基づいて裁定する。[RFC-0031](0031-shared-court-initial-notice-boundary.md)
 - 有効な申立てを受理した claim について、`a + 10,000` を hard deadline として、開示義務、証拠の収録窓、資料保持、Final と報酬の保留、bond の解放条件を原子的に適用する。後続の Demand、再送、再申立て、owner 交代で起点を更新しない。排他的な `collect_until`、各応答の締切、hard deadline は別々に検査する。受付時に署名済みの依存契約が最大係争期間とその後の保持・回復を覆うことを検査する。実効期限に従って Miner／Provider の保存と Node の GC を制御する。
 
 ### 11.2 役割と対話
@@ -215,9 +215,14 @@ fixture での `close_cone_acquit` の軽さ(`docs/measurements/2026-10-19-court
 | TIR 局所化 | 演算・tile・reduction の境界を元の source に認証し、行列積の部分和や attention の最大値・総和・重み付き集約などを小さな決定論的検査単位にする。パラメータに加え、動的 operand、親子の数値 fold、選択に必要な比較、opening と終端を計上する。局所反証の費用と正常側の全範囲の費用は別に測る。 |
 | Batch 搬送と復元 | Demand は case、元 source と ruleset に束縛した要求 root、canonical な範囲・長さ・認証方式、part 上限、総 bytes 上限、応答期限、予約を固定する。Node は認証方式を元資料の形式から決定する。Response は case・要求 root・範囲・part index・payload を署名者と opening に結び付ける。受信順に処理しても canonical な範囲・slot で検査結果を確定する。正当な重複で進捗・予約を二重計上せず、競合・改変は拒否する。受理済み・検査済み・未取得の範囲と残り予算は branch が認証する checkpoint から復元する。範囲全体の認証を要する形式では、元資料の全体検査に成功した時点でのみ全 slot を更新し、部分的な検査済み状態の復元を拒否する。送受信キューを件数と bytes の両方で制限し、Node の処理容量に応じた backpressure を Panel の証拠生成まで伝える。 |
 
-#### Batch 応答の署名と途中再開
+#### 署名付き Batch 要求の開始・応答・再開
 
-Batch の Begin・Part・Finish の署名は、ネットワーク、元の claim、元資料の scope、受理済みの Batch 要求 root、資料の座標、応答者、操作内容に結び付ける。Node は対象 branch に受理済みの要求から root を解決し、署名と元の claim が所有する予約枠を照合する。部分受信した draft と part は同じ要求 root に結び付いた draft ID で復元する。別の要求で署名した操作や、別の要求の draft の続きは受理しない。完成後に共有可能な資料を再利用する場合は、元資料への認証と応答者固有の義務の履行を個別に扱う。
+候補の lifecycle carrier は `BCT1` の識別子を使い、`Open` と `Respond` を区別する。Node は範囲数、part の長さ、署名長を割当て前に検査し、未定義の版・操作や余分なバイトを拒否する。この形式は新 ruleset の候補であり、公開 chain での受付は §11.5 の条件を満たした後に有効化する。
+
+- **Open。** 初回 notice を出した適格な署名者が、ネットワーク、元の claim と scope、受理済み notice ID、要求番号、署名者、canonical な要求 root に署名する。Node は対象 branch の notice と現在の bond 適格性、元の claim に予約済みの開始枠と実収録時刻を照合する。ひとつの開始枠に保持する要求はひとつとし、同一要求の再送で予約や期限を増やさない。受理済みの要求と root を branch の状態に保存する。
+- **Respond。** Begin・Part・Finish の署名は、ネットワーク、元の claim と scope、受理済み要求 root、資料の座標、応答者、操作内容に結び付ける。Node は carrier の要求番号から受理済み要求を読み、Begin の宣言または Part・Finish が参照する draft を使って予約枠を導出する。元の claim が所有する枠、要求の期限、署名を照合してから状態を更新する。
+- **再開。** 受理済み draft と part は、同じ要求 root に束縛した draft ID で復元する。要求、署名、draft の取り違えを拒否する。先行送信された part はキュー上限と収録時の依存条件に従う。受信だけで義務の履行や検査完了を記録せず、完成後に共有資料を再利用する場合も、元資料への認証と応答者固有の義務の履行を個別に扱う。
+- **会計。** 予約は carrier の識別子・操作種別・要求番号を含む実際の符号化サイズを使う。資料保管料は同じ carrier の native 手数料枠から配分し、要求番号、要求 root、署名済み操作、実収録点、金額を照合する。同じ手数料を別の費目に重複計上しない。
 
 #### TIR の局所要求とネイティブ認証
 
@@ -250,10 +255,10 @@ Begin と Finish の予約は、実際に割り当てる DAA で個別の draft 
 1. Tokenizer の初回費用と claim ごとの費用を分け、同じ登録済み資料の再利用と、旧記録・別 branch・改変の拒否を確認する。
 2. Scheduler と見積もりを対にして、正直な申立人の待ち時間を全枠占有・応答の最遅到着・再入場で測る。
 3. 対応演算と全許容分岐の資料上限を測る。数箇所で約 7.5 KB だったパラメータ証拠に加え、動的 operand、認証情報、全対象 root の最大量を計測する。
-4. 実ノードで Batch の先行送信、逆順、重複、欠落、再送、上限到達、backpressure、restart・reorg・pruned IBD を測る。予約量と実際の搬送・検査・収録を突き合わせ、T06 の最遅申立てでも hard deadline に収める。
+4. 実ノードで署名付き Open から Finish までを通し、未受理 notice、異なる要求番号・root、署名者の取り違え、保管料の不足を拒否する。先行送信、逆順、重複、欠落、再送、上限到達、backpressure、restart・reorg・pruned IBD を測る。予約量と実際の搬送・検査・収録を突き合わせ、T06 の最遅申立てでも hard deadline に収める。
 5. 同じ候補で正常・不正・未提出・収録機会不足の裁定、信用・会計・保持の復元、同時 Court の混雑を §10 に従って確認する。公開検証は同じ claim ID で受理、独立席、Panel 応答、Node 裁定、Gate C、Final、PFS4、報酬を個別に照合する。
 
-作業ブランチの候補には tokenizer 記録の導出、owner の rooted scheduler、TIR の有界な parameter 解析と認証済み StepRun の取り込み、Batch の受信・検査・checkpoint 部品がある。全 graph の原子的予約と公開経路の接続、実測に基づく期限内の完走は検証対象として残る。[実装と測定の範囲](../evidence/oom-recovery-continuation-2026-11-03.md#batch-court-clock-and-exact-t12-recheck)
+作業ブランチの候補には tokenizer 記録の導出、owner の rooted scheduler、TIR の有界な parameter 解析と認証済み StepRun の取り込み、Batch の受信・検査・checkpoint 部品がある。署名付き carrier の符号化・境界・手数料の照合は分離試験で検証し、収録済み notice から Finish までの Core 統合試験を追加した。全 graph の原子的予約、公開経路の接続、実測に基づく期限内の完走は検証対象として残る。[実装と測定の範囲](../evidence/oom-recovery-continuation-2026-11-03.md#batch-court-clock-and-exact-t12-recheck)
 
 ## 2026-10-21 追加隔離checkpoint — original parameter footprint / archive S1
 

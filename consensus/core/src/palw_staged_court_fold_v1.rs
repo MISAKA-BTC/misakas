@@ -1094,14 +1094,69 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
-    /// The demand dispatcher supplies a validated notice and demand here.
-    /// The stored request also needs the original's reserved opening slot.
+    /// Native candidate entry for an already accepted Batch carrier.
+    pub(super) fn apply_batch_court_wire_v1(
+        &mut self,
+        at: &PalwBlockContextV2,
+        wire: &crate::palw_batch_court_v1::carriage::BatchCourtWireV1,
+        storage_debit: Option<&crate::palw_court_shared_material_intake_v1::MaterialBatchStorageDebitV1>,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_batch_court_v1::carriage::BatchCourtWireV1;
+        match wire {
+            BatchCourtWireV1::Open(open) => self.install_batch_demand_v1(at, open),
+            BatchCourtWireV1::Respond(control) => {
+                super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
+                    self, at, &control.intake, control.demand_ordinal, storage_debit,
+                )?;
+                Ok(())
+            }
+        }
+    }
+
+    /// The Batch dispatcher calls this with the literal signed opening.
+    /// The notice issuer and the original's reserved opening slot are checked here.
     pub(super) fn install_batch_demand_v1(
         &mut self,
         at: &PalwBlockContextV2,
-        demand: crate::palw_batch_court_v1::rooted::RootedBatchDemandV1,
+        signed: &crate::palw_batch_court_v1::carriage::SignedBatchDemandV1,
     ) -> Result<(), PalwStateV2Error> {
-        demand.check_adoption(&self.state, at).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        use crate::palw_batch_court_v1::rooted::RootedBatchDemandV1;
+        let refused = |reason: &str| PalwStateV2Error::CarriageInconsistent(reason.into());
+        if !self.extras.staged_tir_route_active {
+            return Err(refused("Batch opening requires the native TIR route"));
+        }
+        let Some(PalwStagedCourtRowV1::CourtSharedQuery(notice)) =
+            self.state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtSharedQuery(signed.notice_id))
+        else {
+            return Err(refused("Batch opening has no accepted notice"));
+        };
+        if (notice.opened_by, notice.claim, notice.scope_id) != (signed.signer, signed.claim, signed.scope_id) {
+            return Err(refused("Batch opening signer or scope differs from the accepted notice"));
+        }
+        let network = self.extras.tir_public_network_domain_v1.ok_or_else(|| refused("Batch network domain is absent"))?;
+        let bond = self.state.bond(&signed.signer).ok_or(PalwStateV2Error::MissingBond(signed.signer))?;
+        if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < self.params.min_collateral_sompi() {
+            return Err(refused("Batch opening signer is no longer an eligible bond"));
+        }
+        signed.verify_v1(network, &bond.pubkey).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let request_root = signed.demand.checked_request_root_v1().map_err(|err| refused(&format!("Batch opening shape: {err:?}")))?;
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("Batch demand row");
+        quote.exact::<RootedBatchDemandV1>(1)?;
+        quote.exact::<crate::palw_batch_court_v1::BatchRangeV1>(signed.demand.ranges.len() as u64)?;
+        self.admit_native_write_v1(quote)?;
+        let demand = RootedBatchDemandV1 {
+            version: 1,
+            claim: signed.claim,
+            scope_id: signed.scope_id,
+            ordinal: signed.ordinal,
+            notice_id: signed.notice_id,
+            opened_block: at.block,
+            request_root,
+            demand: signed.demand.clone(),
+        };
+        let signed_bytes = borsh::object_length(signed).map_err(|err| refused(&err.to_string()))? as u64
+            + crate::palw_batch_court_v1::carriage::BATCH_OPEN_WIRE_OVERHEAD_V1;
+        demand.check_adoption(&self.state, at, signed_bytes).map_err(PalwStateV2Error::CarriageInconsistent)?;
         let key = demand.key();
         if let Some(old) = self.state.staged_court_row_v1(&key) {
             return match old {
@@ -1109,9 +1164,6 @@ impl TransitionBuilder<'_> {
                 _ => Err(PalwStateV2Error::CarriageInconsistent("accepted Batch demand is immutable".into())),
             };
         }
-        let mut quote = super::native_writers::NativeWriteQuoteV1::new("Batch demand row");
-        quote.exact::<crate::palw_batch_court_v1::rooted::RootedBatchDemandV1>(1)?;
-        self.admit_native_write_v1(quote)?;
         let new = Some(PalwStagedCourtRowV1::CourtBatchDemand(Box::new(demand)));
         self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "native Batch demand writer")?;
         self.reserve_staged_indices_v1(&key, &new)?;

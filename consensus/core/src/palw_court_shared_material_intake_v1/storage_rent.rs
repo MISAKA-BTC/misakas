@@ -3,8 +3,9 @@
 use super::{
     MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1, SignedMaterialIntakeV1, material_intake_schedule_v1,
 };
+use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchMaterialControlV1, decode_batch_court_carrier_v1};
 use crate::palw_court_carrier_fee_v1::CarrierFeeBudgetV1;
-use crate::palw_state_v2::{PalwBlockContextV2, PalwConsensusObjectV2};
+use crate::palw_state_v2::PalwBlockContextV2;
 use crate::{Hash64, tx::Transaction};
 
 /// Quote the existing per-byte storage rate for a V3 declaration only.
@@ -43,20 +44,11 @@ impl MaterialBatchCarrierFeeV1 {
 /// Shared fee accounting for an enabled V3 route. Callers supply the fee
 /// remaining after mandatory bond burn and all preceding fee allocations.
 pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) -> Result<MaterialBatchCarrierFeeV1, String> {
-    let rent = match batch_storage_declaration(carrier) {
-        Some(intake) => material_batch_storage_rent_v1(&intake)?.unwrap_or(0),
-        None => 0,
+    let rent = match decode_batch_court_carrier_v1(carrier)? {
+        Some(BatchCourtWireV1::Respond(control)) => material_batch_storage_rent_v1(&control.intake)?.unwrap_or(0),
+        _ => 0,
     };
     Ok(MaterialBatchCarrierFeeV1::split(rent, available_fee))
-}
-
-fn batch_storage_declaration(carrier: &Transaction) -> Option<Box<SignedMaterialIntakeV1>> {
-    let decoded = crate::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(carrier));
-    let mut objects = decoded.objects.into_iter();
-    match objects.next()?.object {
-        PalwConsensusObjectV2::MaterialIntakeV1 { intake } => Some(intake),
-        _ => None,
-    }
 }
 
 /// One storage debit allocated from the same native budget as other costs.
@@ -79,13 +71,17 @@ impl MaterialBatchStorageDebitV1 {
         if carrier.id() != budget.carrier_v1() || !carrier.id_is_current() {
             return Err("Batch storage rent budget belongs to another carrier".into());
         }
-        let intake = batch_storage_declaration(carrier).ok_or("Batch storage rent carrier has another purpose")?;
+        let Some(BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal, intake })) =
+            decode_batch_court_carrier_v1(carrier)?
+        else {
+            return Err("Batch storage rent carrier has another purpose".into());
+        };
         let amount = material_batch_storage_rent_v1(&intake)?.ok_or("Batch storage rent carrier is not a V3 Begin")?;
         let split = MaterialBatchCarrierFeeV1::split(amount, budget.remaining_v1());
         if !split.pays_storage_rent_v1() {
             return Err("Batch storage rent carrier has insufficient available fee".into());
         }
-        let declaration = declaration_id(&intake, request_root)?;
+        let declaration = declaration_id(&intake, request_root, demand_ordinal)?;
         // The same physical carrier has only one allocation for this purpose,
         // even if a caller mistakenly supplies another request identity.
         let purpose =
@@ -102,28 +98,32 @@ impl MaterialBatchStorageDebitV1 {
         &self,
         intake: &SignedMaterialIntakeV1,
         request_root: Hash64,
+        demand_ordinal: u64,
         at: &PalwBlockContextV2,
         amount: u64,
     ) -> Result<(), String> {
-        if self.at != *at || self.amount != amount || self.declaration != declaration_id(intake, request_root)? {
+        if self.at != *at || self.amount != amount || self.declaration != declaration_id(intake, request_root, demand_ordinal)? {
             return Err("Batch storage rent debit differs from the accepted declaration".into());
         }
         Ok(())
     }
 }
 
-fn declaration_id(intake: &SignedMaterialIntakeV1, request_root: Hash64) -> Result<Hash64, String> {
+fn declaration_id(intake: &SignedMaterialIntakeV1, request_root: Hash64, demand_ordinal: u64) -> Result<Hash64, String> {
     if request_root == Hash64::default() {
         return Err("Batch storage rent lacks the accepted request root".into());
     }
-    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-storage-declaration/v1", &(request_root, intake))
+    crate::palw_court_shared_tir_stream_v1::stream_digest(
+        b"misaka-palw/batch-storage-declaration/v1",
+        &(request_root, demand_ordinal, intake),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1;
     use crate::palw_court_shared_material_intake_v1::MaterialTargetV1;
-    use crate::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
     use crate::palw_state_v2::PalwBondKeyV2;
     use crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
     use crate::tx::{PopulatedTransaction, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
@@ -141,6 +141,11 @@ mod tests {
         };
         let amount = material_batch_storage_rent_v1(&intake).unwrap().unwrap();
         assert!(amount > 0);
+        let demand_ordinal = 8;
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(
+            borsh::to_vec(&BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal, intake: intake.clone() })).unwrap(),
+        );
         let output = 1_000;
         let tx = Transaction::new(
             0,
@@ -149,11 +154,7 @@ mod tests {
             0,
             SUBNETWORK_ID_PALW_LIFECYCLE,
             0,
-            borsh::to_vec(&PalwLifecycleTxPayloadV2 {
-                version: PALW_LIFECYCLE_TX_VERSION_V2,
-                object: PalwConsensusObjectV2::MaterialIntakeV1 { intake: Box::new(intake.clone()) },
-            })
-            .unwrap(),
+            payload,
         );
         let budget = |fee| {
             CarrierFeeBudgetV1::from_populated_v1(&PopulatedTransaction::new(
@@ -182,11 +183,12 @@ mod tests {
         assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
         assert!(MaterialBatchStorageDebitV1::allocate_v1(&tx, &mut fees, other_request, at).is_err());
         assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
-        assert!(paid.check_v1(&intake, request, &at, amount).is_ok());
-        assert!(paid.check_v1(&intake, other_request, &at, amount).is_err());
-        assert!(paid.check_v1(&intake, request, &PalwBlockContextV2 { daa_score: 8, ..at }, amount).is_err());
+        assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount).is_ok());
+        assert!(paid.check_v1(&intake, other_request, demand_ordinal, &at, amount).is_err());
+        assert!(paid.check_v1(&intake, request, demand_ordinal, &PalwBlockContextV2 { daa_score: 8, ..at }, amount).is_err());
+        assert!(paid.check_v1(&intake, request, demand_ordinal + 1, &at, amount).is_err());
         intake.signature[0] ^= 1;
-        assert!(paid.check_v1(&intake, request, &at, amount).is_err());
+        assert!(paid.check_v1(&intake, request, demand_ordinal, &at, amount).is_err());
         intake.version = 1;
         assert_eq!(material_batch_storage_rent_v1(&intake), Ok(None));
     }
