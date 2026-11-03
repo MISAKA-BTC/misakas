@@ -137,14 +137,14 @@ pub(crate) fn retention_prune_plan_v1(
     free: u64,
     reserve: u64,
 ) -> (Vec<usize>, u64) {
-    retention_prune_plan_with_material_v1(claims, chain, |_| Ok(false), attempt_horizon, free, reserve)
+    retention_prune_plan_with_material_v1(claims, |row| chain(&row.claim), |_| Ok(false), attempt_horizon, free, reserve)
 }
 
 /// The material oracle also covers kernel/provider subjects without native
 /// claim rows. Only a successful read can clear a material obligation.
 fn retention_prune_plan_with_material_v1(
     claims: &[RetainedClaimV1],
-    chain: impl Fn(&Hash64) -> Option<RetainedChainViewV1>,
+    chain: impl Fn(&RetainedClaimV1) -> Option<RetainedChainViewV1>,
     material_owed: impl Fn(&Hash64) -> Result<bool, String>,
     attempt_horizon: Duration,
     free: u64,
@@ -157,7 +157,7 @@ fn retention_prune_plan_with_material_v1(
         if !matches!(material_owed(&c.claim), Ok(false)) {
             continue;
         }
-        let view = chain(&c.claim);
+        let view = chain(c);
         if view.as_ref().is_some_and(|view| view.da_owed) {
             continue;
         }
@@ -407,8 +407,13 @@ impl PalwRetentionJanitor {
         let session = self.consensus_manager.consensus().unguarded_session();
         let now_daa = session.get_virtual_daa_score();
         let rcore = self.rcore_plus.is_some_and(|fence| fence.is_active(now_daa));
-        let chain = |claim: &Hash64| {
-            session.palw_derived_artifacts_v1(*claim).map(|(state, _, _)| RetainedChainViewV1 {
+        // The resident obligation oracle covers DA for all file kinds.
+        // Only a free-prompt age decision still needs the legacy claim phase.
+        let chain = |row: &RetainedClaimV1| {
+            if row.kind != RetainedKindV1::FreePrompt {
+                return None;
+            }
+            session.palw_derived_artifacts_v1(row.claim).map(|(state, _, _)| RetainedChainViewV1 {
                 da_owed: rcore && kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1(&state, now_daa),
                 source: state.source,
                 phase: state.phase,
@@ -607,7 +612,7 @@ mod tests {
         ];
         let chain_reads = Cell::new(0);
         let obligation_reads = Cell::new(0);
-        let chain = |_: &Hash64| {
+        let chain = |_: &RetainedClaimV1| {
             chain_reads.set(chain_reads.get() + 1);
             None
         };
