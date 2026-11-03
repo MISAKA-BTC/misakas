@@ -17,7 +17,7 @@ use crate::{
         PALW_PROMPT_IDS_OPENING_HEADER_BYTES, PalwPromptIdsFormV1, prompt_ids_tile_count_v1, prompt_ids_tile_len_v1,
         prompt_token_ids_match_v1, verify_prompt_ids_opening_v1,
     },
-    palw_step_leg::step_leg_max_opening_siblings_v1,
+    palw_step_leg::{state_v4_path_len, step_leg_max_opening_siblings_v1},
     palw_tir_admission_v1::{PALW_TIR_CLASS_RECORD_VERSION_V1, PalwTirClassRecordV1},
     palw_tir_artifact_v1::PALW_TIR_ROW_PIECE_BYTES_V1,
     palw_tir_attempt_v1::PalwTirJobFactsV1,
@@ -423,6 +423,22 @@ impl TirSourceCatalogV2 {
             },
         }
     }
+    /// Exact canonical opening bytes for an individual unit's service price.
+    /// The signed catalog continues to commit to the conservative unit bounds.
+    pub(crate) fn canonical_opening_bytes_v2(&self, kind: SourceKind, index: u64) -> Result<u64, PositiveSourceGeometryErrorV2> {
+        let bound = self.unit_bound(kind, index)?;
+        if kind == SourceKind::Input && self.input_form == PalwPromptIdsFormV1::MerkleV1 {
+            // Prompt IDs and the V4 tree use the same promote-odd path shape.
+            let siblings = u64::from(state_v4_path_len(bound.source_units, index));
+            return bound
+                .max_data_bytes
+                .checked_add(PALW_PROMPT_IDS_OPENING_HEADER_BYTES)
+                .and_then(|n| n.checked_add(siblings * 64))
+                .ok_or(PositiveSourceGeometryErrorV2::Budget);
+        }
+        Ok(bound.max_unit_bytes)
+    }
+
     pub fn unit_bound(&self, kind: SourceKind, index: u64) -> Result<G14UnitBoundV2, PositiveSourceGeometryErrorV2> {
         let source_units = self.source_units(kind);
         if index >= source_units {

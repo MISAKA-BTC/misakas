@@ -169,6 +169,8 @@ struct NativeAssignedCourtV2 {
     source_requests:
         BTreeMap<misaka_palw_positive_contract::identity::RequestId, crate::palw_positive_source_v2::RetainedSourceRequestV2>,
     source_responses: BTreeMap<Digest, source::CheckedAssignedSourceResponseV2>,
+    source_ledger: Option<crate::palw_positive_source_v2::NativeSourceLedgerV2>,
+    settled_source_fee: u64,
     derived_heap: u64,
     checker_heap: u64,
     available_heap: u64,
@@ -1341,6 +1343,8 @@ fn prepare_initial_case_checker_v2(
         source,
         source_requests: BTreeMap::new(),
         source_responses: BTreeMap::new(),
+        source_ledger: None,
+        settled_source_fee: 0,
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1405,7 +1409,7 @@ impl NativeAssignedCourtV2 {
         prior: &CaseRow,
         origin: AcceptedOrigin,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
-    ) -> Result<(), PalwStateV2Error> {
+    ) -> Result<Option<[u8; PUBKEY_BYTES]>, PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
         use misaka_palw_positive_contract::assignment::{
             control_material::AssignmentControlViewV2,
@@ -1414,7 +1418,7 @@ impl NativeAssignedCourtV2 {
         };
 
         let PositiveNativeOperationV2::SourceRequest { request, requester, signature } = &body.operation else {
-            return Ok(());
+            return Ok(None);
         };
         let result = self.court.result();
         let material = backing.material();
@@ -1481,7 +1485,8 @@ impl NativeAssignedCourtV2 {
         if misaka_palw_positive_contract::identity::principal(&key) != *requester {
             return Err(refuse("actual source requester key"));
         }
-        request.authenticate(units, &key, signature).map_err(refuse)
+        request.authenticate(units, &key, signature).map_err(refuse)?;
+        Ok(Some(key))
     }
 
     /// Admit this exact operation before decoding or applying it. A candidate's
@@ -1605,6 +1610,7 @@ fn replay_assigned_court_history_v2(
             continue;
         }
         let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
+        let work_before = machine.remaining_work;
         let _body = machine.reserve_operation_v2(body_bytes, material)?;
         let body = decode_native_body_v2(body_bytes, limits).map_err(refuse)?;
         let Some((case, result)) = body.operation.case_target_v2().map_err(refuse)? else {
@@ -1613,17 +1619,36 @@ fn replay_assigned_court_history_v2(
         if case != pin.case || result.is_some_and(|id| id != pin.result) {
             return Err(refuse("archived Court operation subject differs"));
         }
-        machine.check_source_request_v2(backing, prefix, &a, &prior, carriage.origin(), &body)?;
-        machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
-        if let Op::SourceResponse { .. } = &body.operation {
-            let response = machine
-                .check_source_response_v2(prefix, &a, material, &prior, carriage.origin(), &body, _body.memory_v1())?
-                .ok_or_else(|| refuse("duplicate source delivery changed the rooted journal"))?;
+        let key = machine.check_source_request_v2(backing, prefix, &a, &prior, carriage.origin(), &body)?;
+        let response = if let Op::SourceResponse { .. } = &body.operation {
+            Some(
+                machine
+                    .check_source_response_v2(prefix, &a, material, &prior, carriage.origin(), &body, _body.memory_v1())?
+                    .ok_or_else(|| refuse("duplicate source delivery changed the rooted journal"))?,
+            )
+        } else {
+            None
+        };
+        if let Some(update) = machine.prepare_assigned_source_update_v2(
+            prefix,
+            &a,
+            material,
+            &prior,
+            carriage.origin(),
+            &body,
+            body_bytes,
+            _body.memory_v1(),
+            (key, response.as_ref()),
+            work_before,
+        )? {
             let after = match backing.records().get(index + 1) {
                 Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
                 None => state,
             };
-            response.check_committed(after, &prior)?;
+            machine.apply_replayed_source_update_v2(after, update)?;
+        }
+        machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
+        if let Some(response) = response {
             machine.remember_source_response_v2(material, response, _body.memory_v1())?;
         }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
@@ -1696,18 +1721,33 @@ impl TransitionBuilder<'_> {
         }
         let material = backing.material();
         let raw = action.transaction().payload.get(3..).ok_or_else(missing)?;
+        let work_before = machine.remaining_work;
         let _body = machine.reserve_operation_v2(raw, material)?;
         if !canonical_equal(body, raw) {
             return Err(refuse("current Court operation differs from literal carrier"));
         }
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
-        machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
-        if matches!(
+        let key = machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
+        let response = if matches!(
             &body.operation,
             crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2::SourceResponse { .. }
         ) {
-            machine.check_source_response_v2(&self.state, &current_assignment, material, &prior, origin, body, _body.memory_v1())?;
-        }
+            machine.check_source_response_v2(&self.state, &current_assignment, material, &prior, origin, body, _body.memory_v1())?
+        } else {
+            None
+        };
+        let _source = machine.prepare_assigned_source_update_v2(
+            &self.state,
+            &current_assignment,
+            material,
+            &prior,
+            origin,
+            body,
+            raw,
+            _body.memory_v1(),
+            (key, response.as_ref()),
+            work_before,
+        )?;
         let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
         let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
             .map_err(refuse)?;

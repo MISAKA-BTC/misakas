@@ -623,6 +623,22 @@ impl NativeSourceLedgerV2 {
     pub fn retained_unions_v2(&self) -> impl Iterator<Item = SourceUnionRow> + '_ {
         self.sources.keys().filter_map(|&(kind, source)| self.source_union(kind, source))
     }
+    /// Outstanding first-response fees after this exact proposal, before any
+    /// native debit or receipt write. The source owner still verifies funding.
+    pub(crate) fn pending_fee_after_v2(&self, update: &PreparedSourceUpdateV2) -> Result<u64, SourceErrorV2> {
+        self.validate_prepared(update)?;
+        match &update.change {
+            SourceChange::Request { reservations, .. } => {
+                reservations.iter().try_fold(self.pending_fee, |total, (_, fee)| add(total, fee.quote.amount))
+            }
+            SourceChange::Response => self
+                .pending_fee
+                .checked_sub(update.fee_intent.as_ref().ok_or(SourceErrorV2::Binding)?.amount)
+                .ok_or(SourceErrorV2::Binding),
+            SourceChange::None => Ok(self.pending_fee),
+        }
+    }
+
     pub fn validate_prepared(&self, update: &PreparedSourceUpdateV2) -> Result<(), SourceErrorV2> {
         if !Arc::ptr_eq(&self.seal, &update.seal)
             || update.revision != self.revision

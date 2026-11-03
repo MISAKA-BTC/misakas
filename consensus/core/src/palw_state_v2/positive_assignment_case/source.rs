@@ -5,7 +5,11 @@ use crate::{
     palw_positive_court_v2::coordinator::native_body::{
         PositiveNativeBodyV2, PositiveNativeOperationV2, SOURCE_RESPONSE_BODY_OVERHEAD_V2,
     },
-    palw_positive_source_v2::RetainedSourceRequestV2,
+    palw_positive_source_geometry_v2::TirSourceGeometryV2,
+    palw_positive_source_v2::{
+        NativeSourceContextV2, NativeSourceLedgerV2, PreparedSourceUpdateV2, RetainedSourceRequestV2, SourceErrorV2,
+        SourceEventCostV2, SourceRequestEventV2, SourceResponseEventV2, SourceServiceFeeV2, history::NativeSourceHistoryV2,
+    },
 };
 use misaka_palw_positive_contract::{
     assignment::{
@@ -13,38 +17,82 @@ use misaka_palw_positive_contract::{
         funding_relay_rows::{FundingRelayBindingV2, FundingRelayCustodyRowV2},
     },
     funding::{SourceFeeDeltaIntent, funding_scope},
-    identity::{RequestId, principal},
+    identity::{FundingScopeId, RequestId, principal},
+    messages::{MinerServiceContract, SourceKind},
     rows::{FundingRow, MAX_NATIVE_KEY_BYTES, NativeHash64, NativeOutpoint, NativeRowValue, ServiceReceiptRow},
 };
+
+struct AssignedSourceContextV2<'a> {
+    geometry: &'a TirSourceGeometryV2,
+    fees: &'a crate::palw_positive_assignment_resources_v2::AssignmentCaseFeeScheduleV2,
+    scope: FundingScopeId,
+    expected_events: usize,
+    material: AcceptedMaterial,
+    cost: SourceEventCostV2,
+}
+
+impl NativeSourceContextV2 for AssignedSourceContextV2<'_> {
+    fn history_complete(
+        &self,
+        result: &MinerResultCommit,
+        history: &NativeSourceHistoryV2,
+        next: &AcceptedMaterial,
+    ) -> Result<(), SourceErrorV2> {
+        if result.id() != self.geometry.result_id() || history.entries().len() != self.expected_events || *next != self.material {
+            return Err(SourceErrorV2::History);
+        }
+        Ok(())
+    }
+
+    fn service_fee(
+        &self,
+        result: &MinerResultCommit,
+        _service: &MinerServiceContract,
+        kind: SourceKind,
+        source: Digest,
+        unit: u64,
+        data_bytes: u64,
+    ) -> Result<SourceServiceFeeV2, SourceErrorV2> {
+        if result.id() != self.geometry.result_id()
+            || source != self.geometry.source_root(kind)
+            || data_bytes != self.geometry.unit_bound(kind, unit)?.max_data_bytes
+        {
+            return Err(SourceErrorV2::Binding);
+        }
+        let bytes = self.geometry.canonical_opening_bytes_v2(kind, unit)?;
+        let amount = self.fees.source_unit_due(bytes).map_err(|_| SourceErrorV2::Budget)?;
+        Ok(SourceServiceFeeV2 { amount, schedule: self.fees.id(), funding_scope: self.scope })
+    }
+
+    fn request(
+        &self,
+        _result: &MinerResultCommit,
+        _service: &MinerServiceContract,
+        event: &SourceRequestEventV2<'_>,
+    ) -> Result<SourceEventCostV2, SourceErrorV2> {
+        if event.material != self.material || self.cost.service_fee != 0 {
+            return Err(SourceErrorV2::Binding);
+        }
+        Ok(self.cost)
+    }
+
+    fn response(
+        &self,
+        _result: &MinerResultCommit,
+        _service: &MinerServiceContract,
+        event: &SourceResponseEventV2<'_>,
+    ) -> Result<SourceEventCostV2, SourceErrorV2> {
+        if event.material != self.material {
+            return Err(SourceErrorV2::Binding);
+        }
+        Ok(self.cost)
+    }
+}
 
 pub(super) struct CheckedAssignedSourceResponseV2 {
     fee: SourceFeeDeltaIntent,
     duty: AcceptedMaterial,
     data_bytes: u64,
-}
-
-impl CheckedAssignedSourceResponseV2 {
-    pub(super) fn check_committed(&self, state: &PalwChainStateV2, prior: &CaseRow) -> Result<(), PalwStateV2Error> {
-        let NativeRowBody::ServiceReceipt(receipt) = required(state, self.fee.receipt_key)? else {
-            return Err(refuse("missing first native source receipt"));
-        };
-        let NativeRowBody::Case(after) = required(state, NativeRowKey::Case(prior.case))? else {
-            return Err(refuse("source response changed Case identity"));
-        };
-        if receipt.result != self.fee.result
-            || receipt.duty != self.duty
-            || receipt.response != self.fee.accepted_response
-            || receipt.provider != self.fee.provider
-            || receipt.bytes != self.data_bytes
-            || prior.usage.fee.checked_add(self.fee.amount) != Some(after.usage.fee)
-            || after.result != prior.result
-            || after.service != prior.service
-            || after.last_event != self.fee.accepted_response.origin
-        {
-            return Err(refuse("rooted source receipt or fee differs from the actual response"));
-        }
-        Ok(())
-    }
 }
 
 fn source_material(origin: AcceptedOrigin) -> Result<AcceptedMaterial, PalwStateV2Error> {
@@ -70,6 +118,177 @@ impl NativeAssignedCourtV2 {
         self._lease.grow_memory_v1(request_heap).map_err(PalwStateV2Error::NativeResource)?;
         self.checker_heap = heap;
         Ok(())
+    }
+
+    /// Prepare only after the native role/opening checks. Use the same
+    /// bounded source ledger for accepted history and the current candidate.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn prepare_assigned_source_update_v2(
+        &mut self,
+        state: &PalwChainStateV2,
+        assignment: &AssignmentRow,
+        material: &AssignmentAdmissionMaterialV2,
+        prior: &CaseRow,
+        origin: AcceptedOrigin,
+        body: &PositiveNativeBodyV2,
+        raw: &[u8],
+        body_heap: u64,
+        (request_key, response): (Option<[u8; PUBKEY_BYTES]>, Option<&CheckedAssignedSourceResponseV2>),
+        work_before: u64,
+    ) -> Result<Option<PreparedSourceUpdateV2>, PalwStateV2Error> {
+        let source = &material.native_preimages.source_policy;
+        let (controls, opening_hash_bytes, opening_heap) = match &body.operation {
+            PositiveNativeOperationV2::SourceRequest { request, .. } => {
+                (request.end.checked_sub(request.first).ok_or_else(capacity)?, 0, 0)
+            }
+            PositiveNativeOperationV2::SourceResponse { request, response: opening, .. } if response.is_some() => {
+                let duty = &self.source_requests.get(request).ok_or_else(missing)?.request;
+                let controls = duty.end.checked_sub(duty.first).and_then(|n| n.checked_add(32)).ok_or_else(capacity)?;
+                (controls, 32 * 128, (opening.len() as u64).checked_mul(3).ok_or_else(capacity)?)
+            }
+            _ => return Ok(None),
+        };
+        let wire_work = (raw.len() as u64).checked_add(opening_hash_bytes).ok_or_else(capacity)?;
+        let ledger_work = source.work.court_body_work(wire_work).map_err(refuse)?;
+        let metered_roles = source.work.court_operation_work(u64::from(request_key.is_some()), controls, 0, 0).map_err(refuse)?;
+        self.remaining_work = self
+            .remaining_work
+            .checked_sub(ledger_work)
+            .and_then(|n| n.checked_sub(metered_roles))
+            .ok_or_else(|| refuse("source ledger replay work cap"))?;
+        let additional_work = work_before.checked_sub(self.remaining_work).ok_or_else(capacity)?;
+
+        let NativeRowBody::Funding(funding) = required(state, NativeRowKey::Funding(prior.case))? else {
+            return Err(refuse("source event has no funded Case"));
+        };
+        if funding.current_outpoint.is_none()
+            || funding.consent.scope != funding_scope(self.court.result(), &prior.service, &funding.basis)
+            || funding.basis.schedule != material.native_preimages.case_fees.id()
+        {
+            return Err(refuse("source event funding scope and fee schedule"));
+        }
+        let mut limits = source.limits();
+        limits.max_history_bytes = limits.max_history_bytes.min(prior.service.budget.retained_bytes);
+        let bytes = if self.source_ledger.is_none() {
+            NativeSourceLedgerV2::replay_heap_requests_v2(limits).map_err(PalwStateV2Error::NativeResource)?
+        } else {
+            0
+        };
+        let heap = self.checker_heap.checked_add(bytes).ok_or_else(capacity)?;
+        if heap
+            .checked_add(self.candidate_heap)
+            .and_then(|n| n.checked_add(body_heap))
+            .and_then(|n| n.checked_add(opening_heap))
+            .is_none_or(|n| n > self.available_heap)
+        {
+            return Err(capacity());
+        }
+        let _opening_lease = if opening_heap == 0 {
+            None
+        } else {
+            Some(reserve_native_requests_v1(opening_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?)
+        };
+        if self.source_ledger.is_none() {
+            self._lease.grow_memory_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
+            self.checker_heap = heap;
+            self.source_ledger = Some(
+                NativeSourceLedgerV2::new(self.court.result().clone(), prior.service, Default::default(), limits).map_err(refuse)?,
+            );
+        }
+        let ledger = self.source_ledger.as_mut().ok_or_else(missing)?;
+        let used = ledger.usage();
+        if (used.rounds, used.unique_source_bytes, used.fee) != (prior.usage.rounds, prior.usage.unique_source_bytes, prior.usage.fee)
+        {
+            return Err(refuse("source counters differ from the replayed ledger"));
+        }
+        ledger.refresh_case_usage(prior).map_err(refuse)?;
+        let accepted = source_material(origin)?;
+        let context = AssignedSourceContextV2 {
+            geometry: &self.source.geometry,
+            fees: &material.native_preimages.case_fees,
+            scope: funding.consent.scope,
+            expected_events: self.source_requests.len().checked_add(self.source_responses.len()).ok_or_else(capacity)?,
+            material: accepted,
+            cost: SourceEventCostV2 {
+                additional_work,
+                // The ordinary carrier pays its independent native wire/mass.
+                outer_carrier_bytes: 0,
+                cutoff: prior.service.deadline.min(assignment.source_consent.service_before_daa),
+                service_fee: response.map_or(0, |checked| checked.fee.amount),
+            },
+        };
+        let update = match &body.operation {
+            PositiveNativeOperationV2::SourceRequest { request, requester, signature } => {
+                let key = request_key.as_ref().ok_or_else(missing)?;
+                ledger.prepare_request(
+                    context.geometry,
+                    &context,
+                    SourceRequestEventV2 {
+                        request: *request,
+                        requester: *requester,
+                        key,
+                        signature,
+                        material: accepted,
+                        native_body: raw,
+                    },
+                )
+            }
+            PositiveNativeOperationV2::SourceResponse { request, .. } => {
+                let checked = response.ok_or_else(missing)?;
+                ledger.prepare_response(
+                    context.geometry,
+                    &context,
+                    SourceResponseEventV2 {
+                        request: *request,
+                        provider: checked.fee.provider,
+                        material: accepted,
+                        native_body: raw,
+                        g14_data_range: (SOURCE_RESPONSE_BODY_OVERHEAD_V2, raw.len() as u64),
+                    },
+                )
+            }
+            _ => return Err(refuse("non-source operation in source update")),
+        }
+        .map_err(refuse)?;
+        if let Some(checked) = response
+            && update.fee_intent() != Some(&checked.fee)
+        {
+            return Err(refuse("replayed source fee differs from the checked native opening"));
+        }
+        let pending = ledger.pending_fee_after_v2(&update).map_err(refuse)?;
+        if self.settled_source_fee > funding.fee.paid
+            || update
+                .usage()
+                .fee
+                .checked_sub(self.settled_source_fee)
+                .and_then(|unpaid| unpaid.checked_add(pending))
+                .is_none_or(|required| required > funding.fee.remaining)
+        {
+            return Err(refuse("outstanding source duties and unpaid first receipts exceed Case escrow"));
+        }
+        Ok(Some(update))
+    }
+
+    pub(super) fn apply_replayed_source_update_v2(
+        &mut self,
+        after: &PalwChainStateV2,
+        update: PreparedSourceUpdateV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let case = update.case_row().ok_or_else(missing)?;
+        let union = update.union().ok_or_else(missing)?;
+        let source_key = NativeRowKey::SourceUnion { case: union.case, kind: union.kind, source: union.source };
+        if !update.changes_case()
+            || required(after, NativeRowKey::Case(case.case))? != NativeRowBody::Case(*case)
+            || required(after, source_key)? != NativeRowBody::SourceUnion(*union)
+        {
+            return Err(refuse("committed Case or source union differs from native replay"));
+        }
+        if let (Some(receipt), Some(intent)) = (update.receipt(), update.fee_intent())
+            && required(after, intent.receipt_key)? != NativeRowBody::ServiceReceipt(*receipt)
+        {
+            return Err(refuse("committed first receipt differs from native replay"));
+        }
+        self.source_ledger.as_mut().ok_or_else(missing)?.apply(update).map_err(refuse)
     }
 
     pub(super) fn remember_source_response_v2(
@@ -167,6 +386,10 @@ impl NativeAssignedCourtV2 {
         let _owner = reserve_native_requests_v1(heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
         let (unit, opening) = self.source.geometry.decode_g14_response_v2(&duty.request, response).map_err(refuse)?;
         let (data_bytes, opening_bytes) = opening.sizes().map_err(refuse)?;
+        let canonical_bytes = self.source.geometry.canonical_opening_bytes_v2(duty.request.kind, unit).map_err(refuse)?;
+        if opening_bytes != canonical_bytes {
+            return Err(refuse("source opening extent differs from the canonical unit price"));
+        }
         let key = NativeRowKey::ServiceReceipt { case: *case, kind: duty.request.kind, source: duty.request.source, unit };
         let provider = principal(&assignment.worker_key);
         if let Some(value) = PositiveRowsV2::new(state).read(key).map_err(refuse)? {
@@ -182,7 +405,7 @@ impl NativeAssignedCourtV2 {
             return Err(refuse("missing source response funding"));
         };
         let schedule = &material.native_preimages.case_fees;
-        let fee = schedule.source_unit_due(opening_bytes).map_err(refuse)?;
+        let fee = schedule.source_unit_due(canonical_bytes).map_err(refuse)?;
         let schedule = schedule.id();
         let scope = funding_scope(result, &prior.service, &funding.basis);
         if funding.current_outpoint.is_none()
@@ -214,6 +437,7 @@ impl NativeAssignedCourtV2 {
 struct CaseSourcePaymentV2 {
     funding: misaka_palw_positive_contract::rows::FundingRow,
     debit: NativeOutpoint,
+    source_paid: u64,
     successor: Option<PendingCaseRelaySuccessorV2>,
 }
 
@@ -496,7 +720,7 @@ impl NativeAssignedCourtV2 {
             .ok_or_else(capacity)?;
         let successor =
             self.qualify_case_relay_successor_v2(state, backing, &funding, (debit, continuation), (daa, accepting_block), relay_heap)?;
-        Ok(CaseSourcePaymentV2 { funding, debit, successor })
+        Ok(CaseSourcePaymentV2 { funding, debit, successor, source_paid: total })
     }
 
     pub(super) fn replay_case_source_payment_v2(
@@ -554,6 +778,7 @@ impl NativeAssignedCourtV2 {
         payment.funding.last_settlement = Some(material);
         let mut expected_case = *prior;
         expected_case.last_event = carriage.origin();
+        let paid = payment.source_paid;
         if required(after, NativeRowKey::Funding(case))? != NativeRowBody::Funding(payment.funding)
             || required(after, NativeRowKey::Case(case))? != NativeRowBody::Case(expected_case)
         {
@@ -586,6 +811,7 @@ impl NativeAssignedCourtV2 {
                 return Err(refuse("source settlement receipt or once marker differs from replay"));
             }
         }
+        self.settled_source_fee = self.settled_source_fee.checked_add(paid).ok_or_else(capacity)?;
         Ok(())
     }
 }
