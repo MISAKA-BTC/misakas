@@ -202,14 +202,19 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     }).unwrap();
     assert!(body.len() > PART);
     let hash = palw_tir_public_body_hash_v1(&body);
-    let draft_id = material_draft_id_for_version(2, claim, target, who, body.len() as u64, hash).unwrap();
+    let request_root = set.request_id(ordinal).unwrap();
+    let other_root = Hash64::from_u64_word(987);
+    let draft_id = material_batch_draft_id_v1(request_root, claim, target, who, body.len() as u64, hash).unwrap();
+    assert_ne!(draft_id, material_batch_draft_id_v1(other_root, claim, target, who, body.len() as u64, hash).unwrap());
+    assert_ne!(draft_id, material_draft_id_for_version(2, claim, target, who, body.len() as u64, hash).unwrap());
     assert_ne!(draft_id, material_draft_id_v1(claim, target, who, body.len() as u64, hash).unwrap());
-    let signed = |action| {
-        let mut s = SignedMaterialIntakeV1 { version: 2, claim, scope_id, target, submitter: who, action, signature: vec![] };
-        s.signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, s.signing_message(network).unwrap().as_byte_slice(),
-            MATERIAL_INTAKE_CONTEXT_V2, [76; 32]).unwrap().as_ref().to_vec();
+    let signed_at = |action, root| {
+        let mut s = SignedMaterialIntakeV1 { version: MATERIAL_BATCH_VERSION, claim, scope_id, target, submitter: who, action, signature: vec![] };
+        s.signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, s.batch_signing_message_v1(network, root).unwrap().as_byte_slice(),
+            MATERIAL_BATCH_CONTEXT_V1, [76; 32]).unwrap().as_ref().to_vec();
         s
     };
+    let signed = |action| signed_at(action, request_root);
     let begin = signed(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
     let finish = signed(MaterialActionV1::Finish { draft_id });
     let part = |index: usize, bytes: &[u8]| signed(MaterialActionV1::Part { draft_id, offset: (index * PART) as u64, bytes: bytes.to_vec() });
@@ -217,19 +222,23 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     let tail = &body[last * PART..];
     let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(material_intake(&mut builder, &at(frame, 1), &begin).is_err());
-    let delivery = batch::MaterialBatchDeliveryV1::new(set.request_id(ordinal).unwrap(), &begin, body.len() as u64).unwrap();
+    let delivery = batch::MaterialBatchDeliveryV1::new(request_root, &begin, body.len() as u64).unwrap();
     let before_unfunded = builder.state.state_root();
     assert!(super::super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
         &mut builder, &at(frame, 1), &begin, &delivery).is_err());
     assert_eq!(builder.state.state_root(), before_unfunded);
-    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 1), &begin).unwrap(), E::Begun);
-    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail)).unwrap(), E::Part);
+    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 1), &begin, request_root).unwrap(), E::Begun);
+    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail), request_root).unwrap(), E::Part);
     let partial_root = builder.state.state_root();
-    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail)).unwrap(), E::Retried);
+    let copied = part(last, tail);
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 2), &copied, other_root).is_err());
+    let resigned = signed_at(copied.action.clone(), other_root);
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 2), &resigned, other_root).is_err());
+    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail), request_root).unwrap(), E::Retried);
     let mut corrupt = tail.to_vec();
     corrupt[0] ^= 1;
-    assert!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, &corrupt)).is_err());
-    assert!(material_intake_pipelined(&mut builder, &at(frame, 3), &finish).is_err());
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, &corrupt), request_root).is_err());
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 3), &finish, request_root).is_err());
     assert_eq!(builder.state.state_root(), partial_root);
     let target_key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
     assert!(builder.state.staged_court_row_v1(&target_key).is_none());
@@ -242,12 +251,18 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     assert!(draft.check_loaded_context(&missing).is_err());
     let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&partial)).unwrap();
     let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, Some(partial.state_root())).unwrap();
+    let draft_key = Key::CourtMaterialDraft(claim, draft_id);
+    let Some(Row::CourtMaterialDraft(draft)) = restored.staged_court_row_v1(&draft_key) else { panic!() };
+    assert_eq!(draft.head, request_root);
+    let mut changed_request = (**draft).clone();
+    changed_request.head = other_root;
+    assert!(changed_request.check(&draft_key).is_err());
     let mut resumed = TransitionBuilder::new(&restored, &params, false, false, false, false, &extras);
     for (index, bytes) in body.chunks(PART).enumerate().take(last).rev() {
-        assert_eq!(material_intake_pipelined(&mut resumed, &at(frame, 3), &part(index, bytes)).unwrap(), E::Part);
+        assert_eq!(material_intake_pipelined(&mut resumed, &at(frame, 3), &part(index, bytes), request_root).unwrap(), E::Part);
     }
-    assert!(material_intake_pipelined(&mut resumed, &at(frame, 3), &finish).is_err());
-    assert_eq!(material_intake_pipelined(&mut resumed, &at(frame, 4), &finish).unwrap(), E::Completed);
+    assert!(material_intake_pipelined(&mut resumed, &at(frame, 3), &finish, request_root).is_err());
+    assert_eq!(material_intake_pipelined(&mut resumed, &at(frame, 4), &finish, request_root).unwrap(), E::Completed);
     let Some(Row::CourtMaterial(material)) = resumed.state.staged_court_row_v1(&target_key) else { panic!() };
     assert_eq!(material.bytes, body);
     assert!(resumed.state.staged_court_row_v1(&Key::CourtMaterialPart(draft_id, (last * PART) as u64)).is_none());

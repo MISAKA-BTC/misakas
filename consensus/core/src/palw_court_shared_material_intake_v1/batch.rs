@@ -1,8 +1,8 @@
 //! Service projection of the signed pipelined material codec. The coordinator
 //! binds an accepted demand, native target bound and literal responder first.
 use super::{
-    MATERIAL_PIPELINED_MAX_BYTES, MATERIAL_PIPELINED_VERSION, MaterialActionV1 as Action, MaterialTargetV1, SignedMaterialIntakeV1,
-    material_draft_id_for_version,
+    MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1 as Action, MaterialTargetV1, SignedMaterialIntakeV1,
+    material_batch_draft_id_v1,
 };
 use crate::Hash64;
 use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations, causal::CausalServicePacketV1};
@@ -23,6 +23,7 @@ enum Stage {
 /// admission must separately reserve capacity for the maximum native branch.
 pub(crate) struct MaterialBatchDeliveryV1 {
     id: Hash64,
+    request_root: Hash64,
     claim: Hash64,
     scope: Hash64,
     target: MaterialTargetV1,
@@ -37,7 +38,7 @@ impl MaterialBatchDeliveryV1 {
         let Action::Begin { total_bytes, body_hash } = declaration.action else {
             return Err("Batch delivery requires a declaration".into());
         };
-        if declaration.version != MATERIAL_PIPELINED_VERSION
+        if declaration.version != MATERIAL_BATCH_VERSION
             || request_root == Hash64::default()
             || declaration.claim == Hash64::default()
             || declaration.scope_id == Hash64::default()
@@ -46,8 +47,8 @@ impl MaterialBatchDeliveryV1 {
         {
             return Err("Batch declaration outside native demand bounds".into());
         }
-        let draft = material_draft_id_for_version(
-            declaration.version,
+        let draft = material_batch_draft_id_v1(
+            request_root,
             declaration.claim,
             declaration.target,
             declaration.submitter,
@@ -60,6 +61,7 @@ impl MaterialBatchDeliveryV1 {
         )?;
         Ok(Self {
             id,
+            request_root,
             claim: declaration.claim,
             scope: declaration.scope_id,
             target: declaration.target,
@@ -68,6 +70,10 @@ impl MaterialBatchDeliveryV1 {
             body_hash,
             draft,
         })
+    }
+
+    pub(crate) fn request_root_v1(&self) -> Hash64 {
+        self.request_root
     }
 
     fn packet_id(&self, stage: Stage) -> Result<[u8; 64], String> {
@@ -90,7 +96,7 @@ impl MaterialBatchDeliveryV1 {
         let mut graph = Vec::with_capacity(parts as usize + 2);
         let mut append = |stage, action, payload, predecessors| -> Result<(), String> {
             let envelope = SignedMaterialIntakeV1 {
-                version: MATERIAL_PIPELINED_VERSION,
+                version: MATERIAL_BATCH_VERSION,
                 claim: self.claim,
                 scope_id: self.scope,
                 target: self.target,
@@ -139,7 +145,7 @@ impl MaterialBatchDeliveryV1 {
         signed: &SignedMaterialIntakeV1,
     ) -> Result<[u8; 64], String> {
         if (signed.version, signed.claim, signed.scope_id, signed.target, signed.submitter)
-            != (MATERIAL_PIPELINED_VERSION, self.claim, self.scope, self.target, self.signer)
+            != (MATERIAL_BATCH_VERSION, self.claim, self.scope, self.target, self.signer)
         {
             return Err("Batch material action has a foreign scope or signer".into());
         }
@@ -174,10 +180,76 @@ mod tests {
     use crate::tx::TransactionOutpoint;
 
     #[test]
+    fn batch_signature_and_draft_refuse_cross_request_reuse() {
+        let key = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([81; 32]);
+        let network = Hash64::from_u64_word(9);
+        let request = Hash64::from_u64_word(5);
+        let other_request = Hash64::from_u64_word(6);
+        let hash = Hash64::from_u64_word(4);
+        let mut action = SignedMaterialIntakeV1 {
+            version: MATERIAL_BATCH_VERSION,
+            claim: Hash64::from_u64_word(1),
+            scope_id: Hash64::from_u64_word(2),
+            target: MaterialTargetV1::Unit { ordinal: 7 },
+            submitter: PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_u64_word(3), 0)),
+            action: Action::Begin { total_bytes: 1, body_hash: hash },
+            signature: Vec::new(),
+        };
+        let own = MaterialBatchDeliveryV1::new(request, &action, 1).unwrap();
+        let foreign = MaterialBatchDeliveryV1::new(other_request, &action, 1).unwrap();
+        assert_ne!(own.draft, foreign.draft);
+        use super::super::MaterialDraftV1;
+        use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
+        let retained = MaterialDraftV1 {
+            version: action.version,
+            claim: action.claim,
+            scope_id: action.scope_id,
+            target: action.target,
+            submitter: action.submitter,
+            draft_id: own.draft,
+            total_bytes: 1,
+            body_hash: hash,
+            begun_block: Hash64::from_u64_word(10),
+            begun_daa: 11,
+            last_daa: 11,
+            accepted_bytes: 0,
+            head: request,
+            expires_daa: 20,
+            material_until_daa: 25,
+        };
+        let draft_key = PalwStagedCourtKeyV1::CourtMaterialDraft(action.claim, own.draft);
+        let mut restored: MaterialDraftV1 = borsh::from_slice(&borsh::to_vec(&retained).unwrap()).unwrap();
+        assert_eq!(restored, retained);
+        assert!(restored.check(&draft_key).is_ok());
+        restored.head = other_request;
+        assert!(restored.check(&draft_key).is_err());
+
+        for stage in [
+            action.action.clone(),
+            Action::Part { draft_id: own.draft, offset: 0, bytes: vec![7] },
+            Action::Finish { draft_id: own.draft },
+        ] {
+            action.action = stage;
+            action.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                &key.signing_key,
+                action.batch_signing_message_v1(network, request).unwrap().as_byte_slice(),
+                super::super::MATERIAL_BATCH_CONTEXT_V1,
+                [82; 32],
+            )
+            .unwrap()
+            .as_ref()
+            .to_vec();
+            assert!(action.verify_batch_v1(network, request, key.verification_key.as_ref()).is_ok());
+            assert!(action.verify_batch_v1(network, other_request, key.verification_key.as_ref()).is_err());
+            assert!(action.verify_v1(network, key.verification_key.as_ref()).is_err());
+        }
+    }
+
+    #[test]
     fn funded_batch_delivery_binds_signed_fragments_and_fits_parallel_slots() {
         let total = PART + 1;
         let mut action = SignedMaterialIntakeV1 {
-            version: MATERIAL_PIPELINED_VERSION,
+            version: MATERIAL_BATCH_VERSION,
             claim: Hash64::from_u64_word(1),
             scope_id: Hash64::from_u64_word(2),
             target: MaterialTargetV1::Unit { ordinal: 7 },

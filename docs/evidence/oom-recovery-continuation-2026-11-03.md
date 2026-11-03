@@ -2293,3 +2293,27 @@ B0 and relay agreed at DAA 19,680, with no new Qwen carrier since the
 previous cursor. The StepRun integration metadata queue expired before
 compilation at 68% reported memory availability, with other rustc
 processes using about 8.6 GB RSS in total.
+
+## Demand-bound signatures and resumable V3 drafts
+
+The V3 candidate uses the accepted Batch request root in the ML-DSA
+message for Begin, Part and Finish and in the draft identity. It
+retains that root in the V3 draft while preserving the original shared
+scope and the V1 and V2 identity formulas. A part re-signed under
+another request still cannot attach to the prior draft. A completed
+material row keeps the existing original-source authentication rules.
+
+The focused harness ran eight checks, including real signatures over all
+three actions, rejection of the same signatures under a second root
+and a Borsh round trip of the retained V3 draft. Replacing the request
+root under the restored draft key was rejected. The harness runs the
+candidate code with cached Studio Core cryptographic and key types.
+It does not run the native claim lifecycle or the public dispatcher.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-demand-bound-v3.y9hVEj/tests.log`.
+
+At DAA 19,680 B0 and relay agreed. The selected fold at DAA 19,680
+references the new Qwen carrier at DAA 19,678. Signed retention is
+40,286. The producer journal confirms submission and the paired RPC
+read found no claim row. The exact fold refusal was not observed.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-bound-signature-live.ONTcBa/page.json`
+and its sibling `journal.txt`.

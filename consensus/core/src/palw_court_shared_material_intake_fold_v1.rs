@@ -39,7 +39,7 @@ pub(super) fn material_intake(
     if s.version != 1 {
         return Err(refused("material intake version is not active on this route"));
     }
-    material_intake_atomic(b, ctx, s)
+    material_intake_atomic(b, ctx, s, None)
 }
 
 /// Candidate native adapter for a demand and response declaration authenticated
@@ -57,7 +57,7 @@ pub(super) fn material_intake_pipelined(
     if !binding.packet_ids.contains(&id) {
         return Err(refused("Batch material slot is not funded by this original"));
     }
-    material_intake_atomic(b, ctx, s)
+    material_intake_atomic(b, ctx, s, Some(delivery.request_root_v1()))
 }
 
 #[cfg(test)]
@@ -65,18 +65,20 @@ pub(super) fn material_intake_pipelined_codec_test(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
+    request_root: Hash64,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
-    assert_eq!(s.version, m::MATERIAL_PIPELINED_VERSION);
-    material_intake_atomic(b, ctx, s)
+    assert_eq!(s.version, m::MATERIAL_BATCH_VERSION);
+    material_intake_atomic(b, ctx, s, Some(request_root))
 }
 
 fn material_intake_atomic(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
+    request_root: Option<Hash64>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let saved = b.try_checkpoint()?;
-    let result = material_intake_inner(b, ctx, s);
+    let result = material_intake_inner(b, ctx, s, request_root);
     if result.is_err() {
         b.restore(saved);
     }
@@ -87,6 +89,7 @@ fn material_intake_inner(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
+    request_root: Option<Hash64>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     if !b.extras.staged_tir_route_active {
         return Err(refused("material intake is dormant below palw_staged_tir_route_v1"));
@@ -106,16 +109,23 @@ fn material_intake_inner(
     if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < b.params.min_collateral_sompi() {
         return Err(refused("material submitter is not active/above existing floor"));
     }
-    s.verify_v1(network, &bond.pubkey).map_err(refused)?;
+    match request_root {
+        Some(root) => s.verify_batch_v1(network, root, &bond.pubkey),
+        None => s.verify_v1(network, &bond.pubkey),
+    }
+    .map_err(refused)?;
     let source = c.source(&b.state).map_err(refused)?;
     let complete = m::target_complete_v1(&b.state, s.claim, s.target).map_err(refused)?;
     match &s.action {
         m::MaterialActionV1::Begin { total_bytes, body_hash } => {
-            if s.version == m::MATERIAL_PIPELINED_VERSION && *total_bytes > m::MATERIAL_PIPELINED_MAX_BYTES {
+            if m::material_is_pipelined_v1(s.version) && *total_bytes > m::MATERIAL_PIPELINED_MAX_BYTES {
                 return Err(refused("pipelined material exceeds its part cap"));
             }
-            let draft_id = m::material_draft_id_for_version(s.version, s.claim, s.target, s.submitter, *total_bytes, *body_hash)
-                .map_err(refused)?;
+            let draft_id = match request_root {
+                Some(root) => m::material_batch_draft_id_v1(root, s.claim, s.target, s.submitter, *total_bytes, *body_hash),
+                None => m::material_draft_id_for_version(s.version, s.claim, s.target, s.submitter, *total_bytes, *body_hash),
+            }
+            .map_err(refused)?;
             let key = Key::CourtMaterialDraft(s.claim, draft_id);
             match b.state.staged_court_row_v1(&key) {
                 Some(Row::CourtMaterialDraft(old)) => {
@@ -179,7 +189,7 @@ fn material_intake_inner(
                 begun_daa: ctx.daa_score,
                 last_daa: ctx.daa_score,
                 accepted_bytes: 0,
-                head: Hash64::default(),
+                head: request_root.unwrap_or_default(),
                 expires_daa,
                 material_until_daa: c.material_until_daa,
             };
@@ -196,7 +206,7 @@ fn material_intake_inner(
             Ok(MaterialIntakeEffectV1::Begun)
         }
         m::MaterialActionV1::Part { draft_id, offset, bytes } => {
-            let mut draft = own_draft(b, s, *draft_id)?;
+            let mut draft = own_draft(b, s, *draft_id, request_root)?;
             if ctx.daa_score >= draft.expires_daa
                 || ctx.daa_score < draft.last_daa
                 || draft.pipelined() && ctx.daa_score <= draft.begun_daa
@@ -233,7 +243,7 @@ fn material_intake_inner(
                 claim: s.claim,
                 draft_id: *draft_id,
                 offset: *offset,
-                previous: draft.head,
+                previous: if draft.pipelined() { Hash64::default() } else { draft.head },
                 bytes: bytes.clone(),
                 daa: ctx.daa_score,
                 expires_daa: draft.expires_daa,
@@ -248,7 +258,7 @@ fn material_intake_inner(
             Ok(MaterialIntakeEffectV1::Part)
         }
         m::MaterialActionV1::Finish { draft_id } => {
-            let draft = own_draft(b, s, *draft_id)?;
+            let draft = own_draft(b, s, *draft_id, request_root)?;
             if complete {
                 // First complete authenticated body already won; this one is released.
                 release_draft(b, &draft)?;
@@ -304,11 +314,17 @@ fn own_draft(
     b: &TransitionBuilder<'_>,
     s: &m::SignedMaterialIntakeV1,
     draft_id: Hash64,
+    request_root: Option<Hash64>,
 ) -> Result<m::MaterialDraftV1, PalwStateV2Error> {
     let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&Key::CourtMaterialDraft(s.claim, draft_id)) else {
         return Err(refused("material draft missing"));
     };
-    if draft.version != s.version || draft.submitter != s.submitter || draft.target != s.target || draft.scope_id != s.scope_id {
+    if draft.version != s.version
+        || draft.submitter != s.submitter
+        || draft.target != s.target
+        || draft.scope_id != s.scope_id
+        || request_root.is_some_and(|root| draft.head != root)
+    {
         return Err(refused("material draft belongs to another submitter/target"));
     }
     Ok((**draft).clone())

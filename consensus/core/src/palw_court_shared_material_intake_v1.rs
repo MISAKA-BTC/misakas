@@ -36,6 +36,12 @@ pub(crate) mod batch;
 pub const MATERIAL_INTAKE_CONTEXT_V1: &[u8] = b"misaka-palw/material-intake/v1/mldsa87";
 pub(crate) const MATERIAL_INTAKE_CONTEXT_V2: &[u8] = b"misaka-palw/material-intake/v2/mldsa87";
 pub(crate) const MATERIAL_PIPELINED_VERSION: u16 = 2;
+pub const MATERIAL_BATCH_VERSION: u16 = 3;
+pub const MATERIAL_BATCH_CONTEXT_V1: &[u8] = b"misaka-palw/material-batch/v1/mldsa87";
+
+pub(crate) fn material_is_pipelined_v1(version: u16) -> bool {
+    matches!(version, MATERIAL_PIPELINED_VERSION | MATERIAL_BATCH_VERSION)
+}
 pub(crate) const MATERIAL_PIPELINED_MAX_BYTES: u64 = (PART * crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1) as u64;
 
 /// One logical material coordinate of one original. Semantic tables (EOG /
@@ -78,6 +84,25 @@ pub(crate) fn material_draft_id_for_version(
         _ => return Err("material draft version".into()),
     };
     crate::palw_court_shared_tir_stream_v1::stream_digest(domain, &(claim, target, submitter, total_bytes, body_hash))
+}
+
+/// V3 keeps the original scope field and stores this Batch request root in
+/// the draft's head slot. Parts are indexed by the resulting draft identity.
+pub fn material_batch_draft_id_v1(
+    request_root: Hash64,
+    claim: Hash64,
+    target: MaterialTargetV1,
+    submitter: PalwBondKeyV2,
+    total_bytes: u64,
+    body_hash: Hash64,
+) -> Result<Hash64, String> {
+    if request_root == Hash64::default() {
+        return Err("material Batch request root is empty".into());
+    }
+    crate::palw_court_shared_tir_stream_v1::stream_digest(
+        b"misaka-palw/material-draft/v3",
+        &(request_root, claim, target, submitter, total_bytes, body_hash),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -150,15 +175,34 @@ impl SignedMaterialIntakeV1 {
             &(network, self.version, self.claim, self.scope_id, self.target, self.submitter, &self.action),
         )
     }
+    pub fn batch_signing_message_v1(&self, network: Hash64, request_root: Hash64) -> Result<Hash64, String> {
+        if self.version != MATERIAL_BATCH_VERSION || request_root == Hash64::default() {
+            return Err("material Batch version/request root".into());
+        }
+        crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/material-intake/v3",
+            &(network, self.version, request_root, self.claim, self.scope_id, self.target, self.submitter, &self.action),
+        )
+    }
+
     pub fn verify_v1(&self, network: Hash64, pubkey: &[u8]) -> Result<(), String> {
+        let context = if self.version == MATERIAL_PIPELINED_VERSION { MATERIAL_INTAKE_CONTEXT_V2 } else { MATERIAL_INTAKE_CONTEXT_V1 };
+        self.verify_message(context, pubkey, || self.signing_message(network))
+    }
+
+    pub fn verify_batch_v1(&self, network: Hash64, request_root: Hash64, pubkey: &[u8]) -> Result<(), String> {
+        self.verify_message(MATERIAL_BATCH_CONTEXT_V1, pubkey, || self.batch_signing_message_v1(network, request_root))
+    }
+
+    fn verify_message(&self, context: &[u8], pubkey: &[u8], message: impl FnOnce() -> Result<Hash64, String>) -> Result<(), String> {
         if self.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
             return Err("material intake signature length".into());
         }
         if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
             pubkey,
-            self.signing_message(network)?.as_byte_slice(),
+            message()?.as_byte_slice(),
             &self.signature,
-            if self.version == MATERIAL_PIPELINED_VERSION { MATERIAL_INTAKE_CONTEXT_V2 } else { MATERIAL_INTAKE_CONTEXT_V1 },
+            context,
         ) {
             return Err("material intake signature invalid".into());
         }
@@ -185,6 +229,7 @@ pub struct MaterialDraftV1 {
     pub begun_daa: u64,
     pub last_daa: u64,
     pub accepted_bytes: u64,
+    /// V1 prefix head, zero for V2, or the immutable Batch request root for V3.
     pub head: Hash64,
     pub expires_daa: u64,
     pub material_until_daa: u64,
@@ -250,13 +295,17 @@ pub fn material_part_digest_v1(p: &MaterialPartV1) -> Result<Hash64, String> {
 }
 impl MaterialDraftV1 {
     pub(crate) fn pipelined(&self) -> bool {
-        self.version == MATERIAL_PIPELINED_VERSION
+        material_is_pipelined_v1(self.version)
     }
 
     pub fn check(&self, key: &Key) -> Result<(), String> {
+        let draft_id = if self.version == MATERIAL_BATCH_VERSION {
+            material_batch_draft_id_v1(self.head, self.claim, self.target, self.submitter, self.total_bytes, self.body_hash)?
+        } else {
+            material_draft_id_for_version(self.version, self.claim, self.target, self.submitter, self.total_bytes, self.body_hash)?
+        };
         if *key != Key::CourtMaterialDraft(self.claim, self.draft_id)
-            || material_draft_id_for_version(self.version, self.claim, self.target, self.submitter, self.total_bytes, self.body_hash)?
-                != self.draft_id
+            || draft_id != self.draft_id
             || self.total_bytes == 0
             || self.accepted_bytes > self.total_bytes
             || self.last_daa < self.begun_daa
@@ -266,7 +315,10 @@ impl MaterialDraftV1 {
             return Err("material draft version/key/declaration/cursor/clock".into());
         }
         if self.pipelined() {
-            if self.total_bytes > MATERIAL_PIPELINED_MAX_BYTES || self.head != Hash64::default() || self.last_daa >= self.expires_daa {
+            if self.total_bytes > MATERIAL_PIPELINED_MAX_BYTES
+                || self.version == MATERIAL_PIPELINED_VERSION && self.head != Hash64::default()
+                || self.last_daa >= self.expires_daa
+            {
                 return Err("pipelined material draft cap/head".into());
             }
         } else if (self.accepted_bytes == 0) != (self.head == Hash64::default())
@@ -371,7 +423,7 @@ impl MaterialDraftV1 {
             }
             bytes.extend_from_slice(&part.bytes);
         }
-        if at != self.accepted_bytes || head != self.head {
+        if at != self.accepted_bytes || !self.pipelined() && head != self.head {
             return Err("material prefix head mismatch".into());
         }
         Ok((bytes, lease))
@@ -379,8 +431,8 @@ impl MaterialDraftV1 {
 }
 impl MaterialPartV1 {
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if !matches!(self.version, 1 | MATERIAL_PIPELINED_VERSION)
-            || self.version == MATERIAL_PIPELINED_VERSION && self.previous != Hash64::default()
+        if self.version != 1 && !material_is_pipelined_v1(self.version)
+            || material_is_pipelined_v1(self.version) && self.previous != Hash64::default()
             || *key != Key::CourtMaterialPart(self.draft_id, self.offset)
             || self.bytes.is_empty()
             || self.bytes.len() > PART
@@ -392,7 +444,7 @@ impl MaterialPartV1 {
     }
 
     pub(crate) fn check_loaded_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
-        if self.version == MATERIAL_PIPELINED_VERSION {
+        if material_is_pipelined_v1(self.version) {
             let Some(Row::CourtMaterialDraft(draft)) = state.staged_court_row_v1(&Key::CourtMaterialDraft(self.claim, self.draft_id))
             else {
                 return Err("pipelined material part has no accepted draft".into());

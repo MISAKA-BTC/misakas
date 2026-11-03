@@ -215,6 +215,10 @@ fixture での `close_cone_acquit` の軽さ(`docs/measurements/2026-10-19-court
 | TIR 局所化 | 演算・tile・reduction の境界を元の source に認証し、行列積の部分和や attention の最大値・総和・重み付き集約などを小さな決定論的検査単位にする。パラメータに加え、動的 operand、親子の数値 fold、選択に必要な比較、opening と終端を計上する。局所反証の費用と正常側の全範囲の費用は別に測る。 |
 | Batch 搬送と復元 | Demand は case、元 source と ruleset に束縛した要求 root、canonical な範囲・長さ・認証方式、part 上限、総 bytes 上限、応答期限、予約を固定する。Node は認証方式を元資料の形式から決定する。Response は case・要求 root・範囲・part index・payload を署名者と opening に結び付ける。受信順に処理しても canonical な範囲・slot で検査結果を確定する。正当な重複で進捗・予約を二重計上せず、競合・改変は拒否する。受理済み・検査済み・未取得の範囲と残り予算は branch が認証する checkpoint から復元する。範囲全体の認証を要する形式では、元資料の全体検査に成功した時点でのみ全 slot を更新し、部分的な検査済み状態の復元を拒否する。送受信キューを件数と bytes の両方で制限し、Node の処理容量に応じた backpressure を Panel の証拠生成まで伝える。 |
 
+#### Batch 応答の署名と途中再開
+
+Batch の Begin・Part・Finish の署名は、ネットワーク、元の claim、元資料の scope、受理済みの Batch 要求 root、資料の座標、応答者、操作内容に結び付ける。Node は対象 branch に受理済みの要求から root を解決し、署名と元の claim が所有する予約枠を照合する。部分受信した draft と part は同じ要求 root に結び付いた draft ID で復元する。別の要求で署名した操作や、別の要求の draft の続きは受理しない。完成後に共有可能な資料を再利用する場合は、元資料への認証と応答者固有の義務の履行を個別に扱う。
+
 #### TIR の局所要求とネイティブ認証
 
 Panel は、元の実行 source に結び付いた争点 root の入力境界から、必要な step leaf を導出する。同じ leaf への要求をまとめ、連続する範囲を既存の `StepRun { first, count }` に写す。離れた範囲は別の要求にする。各区間は元資料の規則が定める最大 leaf 数と、ネイティブ応答サイズの上限を使って求めた最大 part 数の両方に収める。要求数の上限を超える計画は予約に使えない。
