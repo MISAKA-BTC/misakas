@@ -140,7 +140,8 @@ pub struct NativeCommittedAssignedCaseV2 {
     parent_state_root: Hash64,
     assignment: AssignmentRow,
     material: AssignmentAdmissionMaterialV2,
-    open: NativeCommittedAssignmentRecordV2,
+    open_raw: Vec<u8>,
+    open_carriage: NativeAcceptedCaseCarriageV2,
     pin: CaseJournalPinV2,
     records: Vec<NativeCommittedCaseRecordV2>,
     assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
@@ -154,7 +155,8 @@ impl NativeCommittedAssignedCaseV2 {
         parent_state_root: Hash64,
         assignment: AssignmentRow,
         material: AssignmentAdmissionMaterialV2,
-        open: NativeCommittedAssignmentRecordV2,
+        open_raw: Vec<u8>,
+        open_carriage: NativeAcceptedCaseCarriageV2,
         pin: CaseJournalPinV2,
         records: Vec<NativeCommittedCaseRecordV2>,
         assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
@@ -188,10 +190,10 @@ impl NativeCommittedAssignedCaseV2 {
         &self.material
     }
     pub fn open_raw(&self) -> &[u8] {
-        self.open.raw()
+        &self.open_raw
     }
     pub fn open_carriage(&self) -> &NativeAcceptedCaseCarriageV2 {
-        self.open.carriage()
+        &self.open_carriage
     }
     pub fn pin(&self) -> &CaseJournalPinV2 {
         &self.pin
@@ -256,7 +258,8 @@ impl NativeHeapV1 for NativeCommittedAssignedCaseV2 {
         assignment
             .native_heap_v1(path)
             .add::<Self>(material.native_heap_v1(path), path)
-            .add::<Self>(open.native_heap_v1(path), path)
+            .add::<Self>(open_raw.native_heap_v1(path), path)
+            .add::<Self>(open_carriage.native_heap_v1(path), path)
             .add::<Self>(records.native_heap_v1(path), path)
             .add::<Self>(assignment_records.native_heap_v1(path), path)
     }

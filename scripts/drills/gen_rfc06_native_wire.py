@@ -263,6 +263,8 @@ print(f'Wrote structural scanners: {len(public)} public, {sum(len(v) for v in pr
 # Each restoration term uses a reviewed source table, rather than total encoded
 # length. Nested member bounds are needed for payees/refuted/staged hold vectors.
 index_sources={
+ 'claims_by_job':('claims',False),
+ 'funded_escrows_by_claim':('funded_escrows',False),
  'exec_v2_source_roots':('exec_v2',True),
  'exec_v2_job_use_deadlines':('exec_v2_job_uses',False),
  'exec_v2_reward_payees':('exec_v2_rewards',True),
