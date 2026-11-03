@@ -1036,5 +1036,23 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "selected Batch material is missing" || why == "selected Batch FullIds are missing"));
     assert_eq!(incomplete.state.state_root(), b.state.state_root());
     assert!(incomplete.state.staged_court_row_v1(&Key::CourtBatchNumericalReceipt(claim)).is_none());
+    use crate::palw_batch_court_v1::rooted::{RootedBatchNumericalReceiptV1, reserved_numerical_terminal_v1};
+    let (_, terminal) = batch::admission::batch_numerical_service_ids_v1(claim, scope_id).unwrap();
+    let terminal_daa = service.book.assigned_daa(&terminal).unwrap();
+    let terminal_at = at(frame, terminal_daa - context.original_accepted_daa);
+    let receipt = RootedBatchNumericalReceiptV1 {
+        version: 1, claim, scope: scope_id, source: context.source_id, notice: notice_id, leaf: notice_leaf,
+        intent_digest: Hash64::from_u64_word(812), at: point, material_until_daa: context.material_until_daa,
+        fault_evidence: None,
+    };
+    let digest = receipt.digest_v1().unwrap();
+    assert!(reserved_numerical_terminal_v1(&b.state, claim, digest, &terminal_at).is_err());
+    // Exercise the terminal reader with an already accepted row. The incomplete
+    // material above never produces a verification receipt.
+    let mut verified = b.state.clone();
+    verified.staged_courts.insert(Key::CourtBatchNumericalReceipt(claim), Row::CourtBatchNumericalReceipt(Box::new(receipt.clone())));
+    assert_eq!(reserved_numerical_terminal_v1(&verified, claim, digest, &terminal_at).unwrap(), &receipt);
+    assert!(reserved_numerical_terminal_v1(&verified, claim, digest, &point).is_err());
+    assert!(reserved_numerical_terminal_v1(&verified, claim, Hash64::from_u64_word(999), &terminal_at).is_err());
     set_material_intake_test_schedule_v1(None);
 }

@@ -778,6 +778,22 @@ pub(crate) fn repair_rooted_batch_slots_v1(
     let mut repairable = ids.clone();
     if let Some((scope, target)) = route {
         exclude_inactive_batch_route_v1(claim, scope, target, ids, edges, &mut repairable)?;
+        let key = Key::CourtBatchNumericalReceipt(claim);
+        if let Some(row) = state.staged_court_row_v1(&key) {
+            let Row::CourtBatchNumericalReceipt(receipt) = row else { return Err(InvalidState) };
+            receipt.check(&key).map_err(|_| InvalidState)?;
+            let notice = Key::CourtSharedQuery(receipt.notice);
+            if receipt.scope != scope
+                || target != (crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1::Numerical { leaf: receipt.leaf })
+                || state.court_shared_initial_notice_v1(claim).is_none_or(|(_, key)| *key != notice)
+            {
+                return Err(InvalidState);
+            }
+            let (verification, _) = admission::batch_numerical_service_ids_v1(claim, scope).map_err(|_| InvalidState)?;
+            if book.assigned_daa(&verification) != Some(receipt.at.daa_score) || !repairable.remove(&verification) {
+                return Err(InvalidState);
+            }
+        }
     }
     if !has_demand {
         return book.repair_missing_ordered_v1(&repairable, hard, edges);

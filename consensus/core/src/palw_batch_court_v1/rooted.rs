@@ -26,6 +26,10 @@ pub struct RootedBatchNumericalReceiptV1 {
 }
 
 impl RootedBatchNumericalReceiptV1 {
+    pub(crate) fn digest_v1(&self) -> Result<Hash64, String> {
+        crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-numerical-finding/v1", self)
+    }
+
     pub(crate) fn check(&self, key: &Key) -> Result<(), String> {
         if self.version != 1
             || *key != Key::CourtBatchNumericalReceipt(self.claim)
@@ -58,6 +62,41 @@ impl RootedBatchNumericalReceiptV1 {
         }
         Ok(())
     }
+}
+
+/// Read the one accepted finding that the booked terminal operation can use.
+/// An absent finding or an exhausted slot cannot yield a terminal decision.
+pub(crate) fn reserved_numerical_terminal_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim: Hash64,
+    receipt_digest: Hash64,
+    at: &PalwBlockContextV2,
+) -> Result<&'a RootedBatchNumericalReceiptV1, String> {
+    let key = Key::CourtBatchNumericalReceipt(claim);
+    let Some(Row::CourtBatchNumericalReceipt(receipt)) = state.staged_court_row_v1(&key) else {
+        return Err("numerical terminal has no accepted verification receipt".into());
+    };
+    receipt.check(&key)?;
+    let context = shared::context(state, claim)?;
+    let service = state.court_service_row_v3_v1().ok_or("numerical terminal has no causal service book")?;
+    context.check_binding(&service.state)?;
+    let binding = service.state.claims.get(&claim).ok_or("numerical terminal has no original booking")?;
+    let (verification, terminal) = crate::palw_court_shared_material_intake_v1::batch::admission::batch_numerical_service_ids_v1(
+        claim, receipt.scope,
+    ).map_err(|_| "numerical terminal packet identities are invalid")?;
+    if receipt.digest_v1()? != receipt_digest
+        || !binding.packet_ids.contains(&verification)
+        || !binding.packet_ids.contains(&terminal)
+        || service.state.book.assigned_daa(&verification) != Some(receipt.at.daa_score)
+        || service.state.book.assigned_daa(&terminal) != Some(at.daa_score)
+        || !service.causal.get(&terminal).is_some_and(|parents| parents.binary_search(&verification).is_ok())
+        || at.daa_score <= receipt.at.daa_score
+        || at.daa_score >= context.hard_daa.min(receipt.material_until_daa)
+    {
+        return Err("numerical terminal differs from its accepted finding or reserved slot".into());
+    }
+    receipt.check_context(state, at)?;
+    Ok(receipt)
 }
 
 impl NativeWireScanV1 for RootedBatchNumericalReceiptV1 {

@@ -4138,3 +4138,21 @@ settlement and public activation still need verification.
 B0 and relay agreed at virtual DAA 19,742. The four additional
 selected blocks contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-numerical-carrier-live.gjtGVL/page.json`.
+
+## Bind numerical terminal lookup to the accepted branch and booking
+
+The terminal reader requires the rooted numerical receipt digest,
+the original's owned verification and terminal packets, the causal
+edge between them, and the exact later accepting DAA within the
+original deadlines. Recovery keeps an accepted verification slot
+fixed while the outstanding terminal remains repairable. The reader
+does not yet issue a terminal carrier or apply settlement.
+
+The native fixture now checks missing and substituted receipts and
+early terminal attempts using a fixture receipt. The integrated
+fixture has not run. Rust parser and whitespace checks passed.
+
+At the user status check, remote main was
+`4128e4d85aad2a88fc0c7a27d8e5bd95bd33913a` and did not contain the
+Batch verification candidate. B0 and relay still agreed at virtual
+DAA 19,742 with no additional selected blocks.
