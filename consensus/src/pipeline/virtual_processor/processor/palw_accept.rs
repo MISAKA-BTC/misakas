@@ -2209,6 +2209,8 @@ impl VirtualStateProcessor {
                 .filter(|f| f.is_active(daa_score))
                 .map(|_| kaspa_consensus_core::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1::network_v1()),
             staged_tir_route_active: self.palw_staged_tir_route_v1.is_some_and(|f| f.is_active(daa_score)),
+            batch_court_active_v1: self.palw_lifecycle_kind_fences.batch_court_in_force_at(daa_score),
+            batch_court_carriers_v1: Vec::new(),
             // Filled below only after every native dependency (including Panel and shard inputs)
             // has been resolved at this block. Neither field is a carrier-provided limit/domain.
             tir_public_allocation_rules_v1: None,

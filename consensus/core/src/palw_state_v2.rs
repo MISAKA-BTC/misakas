@@ -14489,13 +14489,65 @@ pub fn palw_v2_apply_one_object_retained_v1(
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
 ) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+    rehearse_palw_object_retained_v1(
+        base,
+        params,
+        ctx,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+        |builder| apply_object(builder, ctx, object),
+    )
+}
+
+/// Rehearse one BCT1 in the same pre-object state as ordinary acceptance.
+/// The processor appends a handoff only after this rehearsal succeeds.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_batch_carrier_retained_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    carrier: &crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+    rehearse_palw_object_retained_v1(
+        base,
+        params,
+        ctx,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+        |builder| builder.apply_batch_court_carrier_v1(ctx, carrier),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rehearse_palw_object_retained_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+    apply: impl FnOnce(&mut TransitionBuilder<'_>) -> Result<(), PalwStateV2Error>,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
     let mut builder =
         TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
     // Step 3's reservation for the block's own attempt, as the fold takes it (see
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    apply_object(&mut builder, ctx, object)?;
+    apply(&mut builder)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
@@ -15010,8 +15062,14 @@ fn apply_palw_transition_v7_inner(
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    for object in accepted_objects {
-        apply_object(&mut builder, ctx, object)?;
+    use crate::palw_batch_court_v1::fold_order::{AcceptedCourtItemV1, in_accepted_order_v1};
+    let ordered = in_accepted_order_v1(accepted_objects, &extras.batch_court_carriers_v1)
+        .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("Batch carriers do not follow accepted lifecycle order".into()))?;
+    for item in ordered {
+        match item {
+            AcceptedCourtItemV1::Ordinary(object) => apply_object(&mut builder, ctx, object)?,
+            AcceptedCourtItemV1::Batch(carrier) => builder.apply_batch_court_carrier_v1(ctx, carrier)?,
+        }
     }
     // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): this accepting block's actual reserved court service supply, after every
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
@@ -20711,6 +20769,11 @@ pub struct PalwTransitionExtrasV1 {
     /// `palw_staged_tir_route_v1` at this block: TIR required-family claims are admitted to the
     /// staged route (native-context seeds and answers). False below it: refused, A-2 uniform.
     pub staged_tir_route_active: bool,
+    /// Prospective BCT1 gate, resolved by the block processor.
+    pub batch_court_active_v1: bool,
+    /// The accepted UTXO facts, in accepted carrier order. The index is the
+    /// count of already accepted ordinary objects immediately before the carrier.
+    pub batch_court_carriers_v1: Vec<(usize, std::sync::Arc<crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1>)>,
     /// Native-resolved original TIR rules, never limits deserialized from a carrier.
     /// None keeps the new original-allocation route dormant.
     pub tir_public_allocation_rules_v1: Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1>,

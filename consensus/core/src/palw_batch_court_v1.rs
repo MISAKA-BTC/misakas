@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
 pub mod carriage;
+pub(crate) mod fold_order;
 pub(crate) mod rooted;
 
 pub const MAX_BATCH_RANGES_V1: usize = 64;

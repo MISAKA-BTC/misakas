@@ -712,7 +712,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
 
     let fx = crate::palw_tir_public_claim_v1::palw_tir_public_material_frame_fixture_v1(true);
     let frame = &fx.frame;
-    let (mut state, params, extras, claim, scope_id) = material_intake_world(&fx);
+    let (mut state, params, mut extras, claim, scope_id) = material_intake_world(&fx);
+    extras.batch_court_active_v1 = true;
     let network = extras.tir_public_network_domain_v1.unwrap();
     let context = crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap().clone();
     let who = outsider();
@@ -799,7 +800,15 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         let accepted = ValidatedBatchCarrierV1::prepare_v1(&native, preceding, *point).unwrap().unwrap();
         let split = accepted.fee_v1();
         assert_eq!(split, material_batch_carrier_fee_v1(&tx, fee - preceding).unwrap());
-        b.apply_batch_court_carrier_v1(point, accepted).map(|()| split)
+        let rehearsal = crate::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
+            &b.state, &params, point, &accepted, false, false, false, false, &extras,
+        );
+        let folded = b.apply_batch_court_carrier_v1(point, &accepted);
+        assert_eq!(rehearsal.is_ok(), folded.is_ok());
+        if let Ok(rehearsed) = rehearsal {
+            assert_eq!(rehearsed.state_root(), b.state.state_root());
+        }
+        folded.map(|()| split)
     };
     let opening = BatchCourtWireV1::Open(open);
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();

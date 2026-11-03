@@ -2602,3 +2602,28 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-lifecycle-gate.1vvoQv/tests
 
 B0 and relay agreed at DAA 19,692. This page reported no new Qwen
 carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-batch-gate-live.ryzBqR/page.json`.
+
+## Accepted-order Batch folding and rehearsal
+
+The Core transition can interleave validated Batch handoffs before any
+ordinary accepted object or after the last one. An index counts accepted
+ordinary objects, so adjacent Batch carriers keep their incoming order
+even if ordinary candidates were filtered out. Regressing or out-of-range
+indices fail the transition. BCT1 does not consume an ordinary wire tag
+or enter through lifecycle object chunks. A common one-object rehearsal
+uses the same accepting point, fee evidence and native state writer as
+the final fold. Both can borrow the same handoff without cloning its
+payload. The processor resolves the independent Batch fence for this
+Core entry, and a dormant entry refuses a handoff.
+
+The extracted suite passed 33 checks, including order around a notice
+and close, stable order at the same index, empty lists, index rejection
+and repeatable rent projection. The native paid fixture compares the
+rehearsal and actual fold, but that fixture has not run in the integrated
+Core. Processor-side accepted UTXO capture and assembly of the actual
+ordered handoff list are still pending. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-fold-order.SbdjrR/tests.log`.
+
+B0 and relay agreed at DAA 19,693, with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-ordered-live.7pokAY/page.json`.

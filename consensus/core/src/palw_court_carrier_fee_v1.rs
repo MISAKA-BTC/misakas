@@ -21,7 +21,7 @@ pub enum CarrierFeeRefusalV1 {
 
 /// Local prepare result only. It never authorizes a spend or establishes that
 /// the transaction was accepted. No persisted caller-supplied `paid` flag exists.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CarrierFeeBudgetV1 {
     carrier: crate::TransactionId,
     actual_fee: u64,

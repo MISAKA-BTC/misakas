@@ -45,6 +45,7 @@ impl MaterialBatchCarrierFeeV1 {
 }
 
 /// Decoded once from a literal carrier. No state or acceptance is implied.
+#[derive(Debug, PartialEq, Eq)]
 struct PreparedBatchCarrierV1 {
     carrier: crate::TransactionId,
     wire: BatchCourtWireV1,
@@ -102,6 +103,7 @@ impl PreparedBatchCarrierV1 {
 /// Ephemeral handoff for a ruleset that has accepted a Batch transaction.
 /// The UTXO walk constructs it before dropping the input view. The Court
 /// fold consumes it at the same accepting point without retaining UTXOs.
+#[derive(Debug, PartialEq, Eq)]
 pub struct ValidatedBatchCarrierV1 {
     batch: PreparedBatchCarrierV1,
     budget: CarrierFeeBudgetV1,
@@ -136,18 +138,16 @@ impl ValidatedBatchCarrierV1 {
         Ok(self.batch.wire_v1())
     }
 
-    pub(crate) fn into_fold_v1(
-        mut self,
-        request_root: Option<Hash64>,
-    ) -> Result<(BatchCourtWireV1, Option<MaterialBatchStorageDebitV1>), String> {
+    /// Rehearsal and the final fold use an independent debit projection over
+    /// the same immutable UTXO fact. The full payload is never cloned here.
+    pub(crate) fn storage_debit_v1(&self, request_root: Option<Hash64>) -> Result<Option<MaterialBatchStorageDebitV1>, String> {
         if self.batch.storage_rent.is_some() != request_root.is_some() {
             return Err("Batch storage rent handoff requires the accepted request root for Begin".into());
         }
-        let debit = match request_root {
-            Some(root) => self.batch.allocate_v1(&mut self.budget, root, self.at)?,
-            None => None,
-        };
-        Ok((self.batch.wire, debit))
+        match request_root {
+            Some(root) => self.batch.allocate_v1(&mut self.budget.clone(), root, self.at),
+            None => Ok(None),
+        }
     }
 }
 
@@ -274,10 +274,12 @@ mod tests {
         assert_eq!(handoff.fee_v1(), full_split);
         assert!(handoff.wire_at_v1(&at).is_ok());
         assert!(handoff.wire_at_v1(&PalwBlockContextV2 { block: other_request, ..at }).is_err());
-        assert!(handoff.into_fold_v1(None).is_err());
-        let handoff = ValidatedBatchCarrierV1::prepare_v1(&native, 1, at).unwrap().unwrap();
-        let (_, debit) = handoff.into_fold_v1(Some(request)).unwrap();
-        assert!(debit.unwrap().check_v1(&intake, request, demand_ordinal, &at, amount).is_ok());
+        assert!(handoff.storage_debit_v1(None).is_err());
+        for _ in 0..2 {
+            let debit = handoff.storage_debit_v1(Some(request)).unwrap().unwrap();
+            assert!(debit.check_v1(&intake, request, demand_ordinal, &at, amount).is_ok());
+            assert_eq!(handoff.fee_v1(), full_split);
+        }
         let prepared = PreparedBatchCarrierV1::decode_v1(&tx).unwrap().unwrap();
         let mut short = budget(amount);
         short.allocate_v1([12; 64], 1).unwrap();

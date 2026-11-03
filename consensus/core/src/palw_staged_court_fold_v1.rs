@@ -1100,11 +1100,14 @@ impl TransitionBuilder<'_> {
     pub(super) fn apply_batch_court_carrier_v1(
         &mut self,
         at: &PalwBlockContextV2,
-        carrier: crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1,
+        carrier: &crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::carriage::BatchCourtWireV1;
         use crate::palw_court_shared_material_intake_v1::MaterialActionV1;
 
+        if !self.extras.batch_court_active_v1 {
+            return Err(PalwStateV2Error::CarriageInconsistent("Batch Court is dormant".into()));
+        }
         let wire = carrier.wire_at_v1(at).map_err(PalwStateV2Error::CarriageInconsistent)?;
         let mut request_root = None;
         if let BatchCourtWireV1::Respond(control) = wire
@@ -1116,8 +1119,8 @@ impl TransitionBuilder<'_> {
             };
             request_root = Some(demand.request_root);
         }
-        let (wire, debit) = carrier.into_fold_v1(request_root).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        self.apply_batch_court_wire_v1(at, &wire, debit.as_ref())
+        let debit = carrier.storage_debit_v1(request_root).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        self.apply_batch_court_wire_v1(at, wire, debit.as_ref())
     }
 
     /// Native candidate entry for an already accepted Batch carrier.
