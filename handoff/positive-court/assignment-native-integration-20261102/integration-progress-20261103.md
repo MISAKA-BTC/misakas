@@ -1570,3 +1570,22 @@ candidate includes the earlier accepted-data and UTXO pinned readers and
 applies cleanly to A0. It is separate from the running custody/index
 verification. The earlier Linux relay test moved past the RocksDB build
 to later Rust dependencies and has not reported a test verdict.
+
+### Integrated archive and Gate C source
+
+Commit `b21559f59` integrates the original Case parent reconstruction,
+sequence-one op9 journaling, and bounded acceptance, UTXO and carrier
+readers on A0. Commit `fab2a91af` integrates the exact Gate C Case link
+and point lookup. The prior custody/index guard was still waiting on
+the shared Cargo lock and had compiled no source. Its own process
+group was stopped after verifying its membership, exit and unchanged
+source map. The unrelated lock holder and separate Linux test were
+left running.
+
+The replacement guard includes the custody/index changes and both
+new commits. It queues warnings-denied library Clippy, Core and
+Consensus test-target checks, native store regressions and the focused
+escrow and Gate C runtime regressions. Its first command is still
+waiting for the shared build lock. The isolated component results above
+apply to the relevant source files. No integrated build or test result
+is claimed by this checkpoint.
