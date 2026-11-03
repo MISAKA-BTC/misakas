@@ -3230,7 +3230,7 @@ mod accepted_rider_tests {
             .into_iter()
             .map(|kind| RetainedClaimV1 {
                 claim: Hash64::from_u64_word(1),
-                paths: vec![],
+                files: vec![],
                 bytes: 100,
                 age: Some(std::time::Duration::MAX),
                 kind,

@@ -92,11 +92,45 @@ pub(crate) fn retention_reserve_bytes_v1(total_bytes: u64) -> u64 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RetainedClaimV1 {
     pub claim: Hash64,
-    pub paths: Vec<PathBuf>,
+    pub files: Vec<RetainedFileV1>,
     pub bytes: u64,
     /// The newest of its files' ages (`None` = unreadable, treated as old).
     pub age: Option<Duration>,
     pub kind: RetainedKindV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedFileV1 {
+    path: PathBuf,
+    bytes: u64,
+    version: Option<FileVersion>,
+}
+
+#[cfg(unix)]
+type FileVersion = (u64, u64, i64, i64);
+#[cfg(not(unix))]
+type FileVersion = (std::time::SystemTime, std::time::SystemTime);
+
+impl RetainedFileV1 {
+    fn version(meta: &std::fs::Metadata) -> Option<FileVersion> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some((meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()))
+        }
+        #[cfg(not(unix))]
+        {
+            Some((meta.created().ok()?, meta.modified().ok()?))
+        }
+    }
+
+    fn new(path: PathBuf, meta: &std::fs::Metadata) -> Self {
+        Self { path, bytes: meta.len(), version: Self::version(meta) }
+    }
+
+    fn matches(&self, meta: &std::fs::Metadata) -> bool {
+        meta.is_file() && meta.len() == self.bytes && self.version.is_some() && Self::version(meta) == self.version
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -209,30 +243,33 @@ fn prune_retained_claims_v1(
 ) -> (usize, u64) {
     let mut removed = 0usize;
     let mut bytes = 0u64;
-    for i in doomed {
+    let mut unchanged = Vec::new();
+    'claims: for i in doomed {
         let c = &claims[i];
-        // Coordinate the final check and unlink with registration. A lead
-        // publisher must acquire its guard before writing the capture.
+        // Keep registration serialized with the final check and unlink.
         let active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
         if active.contains_key(&c.claim) || !matches!(material_owed(&c.claim), Ok(false)) {
             continue;
         }
-        let mut removed_file = false;
-        for path in &c.paths {
-            // Planning uses an inventory estimate. Credit the reclaimer only
-            // for files this pass actually removed, including partial groups.
-            match std::fs::symlink_metadata(path) {
-                Ok(meta) if meta.is_file() => match std::fs::remove_file(path) {
-                    Ok(()) => {
-                        removed_file = true;
-                        bytes = bytes.saturating_add(meta.len());
-                    }
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", path.display()),
-                },
-                Ok(_) => trace!("[{PALW_RETENTION}] no longer a regular file: {}", path.display()),
+        // A publication can replace a file and release its guard between the
+        // scan and this lock. Discard the old plan for the whole capture.
+        unchanged.clear();
+        for file in &c.files {
+            match std::fs::symlink_metadata(&file.path) {
+                Ok(meta) if file.matches(&meta) => unchanged.push(file),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => trace!("[{PALW_RETENTION}] cannot inspect {} before pruning: {e}", path.display()),
+                _ => continue 'claims,
+            }
+        }
+        let mut removed_file = false;
+        for file in &unchanged {
+            match std::fs::remove_file(&file.path) {
+                Ok(()) => {
+                    removed_file = true;
+                    bytes = bytes.saturating_add(file.bytes);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", file.path.display()),
             }
         }
         removed += usize::from(removed_file);
@@ -246,7 +283,7 @@ pub(crate) fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<
     let mut own: std::collections::BTreeMap<Hash64, RetainedClaimV1> = std::collections::BTreeMap::new();
     let mut claims = Vec::new();
     let mut abandoned = Vec::new();
-    let age_of = |meta: &std::fs::Metadata| meta.modified().ok().and_then(|t| now.duration_since(t).ok());
+    let age_of = |meta: &std::fs::Metadata| meta.modified().ok().map(|t| now.duration_since(t).unwrap_or_default());
     for (sub, foreign) in [(dir.to_path_buf(), false), (dir.join("foreign"), true)] {
         let Ok(entries) = std::fs::read_dir(&sub) else { continue };
         for entry in entries.flatten() {
@@ -270,25 +307,31 @@ pub(crate) fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<
             };
             let Ok(claim) = stem.parse::<Hash64>() else { continue };
             if foreign {
-                claims.push(RetainedClaimV1 { claim, paths: vec![path], bytes: meta.len(), age, kind: RetainedKindV1::Foreign });
+                claims.push(RetainedClaimV1 {
+                    claim,
+                    files: vec![RetainedFileV1::new(path, &meta)],
+                    bytes: meta.len(),
+                    age,
+                    kind: RetainedKindV1::Foreign,
+                });
                 continue;
             }
             let kind = if material && starts_with_fp_magic(&path) { RetainedKindV1::FreePrompt } else { RetainedKindV1::Attempt };
             let row = own.entry(claim).or_insert(RetainedClaimV1 {
                 claim,
-                paths: Vec::new(),
+                files: Vec::new(),
                 bytes: 0,
                 age: None,
                 kind: RetainedKindV1::Attempt,
             });
             // The claim is as young as its youngest file; an unreadable age reads as old.
-            row.age = match (row.paths.is_empty(), row.age, age) {
+            row.age = match (row.files.is_empty(), row.age, age) {
                 (true, _, age) => age,
                 (false, Some(a), Some(b)) => Some(a.min(b)),
                 (false, Some(a), None) => Some(a),
                 (false, None, b) => b,
             };
-            row.paths.push(path);
+            row.files.push(RetainedFileV1::new(path, &meta));
             row.bytes = row.bytes.saturating_add(meta.len());
             if material {
                 row.kind = kind;
@@ -506,13 +549,7 @@ mod tests {
     const MIN: Duration = Duration::from_secs(60);
 
     fn claim(n: u64, kind: RetainedKindV1, bytes: u64, age_min: u64) -> RetainedClaimV1 {
-        RetainedClaimV1 {
-            claim: Hash64::from_u64_word(n),
-            paths: vec![PathBuf::from(format!("{n}.material"))],
-            bytes,
-            age: Some(MIN * age_min as u32),
-            kind,
-        }
+        RetainedClaimV1 { claim: Hash64::from_u64_word(n), files: vec![], bytes, age: Some(MIN * age_min as u32), kind }
     }
 
     /// **The floor is 8 GiB, or 5 % of a volume big enough for that to be more.**
@@ -521,14 +558,14 @@ mod tests {
         let claims = vec![
             RetainedClaimV1 {
                 claim: Hash64::from_u64_word(1),
-                paths: vec![],
+                files: vec![],
                 bytes: 40,
                 age: Some(Duration::MAX),
                 kind: RetainedKindV1::Attempt,
             },
             RetainedClaimV1 {
                 claim: Hash64::from_u64_word(2),
-                paths: vec![],
+                files: vec![],
                 bytes: 30,
                 age: Some(Duration::MAX),
                 kind: RetainedKindV1::Foreign,
@@ -551,9 +588,9 @@ mod tests {
             claim(3, RetainedKindV1::Foreign, 30, 900),
         ];
         for claim in &mut claims {
-            let path = dir.path().join(&claim.paths[0]);
+            let path = dir.path().join(format!("{}.material", claim.claim));
             std::fs::write(&path, vec![0; claim.bytes as usize]).unwrap();
-            claim.paths[0] = path;
+            claim.files.push(RetainedFileV1::new(path.clone(), &std::fs::metadata(path).unwrap()));
         }
         let plan = |owed: fn(&Hash64) -> Result<bool, String>| {
             retention_prune_plan_with_material_v1(&claims, |_| None, owed, 60 * MIN, 0, 100)
@@ -565,11 +602,11 @@ mod tests {
         let (doomed, short) = plan(unowed);
         assert_eq!((doomed.as_slice(), short), (&[0, 1, 2][..], 10));
         assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Err("selected branch changed".into())), (0, 0));
-        assert!(claims.iter().all(|claim| claim.paths[0].is_file()));
+        assert!(claims.iter().all(|claim| claim.files[0].path.is_file()));
 
         let (doomed, _) = plan(unowed);
         assert_eq!(prune_retained_claims_v1(&claims, doomed, unowed), (3, 90));
-        assert!(claims.iter().all(|claim| !claim.paths[0].exists()));
+        assert!(claims.iter().all(|claim| !claim.files[0].path.exists()));
     }
 
     #[test]
@@ -577,12 +614,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut row = claim(15, RetainedKindV1::Attempt, 3, 0);
         let material = dir.path().join("claim.material");
-        row.paths = vec![material.clone()];
         // The deletion plan predates the publication. Both guards share the
         // same claim, and an early exit drops only its own guard.
         let first = pin_attempt_publication(row.claim);
         let second = pin_attempt_publication(row.claim);
         std::fs::write(&material, b"new").unwrap();
+        row.files.push(RetainedFileV1::new(material.clone(), &std::fs::metadata(&material).unwrap()));
         drop(first);
         assert_eq!(prune_retained_claims_v1(&[row.clone()], vec![0], |_| Ok(false)), (0, 0));
         assert_eq!(std::fs::read(&material).unwrap(), b"new");
@@ -625,18 +662,52 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_written_after_scan_start_is_new_for_age_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let before_write = std::time::UNIX_EPOCH;
+        let material = dir.path().join(format!("{}.material", Hash64::from_u64_word(112)));
+        std::fs::write(material, b"new").unwrap();
+        let (claims, _) = scan_retention_v1(dir.path(), before_write);
+        assert_eq!(claims[0].age, Some(Duration::ZERO));
+        assert_eq!(retention_prune_plan_v1(&claims, |_| None, 60 * MIN, 100, 0), (vec![], 0));
+    }
+
+    #[test]
+    fn pressure_plan_cannot_delete_a_capture_replaced_after_the_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let claim = Hash64::from_u64_word(111);
+        let material = dir.path().join(format!("{claim}.material"));
+        let answer = dir.path().join(format!("{claim}.answer"));
+        std::fs::write(&material, b"old").unwrap();
+        std::fs::write(&answer, b"answer").unwrap();
+        let (claims, _) = scan_retention_v1(dir.path(), std::time::SystemTime::now());
+        let (doomed, _) = retention_prune_plan_v1(&claims, |_| None, 60 * MIN, 0, 9);
+        assert_eq!(doomed, vec![0]);
+
+        let pin = pin_attempt_publication(claim);
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, b"new").unwrap();
+        std::fs::rename(replacement, &material).unwrap();
+        drop(pin);
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Ok(false)), (0, 0));
+        assert_eq!(std::fs::read(&material).unwrap(), b"new");
+        assert_eq!(std::fs::read(&answer).unwrap(), b"answer");
+    }
+
+    #[test]
     fn retention_reclaim_reports_only_files_it_removed() {
         let dir = tempfile::tempdir().unwrap();
         let mut row = claim(1, RetainedKindV1::Attempt, 400, 90);
         let material = dir.path().join("claim.material");
-        let replaced = dir.path().join("claim.answer");
         let missing = dir.path().join("gone.material");
         std::fs::write(&material, b"retained bytes").unwrap();
-        std::fs::create_dir(&replaced).unwrap();
-        row.paths = vec![material.clone(), replaced.clone(), missing];
+        std::fs::write(&missing, b"removed by another pass").unwrap();
+        for path in [&material, &missing] {
+            row.files.push(RetainedFileV1::new(path.clone(), &std::fs::metadata(path).unwrap()));
+        }
+        std::fs::remove_file(missing).unwrap();
         assert_eq!(prune_retained_claims_v1(&[row.clone()], vec![0], |_| Ok(false)), (1, 14));
         assert!(!material.exists());
-        assert!(replaced.is_dir());
         assert_eq!(prune_retained_claims_v1(&[row], vec![0], |_| Ok(false)), (0, 0));
     }
 
@@ -755,7 +826,7 @@ mod tests {
         let (claims, abandoned) = scan_retention_v1(&dir, later);
         assert_eq!(abandoned, vec![partial]);
         let by = |c: &Hash64| claims.iter().find(|x| &x.claim == c).cloned().unwrap();
-        assert_eq!((by(&a).kind, by(&a).bytes, by(&a).paths.len()), (RetainedKindV1::Attempt, 8, 2));
+        assert_eq!((by(&a).kind, by(&a).bytes, by(&a).files.len()), (RetainedKindV1::Attempt, 8, 2));
         assert_eq!(by(&f).kind, RetainedKindV1::FreePrompt);
         assert_eq!(by(&g).kind, RetainedKindV1::Foreign);
         assert!(by(&a).age.is_some_and(|age| age >= Duration::from_secs(7000)), "two hours after the writes");
