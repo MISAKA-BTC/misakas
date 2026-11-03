@@ -140,7 +140,7 @@ impl PalwTirPublicSourceV1 {
             crate::palw_native_resource_v1::NativeCoverageV1,
         >,
     {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, standalone_tir_program_shape_v1};
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1};
         if source.header.step_leaf_count > budget.max_original_leaves {
             return Err(CoverErrorV1::Local("original parameter cover leaf budget exhausted").native());
         }
@@ -157,10 +157,9 @@ impl PalwTirPublicSourceV1 {
         if verified.class_id != source.class_id || verified.context_hash != source.context_hash {
             return Err(E::Decode("original parameter cover substitutes source geometry".into()));
         }
-        let shape = standalone_tir_program_shape_v1(&registered.program).map_err(|e| E::Decode(e.to_string()))?;
         let additional = PreparedParameterCoverV1::native_all_roots_requests_v1(
             &verified.space.program,
-            &shape,
+            &registered.program,
             source.header.step_leaf_count,
             budget,
         )?;
@@ -210,7 +209,7 @@ impl PalwTirPublicSourceV1 {
             crate::palw_native_resource_v1::NativeCoverageV1,
         >,
     {
-        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, standalone_tir_program_shape_v1};
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1};
         if source.header.step_leaf_count > budget.max_original_leaves {
             return Err(CoverErrorV1::Local("original parameter cover leaf budget exhausted").native());
         }
@@ -227,10 +226,9 @@ impl PalwTirPublicSourceV1 {
         if verified.class_id != source.class_id || verified.context_hash != source.context_hash {
             return Err(E::Decode("original parameter cover substitutes source geometry".into()));
         }
-        let shape = standalone_tir_program_shape_v1(&registered.program).map_err(|e| E::Decode(e.to_string()))?;
         let additional = PreparedParameterCoverV1::native_all_roots_requests_v1(
             &verified.space.program,
-            &shape,
+            &registered.program,
             source.header.step_leaf_count,
             budget,
         )?;
@@ -372,11 +370,14 @@ mod native_owner_tests {
             .resolve_registered_layout_v1(&f.record, &f.layout, source.header.committed_execution_root, source.maximum_leaves)
             .unwrap();
         let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, source.maximum_leaves).unwrap();
-        let shape = crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&f.record.program).unwrap();
         let prelude = PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, &source.header).unwrap();
-        let additional =
-            PreparedParameterCoverV1::native_all_roots_requests_v1(&verified.space.program, &shape, source.header.step_leaf_count, B)
-                .unwrap();
+        let additional = PreparedParameterCoverV1::native_all_roots_requests_v1(
+            &verified.space.program,
+            &f.record.program,
+            source.header.step_leaf_count,
+            B,
+        )
+        .unwrap();
         let total = prelude.checked_add(additional).unwrap();
         for quota in [prelude - 1, total - 1, total] {
             let checker = crate::palw_native_resource_v1::NativeDemandCheckerV1::new(
@@ -404,7 +405,7 @@ mod native_owner_tests {
         assert!(matches!(
             PreparedParameterCoverV1::native_all_roots_requests_v1(
                 &verified.space.program,
-                &shape,
+                &f.record.program,
                 source.header.step_leaf_count,
                 unbounded
             ),
@@ -483,11 +484,10 @@ mod root_input_tests {
             .resolve_registered_layout_v1(&f.record, &f.layout, source.header.committed_execution_root, source.maximum_leaves)
             .unwrap();
         let verified = crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, source.maximum_leaves).unwrap();
-        let shape = crate::palw_native_resource_v1::standalone_tir_program_shape_v1(&f.record.program).unwrap();
         let prelude = PalwTirPublicSourceV1::native_construction_requests_v1(&f.record, &f.layout, &source.header).unwrap();
         let additional = PreparedParameterCoverV1::native_all_roots_requests_v1(
             &verified.space.program,
-            &shape,
+            &f.record.program,
             source.header.step_leaf_count,
             budget,
         )
