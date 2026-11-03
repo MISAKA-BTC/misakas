@@ -1148,7 +1148,7 @@ impl TransitionBuilder<'_> {
         at: &PalwBlockContextV2,
         operands: &[u8],
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1;
+        use crate::palw_batch_court_v1::{carriage::BatchStopControlV1, rooted::RootedBatchStopReceiptV1};
         use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::{batch_payload, verify_rooted_batch_stop_v1};
         let refused = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
         let rules = self.extras.native_court_rules_v1.filter(|rules| {
@@ -1156,8 +1156,7 @@ impl TransitionBuilder<'_> {
         }).ok_or_else(|| refused("Batch Stop requires native rules at the accepting point and network"))?;
         let (claim, _) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| refused(&why.to_string()))?;
         let key = PalwStagedCourtKeyV1::CourtBatchStopReceipt(claim);
-        let digest = crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-stop-receipt/v1", &operands)
-            .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let digest = RootedBatchStopReceiptV1::digest_operands(operands).map_err(PalwStateV2Error::CarriageInconsistent)?;
         if let Some(old) = self.state.staged_court_row_v1(&key) {
             return match old {
                 PalwStagedCourtRowV1::CourtBatchStopReceipt(row) if row.at == *at && row.operands_digest == digest => Ok(()),
@@ -1168,14 +1167,32 @@ impl TransitionBuilder<'_> {
             .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
         let context = crate::palw_court_shared_tir_state_v1::context(&self.state, claim)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let (source_id, material_until_daa) = (context.source_id, context.material_until_daa);
         let mut quote = super::native_writers::NativeWriteQuoteV1::new("Batch Stop receipt row");
-        quote.exact::<RootedBatchStopReceiptV1>(1)?;
+        quote
+            .exact::<RootedBatchStopReceiptV1>(1)?
+            .exact::<BatchStopControlV1>(2)? // temporary Box and shared owner
+            .exact::<usize>(3)? // Arc counters and alignment on supported targets
+            .exact::<u8>(operands.len() as u64)?;
+        self.admit_native_write_v1(quote)?;
+        let mut retained = Vec::new();
+        retained.try_reserve_exact(operands.len()).map_err(|why| {
+            PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<BatchStopControlV1>(
+                "retain Batch Stop operands", &why.to_string(),
+            ))
+        })?;
+        retained.extend_from_slice(operands);
         let receipt = RootedBatchStopReceiptV1 {
-            version: 1, claim, source_id: context.source_id, operands_digest: digest,
-            at: *at, material_until_daa: context.material_until_daa, fault_position: finding.map(|fault| fault.position),
+            version: 2,
+            claim,
+            source_id,
+            operands_digest: digest,
+            at: *at,
+            material_until_daa,
+            fault_position: finding.map(|fault| fault.position),
+            operands: Some(Box::new(BatchStopControlV1 { operands: retained }).into()),
         };
         receipt.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
-        self.admit_native_write_v1(quote)?;
         let new = Some(PalwStagedCourtRowV1::CourtBatchStopReceipt(Box::new(receipt)));
         self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "native Batch Stop receipt writer")?;
         self.reserve_staged_indices_v1(&key, &new)?;

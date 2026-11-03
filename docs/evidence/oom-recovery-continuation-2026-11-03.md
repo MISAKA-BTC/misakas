@@ -3030,3 +3030,25 @@ The paired read agreed at DAA 19,706 and found no Qwen carrier in the
 newly scanned selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-native-handoff-inventory.dfyZTI/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-handoff-live.ysomEA/page.json`.
+
+## Retained signed Batch Stop operands
+
+New Stop receipts save the signed intent and EOG opening in version 2,
+in the same row as the accepting point and finding. The existing key,
+row tag and retention horizon apply. Version 1 remains byte-for-byte
+readable as a digest-only receipt. Version 2 validates the retained
+claim and operand digest and shares the immutable payload between
+branch state and journal copies. The native writer and restore scanner
+account for the bounded payload before allocation.
+
+The extracted Rust suite passed 39 checks, including version 1 byte
+compatibility, version 2 round trip, shared ownership, scan accounting,
+and refusal of changed, truncated or oversized operands. This is codec
+and local resource evidence. The whole-Core build, pruned IBD, a full
+re-adjudication from restored state, terminal accounting, and funded
+storage for the complete profile still require verification.
+
+B0 and relay agreed at DAA 19,707. The newly scanned selected interval
+had no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-durable.G0k4E0/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-stop-durable-live.TZqUzd/page.json`.

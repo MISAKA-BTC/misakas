@@ -90,6 +90,22 @@ impl BorshDeserialize for BatchStopControlV1 {
     }
 }
 
+impl crate::palw_native_resource_v1::wire::NativeWireScanV1 for BatchStopControlV1 {
+    fn scan_native_wire_v1<R: Read>(
+        reader: &mut crate::palw_native_resource_v1::wire::NativeWireReaderV1<R>,
+    ) -> io::Result<crate::palw_native_resource_v1::wire::NativeWireShapeV1> {
+        use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::MAX_BATCH_STOP_OPERANDS_BYTES_V1;
+        use crate::palw_native_resource_v1::wire::{NativeWireShapeV1, wire_bad};
+        reader.step()?;
+        let bytes = u64::from(reader.word()?);
+        if bytes > MAX_BATCH_STOP_OPERANDS_BYTES_V1 as u64 {
+            return Err(wire_bad("retained Batch Stop exceeds the operand bound"));
+        }
+        reader.skip(bytes)?;
+        NativeWireShapeV1 { byte_entries: bytes, ..Default::default() }.allocation(bytes, 1)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct BatchMaterialControlV1 {
     pub demand_ordinal: u64,
