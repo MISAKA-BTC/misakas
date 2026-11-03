@@ -4366,3 +4366,26 @@ fixture has not run. The production coordinator still has to call
 the writer with a complete payer-approved book in the original
 admission checkpoint. The existing isolated Linux job is compiling
 its older `587a1808c` snapshot.
+
+## Reserve the original duties separately from Batch material
+
+The Batch base candidate now derives the liable signer turns and
+holding packet from the native original without constructing a legacy
+source projection. It preserves previous release records and causal
+edges in the candidate service row. Its relative funding digest binds
+the liable signers, service profile, holding window, costs and capital.
+The ordinary funded admission continues to reserve its full legacy
+source projection.
+
+The native fixture now reserves Batch material on this smaller base,
+checks that no legacy source packet is included, and prepares a signed
+TFO1 output for the combined scope. It asserts that the earlier scope
+is refused and the newly signed scope resolves to the actual funding
+outpoint. The fixture has not run. Rust parsing and whitespace checks
+passed. Production still needs a pinned Batch schedule and the
+coordinator must install the resulting book and escrow together.
+
+The IBM Linux check of `587a1808c` remained active under invocation
+`460e5e2f1da647b784dd040aab7462cf`, with 104 RocksDB objects observed.
+This source change is outside that snapshot. No public carrier was
+submitted during this step.

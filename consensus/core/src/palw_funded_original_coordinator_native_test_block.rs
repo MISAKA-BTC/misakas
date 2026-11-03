@@ -288,10 +288,19 @@
                     ),
                     Err(crate::palw_batch_court_v1::BatchCourtErrorV1::CaseGraph),
                 ));
-                let (quote, batch) = reserve_native_batch_delivery_v1(
-                    journal, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
+                let (base, base_book, base_scope) = crate::palw_funded_original_admission_v1::funded_batch_base_candidate_v1(
+                    &b.state, req.frame_v1(), &admission,
                 ).unwrap();
-                assert!(quote.required_daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
+                assert!(base.source_packets.is_empty());
+                assert_eq!(base.signer_packets, derivation.signer_packets);
+                assert_eq!(base.branch_count(), liable * service_profile.packets_per_signer + 1);
+                assert_eq!(base_book.state.claims[&claim].packet_ids, base.packet_ids());
+                let (quote, batch) = reserve_native_batch_delivery_v1(
+                    base_book, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
+                ).unwrap();
+                let batch_packets = &batch.state.claims[&claim].packet_ids;
+                assert!(quote.required_daa <= 10_000 && base.packet_ids().is_subset(batch_packets));
+                assert!(derivation.source_packets.iter().all(|packet| !batch_packets.contains(&packet.id)));
                 // The original payer consent accepted above cannot authorize
                 // this additional native Batch graph.
                 use crate::palw_court_original_escrow_v1::{FundingRefusalV1, OriginalFundingScopeV1, prepare_funding_v1};
@@ -299,16 +308,29 @@
                 let t = &funded.funding.terms;
                 let batch_scope = OriginalFundingScopeV1 {
                     claim, job_identity: t.job_identity, execution_root: t.execution_root, source_id: t.source_id,
-                    relative_graph_id: req.source_graph_v1().unwrap().scope_v3(), fee_profile_id: t.fee_profile_id,
+                    relative_graph_id: base_scope, fee_profile_id: t.fee_profile_id,
                     capital_profile_id: t.capital_profile_id, retention_profile_id: t.retention_profile_id,
-                    settlement_policy_id: t.settlement_policy_id, required_amount_sompi: t.funding_amount_sompi,
-                    required_material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa,
+                    settlement_policy_id: t.settlement_policy_id,
+                    required_amount_sompi: crate::palw_funded_original_admission_v1::funded_required_amount_v1(
+                        700, 300, base.capital_sompi, deposit,
+                    ).unwrap(),
+                    required_material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa.max(hard),
                 }.with_native_batch_v1(&quote).unwrap();
                 assert!(matches!(prepare_funding_v1(
                     funded.inspect_carrier_v1(pairing.carrier()).unwrap(), &funded.funding, &funded.payer_pubkey,
                     &batch_scope, t.network_domain, ctx.daa_score,
                 ), Err(FundingRefusalV1::Scope)));
-                assert!(expected_edges.iter().all(|(id, parents)| batch.causal.get(id) == Some(parents)));
+                let amount = batch_scope.required_amount_sompi;
+                let (batch_carrier, batch_pairing) = carrier_with(amount, amount, &|terms| {
+                    terms.relative_graph_id = batch_scope.relative_graph_id;
+                    terms.material_until_daa = batch_scope.required_material_until_daa;
+                }, &|_| {}).unwrap();
+                let funded_batch = batch_pairing.envelope();
+                let checked = prepare_funding_v1(
+                    funded_batch.inspect_carrier_v1(&batch_carrier).unwrap(), &funded_batch.funding, &funded_batch.payer_pubkey,
+                    &batch_scope, t.network_domain, ctx.daa_score,
+                ).unwrap();
+                assert_eq!(checked.actual().outpoint(), batch_pairing.outpoint());
                 assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
                 assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
                 assert_eq!(batch.causal[&terminal], [verification]);
