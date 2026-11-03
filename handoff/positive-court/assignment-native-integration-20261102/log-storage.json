@@ -742,5 +742,37 @@
     "stored_sha256": "bc43bc179984994b45adb534d7b5f6a8537ca1f7b5c430ac644b0659743bce83",
     "raw_bytes": 357623,
     "stored_bytes": 24540
+  },
+  {
+    "raw_name": "assignment-history-extent-clippy-first.log",
+    "stored_name": "assignment-history-extent-clippy-first.log.gz",
+    "raw_sha256": "7a36a6f906f42a93a48c723c5ea89f57701f31541d229e349c16b2f9b5b4ecc3",
+    "stored_sha256": "5164cfd418e8c50640d7a1e014041b899c3eada944e2e610ef21a9c9baf60315",
+    "raw_bytes": 341727,
+    "stored_bytes": 23626
+  },
+  {
+    "raw_name": "assignment-history-extent-runtime-first.log",
+    "stored_name": "assignment-history-extent-runtime-first.log.gz",
+    "raw_sha256": "e950673c44a3f5b65c378582699dacc3f0379048378b3fab9d6ef2e4c130905d",
+    "stored_sha256": "07735bfd00e05997043344da384d6559b831544d49338d63a55d403d1319e514",
+    "raw_bytes": 360272,
+    "stored_bytes": 24749
+  },
+  {
+    "raw_name": "assignment-history-extent-runtime-second.log",
+    "stored_name": "assignment-history-extent-runtime-second.log.gz",
+    "raw_sha256": "4d5f2cd248183bae2bc5f529106fdd5db1d1b6d9e6f3e9d96bc30f99ce5e9eac",
+    "stored_sha256": "b35f49ceff55e8e92c162a789f6d5b95b0b9e06e3d58475c1c51f785b7061865",
+    "raw_bytes": 358897,
+    "stored_bytes": 24674
+  },
+  {
+    "raw_name": "assignment-history-extent-unit-final.log",
+    "stored_name": "assignment-history-extent-unit-final.log.gz",
+    "raw_sha256": "d08c93fa623ead1a9fc0db08ac94fa4006ca0be1d35eed7b4a7c3eb51ab3dc53",
+    "stored_sha256": "ea005fdeb8780f0ea17123d462b72bc499de497038f3e82ae7c53a175c05ea07",
+    "raw_bytes": 357251,
+    "stored_bytes": 24461
   }
 ]

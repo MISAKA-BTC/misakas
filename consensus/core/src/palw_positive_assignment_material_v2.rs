@@ -213,6 +213,11 @@ impl AssignmentAdmissionMaterialV2 {
         let value = borsh::from_slice::<Self>(raw).map_err(|_| ContractError::NonCanonical)?;
         Ok(value)
     }
+    /// Unique retained history must also fit two complete reads during replay.
+    pub(crate) fn native_assignment_journal_storage_limit_v2(&self) -> u64 {
+        self.assignment_policy.max_history_bytes.min(self.money.usage.retained_bytes).min(self.money.usage.replay_bytes / 2)
+    }
+
     /// The framed native record includes the actual control envelope and
     /// journal header. Both retention and replay must pay for those bytes.
     pub fn check_native_open_record_extent_v2(&self, payload_bytes: u64) -> Result<(), ContractError> {
@@ -221,8 +226,7 @@ impl AssignmentAdmissionMaterialV2 {
         let record_bytes = payload_bytes.checked_add(ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64).ok_or(ContractError::Budget)?;
         if payload_bytes == 0
             || payload_bytes > self.assignment_policy.max_frame_bytes
-            || record_bytes
-                > self.assignment_policy.max_history_bytes.min(self.money.usage.retained_bytes).min(self.money.usage.replay_bytes)
+            || record_bytes > self.native_assignment_journal_storage_limit_v2()
         {
             return Err(ContractError::Budget);
         }

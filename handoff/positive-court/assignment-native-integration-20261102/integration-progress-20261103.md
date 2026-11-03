@@ -372,3 +372,32 @@ Case material unit tests passed on the same source at opt2. The new
 case checks the reference and exact BindResult header, including missing,
 tampered and other-Assignment material. The docs check found zero new
 issues against the 43 known missing references.
+
+## Exact cumulative Assignment journal extents
+
+The native BindResult checkpoint prices the proposed control envelope and
+journal header together with all existing rooted Assignment frames before
+allocating or mutating. The walk is bounded by the original frame count,
+uses exact ordinal keys, and checks the chain and original Open origin.
+The total must fit the history and retained-byte caps, plus both reads
+under the original replay-byte quote. Open also requires enough replay
+bytes for both passes of its complete record.
+
+The RocksDB visitor uses the same rooted extents to price the actual
+two-pass walk before reading literal bytes. The longest real record bounds
+the per-read workspace. The visitor still independently checks the literal
+frame identity and raw extents on each pass. A missing frame is local
+unavailability. A malformed or disconnected frame cannot be replayed.
+
+This is a journal bound. It covers the new BindResult writer and the
+two-pass reader, while total carrier validation and Case replay work,
+the all-branch reservation owner, and the other continuation writers
+remain separate unfinished work.
+
+Core and Consensus library Clippy passed with warnings denied. The first
+runtime run passed the rooted extent unit test and rejected the Open
+fixture's insufficient replay budget. The corrected test explicitly
+exercises that rejection and accepts the exact two-read boundary. Seven
+external material cases and one rooted extent unit case passed on the
+final source. Only the external fixture changed after Clippy. No new
+documentation issues were reported against 43 existing missing links.

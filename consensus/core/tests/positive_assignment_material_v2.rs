@@ -480,13 +480,15 @@ fn native_open_quote_covers_control_envelope_and_complete_journal_record() {
     let inner_bytes = payload(&material).len() as u64;
     let payload_bytes = inner_bytes + ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64;
     let record_bytes = payload_bytes + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+    assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
+    material.money.usage.replay_bytes = 2 * record_bytes;
     assert!(material.check_native_open_record_extent_v2(payload_bytes).is_ok());
     material.money.usage.retained_bytes = record_bytes - 1;
     assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
     material.money.usage.retained_bytes = record_bytes;
-    material.money.usage.replay_bytes = payload_bytes;
+    material.money.usage.replay_bytes = 2 * record_bytes - 1;
     assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
-    material.money.usage.replay_bytes = record_bytes;
+    material.money.usage.replay_bytes = 2 * record_bytes;
     material.assignment_policy.max_frame_bytes = payload_bytes - 1;
     assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
     material.assignment_policy.max_frame_bytes = payload_bytes;

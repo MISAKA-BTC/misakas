@@ -486,9 +486,27 @@ impl TransitionBuilder<'_> {
         self.require_assignment_output_unlocked_v2(output.outpoint())?;
         let head = self.assignment_head_v2(id)?;
         let policy = &plan.material.assignment_policy;
-        if head.next_ordinal >= u64::from(policy.max_history_frames) {
-            return Err(refusal("original Assignment history frame budget exhausted"));
-        }
+        let max_frames_before = u64::from(policy.max_history_frames).checked_sub(1).ok_or_else(|| refusal("empty history policy"))?;
+        let header_bytes = misaka_palw_positive_contract::assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+        let proposed_payload_bytes = (literal.len() as u64)
+            .checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64)
+            .filter(|n| *n <= policy.max_frame_bytes)
+            .ok_or_else(|| refusal("BindResult exceeds the original frame cap"))?;
+        let proposed_record_bytes = proposed_payload_bytes.checked_add(header_bytes).ok_or_else(|| refusal("BindResult extent"))?;
+        let remaining = plan
+            .material
+            .native_assignment_journal_storage_limit_v2()
+            .checked_sub(proposed_record_bytes)
+            .ok_or_else(|| refusal("BindResult exceeds the original history budget"))?;
+        let max_record_bytes = policy.max_frame_bytes.checked_add(header_bytes).ok_or_else(|| refusal("original frame cap"))?;
+        PositiveRowsV2::new(&self.state)
+            .assignment_journal_extent_v2(&head, expected.origin, max_frames_before, max_record_bytes, remaining)
+            .map_err(|error| match error {
+                crate::palw_positive_rows_v2::PositiveRowErrorV2::Contract(misaka_palw_positive_contract::ContractError::Budget) => {
+                    refusal("BindResult exceeds the original cumulative history budget")
+                }
+                _ => missing_assignment_history(),
+            })?;
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
             let payload = self.encode_assignment_control_payload_v2(id, literal, policy.max_frame_bytes)?;

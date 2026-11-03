@@ -428,14 +428,29 @@ impl DbPalwStateV2Store {
             },
         )?;
         let head = rows.journal;
-        bound(head.next_ordinal, limits.max_frames)?;
-        // Two complete reads/hashes per frame: reverse validation then forward
-        // delivery. Reserve before metadata allocation or the first DB read.
-        let raw_bound = mul(mul(head.next_ordinal, limits.max_record_bytes)?, 2)?;
-        bound(raw_bound, limits.max_total_raw_bytes)?;
+        // Rooted frame sizes provide an exact byte bound before any literal
+        // DB read. Reserve two complete passes and charge both hashes.
+        let extent = kaspa_consensus_core::palw_positive_rows_v2::PositiveRowsV2::new(state)
+            .assignment_journal_extent_v2(
+                &head,
+                rows.assignment.origin,
+                limits.max_frames,
+                limits.max_record_bytes,
+                limits.max_total_raw_bytes / 2,
+            )
+            .map_err(|error| match error {
+                kaspa_consensus_core::palw_positive_rows_v2::PositiveRowErrorV2::Contract(
+                    misaka_palw_positive_contract::ContractError::Budget,
+                ) => capacity("rooted history extent exceeds reservation"),
+                kaspa_consensus_core::palw_positive_rows_v2::PositiveRowErrorV2::MissingRequiredRow => {
+                    capacity("current rooted Assignment frame unavailable")
+                }
+                _ => corrupt("current rooted Assignment frame chain invalid"),
+            })?;
+        let raw_bound = mul(extent.record_bytes, 2)?;
         bound(mul(raw_bound, 2)?, limits.max_work)?;
         let index = mul(head.next_ordinal, size_of::<Digest>() as u64)?;
-        bound(add(add(index, limits.max_record_bytes)?, fixed_workspace)?, limits.max_heap_bytes)?;
+        bound(add(add(index, extent.largest_record_bytes)?, fixed_workspace)?, limits.max_heap_bytes)?;
         let count = usize::try_from(head.next_ordinal).map_err(|_| capacity("frame count address space"))?;
         let mut ids = Vec::new();
         ids.try_reserve_exact(count).map_err(|_| capacity("bounded frame index"))?;
@@ -446,9 +461,9 @@ impl DbPalwStateV2Store {
         let mut raw_bytes = 0;
         for ordinal in (0..head.next_ordinal).rev() {
             let (previous, origin, kind) =
-                self.with_positive_assignment_journal_record_v2(expected, limits.max_record_bytes, |raw| {
+                self.with_positive_assignment_journal_record_v2(expected, extent.largest_record_bytes, |raw| {
                     raw_bytes = add(raw_bytes, raw.len() as u64)?;
-                    let view = AssignmentJournalRecordViewV2::decode(raw, limits.max_record_bytes)
+                    let view = AssignmentJournalRecordViewV2::decode(raw, extent.largest_record_bytes)
                         .map_err(|_| corrupt("persisted frame identity/codec"))?;
                     let h = view.header();
                     if h.id() != expected || h.assignment != assignment || h.ordinal != ordinal {
@@ -467,16 +482,22 @@ impl DbPalwStateV2Store {
             ids.push(expected);
             expected = previous;
         }
+        if raw_bytes != extent.record_bytes {
+            return Err(corrupt("literal history extent differs from rooted frames"));
+        }
         for id in ids.into_iter().rev() {
-            self.with_positive_assignment_journal_record_v2(id, limits.max_record_bytes, |raw| {
+            self.with_positive_assignment_journal_record_v2(id, extent.largest_record_bytes, |raw| {
                 raw_bytes = add(raw_bytes, raw.len() as u64)?;
-                let view = AssignmentJournalRecordViewV2::decode(raw, limits.max_record_bytes)
+                let view = AssignmentJournalRecordViewV2::decode(raw, extent.largest_record_bytes)
                     .map_err(|_| corrupt("persisted frame changed during read"))?;
                 if view.header().id() != id {
                     return Err(corrupt("immutable frame identity changed"));
                 }
                 visit(view.header(), view.payload())
             })??;
+        }
+        if raw_bytes != raw_bound {
+            return Err(corrupt("literal history extent differs from rooted frames"));
         }
         Ok(AssignmentJournalReadReportV2 { frames: head.next_ordinal, raw_bytes, hash_work: mul(raw_bytes, 2)? })
     }
