@@ -2591,7 +2591,13 @@ impl VirtualStateProcessor {
                     if palw_state.is_some() && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(pov_daa_score) {
                         ctx.positive_accepting_point = Some(positive_point);
                     }
-                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
+                    self.calculate_utxo_state(
+                        &mut ctx,
+                        &selected_parent_utxo_view,
+                        &*bond_view,
+                        pov_daa_score,
+                        palw_state.as_deref(),
+                    )?;
                     let mut assignment_raw_actions =
                         self.take_assignment_actions_v2(&mut ctx, positive_point, &selected_parent_utxo_view, palw_state.as_deref())?;
                     if let Some(state) = palw_state.as_deref()
@@ -3896,10 +3902,29 @@ impl VirtualStateProcessor {
         if let Some(fault) = ctx.positive_native_carriers.take_resource_fault() {
             return Err(fault);
         }
-        std::mem::take(&mut ctx.positive_native_carriers)
+        let actions = std::mem::take(&mut ctx.positive_native_carriers)
             .into_phase_two(&ctx.mergeset_acceptance_data, &ctx.accepted_tx_ids, point, ctx.selected_parent())
             .map_err(|why| NativeCoverageV1::unsupported::<Self>("Positive carrier phase-two provenance", &format!("{why:?}")))?
-            .into_assignment_raw_actions_v2(self, &selected_parent_utxo_view.compose(&ctx.mergeset_diff), state)
+            .into_assignment_raw_actions_v2(self, &selected_parent_utxo_view.compose(&ctx.mergeset_diff), state)?;
+        for (outpoint, entry) in &ctx.mergeset_diff.remove {
+            if !ctx.palw_escrow_locks.positive_case.contains_key(outpoint) {
+                continue;
+            }
+            let mut matching = actions.iter().filter(|action| {
+                let tx = action.transaction();
+                tx.payload.get(7) == Some(&12)
+                    && tx.inputs.first().is_some_and(|input| input.previous_outpoint == *outpoint)
+                    && action.entries().first() == Some(entry)
+                    && action.case_backing().is_ok()
+            });
+            if matching.next().is_none() || matching.next().is_some() {
+                return Err(NativeCoverageV1::unsupported::<Self>(
+                    "accepted Case UTXO debit",
+                    "missing or duplicate matching raw settlement action",
+                ));
+            }
+        }
+        Ok(actions)
     }
 
     fn replay_relay_utxo_fees_v2(
@@ -3925,7 +3950,7 @@ impl VirtualStateProcessor {
         }
         let round_incomes = std::mem::take(&mut ctx.palw_round_fee_incomes);
         let original = ctx.restart_with_relay_fee_plan(parent_multiset, plan);
-        self.calculate_utxo_state(ctx, selected_parent_utxo_view, bond_view, point.daa_score)?;
+        self.calculate_utxo_state(ctx, selected_parent_utxo_view, bond_view, point.daa_score, Some(parent_state))?;
         if round_incomes != ctx.palw_round_fee_incomes {
             return Err(fault("Round income changed during replay"));
         }
@@ -4061,7 +4086,7 @@ impl VirtualStateProcessor {
         let relay_parent_multiset = ctx.positive_relay_preview_point.map(|_| ctx.multiset_hash.clone());
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, daa)
+        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, daa, virtual_palw_state.as_deref())
             .map_err(RuleError::LocalNativeCapacityUnavailable)?;
         if let (Some(point), Some(parent_multiset), Some(state)) =
             (ctx.positive_relay_preview_point, relay_parent_multiset, virtual_palw_state.as_ref())
@@ -5937,6 +5962,7 @@ impl VirtualStateProcessor {
             args,
             bond_gate.as_ref().map(|gate| &gate.burns),
             bond_gate.as_ref().map(|gate| &gate.escrow),
+            bond_gate.as_ref().and_then(|gate| gate.case_source_parent.as_ref()).map(|(parent, state)| (*parent, &***state)),
         )?;
         // **ADR-0152 H-1 (P2-9 review, finding 5):** an H-1 carrier the fold would refuse at the tip
         // is refused here, AFTER the UTXO context, so only a funded, signed carrier costs this node a
@@ -7823,6 +7849,7 @@ pub(super) struct PalwMempoolBondGate {
     pub(super) burns: std::collections::HashMap<TransactionOutpoint, u64>,
     /// **G14 lane escrow-rfc08 round 2: the funded-escrow locks at the tip** (rooted rows only — a mempool has no mergeset, so no
     /// provisional lock; a chained spend of a not-yet-accepted TFO1 output is refused at the merge by the provisional lock).
+    pub(super) case_source_parent: Option<(BlockHash, Arc<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>)>,
     pub(super) escrow: super::utxo_validation::PalwEscrowSpendLocksV1,
 }
 

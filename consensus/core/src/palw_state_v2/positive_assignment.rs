@@ -959,6 +959,7 @@ pub(super) fn apply_raw_before_object_v2(
         match builder.apply_positive_assignment_raw_v2(ctx, &action) {
             Ok(()) => {}
             Err(local @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_))) => return Err(local),
+            Err(why) if action.transaction().payload.get(7) == Some(&12) && action.case_backing().is_ok() => return Err(why),
             Err(_semantic) => {}
         }
         *previous_ordinal = Some(origin.accepted_tx_ordinal);
