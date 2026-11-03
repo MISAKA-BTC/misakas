@@ -1332,3 +1332,22 @@ to come from the same intake. Before C can be integrated, its historical
 reader needs a bounded projection of the original accepted Assignment
 and payer at the exact R event. A preflight alone creates neither C custody
 nor a Case, and the replay cannot substitute a later Assignment rule scope.
+
+### Case relay historical contract scope
+
+The [follow-up candidate](initial-case-relay-historical-scope-candidate-20261103.tar.gz)
+projects the exact original Assignment row from the real R event. It compares
+each newer row image before reversing it, keeps one codec-bounded buffer
+and meters the original row decode. A uses its existing nonce projection.
+R's policy, fee and custody stay tied to R's actual rules. C checks the
+contract identity, original payer and caps against the restored Open
+Assignment, including its chronology relative to R. Substituting R's
+ruleset for A's contract ruleset or using a closed Assignment fails.
+
+Eight isolated funds cases passed with the extracted matchers. Candidate
+Core and test metadata passed. The Consensus test target passed metadata
+against the prior compiled Core with exact copies of the new pure functions.
+This does not establish native replay or registration. The candidate stays
+staged while the initial A runtime is pinned. C op14 still needs the actual
+original Assignment material/profile owner at registration and an end-to-end
+test covering a ruleset change, actual fees, custody, retry and recovery.
