@@ -101,6 +101,7 @@ impl VirtualStateProcessor {
             maximum_heap,
             maximum_work,
         )
+        .map(|(carriage, _)| carriage)
     }
 
     /// Read original decode rules for a continuation against the actual walk's
@@ -177,7 +178,7 @@ impl VirtualStateProcessor {
         let limits = rules.body_limits().map_err(|_| E::Invalid("original Assignment body limits"))?;
         kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(continuation_body, limits)
             .map_err(|_| E::InvalidContinuation)?;
-        let carriage = self.load_positive_assignment_carriage_v2(
+        let (carriage, work) = self.load_positive_assignment_carriage_v2(
             parent,
             record,
             max_payload,
@@ -188,6 +189,19 @@ impl VirtualStateProcessor {
         if !matches!(PositiveRowsV2::new(prefix).read(NativeRowKey::Assignment(assignment)), Ok(None)) {
             return Err(E::Invalid("original Open did not start at an absent Assignment"));
         }
+        let anchor = BlockHash::from_bytes(row.bundle.terms.branch_anchor.0);
+        if !self
+            .reachability_service
+            .try_is_chain_ancestor_of(anchor, carriage.selected_parent())
+            .map_err(|_| E::Unavailable("original signed ancestor reachability"))?
+        {
+            return Err(E::Invalid("signed Assignment anchor is outside original selected chain"));
+        }
+        let anchor_daa = self.headers_store.get_daa_score(anchor).map_err(|_| E::Unavailable("original signed ancestor header"))?;
+        let remaining_work = view.material.custody.replay_work.checked_sub(work).ok_or(E::Invalid("original replay work cap"))?;
+        prefix
+            .check_original_assignment_verifier_candidates_v2(&view, anchor_daa, row.bundle.terms.result_before_daa, remaining_work)
+            .map_err(|_| E::Invalid("original verifier candidates differ or exceed replay budget"))?;
         Ok(Some((rules, carriage)))
     }
 
@@ -195,21 +209,21 @@ impl VirtualStateProcessor {
     /// stores. The caller still has to choose its record from CURRENT rooted
     /// history and replay duties/custody. This method issues no admission or
     /// accounting capability and never reselects a later intake profile.
-    pub(in crate::pipeline::virtual_processor) fn load_positive_assignment_carriage_v2(
+    fn load_positive_assignment_carriage_v2(
         &self,
         current_selected_parent: BlockHash,
         record: AssignmentJournalRecordViewV2<'_>,
         maximum_payload: u64,
         maximum_heap: u64,
         maximum_work: u64,
-    ) -> Result<NativeAcceptedCaseCarriageV2, NativeAssignmentArchiveErrorV2> {
+    ) -> Result<(NativeAcceptedCaseCarriageV2, u64), NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
         if record.header().kind == AssignmentJournalEventKindV2::MetadataReceipt {
             return Err(E::Unavailable("actual metadata receipt carriage owner is not connected"));
         }
         let (boundary, native_body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, maximum_payload)
             .map_err(|_| E::Invalid("invalid original Assignment control carriage framing"))?;
-        let carriage = self.load_positive_accepted_carriage_v2(
+        let (carriage, work) = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
             NativeArchiveBoundaryV2::Assignment(boundary),
             maximum_heap,
@@ -222,7 +236,7 @@ impl VirtualStateProcessor {
         {
             return Err(E::Invalid("original actual Assignment carrier differs from journal"));
         }
-        Ok(carriage)
+        Ok((carriage, work))
     }
 
     fn load_positive_accepted_carriage_v2(
@@ -231,7 +245,7 @@ impl VirtualStateProcessor {
         boundary: NativeArchiveBoundaryV2,
         maximum_heap: u64,
         maximum_work: u64,
-    ) -> Result<NativeAcceptedCaseCarriageV2, NativeAssignmentArchiveErrorV2> {
+    ) -> Result<(NativeAcceptedCaseCarriageV2, u64), NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
         if [maximum_heap, maximum_work].into_iter().any(|n| n == 0 || n == u64::MAX) {
             return Err(E::Invalid("original archive limits are not finite"));
@@ -369,10 +383,11 @@ impl VirtualStateProcessor {
         let carriage =
             NativeAcceptedCaseCarriageV2::from_native_history_v2(body, index, entries, actual_fee, origin, selected_parent, lease)
                 .map_err(|_| E::Invalid("actual native carriage shape"))?;
-        carriage.with_native_prefix_state_v2(Arc::new(prefix), root).map_err(|error| match error {
+        let carriage = carriage.with_native_prefix_state_v2(Arc::new(prefix), root).map_err(|error| match error {
             NativeAssignedCaseBackingErrorV2::NativeResource(r) => E::Resource(r),
             _ => E::Invalid("actual prefix owner mismatch"),
-        })
+        })?;
+        Ok((carriage, work))
     }
 
     /// Same accepting-prefix creator outputs disappear from net UTXO diffs;

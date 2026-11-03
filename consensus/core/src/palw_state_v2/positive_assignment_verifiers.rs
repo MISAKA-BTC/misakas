@@ -34,7 +34,7 @@ fn extent(count: u32) -> Result<usize, PalwStateV2Error> {
 /// section alone establishes no reservation or authenticated ancestry.
 pub(super) struct AssignmentVerifierCandidatesV2<'a>(&'a [[u8; KEY_BYTES]]);
 impl<'a> AssignmentVerifierCandidatesV2<'a> {
-    pub(super) fn decode(preimage: &'a [u8]) -> Result<Self, PalwStateV2Error> {
+    fn decode_framing(preimage: &'a [u8]) -> Result<Self, PalwStateV2Error> {
         let header = preimage.get(..HEADER).ok_or_else(|| refused("truncated cohort header"))?;
         if &header[..MAGIC.len()] != MAGIC {
             return Err(refused("wrong cohort format"));
@@ -42,7 +42,11 @@ impl<'a> AssignmentVerifierCandidatesV2<'a> {
         let count = u32::from_le_bytes(header[MAGIC.len()..].try_into().expect("fixed count width"));
         let keys = preimage.get(HEADER..extent(count)?).ok_or_else(|| refused("truncated cohort keys"))?;
         let (keys, []) = keys.as_chunks::<KEY_BYTES>() else { unreachable!("checked extent has whole keys") };
-        let view = Self(keys);
+        Ok(Self(keys))
+    }
+
+    pub(super) fn decode(preimage: &'a [u8]) -> Result<Self, PalwStateV2Error> {
+        let view = Self::decode_framing(preimage)?;
         let mut previous = None;
         for key in view.keys() {
             if previous.is_some_and(|p| p >= key) {
@@ -125,6 +129,69 @@ pub(super) fn derive_assignment_verifier_candidates_v2(
     Ok(LeasedAssignmentVerifierCandidatesV2 { bytes: encoded, count, _lease: lease })
 }
 
+impl PalwChainStateV2 {
+    /// Audit retained keys against the exact original pre-event state. The
+    /// native caller supplies the independently resolved signed ancestor DAA
+    /// and charges this pass from the original replay budget. This establishes
+    /// data equality only; it does not restore capacity or certify a claim.
+    pub fn check_original_assignment_verifier_candidates_v2(
+        &self,
+        original: &crate::palw_positive_assignment_material_v2::AssignmentAdmissionMaterialViewV2<'_>,
+        anchor_daa: u64,
+        result_before_daa: u64,
+        remaining_work: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        use misaka_palw_positive_contract::assignment::open_material::AssignmentOpenPreimageKindV2;
+
+        let material = &original.material;
+        let preimage = original.open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
+        let per_row = material.native_preimages.source_policy.work.per_control;
+        let max_rows = remaining_work.checked_div(per_row).ok_or_else(|| refused("invalid original work schedule"))?;
+        self.compare_assignment_verifier_candidates_v2(
+            preimage,
+            &material.certification_policy,
+            anchor_daa,
+            result_before_daa,
+            material.origin.accepted_daa,
+            max_rows,
+        )
+    }
+
+    fn compare_assignment_verifier_candidates_v2(
+        &self,
+        preimage: &[u8],
+        policy: &PalwSecurityCertificationPolicyV1,
+        anchor_daa: u64,
+        result_before_daa: u64,
+        intake_daa: u64,
+        max_rows: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        if anchor_daa > intake_daa || intake_daa >= result_before_daa {
+            return Err(refused("original intake clock"));
+        }
+        let cutoff = assignment_verifier_registration_cutoff_v2(policy, anchor_daa, result_before_daa).map_err(refused)?;
+        let retained = AssignmentVerifierCandidatesV2::decode_framing(preimage)?;
+        let mut keys = retained.keys();
+        if let Some(cutoff) = cutoff {
+            if self.bonds.len() as u64 > max_rows {
+                return Err(refused("original verifier replay work cap"));
+            }
+            for (key, bond) in &self.bonds {
+                if bond.registered_daa > intake_daa {
+                    return Err(refused("invalid original registration chronology"));
+                }
+                if bond.registered_daa <= cutoff && keys.next() != Some(*key) {
+                    return Err(refused("retained verifier candidates differ from original registry"));
+                }
+            }
+        }
+        if keys.next().is_some() {
+            return Err(refused("unexpected retained verifier candidate"));
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -197,6 +264,26 @@ mod tests {
         assert!(check(&state, 12, 419).contains("cohort exceeds original byte budget"));
         state.bonds.get_mut(&key(6)).unwrap().registered_daa = 101;
         assert!(check(&state, 12, 4096).contains("InvalidRegistrationChronology"));
+    }
+
+    #[test]
+    fn original_cohort_replay_rejects_partial_reordered_or_wrong_branch_data() {
+        let mut state = fixture();
+        let policy = policy();
+        let check = |state: &PalwChainStateV2, indices: &[u32], work| {
+            state.compare_assignment_verifier_candidates_v2(&preimage(indices), &policy, 100, 104, 100, work)
+        };
+        assert!(check(&state, &[1, 2, 3, 4, 5, 6], 6).is_ok());
+        assert!(check(&state, &[1, 2, 3, 4, 5, 6], 5).is_err());
+        for indices in [&[1, 2, 3, 4, 5][..], &[1, 3, 2, 4, 5, 6], &[1, 2, 3, 4, 5, 6, 7]] {
+            assert!(check(&state, indices, 6).is_err());
+        }
+        let bond = state.bonds.remove(&key(6)).unwrap();
+        state.bonds.insert(key(7), bond);
+        assert!(check(&state, &[1, 2, 3, 4, 5, 6], 6).is_err());
+        assert!(check(&state, &[1, 2, 3, 4, 5, 7], 6).is_ok());
+        state.bonds.get_mut(&key(7)).unwrap().registered_daa = 101;
+        assert!(check(&state, &[1, 2, 3, 4, 5], 6).is_err());
     }
 
     #[test]

@@ -282,3 +282,33 @@ failed with a test closure borrow error before executing tests. The
 corrected Clippy and runtime runs share one unchanged source map.
 The documentation check recorded zero new issues against 43 existing
 missing references. See the verifier cohort artifact audit and log manifest.
+
+## Original Gate C candidates on Assignment continuation replay
+
+The continuation loader now resolves the signed anchor against the
+original accepting block's actual selected parent. It reads the ancestor
+DAA from the native header store after the ancestry check. It then checks
+the original reservation custody candidate keys against the real pre-op8
+state already reconstructed from the accepted ordinal and retained delta.
+This is an exact equality check in native bond key order. It rejects
+missing, extra, reordered, duplicate or foreign keys and does not allocate
+another cohort. Current-branch registrations are not inputs to this check.
+
+The loader deducts the existing carriage work quote before allowing the
+registry pass, with the original per-control rate applied to each scanned
+row. The scan bound is checked before inspecting the registry. Missing
+original ancestry or headers and divergent retained data abort continuation
+loading through the local archive error boundary. The caller must retry
+from available canonical data.
+
+This change is on the Node continuation read path. It does not complete
+the write-side reservation owner, the independently scheduled P sweep
+provider, pruning custody, or full accounting of every historical replay
+operation. No native Assigned Result or funds movement is enabled here.
+
+Core and Consensus library Clippy passed with warnings denied. All four
+cohort unit tests passed on the same unchanged source map with opt2 and
+the normal stack. The replay test exercises different registry states as
+fixtures. Actual native A acceptance, reorg, and closed-DB replay of that
+new row were outside this test. The documentation check found zero new
+issues against the 43 existing missing references.

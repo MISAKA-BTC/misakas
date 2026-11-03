@@ -678,5 +678,21 @@
     "stored_sha256": "f462724370ff48f86bc3713bbe578feb1344c7c2a1eb84455b02fd58cc99bd01",
     "raw_bytes": 357623,
     "stored_bytes": 24513
+  },
+  {
+    "raw_name": "verifier-cohort-replay-clippy-first.log",
+    "stored_name": "verifier-cohort-replay-clippy-first.log.gz",
+    "raw_sha256": "25a48f693c4cfe28937f72a7062c4ee38f04ef5ed811f2c10126d072d308f412",
+    "stored_sha256": "0b6166a88a644978657bb5cbdbe6b6ef23904d30f14e0f942e6a216583d3e324",
+    "raw_bytes": 341727,
+    "stored_bytes": 23646
+  },
+  {
+    "raw_name": "verifier-cohort-replay-runtime-first.log",
+    "stored_name": "verifier-cohort-replay-runtime-first.log.gz",
+    "raw_sha256": "9514d808f103d9da6bcf524e4b824ad7d2051798317464e3c9ebc75aaf81e50b",
+    "stored_sha256": "16750a8071cf898545d1f234497e3508e0b7a98256df36bf14e85437f7f44cd2",
+    "raw_bytes": 357758,
+    "stored_bytes": 24591
   }
 ]
