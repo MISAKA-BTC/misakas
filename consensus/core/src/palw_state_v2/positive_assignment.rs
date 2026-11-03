@@ -456,6 +456,7 @@ impl TransitionBuilder<'_> {
                 || role_row.bond != outpoint
                 || role_row.assignment != id
                 || role_row.authorization != AssignmentRoleAuthorizationV2::Initial
+                || role_row.lease != row.reservation
             {
                 return Err(refusal("initial role set differs from the three signed roles"));
             }
@@ -492,9 +493,6 @@ impl TransitionBuilder<'_> {
             (funding.outpoint(), funding.amount()),
             &plan.funding.payer_key,
         )?;
-        if relay.is_some() && (row.reservation.origin != row.origin || row.reservation.digest == Digest([0; 64])) {
-            return Err(refusal("initial Assignment relay requires the reservation at this acceptance point"));
-        }
         let nonce_key = NativeRowKey::AssignmentNonce(row.bundle.terms.poster);
         let previous = match PositiveRowsV2::new(&self.state).read(nonce_key).map_err(refusal)? {
             None => AssignmentNonceV2::default(),
@@ -658,8 +656,10 @@ impl TransitionBuilder<'_> {
         horizon
             .check_case_maturity_v2(ctx.daa_score, plan.case.maturity_daa, plan.material.assignment_policy.refund_window_daa)
             .map_err(refusal)?;
-        if relay.is_some() && (plan.case.reservation.origin != origin || plan.case.reservation.digest == Digest([0; 64])) {
-            return Err(refusal("initial Case relay requires the Case reservation at this acceptance point"));
+        if plan.case.reservation
+            != crate::palw_positive_assignment_material_v2::assigned_case_reservation_v2(expected, origin, &plan.case, &plan.funding)
+        {
+            return Err(refusal("Case reservation does not carry the original Assignment custody and literal funding"));
         }
 
         let head = self.assignment_head_v2(id)?;

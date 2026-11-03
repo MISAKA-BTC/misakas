@@ -1256,6 +1256,16 @@ fn prepare_initial_case_checker_v2(
     }
     let (horizon, source_ledger) =
         super::positive_assignment::assignment_horizon_v2(&rules, signed, source, prover, resources, row.origin.accepted_daa)?;
+    if bundle.case.reservation
+        != crate::palw_positive_assignment_material_v2::assigned_case_reservation_v2(
+            row,
+            first.origin(),
+            &bundle.case,
+            &bundle.funding,
+        )
+    {
+        return Err(refuse("recovered Case reservation differs from the actual Assignment, Result and original coin"));
+    }
     let accepted_daa = first.origin().accepted_daa;
     let gate_c = rules.gate_c_clock(accepted_daa).map_err(refuse)?;
     horizon

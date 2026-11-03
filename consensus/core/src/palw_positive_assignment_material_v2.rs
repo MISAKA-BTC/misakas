@@ -287,13 +287,18 @@ impl AssignmentAdmissionMaterialV2 {
             || self.custody.liability != row.liability
             || self.custody.retention_until_daa < row.bundle.terms.reserve_until_daa
             || self.custody.retention_until_daa == u64::MAX
+            || self
+                .custody
+                .retention_until_daa
+                .checked_sub(row.origin.accepted_daa)
+                .is_none_or(|n| n > self.native_preimages.physical.max_retention_daa)
             || row.admission_material != (AcceptedMaterial { origin: row.origin, digest: self.id() })
         {
             return Err(ContractError::Identity);
         }
-        if self.custody.retained_bytes < self.money.usage.retained_bytes
-            || self.custody.replay_bytes < self.money.usage.replay_bytes
-            || self.custody.heap_bytes < self.money.usage.heap_bytes
+        if self.custody.retained_bytes != self.money.usage.retained_bytes
+            || self.custody.replay_bytes != self.money.usage.replay_bytes
+            || self.custody.heap_bytes != self.money.usage.heap_bytes
             || self.custody.replay_work == 0
             || self.custody.replay_work > self.assignment_policy.max_replay_work
             || self.source.units == 0
@@ -326,6 +331,80 @@ impl AssignmentAdmissionMaterialV2 {
         Ok(())
     }
 }
+pub(crate) const ASSIGNMENT_COHORT_MAGIC_V2: &[u8; 8] = b"PC2ACOH1";
+pub(crate) const ASSIGNMENT_COHORT_HEADER_V2: usize = ASSIGNMENT_COHORT_MAGIC_V2.len() + 4;
+pub(crate) const ASSIGNMENT_COHORT_KEY_BYTES_V2: usize = 64 + 4;
+
+pub(crate) fn split_assignment_reservation_v2(
+    bytes: &[u8],
+) -> Result<(&[[u8; ASSIGNMENT_COHORT_KEY_BYTES_V2]], &[u8]), ContractError> {
+    let header = bytes.get(..ASSIGNMENT_COHORT_HEADER_V2).ok_or(ContractError::NonCanonical)?;
+    if !header.starts_with(ASSIGNMENT_COHORT_MAGIC_V2) {
+        return Err(ContractError::NonCanonical);
+    }
+    let count = u32::from_le_bytes(header[ASSIGNMENT_COHORT_MAGIC_V2.len()..].try_into().expect("fixed count width"));
+    let keys_bytes = (count as usize).checked_mul(ASSIGNMENT_COHORT_KEY_BYTES_V2).ok_or(ContractError::Budget)?;
+    let (keys, reservation) = bytes[ASSIGNMENT_COHORT_HEADER_V2..].split_at_checked(keys_bytes).ok_or(ContractError::NonCanonical)?;
+    let (keys, []) = keys.as_chunks::<ASSIGNMENT_COHORT_KEY_BYTES_V2>() else { unreachable!("fixed key width") };
+    Ok((keys, reservation))
+}
+
+/// Retained alongside the exact verifier cohort in the original Open record.
+/// The bounds are selected by the original native quote and signed duties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct AssignmentReservationCustodyV2 {
+    version: u16,
+    revision: u16,
+    assignment: AssignmentId,
+    origin: AcceptedOrigin,
+    quote: Digest,
+    source: Digest,
+    prover: Digest,
+    retention_until_daa: u64,
+    journal_bytes: u64,
+    replay_work: u64,
+}
+
+impl AssignmentReservationCustodyV2 {
+    pub fn derive(row: &AssignmentRow, material: &AssignmentAdmissionMaterialV2) -> Self {
+        Self {
+            version: 2,
+            revision: 1,
+            assignment: row.id(),
+            origin: row.origin,
+            quote: material.money.id(),
+            source: row.source_consent.id(),
+            prover: row.prover_consent.id(),
+            retention_until_daa: material.custody.retention_until_daa,
+            journal_bytes: material.native_assignment_journal_storage_limit_v2(),
+            replay_work: material.custody.replay_work,
+        }
+    }
+}
+
+/// The C reservation keeps the exact A custody and links it to the actual
+/// Result origin, signed service, original Case coin and maturity.
+pub(crate) fn assigned_case_reservation_v2(
+    assignment: &AssignmentRow,
+    origin: AcceptedOrigin,
+    case: &misaka_palw_positive_contract::rows::CaseRow,
+    funding: &misaka_palw_positive_contract::rows::FundingRow,
+) -> AcceptedMaterial {
+    let commitment = (
+        *b"PC2ACASE",
+        assignment.id(),
+        assignment.reservation,
+        case.case,
+        case.result,
+        case.service.id(),
+        case.maturity_daa,
+        funding.consent.id(),
+        funding.original_outpoint,
+        origin,
+    );
+    AcceptedMaterial { origin, digest: digest(b"misaka/positive/assignment-custody-bytes/v2/r1", &commitment) }
+}
+
 /// Literal liability custody in the Open journal. The epoch interval and
 /// release limits are derived under the actual original rule set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -409,6 +488,15 @@ impl<'a> AssignmentAdmissionMaterialViewV2<'a> {
             if *expected != assignment_custody_bytes_id_v2(actual) {
                 return Err(ContractError::Identity);
             }
+        }
+        let reservation_kind = AssignmentOpenPreimageKindV2::ReservationCustody;
+        let (_, reservation) = split_assignment_reservation_v2(open.preimage(reservation_kind))?;
+        let actual = borsh::from_slice::<AssignmentReservationCustodyV2>(reservation).map_err(|_| ContractError::NonCanonical)?;
+        let expected = AssignmentReservationCustodyV2::derive(row, &material);
+        let reservation_pin =
+            AcceptedMaterial { origin: row.origin, digest: material.custody.preimage_bytes[reservation_kind as usize] };
+        if actual != expected || material.custody.reservation != reservation_pin {
+            return Err(ContractError::Identity);
         }
         let liability_kind = AssignmentOpenPreimageKindV2::LiabilityCustody;
         let actual = borsh::from_slice::<AssignmentLiabilityCustodyV2>(open.preimage(liability_kind))

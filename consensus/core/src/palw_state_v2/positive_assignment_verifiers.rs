@@ -8,9 +8,10 @@ use crate::palw_positive_assignment_certification_v2::{
 };
 use crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1;
 
-const MAGIC: &[u8; 8] = b"PC2ACOH1";
-const HEADER: usize = MAGIC.len() + 4;
-const KEY_BYTES: usize = 64 + 4;
+use crate::palw_positive_assignment_material_v2::{
+    ASSIGNMENT_COHORT_HEADER_V2 as HEADER, ASSIGNMENT_COHORT_KEY_BYTES_V2 as KEY_BYTES, ASSIGNMENT_COHORT_MAGIC_V2 as MAGIC,
+    split_assignment_reservation_v2,
+};
 
 fn refused(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(format!("Assignment verifier candidates: {why:?}"))
@@ -35,13 +36,7 @@ fn extent(count: u32) -> Result<usize, PalwStateV2Error> {
 pub(super) struct AssignmentVerifierCandidatesV2<'a>(&'a [[u8; KEY_BYTES]]);
 impl<'a> AssignmentVerifierCandidatesV2<'a> {
     fn decode_framing(preimage: &'a [u8]) -> Result<Self, PalwStateV2Error> {
-        let header = preimage.get(..HEADER).ok_or_else(|| refused("truncated cohort header"))?;
-        if &header[..MAGIC.len()] != MAGIC {
-            return Err(refused("wrong cohort format"));
-        }
-        let count = u32::from_le_bytes(header[MAGIC.len()..].try_into().expect("fixed count width"));
-        let keys = preimage.get(HEADER..extent(count)?).ok_or_else(|| refused("truncated cohort keys"))?;
-        let (keys, []) = keys.as_chunks::<KEY_BYTES>() else { unreachable!("checked extent has whole keys") };
+        let (keys, _) = split_assignment_reservation_v2(preimage).map_err(refused)?;
         Ok(Self(keys))
     }
 

@@ -434,6 +434,11 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
         last_event: origin(),
         admission_material: AcceptedMaterial { origin: origin(), digest: material.id() },
     };
+    let reservation = reservation_bytes(&row, &material);
+    let digest = assignment_custody_bytes_id_v2(&reservation);
+    material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize] = digest;
+    material.custody.reservation = AcceptedMaterial { origin: row.origin, digest };
+    row.reservation = material.custody.reservation;
     let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &material).unwrap()).unwrap();
     let digest = assignment_custody_bytes_id_v2(&liability);
     material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::LiabilityCustody as usize] = digest;
@@ -445,12 +450,19 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
 fn limits() -> AssignmentOpenLimitsV2 {
     AssignmentOpenLimitsV2::within_payload(16 << 10)
 }
+fn reservation_bytes(row: &AssignmentRow, material: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
+    let mut reservation = b"PC2ACOH1".to_vec();
+    reservation.extend_from_slice(&0u32.to_le_bytes());
+    borsh::to_writer(&mut reservation, &AssignmentReservationCustodyV2::derive(row, material)).unwrap();
+    reservation
+}
+
 fn payload(row: &AssignmentRow, m: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
     let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(row, m).unwrap()).unwrap();
     misaka_palw_positive_contract::assignment::open_material::encode_assignment_open_v2(
         &borsh::to_vec(m).unwrap(),
         &[2, 0, 1, 0, 8],
-        [&[1], &liability],
+        [&reservation_bytes(row, m), &liability],
         limits(),
     )
     .unwrap()
@@ -603,6 +615,30 @@ fn custody_and_literal_transaction_cannot_be_replaced_or_missing() {
     assert!(premature.check_row(&row_with_matching_pin).is_err());
 }
 #[test]
+fn reservation_rejects_rehashed_budget_and_extra_cohort_tail() {
+    let (row, material, _) = fixture();
+    let actual = reservation_bytes(&row, &material);
+    let mut forged = actual.clone();
+    *forged.last_mut().unwrap() ^= 1;
+    let mut padded = actual;
+    padded.push(0);
+    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &material).unwrap()).unwrap();
+    for reservation in [&forged, &padded] {
+        let mut row = row.clone();
+        let mut material = material.clone();
+        let digest = assignment_custody_bytes_id_v2(reservation);
+        material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize] = digest;
+        material.custody.reservation.digest = digest;
+        row.reservation = material.custody.reservation;
+        row.admission_material.digest = material.id();
+        let raw = encode_assignment_open_v2(&borsh::to_vec(&material).unwrap(), &[2, 0, 1, 0, 8], [reservation, &liability], limits())
+            .unwrap();
+        assert!(material.check_row(&row).is_ok());
+        assert!(AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 8], limits()).is_err());
+    }
+}
+
+#[test]
 fn original_liability_rejects_a_rehashed_clock_from_another_policy() {
     let (mut row, mut material, _) = fixture();
     let mut changed = material.clone();
@@ -613,7 +649,13 @@ fn original_liability_rejects_a_rehashed_clock_from_another_policy() {
     material.custody.liability.digest = digest;
     row.liability = material.custody.liability;
     row.admission_material.digest = material.id();
-    let raw = encode_assignment_open_v2(&borsh::to_vec(&material).unwrap(), &[2, 0, 1, 0, 8], [&[1], &bytes], limits()).unwrap();
+    let raw = encode_assignment_open_v2(
+        &borsh::to_vec(&material).unwrap(),
+        &[2, 0, 1, 0, 8],
+        [&reservation_bytes(&row, &material), &bytes],
+        limits(),
+    )
+    .unwrap();
     assert!(material.check_row(&row).is_ok());
     assert!(matches!(
         AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 8], limits()),

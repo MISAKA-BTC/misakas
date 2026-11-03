@@ -43,7 +43,7 @@ impl Reader<'_> {
             else {
                 return Err(PositiveRowErrorV2::WrongRowKind);
             };
-            if auth.authorization != AssignmentRoleAuthorizationV2::Initial {
+            if auth.authorization != AssignmentRoleAuthorizationV2::Initial || auth.lease != row.reservation {
                 return inconsistent();
             }
             auth.authenticate(row)?;
