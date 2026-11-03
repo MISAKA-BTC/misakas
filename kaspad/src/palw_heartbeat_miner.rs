@@ -626,6 +626,9 @@ impl PalwHeartbeatMinerService {
             return Ok(PassOutcomeV1::Idle);
         };
         submitted.map_err(|e| format!("the chain refused a heartbeat this node mined: {e}"))?;
+        trace!(
+            "[{PALW_HEARTBEAT}] minted {hash}: local_hint={hint:?} yield_decision={decision:?} template_earliest_ms={earliest} role={role:?}"
+        );
         Ok(PassOutcomeV1::Minted { hash, role, carriers })
     }
 }

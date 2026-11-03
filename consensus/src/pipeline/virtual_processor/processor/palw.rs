@@ -3968,22 +3968,16 @@ impl VirtualStateProcessor {
     /// quantum), so a quantum either wins at its beacon or it never does. `wins: false` rows are
     /// returned too — an operator asking "why am I not producing receipt blocks" deserves to see
     /// the tickets that lost rather than an empty list that also means "no claims".
-    pub fn palw_fp_spendable_v3_impl(
+    pub fn palw_fp_spendable_with_parent_v3_impl(
         &self,
         bond: kaspa_consensus_core::tx::TransactionOutpoint,
-    ) -> Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
+    ) -> Option<(BlockHash, Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpSpendableQuantumV3, fp_draw_slot_v3, fp_quantum_ticket_v3};
         use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
 
-        let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
-            return Vec::new();
-        };
-        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
-            return Vec::new();
-        };
-        let Ok(Some((chain_point, state))) = self.palw_v2_reader_state(state_params) else {
-            return Vec::new();
-        };
+        let freeprompt = self.palw_freeprompt_params_v3.as_ref()?;
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (chain_point, state) = self.palw_v2_reader_state(state_params).ok().flatten()?;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.network_id_bytes.as_slice(),
             Some(self.genesis.hash),
@@ -4055,7 +4049,7 @@ impl VirtualStateProcessor {
                 });
             }
         }
-        out
+        Some((chain_point, out))
     }
 
     /// **The bonds this block's own mergeset declares** — the half the parent state cannot hold.

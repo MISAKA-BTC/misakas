@@ -469,6 +469,15 @@ pub trait ConsensusApi: Send + Sync {
         Vec::new()
     }
 
+    /// The receipt candidates and the immutable selected state they were read from.
+    /// A builder matches this parent against the template before it signs.
+    fn palw_fp_spendable_with_parent_v3(
+        &self,
+        _bond: crate::tx::TransactionOutpoint,
+    ) -> Option<(BlockHash, Vec<crate::palw_freeprompt_v3::PalwFpSpendableQuantumV3>)> {
+        None
+    }
+
     /// **Every PALW V2 bond outpoint whose collateral may not be spent right now.**
     ///
     /// The wallet has to know this and had no way to ask (audit3 H3): `get_stake_bonds` reads the

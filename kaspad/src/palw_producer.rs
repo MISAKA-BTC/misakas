@@ -58,6 +58,29 @@ use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
 
+/// RDA4's canonical ML-DSA fields fit within the receipt commitment cap.
+/// Limit reads on the opened file, including files replaced or grown during a scan.
+fn read_redemption_bundle_v4(path: &std::path::Path) -> Option<Vec<u8>> {
+    use kaspa_consensus_core::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4 as CAP;
+    use std::io::Read;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > CAP as u64 {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    file.take(CAP as u64 + 1).read_to_end(&mut bytes).ok()?;
+    (bytes.len() <= CAP).then_some(bytes)
+}
+
 /// Local attempt-only readiness. Peer safety comes from the existing
 /// PartitionWatch gate, never from one consensus-refusal record.
 fn palw_producer_view_guard_v1(
@@ -1226,22 +1249,6 @@ impl PalwProducerService {
             // only inside its use window, so the hold did not delay a free-prompt executor's pay, it
             // forfeited it. The bond that fills its ceiling is exactly the one committing
             // free-prompt claims.
-            // ADR-0135: the registry's class-local gate, read before a draw is built. Not a rule of
-            // this node's — the fold refuses what it refuses — but a draw for a HELD class or one at
-            // its inflight cap is a block the chain will not take, so it is not built.
-            if let Some(detail) = self.registry_holds_class(&session, facts.daa_score) {
-                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
-                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
-                if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
-                    last_hold = Some(detail);
-                    last_hold_at = Some(std::time::Instant::now());
-                }
-                if !self.tick(std::time::Duration::from_secs(5)).await {
-                    break;
-                }
-                continue;
-            }
             if facts.ready_to_spend_receipts(&self.verification_key()).is_ok() {
                 match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
                     Ok(Some(hash)) => {
@@ -1296,6 +1303,21 @@ impl PalwProducerService {
                         }
                     }
                 }
+            }
+            // Registry holds constrain new attempts. Mature receipt and redemption
+            // rights were evaluated above against their own claim and bond rules.
+            if let Some(detail) = self.registry_holds_class(&session, facts.daa_score) {
+                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
+                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
+                    last_hold = Some(detail);
+                    last_hold_at = Some(std::time::Instant::now());
+                }
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
+                continue;
             }
             // Route-matrix #11: a class this node can never produce for disables the attempt lane
             // alone — the receipt lane above keeps spending this bond's quanta.
@@ -1624,6 +1646,22 @@ impl PalwProducerService {
         info!("[{PALW_PRODUCER}] stopping ({produced} blocks this run)");
     }
 
+    fn receipt_template_is_current_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        template: &kaspa_consensus_core::block::BlockTemplate,
+        quoted_parent: Hash64,
+        quoted_daa: u64,
+    ) -> bool {
+        let current = self.consensus_manager.consensus().unguarded_session();
+        self.flow_context.is_consensus_participation_allowed()
+            && session.with_consensus_api_v1(|observed| current.with_consensus_api_v1(|active| std::ptr::eq(observed, active)))
+            && template.selected_parent_hash == quoted_parent
+            && template.block.header.daa_score == quoted_daa
+            && current.get_sink() == quoted_parent
+            && current.get_virtual_daa_score() == quoted_daa
+    }
+
     /// **One receipt block, if a quantum wins right now.**
     ///
     /// Asks the chain for this bond's spendable quanta (`palw_fp_spendable_v3` — each row carries
@@ -1643,7 +1681,9 @@ impl PalwProducerService {
         miner_data: MinerData,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let seed = self.key_seed.ok_or("no signing key")?;
-        let spendable = session.palw_fp_spendable_v3(bond);
+        let Some((quoted_parent, spendable)) = session.palw_fp_spendable_with_parent_v3(bond) else {
+            return Ok(None);
+        };
         // A win licenses a block only inside its use window (invariant F14), and the spendable
         // list does not filter on it — a quantum whose window closed stays in the list, unspent,
         // forever. Picking one built a template, signed it and had the chain refuse it on every
@@ -1661,6 +1701,11 @@ impl PalwProducerService {
             .get_block_template(session, miner_data)
             .await
             .map_err(|e| format!("no block template: {e}"))?;
+
+        if !self.receipt_template_is_current_v1(session, &template, quoted_parent, next_daa) {
+            trace!("[{PALW_PRODUCER}] receipt quote no longer matches its template or the active parent");
+            return Ok(None);
+        }
 
         // The header the spend binds is THIS one — its pre-pow hash, timestamp and nonce — so the
         // envelope is built after the template exists and re-bound if the template's fields change.
@@ -1715,7 +1760,7 @@ impl PalwProducerService {
         let mut names: Vec<std::path::PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
         names.sort();
         for path in names {
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Some(bytes) = read_redemption_bundle_v4(&path) else { continue };
             let Ok(bundle) = kaspa_consensus_core::palw_receipt_v4::PalwRedemptionAuthBundleV4::decode(&bytes) else { continue };
             // A bundle that fails its own checks is skipped, never believed: the chain would refuse the block anyway.
             if bundle
@@ -1730,7 +1775,9 @@ impl PalwProducerService {
             if next_daa > auth.expiry_daa {
                 continue;
             }
-            let spendable = session.palw_fp_spendable_v3(auth.executor_bond);
+            let Some((quoted_parent, spendable)) = session.palw_fp_spendable_with_parent_v3(auth.executor_bond) else {
+                return Ok(None);
+            };
             let Some(win) = spendable.into_iter().find(|q| {
                 q.claim_id == auth.claim_id
                     && q.wins
@@ -1746,6 +1793,10 @@ impl PalwProducerService {
                 .get_block_template(session, miner_data.clone())
                 .await
                 .map_err(|e| format!("no block template: {e}"))?;
+            if !self.receipt_template_is_current_v1(session, &template, quoted_parent, next_daa) {
+                trace!("[{PALW_PRODUCER}] redemption quote no longer matches its template or the active parent");
+                return Ok(None);
+            }
             template.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
             let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
             let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
@@ -1771,6 +1822,10 @@ impl PalwProducerService {
                 .await
                 .ok_or_else(|| format!("{PALW_PRODUCER_EXITING}: redemption block {hash} was not submitted"))?
                 .map_err(|e| format!("the chain refused a redemption block this node produced: {e}"))?;
+            info!(
+                "[{PALW_PRODUCER}] PFS4 submitted block={hash} claim={} quantum={} parent={quoted_parent} daa={next_daa}",
+                win.claim_id, win.quantum_index
+            );
             return Ok(Some(hash));
         }
         Ok(None)
@@ -3310,6 +3365,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn redemption_bundle_reads_are_bounded_to_regular_files() {
+        use kaspa_consensus_core::palw_receipt_v4::PALW_COMMITMENT_MAX_BYTES_V4 as CAP;
+
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("authorization");
+        assert!(read_redemption_bundle_v4(&path).is_none());
+        assert!(read_redemption_bundle_v4(root.path()).is_none());
+
+        let valid_size = vec![1; CAP];
+        std::fs::write(&path, &valid_size).unwrap();
+        assert_eq!(read_redemption_bundle_v4(&path), Some(valid_size));
+
+        std::fs::write(&path, vec![1; CAP + 1]).unwrap();
+        assert!(read_redemption_bundle_v4(&path).is_none());
+    }
+
     /// **A producer misconfiguration never takes the node down** (the route-matrix re-audit's #11).
     /// The unproducible-class refusal called `process::exit(1)` from the constructor, which under
     /// systemd's `Restart=` is a crash loop of the whole kaspad — seat, RPC and public entry node with
@@ -3324,9 +3396,11 @@ mod tests {
         assert!(production.contains("--palw-producer-class: {why} — production disabled"), "the nodelog phrase");
         let worker = &production[production.find("pub async fn worker(").expect("the worker")..];
         let receipt = worker.find("self.produce_receipt(").expect("the receipt lane");
+        let redemption = worker.find("self.produce_redemption(").expect("the redemption lane");
+        let registry_hold = worker.find("self.registry_holds_class(").expect("the registry's attempt hold");
         let hold = worker.find("if let Some(why) = &self.class_refusal").expect("the attempt lane's hold");
         let attempt = worker.find("palw_producer_ready_v1(&facts,").expect("the attempt lane");
-        assert!(receipt < hold && hold < attempt, "the refusal holds the attempt lane after the receipt lane has run");
+        assert!(receipt < redemption && redemption < registry_hold && registry_hold < hold && hold < attempt);
     }
     use kaspa_consensus_core::config::Config;
     use kaspa_consensus_core::config::params::{devnet_shipped_params, palw_rc_shipped_params};
