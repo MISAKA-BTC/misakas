@@ -203,7 +203,8 @@ impl RootedBatchDemandV1 {
         }
         use crate::palw_court_shared_material_intake_v1 as material;
         let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
-        material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule)
+        let phased = shared::context(state, self.claim)?.batch_notice_only_v1();
+        material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule, phased)
     }
 }
 
@@ -313,7 +314,7 @@ pub(super) fn quote_open_v1(
     };
     let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
     demand.response_deadline_daa = material::batch::batch_open_response_deadline_v1(
-        claim, scope, ordinal, &demand, book, &binding.packet_ids, schedule,
+        claim, scope, ordinal, &demand, book, &binding.packet_ids, schedule, context.batch_notice_only_v1(),
     )?;
     demand.checked_request_root_v1().map_err(|why| format!("Batch quote shape: {why:?}"))?;
     Ok(super::carriage::SignedBatchDemandV1 { version: 1, claim, scope_id: scope, ordinal, notice_id, signer: notice.opened_by,

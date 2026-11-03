@@ -39,6 +39,11 @@ pub(crate) struct NumericalBatchEnvelopeV1 {
 }
 
 impl NumericalBatchEnvelopeV1 {
+    #[cfg(test)]
+    pub(crate) fn test_only_v1(claim: Hash64, profile: Hash64, scope: Hash64, maximums: Vec<u64>) -> Self {
+        Self { claim, profile, scope, maximums }
+    }
+
     pub(crate) fn scope_v1(&self) -> Hash64 {
         self.scope
     }

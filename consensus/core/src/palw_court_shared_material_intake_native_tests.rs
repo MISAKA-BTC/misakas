@@ -703,8 +703,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, quote_batch_open_v1,
     };
     use crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
-    use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchRangeAuthenticationV1, BatchRangeV1};
-    use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations, causal::CausalServicePacketV1};
+    use crate::palw_batch_court_v1::{BatchRangeAuthenticationV1, BatchRangeV1};
+    use crate::palw_court_service_v1::{ServiceCost, ServiceReservations};
     use crate::palw_court_shared_material_intake_v1::*;
     use crate::palw_court_shared_tir_frontier_v1::{SHARED_REQUEST_CONTEXT_V1, SignedSharedRequestV1};
     use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, palw_tir_public_body_hash_v1};
@@ -732,8 +732,10 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     notice.signature = sign(notice.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
     let notice_at = at(frame, NOTICE_WINDOW_DAA);
     let open_at = at(frame, NOTICE_WINDOW_DAA + 1);
-    let begin_at = at(frame, NOTICE_WINDOW_DAA + 2);
-    let response_deadline = at(frame, NOTICE_WINDOW_DAA + 5).daa_score;
+    let begin_at = at(frame, NOTICE_WINDOW_DAA + 5);
+    let part_at = at(frame, NOTICE_WINDOW_DAA + 7);
+    let finish_at = at(frame, NOTICE_WINDOW_DAA + 9);
+    let response_deadline = at(frame, NOTICE_WINDOW_DAA + 12).daa_score;
     let target = MaterialTargetV1::PromptFlat;
     let body = borsh::to_vec(&fx.execution.prompt).unwrap();
     assert!(body.len() <= PART);
@@ -742,31 +744,22 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let ranges = vec![BatchRangeV1 { id: target.id_v1(claim).unwrap(), bytes: body.len() as u32,
         authentication: BatchRangeAuthenticationV1::WholeRange }];
     let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
-    use batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1};
-    let window = BatchCourtWindowV1 {
-        claim_accepted_daa: context.original_accepted_daa,
-        challenge_opened_daa: notice_at.daa_score,
-        collect_until_daa: context.hard_daa,
-        material_until_daa: context.material_until_daa,
-    };
-    let terminal = Hash64::from_u64_word(997).as_bytes();
-    let verification = Hash64::from_u64_word(998).as_bytes();
+    use batch::admission::{NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1, reserve_native_batch_delivery_v1};
+    use batch::native_ranges::NumericalBatchEnvelopeV1;
     let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
     set_material_intake_test_schedule_v1(Some(storage));
     let mut service = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(state.court_service_state_v1().unwrap());
     service.state.book = ServiceReservations::new(cost(64 * 1024)).unwrap();
     service.state.claims.get_mut(&claim).unwrap().packet_ids.clear();
-    let plan = BatchAdmissionV1 {
-        claim, scope: scope_id, window,
-        demands: &[MaximumBatchDemandV1 { ordinal, range_maximums: &[PART as u64], predecessors: &[], verification }],
-        retained_controls: &[],
-        terminal, recovery_daa: 1, maximum_packets: 6,
+    let envelope = NumericalBatchEnvelopeV1::test_only_v1(claim, context.profile_id, scope_id, vec![PART as u64]);
+    let costs = NativeBatchDeliveryCostsV1 {
+        numerical_verification: cost(1), terminal: cost(1), recovery_daa: 1, maximum_packets: 6,
+        timing: NativeBatchDeliveryTimingV1 {
+            open_daa: 2, provider_wait_daa: 2, begin_daa: 2, parts_daa: 2,
+            finish_daa: 3, verification_daa: 2, stop_daa: 1, terminal_daa: 1,
+        },
     };
-    let graph = [verification, terminal].into_iter().map(|id| CausalServicePacketV1 {
-        packet: ServicePacket { id, release_daa: open_at.daa_score, service_before: context.hard_daa - 1, cost: cost(1) },
-        predecessors: vec![],
-    }).collect();
-    let (quote, service) = plan.reserve_for_original_v1(service, graph, storage, |_, bytes| Ok(cost(bytes))).unwrap();
+    let (quote, service) = reserve_native_batch_delivery_v1(service, frame, &envelope, None, costs, storage, |_, bytes| Ok(cost(bytes))).unwrap();
     assert!(quote.required_daa <= 10_000);
     assert_eq!(quote.carrier_storage_rent_sompi, PART as u64 * storage.sompi_per_byte);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
@@ -864,24 +857,34 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert!(template_ready(&b.state, &open_at, &opening).is_err());
     assert!(template_ready(&b.state, &begin_at, &begin).is_ok());
-    let service = b.state.court_service_state_v1().unwrap();
-    let mut missed = service.book.clone();
+    let service = b.state.court_service_row_v3_v1().unwrap();
+    let mut missed = service.state.book.clone();
     missed.observe_block(open_at.daa_score, open_at.block.as_bytes(), ServiceCost::default()).unwrap();
     missed.observe_block(begin_at.daa_score, begin_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    missed.observe_block(part_at.daa_score, part_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    let repair_at = at(frame, NOTICE_WINDOW_DAA + 10);
+    missed.observe_block(repair_at.daa_score, repair_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    let ids = &service.state.claims[&claim].packet_ids;
+    let mut repaired = missed.clone();
+    assert_eq!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut repaired), Ok(1));
+    let finish_packet = ids.iter().find(|id| service.state.book.assigned_daa(id) == Some(finish_at.daa_score)).unwrap();
+    assert_eq!(repaired.assigned_daa(finish_packet), Some(response_deadline - 1));
+    let Some(Row::CourtBatchDemand(accepted)) = b.state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)) else {
+        panic!("missing accepted Batch Open");
+    };
+    assert_eq!(accepted.request_root, request_root);
+    assert!(batch::check_open_response_slots_v1(accepted, &repaired, ids, storage, true).is_ok());
     missed.observe_block(response_deadline, [7; 64], ServiceCost::default()).unwrap();
     let before = missed.clone();
-    let ids = &service.claims[&claim].packet_ids;
-    let mut ordinary = before.clone();
-    assert!(ordinary.repair_missing_ordered_v1(ids, context.hard_daa, &Default::default()).unwrap() > 0);
-    assert!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &Default::default(), &mut missed).is_err());
+    assert!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut missed).is_err());
     assert_eq!(missed, before);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges).is_err());
     let quote = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
     assert_eq!(quote.request_root, request_root);
-    assert_eq!((quote.begin_daa, quote.finish_daa, quote.retained_submitter), (begin_at.daa_score, response_deadline - 1, None));
+    assert_eq!((quote.begin_daa, quote.finish_daa, quote.retained_submitter), (begin_at.daa_score, finish_at.daa_score, None));
     assert_eq!(quote.total_bytes, body.len() as u64);
     assert_eq!(quote.parts, [BatchResponsePartSlotV1 {
-        offset: 0, bytes: body.len() as u64, assigned_daa: at(frame, NOTICE_WINDOW_DAA + 3).daa_score, accepted_daa: None,
+        offset: 0, bytes: body.len() as u64, assigned_daa: part_at.daa_score, accepted_daa: None,
     }]);
     assert!(quote_batch_response_v1(&b.state, claim, ordinal, MaterialTargetV1::FullIds).is_err());
     let after_open = b.state.state_root();
@@ -899,7 +902,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(b.state.state_root(), after_begin);
     let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
     assert_eq!(draft_id, quote.draft_id);
-    apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 3), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
+    apply(&mut b, &part_at, &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
     let resumed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
     assert!(!resumed.material_available);
     assert_eq!((resumed.retained_submitter, resumed.retained_body_hash), (Some(who), Some(hash)));
@@ -928,7 +931,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         incomplete.body_reserved_with_v1(&b.state, |_| panic!("incomplete draft must fail before allocation")),
         Err(NativeDecodeErrorV1::Decode(_)),
     ));
-    apply(&mut b, &at(frame, NOTICE_WINDOW_DAA + 4), &respond(MaterialActionV1::Finish { draft_id }), 1, 0).unwrap();
+    apply(&mut b, &finish_at, &respond(MaterialActionV1::Finish { draft_id }), 1, 0).unwrap();
     let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
     let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
     assert_eq!(material.bytes, body);

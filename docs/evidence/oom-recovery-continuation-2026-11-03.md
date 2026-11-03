@@ -3839,3 +3839,28 @@ B0 and relay agreed at virtual DAA 19,731. The two selected blocks
 contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-phase.dcq9og/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-batch-phase-live.yXudci/page.json`.
+
+## Keep the signed response deadline stable across Finish repair
+
+Batch-only Open quotes and acceptance now derive the response
+deadline from the exclusive end of the original's booked Finish
+interval. Validation checks ownership, assigned slots, separation
+between prerequisite phases and the provider preparation interval.
+The earliest possible Begin and latest possible Finish must fit
+the draft TTL. The older shared context continues to use the
+deadline derived from assigned slots.
+
+The extracted suite passed 51 tests after serializing code generation
+following a local disk-space error. The new test moved an unsupplied
+Finish from DAA 17 to 20 without changing the request root or the
+signed exclusive deadline of 21. It rejected a changed deadline and
+a draft TTL that could expire before the latest slot. The native
+fixture now also tests repair against the signed Open, but has not run.
+An inactive alternative can still interfere with combined-route
+repair. Selecting one route must retire the unused route from the
+repair candidate while preserving its rooted reservation history.
+
+B0 and relay still agreed at virtual DAA 19,731. The scan returned no
+additional selected blocks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-signed-phase.CmDSmR/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-signed-phase-live.UdYiPy/page.json`.

@@ -114,9 +114,10 @@ pub(crate) fn check_open_response_slots_v1(
     book: &ServiceReservations,
     owned: &std::collections::BTreeSet<[u8; 64]>,
     schedule: MaterialIntakeScheduleV1,
+    phased: bool,
 ) -> Result<(), String> {
     let deadline = batch_open_response_deadline_v1(
-        rooted.claim, rooted.scope_id, rooted.ordinal, &rooted.demand, book, owned, schedule,
+        rooted.claim, rooted.scope_id, rooted.ordinal, &rooted.demand, book, owned, schedule, phased,
     )?;
     // A later deadline would advertise response time with no corresponding
     // slots and could extend the wait into a reserved fallback turn.
@@ -126,8 +127,10 @@ pub(crate) fn check_open_response_slots_v1(
     Ok(())
 }
 
-/// Earliest exclusive deadline that includes every booked response position.
+/// Exclusive response deadline. Batch-only originals sign the end of the
+/// immutable Finish window, so legal repairs do not change the signed root.
 /// The input's proposed response deadline is intentionally not read here.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn batch_open_response_deadline_v1(
     claim: Hash64,
     scope: Hash64,
@@ -136,6 +139,7 @@ pub(crate) fn batch_open_response_deadline_v1(
     book: &ServiceReservations,
     owned: &std::collections::BTreeSet<[u8; 64]>,
     schedule: MaterialIntakeScheduleV1,
+    phased: bool,
 ) -> Result<u64, String> {
     use crate::palw_batch_court_v1::BatchRangeAuthenticationV1;
     if u64::from(demand.part_bytes) != PART
@@ -154,28 +158,47 @@ pub(crate) fn batch_open_response_deadline_v1(
         .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
         .ok_or("Batch original clock overflows")?;
     let service = release..hard.min(demand.case_window.collect_until_daa);
-    let mut last_finish = demand.opened_daa;
+    let open_before = if phased {
+        let id = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(claim, scope, ordinal)?.as_bytes();
+        let packet = book.packet(&id).ok_or("Batch phased response has no reserved Open")?;
+        if !owned.contains(&id) || book.assigned_daa(&id) != Some(demand.opened_daa) {
+            return Err("Batch phased response differs from its reserved Open".into());
+        }
+        Some(packet.service_before)
+    } else {
+        None
+    };
+    let mut deadline = release;
     for (range_index, range) in demand.ranges.iter().enumerate() {
         if range.authentication != BatchRangeAuthenticationV1::WholeRange {
             return Err("Batch native demand requires whole range authentication".into());
         }
         let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: range_index as u32 };
-        let (begin, finish) = checked_response_span_v1(position, claim, scope, u64::from(range.bytes), service.clone(), book, owned)?;
+        let span = checked_response_span_v1(
+            position, claim, scope, u64::from(range.bytes), service.clone(), book, owned, open_before,
+        )?;
         let expires = schedule
-            .draft_expires_v1(begin, hard, demand.case_window.material_until_daa)
+            .draft_expires_v1(span.earliest_begin, hard, demand.case_window.material_until_daa)
             .map_err(|_| "Batch response draft expiry cannot be derived")?;
-        if finish >= expires {
+        if span.finish_before > expires {
             return Err("Batch response finish crosses the draft expiry".into());
         }
-        last_finish = last_finish.max(finish);
+        deadline = deadline.max(span.finish_before);
     }
-    let deadline = last_finish.checked_add(1).ok_or("Batch response deadline overflows")?;
     if deadline >= demand.case_window.collect_until_daa || deadline > hard {
         return Err("Batch response has no exclusive deadline inside the collection window".into());
     }
     Ok(deadline)
 }
 
+struct ResponseSpanV1 {
+    begin: u64,
+    finish: u64,
+    earliest_begin: u64,
+    finish_before: u64,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn checked_response_span_v1(
     position: BatchResponsePositionV1,
     claim: Hash64,
@@ -184,7 +207,8 @@ fn checked_response_span_v1(
     service: std::ops::Range<u64>,
     book: &ServiceReservations,
     owned: &std::collections::BTreeSet<[u8; 64]>,
-) -> Result<(u64, u64), String> {
+    open_before: Option<u64>,
+) -> Result<ResponseSpanV1, String> {
     let graph = position
         .reservation_graph_v1(claim, scope, bytes, service.clone(), |_, bytes| Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 }))?;
     let slot = |id| {
@@ -192,19 +216,40 @@ fn checked_response_span_v1(
             .filter(|daa| service.contains(daa))
             .ok_or("Batch response position has no assigned service within the demand")
     };
+    let packet = |id| book.packet(&id).ok_or("Batch response has no reserved packet");
     for node in &graph {
         let id = node.packet.id;
         let at = slot(id)?;
-        if !owned.contains(&id) || book.packet(&id).is_none_or(|packet| packet.cost.bytes < node.packet.cost.bytes) {
+        let booked = packet(id)?;
+        if !owned.contains(&id) || booked.cost.bytes < node.packet.cost.bytes {
             return Err("Batch response exceeds the original reserved packet".into());
+        }
+        if open_before.is_some() && (booked.release_daa < service.start || booked.service_before > service.end) {
+            return Err("Batch response phase escapes the original collection window".into());
         }
         for &predecessor in &node.predecessors {
             if slot(predecessor)? >= at {
                 return Err("Batch response reservation does not preserve causal order".into());
             }
+            if open_before.is_some() && packet(predecessor)?.service_before > booked.release_daa {
+                return Err("Batch response phases overlap their prerequisites".into());
+            }
         }
     }
-    Ok((slot(graph[0].packet.id)?, slot(graph[graph.len() - 1].packet.id)?))
+    let begin_id = graph[0].packet.id;
+    let finish_id = graph[graph.len() - 1].packet.id;
+    let begin = slot(begin_id)?;
+    let finish = slot(finish_id)?;
+    let (earliest_begin, finish_before) = if let Some(open_before) = open_before {
+        let first = packet(begin_id)?.release_daa;
+        if first <= open_before {
+            return Err("Batch response has no preparation interval after Open".into());
+        }
+        (first, packet(finish_id)?.service_before)
+    } else {
+        (begin, finish.checked_add(1).ok_or("Batch response deadline overflows")?)
+    };
+    Ok(ResponseSpanV1 { begin, finish, earliest_begin, finish_before })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -265,7 +310,7 @@ pub fn quote_batch_response_v1(
     let total_bytes = u64::from(range.bytes);
     let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: index as u32 };
     let release = demand.opened_daa.checked_add(1).ok_or("Batch demand opening overflows")?;
-    let (begin_daa, finish_daa) = checked_response_span_v1(
+    let span = checked_response_span_v1(
         position,
         claim,
         rooted.scope_id,
@@ -273,7 +318,9 @@ pub fn quote_batch_response_v1(
         release..demand.response_deadline_daa,
         &service.book,
         owned,
+        None,
     )?;
+    let (begin_daa, finish_daa) = (span.begin, span.finish);
     let request_root = rooted.request_root;
     let draft_id = material_batch_draft_id_v1(request_root, claim, target)?;
     let draft_key = Key::CourtMaterialDraft(claim, draft_id);
@@ -1205,26 +1252,26 @@ mod tests {
                 max_root_memberships: 1,
             },
         };
-        assert!(check_open_response_slots_v1(&rooted, &book, &owned, schedule).is_ok());
+        assert!(check_open_response_slots_v1(&rooted, &book, &owned, schedule, false).is_ok());
         let finish = book.assigned_daa(&graph.last().unwrap().packet.id).unwrap();
         let mut earliest = rooted.clone();
         earliest.demand.response_deadline_daa = finish;
         let deadline = batch_open_response_deadline_v1(
-            earliest.claim, earliest.scope_id, earliest.ordinal, &earliest.demand, &book, &owned, schedule,
+            earliest.claim, earliest.scope_id, earliest.ordinal, &earliest.demand, &book, &owned, schedule, false,
         ).unwrap();
         assert_eq!(deadline, finish + 1);
-        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule, false).is_err());
         earliest.demand.response_deadline_daa = deadline;
-        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_ok());
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule, false).is_ok());
         earliest.demand.response_deadline_daa = deadline + 1;
-        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule, false).is_err());
         earliest.demand.response_deadline_daa = deadline;
         earliest.demand.case_window.collect_until_daa = deadline;
-        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule, false).is_err());
         let expired = MaterialIntakeScheduleV1 { draft_ttl_daa: 2, ..schedule };
-        assert!(check_open_response_slots_v1(&rooted, &book, &owned, expired).is_err());
+        assert!(check_open_response_slots_v1(&rooted, &book, &owned, expired, false).is_err());
         owned.remove(&graph[1].packet.id);
-        assert!(check_open_response_slots_v1(&rooted, &book, &owned, schedule).is_err());
+        assert!(check_open_response_slots_v1(&rooted, &book, &owned, schedule, false).is_err());
     }
 
     #[test]
