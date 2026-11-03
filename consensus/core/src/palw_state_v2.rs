@@ -14539,7 +14539,7 @@ pub fn palw_batch_template_slot_v1(
 ) -> Result<(), String> {
     use crate::palw_batch_court_v1::{
         BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
-        carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1, decode_batch_court_carrier_v1},
+        carriage::{BATCH_CONVICT_NUMERICAL_TAG_V1, BATCH_COURT_CARRIER_MAGIC_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1, decode_batch_court_carrier_v1},
         rooted::reserved_open_slot_v1,
     };
     use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_requests_v1};
@@ -14555,11 +14555,13 @@ pub fn palw_batch_template_slot_v1(
         );
     }
     let mut q = TirNativeRequestsV1::new();
-    q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(|why| why.to_string())?;
+    if payload.first().copied() != Some(BATCH_CONVICT_NUMERICAL_TAG_V1) {
+        q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(|why| why.to_string())?;
+    }
     match payload.first().copied() {
         Some(0) => q.exact_v1::<BatchRangeV1>(MAX_BATCH_RANGES_V1 as u64),
         Some(1) => q.exact_v1::<u8>(u64::from(MAX_BATCH_PART_BYTES_V1)),
-        Some(BATCH_VERIFY_NUMERICAL_TAG_V1) => Ok(()),
+        Some(BATCH_VERIFY_NUMERICAL_TAG_V1 | BATCH_CONVICT_NUMERICAL_TAG_V1) => Ok(()),
         _ => return Err("unknown Batch template carrier kind".into()),
     }
     .map_err(|why| why.to_string())?;
@@ -14602,6 +14604,13 @@ pub fn palw_batch_template_slot_v1(
                 return Err("numerical Batch verification is already accepted".into());
             }
             reserved_numerical_verification_slot_v1(state, &signed, at.daa_score).map(|_| ())
+        }
+        BatchCourtWireV1::ConvictNumerical(control) => {
+            let receipt = crate::palw_batch_court_v1::rooted::reserved_numerical_terminal_v1(state, control.claim, control.receipt_digest, at)?;
+            if receipt.fault_evidence.is_none() {
+                return Err("numerical terminal receipt contains no fault".into());
+            }
+            Ok(())
         }
     }
 }

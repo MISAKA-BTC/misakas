@@ -1062,6 +1062,15 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let terminal_rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 { at: terminal_at, ..rules };
     assert!(batch::native_ranges::recheck_numerical_terminal_v1(&verified, claim, digest, &terminal_rules, replay_budget)
         .unwrap().is_none());
+    let terminal = BatchCourtWireV1::ConvictNumerical(crate::palw_batch_court_v1::carriage::BatchNumericalTerminalV1 {
+        claim, receipt_digest: digest,
+    });
+    assert!(template_ready(&verified, &terminal_at, &terminal).is_err());
+    let terminal_extras = PalwTransitionExtrasV1 { native_court_rules_v1: Some(terminal_rules), ..extras.clone() };
+    let mut terminal_fold = TransitionBuilder::new(&verified, &params, false, false, false, false, &terminal_extras);
+    assert!(matches!(apply(&mut terminal_fold, &terminal_at, &terminal, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "numerical terminal receipt contains no fault"));
+    assert_eq!(terminal_fold.state.state_root(), verified.state_root());
     assert!(reserved_numerical_terminal_v1(&verified, claim, digest, &point).is_err());
     assert!(reserved_numerical_terminal_v1(&verified, claim, Hash64::from_u64_word(999), &terminal_at).is_err());
     let old_fault = RootedBatchNumericalReceiptV1 { fault_evidence: Some(Hash64::from_u64_word(9)), ..receipt };

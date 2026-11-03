@@ -91,9 +91,19 @@ pub enum BatchCourtWireV1 {
     Respond(BatchMaterialControlV1),
     Stop(BatchStopControlV1),
     VerifyNumerical(SignedNumericalBatchVerificationV1),
+    ConvictNumerical(BatchNumericalTerminalV1),
 }
 
 pub(crate) const BATCH_VERIFY_NUMERICAL_TAG_V1: u8 = 3;
+pub(crate) const BATCH_CONVICT_NUMERICAL_TAG_V1: u8 = 4;
+
+/// Any carrier can relay this exact rooted fault. The existing claim
+/// conviction credits the authenticated notice issuer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct BatchNumericalTerminalV1 {
+    pub claim: Hash64,
+    pub receipt_digest: Hash64,
+}
 
 /// The signed Stop operands are framed before the original-specific EOG
 /// size and native terminal slot are resolved.
@@ -195,6 +205,7 @@ pub const BATCH_COURT_CARRIER_MAGIC_V1: &[u8; 4] = b"BCT1";
 pub(crate) const BATCH_STOP_WIRE_OVERHEAD_V1: u64 = BATCH_COURT_CARRIER_MAGIC_V1.len() as u64 + 1 + 4;
 pub(crate) const BATCH_OPEN_WIRE_OVERHEAD_V1: u64 = BATCH_COURT_CARRIER_MAGIC_V1.len() as u64 + 1;
 pub(crate) const BATCH_RESPONSE_WIRE_OVERHEAD_V1: u64 = BATCH_OPEN_WIRE_OVERHEAD_V1 + 8;
+pub(crate) const BATCH_NUMERICAL_TERMINAL_BYTES_V1: u64 = BATCH_OPEN_WIRE_OVERHEAD_V1 + 2 * 64;
 
 /// Canonical BCT1 opening size from its range count. Every field besides the
 /// signature and ranges is fixed-width, and the native signature width is fixed.
@@ -274,6 +285,22 @@ mod tests {
         MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1, SignedMaterialIntakeV1,
     };
     use crate::tx::TransactionOutpoint;
+
+    #[test]
+    fn numerical_terminal_carrier_has_a_fixed_claim_and_receipt() {
+        let wire = BatchCourtWireV1::ConvictNumerical(BatchNumericalTerminalV1 {
+            claim: Hash64::from_u64_word(1),
+            receipt_digest: Hash64::from_u64_word(2),
+        });
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(&wire).unwrap());
+        assert_eq!(payload.len() as u64, BATCH_NUMERICAL_TERMINAL_BYTES_V1);
+        assert_eq!(payload[BATCH_COURT_CARRIER_MAGIC_V1.len()], BATCH_CONVICT_NUMERICAL_TAG_V1);
+        assert_eq!(decode_batch_court_payload_v1(&payload).unwrap(), Some(wire));
+        assert!(decode_batch_court_payload_v1(&payload[..payload.len() - 1]).is_err());
+        payload.push(0);
+        assert!(decode_batch_court_payload_v1(&payload).is_err());
+    }
 
     #[test]
     fn batch_open_signature_binds_notice_ordinal_network_and_request() {

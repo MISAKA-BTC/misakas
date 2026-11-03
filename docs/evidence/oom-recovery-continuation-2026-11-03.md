@@ -4229,3 +4229,29 @@ The adapter is not yet called by a terminal carrier.
 B0 and relay remained at virtual DAA 19,744 with the same selected
 tip. See
 `/private/tmp/misaka-t12-oom-20261102/g14-numerical-terminal-replay-live.FJUqfc/page.json`.
+
+## Dispatch the numerical fault terminal carrier
+
+BCT1 tag 4 carries the original claim and rooted finding digest in
+133 bytes. The original terminal reservation must cover its bytes,
+work and IO. The accepting fold uses the native replay profile and
+independently reproduces the fault from retained material. It takes
+the filer from the accepted notice, invokes the existing shared
+claim conviction, and saves the verified arithmetic cone in the
+existing Court archive evidence format. A failed economic transition
+restores its checkpoint. A local match refuses this fault operation
+and grants no claim credit. The production numerical profile remains
+unset.
+
+The extracted suite passed 57 tests, including terminal encoding,
+length and trailing-byte refusal. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-terminal-carrier.L93HmB/tests.log`.
+The native fixture now routes a local-match receipt through the
+terminal handoff and checks refusal without state changes. It has not
+run. A complete native fault settlement and positive claim path still
+need integration verification, as do archive pricing and public
+activation.
+
+B0 and relay agreed at virtual DAA 19,744 on the new selected block.
+There was no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-terminal-carrier-live.yZrlxj/page.json`.

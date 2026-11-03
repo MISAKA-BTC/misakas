@@ -369,7 +369,7 @@ pub(crate) fn recheck_numerical_terminal_v1(
     receipt_digest: Hash64,
     rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
     budget: super::numerical_verification::NumericalBatchReplayBudgetV1,
-) -> Result<Option<NativeRetainedV1<crate::palw_tir_court_v1::PalwTirConeRefutationV1>>, E> {
+) -> Result<Option<(crate::palw_state_v2::PalwBondKeyV2, NativeRetainedV1<crate::palw_tir_court_v1::PalwTirConeRefutationV1>)>, E> {
     use crate::palw_tir_court_v1::{PalwTirConeRefutationV1, PalwTirCourtRulesV1, recheck_retained_tir_cone_v1};
     let invalid = |why: &str| E::Decode(why.into());
     rules.check().map_err(E::Decode)?;
@@ -385,7 +385,12 @@ pub(crate) fn recheck_numerical_terminal_v1(
     {
         return Err(invalid("numerical terminal lacks booked work or IO"));
     }
+    receipt.check_context(state, &rules.at).map_err(E::Decode)?;
     let Some(expected) = receipt.fault_evidence else { return Ok(None) };
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(receipt.notice)) else {
+        return Err(invalid("numerical terminal lost its accepted notice issuer"));
+    };
     let bytes = receipt.fault_bytes.as_ref().ok_or_else(|| invalid("numerical terminal is missing retained fault material"))?;
     if bytes.len() as u64 > budget.max_fault_bytes || bytes.len() as u64 >= rules.court.max_close_bytes() {
         return Err(invalid("numerical terminal fault exceeds its admitted bytes"));
@@ -420,7 +425,7 @@ pub(crate) fn recheck_numerical_terminal_v1(
         limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court),
     };
     let cone = recheck_retained_tir_cone_v1(cone, original, receipt.leaf, expected, &court, budget.work).map_err(E::Decode)?;
-    Ok(Some(NativeRetainedV1::from_owner_reserved_v1(cone, lease)))
+    Ok(Some((notice.opened_by, NativeRetainedV1::from_owner_reserved_v1(cone, lease))))
 }
 
 pub(crate) fn prepare_numerical_batch_material_v1(

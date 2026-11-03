@@ -93,6 +93,11 @@ pub(crate) fn reserved_numerical_terminal_v1<'a>(
         return Err("numerical terminal fault has no retained adjudication material".into());
     }
     let context = shared::context(state, claim)?;
+    if (receipt.scope, receipt.source, receipt.material_until_daa) != (context.scope_id, context.source_id, context.material_until_daa)
+        || state.court_shared_initial_notice_v1(claim).is_none_or(|(_, key)| *key != Key::CourtSharedQuery(receipt.notice))
+    {
+        return Err("numerical terminal differs from its original or accepted notice".into());
+    }
     let service = state.court_service_row_v3_v1().ok_or("numerical terminal has no causal service book")?;
     context.check_binding(&service.state)?;
     let binding = service.state.claims.get(&claim).ok_or("numerical terminal has no original booking")?;
@@ -110,7 +115,6 @@ pub(crate) fn reserved_numerical_terminal_v1<'a>(
     {
         return Err("numerical terminal differs from its accepted finding or reserved slot".into());
     }
-    receipt.check_context(state, at)?;
     Ok(receipt)
 }
 

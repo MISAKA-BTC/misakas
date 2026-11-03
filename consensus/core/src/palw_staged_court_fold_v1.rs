@@ -1147,7 +1147,62 @@ impl TransitionBuilder<'_> {
             }
             BatchCourtWireV1::Stop(control) => self.install_batch_stop_receipt_v1(at, &control.operands),
             BatchCourtWireV1::VerifyNumerical(signed) => self.install_batch_numerical_receipt_v1(at, signed),
+            BatchCourtWireV1::ConvictNumerical(control) => self.apply_batch_numerical_conviction_v1(at, control),
         }
+    }
+
+    fn batch_numerical_rules_v1(
+        &self,
+        at: &PalwBlockContextV2,
+    ) -> Result<(
+        crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+        crate::palw_court_shared_material_intake_v1::NumericalBatchReplayBudgetV1,
+    ), PalwStateV2Error> {
+        let rules = self.extras.native_court_rules_v1.filter(|rules| {
+            self.extras.batch_court_active_v1 && &rules.at == at
+                && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+        }).ok_or_else(|| PalwStateV2Error::CarriageInconsistent("numerical Batch requires active native rules at the accepting point".into()))?;
+        let profile = self.extras.batch_numerical_profile_v1.filter(|profile| {
+            self.state.court_service_state_v1().is_some_and(|service| service.profile_id == profile.service_profile)
+        }).ok_or_else(|| PalwStateV2Error::CarriageInconsistent("numerical Batch receipt has no matching native replay profile".into()))?;
+        Ok((rules, profile.budget))
+    }
+
+    fn apply_batch_numerical_conviction_v1(
+        &mut self,
+        at: &PalwBlockContextV2,
+        control: &crate::palw_batch_court_v1::carriage::BatchNumericalTerminalV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_court_end_archive_v1::CourtEndEvidenceV1;
+        use crate::palw_court_shared_material_intake_v1::batch::native_ranges::recheck_numerical_terminal_v1;
+        use crate::palw_court_v2::PalwCourtVerdictProofV2;
+        use crate::palw_tir_court_v1::PalwTirConeRefutationV1;
+        use crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1;
+        let (rules, budget) = self.batch_numerical_rules_v1(at)?;
+        let (filer, cone) = recheck_numerical_terminal_v1(&self.state, control.claim, control.receipt_digest, &rules, budget)
+            .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?
+            .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("numerical terminal receipt contains no fault".into()))?;
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("numerical Batch court end evidence");
+        quote.exact::<PalwTirConeRefutationV1>(1)?.copy(&*cone)?
+            .exact::<PalwCourtVerdictProofV2>(1)?.exact::<PalwTirPublicConvictionEvidenceV1>(1)?
+            .exact::<CourtEndEvidenceV1>(2)?.exact::<usize>(3)?;
+        self.admit_native_write_v1(quote)?;
+        let (cone, _lease) = cone.into_parts_v1();
+        let evidence = PalwTirPublicConvictionEvidenceV1::Arithmetic {
+            proof: Box::new(PalwCourtVerdictProofV2::TirCone { refutation: Box::new(cone) }),
+        };
+        let ending = Box::new(CourtEndEvidenceV1::TirConviction {
+            point: *at, claim: control.claim, filer, evidence: Box::new(evidence),
+        }).into();
+        let saved = self.try_checkpoint()?;
+        let previous = self.court_end_evidence.replace(ending);
+        let result = super::palw_court_service_lifecycle_fold_v1::apply_shared_bottom_conviction_v1(self, at, control.claim, filer);
+        self.court_end_evidence = previous;
+        if let Err(err) = result {
+            self.restore(saved);
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Native verification writer. The result is retained independently of settlement.
@@ -1159,13 +1214,7 @@ impl TransitionBuilder<'_> {
         use crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1;
         use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::verify_rooted_numerical_batch_v1;
         let refused = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
-        let rules = self.extras.native_court_rules_v1.filter(|rules| {
-            self.extras.batch_court_active_v1 && &rules.at == at
-                && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
-        }).ok_or_else(|| refused("numerical Batch receipt requires active native rules at the accepting point"))?;
-        let profile = self.extras.batch_numerical_profile_v1.filter(|profile| {
-            self.state.court_service_state_v1().is_some_and(|service| service.profile_id == profile.service_profile)
-        }).ok_or_else(|| refused("numerical Batch receipt has no matching native replay profile"))?;
+        let (rules, budget) = self.batch_numerical_rules_v1(at)?;
         let key = PalwStagedCourtKeyV1::CourtBatchNumericalReceipt(signed.claim);
         let digest = crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-numerical-receipt/v1", signed)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
@@ -1175,7 +1224,7 @@ impl TransitionBuilder<'_> {
                 _ => Err(refused("accepted numerical Batch receipt is immutable")),
             };
         }
-        let finding = verify_rooted_numerical_batch_v1(&self.state, self.params, &rules, signed, profile.budget)
+        let finding = verify_rooted_numerical_batch_v1(&self.state, self.params, &rules, signed, budget)
             .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
         if (finding.claim, finding.scope, finding.notice, finding.leaf, finding.at)
             != (signed.claim, signed.scope, signed.notice, signed.leaf, *at)

@@ -58,7 +58,8 @@ impl NumericalBatchReplayBudgetV1 {
     /// can reserve additional service for its native accounting operation.
     pub(crate) fn covers_terminal_recheck_v1(self, terminal: ServiceCost) -> bool {
         self.service_cost_v1().is_some_and(|replay| {
-            terminal.work >= replay.work && terminal.io >= replay.io && terminal.controls == 1
+            terminal.bytes >= crate::palw_batch_court_v1::carriage::BATCH_NUMERICAL_TERMINAL_BYTES_V1
+                && terminal.work >= replay.work && terminal.io >= replay.io && terminal.controls == 1
         })
     }
 
@@ -292,6 +293,7 @@ mod tests {
         assert!(budget.covers_terminal_recheck_v1(cost));
         assert!(!budget.covers_terminal_recheck_v1(ServiceCost { work: cost.work - 1, ..cost }));
         assert!(!budget.covers_terminal_recheck_v1(ServiceCost { io: cost.io - 1, ..cost }));
+        assert!(!budget.covers_terminal_recheck_v1(ServiceCost { bytes: 0, ..cost }));
         assert!(NumericalBatchReplayBudgetV1 { workspace_bytes: 0, ..budget }.service_cost_v1().is_none());
         assert!(NumericalBatchReplayBudgetV1 { base_work: 0, ..budget }.service_cost_v1().is_none());
         assert!(NumericalBatchReplayBudgetV1 { io: 0, ..budget }.service_cost_v1().is_none());
