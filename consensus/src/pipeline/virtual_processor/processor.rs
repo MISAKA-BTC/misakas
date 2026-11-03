@@ -3048,6 +3048,32 @@ impl VirtualStateProcessor {
                             );
                             bond_view.apply(&bond_muts);
                         }
+                        // Retain only a small diagnostic sample from this exact
+                        // fold. The carrier in the claim row can be a merge
+                        // member and does not identify the accepting block.
+                        let attempt_admissions = palw_v2_staged
+                            .as_ref()
+                            .filter(|(_, delta, _)| {
+                                delta.point.block == current
+                                    && self
+                                        .palw_state_params_v2
+                                        .as_ref()
+                                        .is_some_and(|params| params.model_panel_one_retention_active_at(delta.point.daa_score))
+                            })
+                            .map(|(_, delta, _)| {
+                                use kaspa_consensus_core::palw_state_v2::{PalwClaimSourceV2, PalwDeltaEntryV2};
+                                let mut created = delta.entries.iter().filter_map(|entry| match entry {
+                                    PalwDeltaEntryV2::Claim { key, old: None, new: Some(row) }
+                                        if matches!(row.source, PalwClaimSourceV2::Attempt)
+                                            && row.accepted_daa == delta.point.daa_score =>
+                                    {
+                                        Some((*key, row.class_id, row.accepted_block, row.accepted_daa, row.trace_retention_daa))
+                                    }
+                                    _ => None,
+                                });
+                                let rows: [_; 4] = std::array::from_fn(|_| created.next());
+                                (rows, created.next().is_some())
+                            });
                         // Commit UTXO data for current chain block
                         self.commit_utxo_state(
                             current,
@@ -3068,6 +3094,16 @@ impl VirtualStateProcessor {
                                 genesis_carriages: Vec::new(),
                             }),
                         )?;
+                        // The batch has succeeded. This does not determine
+                        // whether the fold later becomes the selected tip.
+                        if let Some((rows, truncated)) = attempt_admissions {
+                            for (claim, class, carrier, daa, retained_until) in rows.into_iter().flatten() {
+                                info!(
+                                    "[palw-attempt-admission] committed fold={current} carrier={carrier} claim={claim} class={class} \
+                                     accepted_daa={daa} effective_retention_daa={retained_until} sample_truncated={truncated}"
+                                );
+                            }
+                        }
                         // Count the number of UTXO-processed chain blocks
                         chain_block_counter += 1;
                     }

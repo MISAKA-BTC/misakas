@@ -1060,3 +1060,37 @@ values widened to I32 and preserved first-max selection. It refused
 a re-committed and re-signed bad Panel lane. This fixture used a
 small trace. The exact Linux Qwen #21 job was still compiling in
 its private tmpfs, with no OOM events at the last sample.
+
+## Exact Qwen #45 custody and #46 refusal — 05:42 UTC
+
+An offline independent check authenticated #45's saved PAV2
+signature against the registered bond and key. It matched the
+2,409,135-byte material to the signed prompt, output, step,
+checkpoint, trace and execution commitments. Four altered inputs
+were rejected by their corresponding checks. The test did not
+re-execute the model or establish provider delivery.
+
+B0 and the Explorer relay reached virtual DAA 19,613 on the same
+selected tip. The Qwen #46 REAL carrier was merged blue, visible
+on the public WebSocket and absent as a claim on both nodes. B0
+recorded its explicit rejection at 20,606 remaining DAA against
+20,608 required. Its material and answer were present in the
+bracketed B0 custody read. The paired class inventory showed nine
+eligible independent bonds, zero independent ready bonds and
+zero assignments. B0 and the relay reported zero receipt blocks
+and zero kernel Finals.
+
+The source now samples up to four exact Attempt creations from
+the per-block delta once the existing ModelOne retention rule is
+active. It emits the committed fold, carrier, claim, class,
+accepting DAA and effective retention deadline only after the
+RocksDB write succeeds. A separate selected-chain observation
+must establish canonicality. The sample has a truncation flag
+and does not clone the delta or expose the flat claims collection.
+A consensus crate metadata check with default, EVM and PQ-only
+features passed against cached dependencies. The diagnostic is
+source-only.
+
+The isolated Qwen #21 Linux job was still compiling. Its reported
+memory peak was 2.58 GB with zero cgroup OOM events and about
+15.68 GB of free production root capacity.
