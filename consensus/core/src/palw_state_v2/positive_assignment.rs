@@ -214,7 +214,7 @@ impl TransitionBuilder<'_> {
             None => Err(refusal("missing accepted Assignment journal head")),
         }
     }
-    fn check_assignment_next_journal_extent_v2(
+    pub(super) fn check_assignment_next_journal_extent_v2(
         &self,
         row: &AssignmentRow,
         head: &AssignmentJournalHeadRow,
