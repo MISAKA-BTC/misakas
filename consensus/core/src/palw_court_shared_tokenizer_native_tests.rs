@@ -222,3 +222,68 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     }
     assert_eq!(b.state.state_root(), before);
 }
+
+#[test]
+fn prospective_tokenizer_cache_rechecks_rooted_eof_and_claim_scope() {
+    use crate::palw_tokenizer_rendering_v2::{PalwTokenizerRenderingBudgetV2, PalwTokenizerRenderingCacheV2};
+
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut state, params, extras) = world(&fx, &fx.frame);
+    let claim = fx.frame.plan_v1().original_claim;
+    let class = semantics.class_id;
+    let accepted_daa = state.claim(&claim).unwrap().accepted_daa;
+    assert!(accepted_daa > eof.completed_daa);
+    state.class_semantics.insert(class, semantics.clone());
+    state.claim_semantics.insert(claim, semantics);
+    let eog = table.eog_opening().unwrap();
+    let token = table.opening_of(0).unwrap();
+    let limits = PalwTokenizerRenderingBudgetV2 {
+        raw_bytes: eof.actual_bytes,
+        vocab: table.vocab(),
+        key_events: eof.key_event_upper_bound_v1(),
+        eog_ids: 1,
+        total_rendering_bytes: 8,
+    };
+    let mut cache = PalwTokenizerRenderingCacheV2::default();
+    assert!(cache.prepare_class_v2(&state, &class, accepted_daa, &raw, &eog, limits).is_err());
+    assert_eq!(cache.verify_claim_token_v2(&state, &claim, 0, &token), None);
+
+    let inventory = Key::Inventory(eof.artifact_hash);
+    let mut accepted = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    accepted.write_staged_row_v1(inventory, Some(Row::ArtifactInventory(eof.clone()))).unwrap();
+    assert!(cache.prepare_class_v2(&accepted.state, &class, eof.completed_daa - 1, &raw, &eog, limits).is_err());
+    cache.prepare_class_v2(&accepted.state, &class, accepted_daa, &raw, &eog, limits).unwrap();
+    assert!(cache.class_is_prepared_v2(&accepted.state, &class, accepted_daa));
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), Some(true));
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 1, &token), Some(false));
+    assert_eq!(cache.lowest_eog_for_claim_v2(&accepted.state, &claim), Some(7));
+    assert_eq!(PalwTokenizerRenderingCacheV2::default().verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+
+    // No inventory on the sibling view, then a different native EOF identity.
+    assert!(!cache.class_is_prepared_v2(&state, &class, accepted_daa));
+    assert_eq!(cache.verify_claim_token_v2(&state, &claim, 0, &token), None);
+    let mut alternate = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    let other_eof = crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1 {
+        inventory_id: h(8801),
+        ..eof.clone()
+    };
+    alternate.write_staged_row_v1(inventory, Some(Row::ArtifactInventory(other_eof))).unwrap();
+    assert_eq!(cache.verify_claim_token_v2(&alternate.state, &claim, 0, &token), None);
+
+    // A claim must still have its native original and output binding. A claim
+    // stamped at the EOF DAA cannot establish ordering from that DAA alone.
+    let original_output = accepted.state.claim(&claim).unwrap().output_root;
+    accepted.state.claims.get_mut(&claim).unwrap().output_root = h(8802);
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+    accepted.state.claims.get_mut(&claim).unwrap().output_root = original_output;
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), Some(true));
+    let original_frame = accepted.state.staged_courts.remove(&fx.frame.key_v1()).unwrap();
+    assert_eq!(cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+    accepted.state.staged_courts.insert(fx.frame.key_v1(), original_frame);
+    let mut same_daa_eof = eof.clone();
+    same_daa_eof.completed_daa = accepted_daa;
+    accepted.write_staged_row_v1(inventory, Some(Row::ArtifactInventory(same_daa_eof))).unwrap();
+    let mut same_daa_cache = PalwTokenizerRenderingCacheV2::default();
+    same_daa_cache.prepare_class_v2(&accepted.state, &class, accepted_daa, &raw, &eog, limits).unwrap();
+    assert_eq!(same_daa_cache.verify_claim_token_v2(&accepted.state, &claim, 0, &token), None);
+}
