@@ -1200,7 +1200,18 @@ and the Rust link invocation omitted `-lc++`. The test binary did not run.
 The [first verification archive](funded-native-relay-first-verification-20261103.json.gz)
 pins the two successful static checks and this separate link failure.
 
-A repeat uses the same source, test command, optimized profile and normal
-stack. A private linker wrapper supplies libc++ for Rust's
-`-nodefaultlibs` links. The wRPC server link proceeded and the build reached
-the Consensus test target. Its runtime result is pending.
+A repeat used the same source, test command, optimized profile and normal
+stack. A private linker wrapper supplied libc++ for Rust's
+`-nodefaultlibs` links. The test reached the real heartbeat validator, which
+refused an active Assignment prefix because the fixture had yet to arm its
+local capacity ledger. The carrier assertions did not execute.
+The [runtime archive](funded-native-relay-libcxx-verification-20261103.json.gz)
+pins the failed result, test binary and linker wrapper.
+
+The corrected fixture registers the class below the fence and arms the
+isolated ledger before its first active heartbeat. The repeat is in progress.
+An initial F preflight candidate also passed standalone Core library and test
+typechecking. It rechecks selected-parent relay material against the actual
+funding output and requires the original custody to cover the derived minimum
+retention horizon. It awaits integrated validation and grants no Assignment
+admission or bound-account custody.
