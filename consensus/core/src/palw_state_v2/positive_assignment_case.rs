@@ -26,7 +26,7 @@ use misaka_palw_positive_contract::{
         AssignmentId,
         rows::{AssignmentRow, AssignmentStatusV2},
     },
-    identity::{Digest, PUBKEY_BYTES, PrincipalId},
+    identity::{CaseId, Digest, PUBKEY_BYTES, PrincipalId, ResultId},
     journal::{CaseJournalLimits, CaseJournalRecordView},
     messages::{MinerResultCommit, PanelWitnessCommit},
     native::NativeRowKey,
@@ -83,6 +83,42 @@ fn rooted_bundle(
     }
     let pin = CaseJournalPinV2 { scope: bundle.result.result.scope, case, result, head };
     Ok((a, bundle, pin))
+}
+
+impl PalwChainStateV2 {
+    /// Resolve a follow-up against the committed selected parent's actual
+    /// Assignment consumption, signed Result, Case and journal head.
+    pub fn assigned_case_journal_pin_v2(
+        &self,
+        case: CaseId,
+        expected_result: Option<ResultId>,
+    ) -> Result<Option<(AssignmentId, CaseJournalPinV2)>, PalwStateV2Error> {
+        use crate::palw_positive_rows_v2::PositiveRowErrorV2;
+        let rows = PositiveRowsV2::new(self);
+        let case_row = match rows.read(NativeRowKey::Case(case)) {
+            Ok(Some(value)) => match value.body {
+                NativeRowBody::Case(row) => row,
+                _ => return Err(refuse("Case key/value")),
+            },
+            Ok(None) | Err(PositiveRowErrorV2::MissingKernelRoute) => return Ok(None),
+            Err(why) => return Err(refuse(why)),
+        };
+        if expected_result.is_some_and(|result| result != case_row.result) {
+            return Ok(None);
+        }
+        let NativeRowBody::Result(result) = required(self, NativeRowKey::Result(case_row.result))? else {
+            return Err(refuse("Case Result key/value"));
+        };
+        let assignment = AssignmentId(result.role_assignment.digest);
+        if rows.read(NativeRowKey::Assignment(assignment)).map_err(refuse)?.is_none() {
+            return Ok(None);
+        }
+        let (_, _, pin) = rooted_bundle(self, assignment)?;
+        if pin.case != case || pin.result != case_row.result {
+            return Err(refuse("Case and original Assignment refer to different subjects"));
+        }
+        Ok(Some((assignment, pin)))
+    }
 }
 
 /// No constructor outside this child. The current counter is cross-checked
@@ -761,6 +797,39 @@ impl CaseJournalSourceV2 for NativeAssignedArchiveV2<'_> {
     }
 }
 
+impl TransitionBuilder<'_> {
+    fn check_case_predecessor_v2(
+        &self,
+        action: &PositiveAssignmentRawActionV2,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let backing = action.case_backing().map_err(|_| missing())?;
+        let (parent, assignment, pin) = match backing {
+            NativeAssignedCaseBackingV2::CommittedHead { parent, assignment, pin, record, .. } => {
+                if record.carriage().origin() != pin.head.history.origin {
+                    return Err(refuse("Case predecessor origin differs from its rooted journal head"));
+                }
+                (*parent, *assignment, *pin)
+            }
+            NativeAssignedCaseBackingV2::Committed(backing) => (backing.parent(), backing.assignment().id(), *backing.pin()),
+            NativeAssignedCaseBackingV2::AbsentAtParent { .. } => return Err(missing()),
+        };
+        let Some((case, expected_result)) = body.operation.case_target_v2().map_err(refuse)? else {
+            return Err(refuse("a Case follow-up requires an explicit subject"));
+        };
+        if parent != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
+            return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
+        }
+        let (_, _, current) = rooted_bundle(&self.state, assignment)?;
+        if current != pin {
+            // A preceding operation in this block can advance the head. Its
+            // unpublished material must be replayed before this operation.
+            return Err(missing());
+        }
+        Ok(())
+    }
+}
+
 // The concrete archive/Remaining/service factory is still required. These raw
 // routes explicitly preserve unavailability instead of constructing a session
 // from rooted summaries or accepting a local cached positive verdict.
@@ -768,17 +837,19 @@ impl TransitionBuilder<'_> {
     pub(super) fn apply_positive_assignment_case_raw_v2(
         &mut self,
         _ctx: &PalwBlockContextV2,
-        _action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
-        _body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+        action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
+        self.check_case_predecessor_v2(action, body)?;
         Err(missing())
     }
     pub(super) fn apply_positive_assignment_attestation_raw_v2(
         &mut self,
         _ctx: &PalwBlockContextV2,
-        _action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
-        _body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+        action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
+        self.check_case_predecessor_v2(action, body)?;
         Err(missing())
     }
 }

@@ -833,7 +833,7 @@ impl PositiveCarrierPhaseTwoV2 {
             },
             native_body::{
                 MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2,
-                PositiveNativeBodyV2, PositiveNativeOperationV2 as C, decode_native_body_v2, scan_native_body_v2,
+                PositiveNativeBodyV2, decode_native_body_v2, scan_native_body_v2,
             },
         };
         use kaspa_consensus_core::palw_state_v2::{
@@ -944,6 +944,7 @@ impl PositiveCarrierPhaseTwoV2 {
             let mut signed_anchor = None;
             let mut pending_relay = None;
             let mut case_relay_contract = None;
+            let mut case_backing = None;
             let mut initial_a = None;
             let mut initial_c = None;
             let output = if let Some(physical) = relay_cap {
@@ -1006,14 +1007,16 @@ impl PositiveCarrierPhaseTwoV2 {
                 let Ok(body) = decode_native_body_v2(&tx.payload[3..], old_limits) else {
                     continue;
                 };
-                // Old0 is deliberately transported, then explicitly refused
-                // for assigned mode at the canonical raw checkpoint. No fake
-                // admission followed by a later Assignment attachment occurs.
-                let _original_meaning = match &body.operation {
-                    C::Expire { .. } => 6,
-                    C::PositiveCourtAttestation { .. } => 7,
-                    _ => kind,
-                };
+                let Ok(subject) = body.operation.case_target_v2() else { continue };
+                if let (Some(subject), Some(state)) = (subject, selected_parent_state) {
+                    case_backing =
+                        processor.prepare_committed_case_head_v2(carrier.prefix.selected_parent, state, subject).map_err(|why| {
+                            match why {
+                                E::Resource(why) => why,
+                                _ => NativeCoverageV1::unsupported::<Self>("committed Case predecessor", &format!("{why:?}")),
+                            }
+                        })?;
+                }
                 None
             } else {
                 let Ok(body) = decode_assignment_body_v2(&tx.payload[3..], limits) else {
@@ -1144,6 +1147,12 @@ impl PositiveCarrierPhaseTwoV2 {
             };
             let action = match open_carriage {
                 Some(carriage) => action.with_original_open_carriage_v2(carriage)?,
+                None => action,
+            };
+            let action = match case_backing {
+                Some(backing) => action
+                    .with_native_case_backing_v2(backing)
+                    .map_err(|why| NativeCoverageV1::unsupported::<Self>("native Case predecessor owner", &format!("{why:?}")))?,
                 None => action,
             };
             actions
