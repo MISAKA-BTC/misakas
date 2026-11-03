@@ -1636,3 +1636,19 @@ including separate job and claim roles and seal key components. A Core
 cache lease/invalidation regression is included but has not run. The
 candidate is outside the guarded A0 source. Future ingress closure and
 the all-branch admission reservation are still required.
+
+### Prospective legacy claim ingress
+
+The [claim ingress candidate](legacy-claim-ingress-candidate-20261103.tar.gz)
+checks existing legacy aliases before assignment consumption and refuses an
+exact rooted Positive ClaimIndex at the ordinary native claim and legacy
+escrow writers and the four Kernel holder tables. The guarded A0 integration
+run still pins its source. The change is staged separately.
+
+The exact-helper probe passed with the production hash, contract and Borsh
+types. It covered the canonical key, a neighboring table, an unrelated
+claim and all four Kernel key/value projections. Core library and focused
+funding-relay test metadata compiled in isolation. The added full Core
+regression has yet to run. Independent job aliases and staged legacy writers
+still need prospective protection. This candidate supplies no op9 acceptance
+or terminal settlement result.
