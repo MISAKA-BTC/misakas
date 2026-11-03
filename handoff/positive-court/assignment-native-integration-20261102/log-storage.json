@@ -1318,5 +1318,29 @@
     "stored_sha256": "7d6625fb1b0c333f232a3de1f57adbdf21a74183a657f9c5780549f5d7abfce8",
     "raw_bytes": 53334,
     "stored_bytes": 4298
+  },
+  {
+    "raw_name": "relay-ordered-plan-clippy.log",
+    "stored_name": "relay-ordered-plan-clippy.log.gz",
+    "raw_sha256": "a6308d197555d30e2b5c5c6032d6b703d30139af4bd77681fa2c429f7c8682e8",
+    "stored_sha256": "2845c2f9d9e00714f7526216d9be5192aa95d864678198c510c92d49268a8ba6",
+    "raw_bytes": 340747,
+    "stored_bytes": 23532
+  },
+  {
+    "raw_name": "relay-ordered-plan-collector-runtime.log",
+    "stored_name": "relay-ordered-plan-collector-runtime.log.gz",
+    "raw_sha256": "b51e9b0168761f273754a99fdc772a181d1ce53dc2cb8cc552e53d413bc64420",
+    "stored_sha256": "f6149fad43e99de04619742493cd94d82656641c464ed8fe95f8e9175d3daaea",
+    "raw_bytes": 197,
+    "stored_bytes": 155
+  },
+  {
+    "raw_name": "relay-ordered-plan-test-check.log",
+    "stored_name": "relay-ordered-plan-test-check.log.gz",
+    "raw_sha256": "6eaca390f5c8e741a22d84de59862a89f7f3928dd8ebb1c1754562525cb50d39",
+    "stored_sha256": "2ff507ae87d3de31a1683ac99b5ccf922d2894f7bbc54a15dedfdc808f8a437c",
+    "raw_bytes": 546096,
+    "stored_bytes": 37283
   }
 ]

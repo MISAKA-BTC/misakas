@@ -2762,7 +2762,7 @@ impl VirtualStateProcessor {
                                 // each such carrier is owed and the transition pays it back.
                                 let (
                                     (objects, folded, carrier_refunds, tir_public_originals, tir_funded_originals, fp_answers),
-                                    assignment_raw_schedule,
+                                    assignment_rehearsal,
                                 ) = self.palw_v2_accepted_objects_and_raw_assignments_v2(
                                     state,
                                     state_params,
@@ -2774,7 +2774,17 @@ impl VirtualStateProcessor {
                                     &ctx.palw_escrow_settlements,
                                     assignment_raw_actions,
                                     &ctx.accepted_tx_ids,
+                                    false,
                                 )?;
+                                let palw_accept::NativeAssignmentRehearsalResultV2::Observed(assignment_raw_schedule) =
+                                    assignment_rehearsal
+                                else {
+                                    return Err(kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+                                        "Assignment final fold",
+                                        "fee preview cannot supply the observed schedule",
+                                    )
+                                    .into());
+                                };
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the

@@ -623,11 +623,9 @@ impl VirtualStateProcessor {
         escrow_settlements: &[kaspa_consensus_core::palw_funded_escrow_v1::PalwEscrowSettlementFactV1],
         actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
         accepted_ids: &[TransactionId],
-    ) -> Result<
-        (PalwAcceptedObjectsAndOriginalsV2, Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>),
-        PalwLocalTransitionFaultV1,
-    > {
-        if actions.is_empty() {
+        plan_relay_fees: bool,
+    ) -> Result<(PalwAcceptedObjectsAndOriginalsV2, NativeAssignmentRehearsalResultV2), PalwLocalTransitionFaultV1> {
+        if actions.is_empty() && !plan_relay_fees {
             return Ok((
                 self.palw_v2_accepted_objects_and_originals(
                     state,
@@ -639,10 +637,10 @@ impl VirtualStateProcessor {
                     round_fee_incomes,
                     escrow_settlements,
                 )?,
-                Vec::new(),
+                NativeAssignmentRehearsalResultV2::Observed(Vec::new()),
             ));
         }
-        let mut raw = NativeAssignmentRehearsalV2::new(actions, accepted_ids)?;
+        let mut raw = NativeAssignmentRehearsalV2::new(actions, accepted_ids, plan_relay_fees)?;
         let legacy = kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
             self.palw_v2_accepted_objects_and_refunds_inner(
                 state,
@@ -656,7 +654,7 @@ impl VirtualStateProcessor {
                 Some(&mut raw),
             )
         })?;
-        Ok((legacy, raw.schedule))
+        Ok((legacy, raw.result))
     }
 
     pub(super) fn palw_v2_accepted_objects_and_refunds_inner(
@@ -696,7 +694,8 @@ impl VirtualStateProcessor {
         // **RFC-0007 §I.6: watch the vertices go by** (past the fence only). Every vertex whose signature verifies under its seat's key
         // is remembered, taken by the fold or not, so a second root of one `(round, seat)` — which the fold drops as the round's second
         // vertex — becomes evidence for the node to carry. A vertex already seen is not verified again.
-        if self.palw_vertex_at(point.daa_score) {
+        let publish_observations = assignment_actions.as_ref().is_none_or(|raw| !raw.result.is_plan());
+        if publish_observations && self.palw_vertex_at(point.daa_score) {
             let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
                 self.network_id_bytes.as_slice(),
                 Some(self.genesis.hash),
@@ -2076,12 +2075,13 @@ impl VirtualStateProcessor {
                             // a node that will SERVE the class needs the graph, so it is indexed
                             // here — the accept path IBD replays, which is what makes a syncing
                             // node's index arrive with its chain.
-                            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-                                class_id,
-                                artifact_root,
-                                admission: Some(carriage),
-                                ..
-                            } = &object
+                            if publish_observations
+                                && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                                    class_id,
+                                    artifact_root,
+                                    admission: Some(carriage),
+                                    ..
+                                } = &object
                             {
                                 match borsh::to_vec(carriage.as_ref()) {
                                     Ok(bytes) => {
@@ -3796,6 +3796,84 @@ type PalwAcceptedObjectsAndOriginalsV2 = (
     >,
     kaspa_consensus_core::palw_fp_answer_accounting_v1::PalwFpClaimAnswersV1,
 );
+
+/// Proposed debit for one exact accepted origin, before reward accounting.
+pub(super) struct NativeRelayFeePlanEntryV2 {
+    pub(super) origin: misaka_palw_positive_contract::rows::AcceptedOrigin,
+    pub(super) selected_parent: BlockHash,
+    pub(super) fees: misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
+}
+
+pub(super) struct NativeRelayFeePlanV2 {
+    pub(super) entries: Vec<NativeRelayFeePlanEntryV2>,
+    _lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+impl NativeRelayFeePlanV2 {
+    fn record(&mut self, entry: NativeRelayFeePlanEntryV2) -> Result<(), PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
+        if entry.fees.relay_charge() == 0 {
+            return Ok(());
+        }
+        if self.entries.len() == self.entries.capacity()
+            || self.entries.last().is_some_and(|previous| {
+                previous.selected_parent != entry.selected_parent
+                    || previous.origin.accepting_block != entry.origin.accepting_block
+                    || previous.origin.accepted_daa != entry.origin.accepted_daa
+                    || previous.origin.accepted_blue_score != entry.origin.accepted_blue_score
+                    || previous.origin.accepted_tx_ordinal >= entry.origin.accepted_tx_ordinal
+            })
+        {
+            return Err(NativeCoverageV1::unsupported::<Self>("relay fee plan storage", "invalid plan slot or order").into());
+        }
+        self.entries.push(entry);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn relay_fee_plan_keeps_only_debits_from_one_ordered_accepting_prefix() {
+    use misaka_palw_positive_contract::{
+        assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
+        rows::{AcceptedOrigin, NativeHash64},
+    };
+    let parent = BlockHash::from_u64_word(2);
+    let mut plan = NativeRelayFeePlanV2 { entries: Vec::with_capacity(2), _lease: None };
+    let entry = |ordinal, selected_parent, accepting, tip| NativeRelayFeePlanEntryV2 {
+        origin: AcceptedOrigin {
+            accepting_block: NativeHash64([accepting; 64]),
+            carrier_block: NativeHash64([3; 64]),
+            carrier_transaction: NativeHash64([4; 64]),
+            accepted_tx_ordinal: ordinal,
+            event_ordinal: 0,
+            accepted_daa: 6,
+            accepted_blue_score: 7,
+        },
+        selected_parent,
+        fees: FundingRelayCarrierFeesV2::new(20, 2, 17, tip).unwrap(),
+    };
+    plan.record(entry(1, parent, 5, 17)).unwrap();
+    assert!(plan.entries.is_empty());
+    plan.record(entry(2, parent, 5, 10)).unwrap();
+    assert!(plan.record(entry(2, parent, 5, 10)).is_err());
+    assert!(plan.record(entry(3, BlockHash::from_u64_word(8), 5, 10)).is_err());
+    assert!(plan.record(entry(3, parent, 9, 10)).is_err());
+    assert_eq!(plan.entries.len(), 1);
+    plan.record(entry(3, parent, 5, 11)).unwrap();
+    assert!(plan.record(entry(4, parent, 5, 10)).is_err());
+    assert_eq!(plan.entries.iter().map(|entry| entry.fees.relay_charge()).collect::<Vec<_>>(), vec![7, 6]);
+}
+
+pub(super) enum NativeAssignmentRehearsalResultV2 {
+    Observed(Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>),
+    Planned(NativeRelayFeePlanV2),
+}
+impl NativeAssignmentRehearsalResultV2 {
+    fn is_plan(&self) -> bool {
+        matches!(self, Self::Planned(_))
+    }
+}
+
 /// Native-only cursor over actual accepted carrier ordinals. A rejected legacy
 /// object contributes no final object slot; its position still advances raw
 /// actions against the correct current prefix in the rehearsal.
@@ -3803,12 +3881,13 @@ pub(super) struct NativeAssignmentRehearsalV2<'a> {
     actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
     cursor: usize,
     accepted_ids: &'a [TransactionId],
-    schedule: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
+    result: NativeAssignmentRehearsalResultV2,
 }
 impl<'a> NativeAssignmentRehearsalV2<'a> {
     fn new(
         actions: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>,
         accepted_ids: &'a [TransactionId],
+        plan_relay_fees: bool,
     ) -> Result<Self, PalwLocalTransitionFaultV1> {
         let mut previous = None;
         for action in &actions {
@@ -3823,16 +3902,34 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             }
             previous = Some(ordinal);
         }
-        let mut schedule = Vec::new();
-        // Each actual raw transport retained the exact schedule slot request
-        // before allocation. No packet-supplied count is used here.
-        schedule.try_reserve_exact(actions.len()).map_err(|_| {
-            kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
-                "Assignment accepted-prefix rehearsal",
-                "schedule allocation refused",
-            )
-        })?;
-        Ok(Self { actions, cursor: 0, accepted_ids, schedule })
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
+        let result = if plan_relay_fees {
+            let count = actions.iter().filter(|action| action.relay_carrier_fees_v2().is_some()).count();
+            let bytes = (count as u64)
+                .checked_mul(size_of::<NativeRelayFeePlanEntryV2>() as u64)
+                .ok_or_else(|| NativeCoverageV1::overflow::<Self>("relay fee plan storage"))?;
+            let fault = |why| NativeCoverageV1::unsupported::<Self>("relay fee plan storage", why);
+            let lease = if bytes == 0 {
+                None
+            } else {
+                Some(reserve_native_requests_v1(bytes)?.ok_or_else(|| fault("plan owner is not armed"))?)
+            };
+            let mut entries = Vec::new();
+            entries.try_reserve_exact(count).map_err(|_| fault("plan allocation refused"))?;
+            if entries.capacity() > count {
+                return Err(fault("plan allocation exceeds the reserved capacity").into());
+            }
+            NativeAssignmentRehearsalResultV2::Planned(NativeRelayFeePlanV2 { entries, _lease: lease })
+        } else {
+            let mut schedule = Vec::new();
+            // Each actual raw transport retained its schedule slot before
+            // allocation. No packet-supplied count is used here.
+            schedule.try_reserve_exact(actions.len()).map_err(|_| {
+                NativeCoverageV1::unsupported::<Self>("Assignment accepted-prefix rehearsal", "schedule allocation refused")
+            })?;
+            NativeAssignmentRehearsalResultV2::Observed(schedule)
+        };
+        Ok(Self { actions, cursor: 0, accepted_ids, result })
     }
     #[allow(clippy::too_many_arguments)]
     fn before(
@@ -3894,7 +3991,11 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
             if action.origin().accepted_tx_ordinal as usize >= before_ordinal {
                 break;
             }
-            let next = if let Some(observed) = action.relay_carrier_fees_v2().filter(|fees| fees.relay_charge() != 0) {
+            let planning = self.result.is_plan();
+            let next = if let Some(observed) = action.relay_carrier_fees_v2().filter(|fees| planning || fees.relay_charge() != 0) {
+                if planning && observed.relay_charge() != 0 {
+                    return Err(NativeCoverageV1::unsupported::<Self>("relay fee plan input", "carrier is already debited").into());
+                }
                 // Replay in the very same prefix as every other raw action.
                 // A charged refusal must abort the enclosing transition,
                 // otherwise ordinary semantic skipping would keep the debit.
@@ -3909,7 +4010,16 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
                     da_court,
                     extras,
                 ) {
-                    Ok((state, planned)) if planned == observed => Ok(state),
+                    Ok((state, planned)) if planning || planned == observed => {
+                        if let NativeAssignmentRehearsalResultV2::Planned(plan) = &mut self.result {
+                            plan.record(NativeRelayFeePlanEntryV2 {
+                                origin: action.origin(),
+                                selected_parent: action.selected_parent(),
+                                fees: planned,
+                            })?;
+                        }
+                        Ok(state)
+                    }
                     Ok(_) => {
                         return Err(NativeCoverageV1::unsupported::<Self>(
                             "relay fee prefix replay",
@@ -3918,6 +4028,7 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
                         .into());
                     }
                     Err(local @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_))) => Err(local),
+                    Err(why) if planning => Err(why),
                     Err(why) => {
                         return Err(NativeCoverageV1::unsupported::<Self>("relay fee prefix replay", &why.to_string()).into());
                     }
@@ -3948,12 +4059,13 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
                     why
                 ),
             }
-            self.schedule.push(kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2 {
-                before_object: u32::try_from(accepted_count).map_err(|_| {
-                    kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::overflow::<Self>("Assignment object slot")
-                })?,
-                action: action.clone(),
-            });
+            if let NativeAssignmentRehearsalResultV2::Observed(schedule) = &mut self.result {
+                schedule.push(kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2 {
+                    before_object: u32::try_from(accepted_count)
+                        .map_err(|_| NativeCoverageV1::overflow::<Self>("Assignment object slot"))?,
+                    action: action.clone(),
+                });
+            }
             self.cursor += 1;
         }
         Ok(())

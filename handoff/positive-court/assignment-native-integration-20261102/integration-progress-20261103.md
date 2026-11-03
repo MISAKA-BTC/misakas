@@ -998,3 +998,26 @@ All 11 contract tests and strict Contract/Core/Consensus library Clippy
 passed. The contract runtime test also confirms that recovering the input
 partition preserves the prior burns and reconstructs the exact observed fee.
 The ordered native replay typechecked and was not exercised with a live debit.
+
+## Ordered planning output for the fee owner
+
+The native accepted-object traversal now has an explicit relay planning mode.
+It previews unallocated op14 actions at their actual positions among legacy
+and other Assignment objects, advancing the disposable state after each valid
+registration. This exposes same-prefix occupancy to later carriers. Successful
+fresh debits retain their full proposed fee partition, selected parent,
+accepting point, carrier identity and ordinal. Refused and exact-repeat
+carriers contribute no debit. The output uses a bounded retained vector and
+refuses a pre-debited input, mixed branch or repeated/decreasing ordinal.
+
+Planning skips the rehearsal's vertex observation and class-carriage index
+write. It cannot supply the final observed action schedule. The normal
+candidate path still requests observed execution and checks that output kind.
+The planning result is ready for the pre-coinbase fee consumer. The UTXO and
+Round path does not consume it yet, and no live debit has run.
+
+Strict Contract/Core/Consensus library Clippy and all Consensus test-target
+typechecks passed. The isolated collector runtime test compiled the exact
+collector and test source in a small harness. It passed the zero-charge,
+wrong-prefix, repeated-ordinal and capacity cases. The complete native
+planning traversal did not execute in a block.
