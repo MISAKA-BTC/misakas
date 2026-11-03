@@ -23072,6 +23072,12 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::StagedCourtSeed { key, old, new } => {
             let (expected, install) = if revert { (new, old) } else { (old, new) };
             expect_matches(&state.staged_courts.get(key).cloned(), expected)?;
+            if let Some(row) = install
+                && (matches!(key, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirOwnerSchedule(_))
+                    || matches!(row, crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(_)))
+            {
+                row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
             palw_staged_court_fold_v1::update_indices(state, *key, expected.as_ref(), install.as_ref());
             match install {
                 Some(row) => {

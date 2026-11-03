@@ -108,6 +108,8 @@ pub enum PalwStagedCourtKeyV1 {
     CourtMaterial(Hash64, Hash64),
     /// (claim, submitter): derived per-claim storage reservation.
     CourtMaterialLedger(Hash64, PalwBondKeyV2),
+    /// Prospective TIR scheduling metadata, appended key 30.
+    TirOwnerSchedule(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -166,6 +168,8 @@ pub enum PalwStagedCourtRowV1 {
     /// resolved-binding release rule (released records + causal edges). Written only past `palw_tir_public_conviction_v1`; the
     /// legacy `CourtService` variant keeps its encoding and stays readable.
     CourtServiceV3(PalwSharedCourtV1<crate::palw_court_service_release_v1::CourtServiceRowV3>),
+    /// Prospective TIR scheduling metadata, appended row 37.
+    TirOwnerSchedule(Box<crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -201,7 +205,8 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtMaterialPart(_)
             | Self::CourtMaterial(_)
             | Self::CourtMaterialLedger(_)
-            | Self::CourtServiceV3(_) => None,
+            | Self::CourtServiceV3(_)
+            | Self::TirOwnerSchedule(_) => None,
             _ => Some(self),
         }
     }
@@ -238,7 +243,8 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtMaterialPart(_)
             | Self::CourtMaterial(_)
             | Self::CourtMaterialLedger(_)
-            | Self::CourtServiceV3(_) => None,
+            | Self::CourtServiceV3(_)
+            | Self::TirOwnerSchedule(_) => None,
             _ => Some(self),
         }
     }
@@ -375,6 +381,7 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::CourtMaterialPart(..), Self::CourtMaterialPart(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtMaterial(..), Self::CourtMaterial(row)) => row.check(key),
             (PalwStagedCourtKeyV1::CourtMaterialLedger(..), Self::CourtMaterialLedger(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::TirOwnerSchedule(_), Self::TirOwnerSchedule(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

@@ -1237,6 +1237,34 @@ impl PalwTirPublicTransitionV1 {
         }
         Ok(Some(next))
     }
+    /// Add the candidate owner change to the same compare-and-swap batch
+    /// as the native acquisition and material rows. The future caller still
+    /// authenticates the carrier and applies native sanctions atomically.
+    pub fn with_rooted_owner_schedule_v2(
+        mut self,
+        frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+        previous: &crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2,
+    ) -> Result<Self, String> {
+        previous.check_frame(frame)?;
+        let Some(next) = self.stage_owner_schedule_v2(previous.schedule())? else { return Ok(self) };
+        let key = previous.key();
+        if self.changes.iter().any(|change| change.key == key) {
+            return Err("TIR acquisition batch repeats its owner snapshot".into());
+        }
+        for change in &self.changes {
+            if let Some(Row::TirAcquisition(row)) = &change.new {
+                previous.check_owner(row)?;
+            }
+        }
+        let next = previous.with_schedule(next)?;
+        self.changes.push(PalwTirPublicRowChangeV1 {
+            key,
+            old: Some(Row::TirOwnerSchedule(Box::new(previous.clone()))),
+            new: Some(Row::TirOwnerSchedule(Box::new(next))),
+        });
+        Ok(self)
+    }
+
     pub fn deltas_v1(&self) -> Vec<crate::palw_state_v2::PalwDeltaEntryV2> {
         self.changes
             .iter()
