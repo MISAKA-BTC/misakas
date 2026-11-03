@@ -34,6 +34,22 @@ pub fn positive_certification_key_v2(subject: Digest) -> Vec<u8> {
     key.extend_from_slice(&subject.0);
     key
 }
+/// Point lookup in the shared S/K/V/N/P table. Own the temporary key
+/// before allocation; the returned bytes remain borrowed from rooted state.
+pub(crate) fn positive_certification_row_bytes_v2(
+    state: &PalwChainStateV2,
+    subject: Digest,
+) -> Result<Option<&[u8]>, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1};
+
+    let Some(route) = state.kernel_route_state_v1() else { return Ok(None) };
+    let mut requests = TirNativeRequestsV1::new();
+    requests.exact_v1::<u8>(65)?;
+    let _key_lease = reserve_native_requests_v1(requests.bytes_v1())?
+        .ok_or_else(|| NativeCoverageV1::unsupported::<Vec<u8>>("P row lookup", "actual checker is not armed"))?;
+    let key = (POSITIVE_CERTIFICATION_TABLE_V2, positive_certification_key_v2(subject));
+    Ok(route.aux.get(&key).map(Vec::as_slice))
+}
 pub fn positive_certification_policy_id_v2(policy: &PalwSecurityCertificationPolicyV1) -> Digest {
     p_hash(b"misaka/positive/certification-policy/v2/r1", policy)
 }
@@ -357,6 +373,24 @@ impl PositiveCertificationRowV2 {
         Ok(row)
     }
 }
+/// Only an exact Case can terminate its P subject. A different Result can
+/// share the CaseId, since CaseId does not bind output.
+pub(crate) fn positive_certification_case_live_v2(
+    header: &PositiveCertificationHeaderV2,
+    case: &CaseRow,
+) -> Result<bool, ContractError> {
+    use misaka_palw_positive_contract::messages::ClaimStatus;
+
+    if case.case != header.case
+        || case.result != header.result
+        || case.coverage.scope != header.scope
+        || case.liability != header.liability
+    {
+        return Err(ContractError::Identity);
+    }
+    Ok(!matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked | ClaimStatus::EndedUnverified))
+}
+
 /// Failure-only pure projection. Positive certification requires the concrete
 /// current native checked/closed-fraud session and is never returned here.
 pub fn positive_certification_failure_v2(
@@ -502,16 +536,11 @@ pub fn authorize_assigned_p_source_request_v2(
     let mut rowkey = [0u8; 65];
     rowkey[0] = b'P';
     rowkey[1..].copy_from_slice(&subject.0);
-    let route = state.kernel_route_state_v1().ok_or(PositivePSourceErrorV2::Unavailable)?;
-    let bytes = route
-        .aux
-        .range((136, Vec::new())..(137, Vec::new()))
-        .find(|((_, key), _)| key.as_slice() == rowkey)
-        .map(|(_, bytes)| bytes)
+    let bytes = positive_certification_row_bytes_v2(state, subject)
+        .map_err(PositivePSourceErrorV2::Native)?
         .ok_or(PositivePSourceErrorV2::Unavailable)?;
-    let shape =
-        crate::palw_native_resource_v1::preflight_native_value_v1::<PositiveCertificationRowV2>(bytes.as_slice(), bytes.len() as u64)
-            .map_err(|_| PositivePSourceErrorV2::Binding)?;
+    let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<PositiveCertificationRowV2>(bytes, bytes.len() as u64)
+        .map_err(|_| PositivePSourceErrorV2::Binding)?;
     let scratch = (8 * std::mem::size_of::<NativeRowValue>() + 8 * MAX_NATIVE_KEY_BYTES * 2) as u64;
     let requests = shape.logical_requests_v1().checked_add(scratch).ok_or_else(|| {
         PositivePSourceErrorV2::Native(crate::palw_native_resource_v1::NativeCoverageV1::overflow::<NativeRowValue>(
@@ -531,16 +560,11 @@ pub fn authorize_assigned_p_source_request_v2(
     }
     let draw = row.draw.as_ref().ok_or(PositivePSourceErrorV2::NotDrawn)?;
     let bundle = PositiveRowsV2::new(state).bundle(h.claim).map_err(|_| PositivePSourceErrorV2::Unavailable)?;
-    if matches!(
-        bundle.case.status,
-        misaka_palw_positive_contract::messages::ClaimStatus::ClaimRefuted
-            | misaka_palw_positive_contract::messages::ClaimStatus::Revoked
-            | misaka_palw_positive_contract::messages::ClaimStatus::EndedUnverified
-    ) {
-        return Err(PositivePSourceErrorV2::Closed);
-    }
     if &bundle.result.result != result || bundle.result.origin != h.commit_origin {
         return Err(PositivePSourceErrorV2::Binding);
+    }
+    if !positive_certification_case_live_v2(h, &bundle.case).map_err(|_| PositivePSourceErrorV2::Binding)? {
+        return Err(PositivePSourceErrorV2::Closed);
     }
     let Some(native_bond) = state.bonds_for_positive_p_source_v2().find_map(|(bond, record)| {
         let point = Digest(palw_kernel_bond_id_v1(bond));

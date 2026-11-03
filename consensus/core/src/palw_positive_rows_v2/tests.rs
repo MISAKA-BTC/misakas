@@ -50,6 +50,68 @@ pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow,
     signed_bundle_for_relations(10)
 }
 
+#[test]
+fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
+    use crate::{
+        palw_positive_certification_v2::{
+            PositiveCertificationHeaderV2, positive_certification_case_live_v2, positive_certification_policy_id_v2,
+        },
+        palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+    };
+
+    let (_, result, mut case, _, _, _) = signed_bundle();
+    let r = &result.result;
+    let policy = PalwSecurityCertificationPolicyV1 {
+        m: 1,
+        k: 1,
+        veto: 0,
+        anchor_delay_spans: 1,
+        attest_window_daa: 5,
+        prosecution_window_daa: 19,
+        certify_by_daa: 7,
+        verifier_maturity_daa: 3,
+        verifier_min_collateral_sompi: 1,
+        draws_per_epoch: 4,
+        epoch_daa: 11,
+    };
+    let header = PositiveCertificationHeaderV2 {
+        version: 2,
+        revision: 1,
+        assignment: misaka_palw_positive_contract::assignment::AssignmentId(d(81)),
+        subject: misaka_palw_positive_contract::native::certification_subject(r),
+        claim: r.claim_id(),
+        result: r.id(),
+        case: r.case_id(),
+        scope: r.scope,
+        policy,
+        policy_id: positive_certification_policy_id_v2(&policy),
+        commit_origin: result.origin,
+        committed_span: Some(2),
+        worker: NativeOutpoint { transaction: NativeHash64([82; 64]), index: 0 },
+        worker_operator: d(83),
+        worker_key: result.miner_key,
+        worker_gain: 100,
+        liability: case.liability,
+    };
+    assert_eq!(positive_certification_case_live_v2(&header, &case), Ok(true));
+    for status in [ClaimStatus::ClaimRefuted, ClaimStatus::Revoked, ClaimStatus::EndedUnverified] {
+        case.status = status;
+        assert_eq!(positive_certification_case_live_v2(&header, &case), Ok(false));
+        let mut other_output = r.clone();
+        other_output.output = d(85);
+        assert_eq!(other_output.case_id(), r.case_id());
+        assert_ne!(other_output.id(), r.id());
+        let other =
+            CaseRow { result: other_output.id(), coverage: CoverageDescriptor { result: other_output.id(), ..case.coverage }, ..case };
+        assert_eq!(positive_certification_case_live_v2(&header, &other), Err(ContractError::Identity));
+        let other =
+            CaseRow { coverage: CoverageDescriptor { scope: ChainScope { branch: d(86), ..r.scope }, ..case.coverage }, ..case };
+        assert_eq!(positive_certification_case_live_v2(&header, &other), Err(ContractError::Identity));
+        let other = CaseRow { liability: material_at(99), ..case };
+        assert_eq!(positive_certification_case_live_v2(&header, &other), Err(ContractError::Identity));
+    }
+}
+
 /// Real signatures over a chosen literal relation count. Large counts are
 /// hostile DTO fixtures, not admitted execution profiles or native quotes.
 pub(super) fn signed_bundle_for_relations(mandatory: u64) -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow, CoverageRow) {

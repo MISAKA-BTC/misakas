@@ -95,13 +95,10 @@ pub(super) fn reserve_p_workspace(bytes: u64) -> Result<NativeDemandLeaseV1, Pal
         ))
     })
 }
-fn raw(state: &PalwChainStateV2, subject: Digest) -> Option<&[u8]> {
-    let key = key(subject);
-    let route = state.kernel_route_state_v1()?;
-    route.aux.range((136, Vec::new())..(137, Vec::new())).find(|((_, k), _)| k.as_slice() == key).map(|(_, v)| v.as_slice())
-}
 fn read(state: &PalwChainStateV2, subject: Digest, pool: u64) -> Result<OwnedP, PalwStateV2Error> {
-    let bytes = raw(state, subject).ok_or_else(|| refuse("missing P row"))?;
+    let bytes = positive_certification_row_bytes_v2(state, subject)
+        .map_err(PalwStateV2Error::NativeResource)?
+        .ok_or_else(|| refuse("missing P row"))?;
     if bytes.len() > MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2 {
         return Err(refuse("P codec bound"));
     }
@@ -150,8 +147,7 @@ fn case_live(state: &PalwChainStateV2, h: &PositiveCertificationHeaderV2) -> Res
         return Err(unavailable("actual P Case unavailable; missing is not withdrawn"));
     };
     let NativeRowBody::Case(case) = value.body else { return Err(refuse("wrong native Case row")) };
-    Ok(case.result == h.result
-        && !matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked | ClaimStatus::EndedUnverified))
+    positive_certification_case_live_v2(h, &case).map_err(refuse)
 }
 pub(super) fn live_verifiers<'a>(
     state: &'a PalwChainStateV2,
@@ -210,7 +206,7 @@ impl TransitionBuilder<'_> {
             return Err(refuse("worker key changed"));
         }
         let subject = certification_subject(&bundle.result.result);
-        if raw(&self.state, subject).is_some() {
+        if positive_certification_row_bytes_v2(&self.state, subject).map_err(PalwStateV2Error::NativeResource)?.is_some() {
             return Err(refuse("P begin is once only, never resets its clock"));
         }
         let h = PositiveCertificationHeaderV2 {
