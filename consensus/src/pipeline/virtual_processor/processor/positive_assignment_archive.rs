@@ -25,8 +25,8 @@ use kaspa_consensus_core::{
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
     palw_state_v2::{
         AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignmentRulesV2,
-        NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2, PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2,
-        PalwDeltaEntryV2, palw_bond_may_take_work_v2,
+        NativeCommittedAssignedCaseV2, NativeCommittedAssignmentRecordV2, NativeCommittedCaseRecordV2, PalwBondKeyV2, PalwBondStateV2,
+        PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
     },
     tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
@@ -40,10 +40,10 @@ use misaka_palw_positive_contract::{
         funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2},
         journal::{ASSIGNMENT_JOURNAL_HEADER_BYTES_V2, AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
         open_material::AssignmentOpenLimitsV2,
-        rows::{AssignmentJournalFrameRow, AssignmentJournalHeadRow, AssignmentNonceRow},
+        rows::{AssignmentJournalFrameRow, AssignmentJournalHeadRow, AssignmentNonceRow, AssignmentStatusV2},
     },
-    identity::Digest,
-    journal::CaseJournalRecordView,
+    identity::{CaseId, Digest},
+    journal::{CASE_JOURNAL_AUX_MATERIAL_BYTES, CaseJournalLimits, CaseJournalRecordView},
     native::{KERNEL_AUX_TABLE, NativeRowKey},
     rows::{AcceptedMaterial, AcceptedOrigin, MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES, NativeRowBody, NativeRowValue},
 };
@@ -258,6 +258,10 @@ fn assignment_archive_row_fault_v2(error: PositiveRowErrorV2) -> NativeAssignmen
     }
 }
 
+fn archive_row_v2(rows: &PositiveRowsV2<'_>, key: NativeRowKey) -> Result<Option<NativeRowBody>, NativeAssignmentArchiveErrorV2> {
+    rows.read(key).map_err(assignment_archive_row_fault_v2).map(|row| row.map(|value| value.body))
+}
+
 fn check_assignment_predecessor_v2(
     prefix: &PalwChainStateV2,
     assignment: AssignmentId,
@@ -405,6 +409,191 @@ impl VirtualStateProcessor {
         })
     }
 
+    /// Assemble the original Assignment and Case histories from one selected
+    /// parent. The result carries the original replay data and its memory
+    /// owners. It gives no authority until the Case writer replays the data.
+    pub(in crate::pipeline::virtual_processor) fn load_committed_assigned_case_v2(
+        &self,
+        parent: BlockHash,
+        state: &PalwChainStateV2,
+        case: CaseId,
+        maximum_heap: u64,
+        maximum_work: u64,
+    ) -> Result<NativeCommittedAssignedCaseV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        if [maximum_heap, maximum_work].into_iter().any(|limit| limit == 0 || limit == u64::MAX) {
+            return Err(E::Invalid("combined Case archive limits must be finite"));
+        }
+        let scratch =
+            (8 * size_of::<NativeRowValue>() + 2 * size_of::<AssignmentAdmissionMaterialV2>() + 2 * MAX_NATIVE_KEY_BYTES) as u64;
+        let backing_heap = size_of::<NativeCommittedAssignedCaseV2>() as u64;
+        let mut remaining_heap = maximum_heap
+            .checked_sub(scratch)
+            .and_then(|n| n.checked_sub(backing_heap))
+            .ok_or(E::Unavailable("combined Case archive workspace cap"))?;
+        let _scratch = reserve_native_requests_v1(scratch)
+            .map_err(E::Resource)?
+            .ok_or(E::Unavailable("combined Case archive workspace lease"))?;
+        let mut remaining_work = maximum_work;
+        charge_archive_work_v2(&mut remaining_work, scratch)?;
+        if state.last_point().map(|point| point.block) != Some(parent) {
+            return Err(E::Invalid("combined Case archive state is not the selected parent"));
+        }
+        let parent_root = self
+            .palw_state_v2_store
+            .read()
+            .state_root_of(parent)
+            .map_err(|error| archive_store_fault_v2(error, "committed Case archive parent root"))?;
+        let rows = PositiveRowsV2::new(state);
+        let Some(NativeRowBody::Case(case_row)) = archive_row_v2(&rows, NativeRowKey::Case(case))? else {
+            return Err(E::Unavailable("rooted Case archive subject"));
+        };
+        let Some(NativeRowBody::Result(result)) = archive_row_v2(&rows, NativeRowKey::Result(case_row.result))? else {
+            return Err(E::Unavailable("rooted Case Result"));
+        };
+        let id = AssignmentId(result.role_assignment.digest);
+        let rooted = rows.assignment(id).map_err(assignment_archive_row_fault_v2)?;
+        let bundle = rows.bundle(result.result.claim_id()).map_err(assignment_archive_row_fault_v2)?;
+        let Some(use_row) = rooted.use_row else {
+            return Err(E::Invalid("rooted Assignment has no Case binding"));
+        };
+        let Some(NativeRowBody::JournalHead(head)) = archive_row_v2(&rows, NativeRowKey::JournalHead(case))? else {
+            return Err(E::Unavailable("rooted Case journal head"));
+        };
+        if bundle.case != case_row
+            || bundle.result != result
+            || rooted.assignment.status != (AssignmentStatusV2::Consumed { case, result: case_row.result })
+            || result.role_assignment != (AcceptedMaterial { origin: rooted.assignment.origin, digest: id.0 })
+            || result.dependencies != rooted.assignment.dependencies
+            || use_row.origin != result.origin
+            || head.case != case
+            || head.sequence == 0
+            || head.history.origin != case_row.last_event
+        {
+            return Err(E::Invalid("rooted Case and Assignment archive links"));
+        }
+        let pin = CaseJournalPinV2 { scope: result.result.scope, case, result: case_row.result, head };
+        let Some(NativeRowBody::AssignmentJournalFrame(open_frame)) =
+            archive_row_v2(&rows, NativeRowKey::AssignmentJournalFrame { assignment: id, ordinal: 0 })?
+        else {
+            return Err(E::Unavailable("rooted Case original Open frame"));
+        };
+        if open_frame.header.kind != AssignmentJournalEventKindV2::Open || open_frame.header.origin != rooted.assignment.origin {
+            return Err(E::Invalid("Case Open frame differs from rooted Assignment"));
+        }
+        let open_payload = u64::from(open_frame.header.payload_bytes);
+        let open_extent = open_payload + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+        charge_archive_work_v2(&mut remaining_work, open_extent * 5)?;
+        let material = self
+            .palw_state_v2_store
+            .read()
+            .with_positive_assignment_journal_record_v2(open_frame.header.id(), open_extent, |raw| {
+                let record = AssignmentJournalRecordViewV2::decode(raw, open_extent)
+                    .map_err(|_| E::Invalid("Case original Open frame codec"))?;
+                if record.frame() != open_frame {
+                    return Err(E::Invalid("Case original Open differs from rooted frame"));
+                }
+                let envelope = AssignmentControlViewV2::decode(record.payload(), open_payload)
+                    .map_err(|_| E::Invalid("Case original Open envelope"))?;
+                let (_, body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, open_payload)
+                    .map_err(|_| E::Invalid("Case original Open native framing"))?;
+                let view = AssignmentAdmissionMaterialViewV2::decode(
+                    &rooted.assignment,
+                    envelope.inner(),
+                    body,
+                    AssignmentOpenLimitsV2::within_payload(open_payload),
+                )
+                .map_err(|_| E::Invalid("Case original Open material"))?;
+                view.material.check_native_open_record_extent_v2(open_payload).map_err(|_| E::Invalid("Case original Open extent"))?;
+                Ok(view.material)
+            })
+            .map_err(|error| archive_store_fault_v2(error, "Case original Open material read"))??;
+
+        let assignment = self.load_rooted_assignment_journal_carriages_v2(parent, state, &material, remaining_heap, remaining_work)?;
+        charge_archive_work_v2(&mut remaining_work, assignment.work)?;
+        remaining_heap = remaining_heap.checked_sub(assignment.heap).ok_or(E::Unavailable("combined Assignment archive heap cap"))?;
+        let policy = &material.positive_policy;
+        let raw = policy.max_case_journal_bytes.min(remaining_work / 7);
+        let events = u64::from(material.assignment_policy.max_history_frames);
+        let record_limits = CaseJournalLimits {
+            max_record_bytes: raw,
+            max_payload_bytes: raw,
+            max_aux_entries: u32::try_from(raw / (CASE_JOURNAL_AUX_MATERIAL_BYTES as u64 + 5)).unwrap_or(u32::MAX),
+            max_aux_preimage_bytes: raw,
+            max_total_preimage_bytes: raw,
+            max_logical_heap_bytes: policy.max_case_heap_bytes,
+        };
+        let limits = CaseJournalChainLimitsV2 {
+            record_limits,
+            max_events: events,
+            max_total_record_bytes: raw * 2,
+            max_hash_bytes: raw * 4,
+            max_index_bytes: events * size_of::<Digest>() as u64,
+        };
+        let mut case_history = self.load_rooted_case_journal_carriages_v2(
+            parent,
+            state,
+            pin,
+            limits,
+            remaining_heap.min(policy.max_case_heap_bytes),
+            remaining_work.min(policy.max_case_work),
+        )?;
+        charge_archive_work_v2(&mut remaining_work, case_history.work)?;
+        let first = case_history.records.first().ok_or(E::Invalid("Case archive omitted BindResult carriage"))?;
+        if first.carriage().origin() != use_row.origin || use_row.binding.origin != use_row.origin {
+            return Err(E::Invalid("Case archive BindResult origin differs from rooted use"));
+        }
+        let first_work = (first.raw().len() as u64).checked_mul(4).ok_or(E::Invalid("Case BindResult first record work overflow"))?;
+        charge_archive_work_v2(&mut remaining_work, first_work)?;
+        let first_view = CaseJournalRecordView::decode(first.raw(), limits.record_limits)
+            .map_err(|_| E::Invalid("Case first BindResult record codec"))?;
+        let case_boundary = exact_case_boundary_v2(first_view)?;
+        let mut matched = false;
+        for control in &assignment.records {
+            charge_archive_work_v2(&mut remaining_work, size_of::<AcceptedOrigin>() as u64)?;
+            // The first accepted carrier must occur in both journals, with
+            // the exact rooted control-frame identity and original prefix.
+            if control.carriage().origin() == use_row.origin {
+                let compare_work =
+                    (control.raw().len() as u64).checked_mul(2).ok_or(E::Invalid("Case Binding compare work overflow"))?;
+                charge_archive_work_v2(&mut remaining_work, compare_work)?;
+                let record = AssignmentJournalRecordViewV2::decode(control.raw(), control.raw().len() as u64)
+                    .map_err(|_| E::Invalid("Case Binding control codec"))?;
+                let (control_boundary, _) =
+                    AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, u64::from(record.header().payload_bytes))
+                        .map_err(|_| E::Invalid("Case BindResult control boundary"))?;
+                if matched
+                    || record.header().kind != AssignmentJournalEventKindV2::BindResult
+                    || record.header().id() != use_row.binding.digest
+                    || control_boundary.selected_parent != case_boundary.selected_parent
+                    || control_boundary.before_delta_end != case_boundary.before_delta_end
+                    || control_boundary.pre_event_root != case_boundary.pre_event_root
+                    || control_boundary.populated_inputs != case_boundary.populated_inputs
+                    || control_boundary.input_count != case_boundary.input_count
+                    || control_boundary.fee != case_boundary.fee
+                {
+                    return Err(E::Invalid("Case and Assignment BindResult archives differ"));
+                }
+                matched = true;
+            }
+        }
+        if !matched {
+            return Err(E::Invalid("Assignment archive omitted the Case BindResult"));
+        }
+        case_history.lease.grow_memory_v1(backing_heap).map_err(E::Resource)?;
+        Ok(NativeCommittedAssignedCaseV2::from_native_archive_v2(
+            parent,
+            parent_root,
+            rooted.assignment,
+            material,
+            assignment.open,
+            pin,
+            case_history.records,
+            assignment.records,
+            [assignment.lease, case_history.lease],
+        ))
+    }
+
     /// Load the complete control history selected by the actual native parent.
     /// Each transaction also has to see the exact previous control head at
     /// its own executed prefix. A raw row copied from another branch cannot
@@ -414,14 +603,16 @@ impl VirtualStateProcessor {
         parent: BlockHash,
         state: &PalwChainStateV2,
         material: &AssignmentAdmissionMaterialV2,
+        maximum_heap: u64,
+        maximum_work: u64,
     ) -> Result<NativeAssignmentJournalCarriagesV2, NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
         let id = material.assignment;
         let policy = &material.assignment_policy;
         let physical = &material.native_preimages.physical;
         let custody = &material.custody;
-        let maximum_heap = custody.heap_bytes.min(physical.max_heap_bytes).min(policy.max_heap_bytes);
-        let maximum_work = custody.replay_work.min(policy.max_replay_work);
+        let maximum_heap = maximum_heap.min(custody.heap_bytes).min(physical.max_heap_bytes).min(policy.max_heap_bytes);
+        let maximum_work = maximum_work.min(custody.replay_work).min(policy.max_replay_work);
         let maximum_raw = custody
             .retained_bytes
             .min(custody.replay_bytes / 2)

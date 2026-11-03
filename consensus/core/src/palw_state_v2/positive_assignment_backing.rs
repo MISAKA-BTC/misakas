@@ -117,12 +117,11 @@ pub struct NativeCommittedAssignedCaseV2 {
     parent_state_root: Hash64,
     assignment: AssignmentRow,
     material: AssignmentAdmissionMaterialV2,
-    open_raw: Vec<u8>,
-    open_carriage: NativeAcceptedCaseCarriageV2,
+    open: NativeCommittedAssignmentRecordV2,
     pin: CaseJournalPinV2,
     records: Vec<NativeCommittedCaseRecordV2>,
     assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
-    _lease: NativeDemandLeaseV1,
+    _leases: [NativeDemandLeaseV1; 2],
 }
 impl NativeCommittedAssignedCaseV2 {
     #[allow(clippy::too_many_arguments)]
@@ -131,25 +130,13 @@ impl NativeCommittedAssignedCaseV2 {
         parent_state_root: Hash64,
         assignment: AssignmentRow,
         material: AssignmentAdmissionMaterialV2,
-        open_raw: Vec<u8>,
-        open_carriage: NativeAcceptedCaseCarriageV2,
+        open: NativeCommittedAssignmentRecordV2,
         pin: CaseJournalPinV2,
         records: Vec<NativeCommittedCaseRecordV2>,
         assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
-        lease: NativeDemandLeaseV1,
+        leases: [NativeDemandLeaseV1; 2],
     ) -> Self {
-        Self {
-            parent,
-            parent_state_root,
-            assignment,
-            material,
-            open_raw,
-            open_carriage,
-            pin,
-            records,
-            assignment_records,
-            _lease: lease,
-        }
+        Self { parent, parent_state_root, assignment, material, open, pin, records, assignment_records, _leases: leases }
     }
     pub fn parent(&self) -> BlockHash {
         self.parent
@@ -164,10 +151,10 @@ impl NativeCommittedAssignedCaseV2 {
         &self.material
     }
     pub fn open_raw(&self) -> &[u8] {
-        &self.open_raw
+        self.open.raw()
     }
     pub fn open_carriage(&self) -> &NativeAcceptedCaseCarriageV2 {
-        &self.open_carriage
+        self.open.carriage()
     }
     pub fn pin(&self) -> &CaseJournalPinV2 {
         &self.pin
@@ -216,23 +203,12 @@ impl NativeHeapV1 for NativeCommittedCaseRecordV2 {
 }
 impl NativeHeapV1 for NativeCommittedAssignedCaseV2 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        let Self {
-            parent: _,
-            parent_state_root: _,
-            assignment,
-            material,
-            open_raw,
-            open_carriage,
-            pin: _,
-            records,
-            assignment_records,
-            _lease: _,
-        } = self;
+        let Self { parent: _, parent_state_root: _, assignment, material, open, pin: _, records, assignment_records, _leases: _ } =
+            self;
         assignment
             .native_heap_v1(path)
             .add::<Self>(material.native_heap_v1(path), path)
-            .add::<Self>(open_raw.native_heap_v1(path), path)
-            .add::<Self>(open_carriage.native_heap_v1(path), path)
+            .add::<Self>(open.native_heap_v1(path), path)
             .add::<Self>(records.native_heap_v1(path), path)
             .add::<Self>(assignment_records.native_heap_v1(path), path)
     }
