@@ -340,7 +340,8 @@ impl HttpTransport for NumericEvidenceGetV1 {
         let host = self.endpoint.address;
         let mut stream = TcpStream::connect_timeout(&host, remaining()?).map_err(|e| e.to_string())?;
         stream.set_write_timeout(Some(remaining()?)).map_err(|e| e.to_string())?;
-        write!(stream, "GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n").map_err(|e| e.to_string())?;
+        let request = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).map_err(|e| e.to_string())?;
         let cap = max_response.saturating_add(16 * 1024);
         let mut raw = Vec::new();
         let mut buffer = [0; 16 * 1024];
@@ -1577,7 +1578,12 @@ mod tests {
             let (mut stream, _) = listener.accept().unwrap();
             stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
             let mut request = [0; 512];
-            let read = stream.read(&mut request).unwrap();
+            let mut read = 0;
+            while !request[..read].ends_with(b"\r\n\r\n") {
+                let n = stream.read(&mut request[read..]).unwrap();
+                assert!(n > 0);
+                read += n;
+            }
             assert!(request[..read].starts_with(b"GET "));
             write!(stream, "HTTP/1.1 302 Found\r\nLocation: http://{destination}/steal\r\nContent-Length: 0\r\n\r\n").unwrap();
         });

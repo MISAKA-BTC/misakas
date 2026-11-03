@@ -4484,7 +4484,8 @@ pub struct PalwPanelService {
     /// a cadence rather than inside every write (audit M2-2).
     foreign_prune_at: std::sync::Mutex<std::time::Instant>,
     provider_http_fetch: Arc<tokio::sync::Semaphore>,
-    pending_provider_http: std::sync::Mutex<Option<(Hash64, misaka_palw_remote::evidence::ClaimRoots, FetchedProviderMaterialV1)>>,
+    pending_provider_http:
+        Arc<std::sync::Mutex<Option<(Hash64, misaka_palw_remote::evidence::ClaimRoots, FetchedProviderMaterialV1)>>>,
     /// The claims the panel's last tick held live (its duties, court duties and disputes): their
     /// files in `retention/foreign/` are out of the sweep's reach, age and count alike
     /// ([`prune_foreign_retention_v1`]).
@@ -5008,7 +5009,7 @@ impl PalwPanelService {
             root_fetch: std::sync::Mutex::new(Default::default()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             provider_http_fetch: Arc::new(tokio::sync::Semaphore::new(1)),
-            pending_provider_http: std::sync::Mutex::new(None),
+            pending_provider_http: Arc::new(std::sync::Mutex::new(None)),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
@@ -14801,30 +14802,35 @@ impl PalwPanelService {
         })
     }
 
-    /// Fetch the existing directory sources first, then one bounded network
-    /// fallback. Both paths use the same manifest and chunk verification.
-    async fn fetch_provider_material(
+    async fn fetch_directory_provider_material(
         &self,
         claim: Hash64,
         roots: misaka_palw_remote::evidence::ClaimRoots,
     ) -> Result<FetchedProviderMaterialV1, String> {
-        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
         use misaka_palw_remote::evidence::{ManifestLimits, fs};
-        let limits = ManifestLimits::default();
         let dirs = self.config.evidence_provider_dirs.clone();
-        let endpoints = self.config.evidence_provider_http.clone();
-        if !dirs.is_empty() || endpoints.is_empty() {
-            let local =
-                tokio::task::spawn_blocking(move || fs::fetch_claim_material(&dirs, &claim.to_string(), &roots, &limits, claim))
-                    .await
-                    .map_err(|error| error.to_string())?;
-            match local {
-                Ok((bytes, report)) => return Ok(FetchedProviderMaterialV1 { bytes, report, http_admission: None }),
-                Err(error) if endpoints.is_empty() => return Err(format!("{error:?}")),
-                Err(_) => {}
-            }
+        if dirs.is_empty() {
+            return Err("no evidence provider directories configured".into());
         }
+        let (bytes, report) = tokio::task::spawn_blocking(move || {
+            fs::fetch_claim_material(&dirs, &claim.to_string(), &roots, &ManifestLimits::default(), claim)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("{error:?}"))?;
+        Ok(FetchedProviderMaterialV1 { bytes, report, http_admission: None })
+    }
 
+    /// Reserve before spawning so even a saturated blocking executor queues
+    /// at most one HTTP job. Its result holds the slot until it is consumed.
+    fn spawn_provider_http_fetch<T: Send + 'static>(
+        &self,
+        claim: Hash64,
+        roots: misaka_palw_remote::evidence::ClaimRoots,
+        finish: impl FnOnce(Result<FetchedProviderMaterialV1, String>) -> T + Send + 'static,
+    ) -> Result<(std::time::Instant, tokio::task::JoinHandle<T>), String> {
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        use misaka_palw_remote::evidence::ManifestLimits;
         let permit = self.provider_http_fetch.clone().try_acquire_owned().map_err(|_| "evidence HTTP fetch already in progress")?;
         // Reassembly temporarily holds both the chunks and the contiguous
         // output. Leave room for one response, manifest and diagnostics.
@@ -14832,41 +14838,24 @@ impl PalwPanelService {
         let lease = global_memory_budget()
             .try_reserve(MemoryClass::Transport, 2 * MAX_BYTES + (8 << 20))
             .map_err(|error| error.to_string())?;
-        let limits = ManifestLimits { max_chunks: 128, max_total_bytes: MAX_BYTES, ..limits };
+        let endpoints = self.config.evidence_provider_http.clone();
+        let limits = ManifestLimits { max_chunks: 128, max_total_bytes: MAX_BYTES, ..ManifestLimits::default() };
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        let mut task = tokio::task::spawn_blocking(move || {
-            let (bytes, report) =
+        let task = tokio::task::spawn_blocking(move || {
+            finish(
                 misaka_palw_remote::transport::fetch_verifier_http_material_v1(&endpoints, claim, &roots, &limits, deadline)
-                    .map_err(|error| error.to_string())?;
-            Ok::<_, String>(FetchedProviderMaterialV1 { bytes, report, http_admission: Some((lease, permit)) })
+                    .map(|(bytes, report)| FetchedProviderMaterialV1 { bytes, report, http_admission: Some((lease, permit)) })
+                    .map_err(|error| error.to_string()),
+            )
         });
-        let material = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut task).await {
-            Ok(result) => result.map_err(|error| error.to_string())??,
-            Err(_) => {
-                task.abort();
-                return Err("evidence HTTP fetch deadline reached".into());
-            }
-        };
-        // An HTTP fetch may span a reorg. A changed accepted deadline needs
-        // a new provider check before the bytes can enter the inbox or cache.
-        if self.provider_claim_roots(roots.network_domain, claim) != Some(roots) {
-            return Err("claim evidence roots or accepted retention changed during HTTP fetch".into());
-        }
-        Ok(material)
+        Ok((deadline, task))
     }
 
-    /// A verified provider copy enters the same inbox and re-execution path
-    /// as a producer's reply. A miss does not establish a claim fault.
+    /// A verified provider copy enters the same seat pool and re-execution
+    /// path as a producer's reply. A miss does not establish a claim fault.
     async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
         let Some(roots) = self.provider_claim_roots(network_domain, claim) else { return };
-        match self.fetch_provider_material(claim, roots).await {
-            Ok(material) if material.http_admission.is_some() => {
-                // Keep at most one network result until the next inbox
-                // drain moves it into the already byte-bounded seat pool.
-                let mut pending = self.pending_provider_http.lock().unwrap();
-                debug_assert!(pending.is_none(), "the HTTP admission owns the single-flight slot");
-                *pending = Some((claim, roots, material));
-            }
+        match self.fetch_directory_provider_material(claim, roots).await {
             Ok(material) => {
                 let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &material.bytes);
                 info!(
@@ -14875,8 +14864,27 @@ impl PalwPanelService {
                     material.report.served_by,
                     material.report.failures.len()
                 );
+                return;
             }
-            Err(why) => info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})"),
+            Err(why) if self.config.evidence_provider_http.is_empty() => {
+                info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})");
+                return;
+            }
+            Err(_) => {}
+        }
+
+        let pending = self.pending_provider_http.clone();
+        // The P2P request has already been dispatched. Do not wait on HTTP
+        // here: one silent endpoint must not delay later duties in the tick.
+        if let Err(why) = self.spawn_provider_http_fetch(claim, roots, move |result| match result {
+            Ok(material) => {
+                let mut pending = pending.lock().unwrap();
+                debug_assert!(pending.is_none(), "the HTTP admission owns the single-flight slot");
+                *pending = Some((claim, roots, material));
+            }
+            Err(why) => debug!("[{PALW_PANEL}] claim {claim}: no HTTP evidence-provider material ({why})"),
+        }) {
+            debug!("[{PALW_PANEL}] claim {claim}: HTTP evidence-provider fetch skipped ({why})");
         }
     }
 
@@ -14890,7 +14898,25 @@ impl PalwPanelService {
             return Ok(false);
         }
         let roots = self.provider_claim_roots(network_domain, claim).ok_or("the claim's committed roots are not readable")?;
-        let material = self.fetch_provider_material(claim, roots).await?;
+        let material = match self.fetch_directory_provider_material(claim, roots).await {
+            Ok(material) => material,
+            Err(why) if self.config.evidence_provider_http.is_empty() => return Err(why),
+            Err(_) => {
+                let (deadline, mut task) = self.spawn_provider_http_fetch(claim, roots, |result| result)?;
+                let material = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut task).await {
+                    Ok(result) => result.map_err(|error| error.to_string())??,
+                    Err(_) => {
+                        task.abort();
+                        return Err("evidence HTTP fetch deadline reached".into());
+                    }
+                };
+                // Re-read the stored acceptance after a network delay or reorg.
+                if self.provider_claim_roots(network_domain, claim) != Some(roots) {
+                    return Err("claim evidence roots or accepted retention changed during HTTP fetch".into());
+                }
+                material
+            }
+        };
         let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
             let parent = target.parent().ok_or("retention path has no parent")?;
