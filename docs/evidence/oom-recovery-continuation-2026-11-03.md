@@ -1837,3 +1837,75 @@ and runner were copied and matched the remote SHA-256 manifest.
 The owned RAM source stage was then released, restoring
 1,029,152,768 bytes of tmpfs space. This did not qualify Seat5
 for unsigned IBD or change the persistent storage requirement.
+
+## PALW clock, builder and TFP1 parallel follow-up — 08:06 UTC
+
+The exact B0 and relay status read at DAA 19,656 reported REAL
+attempt ticks active from 5,300, PFS4 spends active from 15,500,
+and the 20,000 acceptance retention fence still unarmed. Both
+reported class semantics, the bounded door and designated answers
+unscheduled. A paired header-only replay of eight selected blocks
+found four one-DAA increases whose only known source lane was
+heartbeat, and three sets containing a REAL carrier with zero
+increase. Mixed candidate sets are left unattributed. The running
+RPC does not supply the actual cursor for each historical fold.
+Explorer REST and WebSocket were current at the subsequent DAA
+19,657 check and the relay process still reported zero receipt blocks.
+B0 refused Qwen #69 and #70 at 20,606/20,608 and #71 at
+20,607/20,608. Both nodes lacked each exact claim.
+
+The builder now evaluates mature own and delegated receipts before
+the local attempt registry hold. The spendable quote returns the
+exact parent it used. A worker compares it and the candidate DAA
+against the template and active consensus before signing. RDA4
+regular-file reads use the existing 16 KiB receipt cap. The clock
+trace records the native grant, next slot, source counts and
+timestamps, and heartbeat logging records the actual local hint
+and yield decision. Consensus tick rules and PFS4 pricing are
+unchanged. Two extracted source checks for receipt ordering and
+bounded reads passed. Thirty retained Core clock/heartbeat tests
+and two retained native Consensus fixtures passed.
+
+The provider authority candidate `f8b39718a` passed a coherent
+38-unit metadata run including Kaspad default+EVM tests. It remains
+isolated. Its full native Core test link crossed the 7 GiB RSS
+guard before running any cases. Three retained baseline held-state
+tests separately passed for input binding, checkpoint anchor and
+penalty attribution. The original public #58 cannot enter that
+transition because it never acquired an accepted claim row.
+Positive Court's rooted TIR entry is also separate from this legacy
+held challenge. The isolated native transition recipe preserves
+these scopes.
+
+The reproduced SmolLM2 fixture still requires 8,782,776 DAA
+against 3,120. Its non-tokenizer diagnostic has 287,806 DAA
+acquisition, 60,000 owner queue, 16 preparation and 36 other
+Open/collection overhead, totaling 347,858. These values use the
+original fixture EOF assumption and are independent of its live
+registration and binding refusal.
+
+Parallel prospective commits are `2086e5689` for tokenizer reuse
+with a branch-checked verified EOF and a cold restart (five focused
+tests passed), `f0ec44d50` for the bounded Studio all-root maximum
+parameter/opening diagnostic (typecheck and real artifact run
+pending), and `3687027c5` for bounded owner slots and explicit
+parking without retiring response duties (four focused tests
+passed). None is a live quote reduction. The all-root diagnostic
+does not cover every response family, and the owner scheduler
+still needs rooted lifecycle and filing integration.
+
+The final builder and clock source `0fec7174b` passed the exact
+38-unit metadata closure, including the Kaspad default+EVM test
+crate and both Core feature sets. The first attempt found missing
+session-proxy calls and a test import. The final source uses the
+existing consensus worker and the bounded fixture import. The
+retry took 210.04 seconds, used zero additional swap and released
+the owned RAM volume. Six retained native PFS4 tests also passed,
+including delegated payout, reorg and cross-version double spend.
+
+The isolated quote diagnostics `db7cf3b3f` derives the optional
+read-only JSON breakdown during the same native over-horizon
+calculation. It preserves the refusal and existing binary
+representations. The added tests have not run. Reorg work is
+reported as quantities and the acquisition DAA still includes
+its existing replay cost.
