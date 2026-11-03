@@ -203,8 +203,9 @@
                     batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1},
                 };
                 use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
+                let verification = h(0xB47D).as_bytes();
                 let demands = envelope.demand_ranges_v1().enumerate()
-                    .map(|(ordinal, range_maximums)| MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[] })
+                    .map(|(ordinal, range_maximums)| MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification })
                     .collect::<Vec<_>>();
                 let notice = bound.original_accepted_daa + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
                 let terminal = h(0xB47C).as_bytes();
@@ -216,10 +217,10 @@
                     },
                 };
                 let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
-                let graph = vec![CausalServicePacketV1 {
-                    packet: ServicePacket { id: terminal, release_daa: notice + 1, service_before: bound.hard_deadline_daa - 1, cost: cost(1) },
+                let graph = [verification, terminal].into_iter().map(|id| CausalServicePacketV1 {
+                    packet: ServicePacket { id, release_daa: notice + 1, service_before: bound.hard_deadline_daa - 1, cost: cost(1) },
                     predecessors: vec![],
-                }];
+                }).collect();
                 let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 100, cover: budgets.1 };
                 let (daa, batch) = plan.reserve_for_original_v1(
                     crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&full), graph, storage, |bytes| Ok(cost(bytes)),

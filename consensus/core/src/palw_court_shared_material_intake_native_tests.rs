@@ -764,6 +764,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     use batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1};
     let window = open.demand.case_window;
     let terminal = Hash64::from_u64_word(997).as_bytes();
+    let verification = Hash64::from_u64_word(998).as_bytes();
     let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
     set_material_intake_test_schedule_v1(Some(storage));
     let mut service = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(state.court_service_state_v1().unwrap());
@@ -771,14 +772,13 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     service.state.claims.get_mut(&claim).unwrap().packet_ids.clear();
     let plan = BatchAdmissionV1 {
         claim, scope: scope_id, window,
-        demands: &[MaximumBatchDemandV1 { ordinal, range_maximums: &[PART as u64], predecessors: &[] }],
-        terminal, recovery_daa: 1, maximum_packets: 5,
+        demands: &[MaximumBatchDemandV1 { ordinal, range_maximums: &[PART as u64], predecessors: &[], verification }],
+        terminal, recovery_daa: 1, maximum_packets: 6,
     };
-    let graph = vec![CausalServicePacketV1 {
-        packet: ServicePacket { id: terminal, release_daa: open_at.daa_score, service_before: context.hard_daa - 1,
-            cost: cost(1) },
+    let graph = [verification, terminal].into_iter().map(|id| CausalServicePacketV1 {
+        packet: ServicePacket { id, release_daa: open_at.daa_score, service_before: context.hard_daa - 1, cost: cost(1) },
         predecessors: vec![],
-    }];
+    }).collect();
     let (required, service) = plan.reserve_for_original_v1(service, graph, storage, |bytes| Ok(cost(bytes))).unwrap();
     assert!(required <= 10_000);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));

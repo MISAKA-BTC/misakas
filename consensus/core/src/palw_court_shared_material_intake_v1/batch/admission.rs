@@ -6,7 +6,7 @@ use crate::{
     palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA},
     palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1},
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Supplied by the native profile compiler. A fallback demand has its own
 /// ordinal and depends on the prior opportunity, even if that response is absent.
@@ -14,6 +14,8 @@ pub(crate) struct MaximumBatchDemandV1<'a> {
     pub ordinal: u64,
     pub range_maximums: &'a [u64],
     pub predecessors: &'a [[u8; 64]],
+    /// Native graph node that checks this demand's completed material.
+    pub verification: [u8; 64],
 }
 
 /// Scope is derived from the prepared original. The caller supplies every
@@ -78,10 +80,19 @@ impl BatchAdmissionV1<'_> {
         }
 
         // Check the complete expansion before allocating or iterating over parts.
+        let native_nodes: BTreeMap<_, _> = graph.iter().enumerate().map(|(index, node)| (node.packet.id, index)).collect();
+        let terminal = *native_nodes.get(&self.terminal).ok_or(CaseGraph)?;
+        if native_nodes.len() != graph.len() {
+            return Err(CaseGraph);
+        }
         let mut ordinals = BTreeSet::new();
         let mut packets = graph.len();
         for demand in self.demands {
-            if !ordinals.insert(demand.ordinal) || !(1..=MAX_BATCH_RANGES_V1).contains(&demand.range_maximums.len()) {
+            if !ordinals.insert(demand.ordinal)
+                || !(1..=MAX_BATCH_RANGES_V1).contains(&demand.range_maximums.len())
+                || demand.verification == self.terminal
+                || !native_nodes.contains_key(&demand.verification)
+            {
                 return Err(CaseGraph);
             }
             let parts = demand.range_maximums.iter().try_fold(0u64, |n, &bytes| {
@@ -100,6 +111,7 @@ impl BatchAdmissionV1<'_> {
         }
 
         let mut spans = Vec::new();
+        let mut verifications = BTreeSet::new();
         for demand in self.demands {
             let open = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(self.claim, self.scope, demand.ordinal)
                 .map_err(|_| CaseGraph)?
@@ -114,18 +126,25 @@ impl BatchAdmissionV1<'_> {
                 packet: ServicePacket { id: open, release_daa: first, service_before: before, cost: open_cost },
                 predecessors: demand.predecessors.to_vec(),
             });
+            let verification = native_nodes[&demand.verification];
+            verifications.insert(demand.verification);
             for (index, &maximum) in demand.range_maximums.iter().enumerate() {
                 let position = BatchResponsePositionV1 { demand_ordinal: demand.ordinal, range_index: index as u32 };
                 let mut response = position
                     .reservation_graph_v1(self.claim, self.scope, maximum, first..before, &mut cost)
                     .map_err(|_| DeliveryCost)?;
                 response[0].predecessors.push(open);
-                spans.push((response[0].packet.id, response[response.len() - 1].packet.id));
+                let finish = response[response.len() - 1].packet.id;
+                graph[verification].predecessors.push(finish);
+                spans.push((response[0].packet.id, finish));
                 graph.append(&mut response);
             }
         }
-        let terminal = graph.iter_mut().find(|node| node.packet.id == self.terminal).ok_or(CaseGraph)?;
-        terminal.predecessors.extend(spans.iter().map(|&(_, finish)| finish));
+        let terminal_predecessors = &mut graph[terminal].predecessors;
+        for predecessor in terminal_predecessors.iter() {
+            verifications.remove(predecessor);
+        }
+        terminal_predecessors.extend(verifications);
         let required = self.window.reserve_latest_notice_checked_v1(book, &graph, self.terminal, self.recovery_daa, |book, _| {
             for (begin, finish) in spans {
                 let begin = book.assigned_daa(&begin).ok_or(ServiceRefusal::InvalidState)?;
@@ -153,13 +172,14 @@ mod tests {
         let h = Hash64::from_u64_word;
         let first = 3_123;
         let terminal = h(3).as_bytes();
+        let verification = h(4).as_bytes();
+        let fallback_verification = h(5).as_bytes();
         let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
-        let graph = |before| {
-            vec![CausalServicePacketV1 {
-                packet: ServicePacket { id: terminal, release_daa: first, service_before: before, cost: cost(1) },
-                predecessors: vec![],
-            }]
+        let node = |id, before| CausalServicePacketV1 {
+            packet: ServicePacket { id, release_daa: first, service_before: before, cost: cost(1) },
+            predecessors: vec![],
         };
+        let graph = |before| vec![node(terminal, before), node(verification, before)];
         let schedule = MaterialIntakeScheduleV1 {
             sompi_per_byte: 0,
             draft_ttl_daa: 3,
@@ -176,48 +196,61 @@ mod tests {
             collect_until_daa: 10_002,
             material_until_daa: 11_000,
         };
-        let demands = [MaximumBatchDemandV1 { ordinal: 5, range_maximums: &[PART + 1], predecessors: &[] }];
+        let demands = [MaximumBatchDemandV1 { ordinal: 5, range_maximums: &[PART + 1], predecessors: &[], verification }];
         let plan = BatchAdmissionV1 {
             claim: h(1),
             scope: h(2),
             window,
             demands: &demands,
             terminal,
-            recovery_daa: 6_874,
-            maximum_packets: 6,
+            recovery_daa: 6_873,
+            maximum_packets: 7,
         };
         let mut book = ServiceReservations::new(ServiceCost { bytes: 64 * 1024, work: 2, io: 2, controls: 2 }).unwrap();
         let empty = book.clone();
         let short = BatchAdmissionV1 { recovery_daa: plan.recovery_daa + 1, ..plan };
-        assert!(short.reserve_v1(&mut book, graph(3_127), schedule, |n| Ok(cost(n))).is_err());
+        assert!(short.reserve_v1(&mut book, graph(3_128), schedule, |n| Ok(cost(n))).is_err());
         assert_eq!(book, empty);
         let expired = MaterialIntakeScheduleV1 { draft_ttl_daa: 2, ..schedule };
-        assert!(plan.reserve_v1(&mut book, graph(3_128), expired, |n| Ok(cost(n))).is_err());
+        assert!(plan.reserve_v1(&mut book, graph(3_129), expired, |n| Ok(cost(n))).is_err());
         assert_eq!(book, empty);
-        let capped = BatchAdmissionV1 { maximum_packets: 5, ..plan };
-        assert!(matches!(capped.reserve_v1(&mut book, graph(3_128), schedule, |n| Ok(cost(n))), Err(BatchCourtErrorV1::CaseGraph)));
+        let capped = BatchAdmissionV1 { maximum_packets: 6, ..plan };
+        assert!(matches!(capped.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))), Err(BatchCourtErrorV1::CaseGraph)));
         assert_eq!(book, empty);
-        let (required, graph) = plan.reserve_v1(&mut book, graph(3_128), schedule, |n| Ok(cost(n))).unwrap();
+        for invalid in [terminal, fallback_verification] {
+            let demands = [MaximumBatchDemandV1 { verification: invalid, ..demands[0] }];
+            let invalid_plan = BatchAdmissionV1 { demands: &demands, ..plan };
+            assert!(matches!(
+                invalid_plan.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))),
+                Err(BatchCourtErrorV1::CaseGraph)
+            ));
+            assert_eq!(book, empty);
+        }
+        let (required, graph) = plan.reserve_v1(&mut book, graph(3_129), schedule, |n| Ok(cost(n))).unwrap();
         assert_eq!(required, 10_000);
-        assert_eq!(graph.len(), 6);
-        assert_eq!(book.assigned_daa(&terminal), Some(3_127));
-        assert_eq!(book.assigned_daa(&graph[3].packet.id), book.assigned_daa(&graph[4].packet.id));
+        assert_eq!(graph.len(), 7);
+        assert_eq!(book.assigned_daa(&terminal), Some(3_128));
+        assert_eq!(book.assigned_daa(&verification), Some(3_127));
+        assert_eq!(book.assigned_daa(&graph[4].packet.id), book.assigned_daa(&graph[5].packet.id));
         let reserved = book.clone();
         let first_finish = BatchResponsePositionV1 { demand_ordinal: 5, range_index: 0 }.packet_id(h(1), h(2), Stage::Finish).unwrap();
         let demands = [
-            MaximumBatchDemandV1 { ordinal: 5, range_maximums: &[1], predecessors: &[] },
-            MaximumBatchDemandV1 { ordinal: 6, range_maximums: &[1], predecessors: &[first_finish] },
+            MaximumBatchDemandV1 { ordinal: 5, range_maximums: &[1], predecessors: &[], verification },
+            MaximumBatchDemandV1 {
+                ordinal: 6,
+                range_maximums: &[1],
+                predecessors: &[verification],
+                verification: fallback_verification,
+            },
         ];
-        let fallback_plan = BatchAdmissionV1 { demands: &demands, recovery_daa: 1, maximum_packets: 9, ..plan };
-        let terminal_graph = vec![CausalServicePacketV1 {
-            packet: ServicePacket { id: terminal, release_daa: first, service_before: 10_001, cost: cost(1) },
-            predecessors: vec![],
-        }];
+        let fallback_plan = BatchAdmissionV1 { demands: &demands, recovery_daa: 1, maximum_packets: 11, ..plan };
+        let terminal_graph = vec![node(terminal, 10_001), node(verification, 10_001), node(fallback_verification, 10_001)];
         assert!(fallback_plan.reserve_v1(&mut book, terminal_graph.clone(), schedule, |n| Ok(cost(n))).is_err());
         assert_eq!(book, reserved);
         let mut book = empty;
         fallback_plan.reserve_v1(&mut book, terminal_graph, schedule, |n| Ok(cost(n))).unwrap();
         let fallback_open = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(h(1), h(2), 6).unwrap().as_bytes();
-        assert!(book.assigned_daa(&fallback_open).unwrap() > book.assigned_daa(&first_finish).unwrap());
+        assert!(book.assigned_daa(&verification).unwrap() > book.assigned_daa(&first_finish).unwrap());
+        assert!(book.assigned_daa(&fallback_open).unwrap() > book.assigned_daa(&verification).unwrap());
     }
 }

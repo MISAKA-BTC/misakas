@@ -2679,3 +2679,27 @@ processor build and isolated activation. See
 B0 and relay agreed at DAA 19,695. The selected interval contained no
 new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-quota-live.950Rz9/page.json`.
+
+## Batch verification after material delivery
+
+The maximum-demand planner now requires each demand to reference a
+separately priced verification node in the native graph. Every range's
+Finish precedes that verification, and the terminal filing depends on
+all such verification nodes. Multiple demands can join at one
+verification. An adaptive Open can depend on the verifier's reserved
+slot. Native ingress must separately check that the prerequisite
+actually completed.
+
+The extracted suite passed 34 checks. Its synthetic latest-notice case
+books sibling parts in the same DAA, then Finish, verification, and
+terminal in order, with the recovery and boundary terms bringing the
+total to exactly 10,000 DAA. The book is unchanged on an extra DAA of
+recovery, an expired draft, a packet cap, or a missing verifier. It
+also exercises an adaptive Open after verification. The native
+notice-to-Finish and preclaim geometry fixtures were updated, and
+their integrated build and real model cost verification remain open.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-verification-edge.1tUlGg/tests.log`.
+
+B0 and relay agreed at DAA 19,696 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-verification-live.zF6QyN/page.json`.
