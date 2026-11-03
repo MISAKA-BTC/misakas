@@ -234,7 +234,7 @@ mod tests {
             deadline_daa: 99,
             received: 0,
         };
-        let object = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk };
+        let object = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk) };
         assert!(stamp.matches_progress(&object, 98, Some(&progress)));
         assert!(!stamp.matches_progress(&object, 99, Some(&progress)));
         progress.received = 1;
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn provider_da_packet_identity_survives_flight_and_retry() {
         let (stamp, mut chunk) = fixture();
-        let object = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: chunk.clone() };
+        let object = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk.clone()) };
         let key = (stamp.duty.claim_id, 1, true);
         let mut outbox = super::super::CourtOutboxV1::default();
         outbox.try_push_provider_da(key, object, 100, stamp).unwrap();
@@ -255,7 +255,7 @@ mod tests {
         assert!(outbox.provider_da_stamp(key, &batch[0].3).unwrap().is_some());
 
         chunk.bytes[0] ^= 1;
-        let different = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk };
+        let different = PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { chunk: Box::new(chunk) };
         assert!(outbox.provider_da_stamp(key, &different).is_err());
         outbox.finish_fixture_flush(batch);
         assert!(outbox.provider_da_stamp(key, &outbox.pending()[0].3).unwrap().is_some());
