@@ -57,6 +57,12 @@ impl FundingRelayCarrierFeesV2 {
         self.before_relay - self.credited_tip
     }
 
+    /// Recover the input to a fee preview without changing the observed
+    /// partition or the earlier native burns it already accounted for.
+    pub fn before_registration(self) -> Self {
+        Self { credited_tip: self.before_relay, ..self }
+    }
+
     /// Compute a fresh partition from an unallocated native fee. The result
     /// does not record an actual reward or debit.
     pub fn plan_registration_charge(self, charge: u64) -> Result<Self, ContractError> {

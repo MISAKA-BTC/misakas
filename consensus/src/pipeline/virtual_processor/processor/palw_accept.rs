@@ -3882,25 +3882,63 @@ impl<'a> NativeAssignmentRehearsalV2<'a> {
         folded: &mut kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1,
         extras: &kaspa_consensus_core::palw_state_v2::PalwTransitionExtrasV1,
     ) -> Result<(), PalwLocalTransitionFaultV1> {
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::NativeCoverageV1,
+            palw_state_v2::{PalwStateV2Error, palw_v2_apply_one_assignment_retained_v2, palw_v2_preview_initial_relay_fee_v2},
+        };
+        let unavailable = processor.palw_unavailable_abstains_at(point.daa_score);
+        let capability = processor.palw_capability_bound_at(point.daa_score);
+        let weightless = processor.palw_uncertified_weightless_at(point.daa_score);
+        let da_court = processor.palw_da_court_at(point.daa_score);
         while let Some(action) = self.actions.get(self.cursor) {
             if action.origin().accepted_tx_ordinal as usize >= before_ordinal {
                 break;
             }
-            let next = kaspa_consensus_core::palw_state_v2::palw_v2_apply_one_assignment_retained_v2(
-                folded,
-                params,
-                point,
-                action,
-                processor.palw_unavailable_abstains_at(point.daa_score),
-                processor.palw_capability_bound_at(point.daa_score),
-                processor.palw_uncertified_weightless_at(point.daa_score),
-                processor.palw_da_court_at(point.daa_score),
-                extras,
-            );
+            let next = if let Some(observed) = action.relay_carrier_fees_v2().filter(|fees| fees.relay_charge() != 0) {
+                // Replay in the very same prefix as every other raw action.
+                // A charged refusal must abort the enclosing transition,
+                // otherwise ordinary semantic skipping would keep the debit.
+                match palw_v2_preview_initial_relay_fee_v2(
+                    folded,
+                    params,
+                    point,
+                    action,
+                    unavailable,
+                    capability,
+                    weightless,
+                    da_court,
+                    extras,
+                ) {
+                    Ok((state, planned)) if planned == observed => Ok(state),
+                    Ok(_) => {
+                        return Err(NativeCoverageV1::unsupported::<Self>(
+                            "relay fee prefix replay",
+                            "observed debit differs from the current-prefix plan",
+                        )
+                        .into());
+                    }
+                    Err(local @ (PalwStateV2Error::NativeResource(_) | PalwStateV2Error::NativeContextUnavailable(_))) => Err(local),
+                    Err(why) => {
+                        return Err(NativeCoverageV1::unsupported::<Self>("relay fee prefix replay", &why.to_string()).into());
+                    }
+                }
+            } else {
+                palw_v2_apply_one_assignment_retained_v2(
+                    folded,
+                    params,
+                    point,
+                    action,
+                    unavailable,
+                    capability,
+                    weightless,
+                    da_court,
+                    extras,
+                )
+            };
             match next {
                 Ok(next) => *folded = next,
-                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
-                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(why)) => {
+                Err(PalwStateV2Error::NativeResource(why)) => return Err(why.into()),
+                Err(PalwStateV2Error::NativeContextUnavailable(why)) => {
                     return Err(PalwLocalTransitionFaultV1::Context(why));
                 }
                 Err(why) => info!(

@@ -543,6 +543,8 @@ fn metadata_charge_requires_exact_debit_from_the_observed_collectible_fee() {
     let unallocated = partition(before_relay);
     let planned = unallocated.plan_registration_charge(charge).unwrap();
     assert_eq!(planned, actual);
+    assert_eq!(planned.before_registration(), unallocated);
+    assert_eq!(planned.before_registration().plan_registration_charge(charge).unwrap(), actual);
     assert_eq!(planned.credited_tip(), 13);
     assert_eq!(planned.gross_fee(), gross);
     assert_eq!(planned.before_relay(), before_relay);

@@ -969,8 +969,6 @@ impl TransitionBuilder<'_> {
                         Err(refusal("relay funding outpoint already has a different signed package"))
                     } else if custody.binding.is_some() || origin.accepted_daa >= custody.retention_until_daa {
                         Err(refusal("relay retry does not name a live pending custody slot"))
-                    } else if action.relay_carrier_fees_v2().is_none_or(|fees| fees.relay_charge() != 0) {
-                        Err(refusal("an exact relay retry cannot charge a second registration fee"))
                     } else if auth.origin.accepting_block == origin.accepting_block {
                         // The same block's canonical prefix already wrote
                         // this pair. Its accepted debit will be reconciled
@@ -1117,6 +1115,10 @@ impl TransitionBuilder<'_> {
         let body = reserved.body();
         let terms = &body.terms;
         let observed = action.relay_carrier_fees_v2().ok_or_else(missing_assignment_history)?;
+        let fee_input = match stage {
+            InitialRelayFeeStageV2::Preview => observed.before_registration(),
+            InitialRelayFeeStageV2::Observed => observed,
+        };
         let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
             return Err(refusal("relay target needs the original Case, join or continuation owner"));
         };
@@ -1144,7 +1146,10 @@ impl TransitionBuilder<'_> {
             })?;
             let mut budget = FundingRelayAuxScanBudgetV2::new(decode_profile).map_err(refusal)?;
             if self.check_relay_outpoint_v2(body, action, &mut budget)? {
-                return Ok(observed);
+                if fee_input.relay_charge() != 0 {
+                    return Err(refusal("an exact relay retry cannot charge a second registration fee"));
+                }
+                return Ok(fee_input);
             }
             let (anchor, _) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
             if terms.contract_network != rules.network()
@@ -1159,7 +1164,7 @@ impl TransitionBuilder<'_> {
             if registration.usage.frame_bytes != reserved.quote().encoded_bytes {
                 return Err(refusal("initial relay frame differs from the registration quote"));
             }
-            if registration.fee > observed.before_relay() {
+            if registration.fee > fee_input.before_relay() {
                 return Err(refusal("initial relay cannot fund the full registration fee after mandatory burns"));
             }
 
@@ -1205,8 +1210,8 @@ impl TransitionBuilder<'_> {
             ))
         })?;
         let allocated = match stage {
-            InitialRelayFeeStageV2::Preview => observed.plan_registration_charge(registration.fee).map_err(refusal)?,
-            InitialRelayFeeStageV2::Observed => observed,
+            InitialRelayFeeStageV2::Preview => fee_input.plan_registration_charge(registration.fee).map_err(refusal)?,
+            InitialRelayFeeStageV2::Observed => fee_input,
         };
         let (auth, custody) =
             FundingRelayAuthorizationRowV2::registration_rows(body, key, action.origin(), *policy, *fees, *physical, allocated)
