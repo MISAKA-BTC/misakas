@@ -1701,3 +1701,39 @@ the position-zero terminal checker with a checkpoint anchor and
 original signed openings, plus altered and missing operands. The
 guarded launch stopped before compilation at the 1 GiB APFS floor
 and detached its owned RAM volume. There is no held verdict.
+
+## Original Qwen held terminal and provider lock scope — 07:28 UTC
+
+At DAA 19,645, B0, the relay and the public REST index and WebSocket
+agreed. Qwen #65's carrier at 19,643 appeared in the selected fold at
+19,644. Both claim-detail RPCs returned absent and B0 recorded 20,607
+remaining against 20,608 required. The exact observer saw no assignment.
+Seat5's unsigned IBD unit is stopped. Root space measured 18,758,246,400
+bytes against a 22,548,578,304-byte launch floor, and the earlier strict
+sidecar refusal remains a separate source qualification issue.
+
+The guarded private run on Qwen #58 succeeded after APFS headroom
+recovered. The original signed leaf 318, first checkpoint and original
+input/output openings entered the native held checker. A verifier denied
+the model, capture and answer returned `ChallengerDefeated`. Missing
+anchor and altered Q, K, V and output were rejected. An altered local
+responder maximum with a finalizing accumulator unchanged returned
+`ExecutorGuilty` using the same original bottom. The packet was 11,667
+bytes, SHA-256
+`6b1a554ed1980c67468befa81ce6ba075afd8f3ec08ac59be7eefd2c5d080553`.
+The build and run took 25.637 seconds with a 1,952,776,192-byte peak
+child RSS, zero swap growth and verified RAM-volume detach. Both older
+temporary binaries were retained. One history position requires zero
+interactive rounds, and the test created no chain session or credit.
+
+Isolated candidate `f8b39718a` now checks the exact provider duty at
+worker entry and again after contextual validation, outside the mempool
+write lock. The lock-held check uses a fixed committed virtual snapshot
+identity, import epoch and active consensus instance. It rejects lock
+contention and a staged, uncommitted virtual view. The candidate adds a
+deterministic change-between-check-and-insertion regression alongside the
+existing worker handoff test. Cargo execution remains outstanding.
+A read-only fingerprint closure resolved 38 metadata units, including
+both Core feature sets and Kaspad default+EVM, with every unchanged
+direct artifact present. The bounded runner is prepared. A separate A0
+compiler was active, so this compile slot remained unused.
