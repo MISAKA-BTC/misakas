@@ -590,6 +590,10 @@ impl PalwKernelRouteStateV1 {
         active(b'A').chain(active(b'P')).take(probe).count() as u64
     }
 
+    pub(crate) fn owns_open_assignment_draw_slot_v2(&self, result_before_daa: u64, assignment: Hash64) -> bool {
+        result_before_daa.checked_sub(1).is_some_and(|last| self.positive_gate_c_schedule_v2.contains(&(b'A', last, assignment)))
+    }
+
     pub(crate) fn owns_undrawn_p_slot_v2(&self, last: u64, subject: Hash64) -> bool {
         self.positive_gate_c_schedule_v2.contains(&(b'P', last, subject))
     }

@@ -302,7 +302,7 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
             transmitted_bytes: 20,
             additional_work: 10,
             retained_bytes: 10,
-            retention_until: 500,
+            retention_until: 450,
             fee: 20,
             witness_attempts: 2,
         },
@@ -318,8 +318,8 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
         max_build_work: 10,
         max_submitted_bytes: 10,
         max_retained_bytes: 10,
-        retention_until_daa: 500,
-        build_before_daa: 400,
+        retention_until_daa: 450,
+        build_before_daa: 250,
         max_service_fee: 20,
         cancellation_policy: policy.cancellation_policy,
     };
@@ -363,7 +363,7 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
         registered_tokenizer: d(44),
         registration: reference(45),
     };
-    let material = AssignmentAdmissionMaterialV2 {
+    let mut material = AssignmentAdmissionMaterialV2 {
         version: 2,
         revision: 1,
         assignment: id,
@@ -413,7 +413,7 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
             heap_bytes: 8192,
         },
     };
-    let row = AssignmentRow {
+    let mut row = AssignmentRow {
         bundle,
         source_consent: source,
         prover_consent: prover,
@@ -434,16 +434,23 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
         last_event: origin(),
         admission_material: AcceptedMaterial { origin: origin(), digest: material.id() },
     };
+    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &material).unwrap()).unwrap();
+    let digest = assignment_custody_bytes_id_v2(&liability);
+    material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::LiabilityCustody as usize] = digest;
+    material.custody.liability = AcceptedMaterial { origin: row.origin, digest };
+    row.liability = material.custody.liability;
+    row.admission_material.digest = material.id();
     (row, material, job)
 }
 fn limits() -> AssignmentOpenLimitsV2 {
     AssignmentOpenLimitsV2::within_payload(16 << 10)
 }
-fn payload(m: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
+fn payload(row: &AssignmentRow, m: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
+    let liability = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(row, m).unwrap()).unwrap();
     misaka_palw_positive_contract::assignment::open_material::encode_assignment_open_v2(
         &borsh::to_vec(m).unwrap(),
         &[2, 0, 1, 0, 8],
-        [&[1], &[2]],
+        [&[1], &liability],
         limits(),
     )
     .unwrap()
@@ -452,7 +459,7 @@ fn payload(m: &AssignmentAdmissionMaterialV2) -> Vec<u8> {
 fn frozen_original_policy_survives_future_policy_change_and_rejects_substitution() {
     let (row, material, _job) = fixture();
     material.check_row(&row).unwrap();
-    let raw = payload(&material);
+    let raw = payload(&row, &material);
     let view = AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 8], limits()).unwrap();
     assert_eq!(view.material, material);
     let mut future = material.assignment_policy;
@@ -476,8 +483,8 @@ fn native_open_quote_covers_control_envelope_and_complete_journal_record() {
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2, journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2,
     };
 
-    let (_, mut material, _) = fixture();
-    let inner_bytes = payload(&material).len() as u64;
+    let (row, mut material, _) = fixture();
+    let inner_bytes = payload(&row, &material).len() as u64;
     let payload_bytes = inner_bytes + ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64;
     let record_bytes = payload_bytes + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
     assert!(material.check_native_open_record_extent_v2(payload_bytes).is_err());
@@ -502,7 +509,7 @@ fn native_open_quote_covers_control_envelope_and_complete_journal_record() {
 #[test]
 fn custody_and_literal_transaction_cannot_be_replaced_or_missing() {
     let (row, material, _job) = fixture();
-    let raw = payload(&material);
+    let raw = payload(&row, &material);
     assert!(AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 9], limits()).is_err());
     assert!(AssignmentOpenViewV2::decode(&[2, 0, 1, 0, 8], limits()).is_err());
     let mut hostile = raw.clone();
@@ -530,6 +537,25 @@ fn custody_and_literal_transaction_cannot_be_replaced_or_missing() {
     row_with_matching_pin.admission_material.digest = premature.id();
     assert!(premature.check_row(&row_with_matching_pin).is_err());
 }
+#[test]
+fn original_liability_rejects_a_rehashed_clock_from_another_policy() {
+    let (mut row, mut material, _) = fixture();
+    let mut changed = material.clone();
+    changed.certification_policy.prosecution_window_daa += 1;
+    let bytes = borsh::to_vec(&AssignmentLiabilityCustodyV2::derive(&row, &changed).unwrap()).unwrap();
+    let digest = assignment_custody_bytes_id_v2(&bytes);
+    material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::LiabilityCustody as usize] = digest;
+    material.custody.liability.digest = digest;
+    row.liability = material.custody.liability;
+    row.admission_material.digest = material.id();
+    let raw = encode_assignment_open_v2(&borsh::to_vec(&material).unwrap(), &[2, 0, 1, 0, 8], [&[1], &bytes], limits()).unwrap();
+    assert!(material.check_row(&row).is_ok());
+    assert!(matches!(
+        AssignmentAdmissionMaterialViewV2::decode(&row, &raw, &[2, 0, 1, 0, 8], limits()),
+        Err(misaka_palw_positive_contract::ContractError::Identity)
+    ));
+}
+
 #[test]
 fn bounded_fixed_codec_and_original_job_profile_are_checked() {
     let (row, material, job) = fixture();
@@ -631,7 +657,7 @@ fn original_control_carriage_borrows_exact_body_and_rejects_detached_subject_or_
         assert!(AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, 2048).is_err());
     }
     let (row, material, _) = fixture_with_relay(true);
-    let open = payload(&material);
+    let open = payload(&row, &material);
     let envelope = encode_assignment_control_v2(
         &AssignmentControlBoundaryV2 { assignment: row.id(), origin: row.origin, ..boundary }.canonical_bytes().unwrap(),
         &open,

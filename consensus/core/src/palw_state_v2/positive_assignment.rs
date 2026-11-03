@@ -1824,6 +1824,9 @@ impl TransitionBuilder<'_> {
         {
             return Err(refusal("BindResult requires the original exclusive open Assignment job"));
         }
+        if !route.owns_open_assignment_draw_slot_v2(row.bundle.terms.result_before_daa, Hash64::from_bytes(row.id().0.0)) {
+            return Err(refusal("BindResult requires the original protected shared Gate C draw slot"));
+        }
         let rules = action.rules();
         let open = action.original_open_carriage_v2().ok_or_else(missing_assignment_history)?;
         if open.origin() != row.origin || rules.original_material() != Some(row.admission_material) {

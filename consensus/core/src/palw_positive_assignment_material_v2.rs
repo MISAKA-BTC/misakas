@@ -8,7 +8,9 @@
 use crate::{
     Hash64,
     config::params::{AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, PositiveCourtPolicyV2},
+    palw_positive_assignment_certification_v2::AssignmentGateCDrawEpochsV2,
     palw_positive_assignment_funds_v2::{AssignmentMoneyQuoteV2, quote_assignment_money_v2},
+    palw_positive_assignment_horizon_v2::AssignmentLiabilityHorizonV2,
     palw_positive_source_geometry_v2::SourceCatalogQuoteV2,
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
     palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
@@ -19,7 +21,7 @@ use misaka_palw_positive_contract::{
     ContractError,
     assignment::{
         AssignmentId,
-        open_material::{ASSIGNMENT_OPEN_PREIMAGES_V2, AssignmentOpenLimitsV2, AssignmentOpenViewV2},
+        open_material::{ASSIGNMENT_OPEN_PREIMAGES_V2, AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
         policy::AssignmentPolicyV2,
         rows::AssignmentRow,
     },
@@ -307,6 +309,60 @@ impl AssignmentAdmissionMaterialV2 {
         Ok(())
     }
 }
+/// Literal liability custody in the Open journal. The epoch interval and
+/// release limits are derived under the actual original rule set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct AssignmentLiabilityCustodyV2 {
+    version: u16,
+    revision: u16,
+    assignment: AssignmentId,
+    origin: AcceptedOrigin,
+    fired_rules: Digest,
+    first_draw_epoch: u64,
+    last_draw_epoch: u64,
+    horizon: AssignmentLiabilityHorizonV2,
+}
+
+impl AssignmentLiabilityCustodyV2 {
+    pub fn derive(row: &AssignmentRow, material: &AssignmentAdmissionMaterialV2) -> Result<Self, ContractError> {
+        row.source_consent.check(&row.bundle)?;
+        row.prover_consent.check(&row.bundle, material.assignment_policy.positive_policy)?;
+        let controls = material
+            .assignment_policy
+            .max_replay_work
+            .checked_div(material.native_preimages.source_policy.work.per_control)
+            .ok_or(ContractError::Budget)?;
+        let epochs = AssignmentGateCDrawEpochsV2::from_result_window(
+            &material.certification_policy,
+            row.origin.accepted_daa,
+            row.bundle.terms.result_before_daa,
+            controls,
+        )
+        .map_err(|_| ContractError::Budget)?
+        .epochs();
+        let horizon = AssignmentLiabilityHorizonV2::derive(
+            &row.bundle,
+            &row.source_consent,
+            &row.prover_consent,
+            &material.assignment_policy,
+            &material.certification_policy,
+            material.positive_policy.max_retention_daa,
+            row.origin.accepted_daa,
+        )
+        .map_err(|_| ContractError::Budget)?;
+        Ok(Self {
+            version: 2,
+            revision: 1,
+            assignment: row.id(),
+            origin: row.origin,
+            fired_rules: material.fired_rules,
+            first_draw_epoch: *epochs.start(),
+            last_draw_epoch: *epochs.end(),
+            horizon,
+        })
+    }
+}
+
 /// Borrowed original material and literal carrier. No admission or replay-pass
 /// capability can be constructed from this DTO; native replay uses real owners.
 pub struct AssignmentAdmissionMaterialViewV2<'a> {
@@ -336,6 +392,14 @@ impl<'a> AssignmentAdmissionMaterialViewV2<'a> {
             if *expected != assignment_custody_bytes_id_v2(actual) {
                 return Err(ContractError::Identity);
             }
+        }
+        let liability_kind = AssignmentOpenPreimageKindV2::LiabilityCustody;
+        let actual = borsh::from_slice::<AssignmentLiabilityCustodyV2>(open.preimage(liability_kind))
+            .map_err(|_| ContractError::NonCanonical)?;
+        let expected = AssignmentLiabilityCustodyV2::derive(row, &material)?;
+        let liability_pin = AcceptedMaterial { origin: row.origin, digest: material.custody.preimage_bytes[liability_kind as usize] };
+        if actual != expected || material.custody.liability != liability_pin {
+            return Err(ContractError::Identity);
         }
         Ok(Self { material, open })
     }

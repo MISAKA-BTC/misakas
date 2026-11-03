@@ -157,6 +157,72 @@ fn assignment_refund_start_v2(
     }
     Ok(source_retention)
 }
+/// Fixed deadlines reserved by the original signed contract. Each deadline
+/// is reconstructed from the same inputs used to price initial admission.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct AssignmentLiabilityHorizonV2 {
+    pub court_before_daa: u64,
+    pub no_draw_expiry_daa: u64,
+    pub last_failed_attestation_daa: u64,
+    pub latest_prosecution_daa: u64,
+    pub liability_until_daa: u64,
+    pub refund_before_daa: u64,
+}
+
+impl AssignmentLiabilityHorizonV2 {
+    pub(crate) fn derive(
+        bundle: &AssignmentAdmissionBundleV2,
+        source: &AssignmentSourceConsentV2,
+        prover: &AssignmentProverConsentV2,
+        assignment: &AssignmentPolicyV2,
+        certification: &PalwSecurityCertificationPolicyV1,
+        max_retention_daa: u64,
+        now: u64,
+    ) -> Result<Self, AssignmentHorizonErrorV2> {
+        let terms = &bundle.terms;
+        // Inclusive upper bound deliberately includes the exclusive Result
+        // cutoff: no legal later Result can require a longer envelope.
+        let clock = AssignmentGateCClockV2::from_existing_policy(certification, terms.result_before_daa)?;
+        if prover.build_before_daa > add(terms.result_before_daa, assignment.build_window_daa)? {
+            return Err(AssignmentHorizonErrorV2::Window);
+        }
+        let court_before = add(prover.build_before_daa, assignment.check_window_daa)?;
+        if court_before > bundle.future_case.service_before_daa {
+            return Err(AssignmentHorizonErrorV2::Window);
+        }
+        let latest_prosecution = clock.prosecution_not_before_daa(court_before)?;
+        // This numeric tail is an ORIGINAL signed liability rule, not the
+        // pending-fraud proof. A real closed-ingress owner is mandatory.
+        let liability_until = add(court_before, assignment.fraud_tail_daa)?;
+        let service_need = court_before.max(clock.latest_failed_attestation_decision_daa);
+        if source.service_before_daa < service_need {
+            return Err(AssignmentHorizonErrorV2::Window);
+        }
+        let refund_start = assignment_refund_start_v2(
+            &clock,
+            latest_prosecution,
+            liability_until,
+            source.service_before_daa,
+            source.budget.retention_until,
+            prover.retention_until_daa,
+        )?;
+        let refund_before = add(refund_start, assignment.refund_window_daa)?;
+        // The retention cap includes the whole refund window after the signed
+        // source duty. Native rollback/custody must cover its own tail as well.
+        if refund_before.checked_sub(now).is_none_or(|n| n > max_retention_daa) || refund_before > terms.reserve_until_daa {
+            return Err(AssignmentHorizonErrorV2::Window);
+        }
+        Ok(Self {
+            court_before_daa: court_before,
+            no_draw_expiry_daa: clock.no_draw_expiry_daa,
+            last_failed_attestation_daa: clock.latest_failed_attestation_decision_daa,
+            latest_prosecution_daa: latest_prosecution,
+            liability_until_daa: liability_until,
+            refund_before_daa: refund_before,
+        })
+    }
+}
+
 impl AssignmentHorizonSpecV2 {
     pub(crate) fn check_case_maturity_v2(
         &self,
@@ -242,40 +308,8 @@ impl AssignmentHorizonSpecV2 {
             return Err(AssignmentHorizonErrorV2::Binding);
         }
         let terms = &bundle.terms;
-        // Inclusive upper bound deliberately includes the exclusive Result
-        // cutoff: no legal later Result can require a longer envelope.
-        let clock = AssignmentGateCClockV2::from_existing_policy(certification, terms.result_before_daa)?;
-        if prover.build_before_daa > add(terms.result_before_daa, assignment.build_window_daa)? {
-            return Err(AssignmentHorizonErrorV2::Window);
-        }
-        let court_before = add(prover.build_before_daa, assignment.check_window_daa)?;
-        if court_before > bundle.future_case.service_before_daa {
-            return Err(AssignmentHorizonErrorV2::Window);
-        }
-        let latest_prosecution = clock.prosecution_not_before_daa(court_before)?;
-        // This numeric tail is an ORIGINAL signed liability rule, not the
-        // pending-fraud proof. A real closed-ingress owner is mandatory.
-        let liability_until = add(court_before, assignment.fraud_tail_daa)?;
-        let service_need = court_before.max(clock.latest_failed_attestation_decision_daa);
-        if source.service_before_daa < service_need {
-            return Err(AssignmentHorizonErrorV2::Window);
-        }
-        let refund_start = assignment_refund_start_v2(
-            &clock,
-            latest_prosecution,
-            liability_until,
-            source.service_before_daa,
-            source.budget.retention_until,
-            prover.retention_until_daa,
-        )?;
-        let refund_before = add(refund_start, assignment.refund_window_daa)?;
-        // The retention cap includes the whole refund window after the signed
-        // source duty. Native rollback/custody must cover its own tail as well.
-        let retention_until = refund_before;
-        if retention_until.checked_sub(now).is_none_or(|n| n > positive.max_retention_daa) || retention_until > terms.reserve_until_daa
-        {
-            return Err(AssignmentHorizonErrorV2::Window);
-        }
+        let liability =
+            AssignmentLiabilityHorizonV2::derive(bundle, source, prover, assignment, certification, positive.max_retention_daa, now)?;
         let prover_readers = assignment.max_prover_joins.checked_add(1).ok_or(AssignmentHorizonErrorV2::Overflow)?;
         let readers = add(u64::from(prover_readers), u64::from(certification.m))?;
         let catalog = resources.source_quote();
@@ -333,15 +367,15 @@ impl AssignmentHorizonSpecV2 {
                 revision: 1,
                 latest_result_before_daa: terms.result_before_daa,
                 prover_build_before_daa: prover.build_before_daa,
-                court_before_daa: court_before,
-                no_draw_expiry_daa: clock.no_draw_expiry_daa,
-                last_failed_attestation_daa: clock.latest_failed_attestation_decision_daa,
-                latest_prosecution_daa: latest_prosecution,
+                court_before_daa: liability.court_before_daa,
+                no_draw_expiry_daa: liability.no_draw_expiry_daa,
+                last_failed_attestation_daa: liability.last_failed_attestation_daa,
+                latest_prosecution_daa: liability.latest_prosecution_daa,
                 source_before_daa: source.service_before_daa,
                 prover_retention_until_daa: prover.retention_until_daa,
-                liability_until_daa: liability_until,
-                refund_before_daa: refund_before,
-                retention_until_daa: retention_until,
+                liability_until_daa: liability.liability_until_daa,
+                refund_before_daa: liability.refund_before_daa,
+                retention_until_daa: liability.refund_before_daa,
                 maximum_distinct_p_readers: certification.m,
                 maximum_prover_readers: prover_readers,
                 minimum_source_rounds,
