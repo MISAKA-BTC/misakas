@@ -89,3 +89,79 @@ prepared while they were still running. Two read-only reorg plans stopped
 when the relay advanced during per-candidate checks; their receipts record
 zero SQL writes. The guarded backup, repair and public cutover had not
 occurred at this cutoff.
+
+## Additional source corrections and test coverage
+
+`91c23b943` connects the global material janitor to the checked resident
+retention reader under the existing R-core fence. A failed read now protects
+material during reclamation planning and a fresh read immediately before
+deletion. It does not change the DAA 20,000 acceptance rule. Six actual
+`kaspad` library retention tests passed; the test log SHA256 is
+`d024e370cfa278550c014a09ab6b2199342fa72ea3596e0b4f08d7d8205fab12`.
+
+`46162a0e4` removes tonic's speculative reservation of a full receive message
+after only a gRPC length header. The existing receive cap still applies.
+Wire scratch grows only with arriving bytes, and an already owned coalesced
+suffix is kept separately when appending it would copy a full-size frame.
+The pinned tonic suite passed 104 tests and the isolated fragmented 320 MiB
+test passed. A header-only declaration retained at most 8 KiB of wire
+scratch. The large fragmented case can transiently have old and new scratch
+owners during growth; this change does not impose a shared limit on all
+inbound decoding or decompression. These two source corrections are newer
+than the sealed relay build.
+
+## Public Explorer recovery and remaining chain state — 01:35 UTC
+
+The two original Explorer services stopped normally and no other canonical
+writer was observed. PostgreSQL produced a full consistent 1,693,997,177-byte
+custom archive with a verified restore inventory. Backup receipt SHA256:
+`6285c05ef53a3960ba38b297d9df565cfc0f1d573660a3c9029edb5a2172329d`.
+
+The planning read path now checks at most eight candidates concurrently
+while consuming them in selected-parent order and requiring the same live
+frontier. A live plan refusal due to a moving frontier left the cursor
+untouched. A second apply reached the exclusive intent but stopped before
+the write phase: the actual SQLAlchemy 1.4.54 default connection has no
+explicit `commit` or `rollback` methods. The writer-only future-mode option
+passed tests in the installed version with an isolated database and the
+same-connection ORM event and rollback behavior.
+
+A fresh plan and the guarded SQL repair succeeded at DAA 19,534. An
+independent PostgreSQL read verified 578 added selected-prefix blocks and
+628 accepted transaction references. All 329 old branch rows remained in
+history, now unselected, with zero remaining transaction acceptance
+references to that branch. The verification receipt SHA256 is
+`de8f6663f55024dbfa9f2b8ef5b7f49ea9a6c3f1f5954d94a4fc459fa8c5c0b9`.
+The revised filler resumed that exact cursor before REST was started.
+
+Both scoped public WebSocket routes reach the same qualified relay. Public
+REST returned HTTP 200 with its selected cursor current, then indexed the
+next natural selected block: DAA 19,534 to 19,535. The rendered site showed
+`node connected` and the new DAA 19,535 row. The advancing public observation
+SHA256 is `d8d85e68c564d63b1c996aa0d5603f17c6eac828ce9c59d80bf9ba10ccb6b26d`.
+The temporary no-force stop configuration was retired without restarting
+the two new Explorer generations. The dedicated 113 tunnel is enabled at
+boot; the IBM relay remains a supervised incident instance bound to the
+current original B0 and B1 generations. The old shared tunnel generation
+and other site configuration retained their exact hashes. At the last
+relay check the cgroup had used at most 2,316,210,176 bytes under the 8 GiB
+limit, with no swap use or OOM events.
+
+Three REAL Qwen2.5 blocks were observed on B0 and the relay after the
+original B0 resumed. Public RPC independently returned the third, DAA
+19,531, as BLUE and off the selected chain. Its acceptance fold had
+20,606 DAA left against the 20,608 DAA required by the Court. Claim and
+Court records were absent for the generated attempts, and there were zero
+producer receipt blocks and zero kernel Finals. The future acceptance-time
+retention rule was still below its DAA 20,000 fence.
+
+B1 remained on its old DAA 19,389 branch. Fresh one-head economic
+observations again matched on safe frontier blue score 60,588, safe weight
+5,698,420,463,928,576 and bounded immature weight zero. These responses
+are diagnostics from the two nodes, rather than independent chain
+validation. The incumbent-preserving rule for a deep tie is unchanged.
+The separate primary113 incremental IBD with seat7 had no observed
+completion; its full identity differs only by the unfired retention fence,
+so the recovery summary refusal does not establish that ordinary
+pre-fence sync must reject this connection. No fork-choice override or
+model certification waiver was applied.
