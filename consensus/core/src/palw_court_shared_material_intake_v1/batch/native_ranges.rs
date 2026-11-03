@@ -291,6 +291,65 @@ pub(crate) struct PreparedNumericalBatchMaterialV1 {
     pub material: NativeRetainedV1<super::super::RootedMaterialV1>,
 }
 
+/// The native profile must account for both bounded evaluation passes and
+/// the temporary cone carriage and interpreter workspace.
+pub(crate) struct NumericalBatchReplayBudgetV1 {
+    pub work: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
+    pub workspace_bytes: u64,
+}
+
+pub(crate) struct NumericalBatchFindingV1 {
+    pub claim: Hash64,
+    pub leaf: u64,
+    pub scope: Hash64,
+    pub notice: Hash64,
+    pub at: crate::palw_state_v2::PalwBlockContextV2,
+    pub fault: Option<crate::palw_step_leg::PalwStepRefutationVerdictV1>,
+}
+
+/// Read-only native replay at the booked verification point. The terminal
+/// carrier must separately authenticate its filer and retain the finding.
+pub(crate) fn replay_numerical_batch_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+    budget: NumericalBatchReplayBudgetV1,
+) -> Result<NumericalBatchFindingV1, E> {
+    use crate::palw_tir_court_v1::{PalwTirCourtRulesV1, replay_tir_cone_from_store_v1};
+    rules.check().map_err(E::Decode)?;
+    if !rules.tir_active || budget.workspace_bytes == 0 {
+        return Err(E::Decode("numerical replay has no active TIR rules or admitted workspace".into()));
+    }
+    let prepared = prepare_numerical_batch_material_v1(state, claim, rules.at.daa_score)?;
+    let frame = super::super::frame_of(state, claim).map_err(E::Decode)?;
+    let class = frame.original_v1().job.class_id;
+    let record = state.tir_class_v1(&class).ok_or_else(|| E::Decode("numerical replay has no registered class".into()))?;
+    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, class)
+        .ok_or_else(|| E::Decode("numerical replay has no registered layout".into()))?;
+    let prompt_form = if rules.prompt_ids_merkle { PalwPromptIdsFormV1::MerkleV1 } else { PalwPromptIdsFormV1::Flat };
+    if prompt_form != frame.plan_v1().owner_work.rules.prompt_form {
+        return Err(E::Decode("numerical replay prompt form differs from the original".into()));
+    }
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(PalwTirPublicSourceV1::native_construction_requests_v1(record, layout, frame.header_v1())?)
+        .map_err(E::Resource)?;
+    q.add_v1(budget.workspace_bytes).map_err(E::Resource)?;
+    let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let binding = frame.header_v1().resolve_registered_layout_v1(
+        record, layout, frame.original_v1().execution_root, frame.descriptor_v1().maximum_leaves.min(rules.step_ladder),
+    ).map_err(E::Decode)?;
+    let store = prepared.material.store_v1(state, claim, prepared.scope).map_err(E::Decode)?;
+    let court = PalwTirCourtRulesV1 {
+        max_step_leaf_count: rules.step_ladder,
+        prompt_form,
+        limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court),
+    };
+    let fault = replay_tir_cone_from_store_v1(
+        &binding, prepared.leaf, &store, &court, budget.work, rules.court.max_close_bytes(),
+    ).map_err(E::Decode)?;
+    Ok(NumericalBatchFindingV1 { claim, leaf: prepared.leaf, scope: prepared.scope, notice: prepared.notice, at: rules.at, fault })
+}
+
 pub(crate) fn prepare_numerical_batch_material_v1(
     state: &PalwChainStateV2,
     claim: Hash64,

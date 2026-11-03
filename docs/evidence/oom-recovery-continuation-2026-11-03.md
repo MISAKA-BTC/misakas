@@ -4008,3 +4008,28 @@ B0 and relay agreed at virtual DAA 19,736. The two selected blocks
 contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-material-closure.oKThNp/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-material-closure-live.hTO9Qs/page.json`.
+
+## Replay the selected numerical leaf with the existing TIR checker
+
+The read-only Batch verifier now prepares all selected inputs at
+the booked verification point, rehydrates the original binding from
+the registered class and layout, and applies the existing cone
+builder and objective checker to the authenticated material store.
+Both passes use bounded work, and the canonical carriage must fit
+the native close ceiling. Only a checked equality or a checked
+fault yields a finding. Missing inputs, work refusal and malformed
+material remain errors.
+
+The extracted test compiled the candidate replay helper and the
+tiny execution fixture against the cached native TIR builder and
+checker. An honest leaf matched, the forged leaf reproduced the
+existing fault and evidence ID, and byte/work caps refused replay.
+The test has not exercised the integrated Batch fold. The remaining
+terminal path needs an authenticated carrier, a rooted finding,
+measured workspace and work prices, and the separate claim-level
+credit rules.
+
+B0 and relay agreed at virtual DAA 19,737. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-replay.zPzNBl/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-numerical-replay-live.MkveFL/page.json`.
