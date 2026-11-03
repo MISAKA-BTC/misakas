@@ -136,3 +136,147 @@ async fn legacy_evm_256mib_and_p2p_320mib_envelopes_remain_usable() {
         }
     }
 }
+
+#[tokio::test]
+async fn evm_and_overlay_sidecar_borsh_admission_and_transport_owner() {
+    use memory_budget::{MemoryBudget, MemoryClass};
+    use p2p::kaspad_message::Payload;
+    use snapshot_memory::{
+        MAX_EVM_HEADER_BYTES, MAX_EVM_STATE_SNAPSHOT_BYTES, MAX_OVERLAY_SNAPSHOT_BYTES, encode_exact, encode_sidecar, encoded_size,
+    };
+    use std::mem::size_of;
+
+    let bank = MemoryBudget::new(4 << 20, [4 << 20; 4]);
+    let header = [7u64, 18];
+    let state = vec![23u8; 1 << 17];
+    let expected_header = borsh::to_vec(&header).unwrap();
+    let expected_state = borsh::to_vec(&state).unwrap();
+    let header_len = encoded_size(&header, MAX_EVM_HEADER_BYTES as u64).unwrap();
+    let state_len = encoded_size(&state, MAX_EVM_STATE_SNAPSHOT_BYTES as u64).unwrap();
+    assert_eq!(encoded_size(&state, MAX_OVERLAY_SNAPSHOT_BYTES as u64).unwrap(), state_len);
+    assert!(encoded_size(&state, state_len - 1).is_err());
+    let inline = size_of::<p2p::KaspadMessage>();
+
+    for evm in [true, false] {
+        let lengths = if evm { vec![header_len, state_len] } else { vec![state_len] };
+        let charged = inline as u64 + 128 + lengths.iter().sum::<u64>();
+        let blocked = bank.try_reserve_retained(MemoryClass::Snapshot, (4 << 20) - charged + 1).unwrap();
+        assert_eq!(
+            encode_sidecar::<()>(&bank, inline, &lengths, || panic!("denied admission ran the encoder")).unwrap_err().kind(),
+            std::io::ErrorKind::OutOfMemory
+        );
+        drop(blocked);
+
+        let (message, lease) = encode_sidecar(&bank, inline, &lengths, || {
+            assert_eq!(bank.snapshot().pending_bytes, charged);
+            let payload = if evm {
+                let evm_header = encode_exact(&header, header_len)?;
+                assert_eq!(evm_header, expected_header);
+                let evm_state_snapshot = encode_exact(&state, state_len)?;
+                assert_eq!(evm_state_snapshot, expected_state);
+                Payload::PruningPointEvmState(p2p::PruningPointEvmStateMessage { found: true, evm_header, evm_state_snapshot })
+            } else {
+                let overlay_snapshot = encode_exact(&state, state_len)?;
+                assert_eq!(overlay_snapshot, expected_state);
+                Payload::PruningPointOverlaySnapshot(p2p::PruningPointOverlaySnapshotMessage { found: true, overlay_snapshot })
+            };
+            Ok(p2p::KaspadMessage { payload: Some(payload), ..Default::default() })
+        })
+        .unwrap();
+        assert_eq!(lease.bytes(), charged);
+        assert_eq!(bank.snapshot().pending_bytes, 0);
+
+        let local = transport::connection_budget();
+        let queued = transport::Outbound::with_preallocated(message, &local, lease, Vec::new()).unwrap();
+        let mut codec = transport::BudgetedProstCodec::<p2p::KaspadMessage, p2p::KaspadMessage>::default();
+        let mut body = EncodeBody::new_client(codec.encoder(), tokio_stream::iter([Ok(queued)]), None, Some(320 << 20));
+        let frame = body.frame().await.unwrap().unwrap().into_data().unwrap();
+        let alias = frame.slice(5..);
+        let decoded = p2p::KaspadMessage::decode(alias.as_ref()).unwrap();
+        match decoded.payload.unwrap() {
+            Payload::PruningPointEvmState(reply) if evm => {
+                assert!(reply.found);
+                assert_eq!(reply.evm_header, expected_header);
+                assert_eq!(reply.evm_state_snapshot, expected_state);
+            }
+            Payload::PruningPointOverlaySnapshot(reply) if !evm => {
+                assert!(reply.found);
+                assert_eq!(reply.overlay_snapshot, expected_state);
+            }
+            _ => panic!("wrong sidecar reply"),
+        }
+        drop(body);
+        drop(frame);
+        assert_eq!(bank.snapshot().class_bytes[MemoryClass::Snapshot as usize], charged);
+        drop(alias);
+        assert_eq!(bank.snapshot().reserved_bytes, 0);
+        assert_eq!(local.snapshot().reserved_bytes, 0);
+    }
+}
+
+#[test]
+fn sidecar_partial_serialization_failure_releases_its_ticket() {
+    use memory_budget::MemoryBudget;
+    use snapshot_memory::{encode_exact, encode_sidecar};
+    let bank = MemoryBudget::new(1024, [1024; 4]);
+    let result = encode_sidecar(&bank, 200, &[8, 1], || {
+        let first = encode_exact(&8u64, 8)?;
+        let second = encode_exact(&9u64, 1)?;
+        Ok((first, second))
+    });
+    assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+    assert_eq!(bank.snapshot().reserved_bytes, 0);
+    assert_eq!(bank.snapshot().pending_bytes, 0);
+
+    assert!(encode_sidecar::<()>(&bank, 200, &[u64::MAX], || panic!("overflow reached encoder")).is_err());
+    if usize::BITS == 64 {
+        assert_eq!(encode_exact(&0u8, u64::MAX).unwrap_err().kind(), std::io::ErrorKind::OutOfMemory);
+    }
+}
+
+#[tokio::test]
+async fn abandoned_sidecar_blocking_result_drops_data_before_ticket() {
+    use memory_budget::MemoryBudget;
+    use snapshot_memory::{encode_exact, encode_sidecar};
+    use std::{sync::Arc, time::Duration};
+
+    struct Reply {
+        data: Vec<u8>,
+        bank: Arc<MemoryBudget>,
+    }
+    impl Drop for Reply {
+        fn drop(&mut self) {
+            assert_eq!(self.data.len(), 8);
+            assert_eq!(self.bank.snapshot().reserved_bytes, 336);
+        }
+    }
+
+    struct Finished(Option<tokio::sync::oneshot::Sender<()>>);
+    impl Drop for Finished {
+        fn drop(&mut self) {
+            // Drop runs after the returned (reply, lease).
+            let _ = self.0.take().unwrap().send(());
+        }
+    }
+
+    let bank = MemoryBudget::new(1024, [1024; 4]);
+    let worker_bank = bank.clone();
+    let (started, running) = tokio::sync::oneshot::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let (finished, done) = tokio::sync::oneshot::channel();
+    let worker = tokio::task::spawn_blocking(move || {
+        let reply = encode_sidecar(&worker_bank, 200, &[8], || {
+            started.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok(Reply { data: encode_exact(&21u64, 8)?, bank: worker_bank.clone() })
+        })
+        .unwrap();
+        (reply, Finished(Some(finished)))
+    });
+    running.await.unwrap();
+    assert_eq!(bank.snapshot().pending_bytes, 336);
+    drop(worker);
+    release.send(()).unwrap();
+    done.await.unwrap();
+    assert_eq!(bank.snapshot().reserved_bytes, 0);
+}

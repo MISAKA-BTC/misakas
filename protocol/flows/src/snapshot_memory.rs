@@ -1,6 +1,36 @@
 //! Construction bounds shared by legacy and chunked snapshot serving.
 use borsh::BorshSerialize;
-use std::io::{self, Write};
+use kaspa_core::memory_budget::{MemoryBudget, MemoryClass, MemoryLease};
+use std::{
+    io::{self, Write},
+    sync::Arc,
+};
+
+// Shared by the sidecar sender and IBD receiver. These bound canonical Borsh
+// bytes, independently of the P2P transport's protobuf frame limit.
+pub(crate) const MAX_EVM_HEADER_BYTES: usize = 1 << 20;
+pub(crate) const MAX_EVM_STATE_SNAPSHOT_BYTES: usize = 256 << 20;
+pub(crate) const MAX_OVERLAY_SNAPSHOT_BYTES: usize = 64 << 20;
+
+/// Admit all outgoing Borsh buffers before constructing any of them. The
+/// message comes first so an abandoned blocking result frees its data first.
+pub(crate) fn encode_sidecar<T>(
+    budget: &Arc<MemoryBudget>,
+    message_bytes: usize,
+    lengths: &[u64],
+    encode: impl FnOnce() -> io::Result<T>,
+) -> io::Result<(T, MemoryLease)> {
+    let bytes = lengths
+        .iter()
+        .copied()
+        .chain([message_bytes as u64])
+        .try_fold(128u64, u64::checked_add)
+        .ok_or_else(|| io::Error::other("snapshot reply size overflow"))?;
+    let lease = budget.try_reserve(MemoryClass::Snapshot, bytes).map_err(|error| io::Error::new(io::ErrorKind::OutOfMemory, error))?;
+    let reply = encode()?;
+    lease.materialized();
+    Ok((reply, lease))
+}
 
 pub(crate) fn declaration_metadata_bytes(classes: usize) -> io::Result<u64> {
     (classes as u64)
@@ -49,7 +79,8 @@ pub(crate) fn encode_exact<T: BorshSerialize>(value: &T, bytes: u64) -> io::Resu
         }
     }
     let size = usize::try_from(bytes).map_err(|_| io::Error::other("snapshot allocation size overflow"))?;
-    let mut value_bytes = Vec::with_capacity(size);
+    let mut value_bytes = Vec::new();
+    value_bytes.try_reserve_exact(size).map_err(|error| io::Error::new(io::ErrorKind::OutOfMemory, error))?;
     let mut exact = Exact { value: &mut value_bytes, remaining: bytes };
     value.serialize(&mut exact)?;
     if exact.remaining != 0 {
