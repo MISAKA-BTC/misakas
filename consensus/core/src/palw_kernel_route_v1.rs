@@ -560,7 +560,12 @@ fn positive_p_schedule_v2(
         // A veto or an empty draw is due in this block, including equal DAA.
         return Ok(Some((b'V', last_negative, subject)));
     }
-    Ok((positive.count_ones() < u32::from(h.policy.k)).then_some((b'D', draw.deadline_daa, subject)))
+    if positive.count_ones() < u32::from(h.policy.k) {
+        return Ok(Some((b'D', draw.deadline_daa, subject)));
+    }
+    let finality = fixed.finality.ok_or(E::Identity)?;
+    let prosecution = finality.origin.accepted_daa.checked_add(h.policy.prosecution_window_daa).ok_or(E::Range)?;
+    Ok(Some((b'Q', prosecution, subject)))
 }
 
 impl PalwKernelRouteStateV1 {
@@ -605,6 +610,14 @@ impl PalwKernelRouteStateV1 {
         let veto =
             self.positive_gate_c_schedule_v2.range((b'V', 0, Hash64::default())..=(b'V', now, Hash64::from_bytes([u8::MAX; 64])));
         elapsed(b'P').chain(elapsed(b'D')).chain(veto).map(|&(_, _, subject)| subject)
+    }
+
+    /// A quorum that survived veto may need fresh native replay at or after
+    /// its prosecution boundary. This schedule alone grants no certification.
+    pub(crate) fn due_positive_quorum_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
+        self.positive_gate_c_schedule_v2
+            .range((b'Q', 0, Hash64::default())..=(b'Q', now, Hash64::from_bytes([u8::MAX; 64])))
+            .map(|&(_, _, subject)| subject)
     }
 
     pub(crate) fn update_positive_aux_indexes_v2(

@@ -913,6 +913,35 @@ pub(super) fn check_rooted_positive_finish_v2(
     Ok(())
 }
 
+impl PalwChainStateV2 {
+    /// Bounded, deterministic archive requests for quorums past prosecution.
+    /// The resulting Case still needs native replay and a fresh block session.
+    pub fn due_positive_case_replays_v2(
+        &self,
+        now: u64,
+        max_subjects: usize,
+    ) -> impl Iterator<Item = Result<(CaseId, ResultId), PalwStateV2Error>> + '_ {
+        self.kernel_route_state_v1()
+            .into_iter()
+            .flat_map(move |route| route.due_positive_quorum_subjects_v2(now))
+            .take(max_subjects)
+            .filter_map(move |subject| {
+                let check = || {
+                    let owned = read(self, Digest(subject.as_bytes()), 0)?;
+                    let h = &owned.row.fixed.header;
+                    let bundle = PositiveRowsV2::new(self).bundle(h.claim).map_err(refuse)?;
+                    check_positive_certification_result_links_v2(h, &bundle.result, &bundle.case).map_err(refuse)?;
+                    let case = &bundle.case;
+                    if case.status != ClaimStatus::PositivePassed || case.unresolved_fraud != 0 || case.maturity_daa > now {
+                        return Ok(None);
+                    }
+                    Ok(Some((h.case, h.result)))
+                };
+                check().transpose()
+            })
+    }
+}
+
 fn bound_session_case(
     builder: &TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
