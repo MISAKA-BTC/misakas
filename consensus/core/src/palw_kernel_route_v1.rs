@@ -590,6 +590,10 @@ impl PalwKernelRouteStateV1 {
         active(b'A').chain(active(b'P')).take(probe).count() as u64
     }
 
+    pub(crate) fn owns_open_assignment_draw_slot_v2(&self, last: u64, assignment: Hash64) -> bool {
+        self.positive_gate_c_schedule_v2.contains(&(b'A', last, assignment))
+    }
+
     pub(crate) fn owns_undrawn_p_slot_v2(&self, last: u64, subject: Hash64) -> bool {
         self.positive_gate_c_schedule_v2.contains(&(b'P', last, subject))
     }
@@ -2665,6 +2669,36 @@ mod case_alias_cache_tests {
         assert!(route.contains_positive_job_v2(job));
         assert!(!route.contains_open_assignment_job_v2(job));
         assert_eq!(borsh::to_vec(&route).unwrap(), canonical);
+    }
+
+    #[test]
+    fn case_draw_slot_replaces_only_its_open_assignment_at_the_exclusive_result_boundary() {
+        let mut route = PalwKernelRouteStateV1::new_typed(
+            palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None,
+            None,
+            LedgerScalarsV1 { daa: 0, burned: 0 },
+        );
+        let assignment = Hash64::from_bytes([6; 64]);
+        let other = Hash64::from_bytes([7; 64]);
+        let subject = Hash64::from_bytes([8; 64]);
+        let now = 99;
+        let capacity = 3;
+        route.positive_gate_c_schedule_v2.extend([(b'A', now, assignment), (b'P', 100, other)]);
+        assert!(route.owns_open_assignment_draw_slot_v2(now, assignment));
+        assert!(!route.owns_open_assignment_draw_slot_v2(now, other));
+        assert!(!route.owns_open_assignment_draw_slot_v2(now + 1, assignment));
+        assert_eq!(route.positive_draw_slots_v2(now, capacity), 2);
+        assert_eq!(route.positive_draw_slots_v2(now + 1, capacity), 1);
+
+        assert!(route.positive_gate_c_schedule_v2.remove(&(b'A', now, assignment)));
+        assert!(!route.owns_open_assignment_draw_slot_v2(now, assignment));
+        assert_eq!(route.positive_draw_slots_v2(now, capacity), 1);
+        assert!(route.positive_gate_c_schedule_v2.insert((b'P', 110, subject)));
+        assert!(route.owns_undrawn_p_slot_v2(110, subject));
+        assert!(route.owns_undrawn_p_slot_v2(100, other));
+        assert_eq!(route.positive_draw_slots_v2(now, capacity), 2);
+        assert_eq!(route.positive_draw_slots_v2(now + 1, capacity), 2);
     }
 
     #[test]

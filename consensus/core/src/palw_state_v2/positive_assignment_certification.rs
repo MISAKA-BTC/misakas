@@ -7,7 +7,9 @@ use crate::{
     palw_kernel_route_v1::palw_kernel_bond_id_v1,
     palw_model_eligibility_v1::PalwEligibilityVerifierV1,
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1},
-    palw_positive_assignment_certification_v2::{AssignmentGateCDrawEpochsV2, assignment_gate_c_draws_used_v2},
+    palw_positive_assignment_certification_v2::{
+        AssignmentGateCClockV2, AssignmentGateCDrawEpochsV2, assignment_gate_c_draws_used_v2,
+    },
     palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, assignment_custody_bytes_id_v2},
     palw_positive_certification_v2::*,
     palw_positive_check_v2::CheckOutcome,
@@ -167,6 +169,14 @@ fn shared_network_draws_v2(
     assignment_gate_c_draws_used_v2(&network, epoch, capacity).map_err(refuse)
 }
 
+/// The slot belonging to this exact Open row at the original op9 boundary.
+pub(super) struct AssignmentDrawSlotTransferV2 {
+    assignment: AssignmentId,
+    last_result_daa: u64,
+    draws_before: u32,
+    reserved_before: u64,
+}
+
 impl TransitionBuilder<'_> {
     pub(super) fn require_new_positive_draw_slot_v2(
         &self,
@@ -184,6 +194,37 @@ impl TransitionBuilder<'_> {
             return Err(refuse("no unreserved capacity in the actual shared N queue"));
         }
         Ok(())
+    }
+
+    pub(super) fn qualify_assignment_draw_slot_transfer_v2(
+        &self,
+        row: &AssignmentRow,
+        policy: &crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+        now: u64,
+    ) -> Result<AssignmentDrawSlotTransferV2, PalwStateV2Error> {
+        queue_policy(self, policy, now)?;
+        let last_result_daa = row
+            .bundle
+            .terms
+            .result_before_daa
+            .checked_sub(1)
+            .filter(|last| now <= *last)
+            .ok_or_else(|| refuse("expired Assignment draw slot"))?;
+        let route = self.state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
+        let assignment = row.id();
+        if row.status != AssignmentStatusV2::Open
+            || !route.owns_open_assignment_draw_slot_v2(last_result_daa, Hash64::from_bytes(assignment.0.0))
+        {
+            return Err(refuse("Case requires the original Open draw slot"));
+        }
+        let _key = reserve_p_workspace((1 + size_of::<[u8; 64]>()) as u64)?;
+        let key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
+        let draws_before = shared_network_draws_v2(&self.state, &key, now / policy.epoch_daa, policy.draws_per_epoch)?;
+        let reserved_before = route.positive_draw_slots_v2(now, policy.draws_per_epoch);
+        if u64::from(draws_before) + reserved_before > u64::from(policy.draws_per_epoch) {
+            return Err(refuse("original Open draw slot exceeds the shared N capacity"));
+        }
+        Ok(AssignmentDrawSlotTransferV2 { assignment, last_result_daa, draws_before, reserved_before })
     }
 
     /// Check both the original finite calendar and the capacity at the actual
@@ -292,9 +333,10 @@ impl TransitionBuilder<'_> {
     pub(super) fn begin_positive_certification_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
-        id: AssignmentId,
+        transfer: AssignmentDrawSlotTransferV2,
         material: &AssignmentAdmissionMaterialV2,
     ) -> Result<(), PalwStateV2Error> {
+        let id = transfer.assignment;
         let a = assignment(&self.state, id)?;
         material.check_row(&a).map_err(refuse)?;
         let AssignmentStatusV2::Consumed { case, result } = a.status else {
@@ -344,9 +386,20 @@ impl TransitionBuilder<'_> {
             liability: bundle.case.liability,
         };
         h.validate().map_err(refuse)?;
-        // The same Case-install checkpoint already changed A to Consumed.
-        // Replacing that slot with the new undrawn P cannot book a second one.
-        self.require_new_positive_draw_slot_v2(&h.policy, ctx.daa_score)?;
+        // A has become Consumed in the same checkpoint. Verify that exactly
+        // its one slot disappeared before installing the protected P slot.
+        let route = self.state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
+        let _key = reserve_p_workspace((1 + size_of::<[u8; 64]>()) as u64)?;
+        let key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
+        let draws = shared_network_draws_v2(&self.state, &key, ctx.daa_score / h.policy.epoch_daa, h.policy.draws_per_epoch)?;
+        if draws != transfer.draws_before
+            || route.owns_open_assignment_draw_slot_v2(transfer.last_result_daa, Hash64::from_bytes(id.0.0))
+            || route.positive_draw_slots_v2(ctx.daa_score, h.policy.draws_per_epoch).checked_add(1) != Some(transfer.reserved_before)
+        {
+            return Err(refuse("Case did not consume exactly its original draw reservation"));
+        }
+        let capacity = h.policy.draws_per_epoch;
+        let last = AssignmentGateCClockV2::from_existing_policy(&h.policy, ctx.daa_score).map_err(refuse)?.latest_draw_daa;
         let _owner = lease(h.policy.m, 0)?;
         write(
             self,
@@ -355,7 +408,14 @@ impl TransitionBuilder<'_> {
                 draw: None,
                 votes: Vec::new(),
             },
-        )
+        )?;
+        let route = self.state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
+        if !route.owns_undrawn_p_slot_v2(last, Hash64::from_bytes(subject.0))
+            || route.positive_draw_slots_v2(ctx.daa_score, capacity) != transfer.reserved_before
+        {
+            return Err(refuse("Case did not install exactly one protected P slot"));
+        }
+        Ok(())
     }
     /// Draw with the actual later seed and live global bond state. The
     /// original reservation preimage bounds which keys need to be looked up.

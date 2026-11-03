@@ -660,6 +660,7 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial Case relay requires the Case reservation at this acceptance point"));
         }
 
+        let p_slot = self.qualify_assignment_draw_slot_transfer_v2(expected, &plan.material.certification_policy, ctx.daa_score)?;
         let head = self.assignment_head_v2(id)?;
         let policy = &plan.material.assignment_policy;
         self.check_assignment_next_journal_extent_v2(
@@ -711,7 +712,7 @@ impl TransitionBuilder<'_> {
             }
             self.write_assignment_aux_v2(NativeRowBody::Case(plan.case))?;
             self.write_assignment_aux_v2(NativeRowBody::Funding(plan.funding))?;
-            self.begin_positive_certification_v2(ctx, id, plan.material)?;
+            self.begin_positive_certification_v2(ctx, p_slot, plan.material)?;
             self.append_assignment_frame_v2(frame, head.retention_until_daa)?;
             self.emit_assignment_material_v2(&frame, &payload, policy.max_frame_bytes)?;
             self.write_initial_assigned_case_journal_v2(&use_row, scope, &frame.header, &plan.material.positive_policy)
