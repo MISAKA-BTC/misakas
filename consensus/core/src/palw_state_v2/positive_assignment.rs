@@ -1596,6 +1596,13 @@ impl TransitionBuilder<'_> {
                     }
                     let certification = rules.certification_policy().ok_or_else(|| refusal("missing actual Gate C policy"))?;
                     let maximum_scan = rules.assignment_policy().max_replay_work / preimages.source_policy.work.per_control;
+                    let draw_epochs = self.check_assignment_draw_calendar_v2(
+                        certification,
+                        ctx.daa_score,
+                        bundle.terms.result_before_daa,
+                        maximum_scan,
+                    )?;
+                    let maximum_scan = maximum_scan - draw_epochs;
                     let heap_budget = rules
                         .assignment_policy()
                         .max_heap_bytes

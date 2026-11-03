@@ -3,7 +3,10 @@
 //! particular the existing k-positive verdict waits for pending fraud without
 //! applying its ordinary failure deadline. A finite no-fraud calendar alone
 //! MUST NOT be used as an unconditional all-branch reservation horizon.
-use crate::{config::params::Params, palw_security_certification_v1::PalwSecurityCertificationPolicyV1};
+use crate::{
+    config::params::Params,
+    palw_security_certification_v1::{PalwCertificationNetworkRowV1, PalwSecurityCertificationPolicyV1},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AssignmentGateCClockErrorV2 {
@@ -15,6 +18,8 @@ pub enum AssignmentGateCClockErrorV2 {
     UnboundedVerifierUniverse,
     VerifierRegistryWorkBound,
     InvalidRegistrationChronology,
+    DrawEpochWorkBound,
+    InconsistentDrawQueue,
 }
 
 /// Original Result/C acceptance is the commit clock, never Assignment intake.
@@ -81,6 +86,63 @@ impl AssignmentGateCClockV2 {
     pub fn require_complete_native_bound(&self) -> Result<std::convert::Infallible, AssignmentGateCClockErrorV2> {
         Err(AssignmentGateCClockErrorV2::UnresolvedPendingFraudOwner)
     }
+}
+
+/// The inclusive epoch interval for a prospective Assignment draw. The
+/// accepting DAA is the lower bound because the later-seed requirement is
+/// defined in execution spans, not as a fixed additional DAA interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AssignmentGateCDrawEpochsV2 {
+    first: u64,
+    last: u64,
+}
+impl AssignmentGateCDrawEpochsV2 {
+    pub fn from_result_window(
+        policy: &PalwSecurityCertificationPolicyV1,
+        intake_daa: u64,
+        result_before_daa: u64,
+        max_epochs: u64,
+    ) -> Result<Self, AssignmentGateCClockErrorV2> {
+        use AssignmentGateCClockErrorV2 as E;
+        if intake_daa >= result_before_daa || result_before_daa == u64::MAX {
+            return Err(E::InvalidClockOrder);
+        }
+        let latest = AssignmentGateCClockV2::from_existing_policy(policy, result_before_daa - 1)?;
+        let first = intake_daa / latest.epoch_daa;
+        let last = latest.latest_draw_daa / latest.epoch_daa;
+        let count = last.checked_sub(first).and_then(|n| n.checked_add(1)).ok_or(E::Overflow)?;
+        if count > max_epochs {
+            return Err(E::DrawEpochWorkBound);
+        }
+        Ok(Self { first, last })
+    }
+
+    pub fn epochs(self) -> std::ops::RangeInclusive<u64> {
+        self.first..=self.last
+    }
+
+    pub fn epoch_count(self) -> u64 {
+        // Construction checks this arithmetic before returning the interval.
+        self.last - self.first + 1
+    }
+}
+
+/// Project the real shared N row at an independently chosen epoch. Expanding
+/// to a later epoch resets the draw count. A future row or an overfull current
+/// row cannot be read as an empty capacity owner.
+pub fn assignment_gate_c_draws_used_v2(
+    network: &PalwCertificationNetworkRowV1,
+    epoch: u64,
+    draws_per_epoch: u32,
+) -> Result<u32, AssignmentGateCClockErrorV2> {
+    use AssignmentGateCClockErrorV2 as E;
+    if draws_per_epoch == 0 {
+        return Err(E::InvalidPolicy);
+    }
+    if network.epoch > epoch || (network.epoch == epoch && network.draws > draws_per_epoch) {
+        return Err(E::InconsistentDrawQueue);
+    }
+    Ok(if network.epoch == epoch { network.draws } else { 0 })
 }
 
 /// Pure DATA bound for the global registry work needed by ANY legal later C.

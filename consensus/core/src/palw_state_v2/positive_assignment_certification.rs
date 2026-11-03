@@ -7,6 +7,7 @@ use crate::{
     palw_kernel_route_v1::palw_kernel_bond_id_v1,
     palw_model_eligibility_v1::PalwEligibilityVerifierV1,
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1},
+    palw_positive_assignment_certification_v2::{AssignmentGateCDrawEpochsV2, assignment_gate_c_draws_used_v2},
     palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, assignment_custody_bytes_id_v2},
     palw_positive_certification_v2::*,
     palw_positive_check_v2::CheckOutcome,
@@ -132,16 +133,59 @@ fn assignment(state: &PalwChainStateV2, id: AssignmentId) -> Result<AssignmentRo
         _ => Err(refuse("actual Assignment missing")),
     }
 }
-fn queue_policy(builder: &TransitionBuilder<'_>, h: &PositiveCertificationHeaderV2, now: u64) -> Result<(), PalwStateV2Error> {
+/// Both prospective admission and actual P consumption use the epoch
+/// geometry of the existing native N queue, with the frozen P policy.
+fn queue_policy(
+    builder: &TransitionBuilder<'_>,
+    policy: &crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
     let mirror = builder.params.rfc0018_v1().filter(|m| m.gate_c_at(now)).ok_or_else(|| refuse("actual Gate C policy unavailable"))?;
-    if mirror.certification.epoch_daa != h.policy.epoch_daa
-        || mirror.certification.draws_per_epoch != h.policy.draws_per_epoch
+    if mirror.certification.epoch_daa != policy.epoch_daa
+        || mirror.certification.draws_per_epoch != policy.draws_per_epoch
         || mirror.certification.m > MAX_POSITIVE_DRAW_POSITIONS_V2
     {
         return Err(refuse("frozen P policy conflicts with actual shared N owner"));
     }
     Ok(())
 }
+
+fn shared_network_draws_v2(
+    state: &PalwChainStateV2,
+    network_key: &(u8, Vec<u8>),
+    epoch: u64,
+    capacity: u32,
+) -> Result<u32, PalwStateV2Error> {
+    let route = state.kernel_route_state_v1().ok_or_else(|| unavailable("actual shared N route"))?;
+    let network = match route.aux.get(network_key) {
+        None => PalwCertificationNetworkRowV1::default(),
+        Some(bytes) => borsh::from_slice(bytes).map_err(refuse)?,
+    };
+    assignment_gate_c_draws_used_v2(&network, epoch, capacity).map_err(refuse)
+}
+
+impl TransitionBuilder<'_> {
+    /// Read the live N owner while deriving the bounded epoch interval. Later
+    /// reservation must still account for other live contracts in each epoch.
+    pub(super) fn check_assignment_draw_calendar_v2(
+        &self,
+        policy: &crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+        intake_daa: u64,
+        result_before_daa: u64,
+        max_epochs: u64,
+    ) -> Result<u64, PalwStateV2Error> {
+        queue_policy(self, policy, intake_daa)?;
+        let calendar =
+            AssignmentGateCDrawEpochsV2::from_result_window(policy, intake_daa, result_before_daa, max_epochs).map_err(refuse)?;
+        // N uses the ordinary certification prefix plus a 64-byte ID.
+        // The P row workspace covers this same lookup at draw time.
+        let _key = reserve_p_workspace((1 + size_of::<[u8; 64]>()) as u64)?;
+        let key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
+        shared_network_draws_v2(&self.state, &key, *calendar.epochs().start(), policy.draws_per_epoch)?;
+        Ok(calendar.epoch_count())
+    }
+}
+
 fn case_live(state: &PalwChainStateV2, h: &PositiveCertificationHeaderV2) -> Result<bool, PalwStateV2Error> {
     let Some(value) = PositiveRowsV2::new(state).read(NativeRowKey::Case(h.case)).map_err(refuse)? else {
         return Err(unavailable("actual P Case unavailable; missing is not withdrawn"));
@@ -229,7 +273,7 @@ impl TransitionBuilder<'_> {
             liability: bundle.case.liability,
         };
         h.validate().map_err(refuse)?;
-        queue_policy(self, &h, ctx.daa_score)?;
+        queue_policy(self, &h.policy, ctx.daa_score)?;
         let _owner = lease(h.policy.m, 0)?;
         write(
             self,
@@ -260,7 +304,7 @@ impl TransitionBuilder<'_> {
             return Err(refuse("P draw already fixed"));
         }
         let h = &row.fixed.header;
-        queue_policy(self, h, ctx.daa_score)?;
+        queue_policy(self, &h.policy, ctx.daa_score)?;
         if ctx.daa_score
             > h.commit_origin.accepted_daa.checked_add(h.policy.certify_by_daa).ok_or_else(|| refuse("draw clock overflow"))?
         {
@@ -275,18 +319,13 @@ impl TransitionBuilder<'_> {
         if anchor.span < earliest {
             return Err(refuse("seed existed too early"));
         }
-        let network_key = certification_network_key_v1();
-        let mut network = match self.state.kernel_route.as_ref().and_then(|r| r.aux.get(&(136, network_key.clone()))) {
-            None => PalwCertificationNetworkRowV1::default(),
-            Some(b) => borsh::from_slice(b).map_err(refuse)?,
-        };
+        let network_key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
         let epoch = ctx.daa_score / h.policy.epoch_daa;
-        if network.epoch != epoch {
-            network = PalwCertificationNetworkRowV1 { epoch, draws: 0 };
-        }
-        if network.draws >= h.policy.draws_per_epoch {
+        let draws = shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?;
+        if draws == h.policy.draws_per_epoch {
             return Err(refuse("actual shared N queue full"));
         }
+        let network = PalwCertificationNetworkRowV1 { epoch, draws: draws + 1 };
         let a = assignment(&self.state, h.assignment)?;
         material.check_row(&a).map_err(refuse)?;
         if a.status != (AssignmentStatusV2::Consumed { case: h.case, result: h.result }) || material.certification_policy != h.policy {
@@ -359,11 +398,10 @@ impl TransitionBuilder<'_> {
             row.fixed.outcome = Some((PositiveCertificationOutcomeV2::NoPopulation, ctx.daa_score));
         }
         row.draw = Some(draw);
-        network.draws = network.draws.checked_add(1).ok_or_else(|| refuse("N overflow"))?;
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
             write(self, row)?;
-            self.write_kernel_row_encoded_v1(136, &network_key, Some(&network))
+            self.write_kernel_row_encoded_v1(network_key.0, &network_key.1, Some(&network))
         })();
         if result.is_err() {
             self.restore(checkpoint)
@@ -574,15 +612,15 @@ impl TransitionBuilder<'_> {
             let h = &row.fixed.header;
             let earliest = h.committed_span.unwrap_or(0).checked_add(h.policy.anchor_delay_spans.max(1));
             let later = self.state.round_seed_anchor.is_some_and(|a| earliest.is_some_and(|s| a.span >= s));
-            let policy_ok = queue_policy(self, h, ctx.daa_score).is_ok();
-            let network_key = certification_network_key_v1();
-            let network: PalwCertificationNetworkRowV1 =
-                match self.state.kernel_route.as_ref().and_then(|r| r.aux.get(&(136, network_key))) {
-                    None => PalwCertificationNetworkRowV1::default(),
-                    Some(bytes) => borsh::from_slice(bytes).map_err(refuse)?,
-                };
-            let queue_free = network.epoch != ctx.daa_score / h.policy.epoch_daa || network.draws < h.policy.draws_per_epoch;
-            if !later || !policy_ok || !queue_free {
+            let policy_ok = queue_policy(self, &h.policy, ctx.daa_score).is_ok();
+            if !later || !policy_ok {
+                report.deferred_queue_or_seed += 1;
+                continue;
+            }
+            let network_key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
+            let epoch = ctx.daa_score / h.policy.epoch_daa;
+            let draws = shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?;
+            if draws == h.policy.draws_per_epoch {
                 report.deferred_queue_or_seed += 1;
                 continue;
             }
