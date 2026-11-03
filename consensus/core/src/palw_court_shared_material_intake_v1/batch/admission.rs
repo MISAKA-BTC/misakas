@@ -12,6 +12,7 @@ use crate::{
     },
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 /// Supplied by the native profile compiler. A fallback demand has its own
 /// ordinal and depends on the prior opportunity, even if that response is absent.
@@ -67,6 +68,50 @@ pub(crate) struct NativeBatchDeliveryCostsV1 {
     pub terminal: ServiceCost,
     pub recovery_daa: u64,
     pub maximum_packets: usize,
+    pub timing: NativeBatchDeliveryTimingV1,
+}
+
+/// Widths of the service phases and deliberate wait between phases. Absolute
+/// windows are written into the packets so repair cannot consume the waits.
+#[derive(Clone, Copy)]
+pub(crate) struct NativeBatchDeliveryTimingV1 {
+    pub open_daa: u64,
+    pub provider_wait_daa: u64,
+    pub begin_daa: u64,
+    pub parts_daa: u64,
+    pub finish_daa: u64,
+    pub verification_daa: u64,
+    pub stop_daa: u64,
+    pub terminal_daa: u64,
+}
+
+struct DeliveryWindowsV1 {
+    open: Range<u64>,
+    begin: Range<u64>,
+    parts: Range<u64>,
+    finish: Range<u64>,
+}
+
+impl DeliveryWindowsV1 {
+    fn response(&self, index: usize, last: usize) -> &Range<u64> {
+        if index == 0 {
+            &self.begin
+        } else if index == last {
+            &self.finish
+        } else {
+            &self.parts
+        }
+    }
+}
+
+fn take_service_window_v1(cursor: &mut u64, width: u64, before: u64) -> Result<Range<u64>, BatchCourtErrorV1> {
+    let end = cursor.checked_add(width).ok_or(BatchCourtErrorV1::Clock)?;
+    if width == 0 || end > before {
+        return Err(BatchCourtErrorV1::Window);
+    }
+    let range = *cursor..end;
+    *cursor = end;
+    Ok(range)
 }
 
 pub(crate) fn batch_numerical_service_ids_v1(claim: Hash64, scope: Hash64) -> Result<([u8; 64], [u8; 64]), BatchCourtErrorV1> {
@@ -124,7 +169,28 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         return Err(Window);
     }
     let (verification, terminal) = batch_numerical_service_ids_v1(claim, scope)?;
-    let packet = |id, cost| ServicePacket { id, release_daa: first, service_before: before, cost };
+    let timing = costs.timing;
+    let mut cursor = first;
+    let open = take_service_window_v1(&mut cursor, timing.open_daa, before)?;
+    if timing.provider_wait_daa == 0 {
+        return Err(Window);
+    }
+    cursor = cursor.checked_add(timing.provider_wait_daa).ok_or(Clock)?;
+    let windows = DeliveryWindowsV1 {
+        open,
+        begin: take_service_window_v1(&mut cursor, timing.begin_daa, before)?,
+        parts: take_service_window_v1(&mut cursor, timing.parts_daa, before)?,
+        finish: take_service_window_v1(&mut cursor, timing.finish_daa, before)?,
+    };
+    let expires = storage.draft_expires_v1(windows.begin.start, hard, original.terms.material_until_daa)
+        .map_err(|_| Window)?;
+    if windows.finish.end > expires {
+        return Err(Window);
+    }
+    let verification_window = take_service_window_v1(&mut cursor, timing.verification_daa, before)?;
+    let stop_window = stop.map(|_| take_service_window_v1(&mut cursor, timing.stop_daa, before)).transpose()?;
+    let terminal_window = take_service_window_v1(&mut cursor, timing.terminal_daa, before)?;
+    let packet = |id, cost, window: &Range<u64>| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
     let demand_count = envelope.demand_ranges_v1().count();
     let demand_capacity = demand_count.checked_add(usize::from(stop.is_some())).ok_or(CaseGraph)?;
     if demand_count == 0 || demand_capacity > costs.maximum_packets {
@@ -140,13 +206,18 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification }
     }));
     let mut graph = Vec::with_capacity(if stop.is_some() { 4 } else { 2 });
-    graph.push(CausalServicePacketV1 { packet: packet(verification, costs.numerical_verification), predecessors: vec![] });
     graph.push(CausalServicePacketV1 {
-        packet: packet(terminal, costs.terminal),
+        packet: packet(verification, costs.numerical_verification, &verification_window),
+        predecessors: vec![],
+    });
+    graph.push(CausalServicePacketV1 {
+        packet: packet(terminal, costs.terminal, &terminal_window),
         predecessors: Vec::with_capacity(usize::from(stop.is_some())),
     });
-    let retained = if let Some((operands, verify, file)) = stop {
-        let (demand, nodes, retained) = operands.graph_v1(first..before, verify, file).map_err(|_| DeliveryCost)?;
+    let retained = if let Some(((operands, verify, file), stop_window)) = stop.zip(stop_window) {
+        let (demand, mut nodes, retained) = operands.graph_v1(first..before, verify, file).map_err(|_| DeliveryCost)?;
+        nodes[0].packet = packet(nodes[0].packet.id, verify, &verification_window);
+        nodes[1].packet = packet(nodes[1].packet.id, file, &stop_window);
         demands.push(demand);
         graph[1].predecessors.push(retained.packet);
         graph.extend(nodes);
@@ -169,7 +240,11 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         recovery_daa: costs.recovery_daa,
         maximum_packets: costs.maximum_packets,
     };
-    plan.reserve_for_original_v1(candidate, graph, storage, cost)
+    let (mut quote, candidate) = plan.reserve_for_original_with_windows_v1(candidate, graph, storage, cost, Some(&windows))?;
+    // The earliest assigned slot may move during repair. Report the bound
+    // for the latest terminal permitted by its immutable packet interval.
+    quote.required_daa = terminal_window.end - a + costs.recovery_daa;
+    Ok((quote, candidate))
 }
 
 impl BatchAdmissionV1<'_> {
@@ -178,10 +253,21 @@ impl BatchAdmissionV1<'_> {
     /// candidate, never an already published row to change in place.
     pub(crate) fn reserve_for_original_v1(
         &self,
+        candidate: crate::palw_court_service_release_v1::CourtServiceRowV3,
+        graph: Vec<CausalServicePacketV1>,
+        storage: MaterialIntakeScheduleV1,
+        cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+    ) -> Result<(BatchAdmissionQuoteV1, crate::palw_court_service_release_v1::CourtServiceRowV3), BatchCourtErrorV1> {
+        self.reserve_for_original_with_windows_v1(candidate, graph, storage, cost, None)
+    }
+
+    fn reserve_for_original_with_windows_v1(
+        &self,
         mut candidate: crate::palw_court_service_release_v1::CourtServiceRowV3,
         graph: Vec<CausalServicePacketV1>,
         storage: MaterialIntakeScheduleV1,
         cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+        windows: Option<&DeliveryWindowsV1>,
     ) -> Result<(BatchAdmissionQuoteV1, crate::palw_court_service_release_v1::CourtServiceRowV3), BatchCourtErrorV1> {
         let binding = candidate.state.claims.get_mut(&self.claim).ok_or(BatchCourtErrorV1::CaseGraph)?;
         if binding.original_accepted_daa != self.window.claim_accepted_daa
@@ -189,7 +275,7 @@ impl BatchAdmissionV1<'_> {
         {
             return Err(BatchCourtErrorV1::Window);
         }
-        let (quote, graph) = self.reserve_v1(&mut candidate.state.book, graph, storage, cost)?;
+        let (quote, graph) = self.reserve_with_v1(&mut candidate.state.book, graph, storage, cost, reserve_native_requests_v1, windows)?;
         let (graph, _graph_lease) = graph.into_parts_v1();
         for node in graph {
             binding.packet_ids.insert(node.packet.id);
@@ -213,7 +299,7 @@ impl BatchAdmissionV1<'_> {
         storage: MaterialIntakeScheduleV1,
         cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
     ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
-        self.reserve_with_v1(book, graph, storage, cost, reserve_native_requests_v1)
+        self.reserve_with_v1(book, graph, storage, cost, reserve_native_requests_v1, None)
     }
 
     fn reserve_with_v1(
@@ -223,6 +309,7 @@ impl BatchAdmissionV1<'_> {
         storage: MaterialIntakeScheduleV1,
         mut cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
         reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+        windows: Option<&DeliveryWindowsV1>,
     ) -> Result<(BatchAdmissionQuoteV1, NativeRetainedV1<Vec<CausalServicePacketV1>>), BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, Window};
         let a = self.window.claim_accepted_daa;
@@ -301,8 +388,9 @@ impl BatchAdmissionV1<'_> {
             if open_cost.bytes < bytes || open_cost.work == 0 || open_cost.controls != 1 {
                 return Err(DeliveryCost);
             }
+            let open_window = windows.map_or(first..before, |windows| windows.open.clone());
             graph.push(CausalServicePacketV1 {
-                packet: ServicePacket { id: open, release_daa: first, service_before: before, cost: open_cost },
+                packet: ServicePacket { id: open, release_daa: open_window.start, service_before: open_window.end, cost: open_cost },
                 predecessors: demand.predecessors.to_vec(),
             });
             let verification = native_nodes[&demand.verification];
@@ -315,6 +403,14 @@ impl BatchAdmissionV1<'_> {
                     })
                     .map_err(|_| DeliveryCost)?;
                 response[0].predecessors.push(open);
+                if let Some(windows) = windows {
+                    let last = response.len() - 1;
+                    for (index, node) in response.iter_mut().enumerate() {
+                        let window = windows.response(index, last);
+                        node.packet.release_daa = window.start;
+                        node.packet.service_before = window.end;
+                    }
+                }
                 let finish = response[response.len() - 1].packet.id;
                 graph[verification].predecessors.push(finish);
                 spans.push((response[0].packet.id, finish, maximum));
@@ -457,6 +553,7 @@ mod tests {
                 assert!(bytes > 0);
                 Err(NativeCoverageV1::unsupported::<CausalServicePacketV1>("test", "quota exhausted"))
             },
+            None,
         );
         assert!(matches!(denied, Err(BatchCourtErrorV1::LocalResource(_))));
         assert_eq!(book, empty);

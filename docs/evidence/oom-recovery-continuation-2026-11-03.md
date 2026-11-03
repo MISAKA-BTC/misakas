@@ -3808,3 +3808,34 @@ B0 and relay still agreed at virtual DAA 19,730 and the scan returned
 no additional selected blocks. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-native-delivery.YYKOiB/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-native-delivery-live.JEbQ9S/page.json`.
+
+## Keep the provider response wait in the original reservation
+
+The native delivery candidate previously booked causally ordered
+slots without reserving provider preparation time. It now gives
+Open, Begin, Parts, Finish, verification, optional Stop and the
+terminal filing distinct immutable service intervals. A positive
+provider wait follows the latest permitted Open. The earliest
+Begin and latest Finish must fit the draft TTL together. The
+terminal quote uses the last DAA in its interval plus the separate
+recovery and exclusive-boundary margins. Existing unphased callers
+keep their previous scheduling behavior.
+
+The extracted scheduler suite passed 50 tests. The measured
+SmolLM2 numerical bounds plus the synthetic Stop used 199 packets
+and a 3,514 DAA upper bound with the scenario's 64 DAA provider
+wait and placeholder service costs. The test skipped an Open
+opportunity and repaired it inside the Open interval. The Begin
+slot still allowed the full wait. The test also refused an
+undersized Parts interval, a missing wait and a draft TTL shorter
+than the allowed Begin-to-Finish span. Frame and rooted row reads
+were stubbed. The integrated fixture has not run. Post-Open repair
+remains subject to the signed response deadline. The production
+profile still needs measured per-phase capacities, signed deadlines
+that cover its legal repair opportunities, funded roles and actual
+adjudication through the public path.
+
+B0 and relay agreed at virtual DAA 19,731. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-phase.dcq9og/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-phase-live.yXudci/page.json`.

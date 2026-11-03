@@ -251,15 +251,22 @@
                 // scheduler while the original still has no Claim row.
                 use crate::palw_court_shared_material_intake_v1::{
                     MaterialIntakeScheduleV1,
-                    batch::admission::{NativeBatchDeliveryCostsV1, batch_numerical_service_ids_v1, reserve_native_batch_delivery_v1},
+                    batch::admission::{
+                        NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1, batch_numerical_service_ids_v1,
+                        reserve_native_batch_delivery_v1,
+                    },
                 };
                 use crate::palw_court_service_v1::ServiceCost;
                 let (verification, terminal) = batch_numerical_service_ids_v1(claim, streamed_envelope.scope_v1()).unwrap();
                 let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
                 let costs = NativeBatchDeliveryCostsV1 {
                     numerical_verification: cost(1), terminal: cost(1), recovery_daa: 1, maximum_packets: 32_768,
+                    timing: NativeBatchDeliveryTimingV1 {
+                        open_daa: 8, provider_wait_daa: 64, begin_daa: 16, parts_daa: 512,
+                        finish_daa: 16, verification_daa: 16, stop_daa: 16, terminal_daa: 16,
+                    },
                 };
-                let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 100, cover: budgets.1 };
+                let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 720, cover: budgets.1 };
                 let journal = funded_journal_row_candidate_v1(&b, &req, &derivation, full.clone()).unwrap();
                 let expected_edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
                     req.source_graph_v1().unwrap(), &derivation,
