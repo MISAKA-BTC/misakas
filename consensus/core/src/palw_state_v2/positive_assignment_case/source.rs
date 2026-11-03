@@ -552,7 +552,7 @@ impl TransitionBuilder<'_> {
         prior.last_event = origin;
         self.write_assignment_aux_v2(NativeRowBody::Funding(payment.funding))?;
         self.write_assignment_aux_v2(NativeRowBody::Case(prior))?;
-        self.write_assigned_case_payment_journal_v2(backing)
+        self.write_assigned_case_followup_journal_v2(backing)
     }
 }
 

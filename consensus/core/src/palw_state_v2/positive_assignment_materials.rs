@@ -299,18 +299,37 @@ fn validate_case_materials_v2(
     assignment_records: &[PositiveAssignmentAcceptedMaterialV2],
     entries: &[PalwDeltaEntryV2],
 ) -> Result<(), PalwStateV2Error> {
+    use crate::palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2;
     use misaka_palw_positive_contract::journal::{CaseJournalEventKind, CaseJournalRecordView};
     let failure = |why| PalwStateV2Error::DeltaMismatch(why);
+    let mut previous_end = 0;
+    let mut source_receipt_count = 0usize;
+    let mut source_union_count = 0usize;
     for record in records {
         let view = CaseJournalRecordView::decode(&record.raw, record.limits).map_err(|_| failure("accepted Case material changed"))?;
         if view.header() != record.header || record.delta_end > entries.len() {
             return Err(failure("Case material header/watermark changed"));
         }
+        let mut boundaries = view.aux().filter_map(|aux| {
+            let boundary = AssignmentCaseBoundaryV2::decode(aux.preimage()).ok()?;
+            (boundary.case == record.header.case && boundary.origin == record.header.origin && boundary.material() == aux.material())
+                .then_some(boundary)
+        });
+        let boundary = boundaries.next().ok_or_else(|| failure("Case journal lacks its exact native boundary"))?;
+        let start = usize::try_from(boundary.before_delta_end).map_err(|_| failure("Case journal delta start extent"))?;
+        if boundaries.next().is_some() || start < previous_end || start >= record.delta_end {
+            return Err(failure("Case journal has an overlapping or empty native checkpoint"));
+        }
+        let event = &entries[start..record.delta_end];
+        previous_end = record.delta_end;
         let assigned_initial = record.header.kind == CaseJournalEventKind::NativeTransaction && record.header.sequence == 1;
+        let source_op = if record.header.kind == CaseJournalEventKind::NativeBody { view.payload().get(4).copied() } else { None };
+        let mut received = None;
+        let mut source_union = None;
         let mut consumed = None;
         let mut case = false;
         let mut head = false;
-        for entry in entries.iter().take(record.delta_end) {
+        for entry in event {
             let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new: Some(bytes) } = entry else {
                 continue;
             };
@@ -335,6 +354,25 @@ fn validate_case_materials_v2(
                 {
                     head = true
                 }
+                NativeRowBody::ServiceReceipt(receipt) if old.is_none() => {
+                    if source_op != Some(4)
+                        || receipt.case != record.header.case
+                        || receipt.result != record.header.result
+                        || receipt.response.origin != record.header.origin
+                        || receipt.response.digest.0 != record.header.origin.carrier_transaction.0
+                        || receipt.settlement.is_some()
+                        || received.replace(receipt).is_some()
+                    {
+                        return Err(failure("first source receipt differs from its atomic response"));
+                    }
+                    source_receipt_count += 1;
+                }
+                NativeRowBody::SourceUnion(union) => {
+                    if !matches!(source_op, Some(3 | 4)) || union.case != record.header.case || source_union.replace(union).is_some() {
+                        return Err(failure("source union differs from its atomic request or response"));
+                    }
+                    source_union_count += 1;
+                }
                 NativeRowBody::AssignmentUse(row)
                     if assigned_initial
                         && row.case == record.header.case
@@ -348,6 +386,20 @@ fn validate_case_materials_v2(
                 _ => {}
             }
         }
+        if received.is_some() != (source_op == Some(4)) || source_union.is_some() != matches!(source_op, Some(3 | 4)) {
+            return Err(failure("source journal lacks its exact receipt or union"));
+        }
+        if let (Some(receipt), Some(union)) = (received, source_union)
+            && (receipt.kind != union.kind || receipt.source != union.source)
+        {
+            return Err(failure("source receipt and union name different source data"));
+        }
+        if let Some(union) = source_union
+            && source_op == Some(3)
+            && (union.union.origin != record.header.origin || union.union.digest.0 != record.header.origin.carrier_transaction.0)
+        {
+            return Err(failure("source request journal differs from its recorded union origin"));
+        }
         if !case || !head {
             return Err(failure("Case material missing atomic Case/head mutation"));
         }
@@ -357,7 +409,7 @@ fn validate_case_materials_v2(
         }
     }
     for (offset, entry) in entries.iter().enumerate() {
-        let PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(bytes), .. } = entry else {
+        let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new: Some(bytes) } = entry else {
             continue;
         };
         if *table != KERNEL_AUX_TABLE {
@@ -393,8 +445,20 @@ fn validate_case_materials_v2(
                     return Err(failure("AssignmentUse must have exactly one atomic initial Case record"));
                 }
             }
+            NativeRowBody::ServiceReceipt(_) if old.is_none() => {
+                source_receipt_count = source_receipt_count
+                    .checked_sub(1)
+                    .ok_or_else(|| failure("first source receipt has no atomic response journal"))?;
+            }
+            NativeRowBody::SourceUnion(_) => {
+                source_union_count =
+                    source_union_count.checked_sub(1).ok_or_else(|| failure("source union has no atomic source journal"))?;
+            }
             _ => {}
         }
+    }
+    if source_receipt_count != 0 || source_union_count != 0 {
+        return Err(failure("source journal row counts differ from the executed delta"));
     }
     Ok(())
 }
@@ -567,7 +631,7 @@ impl TransitionBuilder<'_> {
         )
     }
 
-    pub(super) fn write_assigned_case_payment_journal_v2(
+    pub(super) fn write_assigned_case_followup_journal_v2(
         &mut self,
         backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
     ) -> Result<(), PalwStateV2Error> {
@@ -576,13 +640,22 @@ impl TransitionBuilder<'_> {
             CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord,
         };
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
-        let action = self.assignment_active_raw.clone().ok_or_else(|| failure("Case settlement journal has no actual carrier"))?;
+        let action = self.assignment_active_raw.clone().ok_or_else(|| failure("Case follow-up journal has no actual carrier"))?;
+        let tx = action.transaction();
+        let (kind, body) = match tx.payload.get(7) {
+            Some(1..=7) => (CaseJournalEventKind::NativeBody, Some(&tx.payload[3..])),
+            Some(12) => (CaseJournalEventKind::NativeTransaction, None),
+            _ => return Err(failure("Case follow-up journal has the wrong actual carrier")),
+        };
         let pin = backing.pin();
         let policy = &backing.material().positive_policy;
-        let (sequence, tx_bytes) = quote_assigned_case_payment_journal_v2(backing, action.transaction())?;
+        let (sequence, payload_bytes) = match body {
+            Some(raw) => (quote_assigned_case_followup_journal_v2(backing, raw.len())?, raw.len()),
+            None => quote_assigned_case_payment_journal_v2(backing, tx)?,
+        };
         let boundary = self.current_positive_case_boundary_v2(pin.case)?;
-        let mut quote = native_writers::NativeWriteQuoteV1::new("Case settlement literal journal bytes");
-        quote.exact::<u8>((tx_bytes + ASSIGNED_CASE_BOUNDARY_BYTES_V2) as u64)?;
+        let mut quote = native_writers::NativeWriteQuoteV1::new("Case follow-up literal journal bytes");
+        quote.exact::<u8>((payload_bytes + ASSIGNED_CASE_BOUNDARY_BYTES_V2) as u64)?;
         quote.exact::<CaseJournalAux>(1)?;
         self.admit_native_write_v1(quote)?;
         let record = CaseJournalRecord {
@@ -595,9 +668,20 @@ impl TransitionBuilder<'_> {
                 sequence,
                 previous: pin.head.head,
                 origin: action.origin(),
-                kind: CaseJournalEventKind::NativeTransaction,
+                kind,
             },
-            payload: encode_exact_case_material_v2(action.transaction(), tx_bytes)?,
+            payload: match body {
+                Some(raw) => {
+                    let mut bytes = Vec::new();
+                    bytes.try_reserve_exact(payload_bytes).map_err(|_| failure("Case body allocation refused"))?;
+                    if bytes.capacity() > payload_bytes {
+                        return Err(failure("Case body exceeded the reserved extent"));
+                    }
+                    bytes.extend_from_slice(raw);
+                    bytes
+                }
+                None => encode_exact_case_material_v2(tx, payload_bytes)?,
+            },
             aux: vec![CaseJournalAux {
                 material: boundary.material(),
                 preimage: encode_exact_case_material_v2(&boundary, ASSIGNED_CASE_BOUNDARY_BYTES_V2)?,
@@ -771,6 +855,45 @@ mod tests {
         native::NativeRowKey,
         rows::{AcceptedMaterial, AcceptedOrigin, NativeHash64},
     };
+
+    #[test]
+    fn first_source_receipt_cannot_publish_without_atomic_response_journal() {
+        use misaka_palw_positive_contract::{identity::PrincipalId, messages::SourceKind, rows::ServiceReceiptRow};
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64([1; 64]),
+            carrier_block: NativeHash64([2; 64]),
+            carrier_transaction: NativeHash64([3; 64]),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: 10,
+            accepted_blue_score: 11,
+        };
+        let response = AcceptedMaterial { origin, digest: Digest(origin.carrier_transaction.0) };
+        let body = NativeRowBody::ServiceReceipt(ServiceReceiptRow {
+            case: CaseId(Digest([4; 64])),
+            kind: SourceKind::Input,
+            source: Digest([5; 64]),
+            unit: 0,
+            result: ResultId(Digest([6; 64])),
+            duty: AcceptedMaterial { origin: AcceptedOrigin { accepted_daa: 9, ..origin }, digest: Digest([7; 64]) },
+            response,
+            provider: PrincipalId(Digest([8; 64])),
+            bytes: 1,
+            additional_work: 1,
+            settlement: None,
+        });
+        let key = body.key().encode();
+        let entry = PalwDeltaEntryV2::KernelRouteRow {
+            table: KERNEL_AUX_TABLE,
+            key,
+            old: None,
+            new: Some(NativeRowValue::new(body).unwrap().encode().unwrap()),
+        };
+        assert!(matches!(
+            PositiveAssignmentMaterialOutcomeV2::default().validate_v2(&[entry]),
+            Err(PalwStateV2Error::DeltaMismatch("first source receipt has no atomic response journal"))
+        ));
+    }
 
     #[test]
     fn orphan_assignment_consumption_cannot_publish_without_its_case_record() {
