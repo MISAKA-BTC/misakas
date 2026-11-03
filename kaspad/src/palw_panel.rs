@@ -7855,11 +7855,13 @@ impl PalwPanelService {
             *last = now;
         }
         let pinned = self.foreign_pinned.lock().unwrap().clone();
-        let session = self.consensus_manager.consensus().unguarded_session();
         prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES, |claim| {
             // One fallible, generation-checked borrowed read. Option getters
             // merge absent claims with pressure/DB errors and cannot authorize GC.
-            session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
+            self.consensus_manager
+                .consensus()
+                .unguarded_session()
+                .with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
         });
     }
 

@@ -288,7 +288,7 @@ fn prune_retained_claims_v1(
 
 /// Read `dir` (and `dir/foreign`) into retained claims; `.partial` files older than an hour are
 /// returned separately, to be removed.
-pub(crate) fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<RetainedClaimV1>, Vec<PathBuf>) {
+fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<RetainedClaimV1>, Vec<(Option<Hash64>, RetainedFileV1)>) {
     let mut own: std::collections::BTreeMap<Hash64, RetainedClaimV1> = std::collections::BTreeMap::new();
     let mut claims = Vec::new();
     let mut abandoned = Vec::new();
@@ -305,7 +305,8 @@ pub(crate) fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<
             let age = age_of(&meta);
             if name.ends_with(".partial") {
                 if age.is_none_or(|a| a >= PALW_RETENTION_PARTIAL_HORIZON) {
-                    abandoned.push(path);
+                    let claim = name.split_once('.').and_then(|(stem, _)| stem.parse().ok());
+                    abandoned.push((claim, RetainedFileV1::new(path, &meta)));
                 }
                 continue;
             }
@@ -448,13 +449,9 @@ impl PalwRetentionJanitor {
     fn pass_with(&self, free: u64, reserve: u64) -> (usize, u64, u64) {
         let now = std::time::SystemTime::now();
         let (claims, abandoned) = scan_retention_v1(&self.dir, now);
-        for path in &abandoned {
-            if let Err(e) = std::fs::remove_file(path) {
-                trace!("[{PALW_RETENTION}] cannot remove the abandoned write {}: {e}", path.display());
-            }
-        }
+        let removed_abandoned = abandoned.iter().filter(|(claim, file)| file.unlink_if_current(*claim)).count();
         if claims.is_empty() {
-            return (abandoned.len(), 0, 0);
+            return (removed_abandoned, 0, 0);
         }
         let session = self.consensus_manager.consensus().unguarded_session();
         let now_daa = session.get_virtual_daa_score();
@@ -493,7 +490,7 @@ impl PalwRetentionJanitor {
             }
             Ok(false)
         });
-        (removed + abandoned.len(), bytes, reserve.saturating_sub(free.saturating_add(bytes)))
+        (removed + removed_abandoned, bytes, reserve.saturating_sub(free.saturating_add(bytes)))
     }
 
     async fn worker(self: &Arc<Self>) {
@@ -671,6 +668,32 @@ mod tests {
     }
 
     #[test]
+    fn abandoned_scan_cannot_remove_an_active_or_replaced_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        let claim = Hash64::from_u64_word(113);
+        let path = dir.path().join(format!("{claim}.material.partial"));
+        std::fs::write(&path, b"old").unwrap();
+        let later = std::time::SystemTime::now() + PALW_RETENTION_PARTIAL_HORIZON;
+        let (_, abandoned) = scan_retention_v1(dir.path(), later);
+        let (id, file) = &abandoned[0];
+        assert_eq!(*id, Some(claim));
+
+        let pin = pin_attempt_publication(claim);
+        assert!(!file.unlink_if_current(*id));
+        let pending = dir.path().join("replacement");
+        std::fs::write(&pending, b"new").unwrap();
+        std::fs::rename(pending, &path).unwrap();
+        drop(pin);
+        assert!(!file.unlink_if_current(*id));
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+
+        let later = std::time::SystemTime::now() + PALW_RETENTION_PARTIAL_HORIZON;
+        let (_, abandoned) = scan_retention_v1(dir.path(), later);
+        assert!(abandoned[0].1.unlink_if_current(abandoned[0].0));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn a_capture_written_after_scan_start_is_new_for_age_pruning() {
         let dir = tempfile::tempdir().unwrap();
         let before_write = std::time::UNIX_EPOCH;
@@ -833,7 +856,9 @@ mod tests {
         std::fs::write(&partial, [0u8; 2]).unwrap();
         let later = std::time::SystemTime::now() + Duration::from_secs(2 * 3600);
         let (claims, abandoned) = scan_retention_v1(&dir, later);
-        assert_eq!(abandoned, vec![partial]);
+        assert_eq!(abandoned.len(), 1);
+        assert_eq!(abandoned[0].0, Some(a));
+        assert_eq!(abandoned[0].1.path, partial);
         let by = |c: &Hash64| claims.iter().find(|x| &x.claim == c).cloned().unwrap();
         assert_eq!((by(&a).kind, by(&a).bytes, by(&a).files.len()), (RetainedKindV1::Attempt, 8, 2));
         assert_eq!(by(&f).kind, RetainedKindV1::FreePrompt);
