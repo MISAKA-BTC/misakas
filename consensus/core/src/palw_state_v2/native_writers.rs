@@ -251,6 +251,11 @@ impl<'a> TransitionBuilder<'a> {
         let mut q = NativeWriteQuoteV1::new(path);
         // `(table, key.clone())` for the map, `bytes.clone()` for the map value, both exact-capacity clones.
         q.exact::<u8>(key_len)?.exact::<u8>(value_len)?.member_if::<(u8, Vec<u8>), Vec<u8>>(absent)?.slots(1)?;
+        // Each new Positive row contributes a typed workspace envelope
+        // to the retained state's native coverage in addition to its Vecs.
+        if absent && table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
+            q.exact::<u8>(crate::palw_native_resource_v1::positive_rows::positive_aux_row_memory_bytes_v1())?;
+        }
         if retained_caller_buffers {
             q.exact::<u8>(key_len)?.exact::<u8>(value_len)?;
         }
