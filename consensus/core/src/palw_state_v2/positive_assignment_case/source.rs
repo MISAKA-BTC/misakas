@@ -512,6 +512,10 @@ impl NativeAssignedCourtV2 {
         let _owner = reserve_native_requests_v1(heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
         let (unit, opening) = self.source.geometry.decode_g14_response_v2(&duty.request, response).map_err(refuse)?;
         let (data_bytes, opening_bytes) = opening.sizes().map_err(refuse)?;
+        let canonical_bytes = self.source.geometry.canonical_opening_bytes_v2(duty.request.kind, unit).map_err(refuse)?;
+        if opening_bytes != canonical_bytes {
+            return Err(refuse("source opening extent differs from the canonical unit price"));
+        }
         let additional_work =
             source.work.court_body_work(bytes.checked_add(SOURCE_RESPONSE_BODY_OVERHEAD_V2).ok_or_else(capacity)?).map_err(refuse)?;
         let key = NativeRowKey::ServiceReceipt { case: *case, kind: duty.request.kind, source: duty.request.source, unit };
