@@ -822,20 +822,17 @@ impl PreparedSourceUpdateV2 {
 fn add(a: u64, b: u64) -> Result<u64, SourceErrorV2> {
     a.checked_add(b).ok_or(SourceErrorV2::Budget)
 }
-fn contains(intervals: &[(u64, u64)], unit: u64) -> bool {
+pub(crate) fn contains(intervals: &[(u64, u64)], unit: u64) -> bool {
     let i = intervals.partition_point(|(_, end)| *end <= unit);
     intervals.get(i).is_some_and(|(first, end)| *first <= unit && unit < *end)
 }
-fn interval_units(intervals: &[(u64, u64)]) -> Result<u64, SourceErrorV2> {
+pub(crate) fn interval_units(intervals: &[(u64, u64)]) -> Result<u64, SourceErrorV2> {
     intervals.iter().try_fold(0, |n, (a, b)| add(n, b.checked_sub(*a).ok_or(SourceErrorV2::Order)?))
 }
-fn merge(previous: &[(u64, u64)], added: (u64, u64)) -> Vec<(u64, u64)> {
-    let mut ranges = Vec::with_capacity(previous.len() + 1);
-    ranges.extend_from_slice(previous);
-    ranges.push(added);
-    ranges.sort_unstable();
-    let mut out: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
-    for (first, end) in ranges {
+pub(crate) fn merge(previous: &[(u64, u64)], added: (u64, u64)) -> Vec<(u64, u64)> {
+    let mut out: Vec<(u64, u64)> = Vec::with_capacity(previous.len() + 1);
+    let split = previous.partition_point(|&(first, _)| first < added.0);
+    for &(first, end) in previous[..split].iter().chain(std::iter::once(&added)).chain(&previous[split..]) {
         if let Some(last) = out.last_mut()
             && first <= last.1
         {
@@ -855,4 +852,20 @@ fn dominates(next: AggregateUsage, old: AggregateUsage) -> bool {
         && next.retained_bytes >= old.retained_bytes
         && next.fee >= old.fee
         && next.witness_attempts >= old.witness_attempts
+}
+
+#[cfg(test)]
+mod canonical_range_tests {
+    use super::{contains, interval_units, merge};
+
+    #[test]
+    fn overlapping_and_adjacent_requests_only_reserve_the_union() {
+        let ranges = merge(&[(2, 4), (8, 10), (12, 14)], (4, 12));
+        assert_eq!(ranges, [(2, 14)]);
+        assert_eq!(interval_units(&ranges).unwrap(), 12);
+        assert!(contains(&ranges, 2));
+        assert!(!contains(&ranges, 14));
+        assert_eq!(merge(&ranges, (4, 12)), ranges);
+        assert_eq!(merge(&ranges, (0, 1)), [(0, 1), (2, 14)]);
+    }
 }

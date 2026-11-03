@@ -5,12 +5,13 @@ use crate::{
     palw_positive_court_v2::coordinator::native_body::{
         PositiveNativeBodyV2, PositiveNativeOperationV2, SOURCE_RESPONSE_BODY_OVERHEAD_V2,
     },
-    palw_positive_source_v2::RetainedSourceRequestV2,
+    palw_positive_source_v2::{RetainedSourceRequestV2, contains, interval_units, merge},
 };
 use misaka_palw_positive_contract::{
     funding::{SourceFeeDeltaIntent, funding_scope},
     identity::{RequestId, principal},
-    rows::ServiceReceiptRow,
+    messages::{MinerDataStatus, SourceKind},
+    rows::{ServiceReceiptRow, SourceUnionRow},
 };
 
 /// Source fees only. Rebuilt from the literal first responses and their
@@ -27,10 +28,39 @@ impl CaseSourceFeesV2 {
     }
 }
 
+#[derive(Default)]
+pub(super) struct ReplayedCaseSourceUnionsV2 {
+    ranges: [Vec<(u64, u64)>; 2],
+    range_leases: [Option<NativeDemandLeaseV1>; 2],
+    rows: [Option<SourceUnionRow>; 2],
+    rounds: u64,
+    unique_bytes: u64,
+    pending_fee: u64,
+}
+fn source_index(kind: SourceKind) -> usize {
+    match kind {
+        SourceKind::ArtifactInventory => 0,
+        SourceKind::Input => 1,
+    }
+}
+impl ReplayedCaseSourceUnionsV2 {
+    fn miner_data(&self) -> MinerDataStatus {
+        let mut rows = self.rows.iter().flatten().peekable();
+        if rows.peek().is_none() {
+            MinerDataStatus::NotRequested
+        } else if rows.all(|row| row.requested_units == row.completed_units) {
+            MinerDataStatus::Complete
+        } else {
+            MinerDataStatus::Pending
+        }
+    }
+}
+
 pub(super) struct CheckedAssignedSourceResponseV2 {
     fee: SourceFeeDeltaIntent,
     duty: AcceptedMaterial,
     data_bytes: u64,
+    reserved_fee: u64,
 }
 
 impl CheckedAssignedSourceResponseV2 {
@@ -75,6 +105,151 @@ impl NativeAssignedCourtV2 {
             return Err(refuse("rooted source fee usage differs from literal first responses"));
         }
         Ok(())
+    }
+
+    pub(super) fn check_source_union_projection_v2(&self, state: &PalwChainStateV2, case: &CaseRow) -> Result<(), PalwStateV2Error> {
+        if case.usage.rounds != self.source_unions.rounds
+            || case.usage.unique_source_bytes != self.source_unions.unique_bytes
+            || case.miner_data != self.source_unions.miner_data()
+        {
+            return Err(refuse("Case source usage differs from the accepted source union"));
+        }
+        for kind in [SourceKind::ArtifactInventory, SourceKind::Input] {
+            let source = self.source.geometry.source_root(kind);
+            let key = NativeRowKey::SourceUnion { case: case.case, kind, source };
+            let saved = PositiveRowsV2::new(state).read(key).map_err(refuse)?.map(|row| row.body);
+            if saved != self.source_unions.rows[source_index(kind)].map(NativeRowBody::SourceUnion) {
+                return Err(refuse("rooted source union differs from the literal request history"));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn replay_source_request_union_v2(
+        &mut self,
+        material: &AssignmentAdmissionMaterialV2,
+        prefix: &PalwChainStateV2,
+        after: &PalwChainStateV2,
+        prior: &CaseRow,
+        origin: AcceptedOrigin,
+        body: &PositiveNativeBodyV2,
+        body_heap: u64,
+    ) -> Result<(), PalwStateV2Error> {
+        let PositiveNativeOperationV2::SourceRequest { request, .. } = &body.operation else {
+            return Err(refuse("expected source request"));
+        };
+        if self.source_requests.contains_key(&request.id()) {
+            return Err(refuse("duplicate source request in the Case journal"));
+        }
+        let kind = request.kind;
+        let index = source_index(kind);
+        let previous = &self.source_unions.ranges[index];
+        let slots = (previous.len() as u64).checked_add(1).ok_or_else(capacity)?;
+        let units = request.end.checked_sub(request.first).ok_or_else(capacity)?;
+        let source_policy = &material.native_preimages.source_policy;
+        let per_unit = u64::from(slots.ilog2()) + u64::from(source_policy.max_parameter_instances.max(1).ilog2()) + 8;
+        let controls = slots.checked_mul(4).and_then(|n| n.checked_add(units.checked_mul(per_unit)?)).ok_or_else(capacity)?;
+        let work = source_policy.work.court_operation_work(0, controls, 0, 0).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(|| refuse("source union replay work"))?;
+        let mut quote = TirNativeRequestsV1::new();
+        quote.exact_v1::<(u64, u64)>(slots).map_err(PalwStateV2Error::NativeResource)?;
+        let bytes = quote.bytes_v1();
+        let heap = self.checker_heap.checked_add(bytes).ok_or_else(capacity)?;
+        if heap.checked_add(self.candidate_heap).and_then(|n| n.checked_add(body_heap)).is_none_or(|n| n > self.available_heap) {
+            return Err(capacity());
+        }
+        let range_lease = reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
+        let ranges = merge(previous, (request.first, request.end));
+        if ranges.capacity() as u64 > slots
+            || (ranges.len() as u64)
+                .checked_add(self.source_unions.ranges[1 - index].len() as u64)
+                .is_none_or(|n| n > source_policy.max_intervals)
+        {
+            return Err(refuse("source union exceeds original interval bounds"));
+        }
+        let requested_units = interval_units(&ranges).map_err(refuse)?;
+        let fresh_units = requested_units
+            .checked_sub(self.source_unions.rows[index].map_or(0, |row| row.requested_units))
+            .ok_or_else(|| refuse("source union lost earlier requests"))?;
+        let mut unique_bytes = self.source_unions.unique_bytes;
+        let mut pending_fee = self.source_unions.pending_fee;
+        let fees = &material.native_preimages.case_fees;
+        for unit in request.first..request.end {
+            if !contains(previous, unit) {
+                let bound = self.source.geometry.unit_bound(kind, unit).map_err(refuse)?;
+                unique_bytes = unique_bytes.checked_add(bound.max_data_bytes).ok_or_else(capacity)?;
+                let fee = fees.source_unit_due(bound.max_unit_bytes).map_err(refuse)?;
+                pending_fee = pending_fee.checked_add(fee).ok_or_else(capacity)?;
+            }
+        }
+        let NativeRowBody::Funding(funding) = required(prefix, NativeRowKey::Funding(prior.case))? else {
+            return Err(refuse("missing source request funding"));
+        };
+        if funding.current_outpoint.is_none()
+            || funding.consent.id().0 != prior.service.funding_consent
+            || funding.basis.schedule != fees.id()
+            || funding.consent.scope != funding_scope(self.court.result(), &prior.service, &funding.basis)
+            || self.source_fees.pending_with(pending_fee, funding.fee.remaining, prior.service.budget.fee).is_none()
+        {
+            return Err(refuse("source request does not reserve all outstanding first-response fees"));
+        }
+        self.source_unions.pending_fee = pending_fee;
+        self.source_unions.unique_bytes = unique_bytes;
+        self.source_unions.rounds = self.source_unions.rounds.checked_add(u64::from(fresh_units != 0)).ok_or_else(capacity)?;
+        if self.source_unions.unique_bytes > prior.service.budget.unique_source_bytes
+            || self.source_unions.rounds > prior.service.budget.rounds
+        {
+            return Err(refuse("source request exceeds original source budget"));
+        }
+        self.source_unions.rows[index] = Some(SourceUnionRow {
+            case: prior.case,
+            kind,
+            source: request.source,
+            source_units: self.source.geometry.source_units(kind),
+            requested_units,
+            completed_units: self.source_unions.rows[index].map_or(0, |row| row.completed_units),
+            union: source_material(origin)?,
+        });
+        self.source_unions.ranges[index] = ranges;
+        let old = self.source_unions.range_leases[index].replace(range_lease);
+        self.checker_heap = heap.checked_sub(old.as_ref().map_or(0, NativeDemandLeaseV1::memory_v1)).ok_or_else(capacity)?;
+        drop(old);
+        let NativeRowBody::Case(case) = required(after, NativeRowKey::Case(prior.case))? else {
+            return Err(refuse("source request changed the Case subject"));
+        };
+        if case.last_event != origin || case.result != prior.result || case.service != prior.service {
+            return Err(refuse("source request differs from the committed Case identity or origin"));
+        }
+        self.check_source_union_projection_v2(after, &case)
+    }
+
+    pub(super) fn replay_source_response_union_v2(
+        &mut self,
+        after: &PalwChainStateV2,
+        response: &CheckedAssignedSourceResponseV2,
+    ) -> Result<(), PalwStateV2Error> {
+        let NativeRowKey::ServiceReceipt { case, kind, source, unit } = response.fee.receipt_key else {
+            return Err(refuse("source response receipt key"));
+        };
+        let index = source_index(kind);
+        let union = self.source_unions.rows[index].as_mut().ok_or_else(|| refuse("source response has no accepted union"))?;
+        if union.source != source || !contains(&self.source_unions.ranges[index], unit) {
+            return Err(refuse("source response is outside the accepted union"));
+        }
+        union.completed_units = union
+            .completed_units
+            .checked_add(1)
+            .filter(|n| *n <= union.requested_units)
+            .ok_or_else(|| refuse("source response exceeds its accepted union"))?;
+        self.source_unions.pending_fee = self
+            .source_unions
+            .pending_fee
+            .checked_sub(response.reserved_fee)
+            .ok_or_else(|| refuse("source response has no reserved service fee"))?;
+        let NativeRowBody::Case(row) = required(after, NativeRowKey::Case(case))? else {
+            return Err(refuse("source response changed the Case subject"));
+        };
+        self.check_source_union_projection_v2(after, &row)
     }
 
     fn admit_source_index_entry_v2<K, V>(&mut self, body_heap: u64) -> Result<(), PalwStateV2Error> {
@@ -203,6 +378,14 @@ impl NativeAssignedCourtV2 {
         };
         let schedule = &material.native_preimages.case_fees;
         let fee = schedule.source_unit_due(opening_bytes).map_err(refuse)?;
+        let reserved = self.source.geometry.unit_bound(duty.request.kind, unit).map_err(refuse)?;
+        let reserved_fee = schedule.source_unit_due(reserved.max_unit_bytes).map_err(refuse)?;
+        let total_new_due = self
+            .source_unions
+            .pending_fee
+            .checked_sub(reserved_fee)
+            .and_then(|pending| pending.checked_add(fee))
+            .ok_or_else(|| refuse("source response fee was not reserved"))?;
         let schedule = schedule.id();
         let scope = funding_scope(result, &prior.service, &funding.basis);
         self.check_source_fee_projection_v2(prior)?;
@@ -211,7 +394,8 @@ impl NativeAssignedCourtV2 {
             || funding.consent.case != *case
             || funding.consent.id().0 != prior.service.funding_consent
             || funding.basis.schedule != schedule
-            || self.source_fees.pending_with(fee, funding.fee.remaining, prior.service.budget.fee).is_none()
+            || fee > reserved_fee
+            || self.source_fees.pending_with(total_new_due, funding.fee.remaining, prior.service.budget.fee).is_none()
         {
             return Err(refuse("source response fee exceeds the original C funding and service limits"));
         }
@@ -227,6 +411,7 @@ impl NativeAssignedCourtV2 {
             },
             duty: duty.material,
             data_bytes,
+            reserved_fee,
         }))
     }
 }

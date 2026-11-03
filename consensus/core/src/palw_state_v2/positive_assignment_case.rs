@@ -169,6 +169,7 @@ struct NativeAssignedCourtV2 {
     source_requests:
         BTreeMap<misaka_palw_positive_contract::identity::RequestId, crate::palw_positive_source_v2::RetainedSourceRequestV2>,
     source_fees: source::CaseSourceFeesV2,
+    source_unions: source::ReplayedCaseSourceUnionsV2,
     source_responses: BTreeMap<Digest, source::CheckedAssignedSourceResponseV2>,
     derived_heap: u64,
     checker_heap: u64,
@@ -1224,6 +1225,7 @@ fn prepare_initial_case_checker_v2(
         source_requests: BTreeMap::new(),
         source_responses: BTreeMap::new(),
         source_fees: source::CaseSourceFeesV2::default(),
+        source_unions: source::ReplayedCaseSourceUnionsV2::default(),
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1474,6 +1476,7 @@ fn replay_assigned_court_history_v2(
         };
         check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
         machine.check_source_fee_projection_v2(&prior)?;
+        machine.check_source_union_projection_v2(prefix, &prior)?;
         if carriage.transaction().payload.get(7) == Some(&12) {
             let after = match backing.records().get(index + 1) {
                 Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
@@ -1492,17 +1495,30 @@ fn replay_assigned_court_history_v2(
             return Err(refuse("archived Court operation subject differs"));
         }
         machine.check_source_request_v2(backing, prefix, &a, &prior, carriage.origin(), &body)?;
-        machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
-        if let Op::SourceResponse { .. } = &body.operation {
-            let response = machine
-                .check_source_response_v2(prefix, &a, material, &prior, carriage.origin(), &body, _body.memory_v1())?
-                .ok_or_else(|| refuse("duplicate source delivery changed the rooted journal"))?;
+        if matches!(&body.operation, Op::SourceRequest { .. } | Op::SourceResponse { .. }) {
             let after = match backing.records().get(index + 1) {
                 Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
                 None => state,
             };
-            response.check_committed(after, &prior)?;
-            machine.remember_source_response_v2(material, response, _body.memory_v1())?;
+            if matches!(&body.operation, Op::SourceRequest { .. }) {
+                machine.replay_source_request_union_v2(
+                    material,
+                    prefix,
+                    after,
+                    &prior,
+                    carriage.origin(),
+                    &body,
+                    _body.memory_v1(),
+                )?;
+                machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
+            } else {
+                let response = machine
+                    .check_source_response_v2(prefix, &a, material, &prior, carriage.origin(), &body, _body.memory_v1())?
+                    .ok_or_else(|| refuse("duplicate source delivery changed the rooted journal"))?;
+                response.check_committed(after, &prior)?;
+                machine.replay_source_response_union_v2(after, &response)?;
+                machine.remember_source_response_v2(material, response, _body.memory_v1())?;
+            }
         }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
@@ -1510,6 +1526,7 @@ fn replay_assigned_court_history_v2(
     }
     check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))?;
     machine.check_source_fee_projection_v2(&rooted.case)?;
+    machine.check_source_union_projection_v2(state, &rooted.case)?;
     Ok(machine)
 }
 
