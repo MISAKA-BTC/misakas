@@ -1529,3 +1529,22 @@ serialization dependencies. It does not exercise the full Consensus
 archive caller. The combined patch applies cleanly to A0 and is staged
 outside the active source map. Cold block-body and UTXO-diff decode
 ownership, plus full Consensus typechecking and native replay, remain open.
+
+### Pinned original UTXO inputs
+
+The [combined UTXO archive candidate](assigned-case-pinned-utxo-candidate-20261103.tar.gz)
+adds an allocation-free view of the persisted bincode add/remove maps.
+Assignment, Case and relay replay use only the removal matching the
+original outpoint, with the existing earlier accepted creator lookup
+as the fallback. The code charges one structural validation and two
+bounded map scans per input. It admits the owned input slots and script
+copies before allocating them.
+
+The exact UTXO store module's isolated test used real RocksDB, actual
+Hash64 and a harness mirroring the production compact UTXO serde fields.
+The DB was closed and reopened with an empty cache. The test checks
+removal reconstruction, added-only refusal, one-byte-under replay cap,
+truncation, invalid coinbase byte and duplicate queried outpoint. Full
+Consensus caller verification, bounded cold block-body reads and the
+native op9-to-settlement run remain open. This patch is kept outside the
+source pinned by the custody/index run.
