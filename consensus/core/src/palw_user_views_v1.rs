@@ -410,10 +410,17 @@ fn batch_response_json_v1(
     target: crate::palw_court_shared_material_intake_v1::MaterialTargetV1,
     now: u64,
 ) -> Option<Value> {
-    use crate::palw_court_shared_material_intake_v1::quote_batch_response_v1;
+    use crate::palw_court_shared_material_intake_v1::{MaterialTargetV1, quote_batch_response_v1};
     use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
     state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtBatchDemand(claim, ordinal))?;
     let tip = state.last_point();
+    let target_text = match target {
+        MaterialTargetV1::FullIds => "full-ids".into(),
+        MaterialTargetV1::PromptFlat => "prompt-flat".into(),
+        MaterialTargetV1::PromptTile { tile } => format!("prompt-tile:{tile}"),
+        MaterialTargetV1::Parameter { leaf } => format!("parameter:{leaf}"),
+        MaterialTargetV1::Unit { ordinal } => format!("unit:{ordinal}"),
+    };
     let (response, error) = match quote_batch_response_v1(state, claim, ordinal, target) {
         Ok(quote) => (json!({
             "requestRoot": quote.request_root.to_string(), "draftId": quote.draft_id.to_string(),
@@ -431,7 +438,7 @@ fn batch_response_json_v1(
         "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchResponse", "nowDaa": now,
         "tipDaa": tip.map(|p| p.daa_score), "tipBlock": tip.map(|p| p.block.to_string()),
         "claimId": claim.to_string(), "ordinal": ordinal.to_string(),
-        "targetId": target.id_v1(claim).ok().map(|id| id.to_string()), "response": response, "error": error,
+        "target": target_text, "targetId": target.id_v1(claim).ok().map(|id| id.to_string()), "response": response, "error": error,
     }))
 }
 

@@ -3194,3 +3194,26 @@ B0 and relay agreed at DAA 19,711 with no Qwen carrier in the newly
 scanned interval. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-response-rpc.h2cqD8/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-batch-response-rpc-live.e9FTeC/page.json`.
+
+## Studio Batch response observation
+
+Studio `d2197d4` reads the existing court RPC through its synced public
+node selector. Its runtime route is
+`GET /api/v1/network/prompt-mining/claims/{claim}/batch/{ordinal}?target=full-ids`.
+The ordinal stays decimal text end to end. Core returns the canonical
+target name, and Studio matches the view version, kind, claim, ordinal,
+target and tip hash before selecting a response. The endpoint preserves
+the remote provenance. An absent view remains an observation of absence
+from that endpoint, with no certification or submission effect.
+
+Studio TypeScript typechecking passed. Two extracted Rust tests passed,
+including the actual Axum handler with a mocked wRPC reader, rejection of
+the old court view, and rejection of substituted identities. A whole
+Studio runtime and the new public node build have not been run together.
+This connects the observation path. End-to-end Panel operation, the full
+funded profile and public 10,000 DAA verification remain open.
+
+B0 and relay agreed on an advanced selected tip at DAA 19,711 with no
+new Qwen carrier in the scanned interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-studio-batch-view.mb2kYg/route-tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-studio-batch-view-live.SQMsoH/page.json`.

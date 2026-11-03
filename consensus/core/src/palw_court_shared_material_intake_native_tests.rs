@@ -839,6 +839,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let view = palw_court_state_json_v1(&b.state, &params, PalwCourtTargetV1::BatchResponse { claim, ordinal, target },
         &PalwUserViewClockV1::default()).unwrap();
     assert_eq!(view["kind"], "palwBatchResponse");
+    assert_eq!(view["target"], "prompt-flat");
     assert_eq!(view["response"]["requestRoot"], request_root.to_string());
     assert_eq!(view["response"]["parts"][0]["acceptedDaa"], quote.parts[0].assigned_daa);
     let draft_key = Key::CourtMaterialDraft(claim, draft_id);
