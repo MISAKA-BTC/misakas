@@ -124,7 +124,7 @@ impl EvidenceProvider for crate::evidence::fs::FsProvider {
     }
     fn put_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> Result<(), ProviderError> {
         let path = crate::evidence::fs::manifest_path(&self.root, claim_hex);
-        crate::evidence::fs::write_provider_file(&path, &borsh::to_vec(manifest).expect("borsh-serializable"))
+        crate::evidence::fs::write_provider_manifest(&path, manifest, &borsh::to_vec(manifest).expect("borsh-serializable"))
             .map_err(|e| ProviderError(e.to_string()))
     }
     fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
@@ -493,7 +493,7 @@ impl HttpProvider {
     }
 }
 
-const MANIFEST_MAX_BYTES: usize = 2 << 20;
+pub(crate) const MANIFEST_MAX_BYTES: usize = 2 << 20;
 
 impl ChunkProvider for HttpProvider {
     fn provider_id(&self) -> &str {
@@ -1150,7 +1150,7 @@ impl RetentionMonitor {
 
 pub mod server {
     use super::*;
-    use crate::evidence::fs::{BoundedFileError, open_bounded_file, read_bounded_file, write_provider_file};
+    use crate::evidence::fs::{BoundedFileError, open_bounded_file, read_bounded_file, write_provider_file, write_provider_manifest};
 
     #[derive(Clone, Debug)]
     pub struct ServerConfig {
@@ -1486,8 +1486,11 @@ pub mod server {
                                 }
                             }
                         }
-                        match write_provider_file(&file, &body) {
+                        match write_provider_manifest(&file, &manifest, &body) {
                             Ok(()) => respond(&mut stream, 201, b"stored"),
+                            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                                respond(&mut stream, 409, e.to_string().as_bytes())
+                            }
                             Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
                         }
                     }
@@ -1629,6 +1632,52 @@ mod tests {
             fs::fetch_claim_material(&[dir.clone()], &claim, &roots, &limits, h(7)),
             Err(fs::ClaimFetchError::NoAdmissibleManifest { offered: 1, .. })
         ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_provider_publication_cannot_replace_the_same_material_at_a_later_deadline() {
+        use crate::evidence::fs;
+
+        let dir = scratch("retention-replay");
+        let claim = claim_hex();
+        let raw = manifest();
+        let chunks = chunks();
+        let mut effective = raw.clone();
+        effective.retention_until_daa += 2;
+
+        let handle = server::start("127.0.0.1:0", dir.clone(), Default::default()).unwrap();
+        let url = handle.url();
+        let providers = open_providers_v1(&[ProviderSpecV1::Http(url.clone())]);
+        let provider = providers[0].as_ref();
+        publish_to_providers_v1(&claim, &raw, &chunks, &[provider], 1).unwrap();
+        publish_to_providers_v1(&claim, &effective, &chunks, &[provider], 1).unwrap();
+
+        let local = fs::FsProvider::new(&dir);
+        let start = std::sync::Barrier::new(3);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                start.wait();
+                let stale = open_providers_v1(&[ProviderSpecV1::Http(url.clone())]);
+                let refused = publish_to_providers_v1(&claim, &raw, &chunks, &[stale[0].as_ref()], 1).unwrap_err();
+                assert!(refused.per_provider[0].result.as_ref().unwrap_err().contains("409"));
+            });
+            scope.spawn(|| {
+                start.wait();
+                assert_eq!(fs::publish(&dir, &claim, &raw, &chunks).unwrap_err().kind(), std::io::ErrorKind::AlreadyExists);
+            });
+            start.wait();
+            local.put_manifest(&claim, &effective).unwrap();
+        });
+        drop(handle);
+
+        let restarted = server::start("127.0.0.1:0", dir.clone(), Default::default()).unwrap();
+        let opened = open_providers_v1(&[ProviderSpecV1::Http(restarted.url())]);
+        let roots = ClaimRoots { retention_deadline: effective.retention_until_daa, ..roots() };
+        let (bytes, _) = fetch_claim_material_any(&[opened[0].as_ref()], &claim, &roots, &ManifestLimits::default(), h(7)).unwrap();
+        assert_eq!(bytes, chunks.concat());
+        assert_eq!(opened[0].manifest_for(&claim).unwrap().unwrap(), effective);
+        drop(restarted);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

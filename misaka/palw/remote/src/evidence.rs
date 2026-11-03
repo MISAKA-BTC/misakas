@@ -275,6 +275,42 @@ pub mod fs {
         result
     }
 
+    /// A replay of the same verified chunk layout cannot shorten the provider's advertised horizon.
+    /// Different content is still replaceable so a publisher can repair a bad manifest.
+    pub(crate) fn write_provider_manifest(path: &Path, manifest: &EvidenceManifestV1, encoded: &[u8]) -> io::Result<()> {
+        let dir = path.parent().ok_or_else(|| io::Error::other("provider manifest has no directory"))?;
+        ensure_provider_directory(dir)?;
+        #[cfg(unix)]
+        let _lease = {
+            let dir = File::open(dir)?;
+            dir.lock()?;
+            dir
+        };
+        #[cfg(not(unix))]
+        let _lease = {
+            static MANIFEST_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            MANIFEST_WRITE.lock().map_err(|_| io::Error::other("provider manifest writer lock poisoned"))?
+        };
+        match read_bounded_file(path, crate::transport::MANIFEST_MAX_BYTES) {
+            Ok(bytes) => {
+                if let Ok(mut current) = borsh::from_slice::<EvidenceManifestV1>(&bytes)
+                    && current.retention_until_daa > manifest.retention_until_daa
+                {
+                    current.retention_until_daa = manifest.retention_until_daa;
+                    if current == *manifest {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AlreadyExists,
+                            "provider holds the same material through a later DAA",
+                        ));
+                    }
+                }
+            }
+            Err(BoundedFileError::Io(error)) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+            Err(_) => {}
+        }
+        write_provider_file(path, encoded)
+    }
+
     /// Place a claim's material in a provider directory (the miner's last act before it may switch off). Write order is the safety:
     /// durably publish each chunk first, then publish the manifest.
     pub fn publish(root: &Path, claim_hex: &str, manifest: &EvidenceManifestV1, chunks: &[Vec<u8>]) -> std::io::Result<()> {
@@ -282,7 +318,7 @@ pub mod fs {
         for (i, bytes) in chunks.iter().enumerate() {
             write_provider_file(&chunk_path(root, id, i as u32), bytes)?;
         }
-        write_provider_file(&manifest_path(root, claim_hex), &borsh::to_vec(manifest)?)
+        write_provider_manifest(&manifest_path(root, claim_hex), manifest, &borsh::to_vec(manifest)?)
     }
 
     /// **A free-prompt claim's material, placed with a provider directory** — the ONE manifest assembly the rail's `--evidence-out`
