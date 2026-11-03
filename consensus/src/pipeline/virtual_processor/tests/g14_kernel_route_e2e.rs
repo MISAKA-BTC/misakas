@@ -55,6 +55,8 @@ use misaka_palw_tir::{MapParams, Tensor};
 use misaka_palw_tir_sketch::fixture::wide128_v1;
 use std::collections::BTreeMap;
 
+mod positive_native_relay;
+
 type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
 // Separate large fixture construction from polling on the standard test stack.
 type TestFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T>>>;

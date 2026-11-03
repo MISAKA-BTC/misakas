@@ -1174,3 +1174,22 @@ The optimized Core run passed the Round budget regression with the 16 MiB
 logical cap. It exercised the inactive case, the typed capacity refusal
 with the entire cap held, and successful retry after release from the same
 parent. The runtime archive pins its command and source.
+
+## Funded relay carrier through the native node
+
+The private G14 harness now has a relay regression using actual signed
+P2PKH fee inputs, heartbeat templates and the ordinary validating node
+entrypoint. It checks a one-sompi shortfall, full registration and an exact
+retry on a different carrier. It asserts the virtual net fee, actual
+acceptance position, rooted authorization and custody rows, and archived
+charge. A second database receives the same blocks and checks the tip root
+and charge independently.
+
+The carrier fees are real UTXO spends in the fixture. The future funding
+outpoint is the declared target of the relay, before an Assignment exists.
+This test covers registration and pending custody. Assignment admission,
+worker payment, and the public activation fences are outside its scope.
+
+All Consensus test targets and the existing Core Assignment fence fixture
+typechecked. The guarded optimized native test command was building at
+this checkpoint. No registration or replay success is recorded yet.

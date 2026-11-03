@@ -1550,5 +1550,21 @@
     "stored_sha256": "818c06990a5b870e97e658fa633e621ad86a643499d631bb3ac3c4b569b84dbc",
     "raw_bytes": 358325,
     "stored_bytes": 24424
+  },
+  {
+    "raw_name": "funded-native-relay-check.log",
+    "stored_name": "funded-native-relay-check.log.gz",
+    "raw_sha256": "9a4891fed6b76429b69a83122a9a26bd64d1818544ecf61db8dea8e838e911c3",
+    "stored_sha256": "6d8bc8a5199a96ba1355041debfc033f2014394a5bd6337339e365176057587e",
+    "raw_bytes": 542100,
+    "stored_bytes": 36838
+  },
+  {
+    "raw_name": "funded-native-relay-fixture-check.log",
+    "stored_name": "funded-native-relay-fixture-check.log.gz",
+    "raw_sha256": "7eb7887ce620d1696e1ed8040db8ed9c83192800ac75a52c9e461b8df9e4810e",
+    "stored_sha256": "c69206adac19a1d5e64ae175b10556cee95d69cd1428563d687a950be8c5ae02",
+    "raw_bytes": 341130,
+    "stored_bytes": 23704
   }
 ]
