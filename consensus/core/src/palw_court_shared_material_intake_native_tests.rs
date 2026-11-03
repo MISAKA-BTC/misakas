@@ -722,7 +722,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key, message.as_byte_slice(), context, [106; 32])
             .unwrap().as_ref().to_vec()
     };
-    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let source = output_source_owned_v2::source_v2(&state, frame).unwrap();
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, context.profile_id).unwrap();
     let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
     set_material_intake_test_schedule_v1(Some(storage));
