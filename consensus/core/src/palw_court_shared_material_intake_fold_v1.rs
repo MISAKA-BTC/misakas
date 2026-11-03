@@ -36,6 +36,30 @@ pub(super) fn material_intake(
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    if s.version != 1 {
+        return Err(refused("material intake version is not active on this route"));
+    }
+    material_intake_atomic(b, ctx, s)
+}
+
+/// Candidate native adapter. Its future caller must bind the authenticated
+/// action to the funded Batch demand and its reserved service slot.
+pub(super) fn material_intake_pipelined(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    if s.version != m::MATERIAL_PIPELINED_VERSION {
+        return Err(refused("pipelined material intake requires version 2"));
+    }
+    material_intake_atomic(b, ctx, s)
+}
+
+fn material_intake_atomic(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let saved = b.try_checkpoint()?;
     let result = material_intake_inner(b, ctx, s);
     if result.is_err() {
@@ -72,7 +96,11 @@ fn material_intake_inner(
     let complete = m::target_complete_v1(&b.state, s.claim, s.target).map_err(refused)?;
     match &s.action {
         m::MaterialActionV1::Begin { total_bytes, body_hash } => {
-            let draft_id = m::material_draft_id_v1(s.claim, s.target, s.submitter, *total_bytes, *body_hash).map_err(refused)?;
+            if s.version == m::MATERIAL_PIPELINED_VERSION && *total_bytes > m::MATERIAL_PIPELINED_MAX_BYTES {
+                return Err(refused("pipelined material exceeds its part cap"));
+            }
+            let draft_id = m::material_draft_id_for_version(s.version, s.claim, s.target, s.submitter, *total_bytes, *body_hash)
+                .map_err(refused)?;
             let key = Key::CourtMaterialDraft(s.claim, draft_id);
             match b.state.staged_court_row_v1(&key) {
                 Some(Row::CourtMaterialDraft(old)) => {
@@ -124,7 +152,7 @@ fn material_intake_inner(
                 return Err(refused("material draft would expire at once"));
             }
             let draft = m::MaterialDraftV1 {
-                version: 1,
+                version: s.version,
                 claim: s.claim,
                 scope_id: c.scope_id,
                 target: s.target,
@@ -154,7 +182,10 @@ fn material_intake_inner(
         }
         m::MaterialActionV1::Part { draft_id, offset, bytes } => {
             let mut draft = own_draft(b, s, *draft_id)?;
-            if ctx.daa_score >= draft.expires_daa || ctx.daa_score < draft.last_daa {
+            if ctx.daa_score >= draft.expires_daa
+                || ctx.daa_score < draft.last_daa
+                || draft.pipelined() && ctx.daa_score <= draft.begun_daa
+            {
                 return Err(refused("material part outside its draft's window"));
             }
             let part_key = Key::CourtMaterialPart(*draft_id, *offset);
@@ -167,19 +198,23 @@ fn material_intake_inner(
             if complete {
                 return Err(refused("material target already complete; no further storage"));
             }
-            let end = crate::palw_court_shared_tir_stream_v1::check_shared_stream_part_v1(
-                draft.total_bytes,
-                draft.accepted_bytes,
-                *offset,
-                bytes.len(),
-            )
+            let accepted = if draft.pipelined() {
+                draft.check_pipelined_geometry(*offset, bytes.len(), draft.accepted_bytes)
+            } else {
+                crate::palw_court_shared_tir_stream_v1::check_shared_stream_part_v1(
+                    draft.total_bytes,
+                    draft.accepted_bytes,
+                    *offset,
+                    bytes.len(),
+                )
+            }
             .map_err(refused)?;
             let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
             q.exact_v1::<u8>(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
             let _raw =
                 crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
             let part = m::MaterialPartV1 {
-                version: 1,
+                version: draft.version,
                 claim: s.claim,
                 draft_id: *draft_id,
                 offset: *offset,
@@ -188,8 +223,10 @@ fn material_intake_inner(
                 daa: ctx.daa_score,
                 expires_daa: draft.expires_daa,
             };
-            draft.head = m::material_part_digest_v1(&part).map_err(refused)?;
-            draft.accepted_bytes = end;
+            if !draft.pipelined() {
+                draft.head = m::material_part_digest_v1(&part).map_err(refused)?;
+            }
+            draft.accepted_bytes = accepted;
             draft.last_daa = ctx.daa_score;
             b.write_staged_row_v1(part_key, Some(Row::CourtMaterialPart(Box::new(part).into())))?;
             b.write_staged_row_v1(Key::CourtMaterialDraft(s.claim, *draft_id), Some(Row::CourtMaterialDraft(Box::new(draft))))?;
@@ -202,10 +239,13 @@ fn material_intake_inner(
                 release_draft(b, &draft)?;
                 return Ok(MaterialIntakeEffectV1::AlreadyComplete);
             }
-            if ctx.daa_score >= draft.expires_daa || draft.accepted_bytes != draft.total_bytes {
+            if ctx.daa_score >= draft.expires_daa
+                || draft.accepted_bytes != draft.total_bytes
+                || draft.pipelined() && ctx.daa_score <= draft.last_daa
+            {
                 return Err(refused("material Finish of an expired or incomplete draft"));
             }
-            let body = draft.body(&b.state).map_err(refused)?;
+            let (body, _body_lease) = draft.body_reserved(&b.state).map_err(refused)?;
             if crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) != draft.body_hash {
                 return Err(refused("material body checksum mismatch"));
             }
@@ -253,7 +293,7 @@ fn own_draft(
     let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&Key::CourtMaterialDraft(s.claim, draft_id)) else {
         return Err(refused("material draft missing"));
     };
-    if draft.submitter != s.submitter || draft.target != s.target || draft.scope_id != s.scope_id {
+    if draft.version != s.version || draft.submitter != s.submitter || draft.target != s.target || draft.scope_id != s.scope_id {
         return Err(refused("material draft belongs to another submitter/target"));
     }
     Ok((**draft).clone())
@@ -262,8 +302,26 @@ fn own_draft(
 /// Removes a draft and its parts and returns its reservation. The ledger's
 /// accounting of the charged schedule price is kept (always 0 since audit B-09 fix-b: a non-zero fee refuses the intake).
 pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDraftV1) -> Result<(), PalwStateV2Error> {
+    let lkey = Key::CourtMaterialLedger(draft.claim, draft.submitter);
+    let next_ledger = match b.state.staged_court_row_v1(&lkey) {
+        Some(Row::CourtMaterialLedger(ledger)) => {
+            let mut ledger = (**ledger).clone();
+            ledger.reserved_bytes = if draft.pipelined() {
+                ledger
+                    .reserved_bytes
+                    .checked_sub(draft.total_bytes)
+                    .ok_or_else(|| refused("pipelined material reservation missing"))?
+            } else {
+                ledger.reserved_bytes.saturating_sub(draft.total_bytes)
+            };
+            Some(ledger)
+        }
+        _ if draft.pipelined() => return Err(refused("pipelined material ledger missing")),
+        _ => None,
+    };
     let mut at = 0u64;
-    while at < draft.accepted_bytes {
+    let end = if draft.pipelined() { draft.total_bytes } else { draft.accepted_bytes };
+    while at < end {
         let key = Key::CourtMaterialPart(draft.draft_id, at);
         if b.state.staged_court_row_v1(&key).is_some() {
             b.write_staged_row_v1(key, None)?;
@@ -274,11 +332,8 @@ pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDr
     if b.state.staged_court_row_v1(&dkey).is_some() {
         b.write_staged_row_v1(dkey, None)?;
     }
-    let lkey = Key::CourtMaterialLedger(draft.claim, draft.submitter);
-    if let Some(Row::CourtMaterialLedger(l)) = b.state.staged_court_row_v1(&lkey) {
-        let mut l = (**l).clone();
-        l.reserved_bytes = l.reserved_bytes.saturating_sub(draft.total_bytes);
-        b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(l))))?;
+    if let Some(ledger) = next_ledger {
+        b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
     }
     Ok(())
 }
@@ -333,8 +388,8 @@ impl TransitionBuilder<'_> {
             }
             (Row::CourtMaterial(m), None) => m.check_context(&self.state).map_err(refused),
             (Row::CourtMaterialDraft(d), Some(Row::CourtMaterialDraft(o))) => {
-                if (d.claim, d.target, d.submitter, d.total_bytes, d.body_hash, d.begun_daa, d.expires_daa)
-                    != (o.claim, o.target, o.submitter, o.total_bytes, o.body_hash, o.begun_daa, o.expires_daa)
+                if (d.version, d.claim, d.target, d.submitter, d.total_bytes, d.body_hash, d.begun_daa, d.expires_daa)
+                    != (o.version, o.claim, o.target, o.submitter, o.total_bytes, o.body_hash, o.begun_daa, o.expires_daa)
                     || d.accepted_bytes < o.accepted_bytes
                     || d.last_daa < o.last_daa
                 {

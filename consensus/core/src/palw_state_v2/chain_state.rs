@@ -4145,7 +4145,8 @@ impl PalwChainStateV2 {
                 R::CourtSharedBottom(r) => r.check_loaded_context(self),
                 R::CourtSharedStream(s) => s.check_context(self),
                 R::CourtSharedChunk(c) => c.check_context(self),
-                R::CourtMaterialDraft(d) => d.check_context(self),
+                R::CourtMaterialDraft(d) => d.check_loaded_context(self),
+                R::CourtMaterialPart(p) => p.check_loaded_context(self),
                 R::CourtMaterial(m) => m.check_context(self),
                 _ => Ok(()),
             }

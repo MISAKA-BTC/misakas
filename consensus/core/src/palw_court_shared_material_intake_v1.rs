@@ -32,6 +32,9 @@ use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Query, PalwTirP
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const MATERIAL_INTAKE_CONTEXT_V1: &[u8] = b"misaka-palw/material-intake/v1/mldsa87";
+pub(crate) const MATERIAL_INTAKE_CONTEXT_V2: &[u8] = b"misaka-palw/material-intake/v2/mldsa87";
+pub(crate) const MATERIAL_PIPELINED_VERSION: u16 = 2;
+pub(crate) const MATERIAL_PIPELINED_MAX_BYTES: u64 = (PART * crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1) as u64;
 
 /// One logical material coordinate of one original. Semantic tables (EOG /
 /// rendering) are NOT a target: their per-claim byte requirement is not
@@ -56,10 +59,23 @@ pub fn material_draft_id_v1(
     total_bytes: u64,
     body_hash: Hash64,
 ) -> Result<Hash64, String> {
-    crate::palw_court_shared_tir_stream_v1::stream_digest(
-        b"misaka-palw/material-draft/v1",
-        &(claim, target, submitter, total_bytes, body_hash),
-    )
+    material_draft_id_for_version(1, claim, target, submitter, total_bytes, body_hash)
+}
+
+pub(crate) fn material_draft_id_for_version(
+    version: u16,
+    claim: Hash64,
+    target: MaterialTargetV1,
+    submitter: PalwBondKeyV2,
+    total_bytes: u64,
+    body_hash: Hash64,
+) -> Result<Hash64, String> {
+    let domain = match version {
+        1 => b"misaka-palw/material-draft/v1",
+        MATERIAL_PIPELINED_VERSION => b"misaka-palw/material-draft/v2",
+        _ => return Err("material draft version".into()),
+    };
+    crate::palw_court_shared_tir_stream_v1::stream_digest(domain, &(claim, target, submitter, total_bytes, body_hash))
 }
 
 // ---------------------------------------------------------------------------
@@ -122,11 +138,13 @@ pub struct SignedMaterialIntakeV1 {
 }
 impl SignedMaterialIntakeV1 {
     pub fn signing_message(&self, network: Hash64) -> Result<Hash64, String> {
-        if self.version != 1 {
-            return Err("material intake version".into());
-        }
+        let domain = match self.version {
+            1 => b"misaka-palw/material-intake/v1",
+            MATERIAL_PIPELINED_VERSION => b"misaka-palw/material-intake/v2",
+            _ => return Err("material intake version".into()),
+        };
         crate::palw_court_shared_tir_stream_v1::stream_digest(
-            b"misaka-palw/material-intake/v1",
+            domain,
             &(network, self.version, self.claim, self.scope_id, self.target, self.submitter, &self.action),
         )
     }
@@ -138,7 +156,7 @@ impl SignedMaterialIntakeV1 {
             pubkey,
             self.signing_message(network)?.as_byte_slice(),
             &self.signature,
-            MATERIAL_INTAKE_CONTEXT_V1,
+            if self.version == MATERIAL_PIPELINED_VERSION { MATERIAL_INTAKE_CONTEXT_V2 } else { MATERIAL_INTAKE_CONTEXT_V1 },
         ) {
             return Err("material intake signature invalid".into());
         }
@@ -229,19 +247,30 @@ pub fn material_part_digest_v1(p: &MaterialPartV1) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/material-part/v1", p)
 }
 impl MaterialDraftV1 {
+    pub(crate) fn pipelined(&self) -> bool {
+        self.version == MATERIAL_PIPELINED_VERSION
+    }
+
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1
-            || *key != Key::CourtMaterialDraft(self.claim, self.draft_id)
-            || material_draft_id_v1(self.claim, self.target, self.submitter, self.total_bytes, self.body_hash)? != self.draft_id
+        if *key != Key::CourtMaterialDraft(self.claim, self.draft_id)
+            || material_draft_id_for_version(self.version, self.claim, self.target, self.submitter, self.total_bytes, self.body_hash)?
+                != self.draft_id
             || self.total_bytes == 0
             || self.accepted_bytes > self.total_bytes
             || self.last_daa < self.begun_daa
             || self.expires_daa <= self.begun_daa
             || self.expires_daa > self.material_until_daa
-            || (self.accepted_bytes == 0) != (self.head == Hash64::default())
-            || self.accepted_bytes != self.total_bytes && !self.accepted_bytes.is_multiple_of(PART as u64)
         {
             return Err("material draft version/key/declaration/cursor/clock".into());
+        }
+        if self.pipelined() {
+            if self.total_bytes > MATERIAL_PIPELINED_MAX_BYTES || self.head != Hash64::default() || self.last_daa >= self.expires_daa {
+                return Err("pipelined material draft cap/head".into());
+            }
+        } else if (self.accepted_bytes == 0) != (self.head == Hash64::default())
+            || self.accepted_bytes != self.total_bytes && !self.accepted_bytes.is_multiple_of(PART as u64)
+        {
+            return Err("material draft prefix cursor/head".into());
         }
         Ok(())
     }
@@ -257,13 +286,70 @@ impl MaterialDraftV1 {
         }
         Ok(())
     }
-    /// Reassemble the retained prefix; every part must chain from the previous.
+    /// Validate branch-retained V2 offsets before resuming a partially received body.
+    pub(crate) fn check_loaded_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        self.check_context(state)?;
+        if self.pipelined() {
+            let mut bytes = 0;
+            for (key, row) in state
+                .staged_court_range_v1(&Key::CourtMaterialPart(self.draft_id, 0), &Key::CourtMaterialPart(self.draft_id, u64::MAX))
+            {
+                let Row::CourtMaterialPart(part) = row else { return Err("pipelined material part retyped".into()) };
+                bytes = self.check_pipelined_part(key, part, bytes)?;
+            }
+            if bytes != self.accepted_bytes {
+                return Err("pipelined material retained bytes differ from draft".into());
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_pipelined_geometry(&self, offset: u64, bytes: usize, already_accepted: u64) -> Result<u64, String> {
+        if !self.pipelined()
+            || !offset.is_multiple_of(PART as u64)
+            || offset >= self.total_bytes
+            || bytes as u64 != (self.total_bytes - offset).min(PART as u64)
+        {
+            return Err("pipelined material part offset/length".into());
+        }
+        already_accepted
+            .checked_add(bytes as u64)
+            .filter(|sum| *sum <= self.total_bytes)
+            .ok_or_else(|| "pipelined material exceeds reserved bytes".into())
+    }
+
+    fn check_pipelined_part(&self, key: &Key, part: &MaterialPartV1, already_accepted: u64) -> Result<u64, String> {
+        part.check(key)?;
+        if part.version != self.version
+            || part.claim != self.claim
+            || part.draft_id != self.draft_id
+            || part.expires_daa != self.expires_daa
+            || part.daa <= self.begun_daa
+            || part.daa > self.last_daa
+            || part.daa >= self.expires_daa
+        {
+            return Err("pipelined material part differs from accepted draft".into());
+        }
+        self.check_pipelined_geometry(part.offset, part.bytes.len(), already_accepted)
+    }
+
+    /// Reassemble the retained prefix for V1 or the completed canonical body for V2.
     pub fn body(&self, state: &PalwChainStateV2) -> Result<Vec<u8>, String> {
+        self.body_reserved(state).map(|(bytes, _)| bytes)
+    }
+
+    pub(crate) fn body_reserved(
+        &self,
+        state: &PalwChainStateV2,
+    ) -> Result<(Vec<u8>, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>), String> {
         self.check(&Key::CourtMaterialDraft(self.claim, self.draft_id))?;
+        if self.pipelined() && self.accepted_bytes != self.total_bytes {
+            return Err("pipelined material is incomplete".into());
+        }
         let n = usize::try_from(self.accepted_bytes).map_err(|_| "material prefix exceeds address space")?;
         let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
         q.exact_v1::<u8>(self.accepted_bytes).map_err(|e| e.to_string())?;
-        let _lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e| e.to_string())?;
+        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e| e.to_string())?;
         let mut bytes = Vec::new();
         bytes.try_reserve_exact(n).map_err(|_| "material prefix allocation refused")?;
         let (mut at, mut head) = (0u64, Hash64::default());
@@ -272,28 +358,44 @@ impl MaterialDraftV1 {
                 return Err("material prefix part missing".into());
             };
             part.check(&Key::CourtMaterialPart(self.draft_id, at))?;
-            if part.previous != head || part.claim != self.claim {
-                return Err("material prefix chain mismatch".into());
+            if self.pipelined() {
+                at = self.check_pipelined_part(&Key::CourtMaterialPart(self.draft_id, at), part, at)?;
+            } else {
+                if part.version != 1 || part.previous != head || part.claim != self.claim {
+                    return Err("material prefix chain mismatch".into());
+                }
+                head = material_part_digest_v1(part)?;
+                at = at.checked_add(part.bytes.len() as u64).ok_or("material prefix overflow")?;
             }
-            head = material_part_digest_v1(part)?;
-            at = at.checked_add(part.bytes.len() as u64).ok_or("material prefix overflow")?;
             bytes.extend_from_slice(&part.bytes);
         }
         if at != self.accepted_bytes || head != self.head {
             return Err("material prefix head mismatch".into());
         }
-        Ok(bytes)
+        Ok((bytes, lease))
     }
 }
 impl MaterialPartV1 {
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1
+        if !matches!(self.version, 1 | MATERIAL_PIPELINED_VERSION)
+            || self.version == MATERIAL_PIPELINED_VERSION && self.previous != Hash64::default()
             || *key != Key::CourtMaterialPart(self.draft_id, self.offset)
             || self.bytes.is_empty()
             || self.bytes.len() > PART
             || !self.offset.is_multiple_of(PART as u64)
         {
             return Err("material part version/key/bound".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_loaded_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        if self.version == MATERIAL_PIPELINED_VERSION {
+            let Some(Row::CourtMaterialDraft(draft)) = state.staged_court_row_v1(&Key::CourtMaterialDraft(self.claim, self.draft_id))
+            else {
+                return Err("pipelined material part has no accepted draft".into());
+            };
+            draft.check_pipelined_part(&Key::CourtMaterialPart(self.draft_id, self.offset), self, 0)?;
         }
         Ok(())
     }
