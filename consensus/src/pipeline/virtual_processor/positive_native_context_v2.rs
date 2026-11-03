@@ -19,6 +19,7 @@ use kaspa_consensus_core::{
     tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry, ValidatedTransaction},
     utxo::utxo_view::UtxoView,
 };
+use misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
@@ -59,7 +60,7 @@ pub(in crate::pipeline::virtual_processor) struct OwnedPositiveCarrierV2 {
     body: BlockTransactionsV3,
     entries: Vec<UtxoEntry>,
     fee: u64,
-    relay_available_fee: Option<u64>,
+    relay_carrier_fees: Option<FundingRelayCarrierFeesV2>,
     prefix: NativePrefixStampV2,
     carrier_block: BlockHash,
     index_within_block: u32,
@@ -178,7 +179,7 @@ impl PositiveCarrierCompanionsV2 {
             body: body.clone(),
             entries: validated.entries,
             fee: validated.calculated_fee,
-            relay_available_fee: None,
+            relay_carrier_fees: None,
             prefix,
             carrier_block: actual_carrier_block,
             index_within_block: index,
@@ -188,11 +189,17 @@ impl PositiveCarrierCompanionsV2 {
     pub(in crate::pipeline::virtual_processor) fn take_resource_fault(&mut self) -> Option<NativeCoverageV1> {
         self.resource_fault.take()
     }
-    /// Private transport handoff, not a Court-success result. Check exact real
-    /// acceptance origin and ordinal before exposing companions to phase two.
-    pub(super) fn record_relay_fee_residual_v2(&mut self, tx: TransactionId, mandatory_burn: u64) {
+    /// Capture the actual UTXO fee partition for the sealed carrier. The
+    /// ordinary tip is the same amount the fee sink adds to the block.
+    pub(super) fn record_relay_carrier_fees_v2(
+        &mut self,
+        tx: TransactionId,
+        mandatory_burn: u64,
+        before_relay: u64,
+        credited_tip: u64,
+    ) {
         let Some(carrier) = self.carriers.last_mut().filter(|carrier| carrier.transaction().id() == tx) else { return };
-        carrier.relay_available_fee = carrier.fee.checked_sub(mandatory_burn);
+        carrier.relay_carrier_fees = FundingRelayCarrierFeesV2::new(carrier.fee, mandatory_burn, before_relay, credited_tip).ok();
     }
 
     pub(in crate::pipeline::virtual_processor) fn into_phase_two(
@@ -367,7 +374,7 @@ mod tests {
                 body: vec![tx].into(),
                 entries: vec![entry],
                 fee: 10,
-                relay_available_fee: None,
+                relay_carrier_fees: None,
                 prefix: NativePrefixStampV2 {
                     accepting: point,
                     selected_parent: parent,
@@ -706,13 +713,10 @@ impl PositiveCarrierPhaseTwoV2 {
                 decode,
             )?;
             let action = if kind == 14 {
-                let available = carrier.relay_available_fee.ok_or_else(|| {
-                    NativeCoverageV1::unsupported::<Self>(
-                        "relay fee residual",
-                        "accepted carrier fee after mandatory burns unavailable",
-                    )
+                let fees = carrier.relay_carrier_fees.ok_or_else(|| {
+                    NativeCoverageV1::unsupported::<Self>("relay carrier fees", "accepted fee partition unavailable")
                 })?;
-                action.with_relay_available_fee_v2(available)?
+                action.with_relay_carrier_fees_v2(fees)?
             } else {
                 action
             };

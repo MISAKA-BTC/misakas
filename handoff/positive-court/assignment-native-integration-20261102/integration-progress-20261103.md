@@ -611,3 +611,30 @@ cases passed on the same source map. These cases exercise the signed
 package and storage floor. The newly connected WriteBatch path was
 typechecked and did not execute a live op14 commit. The documentation
 check reported zero new issues against the existing 43.
+
+## Relay registration charge linked to the native fee sink
+
+The validated carrier now retains an observed fee partition from the
+UTXO fee sink. It covers gross fee, mandatory burns, collectible fee
+after existing rent and the tip actually credited to the block. The
+initial A price check reads the pre-relay collectible amount. Checked
+subtraction prevents allocating money already used by an earlier
+burn. Refused attempts keep their ordinary fee treatment.
+
+The same-batch RocksDB writer requires the observed debit to equal
+the complete quoted registration charge. Its reference binds the
+accepted literal material, original quote and fee partition at the
+actual accepting origin. This applies whether the literal bytes are
+new or already present. A zero debit, mismatched amount or reference
+cannot create a stored registration. The added contract regression
+covers no debit, underpayment, overpayment, arithmetic conservation
+and charge reference separation across accepting branches.
+
+The current fee sink credits the ordinary pre-relay amount. Actual
+debit scheduling ahead of Round admission and ordinary coinbase
+calculation remains open, along with the canonical custody reservation
+and restore owners. No real op14 payment or registration ran.
+
+Core and Consensus library Clippy passed with warnings denied and all
+nine relay contract cases passed on the same source. The document
+check found zero new issues against the existing 43.

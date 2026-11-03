@@ -492,3 +492,32 @@ fn registration_fee_floor_matches_literal_payload_and_pending_row_images() {
         assert!(fees.minimum_registration_fee(&policy, &physical, &terms).is_err());
     }
 }
+
+#[test]
+fn metadata_charge_requires_exact_debit_from_the_observed_collectible_fee() {
+    let (auth, _) = relay_pair(terms());
+    let charge = auth.quote.fee;
+    let before_relay = charge + 13;
+    let mandatory = 29;
+    let earlier_rent = 7;
+    let gross = before_relay + mandatory + earlier_rent;
+    let partition = |credited_tip| FundingRelayCarrierFeesV2::new(gross, mandatory, before_relay, credited_tip).unwrap();
+
+    let charged = auth.carrier_charge_material(partition(13)).unwrap();
+    assert_eq!(charged.origin, auth.origin);
+    assert!(auth.carrier_charge_material(partition(before_relay)).is_err());
+    assert!(auth.carrier_charge_material(partition(12)).is_err());
+    assert!(auth.carrier_charge_material(partition(14)).is_err());
+    assert!(FundingRelayCarrierFeesV2::new(gross, mandatory, gross - mandatory + 1, 13).is_err());
+    assert!(FundingRelayCarrierFeesV2::new(gross, gross + 1, 0, 0).is_err());
+    assert!(FundingRelayCarrierFeesV2::new(gross, mandatory, before_relay, before_relay + 1).is_err());
+
+    let mut other_branch = auth.clone();
+    other_branch.origin.accepting_block = NativeHash64([91; 64]);
+    other_branch.material.origin = other_branch.origin;
+    other_branch.metadata_quote.origin = other_branch.origin;
+    assert_ne!(charged.digest, other_branch.carrier_charge_material(partition(13)).unwrap().digest);
+
+    let different_prior_fee = FundingRelayCarrierFeesV2::new(gross, mandatory + 1, before_relay, 13).unwrap();
+    assert_ne!(charged.digest, auth.carrier_charge_material(different_prior_fee).unwrap().digest);
+}

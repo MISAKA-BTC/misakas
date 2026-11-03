@@ -4,10 +4,40 @@
 use super::{funding_relay::*, funding_relay_policy::*};
 use crate::{
     ContractError,
-    identity::{Digest, PUBKEY_BYTES, SIGNATURE_BYTES, principal},
+    identity::{Digest, PUBKEY_BYTES, SIGNATURE_BYTES, hash, principal},
     rows::{AcceptedMaterial, AcceptedOrigin, NativeOutpoint},
 };
 use borsh::{BorshDeserialize, BorshSerialize};
+
+/// Observed transaction fee partition. Construction checks arithmetic only;
+/// the UTXO fee owner must supply the amounts that reward calculation used.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct FundingRelayCarrierFeesV2 {
+    gross_fee: u64,
+    mandatory_burn: u64,
+    before_relay: u64,
+    credited_tip: u64,
+}
+impl FundingRelayCarrierFeesV2 {
+    pub fn new(gross_fee: u64, mandatory_burn: u64, before_relay: u64, credited_tip: u64) -> Result<Self, ContractError> {
+        if gross_fee.checked_sub(mandatory_burn).is_none_or(|remaining| before_relay > remaining) || credited_tip > before_relay {
+            return Err(ContractError::Budget);
+        }
+        Ok(Self { gross_fee, mandatory_burn, before_relay, credited_tip })
+    }
+
+    pub fn gross_fee(self) -> u64 {
+        self.gross_fee
+    }
+
+    pub fn before_relay(self) -> u64 {
+        self.before_relay
+    }
+
+    fn relay_charge(self) -> u64 {
+        self.before_relay - self.credited_tip
+    }
+}
 
 /// One purpose signature, distinct from the normal transaction signature in
 /// the other row. All references must be resolved by native restore/admission.
@@ -28,6 +58,19 @@ pub struct FundingRelayAuthorizationRowV2 {
     pub quote: FundingRelayMoneyQuoteV2,
 }
 impl FundingRelayAuthorizationRowV2 {
+    /// Rebuild the charge reference from the actual fee partition. The
+    /// material binds this charge to one accepting origin and one literal
+    /// package; the original quote fixes the full registration debit.
+    pub fn carrier_charge_material(&self, carrier_fees: FundingRelayCarrierFeesV2) -> Result<AcceptedMaterial, ContractError> {
+        if self.quote.fee == 0 || carrier_fees.relay_charge() != self.quote.fee {
+            return Err(ContractError::Budget);
+        }
+        Ok(AcceptedMaterial {
+            origin: self.origin,
+            digest: hash(b"misaka/positive/funding-relay-charge/v2/r1", &(self.material, self.metadata_quote, carrier_fees)),
+        })
+    }
+
     pub fn validate_shape(&self) -> Result<(), ContractError> {
         self.terms.validate_shape()?;
         let quote = self.fees.quote(&self.policy, &self.physical, &self.terms, self.quote.usage, self.origin.accepted_daa)?;

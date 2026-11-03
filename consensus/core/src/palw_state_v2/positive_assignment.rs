@@ -1078,7 +1078,7 @@ impl TransitionBuilder<'_> {
             // Include the actual package's required retained images. The
             // storage and fee owners still determine the final charge.
             let minimum_fee = fees.minimum_registration_fee(policy, physical, terms).map_err(refusal)?;
-            let available = action.relay_available_fee_v2().ok_or_else(missing_assignment_history)?;
+            let available = action.relay_carrier_fees_v2().ok_or_else(missing_assignment_history)?.before_relay();
             if minimum_fee > terms.max_metadata_fee || minimum_fee > available {
                 return Err(refusal("initial relay cannot fund the minimum metadata fee after mandatory burns"));
             }

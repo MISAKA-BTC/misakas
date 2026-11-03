@@ -1022,11 +1022,6 @@ impl VirtualStateProcessor {
                 // documentation ("enters circulation nowhere") would still be false. Burned by
                 // don't-mint, the mechanism the §F service share already uses.
                 let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0).saturating_add(escrow_burned);
-                if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
-                    && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
-                {
-                    ctx.positive_native_carriers.record_relay_fee_residual_v2(validated_tx.id(), owed);
-                }
                 if collect_carrier_fees {
                     palw_record_accepted_carrier_fees_v1(
                         validated_tx,
@@ -1056,6 +1051,13 @@ impl VirtualStateProcessor {
                 // nothing at all.
                 let collectible =
                     self.palw_collectible_transaction_fee_v1(validated_tx.tx, validated_tx.calculated_fee, owed, pov_daa_score);
+                if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
+                {
+                    // A qualified relay debit must reduce the very same
+                    // credited tip once the earlier allocator is connected.
+                    ctx.positive_native_carriers.record_relay_carrier_fees_v2(validated_tx.id(), owed, collectible, collectible);
+                }
                 block_fee += collectible;
                 // Finality classifies collectible fees, never destroyed bond/rent funds — past `palw_tir_public_conviction_v1` only
                 // (AUDIT-8b, 2026-10-27): below it the finality share reads the raw fee, exactly as the live chain does.

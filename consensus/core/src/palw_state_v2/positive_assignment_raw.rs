@@ -11,7 +11,7 @@ use crate::{
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
 };
 use misaka_palw_positive_contract::{
-    assignment::policy::AssignmentPolicyV2,
+    assignment::{funding_relay_rows::FundingRelayCarrierFeesV2, policy::AssignmentPolicyV2},
     identity::Digest,
     rows::{AcceptedMaterial, AcceptedOrigin},
 };
@@ -133,7 +133,7 @@ struct PositiveAssignmentRawDataV2 {
     case_backing: Option<Arc<NativeAssignedCaseBackingV2>>,
     original_open: Option<Arc<NativeAcceptedCaseCarriageV2>>,
     signed_anchor: Option<(BlockHash, u64)>,
-    relay_available_fee: Option<u64>,
+    relay_carrier_fees: Option<FundingRelayCarrierFeesV2>,
     _transport: Arc<NativeDemandLeaseV1>,
     _decode: Arc<NativeDemandLeaseV1>,
 }
@@ -170,7 +170,7 @@ impl PositiveAssignmentRawActionV2 {
             case_backing: None,
             original_open: None,
             signed_anchor: None,
-            relay_available_fee: None,
+            relay_carrier_fees: None,
             _transport: Arc::new(transport),
             _decode: Arc::new(decode),
         })))
@@ -201,19 +201,22 @@ impl PositiveAssignmentRawActionV2 {
     pub(super) fn signed_anchor_clock_v2(&self) -> Option<(BlockHash, u64)> {
         self.0.signed_anchor
     }
-    /// Transport the actual accepted carrier's fee remaining after existing
-    /// mandatory destruction. This allocates no metadata fee.
-    pub fn with_relay_available_fee_v2(mut self, available: u64) -> Result<Self, NativeCoverageV1> {
-        let invalid = || NativeCoverageV1::unsupported::<Self>("relay fee residual", "wrong operation, amount or shared owner");
+    /// Transport the fee partition observed at the actual UTXO fee sink.
+    pub fn with_relay_carrier_fees_v2(mut self, fees: FundingRelayCarrierFeesV2) -> Result<Self, NativeCoverageV1> {
+        let invalid = || NativeCoverageV1::unsupported::<Self>("relay carrier fees", "wrong operation, gross fee or shared owner");
         let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
-        if data.relay_available_fee.is_some() || data.body[data.index as usize].payload.get(7) != Some(&14) || available > data.fee {
+        if data.relay_carrier_fees.is_some()
+            || data.body[data.index as usize].payload.get(7) != Some(&14)
+            || fees.gross_fee() != data.fee
+        {
             return Err(invalid());
         }
-        data.relay_available_fee = Some(available);
+        data.relay_carrier_fees = Some(fees);
         Ok(self)
     }
-    pub(super) fn relay_available_fee_v2(&self) -> Option<u64> {
-        self.0.relay_available_fee
+
+    pub fn relay_carrier_fees_v2(&self) -> Option<FundingRelayCarrierFeesV2> {
+        self.0.relay_carrier_fees
     }
 
     /// Retain the original accepted op8 and executed prefix for op9 replay.
@@ -300,7 +303,7 @@ impl PartialEq for PositiveAssignmentRawActionV2 {
             && self.current_output() == other.current_output()
             && self.rules() == other.rules()
             && self.signed_anchor_clock_v2() == other.signed_anchor_clock_v2()
-            && self.relay_available_fee_v2() == other.relay_available_fee_v2()
+            && self.relay_carrier_fees_v2() == other.relay_carrier_fees_v2()
             && match (&self.0.original_open, &other.0.original_open) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -394,7 +397,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             case_backing,
             original_open,
             signed_anchor: _,
-            relay_available_fee: _,
+            relay_carrier_fees: _,
             _transport: _,
             _decode: _,
         } = &*self.0;

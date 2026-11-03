@@ -124,6 +124,12 @@ impl DbPalwStateV2Store {
             {
                 return Err(invalid("carrier differs from both retained signatures and terms"));
             }
+            let fees = action.relay_carrier_fees_v2().ok_or_else(|| invalid("missing actual carrier fee partition"))?;
+            let charge =
+                auth.carrier_charge_material(fees).map_err(|_| invalid("credited tip does not account for the quoted charge"))?;
+            if charge != auth.metadata_charge {
+                return Err(invalid("actual charge differs from the canonical registration reference"));
+            }
             let key = key(auth.material.digest);
             if let Some(saved) = self.db.get_pinned(key)? {
                 if saved.as_ref() != payload {
