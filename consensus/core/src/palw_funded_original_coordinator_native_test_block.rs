@@ -185,6 +185,8 @@
                 let req = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap().prepare_requirements_v1(&b, &ctx,
                     PreparedRequirementBudgetsV1 { numerical: budgets.0, input: budgets.1, source: budgets.2 }).unwrap();
                 let envelope = req.numerical_batch_envelope_v1(&b, &ctx, 4_096).unwrap();
+                assert!(req.constraint_stop_batch_operands_v1(&b, &ctx).unwrap().is_none(),
+                    "this numerical fixture has no verified tokenizer registration");
                 assert_eq!(envelope.scope, req.source_graph_v1().unwrap().absolute_scope_v3());
                 assert!(!envelope.maximums_v1().is_empty());
                 assert_eq!(envelope.demand_ranges_v1().flatten().copied().collect::<Vec<_>>(), envelope.maximums_v1());

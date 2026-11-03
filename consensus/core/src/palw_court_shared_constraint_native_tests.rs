@@ -471,6 +471,8 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     // unrelated invalid-rendering result can make the positive pass by accident.
     let eog_only=ConstraintMaterialV1{eog:&eog,renderings:&[]};
     let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
+    assert_eq!(borsh::object_length(&end_only).unwrap() as u64,
+        crate::palw_court_shared_material_intake_v1::batch::constraint_stop::STOP_INTENT_BYTES_V1);
     let projected_end=store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&duty).unwrap();
     assert!(store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&token_duty).is_err());
     // Seed = signed intent message (binds material_id): exact equality is against

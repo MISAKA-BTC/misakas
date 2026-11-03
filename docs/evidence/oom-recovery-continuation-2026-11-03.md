@@ -2836,3 +2836,29 @@ service reservation remain open. See
 B0 and relay agreed at DAA 19,699 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-signed-seed-live.AMS1pO/page.json`.
+
+## Rooted constrained Stop branch in the Batch reservation graph
+
+The native prepared-original candidate can derive a constrained
+Stop branch from the actual original, its rooted service scope and
+its current verified tokenizer registration. The branch includes
+the exact FullIds delivery size, original ID count, EOG replay calls
+and serialized signed Stop operands. It reserves delivery Finish
+before FullIds verification and that verification before Stop.
+The complete profile joins Stop to the case terminal. The graph
+refuses a stop cost whose byte allowance cannot hold the signed
+intent and EOG-only material. CPU, I/O and carrier overhead still
+need costs from the native service profile.
+
+The extracted suite passed 36 checks. The new fixture exercises
+the actual Batch scheduler from the latest notice with a 2,050-ID
+body and fixture service costs. It checks Finish, verification,
+Stop and terminal ordering and refuses a one-byte short allowance.
+The native fixture comparing signed operand size with Borsh and
+the prepared-original test remain unrun. This branch does not
+establish the complete profile or a live T12 terminal carrier.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-branch-reservation.PfGHDE/tests.log`.
+
+B0 and relay agreed at DAA 19,700 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-branch-reservation-live.HtdMFF/page.json`.

@@ -64,6 +64,24 @@ impl PreparedOriginalRequirementsV1 {
     pub(super) fn source_graph_v1(&self)->Result<&crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,PreparedRequirementsErrorV1>{
         match &self.source{PreparedSourceRequirementsV1::Native{graph,..}=>Ok(graph),PreparedSourceRequirementsV1::MissingSharedServiceNamespace=>Err(PreparedRequirementsErrorV1::MissingSharedServiceNamespace)}
     }
+    /// Stop branch inputs from the same uninstalled original and service scope.
+    pub(super) fn constraint_stop_batch_operands_v1(
+        &self, b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2,
+    ) -> Result<Option<crate::palw_court_shared_material_intake_v1::batch::constraint_stop::ConstraintStopBatchOperandsV1>,
+                PreparedRequirementsErrorV1> {
+        self.geometry.prepared.check_preclaim_context_v1(b, ctx).map_err(PreparedRequirementsErrorV1::Geometry)?;
+        let PreparedSourceRequirementsV1::Native { namespace, graph } = &self.source else {
+            return Err(PreparedRequirementsErrorV1::MissingSharedServiceNamespace);
+        };
+        let book = b.state.court_service_state_v1().ok_or(PreparedRequirementsErrorV1::MissingSharedServiceNamespace)?;
+        if *namespace != crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(book.profile_id) {
+            return Err(PreparedRequirementsErrorV1::Geometry(PreparedGeometryErrorV1::State(refused("prepared Batch namespace changed"))));
+        }
+        let frame = self.frame_v1();
+        Ok(crate::palw_court_shared_material_intake_v1::batch::constraint_stop::ConstraintStopBatchOperandsV1::derive_v1(
+            &b.state, b.extras, ctx.daa_score, graph.absolute_scope_v3(), frame.original_v1(), frame.header_v1(),
+        ))
+    }
     /// Numerical input envelope from the authenticated preclaim snapshot.
     /// Semantic and terminal profiles must be priced separately.
     pub(super) fn numerical_batch_envelope_v1(
