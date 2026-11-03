@@ -1589,3 +1589,14 @@ escrow and Gate C runtime regressions. Its first command is still
 waiting for the shared build lock. The isolated component results above
 apply to the relevant source files. No integrated build or test result
 is claimed by this checkpoint.
+
+### Archive failure classification and replay budgets
+
+The [archive fault candidate](native-archive-faults-candidate-20261103.tar.gz)
+preserves distinct corruption, unavailable history and local resource
+outcomes across the Case and relay readers. A failed relay read/work
+charge leaves both counters unchanged. Two isolated tests ran the
+exact classifier and counter update with actual StoreError values and
+a small native coverage harness. The combined Consensus check is still
+waiting for the shared build lock, so this follow-up is staged separately
+from its source map.
