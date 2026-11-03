@@ -2317,3 +2317,28 @@ references the new Qwen carrier at DAA 19,678. Signed retention is
 read found no claim row. The exact fold refusal was not observed.
 See `/private/tmp/misaka-t12-oom-20261102/g14-batch-bound-signature-live.ONTcBa/page.json`
 and its sibling `journal.txt`.
+
+## Batch V3 carrier storage fee allocation
+
+The Batch candidate now accepts a positive storage charge only with a
+debit matching the exact V3 Begin declaration, accepted demand root and
+accepting point. Its price is the existing per-byte schedule. The
+allocation uses the same checked transaction fee budget as other
+obligations, has a fixed per-carrier purpose and cannot draw on escrow
+principal. Legacy intake still has no debit source. The public route must
+pass the native budget after the other mandatory allocations and exclude
+the allocated amount from collectible fees. The accepted-demand
+dispatcher and coinbase integration remain open.
+
+Three focused checks ran against the candidate allocation and cached
+native transaction/carrier code. They cover the exact paid carrier,
+an insufficient remainder after another allocation, duplicate allocation
+of the same carrier, substitution of the request, accepting point and
+declaration bytes, and native fee conservation. The payload uses a
+signature-width fixture and does not exercise the native fold's signature
+verification. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-carrier-rent.BbvNSz/tests.log`.
+
+B0 and relay agreed at DAA 19,681 with no new Qwen carrier since the
+previous cursor. The preceding integration metadata queue expired before
+starting a compiler at 63% reported memory availability.

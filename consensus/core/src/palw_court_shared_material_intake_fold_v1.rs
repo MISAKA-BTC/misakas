@@ -5,8 +5,9 @@
 //! Dormant: refused unless `palw_staged_tir_route_v1` is in force at the block
 //! (`extras.staged_tir_route_active`, the dormant G-10 fence the shared TIR
 //! court lives under), the original has an installed shared context, and the
-//! storage fee schedule resolves — it is typed-missing in every non-test build.
-//! No lifecycle dispatcher/wire tag calls this yet (see lane notes).
+//! storage fee resolves. The legacy route has no carrier debit source.
+//! The V3 Batch adapter additionally needs accepted-demand dispatch and
+//! native carrier fee allocation.
 use super::*;
 use crate::palw_court_shared_material_intake_v1 as m;
 use crate::palw_court_shared_tir_state_v1 as shared;
@@ -39,7 +40,7 @@ pub(super) fn material_intake(
     if s.version != 1 {
         return Err(refused("material intake version is not active on this route"));
     }
-    material_intake_atomic(b, ctx, s, None)
+    material_intake_atomic(b, ctx, s, None, None)
 }
 
 /// Candidate native adapter for a demand and response declaration authenticated
@@ -50,6 +51,7 @@ pub(super) fn material_intake_pipelined(
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
     delivery: &m::batch::MaterialBatchDeliveryV1,
+    storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let service = b.state.court_service_state_v1().ok_or_else(|| refused("Batch material has no rooted service book"))?;
     let binding = service.claims.get(&s.claim).ok_or_else(|| refused("Batch material original has no service binding"))?;
@@ -57,7 +59,7 @@ pub(super) fn material_intake_pipelined(
     if !binding.packet_ids.contains(&id) {
         return Err(refused("Batch material slot is not funded by this original"));
     }
-    material_intake_atomic(b, ctx, s, Some(delivery.request_root_v1()))
+    material_intake_atomic(b, ctx, s, Some(delivery.request_root_v1()), storage_debit)
 }
 
 #[cfg(test)]
@@ -68,7 +70,7 @@ pub(super) fn material_intake_pipelined_codec_test(
     request_root: Hash64,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     assert_eq!(s.version, m::MATERIAL_BATCH_VERSION);
-    material_intake_atomic(b, ctx, s, Some(request_root))
+    material_intake_atomic(b, ctx, s, Some(request_root), None)
 }
 
 fn material_intake_atomic(
@@ -76,9 +78,10 @@ fn material_intake_atomic(
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
     request_root: Option<Hash64>,
+    storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let saved = b.try_checkpoint()?;
-    let result = material_intake_inner(b, ctx, s, request_root);
+    let result = material_intake_inner(b, ctx, s, request_root, storage_debit);
     if result.is_err() {
         b.restore(saved);
     }
@@ -90,6 +93,7 @@ fn material_intake_inner(
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
     request_root: Option<Hash64>,
+    storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     if !b.extras.staged_tir_route_active {
         return Err(refused("material intake is dormant below palw_staged_tir_route_v1"));
@@ -193,13 +197,12 @@ fn material_intake_inner(
                 expires_daa,
                 material_until_daa: c.material_until_daa,
             };
-            // audit B-09 (fix-b): a fee is never merely ACCOUNTED. Its payer is an unadopted part of the V5 storage schedule, and a
-            // debit here would also leave the intake's derived native read/write set, so a non-zero fee REFUSES the intake (nothing
-            // written) until V5 adopts the payer and its debit; a zero fee charges nothing and records nothing owed.
+            // A positive charge is rooted only after an exact accepted carrier
+            // fee allocation. The legacy route still has no debit source.
             if fee > 0 {
-                return Err(refused(
-                    "material storage fee has no adopted payer (V5): intake refused rather than accounted and never debited",
-                ));
+                let root = request_root.ok_or_else(|| refused("material storage fee has no Batch demand"))?;
+                let debit = storage_debit.ok_or_else(|| refused("Batch material storage fee has no accepted carrier debit"))?;
+                debit.check_v1(s, root, ctx, fee).map_err(refused)?;
             }
             b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
             b.write_staged_row_v1(key, Some(Row::CourtMaterialDraft(Box::new(draft))))?;
@@ -331,7 +334,7 @@ fn own_draft(
 }
 
 /// Removes a draft and its parts and returns its reservation. The ledger's
-/// accounting of the charged schedule price is kept (always 0 since audit B-09 fix-b: a non-zero fee refuses the intake).
+/// accounting of the charged schedule price is kept.
 pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDraftV1) -> Result<(), PalwStateV2Error> {
     let lkey = Key::CourtMaterialLedger(draft.claim, draft.submitter);
     let next_ledger = match b.state.staged_court_row_v1(&lkey) {

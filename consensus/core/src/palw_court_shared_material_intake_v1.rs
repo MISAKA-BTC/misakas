@@ -15,9 +15,8 @@
 //!   registered opening width, the prompt's native form and the complete-ID
 //!   body). A declared size is never authority: it is checked against the
 //!   per-target native bound and against the submitter's per-claim budget.
-//! * Funding of storage belongs to the unadopted fee schedule. Production
-//!   resolution is always typed-missing ([`MaterialIntakeMissingV1::Schedule`]),
-//!   so no intake folds on any network. Tests inject a schedule.
+//! * Legacy intake has no storage debit source. The V3 Batch candidate checks
+//!   an exact carrier fee allocation before recording a positive charge.
 //!
 //! Authentication is data identity only (existing Merkle commitments/openings),
 //! never a computation proof, a duty completion, a custody grant or a credit.
@@ -32,6 +31,8 @@ use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Query, PalwTirP
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub(crate) mod batch;
+mod storage_rent;
+pub use storage_rent::{MaterialBatchStorageDebitV1, material_batch_storage_rent_v1};
 
 pub const MATERIAL_INTAKE_CONTEXT_V1: &[u8] = b"misaka-palw/material-intake/v1/mldsa87";
 pub(crate) const MATERIAL_INTAKE_CONTEXT_V2: &[u8] = b"misaka-palw/material-intake/v2/mldsa87";

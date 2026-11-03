@@ -225,7 +225,7 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     let delivery = batch::MaterialBatchDeliveryV1::new(request_root, &begin, body.len() as u64).unwrap();
     let before_unfunded = builder.state.state_root();
     assert!(super::super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
-        &mut builder, &at(frame, 1), &begin, &delivery).is_err());
+        &mut builder, &at(frame, 1), &begin, &delivery, None).is_err());
     assert_eq!(builder.state.state_root(), before_unfunded);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 1), &begin, request_root).unwrap(), E::Begun);
     assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail), request_root).unwrap(), E::Part);
