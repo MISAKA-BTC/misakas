@@ -905,3 +905,32 @@ unverified.
 
 The public REST and WebSocket remained current at virtual DAA
 19,606 with zero receipt blocks on the relay.
+
+## Live activation state and exact Qwen #43 — 05:24 UTC
+
+B0, B1, the relay, the 113 primary and the 113 tunnel reported the
+same schedule identity. The deployed retention activation was 20,000
+and was still unarmed. ModelOne and the Gate C attestor-liability
+fence were armed. At DAA 19,607, B0, relay, tunnel and the public
+index agreed on the selected tip. B1 and the 113 primary remained
+unsynced. The paired Qwen class inventory counted nine eligible
+independent bonds, zero ready independent bonds and zero assignments.
+
+The exact Qwen #43 carrier was present on B0, relay and the public
+WebSocket. Its claim was absent on B0. The matching journal refusal
+had 20,607 remaining DAA against 20,608 required. B0 reported zero
+receipt blocks and zero kernel Finals.
+
+The refreshed observer separates the stored carrier from the
+accepting fold clock, requires post-fence acceptance for the
+effective-retention gate, and reports whether the deadline was
+actually lifted. It checks the credited full-seat mask and reports
+Final and Gate C separately. Four local boundary fixtures passed.
+The real paired #43 check kept all gates false. The accepting fold
+hash, the first qualifying carrier across the boundary, and actual
+producer/provider custody still need independent evidence.
+
+The guarded IBM build and dependent arithmetic unit retained their
+original invocation IDs. The build was compiling workspace
+dependencies after 238 seconds and had about 13.4 GiB free. The
+arithmetic unit was waiting for the build receipt.
