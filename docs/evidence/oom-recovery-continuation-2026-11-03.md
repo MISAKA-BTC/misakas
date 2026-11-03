@@ -685,3 +685,18 @@ DAA against 20,608 required. Its exact claim, Court, and lifecycle
 rows were absent on B0, and B0's receipt and kernel Final counters
 were zero. B1 and the primary on 113 remained unsynced. The live
 Panel load measurement and promotion criteria remain open.
+
+The independent review found that a stalled Court sender could hold
+an unlimited number of those batches if native accounting were
+disabled. Commit `afef37a9e` caps resident batches at eight per
+process. The producer acquires the slot before inference. A refused
+import or retry retains the slot until the original batch retires.
+The existing per-batch limit is 64 riders. This bounds the number
+of in-process pinned rider captures and leaves retained-file byte
+accounting to the existing storage budget when configured. Six
+scoped tests passed, including the default-accounting limit and
+admission after retirement. Log SHA256 is
+`80a1fa7b73c050da5253c2e34e689f09e69dedf55148cdf4c48d88603cb290fe`.
+Node default/EVM test metadata also compiled with the resident cap.
+At 05:01 UTC the unsigned seat5 trial was still stopped. Its volume
+had 21,634,891,776 bytes free, below the 21 GiB launch floor.
