@@ -415,6 +415,13 @@ impl AssignmentDerivedResourcesV2 {
     pub fn all_attempt_relations(&self) -> u64 {
         self.all_attempt_relations
     }
+    /// The same complete frames and ML-DSA packet signatures reserved by
+    /// ContractCourtV2 when the first candidate opens.
+    pub(crate) fn all_attempt_signed_frame_bytes_v2(&self) -> Result<u64, AssignmentResourceErrorV2> {
+        let quote = crate::palw_positive_contract_v2::signed_quote(self.all_attempt_relations, self.check_limits.max_part_bytes)
+            .map_err(|_| AssignmentResourceErrorV2::Budget)?;
+        Ok(quote.total_packet_bytes)
+    }
     pub fn all_attempt_cost(&self) -> CostEnvelope {
         self.all_attempt_cost
     }

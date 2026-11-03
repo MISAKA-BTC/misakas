@@ -34,7 +34,7 @@ pub struct SignedTransportQuote {
     pub signature_bytes: u64,
     pub total_packet_bytes: u64,
 }
-fn signed_quote(count: u64, frame_cap: u64) -> Result<SignedTransportQuote, AdapterError> {
+pub(crate) fn signed_quote(count: u64, frame_cap: u64) -> Result<SignedTransportQuote, AdapterError> {
     let max_packet_bytes = frame_cap.checked_add(SIGNATURE_BYTES as u64).ok_or(CheckError::Budget)?;
     let unsigned_frame_bytes = count.checked_mul(frame_cap).ok_or(CheckError::Budget)?;
     let signature_bytes = count.checked_mul(SIGNATURE_BYTES as u64).ok_or(CheckError::Budget)?;

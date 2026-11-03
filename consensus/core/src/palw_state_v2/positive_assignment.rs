@@ -1795,6 +1795,7 @@ impl TransitionBuilder<'_> {
                 &gate_c,
                 rules.assignment_policy().refund_window_daa,
                 rules.positive_policy().max_attempts,
+                resources.all_attempt_signed_frame_bytes_v2().map_err(assignment_resource_error)?,
             )
             .map_err(refusal)?;
         let relay = if rules.funding_relay_profile().requires_relay() {

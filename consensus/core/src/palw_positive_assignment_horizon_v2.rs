@@ -97,6 +97,7 @@ impl AssignmentHorizonSpecV2 {
         gate_c: &AssignmentGateCClockV2,
         refund_window_daa: u64,
         attempts: u32,
+        signed_court_frame_bytes: u64,
     ) -> Result<(), AssignmentHorizonErrorV2> {
         let retained_until = self.refund_before_daa.checked_sub(refund_window_daa).ok_or(AssignmentHorizonErrorV2::Overflow)?;
         let source_before = self.court_before_daa.max(gate_c.latest_failed_attestation_decision_daa);
@@ -106,10 +107,12 @@ impl AssignmentHorizonSpecV2 {
         {
             return Err(AssignmentHorizonErrorV2::Window);
         }
+        let minimum_transmitted =
+            add(self.minimum_transmitted_source_bytes, add(signed_court_frame_bytes, self.record_bytes_all_attempts)?)?;
         let budget = &service.budget;
         if budget.rounds < self.minimum_source_rounds
             || budget.unique_source_bytes < self.minimum_unique_source_bytes
-            || budget.transmitted_bytes < self.minimum_transmitted_source_bytes
+            || budget.transmitted_bytes < minimum_transmitted
             || budget.retained_bytes < self.minimum_unique_source_bytes
             || budget.witness_attempts != attempts
         {
@@ -195,18 +198,18 @@ impl AssignmentHorizonSpecV2 {
         )?;
         let minimum_source_rounds = mul(ranges, readers)?;
         let minimum_transmitted = mul(catalog.opening_bytes, readers)?;
-        if source.budget.rounds < minimum_source_rounds
-            || source.budget.unique_source_bytes < catalog.data_bytes
-            || source.budget.transmitted_bytes < minimum_transmitted
-            || source.budget.retained_bytes < catalog.data_bytes
-        {
-            return Err(AssignmentHorizonErrorV2::Budget);
-        }
         let record_bytes_all_attempts = mul(
             misaka_palw_positive_contract::record::wire_size(resources.binding().job().exact_decode_tokens)?,
             u64::from(positive.max_attempts),
         )?;
-        if prover.max_submitted_bytes < add(resources.all_attempt_cost().encoded_bytes, record_bytes_all_attempts)?
+        let signed_court_frame_bytes = resources.all_attempt_signed_frame_bytes_v2()?;
+        let prover_transport = add(signed_court_frame_bytes, record_bytes_all_attempts)?;
+        if source.budget.rounds < minimum_source_rounds
+            || source.budget.unique_source_bytes < catalog.data_bytes
+            || source.budget.transmitted_bytes < add(minimum_transmitted, prover_transport)?
+            || source.budget.retained_bytes < catalog.data_bytes
+            || signed_court_frame_bytes > positive.max_all_attempt_bytes
+            || prover.max_submitted_bytes < prover_transport
             || prover.max_retained_bytes < catalog.data_bytes
         {
             return Err(AssignmentHorizonErrorV2::Budget);
