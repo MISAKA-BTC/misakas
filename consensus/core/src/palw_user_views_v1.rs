@@ -11,6 +11,7 @@
 //! (`"unavailable"` / an `error` string), never zero-filled. No rule reads these documents.
 
 use crate::config::params::{ForkActivation, PalwPostLaunchFenceV1, Params};
+use crate::palw_court_shared_material_intake_v1::MaterialTargetV1;
 use crate::palw_state_v2::{
     PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwClaimPhaseV2, PalwClaimStateV2, PalwCourtSessionStateV2, PalwStateParamsV2,
 };
@@ -356,11 +357,12 @@ pub fn palw_claim_detail_json_v1(
 }
 
 /// What `getPalwCourtState` (op 226) is asked about.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PalwCourtTargetV1 {
     Claim(Hash64),
     Session(Hash64),
-    BatchResponse { claim: Hash64, ordinal: u64, target: crate::palw_court_shared_material_intake_v1::MaterialTargetV1 },
+    BatchResponse { claim: Hash64, ordinal: u64, target: MaterialTargetV1 },
+    NumericalBatchOpen { claim: Hash64, ordinal: usize, notice: Hash64, leaf: u64, lengths: Vec<(MaterialTargetV1, u64)> },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -377,6 +379,9 @@ pub fn palw_court_state_json_v1(
         PalwCourtTargetV1::Claim(c) => (c, None),
         PalwCourtTargetV1::Session(s) => (state.court_session(&s)?.claim, Some(s)),
         PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => return batch_response_json_v1(state, claim, ordinal, target, now),
+        PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
+            return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
+        }
     };
     let sessions: Vec<Value> = state
         .court_sessions_iter()
@@ -401,6 +406,49 @@ pub fn palw_court_state_json_v1(
         "dispute": dispute_json(state, &claim_id),
         "courtClocks": claim.map(|c| court_clocks_json(state, params, &claim_id, c)).unwrap_or(Value::Null),
     }))
+}
+
+fn numerical_batch_open_json_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    ordinal: usize,
+    notice: Hash64,
+    leaf: u64,
+    lengths: &[(MaterialTargetV1, u64)],
+    now: u64,
+) -> Value {
+    use crate::palw_court_shared_material_intake_v1::quote_numerical_batch_open_v1;
+    // This view only serves the bounded numerical profile. The fold still
+    // authenticates and accounts for the final signed carrier independently.
+    const MAX_QUOTE_RANGES: usize = 4_096;
+    let result = quote_numerical_batch_open_v1(state, claim, notice, leaf, ordinal, MAX_QUOTE_RANGES, lengths)
+        .map_err(|error| error.to_string()).and_then(|open| {
+            let demand = &open.demand;
+            let window = demand.case_window;
+            let request_root = demand.checked_request_root_v1().map_err(|error| format!("Batch demand: {error:?}"))?;
+            Ok(json!({
+                "wireVersion": open.version, "scopeId": open.scope_id.to_string(),
+                "signer": palw_bond_key_text_v1(&open.signer), "requestRoot": request_root.to_string(),
+                "caseId": demand.case_id.to_string(), "originalAcceptedDaa": window.claim_accepted_daa.to_string(),
+                "noticeDaa": window.challenge_opened_daa.to_string(), "collectUntilDaa": window.collect_until_daa.to_string(),
+                "materialUntilDaa": window.material_until_daa.to_string(), "openedDaa": demand.opened_daa.to_string(),
+                "responseDeadlineDaa": demand.response_deadline_daa.to_string(),
+                "partBytes": demand.part_bytes, "maximumBytes": demand.maximum_bytes,
+                "ranges": demand.ranges.iter().map(|range| json!({
+                    "id": range.id.to_string(), "bytes": range.bytes, "authentication": "whole-range",
+                })).collect::<Vec<_>>(),
+            }))
+        });
+    let (open, error) = match result {
+        Ok(open) => (open, None),
+        Err(error) => (Value::Null, Some(error)),
+    };
+    json!({
+        "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwNumericalBatchOpen", "nowDaa": now,
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "claimId": claim.to_string(), "noticeId": notice.to_string(),
+        "ordinal": ordinal.to_string(), "leaf": leaf.to_string(), "open": open, "error": error,
+    })
 }
 
 fn batch_response_json_v1(

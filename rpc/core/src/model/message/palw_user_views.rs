@@ -92,17 +92,29 @@ pub struct GetPalwCourtStateRequest {
     pub batch_ordinal: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub batch_target: String,
+    /// Numerical Open selector `notice/leaf/target=bytes,target=bytes`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub batch_open: String,
 }
 
 impl Serializer for GetPalwCourtStateRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        let version = if self.batch_ordinal.is_empty() && self.batch_target.is_empty() { 1 } else { 2 };
+        let version = if !self.batch_open.is_empty() {
+            3
+        } else if self.batch_ordinal.is_empty() && self.batch_target.is_empty() {
+            1
+        } else {
+            2
+        };
         store!(u16, &version, writer)?;
         store!(String, &self.claim_hex, writer)?;
         store!(String, &self.session_hex, writer)?;
-        if version == 2 {
+        if version >= 2 {
             store!(String, &self.batch_ordinal, writer)?;
             store!(String, &self.batch_target, writer)?;
+        }
+        if version == 3 {
+            store!(String, &self.batch_open, writer)?;
         }
         Ok(())
     }
@@ -111,17 +123,18 @@ impl Serializer for GetPalwCourtStateRequest {
 impl Deserializer for GetPalwCourtStateRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if !matches!(version, 1 | 2) {
+        if !matches!(version, 1..=3) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown getPalwCourtState request version"));
         }
         let claim_hex = load!(String, reader)?;
         let session_hex = load!(String, reader)?;
-        let (batch_ordinal, batch_target) = if version == 2 {
+        let (batch_ordinal, batch_target) = if version >= 2 {
             (load!(String, reader)?, load!(String, reader)?)
         } else {
             (String::new(), String::new())
         };
-        Ok(Self { claim_hex, session_hex, batch_ordinal, batch_target })
+        let batch_open = if version == 3 { load!(String, reader)? } else { String::new() };
+        Ok(Self { claim_hex, session_hex, batch_ordinal, batch_target, batch_open })
     }
 }
 
@@ -234,6 +247,13 @@ mod tests {
         let batch = GetPalwCourtStateRequest { batch_ordinal: u64::MAX.to_string(), batch_target: "full-ids".into(), ..req };
         let restored = round_trip(&batch);
         assert_eq!((restored.batch_ordinal, restored.batch_target), (batch.batch_ordinal, batch.batch_target));
+        assert!(restored.batch_open.is_empty());
+        let open = GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), batch_ordinal: "0".into(),
+            batch_open: format!("{}/18446744073709551615/unit:0=1", "cd".repeat(64)), ..Default::default() };
+        let mut open_wire = Vec::new();
+        Serializer::serialize(&open, &mut open_wire).unwrap();
+        assert_eq!(&open_wire[..2], &3u16.to_le_bytes());
+        assert_eq!(round_trip(&open).batch_open, open.batch_open);
         let bond = round_trip(&GetPalwBondDetailRequest { bond: "00:1".into() });
         assert_eq!(bond.bond, "00:1");
         let plain = round_trip(&GetPalwFenceScheduleRequest::default());

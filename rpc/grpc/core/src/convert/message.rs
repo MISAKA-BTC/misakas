@@ -6117,11 +6117,11 @@ try_from!(item: &protowire::GetPalwClaimDetailRequestMessage, kaspa_rpc_core::Ge
 });
 from!(item: &kaspa_rpc_core::GetPalwCourtStateRequest, protowire::GetPalwCourtStateRequestMessage, {
     Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone(), batch_ordinal: item.batch_ordinal.clone(),
-        batch_target: item.batch_target.clone() }
+        batch_target: item.batch_target.clone(), batch_open: item.batch_open.clone() }
 });
 try_from!(item: &protowire::GetPalwCourtStateRequestMessage, kaspa_rpc_core::GetPalwCourtStateRequest, {
     Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone(), batch_ordinal: item.batch_ordinal.clone(),
-        batch_target: item.batch_target.clone() }
+        batch_target: item.batch_target.clone(), batch_open: item.batch_open.clone() }
 });
 from!(item: &kaspa_rpc_core::GetPalwFenceScheduleRequest, protowire::GetPalwFenceScheduleRequestMessage, {
     Self { view: item.view.clone(), key: item.key.clone() }

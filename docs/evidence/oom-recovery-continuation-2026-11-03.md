@@ -3304,3 +3304,25 @@ B0 and relay still agreed at virtual DAA 19,714. The scanner found no
 new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-root-open-live.ElMRSJ/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-open-plan.1HzgXg/tests.log`.
+
+## Operator RPC for numerical Batch Open quotes
+
+Court RPC op 226 now accepts a version-3 numerical Open request. The
+request names the claim, demand ordinal, accepted notice, disputed leaf
+and exact target lengths. The selected snapshot supplies the quote tip,
+signer, request root, windows and canonical ranges. The route requires
+the existing operator RPC setting and admits one quote at a time across
+connections. It caps the input list at 64 entries, the selector at 4,096
+bytes and the native enumeration at 4,096 positions. Existing claim,
+session and response reads retain their previous request versions.
+
+Three extracted tests passed for legacy request bytes, version-3 round
+trip, full-width leaf text and malformed or oversized selectors. Protoc
+compiled the updated schema. The RPC service and Core have not run
+together with this change. A Panel client must still reconstruct and
+verify the request root before signing, then fund and file the carrier
+at its booked DAA. The production funded original profile remains open.
+
+B0 and relay agreed at virtual DAA 19,715, with no newly scanned Qwen
+carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-root-open-rpc-live.1q4n0T/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-open-rpc.EP0ttk/tests.log`.
