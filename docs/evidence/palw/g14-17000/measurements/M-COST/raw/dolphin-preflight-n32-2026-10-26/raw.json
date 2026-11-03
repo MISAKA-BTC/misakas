@@ -1,0 +1,142 @@
+{
+  "build": {
+    "source_commit": "3872a488c64e03abfcdac11624460dab89d11138",
+    "source_trees": "a756089d717df66e1ee65d7af0b77f48cc718496c5c56c135df1943b7380b9e5",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--release",
+      "-p",
+      "misaka-palw-opv-meas",
+      "--test",
+      "g14_real_model_measure",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "shared_slot": true,
+    "stage": "BUILT",
+    "features": "default",
+    "minimum_hardware": false,
+    "load_before": [
+      3.76171875,
+      6.2080078125,
+      11.15625
+    ],
+    "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+    "builder_sha256": "4a1057462264d25160dd5a04b9014fc2b54f1392dcaa3d91fcf7ac886d747018",
+    "exit_code": 0,
+    "wall_seconds": 209.558700666,
+    "load_after": [
+      5.94287109375,
+      5.8525390625,
+      9.92236328125
+    ],
+    "binary": {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/dolphin-opv-g14_real_model_measure-bfaf6f7de4aacd90",
+      "sha256": "d709c5cbfebdfd3da7f64509f8d4856980fc68801853f298f4f01afb8c841ba1"
+    },
+    "source_unchanged": true
+  },
+  "command": [
+    "/usr/bin/time",
+    "-l",
+    "/Users/wata/.codex/artifacts/g14-17000-measure/pins/dolphin-opv-g14_real_model_measure-bfaf6f7de4aacd90",
+    "g14_dolphin_long_context_cost",
+    "--exact",
+    "--ignored",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "env": {
+    "TMPDIR": "/private/tmp",
+    "RAYON_NUM_THREADS": "3",
+    "G14_A16_ARTIFACT": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/legacy/dolphin3.0-qwen25-1.5b-a16-32k-precise.palwart",
+    "G14_A16_TOKENS": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/calib/eval-a16-long-tokens.json",
+    "G14_A16_POSITIONS": "32",
+    "G14_A16_CHUNK": "16"
+  },
+  "status": "UNDER_LOAD_RUNTIME_ONLY",
+  "minimum_hardware": false,
+  "arming_evidence": false,
+  "load_before": [
+    5.49951171875,
+    5.7607421875,
+    9.81787109375
+  ],
+  "timeout_seconds": 1800,
+  "rss_cap_gib": 8,
+  "telemetry": [
+    {
+      "seconds": 0.013695458,
+      "process_group_rss_bytes": 1343488,
+      "load": [
+        5.49951171875,
+        5.7607421875,
+        9.81787109375
+      ]
+    },
+    {
+      "seconds": 5.036959125,
+      "process_group_rss_bytes": 8650752,
+      "load": [
+        5.37939453125,
+        5.7314453125,
+        9.78369140625
+      ]
+    },
+    {
+      "seconds": 10.060673666,
+      "process_group_rss_bytes": 2086354944,
+      "load": [
+        5.1884765625,
+        5.68603515625,
+        9.74365234375
+      ]
+    }
+  ],
+  "exit_code": 0,
+  "wall_seconds": 15.071449125,
+  "load_after": [
+    5.17333984375,
+    5.67431640625,
+    9.7158203125
+  ],
+  "stdout_sha256": "4cc6db43a4504b9038b6a0a3b8d009a6f56819ee6f5ccbe2afe6dc64e2193494",
+  "stderr_sha256": "99ea65441e1439ae1038cde185a32efa5757981a99b9685e6a94c478baf5f7d3",
+  "under_load": true,
+  "setup": {
+    "arming_evidence": false,
+    "artifact": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/legacy/dolphin3.0-qwen25-1.5b-a16-32k-precise.palwart",
+    "artifact_bytes": 1811942348,
+    "artifact_sha256": "8d88abf0cf46d86bed52466328690dbfebf6b49efb2b278a9648f947c4843da6",
+    "cache_profile": "A16KvI32",
+    "chunk_positions": 16,
+    "cold_fetch_measured": false,
+    "declared_max_context": 32768,
+    "kernel_slice_claim_measured": false,
+    "nine_b_measured": false,
+    "positions_requested": 32,
+    "runtime": "A16 graph-v7 planned",
+    "setup_wall_ns": 7252609583,
+    "shape_profile_id": "c5ee885c982c3c4db81277174099b2dc955ae2e2e08f3231bb0c406d10035c04054a2b18cf232b0b53d8c42d27a64fc334a6ff7760bc6f63abbe5eb220c7411f",
+    "token_file": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/calib/eval-a16-long-tokens.json",
+    "tokens_sha256": "41069932f1940b3d7a59b54647bff7fe81fc03de9582b999fe57c2e0bd119d2d"
+  },
+  "result": {
+    "arming_evidence": false,
+    "cache_resident_bytes": 1835008,
+    "court_measured": false,
+    "da_encoded_bytes": null,
+    "last_logits_sha256": "7b0ca035d1554cb91dff0507460586ebfe183129cc4026b078a9c16eb05c21f8",
+    "logical_trace_i32_bytes_total": 279636992,
+    "positions_executed": 32,
+    "total_forward_wall_ns": 1316720334,
+    "trace_retained": false,
+    "transfer_measured": false
+  },
+  "completed_positions": 32,
+  "rss_bytes": 2085158912.0,
+  "user_seconds": 15.8,
+  "system_seconds": 0.43
+}

@@ -1,0 +1,23 @@
+{
+  "classification": "TWO_ENDPOINT_OBSERVATION_NOT_LATENCY_DISTRIBUTION",
+  "inputs": [
+    {
+      "path": "public-wrpc-2026-10-26.json",
+      "sha256": "d7890d4f21f973da672bc2b406a1713c7dc9a7d24a17f82ef2eb51ebf8798e86"
+    },
+    {
+      "path": "public-wrpc-continuation-2026-10-26.json",
+      "sha256": "7eaf9944f4c1d5bff8d78e17c5b36e5af5646477509df2c5162413e0df52090e"
+    }
+  ],
+  "network": "testnet-12",
+  "observed_daa": [
+    15850,
+    15904
+  ],
+  "elapsed_seconds": 8934.865,
+  "daa_delta": 54,
+  "mean_elapsed_seconds_per_net_daa_advance": 165.46046296296296,
+  "remaining_daa_to_17000": 1096,
+  "arming_evidence": false
+}

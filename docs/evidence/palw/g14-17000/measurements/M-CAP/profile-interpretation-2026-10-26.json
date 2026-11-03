@@ -1,0 +1,71 @@
+{
+  "source_commit": "9c93b6a130b724b0b8d9ea31ab8525c2af8ac1dc",
+  "scope": "source-derived interpretation of measured profile labels, not new runtime evidence",
+  "profiles": [
+    {
+      "reported_positions": 6,
+      "prompt_tokens": 3,
+      "requested_generated_tokens": 3,
+      "trace_positions_derived": 5
+    },
+    {
+      "reported_positions": 64,
+      "prompt_tokens": 3,
+      "requested_generated_tokens": 61,
+      "trace_positions_derived": 63
+    }
+  ],
+  "legal_max_trace_positions": 64,
+  "maximum_trace_measured": false,
+  "files": [
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical/capacity_measurement.rs",
+      "git_blob": "a7ba4537462bfd9c9c55847404d61a401c3d42e3",
+      "sha256": "f527470bc8beca524e95e9710fce8706a0cbd5d1f51e40e8f485126251eea9da",
+      "matches": [
+        {
+          "line": 55,
+          "text": "prompt: vec![3, 17, 9],"
+        },
+        {
+          "line": 56,
+          "text": "max_new_tokens: positions - 3,"
+        }
+      ]
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs",
+      "git_blob": "10497b78055d3f7325feb593f8de5a1633e453a9",
+      "sha256": "6289d9f1222508065f313b9b70c7cf131f482f5ee5db1801b5dbd8f1c6aa0be9",
+      "matches": [
+        {
+          "line": 60,
+          "text": "const MAX_POSITIONS: u32 = 64;"
+        },
+        {
+          "line": 551,
+          "text": "let fed = generated.len() - 1;"
+        },
+        {
+          "line": 552,
+          "text": "let stream: Vec<u32> = job.prompt.iter().chain(&generated[..fed]).copied().collect();"
+        }
+      ]
+    },
+    {
+      "path": "misaka/palw/kernel/src/job.rs",
+      "git_blob": "837dadc036c09408e20cd4c762d09153e7439bd6",
+      "sha256": "75dafc78572c0cb288ced9e6f64fb7776e284e89b1d10d9a8940c6b5468ba1ca",
+      "matches": [
+        {
+          "line": 82,
+          "text": "let positions = self.prompt.len() as u64 + self.max_new_tokens as u64 - 1;"
+        },
+        {
+          "line": 83,
+          "text": "if positions > max_positions as u64 {"
+        }
+      ]
+    }
+  ]
+}

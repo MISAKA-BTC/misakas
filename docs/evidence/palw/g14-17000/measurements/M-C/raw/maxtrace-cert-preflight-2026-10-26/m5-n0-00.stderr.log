@@ -1,0 +1,22 @@
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::cert::g14_cert_panel_one_measure' (3232971) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e.rs:764:57:
+the class registered through the real path
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+        0.03 real         0.02 user         0.01 sys
+            49823744  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+                3534  page reclaims
+                   0  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                   0  signals received
+                  12  voluntary context switches
+                 935  involuntary context switches
+           308546026  instructions retired
+           117714433  cycles elapsed
+            18383496  peak memory footprint

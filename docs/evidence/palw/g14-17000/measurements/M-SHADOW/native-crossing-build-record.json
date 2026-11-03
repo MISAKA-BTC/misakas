@@ -1,0 +1,38 @@
+{
+  "source_commit": "f665796d1aa759e0b3c4879c7deb39755e144fb1",
+  "source_trees": "a756089d717df66e1ee65d7af0b77f48cc718496c5c56c135df1943b7380b9e5",
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "kaspa-consensus",
+    "--lib",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "shared_slot": true,
+  "stage": "BUILT",
+  "features": "default",
+  "minimum_hardware": false,
+  "load_before": [
+    5.17333984375,
+    5.67431640625,
+    9.7158203125
+  ],
+  "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+  "builder_sha256": "4a1057462264d25160dd5a04b9014fc2b54f1392dcaa3d91fcf7ac886d747018",
+  "exit_code": 0,
+  "wall_seconds": 622.298867208,
+  "load_after": [
+    9.88037109375,
+    9.27783203125,
+    9.44970703125
+  ],
+  "binary": {
+    "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-crossing-kaspa_consensus-d80b6d194a277fef",
+    "sha256": "942cb1484a6ee2648b554b2b3165e8b0688a1c3dc295258bc28e7665dc16f2b0"
+  },
+  "source_unchanged": true
+}

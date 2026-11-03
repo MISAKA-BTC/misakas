@@ -1,0 +1,33 @@
+{
+  "source_commit": "a2e21220795136aeae68430ed786bb124c327e4e",
+  "source_trees": "0af58fdc5add54c2aaf81b5c39d9436deb6b5b901ee85de31dc61b822f1af238",
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "kaspa-consensus",
+    "--lib",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "shared_slot": true,
+  "stage": "FAILED",
+  "features": "default",
+  "minimum_hardware": false,
+  "load_before": [
+    7.669921875,
+    12.19677734375,
+    26.21923828125
+  ],
+  "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+  "builder_sha256": "24b38ae19ff71dd6a68bea8b69f9dde464fa53a37bf1b83127ce258ae1799a0b",
+  "exit_code": 101,
+  "wall_seconds": 82.30078275,
+  "load_after": [
+    10.5390625,
+    12.228515625,
+    24.97900390625
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "batch_status": "UNDER_LOAD_FIXTURE_ONLY",
+  "aggregation": "median of process medians; largest process p95; largest item maximum; independent-process RSS delta is descriptive only",
+  "rows": [
+    {
+      "operation": "mldsa87_verify",
+      "scale": null,
+      "status": "UNDER_LOAD",
+      "under_load": true,
+      "sample_processes": 3,
+      "baseline_processes": 3,
+      "n_each": 1000,
+      "median_of_process_medians_wall_ns": 126250,
+      "worst_process_p95_wall_ns": 134333,
+      "worst_item_wall_ns": 218292,
+      "warmup_wall_ns": [
+        183334,
+        157292,
+        154125
+      ],
+      "exemplar_body_bytes": [
+        4627,
+        4627,
+        4627
+      ],
+      "distinct": [
+        64,
+        64,
+        64
+      ],
+      "median_process_peak_rss_bytes": 13729792,
+      "median_setup_peak_rss_bytes": 13631488,
+      "descriptive_rss_delta_bytes": 98304,
+      "max_load_before_or_after": 12.1796875
+    },
+    {
+      "operation": "root_claim_admit",
+      "scale": null,
+      "status": "UNDER_LOAD",
+      "under_load": true,
+      "sample_processes": 3,
+      "baseline_processes": 3,
+      "n_each": 1000,
+      "median_of_process_medians_wall_ns": 1437791,
+      "worst_process_p95_wall_ns": 1523291,
+      "worst_item_wall_ns": 2916458,
+      "warmup_wall_ns": [
+        1420916,
+        1401500,
+        1388000
+      ],
+      "exemplar_body_bytes": [
+        16571,
+        16571,
+        16571
+      ],
+      "distinct": [
+        96,
+        96,
+        96
+      ],
+      "median_process_peak_rss_bytes": 16433152,
+      "median_setup_peak_rss_bytes": 16285696,
+      "descriptive_rss_delta_bytes": 147456,
+      "max_load_before_or_after": 12.1796875
+    },
+    {
+      "operation": "d2_sweep",
+      "scale": 16,
+      "status": "UNDER_LOAD",
+      "under_load": true,
+      "sample_processes": 3,
+      "baseline_processes": 3,
+      "n_each": 1000,
+      "median_of_process_medians_wall_ns": 750,
+      "worst_process_p95_wall_ns": 792,
+      "worst_item_wall_ns": 958,
+      "warmup_wall_ns": [
+        3584,
+        2417,
+        3542
+      ],
+      "exemplar_body_bytes": [
+        0,
+        0,
+        0
+      ],
+      "distinct": [
+        1,
+        1,
+        1
+      ],
+      "median_process_peak_rss_bytes": 12566528,
+      "median_setup_peak_rss_bytes": 12500992,
+      "descriptive_rss_delta_bytes": 65536,
+      "max_load_before_or_after": 7.8701171875
+    },
+    {
+      "operation": "d2_sweep",
+      "scale": 256,
+      "status": "UNDER_LOAD",
+      "under_load": true,
+      "sample_processes": 3,
+      "baseline_processes": 3,
+      "n_each": 1000,
+      "median_of_process_medians_wall_ns": 9333,
+      "worst_process_p95_wall_ns": 9500,
+      "worst_item_wall_ns": 64459,
+      "warmup_wall_ns": [
+        17167,
+        18875,
+        16417
+      ],
+      "exemplar_body_bytes": [
+        0,
+        0,
+        0
+      ],
+      "distinct": [
+        1,
+        1,
+        1
+      ],
+      "median_process_peak_rss_bytes": 12713984,
+      "median_setup_peak_rss_bytes": 12943360,
+      "descriptive_rss_delta_bytes": -229376,
+      "max_load_before_or_after": 7.8701171875
+    },
+    {
+      "operation": "d2_sweep",
+      "scale": 4096,
+      "status": "UNDER_LOAD",
+      "under_load": true,
+      "sample_processes": 3,
+      "baseline_processes": 3,
+      "n_each": 1000,
+      "median_of_process_medians_wall_ns": 216416,
+      "worst_process_p95_wall_ns": 237667,
+      "worst_item_wall_ns": 417958,
+      "warmup_wall_ns": [
+        396625,
+        451625,
+        481917
+      ],
+      "exemplar_body_bytes": [
+        0,
+        0,
+        0
+      ],
+      "distinct": [
+        1,
+        1,
+        1
+      ],
+      "median_process_peak_rss_bytes": 19283968,
+      "median_setup_peak_rss_bytes": 15695872,
+      "descriptive_rss_delta_bytes": 3588096,
+      "max_load_before_or_after": 7.8701171875
+    }
+  ]
+}
