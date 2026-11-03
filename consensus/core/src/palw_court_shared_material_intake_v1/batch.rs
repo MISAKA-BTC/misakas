@@ -1,14 +1,16 @@
 //! Service projection of the signed pipelined material codec. The coordinator
 //! binds an accepted demand, native target bound and literal responder first.
 use super::{
-    MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1 as Action, MaterialTargetV1, SignedMaterialIntakeV1,
-    material_batch_draft_id_v1,
+    MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1 as Action, MaterialIntakeScheduleV1, MaterialTargetV1,
+    SignedMaterialIntakeV1, material_batch_draft_id_v1,
 };
 use crate::Hash64;
-use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations, causal::CausalServicePacketV1};
+use crate::palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1};
+use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1};
 use crate::palw_state_v2::PalwBondKeyV2;
 use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
 use borsh::BorshSerialize;
+use std::collections::BTreeMap;
 
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
 
@@ -24,6 +26,7 @@ enum Stage {
 pub(crate) struct MaterialBatchDeliveryV1 {
     id: Hash64,
     request_root: Hash64,
+    case_window: BatchCourtWindowV1,
     release_daa: u64,
     service_before: u64,
     claim: Hash64,
@@ -64,7 +67,8 @@ impl MaterialBatchDeliveryV1 {
             .map(|index| &demand.ranges[index])
             .ok_or("Batch material target is outside the accepted demand")?;
         let release_daa = demand.opened_daa.checked_add(1).ok_or("Batch demand opening overflows")?;
-        let delivery = Self::new(request_root, declaration, native_maximum, release_daa, demand.response_deadline_daa)?;
+        let delivery =
+            Self::new(request_root, declaration, native_maximum, demand.case_window, release_daa, demand.response_deadline_daa)?;
         if range.authentication != BatchRangeAuthenticationV1::WholeRange || delivery.total != u64::from(range.bytes) {
             return Err("Batch material declaration differs from the accepted range".into());
         }
@@ -75,6 +79,7 @@ impl MaterialBatchDeliveryV1 {
         request_root: Hash64,
         declaration: &SignedMaterialIntakeV1,
         native_maximum: u64,
+        case_window: BatchCourtWindowV1,
         release_daa: u64,
         service_before: u64,
     ) -> Result<Self, String> {
@@ -106,6 +111,7 @@ impl MaterialBatchDeliveryV1 {
         Ok(Self {
             id,
             request_root,
+            case_window,
             release_daa,
             service_before,
             claim: declaration.claim,
@@ -181,6 +187,60 @@ impl MaterialBatchDeliveryV1 {
         Ok(graph)
     }
 
+    fn check_case_dependencies_v1(&self, nodes: &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal> {
+        use ServiceRefusal::InvalidState;
+        let id = |stage| self.packet_id(stage).map_err(|_| InvalidState);
+        let begin = id(Stage::Begin)?;
+        if !nodes.contains_key(&begin) {
+            return Err(InvalidState);
+        }
+        let finish = nodes.get(&id(Stage::Finish)?).ok_or(InvalidState)?;
+        for offset in (0..self.total).step_by(PART as usize) {
+            let part_id = id(Stage::Part(offset))?;
+            let part = nodes.get(&part_id).ok_or(InvalidState)?;
+            if !part.predecessors.contains(&begin) || !finish.predecessors.contains(&part_id) {
+                return Err(InvalidState);
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate the actual booked span against the same expiry as the native
+    /// fold. A Finish exactly on the expiry DAA is outside the draft.
+    pub(crate) fn check_draft_schedule_v1(
+        &self,
+        book: &ServiceReservations,
+        schedule: MaterialIntakeScheduleV1,
+    ) -> Result<(), ServiceRefusal> {
+        use ServiceRefusal::{DeadlineExhausted, InvalidState};
+        let assigned = |stage| {
+            let id = self.packet_id(stage).map_err(|_| InvalidState)?;
+            let daa = book.assigned_daa(&id).ok_or(InvalidState)?;
+            if !(self.release_daa..self.service_before).contains(&daa) {
+                return Err(DeadlineExhausted);
+            }
+            Ok(daa)
+        };
+        let begin = assigned(Stage::Begin)?;
+        let finish = assigned(Stage::Finish)?;
+        let hard = self
+            .case_window
+            .claim_accepted_daa
+            .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+            .ok_or(DeadlineExhausted)?;
+        let expires = schedule.draft_expires_v1(begin, hard, self.case_window.material_until_daa).map_err(|_| DeadlineExhausted)?;
+        if finish >= expires {
+            return Err(DeadlineExhausted);
+        }
+        for offset in (0..self.total).step_by(PART as usize) {
+            let part = assigned(Stage::Part(offset))?;
+            if part <= begin || part >= finish {
+                return Err(DeadlineExhausted);
+            }
+        }
+        Ok(())
+    }
+
     /// Match the actual signed action to its case-specific booked slot. The
     /// accepting caller must take the book from the live claim binding, and
     /// still verify the signature, native body and actual predecessor rows.
@@ -220,10 +280,97 @@ impl MaterialBatchDeliveryV1 {
     }
 }
 
+impl BatchCourtWindowV1 {
+    /// Book the complete case atomically with the native storage windows.
+    /// The coordinator supplies every delivery selected by the case graph.
+    pub(crate) fn reserve_latest_notice_material_v1(
+        self,
+        book: &mut ServiceReservations,
+        graph: &[CausalServicePacketV1],
+        terminal: [u8; 64],
+        recovery_daa: u64,
+        deliveries: &[MaterialBatchDeliveryV1],
+        schedule: MaterialIntakeScheduleV1,
+    ) -> Result<u64, BatchCourtErrorV1> {
+        if deliveries.is_empty() || deliveries.iter().any(|delivery| delivery.case_window != self) {
+            return Err(BatchCourtErrorV1::CaseGraph);
+        }
+        self.reserve_latest_notice_checked_v1(book, graph, terminal, recovery_daa, |candidate, nodes| {
+            for delivery in deliveries {
+                delivery.check_case_dependencies_v1(nodes)?;
+                delivery.check_draft_schedule_v1(candidate, schedule)?;
+            }
+            Ok(())
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tx::TransactionOutpoint;
+
+    fn test_case() -> BatchCourtWindowV1 {
+        BatchCourtWindowV1 { claim_accepted_daa: 2, challenge_opened_daa: 7, collect_until_daa: 20, material_until_daa: 11_000 }
+    }
+
+    #[test]
+    fn latest_case_refuses_finish_on_draft_expiry_atomically() {
+        let h = Hash64::from_u64_word;
+        let a = 2;
+        let notice = a + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
+        let first = notice + 1;
+        let case = BatchCourtWindowV1 {
+            claim_accepted_daa: a,
+            challenge_opened_daa: notice,
+            collect_until_daa: a + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA,
+            material_until_daa: 11_000,
+        };
+        let begin = SignedMaterialIntakeV1 {
+            version: MATERIAL_BATCH_VERSION,
+            claim: h(1),
+            scope_id: h(2),
+            target: MaterialTargetV1::Unit { ordinal: 7 },
+            submitter: PalwBondKeyV2(TransactionOutpoint::new(h(3), 0)),
+            action: Action::Begin { total_bytes: 1, body_hash: h(4) },
+            signature: Vec::new(),
+        };
+        let cost = |bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
+        let delivery = MaterialBatchDeliveryV1::new(h(5), &begin, 1, case, first, first + 8).unwrap();
+        let mut graph = delivery.service_graph_v1(first, first + 8, cost).unwrap();
+        let finish = graph[2].packet.id;
+        let terminal = [18; 64];
+        graph.push(CausalServicePacketV1 {
+            packet: ServicePacket { id: terminal, release_daa: first, service_before: first + 8, cost: cost(1).unwrap() },
+            predecessors: vec![finish],
+        });
+        let mut schedule = super::super::material_intake_schedule_v1().unwrap();
+        schedule.draft_ttl_daa = 3;
+        let mut book = ServiceReservations::new(ServiceCost { bytes: PART * 2, work: 1, io: 1, controls: 1 }).unwrap();
+        let initial = book.clone();
+        graph[2].packet.release_daa = first + 3;
+        let mut plain = initial.clone();
+        case.reserve_latest_notice_case_v1(&mut plain, &graph, terminal, 1).unwrap();
+        assert_eq!(plain.assigned_daa(&finish), Some(first + 3));
+        assert_eq!(
+            case.reserve_latest_notice_material_v1(&mut book, &graph, terminal, 1, std::slice::from_ref(&delivery), schedule),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::DeadlineExhausted)),
+        );
+        assert_eq!(book, initial);
+        graph[2].packet.release_daa = first + 2;
+        let omitted = graph[1].packet.id;
+        let mut wrong_graph = graph.clone();
+        wrong_graph[2].predecessors = vec![graph[0].packet.id];
+        wrong_graph[3].predecessors.push(omitted);
+        assert_eq!(
+            case.reserve_latest_notice_material_v1(&mut book, &wrong_graph, terminal, 1, std::slice::from_ref(&delivery), schedule),
+            Err(BatchCourtErrorV1::Reservation(ServiceRefusal::InvalidState)),
+        );
+        assert_eq!(book, initial);
+        case.reserve_latest_notice_material_v1(&mut book, &graph, terminal, 1, &[delivery], schedule).unwrap();
+        assert_eq!(book.assigned_daa(&finish), Some(first + 2));
+        assert_eq!(book.assigned_daa(&terminal), Some(first + 3));
+    }
 
     #[test]
     fn accepted_demand_fixes_native_range_and_delivery_window() {
@@ -299,8 +446,8 @@ mod tests {
             action: Action::Begin { total_bytes: 1, body_hash: hash },
             signature: Vec::new(),
         };
-        let own = MaterialBatchDeliveryV1::new(request, &action, 1, 11, 14).unwrap();
-        let foreign = MaterialBatchDeliveryV1::new(other_request, &action, 1, 11, 14).unwrap();
+        let own = MaterialBatchDeliveryV1::new(request, &action, 1, test_case(), 11, 14).unwrap();
+        let foreign = MaterialBatchDeliveryV1::new(other_request, &action, 1, test_case(), 11, 14).unwrap();
         assert_ne!(own.draft, foreign.draft);
         use super::super::MaterialDraftV1;
         use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
@@ -362,7 +509,7 @@ mod tests {
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         let request = Hash64::from_u64_word(5);
-        let delivery = MaterialBatchDeliveryV1::new(request, &action, total, 11, 14).unwrap();
+        let delivery = MaterialBatchDeliveryV1::new(request, &action, total, test_case(), 11, 14).unwrap();
         let cost = |bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
         let graph = delivery.service_graph_v1(11, 14, cost).unwrap();
         assert_eq!(graph.len(), 4);
@@ -373,7 +520,7 @@ mod tests {
         book.reserve_causal_v1(&graph, 14).unwrap();
         assert_eq!(delivery.check_slot_v1(&book, 11, &action).unwrap(), graph[0].packet.id);
         assert!(delivery.check_slot_v1(&book, 12, &action).is_err());
-        let other = MaterialBatchDeliveryV1::new(Hash64::from_u64_word(6), &action, total, 11, 14).unwrap();
+        let other = MaterialBatchDeliveryV1::new(Hash64::from_u64_word(6), &action, total, test_case(), 11, 14).unwrap();
         assert!(other.check_slot_v1(&book, 11, &action).is_err());
         for (index, (offset, len)) in [(0, PART), (PART, 1)].into_iter().enumerate().rev() {
             action.action = Action::Part { draft_id: delivery.draft, offset, bytes: vec![0; len as usize] };

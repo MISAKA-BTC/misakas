@@ -120,6 +120,16 @@ pub struct MaterialIntakeScheduleV1 {
     pub draft_ttl_daa: u64,
     pub cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1,
 }
+impl MaterialIntakeScheduleV1 {
+    pub(crate) fn draft_expires_v1(self, begun_daa: u64, hard_daa: u64, material_until_daa: u64) -> Result<u64, &'static str> {
+        let expires_daa =
+            begun_daa.checked_add(self.draft_ttl_daa).ok_or("material TTL overflow")?.min(hard_daa).min(material_until_daa);
+        if expires_daa <= begun_daa {
+            return Err("material draft would expire at once");
+        }
+        Ok(expires_daa)
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MaterialIntakeMissingV1 {
     /// The storage fee schedule (price, payer, TTL) is not adopted.

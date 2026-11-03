@@ -241,6 +241,8 @@ CPU work、bytes、IO、メモリ、保持 byte-DAA、control 枠を個別に予
 
 最後の有効な申立て `a + 3,120` では、差の `6,880 DAA` に境界余裕を含めるため、対話・収録・回復に配分できるのは最大 `6,879 DAA`。添付案のサービス配分例（準備 500、owner 800、要求・応答 1,400、搬送 2,400、検査 1,600、終了収録 1,200、再送・回復 1,100）は合計 9,000 DAA。境界余裕を含めると経過 999 DAA までの開始でしか収まらず、最遅の開始では 12,121 DAA を要する。この配分例は早期開始の設計比較に用いる。受付時に最遅開始を含む全合法分岐を予約できない profile は有効化を拒否する。見積もりは必要量と上限を返し、上限値で切り詰めない。
 
+Begin と Finish の予約は、実際に割り当てる DAA で個別の draft の期限も満たす。期限は Begin の収録 DAA に適用する保存期間、係争期限、実効保持期限の最小値とし、Finish はその値より前に置く。Begin・全 part・Finish の依存関係と期限を一括で検査し、どれかが成立しない予約は確定しない。
+
 ### 11.5 実装・検証の順序
 
 同じ SmolLM2 frame、class、artifact、入力で旧見積もり `8,782,776 DAA` と上限 `3,120 DAA` を再現する。内訳は tokenizer raw/key が `8,418,376`、表の rendering が `16,392`、inventory/semantics opening が `150`。残る `347,858 DAA` には owner 待機 `60,000`、取得 `287,806`、準備 `16`、その他の開始・収録 `36` が含まれる。これらは fixture EOF を使ったオフライン見積もりである。[SmolLM2 計測記録](../evidence/oom-recovery-continuation-2026-11-03.md#smollm2-tokenizer-court-quote-and-rendering-check--0538-utc)

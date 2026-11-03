@@ -59,6 +59,12 @@ pub(super) fn material_intake_pipelined(
     if !binding.packet_ids.contains(&id) {
         return Err(refused("Batch material slot is not funded by this original"));
     }
+    if matches!(s.action, m::MaterialActionV1::Begin { .. }) {
+        let schedule = m::material_intake_schedule_v1().map_err(|_| refused("Batch material storage schedule missing"))?;
+        delivery
+            .check_draft_schedule_v1(&service.book, schedule)
+            .map_err(|err| refused(format!("Batch material draft schedule: {err:?}")))?;
+    }
     material_intake_atomic(b, ctx, s, Some(delivery.request_root_v1()), storage_debit)
 }
 
@@ -171,15 +177,7 @@ fn material_intake_inner(
                 .ok_or_else(|| refused("material declaration exceeds the submitter's per-claim native budget"))?;
             let fee = schedule.sompi_per_byte.checked_mul(*total_bytes).ok_or_else(|| refused("material fee overflow"))?;
             ledger.charged_sompi = ledger.charged_sompi.checked_add(fee).ok_or_else(|| refused("material fee overflow"))?;
-            let expires_daa = ctx
-                .daa_score
-                .checked_add(schedule.draft_ttl_daa)
-                .ok_or_else(|| refused("material TTL overflow"))?
-                .min(c.hard_daa)
-                .min(c.material_until_daa);
-            if expires_daa <= ctx.daa_score {
-                return Err(refused("material draft would expire at once"));
-            }
+            let expires_daa = schedule.draft_expires_v1(ctx.daa_score, c.hard_daa, c.material_until_daa).map_err(refused)?;
             let draft = m::MaterialDraftV1 {
                 version: s.version,
                 claim: s.claim,

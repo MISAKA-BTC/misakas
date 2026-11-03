@@ -2370,3 +2370,27 @@ referenced by the selected fold at DAA 19,681 and has signed retention
 found no live claim row or exact fold refusal. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-fee-split-live.pdmCMN/page.json`
 and its sibling `journal.txt`.
+
+## Native draft expiry in the latest-notice reservation
+
+The Batch candidate checks Begin, every Part and Finish inside the
+delivery window and checks the Begin-to-Finish span against the
+existing draft expiry. The reservation and the native fold use one
+expiry calculation. Every part has its Begin predecessor and Finish
+depends on all parts. A missing edge or expired draft rolls back the
+entire proposed reservation before the service book is changed.
+
+The latest-notice fixture used a three-DAA draft TTL to hit equality:
+the general case still fit its terminal and recovery budget, but its
+Finish was assigned exactly to the draft expiry. The native guard
+refused it and the book remained byte-equivalent. Moving Finish one
+DAA earlier succeeded. A separate missing-edge variant was refused
+atomically. Eighteen extracted Core checks passed.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-material-expiry.weI0Mo/tests.log`.
+This fixture uses an isolated TTL and does not measure the public
+profile or exercise the production dispatcher.
+
+B0 and relay agreed on the selected tip at DAA 19,683. The bounded
+selected-chain read found no new Qwen carrier after the previous
+cursor. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-expiry-live.PYjEXy/page.json`.

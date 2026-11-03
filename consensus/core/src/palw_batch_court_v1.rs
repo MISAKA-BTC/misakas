@@ -56,6 +56,17 @@ impl BatchCourtWindowV1 {
         terminal: [u8; 64],
         recovery_daa: u64,
     ) -> Result<u64, BatchCourtErrorV1> {
+        self.reserve_latest_notice_checked_v1(book, graph, terminal, recovery_daa, |_, _| Ok(()))
+    }
+
+    pub(crate) fn reserve_latest_notice_checked_v1(
+        self,
+        book: &mut ServiceReservations,
+        graph: &[CausalServicePacketV1],
+        terminal: [u8; 64],
+        recovery_daa: u64,
+        check_assignments: impl FnOnce(&ServiceReservations, &BTreeMap<[u8; 64], &CausalServicePacketV1>) -> Result<(), ServiceRefusal>,
+    ) -> Result<u64, BatchCourtErrorV1> {
         use BatchCourtErrorV1::{CaseGraph, Clock, Reservation, Window};
         self.check()?;
         let latest_notice = self.claim_accepted_daa.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
@@ -90,7 +101,8 @@ impl BatchCourtWindowV1 {
             return Err(CaseGraph);
         }
 
-        book.reserve_causal_v1(graph, service_before).map_err(Reservation)?;
+        book.reserve_causal_checked_v1(graph, service_before, |candidate| check_assignments(candidate, &nodes))
+            .map_err(Reservation)?;
         // The assigned slot is below service_before; the checked window
         // proves these additions fit and cannot exceed the original hard end.
         let terminal_daa = book.assigned_daa(&terminal).expect("successful case reservation assigns its terminal");
