@@ -17,7 +17,7 @@ use misaka_palw_positive_contract::{
         control_material::ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2,
         funding_relay::{FundingRelayRegistrationBodyV2, FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2},
         funding_relay_policy::{FundingRelayAuxScanBudgetV2, FundingRelayPolicyV2},
-        funding_relay_rows::FundingRelayAuthorizationRowV2,
+        funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCarrierFeesV2},
         journal::{AssignmentJournalEventKindV2, assignment_frame_v2},
         open_material::AssignmentOpenLimitsV2,
         rows::*,
@@ -28,6 +28,11 @@ use misaka_palw_positive_contract::{
         AcceptedOrigin, CaseRow, ClaimIndexRow, FundingRow, NativeOutpoint, NativeRowBody, NativeRowValue, ResultRow, validate_bundle,
     },
 };
+
+pub(super) enum InitialRelayFeeStageV2 {
+    Preview,
+    Observed,
+}
 
 fn refusal(detail: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(format!("Positive Assignment transition: {detail:?}"))
@@ -126,6 +131,22 @@ impl TransitionBuilder<'_> {
             || origin.accepted_blue_score != ctx.blue_score
         {
             return Err(refusal("event does not belong to this native accepting point"));
+        }
+        Ok(())
+    }
+    pub(super) fn require_raw_assignment_origin_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+    ) -> Result<(), PalwStateV2Error> {
+        self.assignment_origin_v2(action.origin(), ctx)?;
+        let tx = action.transaction();
+        if tx.id().as_bytes() != action.origin().carrier_transaction.0
+            || tx.inputs.len() != action.entries().len()
+            || tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            || tx.payload.get(..3) != Some(&[1, 0, 176])
+        {
+            return Err(refusal("raw action lost its actual native transaction/origin binding"));
         }
         Ok(())
     }
@@ -1063,11 +1084,12 @@ impl TransitionBuilder<'_> {
     }
 
     #[inline(never)]
-    fn install_initial_assignment_relay_v2(
+    pub(super) fn install_initial_assignment_relay_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
         action: &PositiveAssignmentRawActionV2,
-    ) -> Result<(), PalwStateV2Error> {
+        stage: InitialRelayFeeStageV2,
+    ) -> Result<FundingRelayCarrierFeesV2, PalwStateV2Error> {
         use crate::{
             config::params::AssignmentFundingRelayProfileV2,
             palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1},
@@ -1101,7 +1123,7 @@ impl TransitionBuilder<'_> {
         if reserved.quote().decoded_inline_bytes > decode_profile.max_decoded_bytes {
             return Err(refusal("initial relay exceeds the decoded size cap"));
         }
-        {
+        let registration = {
             let mut requests = TirNativeRequestsV1::new();
             // Two decoded rows plus decoder scratch and the reconstructed
             // literal used to check an existing package's stored crosslinks.
@@ -1122,7 +1144,7 @@ impl TransitionBuilder<'_> {
             })?;
             let mut budget = FundingRelayAuxScanBudgetV2::new(decode_profile).map_err(refusal)?;
             if self.check_relay_outpoint_v2(body, action, &mut budget)? {
-                return Ok(());
+                return Ok(observed);
             }
             let (anchor, _) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
             if terms.contract_network != rules.network()
@@ -1142,7 +1164,8 @@ impl TransitionBuilder<'_> {
             }
 
             self.check_initial_relay_slots_v2(terms, poster_nonce, policy, &mut budget)?;
-        }
+            registration
+        };
         let native_key = native_bond(terms.payer_bond);
         let bond = self.state.bond(&native_key).ok_or_else(|| refusal("initial relay poster bond missing"))?;
         if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
@@ -1181,13 +1204,18 @@ impl TransitionBuilder<'_> {
                 "native owner is not armed",
             ))
         })?;
+        let allocated = match stage {
+            InitialRelayFeeStageV2::Preview => observed.plan_registration_charge(registration.fee).map_err(refusal)?,
+            InitialRelayFeeStageV2::Observed => observed,
+        };
         let (auth, custody) =
-            FundingRelayAuthorizationRowV2::registration_rows(body, key, action.origin(), *policy, *fees, *physical, observed)
+            FundingRelayAuthorizationRowV2::registration_rows(body, key, action.origin(), *policy, *fees, *physical, allocated)
                 .map_err(refusal)?;
         // The enclosing raw checkpoint owns both writes. Their adjacency is
         // consumed by the actual material writer and historical replay.
         self.write_assignment_aux_v2(NativeRowBody::FundingRelayAuthorization(auth))?;
-        self.write_assignment_aux_v2(NativeRowBody::FundingRelayCustody(custody))
+        self.write_assignment_aux_v2(NativeRowBody::FundingRelayCustody(custody))?;
+        Ok(allocated)
     }
 }
 
@@ -1212,18 +1240,11 @@ impl TransitionBuilder<'_> {
         let previous_boundary = self.assignment_raw_boundary.replace(boundary);
         let previous_active = self.assignment_active_raw.replace(action.clone());
         let result = (|| {
-            self.assignment_origin_v2(action.origin(), ctx)?;
+            self.require_raw_assignment_origin_v2(ctx, action)?;
             let tx = action.transaction();
-            if tx.id().as_bytes() != action.origin().carrier_transaction.0
-                || tx.inputs.len() != action.entries().len()
-                || tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-                || tx.payload.get(..3) != Some(&[1, 0, 176])
-            {
-                return Err(refusal("raw action lost its actual native transaction/origin binding"));
-            }
             let rules = action.rules();
             if tx.payload.get(7) == Some(&14) {
-                return self.install_initial_assignment_relay_v2(ctx, action);
+                return self.install_initial_assignment_relay_v2(ctx, action, InitialRelayFeeStageV2::Observed).map(|_| ());
             }
             if matches!(tx.payload.get(7), Some(0..=7)) {
                 let old_limits = crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {

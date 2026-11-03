@@ -14572,6 +14572,41 @@ pub fn palw_v2_apply_one_assignment_retained_v2(
     builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
 }
 
+/// Preview one op14 against the supplied accepted prefix using the same
+/// checks and native row writer as final execution. The state returned is
+/// disposable and can extend a preview of the next accepted carrier. The
+/// partition is only a plan until the UTXO owner credits that exact tip.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_preview_initial_relay_fee_v2(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    action: &PositiveAssignmentRawActionV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<
+    (
+        crate::palw_native_resource_v1::NativeChainStateV1,
+        misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCarrierFeesV2,
+    ),
+    PalwStateV2Error,
+> {
+    let mut builder =
+        TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
+    builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
+    source_bootstrap_v1::prepare(&mut builder, ctx)?;
+    builder.require_raw_assignment_origin_v2(ctx, action)?;
+    if action.transaction().payload.get(7) != Some(&14) {
+        return Err(PalwStateV2Error::KernelRouteRefused("relay fee preview requires op14".into()));
+    }
+    let fees = builder.install_initial_assignment_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
+    let state = builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)?;
+    Ok((state, fees))
+}
+
 /// **Would this licence object actually LICENSE its claim on `base`?** (2026-09-24 DoS audit review
 /// of #6.) `true` only for a `ReceiptLicensed`, `ReceiptLicensedV2` or `OptimisticLicensed` that
 /// folds without error AND leaves its claim `ReceiptLicensed` — asked by folding it, so the answer

@@ -49,8 +49,22 @@ impl FundingRelayCarrierFeesV2 {
         self.before_relay
     }
 
+    pub fn credited_tip(self) -> u64 {
+        self.credited_tip
+    }
+
     pub fn relay_charge(self) -> u64 {
         self.before_relay - self.credited_tip
+    }
+
+    /// Compute a fresh partition from an unallocated native fee. The result
+    /// does not record an actual reward or debit.
+    pub fn plan_registration_charge(self, charge: u64) -> Result<Self, ContractError> {
+        if charge == 0 || self.relay_charge() != 0 {
+            return Err(ContractError::Budget);
+        }
+        let credited_tip = self.before_relay.checked_sub(charge).ok_or(ContractError::Budget)?;
+        Ok(Self { credited_tip, ..self })
     }
 }
 

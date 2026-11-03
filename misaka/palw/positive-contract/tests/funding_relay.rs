@@ -540,6 +540,16 @@ fn metadata_charge_requires_exact_debit_from_the_observed_collectible_fee() {
     let partition = |credited_tip| FundingRelayCarrierFeesV2::new(gross, mandatory, before_relay, credited_tip).unwrap();
 
     let actual = partition(13);
+    let unallocated = partition(before_relay);
+    let planned = unallocated.plan_registration_charge(charge).unwrap();
+    assert_eq!(planned, actual);
+    assert_eq!(planned.credited_tip(), 13);
+    assert_eq!(planned.gross_fee(), gross);
+    assert_eq!(planned.before_relay(), before_relay);
+    assert!(unallocated.plan_registration_charge(0).is_err());
+    assert!(unallocated.plan_registration_charge(before_relay + 1).is_err());
+    assert_eq!(unallocated.plan_registration_charge(before_relay).unwrap().credited_tip(), 0);
+    assert!(planned.plan_registration_charge(1).is_err());
     let raw = actual.archive_bytes();
     assert_eq!(raw.as_slice(), borsh::to_vec(&actual).unwrap());
     assert_eq!(FundingRelayCarrierFeesV2::from_archive_bytes(&raw).unwrap(), actual);

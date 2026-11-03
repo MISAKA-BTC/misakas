@@ -953,3 +953,26 @@ Strict Contract/Core/Consensus library Clippy and Core test-target checking
 passed. The new selected-parent/duplicate-attachment regression typechecked
 and was not executed. The initial type error and the stopped library-only
 check are retained alongside the final verification.
+
+## Preview an initial relay charge on a disposable native prefix
+
+The new Core fee preview checks the same op14 carrier and accepting point,
+current-prefix bond/key and nonce, pending capacity, terms, signatures, and
+write resources as final execution. It calls the same row writer on a
+disposable native state. That state can be used for the next carrier in
+an ordered preview. The preview returns the proposed fee partition. A fresh
+registration deducts the full quote from the unallocated native fee, and an
+exact pending retry returns the original zero-debit partition. The fee
+arithmetic refuses a zero registration charge, a charge above the available
+fee, or applying a second charge to a partition.
+
+The final fold still requires the actual observed partition and validates
+the exact charge before writing. The native acceptance path has no call
+to this preview yet. The next connection must supply the real ordered
+accepted prefix and route the result through Round fee admission and reward
+calculation before publication, then reconcile it with the final fold.
+
+All 11 contract tests passed, including exact tip, insufficient fee and
+second-charge cases. Strict Contract/Core/Consensus library Clippy passed.
+The native preview typechecked and did not run in a native block. The
+commands, source map and logs are retained in the preview archive.
