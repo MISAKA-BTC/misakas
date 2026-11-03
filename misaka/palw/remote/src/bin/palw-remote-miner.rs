@@ -56,7 +56,7 @@ use misaka_palw_remote::attempt::{AttemptExecutor, AttemptParams, AttemptSigner,
 use misaka_palw_remote::checkpoint::Checkpoint;
 use misaka_palw_remote::miner::{
     BlockObservation, BlockState, BlockTracker, MinerConfig, MinerHalt, MinerState, NodeTemplate, RemoteNode, StepOutcome,
-    publish_block, step_with_custody,
+    publish_block, step_with_custody_and_retention,
 };
 use misaka_palw_remote::relay::Reply;
 use misaka_palw_remote::template::{TemplatePolicy, producer_facts_from_wire_v1};
@@ -667,14 +667,34 @@ fn say(event: &str, fields: serde_json::Value) {
     println!("{}", serde_json::json!({ "event": event, "detail": fields }));
 }
 
-fn keep_material(dir: &Path, attempt_id: &Hash64, material: &[u8]) {
+fn keep_material(dir: &Path, attempt_id: Hash64, material: &[u8]) -> Result<(), String> {
+    use std::io::Write;
     let dir = dir.join("material");
-    let _ = std::fs::create_dir_all(&dir);
-    if let Err(e) = std::fs::write(dir.join(attempt_id.to_string()), material) {
-        eprintln!(
-            "[palw-remote-miner] WARNING: cannot keep the capture for {attempt_id}: {e} — the Panel will not be able to read it"
-        );
-    }
+    let path = dir.join(attempt_id.to_string());
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&dir)?;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_nanos());
+        let temporary = dir.join(format!(".{attempt_id}.{}.{stamp}.tmp", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        let result = (|| {
+            file.write_all(material)?;
+            file.sync_all()?;
+            match std::fs::hard_link(&temporary, &path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if std::fs::read(&path)? != material {
+                        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "different capture at attempt ID"));
+                    }
+                    std::fs::File::open(&path)?.sync_all()?;
+                }
+                Err(error) => return Err(error),
+            }
+            std::fs::File::open(&dir)?.sync_all()
+        })();
+        let _ = std::fs::remove_file(&temporary);
+        result
+    };
+    write().map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn main() {
@@ -962,15 +982,23 @@ fn main() {
             }
         }
         let custody = native_exchange.as_mut().map(|x| x as &mut dyn misaka_palw_remote::attempt::NativeCustodyV3);
-        let outcome =
-            step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, custody);
+        let outcome = step_with_custody_and_retention(
+            &refs,
+            &cfg_step,
+            &mut state,
+            &mut executor,
+            &signer,
+            &network_draw,
+            &custody_in_force,
+            custody,
+            &|attempt_id, material| keep_material(&args.state_dir, attempt_id, material),
+        );
         if let Some(mode) = state.last_mode {
             say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));
         }
         match outcome {
             Ok(StepOutcome::DrawLost { bucket }) => say("draw-lost", serde_json::json!({ "bucket": bucket })),
             Ok(StepOutcome::Published(p)) => {
-                keep_material(&args.state_dir, &p.attempt_id, &p.material);
                 say(
                     "published",
                     serde_json::json!({
@@ -1052,5 +1080,27 @@ fn main() {
             }
         }
         std::thread::sleep(std::time::Duration::from_secs(args.poll_secs));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_capture_is_idempotent_and_immutable() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("rfc09-retention-{}-{stamp}", std::process::id()));
+        let attempt = Hash64::from_u64_word(8);
+        let check = (|| -> Result<(), String> {
+            keep_material(&root, attempt, b"the original")?;
+            keep_material(&root, attempt, b"the original")?;
+            assert!(keep_material(&root, attempt, b"another capture").is_err());
+            assert_eq!(std::fs::read(root.join("material").join(attempt.to_string())).unwrap(), b"the original");
+            assert_eq!(std::fs::read_dir(root.join("material")).unwrap().count(), 1);
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        check.unwrap();
     }
 }

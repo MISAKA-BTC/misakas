@@ -215,6 +215,8 @@ pub enum MinerHalt {
     Attempt(#[from] AttemptError),
     #[error("position {challenge} already carries attempt {earlier}; a second attempt there would be an equivocation")]
     Equivocation { challenge: Hash64, earlier: Hash64 },
+    #[error("cannot retain the capture for attempt {attempt_id}: {reason}")]
+    RetainMaterial { attempt_id: Hash64, reason: String },
     #[error("the finished block was not taken: {0}")]
     Publish(#[from] RelayFailure),
     #[error("verification refused the view, before any inference or signature: {0}")]
@@ -315,6 +317,22 @@ pub fn step_with_custody(
     network_draw: &dyn Fn(&Header, u64, bool) -> bool,
     custody_in_force: &dyn Fn(u64, &Hash64) -> bool,
     custody: Option<&mut dyn crate::attempt::NativeCustodyV3>,
+) -> Result<StepOutcome, MinerHalt> {
+    step_with_custody_and_retention(nodes, cfg, state, executor, signer, network_draw, custody_in_force, custody, &|_, _| Ok(()))
+}
+
+/// Retain a won attempt's capture before handing its block to any relay.
+#[allow(clippy::too_many_arguments)]
+pub fn step_with_custody_and_retention(
+    nodes: &[&dyn RemoteNode],
+    cfg: &MinerConfig,
+    state: &mut MinerState,
+    executor: &mut dyn AttemptExecutor,
+    signer: &dyn AttemptSigner,
+    network_draw: &dyn Fn(&Header, u64, bool) -> bool,
+    custody_in_force: &dyn Fn(u64, &Hash64) -> bool,
+    custody: Option<&mut dyn crate::attempt::NativeCustodyV3>,
+    retain_material: &dyn Fn(Hash64, &[u8]) -> Result<(), String>,
 ) -> Result<StepOutcome, MinerHalt> {
     let views: Vec<ViewAdapter<'_>> = nodes.iter().map(|n| ViewAdapter(*n)).collect();
     let view_refs: Vec<&dyn ChainView> = views.iter().map(|v| v as &dyn ChainView).collect();
@@ -419,6 +437,11 @@ pub fn step_with_custody(
     let fresh_view = agree(&view_refs, &cfg.quorum)?;
     let (fresh_templates, _) = gather(nodes, &cfg.attempt.network_id);
     ready_to_publish(&accepted, &observations(&fresh_templates, &cfg.attempt.network_id), &cfg.template, fresh_view.virtual_daa)?;
+
+    // An individual relay can accept the block even if the fanout quorum fails.
+    // Keep its exact capture before any relay sees the signed block.
+    retain_material(mounted.attempt_id, &mounted.material)
+        .map_err(|reason| MinerHalt::RetainMaterial { attempt_id: mounted.attempt_id, reason })?;
 
     let mut block = chosen.block.clone();
     block.header = std::sync::Arc::new(mounted.header.clone());
@@ -1135,6 +1158,27 @@ mod tests {
         assert!(matches!(r, Err(MinerHalt::Publish(RelayFailure::TooFew { got: 1, need: 2, .. }))), "{r:?}");
         // The block was NOT recorded as published: a retry re-makes the same bytes.
         assert_eq!(state.published().count(), 0);
+    }
+
+    #[test]
+    fn capture_retention_failure_stops_before_any_submission() {
+        let signer = keypair();
+        let (a, b) = (Fake::new("a", &pk(&signer)), Fake::new("b", &pk(&signer)));
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let result = step_with_custody_and_retention(
+            &[&a, &b],
+            &cfg(pk(&signer)),
+            &mut state,
+            &mut exec,
+            &signer,
+            &|_, _, _| true,
+            &|_, _| false,
+            None,
+            &|_, _| Err("disk unavailable".into()),
+        );
+        assert!(matches!(result, Err(MinerHalt::RetainMaterial { .. })), "{result:?}");
+        assert!(a.submitted.borrow().is_empty());
+        assert!(b.submitted.borrow().is_empty());
     }
 
     #[test]
