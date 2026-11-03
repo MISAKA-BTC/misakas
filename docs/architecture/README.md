@@ -4,6 +4,10 @@
 
 [総合入口](../README.md) / [状態](../STATUS.md)。
 
+## Architecture Specification
+
+- [PALW Architecture Specification](palw-specification.md) — 0〜9章の統合仕様。モデル＝minerによるDAG並列ブロック生成を含む。
+
 ## 資料
 
 - [consensus.md](consensus.md)

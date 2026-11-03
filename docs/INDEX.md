@@ -10,6 +10,8 @@
 
 [PRINCIPLES](PRINCIPLES.md) / [状態](STATUS.md) / [仕様](spec/README.md)。
 
+[PALW Architecture Specification](architecture/palw-specification.md) — 0〜9章の統合仕様と、モデル＝minerを前提とするDAG並列ブロック生成。
+
 <a id="3"></a>
 ## 3. RFC・ADR・仕様の更新
 
