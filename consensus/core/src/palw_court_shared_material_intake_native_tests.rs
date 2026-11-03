@@ -202,7 +202,26 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     }).unwrap();
     assert!(body.len() > PART);
     let hash = palw_tir_public_body_hash_v1(&body);
-    let request_root = set.request_id(ordinal).unwrap();
+    use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1};
+    let demand = BatchDemandV1 {
+        case_id: Hash64::from_u64_word(986),
+        case_window: BatchCourtWindowV1 {
+            claim_accepted_daa: context.original_accepted_daa,
+            challenge_opened_daa: context.original_accepted_daa,
+            collect_until_daa: context.hard_daa,
+            material_until_daa: context.material_until_daa,
+        },
+        opened_daa: context.original_accepted_daa,
+        response_deadline_daa: context.hard_daa - 1,
+        maximum_bytes: body.len() as u64,
+        part_bytes: PART as u32,
+        ranges: vec![BatchRangeV1 {
+            id: target.id_v1(claim).unwrap(),
+            bytes: body.len() as u32,
+            authentication: BatchRangeAuthenticationV1::WholeRange,
+        }],
+    };
+    let request_root = demand.checked_request_root_v1().unwrap();
     let other_root = Hash64::from_u64_word(987);
     let draft_id = material_batch_draft_id_v1(request_root, claim, target, who, body.len() as u64, hash).unwrap();
     assert_ne!(draft_id, material_batch_draft_id_v1(other_root, claim, target, who, body.len() as u64, hash).unwrap());
@@ -222,7 +241,7 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     let tail = &body[last * PART..];
     let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(material_intake(&mut builder, &at(frame, 1), &begin).is_err());
-    let delivery = batch::MaterialBatchDeliveryV1::new(request_root, &begin, body.len() as u64).unwrap();
+    let delivery = batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand, &begin, body.len() as u64).unwrap();
     let before_unfunded = builder.state.state_root();
     assert!(super::super::palw_court_shared_material_intake_fold_v1::material_intake_pipelined(
         &mut builder, &at(frame, 1), &begin, &delivery, None).is_err());

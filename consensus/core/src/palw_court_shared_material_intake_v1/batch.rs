@@ -24,6 +24,8 @@ enum Stage {
 pub(crate) struct MaterialBatchDeliveryV1 {
     id: Hash64,
     request_root: Hash64,
+    release_daa: u64,
+    service_before: u64,
     claim: Hash64,
     scope: Hash64,
     target: MaterialTargetV1,
@@ -34,12 +36,54 @@ pub(crate) struct MaterialBatchDeliveryV1 {
 }
 
 impl MaterialBatchDeliveryV1 {
-    pub(crate) fn new(request_root: Hash64, declaration: &SignedMaterialIntakeV1, native_maximum: u64) -> Result<Self, String> {
+    /// Resolve the exact target from the already accepted demand before
+    /// assigning a delivery. The caller loads the notice and demand from the
+    /// same branch and derives the bound from the original source.
+    pub(crate) fn from_accepted_demand_v1(
+        context: &crate::palw_court_shared_tir_state_v1::SharedTirContextV1,
+        demand: &crate::palw_batch_court_v1::BatchDemandV1,
+        declaration: &SignedMaterialIntakeV1,
+        native_maximum: u64,
+    ) -> Result<Self, String> {
+        use crate::palw_batch_court_v1::BatchRangeAuthenticationV1;
+        let request_root = demand.checked_request_root_v1().map_err(|err| format!("Batch demand: {err:?}"))?;
+        if declaration.claim != context.claim
+            || declaration.scope_id != context.scope_id
+            || demand.case_window.claim_accepted_daa != context.original_accepted_daa
+            || demand.case_window.material_until_daa != context.material_until_daa
+            || demand.response_deadline_daa > context.hard_daa
+            || u64::from(demand.part_bytes) != PART
+        {
+            return Err("Batch material demand substitutes the original context or part width".into());
+        }
+        let target = declaration.target.id_v1(context.claim)?;
+        let range = demand
+            .ranges
+            .binary_search_by_key(&target, |range| range.id)
+            .ok()
+            .map(|index| &demand.ranges[index])
+            .ok_or("Batch material target is outside the accepted demand")?;
+        let release_daa = demand.opened_daa.checked_add(1).ok_or("Batch demand opening overflows")?;
+        let delivery = Self::new(request_root, declaration, native_maximum, release_daa, demand.response_deadline_daa)?;
+        if range.authentication != BatchRangeAuthenticationV1::WholeRange || delivery.total != u64::from(range.bytes) {
+            return Err("Batch material declaration differs from the accepted range".into());
+        }
+        Ok(delivery)
+    }
+
+    fn new(
+        request_root: Hash64,
+        declaration: &SignedMaterialIntakeV1,
+        native_maximum: u64,
+        release_daa: u64,
+        service_before: u64,
+    ) -> Result<Self, String> {
         let Action::Begin { total_bytes, body_hash } = declaration.action else {
             return Err("Batch delivery requires a declaration".into());
         };
         if declaration.version != MATERIAL_BATCH_VERSION
             || request_root == Hash64::default()
+            || release_daa >= service_before
             || declaration.claim == Hash64::default()
             || declaration.scope_id == Hash64::default()
             || total_bytes == 0
@@ -62,6 +106,8 @@ impl MaterialBatchDeliveryV1 {
         Ok(Self {
             id,
             request_root,
+            release_daa,
+            service_before,
             claim: declaration.claim,
             scope: declaration.scope_id,
             target: declaration.target,
@@ -89,8 +135,8 @@ impl MaterialBatchDeliveryV1 {
         service_before: u64,
         mut cost: impl FnMut(u64) -> Result<ServiceCost, String>,
     ) -> Result<Vec<CausalServicePacketV1>, String> {
-        if release_daa >= service_before {
-            return Err("Batch delivery service interval is empty".into());
+        if release_daa < self.release_daa || service_before > self.service_before || release_daa >= service_before {
+            return Err("Batch delivery service interval is outside its accepted demand".into());
         }
         let parts = self.total.div_ceil(PART);
         let mut graph = Vec::with_capacity(parts as usize + 2);
@@ -163,7 +209,7 @@ impl MaterialBatchDeliveryV1 {
             _ => return Err("Batch material action differs from its declaration".into()),
         };
         let id = self.packet_id(stage)?;
-        if book.assigned_daa(&id) != Some(daa) {
+        if !(self.release_daa..self.service_before).contains(&daa) || book.assigned_daa(&id) != Some(daa) {
             return Err("Batch material action has no assigned service at this DAA".into());
         }
         let bytes = borsh::object_length(signed).map_err(|e| e.to_string())? as u64;
@@ -178,6 +224,64 @@ impl MaterialBatchDeliveryV1 {
 mod tests {
     use super::*;
     use crate::tx::TransactionOutpoint;
+
+    #[test]
+    fn accepted_demand_fixes_native_range_and_delivery_window() {
+        use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1};
+        use crate::palw_court_shared_tir_state_v1::SharedTirContextV1;
+        let h = Hash64::from_u64_word;
+        let action = SignedMaterialIntakeV1 {
+            version: MATERIAL_BATCH_VERSION,
+            claim: h(1),
+            scope_id: h(2),
+            target: MaterialTargetV1::Unit { ordinal: 7 },
+            submitter: PalwBondKeyV2(TransactionOutpoint::new(h(3), 0)),
+            action: Action::Begin { total_bytes: PART + 1, body_hash: h(4) },
+            signature: Vec::new(),
+        };
+        let context = SharedTirContextV1 {
+            version: 1,
+            claim: action.claim,
+            allocation_id: h(5),
+            source_id: h(6),
+            rules_id: h(7),
+            profile_id: h(8),
+            scope_id: action.scope_id,
+            queries: 8,
+            original_accepted_daa: 2,
+            hard_daa: 10_002,
+            material_until_daa: 11_000,
+        };
+        let mut demand = BatchDemandV1 {
+            case_id: h(9),
+            case_window: BatchCourtWindowV1 {
+                claim_accepted_daa: 2,
+                challenge_opened_daa: 7,
+                collect_until_daa: 20,
+                material_until_daa: 11_000,
+            },
+            opened_daa: 10,
+            response_deadline_daa: 14,
+            maximum_bytes: PART + 1,
+            part_bytes: PART as u32,
+            ranges: vec![BatchRangeV1 {
+                id: action.target.id_v1(action.claim).unwrap(),
+                bytes: (PART + 1) as u32,
+                authentication: BatchRangeAuthenticationV1::WholeRange,
+            }],
+        };
+        let delivery = MaterialBatchDeliveryV1::from_accepted_demand_v1(&context, &demand, &action, PART + 1).unwrap();
+        assert_eq!(delivery.request_root_v1(), demand.checked_request_root_v1().unwrap());
+        assert!(MaterialBatchDeliveryV1::from_accepted_demand_v1(&context, &demand, &action, PART).is_err());
+        let mut wrong_context = context.clone();
+        wrong_context.material_until_daa += 1;
+        assert!(MaterialBatchDeliveryV1::from_accepted_demand_v1(&wrong_context, &demand, &action, PART + 1).is_err());
+        demand.ranges[0].authentication = BatchRangeAuthenticationV1::IndependentParts;
+        assert!(MaterialBatchDeliveryV1::from_accepted_demand_v1(&context, &demand, &action, PART + 1).is_err());
+        demand.ranges[0].authentication = BatchRangeAuthenticationV1::WholeRange;
+        demand.ranges[0].id = h(11);
+        assert!(MaterialBatchDeliveryV1::from_accepted_demand_v1(&context, &demand, &action, PART + 1).is_err());
+    }
 
     #[test]
     fn batch_signature_and_draft_refuse_cross_request_reuse() {
@@ -195,8 +299,8 @@ mod tests {
             action: Action::Begin { total_bytes: 1, body_hash: hash },
             signature: Vec::new(),
         };
-        let own = MaterialBatchDeliveryV1::new(request, &action, 1).unwrap();
-        let foreign = MaterialBatchDeliveryV1::new(other_request, &action, 1).unwrap();
+        let own = MaterialBatchDeliveryV1::new(request, &action, 1, 11, 14).unwrap();
+        let foreign = MaterialBatchDeliveryV1::new(other_request, &action, 1, 11, 14).unwrap();
         assert_ne!(own.draft, foreign.draft);
         use super::super::MaterialDraftV1;
         use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
@@ -258,16 +362,18 @@ mod tests {
             signature: vec![0; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
         };
         let request = Hash64::from_u64_word(5);
-        let delivery = MaterialBatchDeliveryV1::new(request, &action, total).unwrap();
+        let delivery = MaterialBatchDeliveryV1::new(request, &action, total, 11, 14).unwrap();
         let cost = |bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
         let graph = delivery.service_graph_v1(11, 14, cost).unwrap();
         assert_eq!(graph.len(), 4);
+        assert!(delivery.service_graph_v1(10, 14, cost).is_err());
+        assert!(delivery.service_graph_v1(11, 15, cost).is_err());
         assert!(delivery.service_graph_v1(11, 14, |bytes| cost(bytes - 1)).is_err());
         let mut book = ServiceReservations::new(ServiceCost { bytes: PART * 2, work: 2, io: 2, controls: 2 }).unwrap();
         book.reserve_causal_v1(&graph, 14).unwrap();
         assert_eq!(delivery.check_slot_v1(&book, 11, &action).unwrap(), graph[0].packet.id);
         assert!(delivery.check_slot_v1(&book, 12, &action).is_err());
-        let other = MaterialBatchDeliveryV1::new(Hash64::from_u64_word(6), &action, total).unwrap();
+        let other = MaterialBatchDeliveryV1::new(Hash64::from_u64_word(6), &action, total, 11, 14).unwrap();
         assert!(other.check_slot_v1(&book, 11, &action).is_err());
         for (index, (offset, len)) in [(0, PART), (PART, 1)].into_iter().enumerate().rev() {
             action.action = Action::Part { draft_id: delivery.draft, offset, bytes: vec![0; len as usize] };

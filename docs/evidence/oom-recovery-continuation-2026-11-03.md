@@ -2342,3 +2342,31 @@ verification. See
 B0 and relay agreed at DAA 19,681 with no new Qwen carrier since the
 previous cursor. The preceding integration metadata queue expired before
 starting a compiler at 63% reported memory availability.
+
+## Accepted Batch range and collectible fee projection
+
+The native delivery constructor now checks the canonical demand root,
+the original's acceptance and material horizon, exact target and byte
+length, whole-range authentication, native maximum, and part width. The
+first delivery slot follows the demand's opening DAA. A service graph
+or actual action outside the exclusive response window is refused.
+
+The carrier fee projection now gives the same storage requirement,
+withheld portion and collectible remainder to storage admission and the
+future coinbase caller. The split preserves the fee left after senior
+obligations. A short payment can yield no collectible remainder and
+still refuses a storage debit. The live dispatcher and the coinbase
+caller still require wiring under the Batch ruleset.
+
+The extracted current demand, signature, reservation and storage code
+passed 17 demand/scheduler checks and three carrier fee checks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-fee-split-demand.Dhi1th/tests-demand.log`
+and `tests-fee.log` in the same directory. Full native fold validation
+is separate.
+
+B0 and relay agreed at DAA 19,682. The Qwen carrier at DAA 19,680 is
+referenced by the selected fold at DAA 19,681 and has signed retention
+40,288. The producer journal records submission, and paired reads
+found no live claim row or exact fold refusal. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-fee-split-live.pdmCMN/page.json`
+and its sibling `journal.txt`.

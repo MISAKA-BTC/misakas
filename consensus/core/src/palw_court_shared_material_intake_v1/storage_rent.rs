@@ -20,6 +20,45 @@ pub fn material_batch_storage_rent_v1(intake: &SignedMaterialIntakeV1) -> Result
     Ok(Some(schedule.sompi_per_byte.checked_mul(total_bytes).ok_or("Batch storage rent overflow")?))
 }
 
+/// The storage rent comes after the existing obligations. An underpaid
+/// declaration may withhold only the remaining fee and cannot open a draft.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaterialBatchCarrierFeeV1 {
+    pub required_storage_rent: u64,
+    pub withheld_storage_rent: u64,
+    pub collectible_fee: u64,
+}
+
+impl MaterialBatchCarrierFeeV1 {
+    fn split(required_storage_rent: u64, available_fee: u64) -> Self {
+        let withheld_storage_rent = required_storage_rent.min(available_fee);
+        Self { required_storage_rent, withheld_storage_rent, collectible_fee: available_fee - withheld_storage_rent }
+    }
+
+    pub fn pays_storage_rent_v1(self) -> bool {
+        self.withheld_storage_rent == self.required_storage_rent
+    }
+}
+
+/// Shared fee accounting for an enabled V3 route. Callers supply the fee
+/// remaining after mandatory bond burn and all preceding fee allocations.
+pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) -> Result<MaterialBatchCarrierFeeV1, String> {
+    let rent = match batch_storage_declaration(carrier) {
+        Some(intake) => material_batch_storage_rent_v1(&intake)?.unwrap_or(0),
+        None => 0,
+    };
+    Ok(MaterialBatchCarrierFeeV1::split(rent, available_fee))
+}
+
+fn batch_storage_declaration(carrier: &Transaction) -> Option<Box<SignedMaterialIntakeV1>> {
+    let decoded = crate::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(carrier));
+    let mut objects = decoded.objects.into_iter();
+    match objects.next()?.object {
+        PalwConsensusObjectV2::MaterialIntakeV1 { intake } => Some(intake),
+        _ => None,
+    }
+}
+
 /// One storage debit allocated from the same native budget as other costs.
 /// The caller keeps this fact with the exact accepted object and excludes the
 /// amount from collectible fees. It must not survive an accepting-point change.
@@ -40,13 +79,13 @@ impl MaterialBatchStorageDebitV1 {
         if carrier.id() != budget.carrier_v1() || !carrier.id_is_current() {
             return Err("Batch storage rent budget belongs to another carrier".into());
         }
-        let decoded = crate::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(carrier));
-        let [object] = decoded.objects.as_slice() else { return Err("Batch storage rent needs one native declaration".into()) };
-        let PalwConsensusObjectV2::MaterialIntakeV1 { intake } = &object.object else {
-            return Err("Batch storage rent carrier has another purpose".into());
-        };
-        let amount = material_batch_storage_rent_v1(intake)?.ok_or("Batch storage rent carrier is not a V3 Begin")?;
-        let declaration = declaration_id(intake, request_root)?;
+        let intake = batch_storage_declaration(carrier).ok_or("Batch storage rent carrier has another purpose")?;
+        let amount = material_batch_storage_rent_v1(&intake)?.ok_or("Batch storage rent carrier is not a V3 Begin")?;
+        let split = MaterialBatchCarrierFeeV1::split(amount, budget.remaining_v1());
+        if !split.pays_storage_rent_v1() {
+            return Err("Batch storage rent carrier has insufficient available fee".into());
+        }
+        let declaration = declaration_id(&intake, request_root)?;
         // The same physical carrier has only one allocation for this purpose,
         // even if a caller mistakenly supplies another request identity.
         let purpose =
@@ -126,6 +165,12 @@ mod tests {
         let at = PalwBlockContextV2 { block: Hash64::from_u64_word(6), daa_score: 7, blue_score: 8, subsidy: 0 };
         let request = Hash64::from_u64_word(9);
         let other_request = Hash64::from_u64_word(10);
+        let short_split = material_batch_carrier_fee_v1(&tx, amount - 1).unwrap();
+        assert!(!short_split.pays_storage_rent_v1());
+        assert_eq!((short_split.withheld_storage_rent, short_split.collectible_fee), (amount - 1, 0));
+        let full_split = material_batch_carrier_fee_v1(&tx, 2 * amount).unwrap();
+        assert!(full_split.pays_storage_rent_v1());
+        assert_eq!((full_split.withheld_storage_rent, full_split.collectible_fee), (amount, amount));
         let mut short = budget(amount);
         short.allocate_v1([12; 64], 1).unwrap();
         assert!(MaterialBatchStorageDebitV1::allocate_v1(&tx, &mut short, request, at).is_err());
@@ -134,9 +179,9 @@ mod tests {
         fees.allocate_v1([12; 64], 1).unwrap();
         let paid = MaterialBatchStorageDebitV1::allocate_v1(&tx, &mut fees, request, at).unwrap();
         assert_eq!(paid.amount_v1(), amount);
-        assert_eq!(fees.remaining_v1(), amount);
+        assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
         assert!(MaterialBatchStorageDebitV1::allocate_v1(&tx, &mut fees, other_request, at).is_err());
-        assert_eq!(fees.remaining_v1(), amount);
+        assert_eq!(fees.remaining_v1(), full_split.collectible_fee);
         assert!(paid.check_v1(&intake, request, &at, amount).is_ok());
         assert!(paid.check_v1(&intake, other_request, &at, amount).is_err());
         assert!(paid.check_v1(&intake, request, &PalwBlockContextV2 { daa_score: 8, ..at }, amount).is_err());

@@ -240,6 +240,12 @@ impl BatchDemandV1 {
         Ok(parts as usize)
     }
 
+    /// Canonical request identity used by signed native material delivery.
+    pub fn checked_request_root_v1(&self) -> Result<Hash64, BatchCourtErrorV1> {
+        self.check()?;
+        self.root()
+    }
+
     fn root(&self) -> Result<Hash64, BatchCourtErrorV1> {
         let bytes = borsh::to_vec(self).map_err(|_| BatchCourtErrorV1::Demand)?;
         Ok(blake2b_512_keyed(b"misaka-palw/batch-court/demand/v1", &bytes))
