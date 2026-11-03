@@ -818,8 +818,18 @@ pub fn leaf_hashes_v1(leaves: &[PalwArtifactOperandV1]) -> Vec<Hash64> {
 /// its hashes root there) AND every leaf it names is already stored and checks; a claim-material manifest only if every unit it lists is
 /// already stored with that hash. The server has no chain: this is "never serve a manifest you cannot back", not a verdict.
 pub fn server_accepts_material_v1(root: &Path, path: &str, body: &[u8]) -> Result<(), String> {
+    server_accepts_material_while_v1(root, path, body, || Ok(()))
+}
+
+pub(crate) fn server_accepts_material_while_v1(
+    root: &Path,
+    path: &str,
+    body: &[u8],
+    check: impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
     use crate::evidence::fs::read_bounded_file;
 
+    check()?;
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
         ["artifacts", class, file] if file.ends_with(".manifest") => {
@@ -829,6 +839,7 @@ pub fn server_accepts_material_v1(root: &Path, path: &str, body: &[u8]) -> Resul
             let program = m.check_against_chain(m.network_domain, class, artifact_root, None)?;
             let rows = canonical_leaf_rows_v1(&program)?;
             for (i, row) in rows.iter().enumerate() {
+                check()?;
                 let file = root.join(artifact_leaf_path(&artifact_root, i as u32));
                 let bytes = read_bounded_file(&file, MATERIAL_UNIT_MAX_BYTES)
                     .map_err(|_| format!("leaf {i} is missing or above the provider unit limit"))?;
@@ -847,6 +858,7 @@ pub fn server_accepts_material_v1(root: &Path, path: &str, body: &[u8]) -> Resul
                 MaterialManifestV1::KernelClaim { entries, .. } | MaterialManifestV1::HeldClaim { entries, .. } => entries,
             };
             for e in entries {
+                check()?;
                 if !is_stem(&e.stem) || e.len as usize > MATERIAL_UNIT_MAX_BYTES {
                     return Err("invalid claim-material manifest entry".into());
                 }
