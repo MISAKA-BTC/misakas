@@ -318,7 +318,7 @@ pub fn step_with_custody(
     custody_in_force: &dyn Fn(u64, &Hash64) -> bool,
     custody: Option<&mut dyn crate::attempt::NativeCustodyV3>,
 ) -> Result<StepOutcome, MinerHalt> {
-    step_with_custody_and_retention(nodes, cfg, state, executor, signer, network_draw, custody_in_force, custody, &|_, _| Ok(()))
+    step_with_custody_and_retention(nodes, cfg, state, executor, signer, network_draw, custody_in_force, custody, &|_| Ok(()))
 }
 
 /// Retain a won attempt's capture before handing its block to any relay.
@@ -332,7 +332,7 @@ pub fn step_with_custody_and_retention(
     network_draw: &dyn Fn(&Header, u64, bool) -> bool,
     custody_in_force: &dyn Fn(u64, &Hash64) -> bool,
     custody: Option<&mut dyn crate::attempt::NativeCustodyV3>,
-    retain_material: &dyn Fn(Hash64, &[u8]) -> Result<(), String>,
+    retain_material: &dyn Fn(&MountedAttempt) -> Result<(), String>,
 ) -> Result<StepOutcome, MinerHalt> {
     let views: Vec<ViewAdapter<'_>> = nodes.iter().map(|n| ViewAdapter(*n)).collect();
     let view_refs: Vec<&dyn ChainView> = views.iter().map(|v| v as &dyn ChainView).collect();
@@ -433,15 +433,14 @@ pub fn step_with_custody_and_retention(
         return Ok(StepOutcome::Republished { block_hash: block.header.hash, report });
     }
 
+    // An individual relay can accept the block even if the fanout quorum fails.
+    // Keep its exact capture before any relay sees the signed block.
+    retain_material(&mounted).map_err(|reason| MinerHalt::RetainMaterial { attempt_id: mounted.attempt_id, reason })?;
+
     // The inference took time: a FRESH quorum must still stand on the same chain point, inside the freshness bound.
     let fresh_view = agree(&view_refs, &cfg.quorum)?;
     let (fresh_templates, _) = gather(nodes, &cfg.attempt.network_id);
     ready_to_publish(&accepted, &observations(&fresh_templates, &cfg.attempt.network_id), &cfg.template, fresh_view.virtual_daa)?;
-
-    // An individual relay can accept the block even if the fanout quorum fails.
-    // Keep its exact capture before any relay sees the signed block.
-    retain_material(mounted.attempt_id, &mounted.material)
-        .map_err(|reason| MinerHalt::RetainMaterial { attempt_id: mounted.attempt_id, reason })?;
 
     let mut block = chosen.block.clone();
     block.header = std::sync::Arc::new(mounted.header.clone());
@@ -1174,11 +1173,62 @@ mod tests {
             &|_, _, _| true,
             &|_, _| false,
             None,
-            &|_, _| Err("disk unavailable".into()),
+            &|_| Err("disk unavailable".into()),
         );
         assert!(matches!(result, Err(MinerHalt::RetainMaterial { .. })), "{result:?}");
         assert!(a.submitted.borrow().is_empty());
         assert!(b.submitted.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_panel_can_fetch_a_capture_even_if_only_one_relay_accepts() {
+        use crate::evidence::{ClaimRoots, ManifestLimits};
+        use crate::transport::{HttpProvider, fetch_claim_material_any, publish_attempt_capture_v1, server};
+
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("rfc09-attempt-provider-{}-{stamp}", std::process::id()));
+        let server = server::start("127.0.0.1:0", dir.clone(), server::ServerConfig::default()).unwrap();
+        let provider = HttpProvider::new(server.url());
+        let signer = keypair();
+        let (a, b) = (Fake::new("a", &pk(&signer)), Fake::new("b", &pk(&signer)));
+        *b.reply.borrow_mut() = Some(Reply::Accepted(h(0x66)));
+        let (mut state, mut exec) = (MinerState::default(), Exec { calls: Cell::new(0) });
+        let result = step_with_custody_and_retention(
+            &[&a, &b],
+            &cfg(pk(&signer)),
+            &mut state,
+            &mut exec,
+            &signer,
+            &|_, _, _| true,
+            &|_, _| false,
+            None,
+            &|mounted| {
+                assert!(a.submitted.borrow().is_empty() && b.submitted.borrow().is_empty());
+                let attempt = &mounted.attempt;
+                assert_eq!(publish_attempt_capture_v1(attempt, &mounted.material, &[&provider])?.verified_copies(), 1);
+                let roots = ClaimRoots {
+                    network_domain: attempt.network_domain,
+                    trace_root: attempt.trace_root,
+                    output_root: attempt.output_root,
+                    execution_root: attempt.execution_root,
+                    trace_chunk_count: attempt.trace_chunk_count,
+                    retention_deadline: attempt.trace_retention_daa,
+                };
+                let (capture, _) = fetch_claim_material_any(
+                    &[&provider],
+                    &mounted.attempt_id.to_string(),
+                    &roots,
+                    &ManifestLimits::default(),
+                    mounted.attempt_id,
+                )
+                .map_err(|error| error.to_string())?;
+                assert_eq!(capture, mounted.material);
+                Ok(())
+            },
+        );
+        server.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(matches!(result, Err(MinerHalt::Publish(RelayFailure::TooFew { got: 1, need: 2, .. }))), "{result:?}");
     }
 
     #[test]

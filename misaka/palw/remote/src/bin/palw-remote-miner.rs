@@ -454,6 +454,7 @@ struct Args {
     executor: PathBuf,
     executor_args: Vec<String>,
     state_dir: PathBuf,
+    evidence_provider: Option<String>,
     steps: Option<u64>,
     poll_secs: u64,
     min_submit: Option<usize>,
@@ -490,6 +491,7 @@ fn parse_args() -> Args {
     let (mut drill_salt, mut drill_ruleset) = (None, None);
     let (mut fork_choice_issuers, mut fork_choice_dir, mut fork_choice_limits) =
         (Vec::new(), None, misaka_palw_remote::l2::L2LimitsV1::default());
+    let mut evidence_provider = None;
     let (mut native_providers, mut native_max_body) = (Vec::new(), 64u64 << 20);
     while let Some(flag) = it.next() {
         let mut value = |name: &str| it.next().unwrap_or_else(|| die(format!("{name} needs a value")));
@@ -513,6 +515,7 @@ fn parse_args() -> Args {
             "--executor-cmd" => executor = Some(PathBuf::from(value("--executor-cmd"))),
             "--executor-arg" => executor_args.push(value("--executor-arg")),
             "--state-dir" => state_dir = Some(PathBuf::from(value("--state-dir"))),
+            "--evidence-provider" => evidence_provider = Some(value("--evidence-provider")),
             "--steps" => steps = Some(value("--steps").parse().unwrap_or_else(|_| die("--steps is not a number"))),
             "--poll-secs" => poll = value("--poll-secs").parse().unwrap_or_else(|_| die("--poll-secs is not a number")),
             "--min-submit" => min_submit = Some(value("--min-submit").parse().unwrap_or_else(|_| die("--min-submit is not a number"))),
@@ -628,6 +631,7 @@ fn parse_args() -> Args {
         executor: executor.unwrap_or_else(|| die("--executor-cmd is required: this binary does not contain a model backend")),
         executor_args,
         state_dir: state_dir.unwrap_or_else(|| die("--state-dir is required")),
+        evidence_provider,
         steps,
         poll_secs: poll,
         min_submit,
@@ -842,6 +846,15 @@ fn main() {
             Box::new(move |daa| fence.is_some_and(|a| a.is_active(daa)))
         })
     });
+    let evidence_providers = args.evidence_provider.as_deref().map(|list| {
+        let specs = misaka_palw_remote::transport::parse_provider_list_v1(list)
+            .unwrap_or_else(|error| die(format!("--evidence-provider: {error}")));
+        if specs.is_empty() {
+            die("--evidence-provider names no provider");
+        }
+        misaka_palw_remote::transport::open_providers_v1(&specs)
+    });
+    let evidence_refs: Vec<_> = evidence_providers.iter().flatten().map(Box::as_ref).collect();
     let mut executor = CommandExecutor { program: args.executor.clone(), args: args.executor_args.clone() };
 
     let network_domain = palw_network_domain_v2_for(args.network.as_bytes(), Some(params.genesis.hash));
@@ -991,7 +1004,25 @@ fn main() {
             &network_draw,
             &custody_in_force,
             custody,
-            &|attempt_id, material| keep_material(&args.state_dir, attempt_id, material),
+            &|mounted| {
+                keep_material(&args.state_dir, mounted.attempt_id, &mounted.material)?;
+                if !evidence_refs.is_empty() {
+                    let report = misaka_palw_remote::transport::publish_attempt_capture_v1(
+                        &mounted.attempt,
+                        &mounted.material,
+                        &evidence_refs,
+                    )?;
+                    say(
+                        "evidence-retained",
+                        serde_json::json!({
+                            "attempt_id": mounted.attempt_id.to_string(),
+                            "manifest_id": report.manifest_id.to_string(),
+                            "verified_copies": report.verified_copies(),
+                        }),
+                    );
+                }
+                Ok(())
+            },
         );
         if let Some(mode) = state.last_mode {
             say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));
