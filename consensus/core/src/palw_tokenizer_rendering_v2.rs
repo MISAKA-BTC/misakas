@@ -24,12 +24,12 @@ use crate::{
         tokenizer_key_events_from_unique_json,
     },
 };
-use kaspa_core::memory_budget::{MemoryBudget, MemoryClass, global_memory_budget};
+use kaspa_core::memory_budget::{MemoryBudget, MemoryBudgetError, MemoryClass, global_memory_budget};
 use std::sync::Arc;
 
 /// The caller supplies the immutable tokenizer identity and registered table
 /// context, independently of the submitted raw bytes and EOG opening.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub struct PalwTokenizerRenderingStatementV2 {
     pub tokenizer_id: Hash64,
     pub exact_raw_bytes: u64,
@@ -40,7 +40,7 @@ pub struct PalwTokenizerRenderingStatementV2 {
 
 /// Local work limits for this single pass. A native caller must also budget
 /// the JSON parser's transient allocations and reserve its processing slot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub struct PalwTokenizerRenderingBudgetV2 {
     pub raw_bytes: u64,
     pub vocab: u32,
@@ -49,7 +49,7 @@ pub struct PalwTokenizerRenderingBudgetV2 {
     pub total_rendering_bytes: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 #[non_exhaustive]
 pub struct PalwDerivedTokenizerRenderingV2 {
     pub statement: PalwTokenizerRenderingStatementV2,
@@ -57,6 +57,7 @@ pub struct PalwDerivedTokenizerRenderingV2 {
     pub maximum_rendering_bytes: u64,
     pub total_rendering_bytes: u64,
     pub eog_leaf: Hash64,
+    pub eog_count: u32,
     pub lowest_eog_id: u32,
 }
 
@@ -119,6 +120,7 @@ pub fn derive_tokenizer_rendering_v2(
         maximum_rendering_bytes,
         total_rendering_bytes,
         eog_leaf: eog.opening.leaf_hash,
+        eog_count: eog.ids.len() as u32,
         lowest_eog_id,
     })
 }
@@ -144,9 +146,10 @@ fn check_operands(
     Ok(())
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 struct PreparedTokenizerIdentityV2 {
     semantics: Hash64,
+    artifact_root: Hash64,
     graph_ir_root: Hash64,
     layout_digest: Hash64,
     eof: PalwTokenizerArtifactInventoryCertificateV1,
@@ -177,6 +180,7 @@ impl PreparedTokenizerIdentityV2 {
         }
         Some(Self {
             semantics: semantics.commitment(),
+            artifact_root: *artifact_root,
             graph_ir_root: record.graph_ir_root,
             layout_digest: record.layout_digest,
             eof: eof.clone(),
@@ -194,7 +198,7 @@ impl PreparedTokenizerIdentityV2 {
 
 /// Operator pins for the exact native registrations being prepared. The
 /// inventory id is the signed offer's id, read back after native EOF acceptance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
 pub struct PalwTfp1TokenizerIntakePinsV2 {
     pub class_id: Hash64,
     pub container_root: Hash64,
@@ -219,10 +223,124 @@ fn tfp1_tokenizer_intake_active(extras: &PalwTransitionExtrasV1) -> bool {
         && extras.staged_public_court.is_some()
 }
 
+const VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1: u16 = 1;
+const VERIFIED_TOKENIZER_REGISTRATION_DOMAIN_V1: &[u8] = b"misaka-palw/verified-tokenizer-registration/v1";
+
+#[derive(Debug, thiserror::Error)]
+pub enum PalwVerifiedTokenizerRegistrationErrorV1 {
+    #[error("tokenizer registration does not match the accepted parent: {0}")]
+    Parent(&'static str),
+    #[error("tokenizer registration evidence refused: {0}")]
+    Evidence(String),
+    #[error("local tokenizer registration capacity: {0}")]
+    Capacity(#[from] MemoryBudgetError),
+}
+
+/// Fixed-size candidate value for a future rooted tokenizer record. Created
+/// only by re-executing the parser and verifying the full table/EOG. Encoding
+/// provides a reproducible identity; it cannot confer verified provenance.
+/// V1 fixes the Qwen V1 rendering interpreter and its JSON/EOF semantics.
+#[derive(Debug, PartialEq, Eq, borsh::BorshSerialize)]
+pub struct PalwVerifiedTokenizerRegistrationV1 {
+    version: u16,
+    pins: PalwTfp1TokenizerIntakePinsV2,
+    identity: PreparedTokenizerIdentityV2,
+    container: PalwTirContainerRowV1,
+    limits: PalwTokenizerRenderingBudgetV2,
+    facts: PalwDerivedTokenizerRenderingV2,
+}
+
+impl PalwVerifiedTokenizerRegistrationV1 {
+    /// Rebuild on the accepted parent independently of any producer cache.
+    /// The caller supplies its effective work limits and bounded retained
+    /// input; the additional parser work is reserved before any input hashing.
+    /// A future native writer must fix `limits` in its ruleset and acquire the
+    /// authenticated operands through its own funded, replayable input path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn derive_v1(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        now_daa: u64,
+        pins: PalwTfp1TokenizerIntakePinsV2,
+        raw: &[u8],
+        eog: &PalwTokenTableEogOpeningV1,
+        limits: PalwTokenizerRenderingBudgetV2,
+    ) -> Result<Option<Self>, PalwVerifiedTokenizerRegistrationErrorV1> {
+        if !tfp1_tokenizer_intake_active(extras) {
+            return Ok(None);
+        }
+        let (identity, container) = PalwTokenizerRenderingCacheV2::tfp1_identity(parent, now_daa, &pins)
+            .map_err(PalwVerifiedTokenizerRegistrationErrorV1::Parent)?;
+        Self::from_operands(identity, container, pins, raw, eog, limits).map(Some)
+    }
+
+    fn from_operands(
+        identity: PreparedTokenizerIdentityV2,
+        container: &PalwTirContainerRowV1,
+        pins: PalwTfp1TokenizerIntakePinsV2,
+        raw: &[u8],
+        eog: &PalwTokenTableEogOpeningV1,
+        limits: PalwTokenizerRenderingBudgetV2,
+    ) -> Result<Self, PalwVerifiedTokenizerRegistrationErrorV1> {
+        let facts = derive_with_native_scratch(&identity, raw, eog, limits, global_memory_budget())?;
+        Ok(Self { version: VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1, pins, identity, container: container.clone(), limits, facts })
+    }
+
+    /// The expected digest of a persisted value can be checked after a cold
+    /// re-derivation. There is intentionally no deserialize-as-verified API.
+    pub fn commitment_v1(&self) -> Hash64 {
+        let bytes = borsh::to_vec(self).expect("fixed tokenizer registration encodes");
+        let digest = blake2b_simd::Params::new().hash_length(64).key(VERIFIED_TOKENIZER_REGISTRATION_DOMAIN_V1).hash(&bytes);
+        Hash64::from_bytes(digest.as_bytes().try_into().expect("64-byte registration digest"))
+    }
+
+    /// Use only in-process verified values on a current parent. Exact
+    /// registrations can survive reorgs; missing/replaced registrations or
+    /// different work limits must go through a fresh native derivation.
+    pub fn applies_to_parent_v1(
+        &self,
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        now_daa: u64,
+        limits: PalwTokenizerRenderingBudgetV2,
+    ) -> bool {
+        tfp1_tokenizer_intake_active(extras)
+            && self.limits == limits
+            && PalwTokenizerRenderingCacheV2::tfp1_identity(parent, now_daa, &self.pins)
+                .is_ok_and(|(identity, container)| self.identity == identity && &self.container == container)
+    }
+
+    pub fn facts_v1(&self) -> &PalwDerivedTokenizerRenderingV2 {
+        &self.facts
+    }
+}
+
+fn derive_with_native_scratch(
+    identity: &PreparedTokenizerIdentityV2,
+    raw: &[u8],
+    eog: &PalwTokenTableEogOpeningV1,
+    mut budget: PalwTokenizerRenderingBudgetV2,
+    memory: &Arc<MemoryBudget>,
+) -> Result<PalwDerivedTokenizerRenderingV2, PalwVerifiedTokenizerRegistrationErrorV1> {
+    use PalwVerifiedTokenizerRegistrationErrorV1::Evidence;
+    let statement = identity.statement;
+    budget.key_events = budget.key_events.min(identity.declared_key_events);
+    check_operands(statement, raw, eog, budget).map_err(Evidence)?;
+    // Same conservative parser multiplier as the existing Node tokenizer
+    // check. Includes separate EOG-sort scratch and bounded tree overhead.
+    let scratch = statement
+        .exact_raw_bytes
+        .checked_mul(128)
+        .and_then(|bytes| bytes.checked_add(4 * eog.ids.len() as u64 + 16_384))
+        .ok_or_else(|| Evidence("tokenizer scratch estimate overflow".into()))?;
+    let _lease = memory.try_reserve(MemoryClass::Native, scratch)?;
+    derive_tokenizer_rendering_v2(statement, raw, eog, budget).map_err(Evidence)
+}
+
 struct PreparedTokenizerRenderingV2 {
     identity: PreparedTokenizerIdentityV2,
     facts: PalwDerivedTokenizerRenderingV2,
-    container: Option<PalwTirContainerRowV1>,
+    registration: Option<PalwVerifiedTokenizerRegistrationV1>,
 }
 
 /// One process-local entry per instance for prospective TIR checks. Empty on restart.
@@ -276,25 +394,14 @@ impl PalwTokenizerRenderingCacheV2 {
         identity: PreparedTokenizerIdentityV2,
         raw: &[u8],
         eog: &PalwTokenTableEogOpeningV1,
-        mut budget: PalwTokenizerRenderingBudgetV2,
+        budget: PalwTokenizerRenderingBudgetV2,
         memory: &Arc<MemoryBudget>,
     ) -> Result<(), String> {
         if self.prepared.as_ref().is_some_and(|entry| entry.identity == identity) {
             return Ok(());
         }
-        let statement = identity.statement;
-        budget.key_events = budget.key_events.min(identity.declared_key_events);
-        check_operands(statement, raw, eog, budget)?;
-        // Same conservative parser multiplier as the existing Node tokenizer
-        // check. Includes separate EOG-sort scratch and bounded tree overhead.
-        let scratch = statement
-            .exact_raw_bytes
-            .checked_mul(128)
-            .and_then(|bytes| bytes.checked_add(4 * eog.ids.len() as u64 + 16_384))
-            .ok_or("tokenizer scratch estimate overflow")?;
-        let _lease = memory.try_reserve(MemoryClass::Native, scratch).map_err(|e| e.to_string())?;
-        let facts = derive_tokenizer_rendering_v2(statement, raw, eog, budget)?;
-        self.prepared = Some(PreparedTokenizerRenderingV2 { identity, facts, container: None });
+        let facts = derive_with_native_scratch(&identity, raw, eog, budget, memory).map_err(|why| why.to_string())?;
+        self.prepared = Some(PreparedTokenizerRenderingV2 { identity, facts, registration: None });
         Ok(())
     }
 
@@ -340,8 +447,18 @@ impl PalwTokenizerRenderingCacheV2 {
             return Ok(false);
         }
         let (identity, container) = Self::tfp1_identity(parent, now_daa, pins)?;
-        self.prepare(identity, raw, eog, budget, global_memory_budget())?;
-        self.prepared.as_mut().expect("successful tokenizer preparation installs one entry").container = Some(container.clone());
+        if self.prepared.as_ref().and_then(|entry| entry.registration.as_ref()).is_some_and(|record| {
+            record.pins == *pins && record.identity == identity && &record.container == container && record.limits == budget
+        }) {
+            return Ok(true);
+        }
+        let registration = PalwVerifiedTokenizerRegistrationV1::from_operands(identity, container, *pins, raw, eog, budget)
+            .map_err(|why| why.to_string())?;
+        self.prepared = Some(PreparedTokenizerRenderingV2 {
+            identity: registration.identity.clone(),
+            facts: registration.facts.clone(),
+            registration: Some(registration),
+        });
         Ok(true)
     }
 
@@ -371,7 +488,12 @@ impl PalwTokenizerRenderingCacheV2 {
             {
                 return Err(Local("tokenizer intake quote changes the registered job or artifact"));
             }
-            if !self.prepared.as_ref().is_some_and(|entry| entry.identity == identity && entry.container.as_ref() == Some(container)) {
+            if !self
+                .prepared
+                .as_ref()
+                .and_then(|entry| entry.registration.as_ref())
+                .is_some_and(|record| record.pins == *pins && record.identity == identity && &record.container == container)
+            {
                 return Err(Local("tokenizer intake quote requires a current local preparation"));
             }
         }
@@ -381,6 +503,12 @@ impl PalwTokenizerRenderingCacheV2 {
     fn for_claim(&self, state: &PalwChainStateV2, claim_id: &Hash64) -> Option<&PreparedTokenizerRenderingV2> {
         let prepared = self.prepared.as_ref()?;
         let claim = state.claim(claim_id)?;
+        if let Some(registration) = &prepared.registration {
+            let container = palw_tir_bound_container_v1(state, claim.class_id)?;
+            if registration.container != *container || container.bound_daa >= claim.accepted_daa {
+                return None;
+            }
+        }
         let semantics = state.claim_semantics_v1(claim_id)?;
         let PalwStagedCourtRowV1::TirClaim(frame) = state.staged_court_row_v1(&PalwStagedCourtKeyV1::TirClaim(*claim_id))? else {
             return None;
@@ -468,6 +596,7 @@ mod tests {
         assert_eq!(facts.maximum_rendering_bytes, 4);
         assert_eq!(facts.total_rendering_bytes, 5);
         assert_eq!(facts.eog_leaf, eog.opening.leaf_hash);
+        assert_eq!(facts.eog_count, 1);
         assert_eq!(facts.lowest_eog_id, 2);
     }
 
@@ -521,14 +650,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn cold_prepare_reserves_scratch_and_only_memoizes_success() {
+    fn identity_fixture(statement: PalwTokenizerRenderingStatementV2) -> PreparedTokenizerIdentityV2 {
         use crate::palw_state_v2::PalwBondKeyV2;
 
-        let (statement, table) = fixture();
-        let eog = table.eog_opening().unwrap();
-        let identity = || PreparedTokenizerIdentityV2 {
+        PreparedTokenizerIdentityV2 {
             semantics: statement.table_root,
+            artifact_root: statement.table_root,
             graph_ir_root: statement.table_root,
             layout_digest: statement.table_root,
             eof: PalwTokenizerArtifactInventoryCertificateV1 {
@@ -541,7 +668,14 @@ mod tests {
             },
             declared_key_events: BUDGET.key_events,
             statement,
-        };
+        }
+    }
+
+    #[test]
+    fn cold_prepare_reserves_scratch_and_only_memoizes_success() {
+        let (statement, table) = fixture();
+        let eog = table.eog_opening().unwrap();
+        let identity = || identity_fixture(statement);
         let small = MemoryBudget::new(1, [1; 4]);
         let adequate = MemoryBudget::new(32_768, [32_768; 4]);
         let mut cache = PalwTokenizerRenderingCacheV2::default();
@@ -590,5 +724,54 @@ mod tests {
         extras.tir_public_conviction_active = true;
         assert!(cache.prepare_tfp1_intake_v2(&state, &extras, 0, &pins, RAW, &eog, BUDGET).is_err());
         assert!(cache.prepared.is_none());
+    }
+
+    #[test]
+    fn registration_bytes_pin_full_eog_and_effective_limits() {
+        let (statement, table) = fixture();
+        let eog = table.eog_opening().unwrap();
+        let denied = MemoryBudget::new(1, [1; 4]);
+        let adequate = MemoryBudget::new(32_768, [32_768; 4]);
+        assert!(matches!(
+            derive_with_native_scratch(&identity_fixture(statement), RAW, &eog, BUDGET, &denied),
+            Err(PalwVerifiedTokenizerRegistrationErrorV1::Capacity(_))
+        ));
+        let build = |limits| {
+            let identity = identity_fixture(statement);
+            let facts = derive_with_native_scratch(&identity, RAW, &eog, limits, &adequate).unwrap();
+            PalwVerifiedTokenizerRegistrationV1 {
+                version: VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1,
+                pins: PalwTfp1TokenizerIntakePinsV2 {
+                    class_id: statement.table_root,
+                    container_root: statement.table_root,
+                    semantics_id: identity.semantics,
+                    inventory_id: identity.eof.inventory_id,
+                },
+                identity,
+                container: PalwTirContainerRowV1 {
+                    container_root: statement.table_root,
+                    manifest_digest: statement.tokenizer_id,
+                    weights_section: 0,
+                    inner_leaf_count: 1,
+                    bound_daa: 1,
+                },
+                limits,
+                facts,
+            }
+        };
+        let record = build(BUDGET);
+        assert_eq!(record.commitment_v1(), build(BUDGET).commitment_v1());
+        assert_eq!(record.facts_v1().eog_leaf, eog.opening.leaf_hash);
+        assert_eq!(record.facts_v1().eog_count, 1);
+        assert_ne!(record.commitment_v1(), build(PalwTokenizerRenderingBudgetV2 { eog_ids: 3, ..BUDGET }).commitment_v1());
+        let mut altered = build(BUDGET);
+        altered.facts.eog_leaf = statement.tokenizer_id;
+        assert_ne!(record.commitment_v1(), altered.commitment_v1());
+        assert_eq!(borsh::to_vec(&record).unwrap().len(), 1298);
+        assert_eq!(
+            record.commitment_v1().to_string(),
+            "f20fc0ff7018849e3eeff3932bb3b6db91e2b617396e1908615621a22affcbcb09a6ddf3b2a125b1cb1a2013715166f5e381d934225588325f600e5b5b3669a3"
+        );
+        assert_eq!(adequate.snapshot().reserved_bytes, 0);
     }
 }
