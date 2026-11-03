@@ -17,19 +17,21 @@ use kaspa_consensus_core::{
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
     palw_state_v2::{
         AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignmentRulesV2,
-        PalwChainStateV2,
+        PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
     },
-    tx::{PopulatedTransaction, UtxoEntry},
+    tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
 use misaka_palw_positive_contract::{
     assignment::{
         AssignmentId,
         control_material::AssignmentControlViewV2,
+        funding_relay::RelayTargetV2,
+        funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2},
         journal::{ASSIGNMENT_JOURNAL_HEADER_BYTES_V2, AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
         open_material::AssignmentOpenLimitsV2,
     },
     journal::CaseJournalRecordView,
-    native::NativeRowKey,
+    native::{KERNEL_AUX_TABLE, NativeRowKey},
     rows::{AcceptedOrigin, MAX_NATIVE_KEY_BYTES, NativeRowBody, NativeRowValue},
 };
 
@@ -71,6 +73,28 @@ pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
     pub remaining_work: u64,
     pub maximum_heap: u64,
     pub acceptance_bytes: u64,
+    pub selected_parent: BlockHash,
+    pub state: &'a PalwChainStateV2,
+    pub authorization: &'a FundingRelayAuthorizationRowV2,
+    pub custody: &'a FundingRelayCustodyRowV2,
+}
+
+impl RelayCarrierReplayV2<'_> {
+    fn charge(&mut self, reads: u64, work: u64) -> Result<(), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        self.remaining_reads = self.remaining_reads.checked_sub(reads).ok_or(E::Invalid("relay replay read cap"))?;
+        self.remaining_work = self.remaining_work.checked_sub(work).ok_or(E::Invalid("relay replay work cap"))?;
+        Ok(())
+    }
+}
+
+fn decode_relay_history_row_v2(key: &[u8], bytes: &[u8]) -> Option<NativeRowBody> {
+    // All three expected variants have fixed fields. Reject another variant
+    // before its decoder can allocate a variable-size payload.
+    if bytes.get(..5)? != key.get(..5)? {
+        return None;
+    }
+    NativeRowValue::decode(key, bytes).ok().map(|row| row.body)
 }
 
 impl VirtualStateProcessor {
@@ -383,15 +407,10 @@ impl VirtualStateProcessor {
 
         let accepting = BlockHash::from_bytes(replay.origin.accepting_block.0);
         let carrier = BlockHash::from_bytes(replay.origin.carrier_block.0);
-        let charge = |replay: &mut RelayCarrierReplayV2<'_>, reads: u64, work: u64| {
-            replay.remaining_reads = replay.remaining_reads.checked_sub(reads).ok_or(E::Invalid("relay replay read cap"))?;
-            replay.remaining_work = replay.remaining_work.checked_sub(work).ok_or(E::Invalid("relay replay work cap"))?;
-            Ok::<_, E>(())
-        };
         let record = |replay: &mut RelayCarrierReplayV2<'_>, prefix, block| {
             // One pin to measure the stored extent and a second possible
             // read through the ordinary cache owner.
-            charge(replay, 2, 0)?;
+            replay.charge(2, 0)?;
             let prefix = [u8::from(prefix)];
             let key = DbKey::new(&prefix, block);
             let raw = self
@@ -399,7 +418,7 @@ impl VirtualStateProcessor {
                 .get_pinned(key)
                 .map_err(|_| E::Unavailable("historical relay record read"))?
                 .ok_or(E::Unavailable("historical relay record missing"))?;
-            charge(replay, 0, raw.len() as u64)
+            replay.charge(0, raw.len() as u64)
         };
         record(&mut replay, DatabaseStorePrefixes::BlockTransactions, carrier)?;
         let body = self.block_transactions_store.get(carrier).map_err(|_| E::Unavailable("original relay block body"))?;
@@ -414,7 +433,7 @@ impl VirtualStateProcessor {
         }
 
         let acceptance_bytes = replay.acceptance_bytes;
-        charge(&mut replay, 1, acceptance_bytes)?;
+        replay.charge(1, acceptance_bytes)?;
         let acceptance = self.acceptance_data_store.get(accepting).map_err(|_| E::Unavailable("original relay acceptance data"))?;
         let inputs = tx.inputs.len() as u64;
         let input_work = u64::from(replay.origin.accepted_tx_ordinal)
@@ -422,9 +441,9 @@ impl VirtualStateProcessor {
             .and_then(|n| n.checked_add(inputs))
             .and_then(|n| n.checked_mul(inputs))
             .ok_or(E::Invalid("relay input replay work overflow"))?;
-        charge(&mut replay, 0, input_work)?;
+        replay.charge(0, input_work)?;
         record(&mut replay, DatabaseStorePrefixes::UtxoDiffs, accepting)?;
-        let (entries, _lease) =
+        let (entries, lease) =
             self.restore_original_archive_inputs_v2(&acceptance, replay.origin, tx, replay.maximum_heap, 0, |creator| {
                 record(&mut replay, DatabaseStorePrefixes::BlockTransactions, creator)
             })?;
@@ -436,7 +455,132 @@ impl VirtualStateProcessor {
         if actual_fee != replay.gross_fee {
             return Err(E::Invalid("original relay Full fee differs from archived gross fee"));
         }
-        Ok(())
+        drop(populated);
+        drop(lease);
+        self.replay_original_relay_payer_v2(replay)
+    }
+
+    /// Reverse only the payer fields from the rooted selected-parent view.
+    /// Each delta is released before the next one is read. The original
+    /// registration pair fixes the exact position within the accepting block.
+    fn replay_original_relay_payer_v2(&self, mut replay: RelayCarrierReplayV2<'_>) -> Result<(), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let authorization = replay.authorization;
+        let current_custody = replay.custody;
+        let terms = &authorization.terms;
+        let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
+            return Err(E::Unavailable("original relay payer contract owner"));
+        };
+        let scratch = (4 * size_of::<NativeRowValue>() + 4 * MAX_NATIVE_KEY_BYTES) as u64;
+        let delta_heap = replay.maximum_heap.checked_sub(scratch).ok_or(E::Invalid("relay payer replay heap cap"))?;
+        let _lease =
+            reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("relay payer replay workspace owner"))?;
+        let funding = terms.funding_outpoint;
+        let purpose = terms.funding_purpose;
+        let auth_key = NativeRowKey::FundingRelayAuthorization { funding, purpose }.encode();
+        let custody_key = NativeRowKey::FundingRelayCustody { funding, purpose }.encode();
+        let nonce_key = (KERNEL_AUX_TABLE, NativeRowKey::AssignmentNonce(terms.payer_bond).encode());
+        let payer =
+            PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(terms.payer_bond.transaction.0), terms.payer_bond.index));
+        let floor = self.palw_state_params_v2.as_ref().ok_or(E::Unavailable("original relay bond floor"))?.min_collateral_sompi();
+        let project = |bond: Option<&PalwBondStateV2>| {
+            bond.map(|bond| {
+                (bond.collateral, palw_bond_may_take_work_v2(bond, floor), bond.pubkey.as_slice() == authorization.payer_key)
+            })
+        };
+        let read_nonce = |bytes: Option<&[u8]>| {
+            bytes
+                .map(|bytes| match decode_relay_history_row_v2(&nonce_key.1, bytes) {
+                    Some(NativeRowBody::AssignmentNonce(row)) => Ok(row.nonce),
+                    _ => Err(E::Invalid("malformed original relay nonce")),
+                })
+                .transpose()
+        };
+        replay.charge(2, (size_of::<PalwBondKeyV2>() + authorization.payer_key.len() + nonce_key.1.len()) as u64)?;
+        let mut bond = project(replay.state.bond(&payer));
+        let route = replay.state.kernel_route_state_v1().ok_or(E::Unavailable("rooted relay kernel route"))?;
+        let current_nonce = route.aux.get(&nonce_key).map(Vec::as_slice);
+        replay.charge(0, current_nonce.map_or(0, |bytes| bytes.len() as u64))?;
+        let mut nonce = read_nonce(current_nonce)?;
+        let accepting = BlockHash::from_bytes(replay.origin.accepting_block.0);
+        let mut cursor = replay.selected_parent;
+        // Account for the wire preflights, decode and projected entry walk.
+        const WORK_PER_DELTA_BYTE: u64 = 6;
+        loop {
+            replay.charge(1, 0)?;
+            let (delta, bytes) = self
+                .palw_state_v2_store
+                .read()
+                .delta_of_retained_bounded_v2(cursor, replay.remaining_work / WORK_PER_DELTA_BYTE, delta_heap)
+                .map_err(|_| E::Unavailable("bounded original relay payer delta"))?;
+            replay.charge(0, bytes * WORK_PER_DELTA_BYTE)?;
+            if delta.point.block != cursor {
+                return Err(E::Invalid("relay payer history delta block differs"));
+            }
+            if cursor == accepting
+                && (delta.point.daa_score != replay.origin.accepted_daa || delta.point.blue_score != replay.origin.accepted_blue_score)
+            {
+                return Err(E::Invalid("original relay payer delta clock differs"));
+            }
+            for (index, entry) in delta.entries.iter().enumerate().rev() {
+                match entry {
+                    PalwDeltaEntryV2::Bond { key, old, new } if *key == payer => {
+                        if bond != project(new.as_ref()) {
+                            return Err(E::Invalid("relay payer bond history differs"));
+                        }
+                        bond = project(old.as_ref());
+                    }
+                    PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } if *table == nonce_key.0 && *key == nonce_key.1 => {
+                        if nonce != read_nonce(new.as_deref())? {
+                            return Err(E::Invalid("relay payer nonce history differs"));
+                        }
+                        nonce = read_nonce(old.as_deref())?;
+                    }
+                    PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(bytes) }
+                        if cursor == accepting && *table == KERNEL_AUX_TABLE && *key == auth_key =>
+                    {
+                        let Some(NativeRowBody::FundingRelayAuthorization(original)) = decode_relay_history_row_v2(key, bytes) else {
+                            return Err(E::Invalid("malformed original relay authorization"));
+                        };
+                        if original != *authorization {
+                            return Err(E::Invalid("original relay authorization differs"));
+                        }
+                        let Some(PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(bytes) }) =
+                            delta.entries.get(index + 1)
+                        else {
+                            return Err(E::Invalid("original relay registration lacks adjacent custody"));
+                        };
+                        if *table != KERNEL_AUX_TABLE || *key != custody_key {
+                            return Err(E::Invalid("original relay custody key differs"));
+                        }
+                        let Some(NativeRowBody::FundingRelayCustody(mut custody)) = decode_relay_history_row_v2(key, bytes) else {
+                            return Err(E::Invalid("malformed original relay custody"));
+                        };
+                        if custody.binding.is_some() {
+                            return Err(E::Invalid("original relay custody was already bound"));
+                        }
+                        custody.binding = current_custody.binding;
+                        if custody != *current_custody || !matches!(bond, Some((_, true, true))) {
+                            return Err(E::Invalid("original relay custody or payer bond differs"));
+                        }
+                        nonce
+                            .unwrap_or_default()
+                            .after_accepting(poster_nonce)
+                            .map_err(|_| E::Invalid("original relay payer nonce was ineligible"))?;
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+            if cursor == accepting {
+                return Err(E::Invalid("original relay registration absent from accepting delta"));
+            }
+            replay.charge(1, 64)?;
+            cursor = self
+                .ghostdag_store
+                .get_selected_parent(cursor)
+                .map_err(|_| E::Unavailable("relay payer historical selected parent"))?;
+        }
     }
 
     fn restore_original_archive_inputs_v2(

@@ -565,6 +565,10 @@ impl VirtualStateProcessor {
             remaining_work: maximum_bytes - acceptance_bytes,
             maximum_heap: auth.quote.usage.heap_bytes - workspace,
             acceptance_bytes,
+            selected_parent: parent,
+            state,
+            authorization: &auth,
+            custody: &custody,
         })
         .map_err(|error| match error {
             NativeAssignmentArchiveErrorV2::Resource(why) => why,

@@ -823,3 +823,27 @@ Core and Consensus library Clippy passed with warnings denied. This is store
 and prefix verification. A live Assignment/Case continuation through the
 native VirtualStateProcessor still needs an end-to-end run. The test runner
 records, source maps and logs are retained as `assignment-parent-root-*`.
+
+## Initial relay payer at the original acceptance position
+
+Exact-repeat archive verification now walks native selected-parent deltas
+backward from the rooted view. It rewinds the payer's eligibility and
+Assignment nonce through later writes, then stops at the exact original
+authorization and adjacent fresh custody rows in the accepting delta. It
+checks the historical payer key and collateral against the normal admission
+predicate and checks the historical nonce without consuming it. The original
+custody row must be unbound and agree with the immutable fields of the
+current row. A later binding requires its own native verification.
+
+Each step charges a bounded store read and wire work before decoding. The
+store checks the pinned extent and typed decode heap before allocating.
+Missing or pruned deltas and exhausted original replay limits refuse archive
+verification. This path depends on retained history. The separate durable
+current-account package and custody owner needed for terminal spends after
+pruning remain open, as do the actual debit and native registration.
+
+Core and Consensus library Clippy passed with warnings denied. The isolated
+production RocksDB store suite passed 36 tests, including exact wire and
+heap thresholds and rejection one byte below each. The reverse payer walk
+was typechecked. No live native relay history ran through it. The failed
+initial typecheck and final execution records are retained.

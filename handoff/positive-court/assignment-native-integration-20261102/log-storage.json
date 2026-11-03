@@ -1166,5 +1166,29 @@
     "stored_sha256": "451fee185268e1bed9cb52cc29bf7cc7784cad9e58942def005599f71714d6cb",
     "raw_bytes": 4409,
     "stored_bytes": 1427
+  },
+  {
+    "raw_name": "relay-historical-payer-clippy-second.log",
+    "stored_name": "relay-historical-payer-clippy-second.log.gz",
+    "raw_sha256": "753e64caef7e7ee2d272c7eee017bd8ea68120d067e51d3203d158c68ce4dd98",
+    "stored_sha256": "faf4ddd347da2e7f6907eac53d167fbf17005a48c235dc4d1853a23db9b1bb6d",
+    "raw_bytes": 340747,
+    "stored_bytes": 23517
+  },
+  {
+    "raw_name": "relay-historical-payer-clippy.log",
+    "stored_name": "relay-historical-payer-clippy.log.gz",
+    "raw_sha256": "1188fb81e33acfd086653738f1243b5d8a93f29999964cb34882aca62136ddbd",
+    "stored_sha256": "d935ea433dd6bce5800ca862c89ae9c6c90db4035445ff04844d3bc261434ff6",
+    "raw_bytes": 340903,
+    "stored_bytes": 23793
+  },
+  {
+    "raw_name": "relay-historical-payer-store-suite.log",
+    "stored_name": "relay-historical-payer-store-suite.log.gz",
+    "raw_sha256": "db8ae92826154294970cfd0cf7ff6c31db5ac819c35dba3fcab2434ba4f916b1",
+    "stored_sha256": "9d9b6c37854b5b9c73d19385a7af3c74c82acc5eb86b559fb6c385760f365c05",
+    "raw_bytes": 4409,
+    "stored_bytes": 1426
   }
 ]
