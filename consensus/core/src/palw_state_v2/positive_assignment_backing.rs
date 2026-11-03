@@ -122,7 +122,8 @@ pub struct NativeCommittedAssignedCaseV2 {
     pin: CaseJournalPinV2,
     records: Vec<NativeCommittedCaseRecordV2>,
     assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
-    _lease: NativeDemandLeaseV1,
+    _records_lease: NativeDemandLeaseV1,
+    _open_lease: NativeDemandLeaseV1,
 }
 impl NativeCommittedAssignedCaseV2 {
     #[allow(clippy::too_many_arguments)]
@@ -136,7 +137,8 @@ impl NativeCommittedAssignedCaseV2 {
         pin: CaseJournalPinV2,
         records: Vec<NativeCommittedCaseRecordV2>,
         assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
-        lease: NativeDemandLeaseV1,
+        records_lease: NativeDemandLeaseV1,
+        open_lease: NativeDemandLeaseV1,
     ) -> Self {
         Self {
             parent,
@@ -148,7 +150,8 @@ impl NativeCommittedAssignedCaseV2 {
             pin,
             records,
             assignment_records,
-            _lease: lease,
+            _records_lease: records_lease,
+            _open_lease: open_lease,
         }
     }
     pub fn parent(&self) -> BlockHash {
@@ -226,7 +229,8 @@ impl NativeHeapV1 for NativeCommittedAssignedCaseV2 {
             pin: _,
             records,
             assignment_records,
-            _lease: _,
+            _records_lease: _,
+            _open_lease: _,
         } = self;
         assignment
             .native_heap_v1(path)

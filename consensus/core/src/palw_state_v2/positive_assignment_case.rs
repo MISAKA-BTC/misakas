@@ -26,7 +26,7 @@ use misaka_palw_positive_contract::{
         AssignmentId,
         rows::{AssignmentRow, AssignmentStatusV2},
     },
-    identity::{Digest, PUBKEY_BYTES, PrincipalId},
+    identity::{CaseId, Digest, PUBKEY_BYTES, PrincipalId, ResultId},
     journal::{CaseJournalLimits, CaseJournalRecordView},
     messages::{MinerResultCommit, PanelWitnessCommit},
     native::NativeRowKey,
@@ -85,6 +85,42 @@ fn rooted_bundle(
     Ok((a, bundle, pin))
 }
 
+impl PalwChainStateV2 {
+    /// Resolve a follow-up against the committed selected parent's actual
+    /// Assignment consumption, signed Result, Case and journal head.
+    pub fn assigned_case_journal_pin_v2(
+        &self,
+        case: CaseId,
+        expected_result: Option<ResultId>,
+    ) -> Result<Option<(AssignmentId, CaseJournalPinV2)>, PalwStateV2Error> {
+        use crate::palw_positive_rows_v2::PositiveRowErrorV2;
+        let rows = PositiveRowsV2::new(self);
+        let case_row = match rows.read(NativeRowKey::Case(case)) {
+            Ok(Some(value)) => match value.body {
+                NativeRowBody::Case(row) => row,
+                _ => return Err(refuse("Case key/value")),
+            },
+            Ok(None) | Err(PositiveRowErrorV2::MissingKernelRoute) => return Ok(None),
+            Err(why) => return Err(refuse(why)),
+        };
+        if expected_result.is_some_and(|result| result != case_row.result) {
+            return Ok(None);
+        }
+        let NativeRowBody::Result(result) = required(self, NativeRowKey::Result(case_row.result))? else {
+            return Err(refuse("Case Result key/value"));
+        };
+        let assignment = AssignmentId(result.role_assignment.digest);
+        if rows.read(NativeRowKey::Assignment(assignment)).map_err(refuse)?.is_none() {
+            return Ok(None);
+        }
+        let (_, _, pin) = rooted_bundle(self, assignment)?;
+        if pin.case != case || pin.result != case_row.result {
+            return Err(refuse("Case and original Assignment refer to different subjects"));
+        }
+        Ok(Some((assignment, pin)))
+    }
+}
+
 /// No constructor outside this child. The current counter is cross-checked
 /// after full replay, exact empty dependency preimage and all alias routes.
 /// This is the INITIAL closed-ingress topology, never generic fraud clearance.
@@ -111,17 +147,30 @@ pub(super) struct NativeAssignedCaseCacheV2 {
     assignment: AssignmentRow,
     material: AssignmentAdmissionMaterialV2,
     pin: CaseJournalPinV2,
-    prepared: PreparedCheck,
-    record_limits: crate::palw_positive_contract_v2::record::RecordLimits,
-    authority: NativeAssignedPanelAuthorityV2,
-    court: ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
+    checker: NativeAssignedCourtV2,
     source: CommonSourceReplayStateV2,
-    facts: Vec<LocalCheckedCourtFactV2>,
     terminal_material: Option<AcceptedMaterial>,
     positive_final: Option<AcceptedOrigin>,
     _lease: NativeDemandLeaseV1,
 }
 
+/// Arithmetic replay keeps the checked state and its native allocation owner
+/// together. Source charges and Gate C votes have separate replay owners.
+struct NativeAssignedCourtV2 {
+    prepared: PreparedCheck,
+    record_limits: crate::palw_positive_contract_v2::record::RecordLimits,
+    authority: NativeAssignedPanelAuthorityV2,
+    court: ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
+    facts: Vec<LocalCheckedCourtFactV2>,
+    check_limits: crate::palw_positive_check_v2::CheckLimits,
+    derived_heap: u64,
+    checker_heap: u64,
+    available_heap: u64,
+    remaining_work: u64,
+    candidate_heap: u64,
+    candidate_lease: Option<NativeDemandLeaseV1>,
+    _lease: NativeDemandLeaseV1,
+}
 /// Private current-step role cursor. It contains an actually resolved current
 /// role, never a caller pass flag or a reused admission-time author.
 struct NativeAssignedPanelStepV2 {
@@ -276,7 +325,9 @@ impl TransitionBuilder<'_> {
         use crate::palw_native_resource_v1::reserve_native_requests_v1;
         use misaka_palw_positive_contract::{CONTRACT_REVISION, CONTRACT_VERSION, identity::ClaimId, native::KERNEL_AUX_TABLE};
 
-        let Some(route) = self.state.kernel_route.as_ref() else { return Ok(()) };
+        let Some(route) = self.state.kernel_route.as_ref() else {
+            return Ok(());
+        };
         if route.aux.range((KERNEL_AUX_TABLE, Vec::new())..(KERNEL_AUX_TABLE + 1, Vec::new())).next().is_none() {
             return Ok(());
         }
@@ -350,12 +401,12 @@ impl NativeAssignedCaseCacheV2 {
         if a != self.assignment
             || pin != self.pin
             || self.source.case_row().map_err(refuse)? != bundle.case
-            || self.court.result() != &bundle.result.result
+            || self.checker.court.result() != &bundle.result.result
             || bundle.case.unresolved_fraud != 0
         {
             return Err(refuse("actual replay before rows disagree"));
         }
-        let terminal = self.facts.last();
+        let terminal = self.checker.facts.last();
         let material = self.terminal_material.ok_or_else(missing)?;
         let fact = terminal.ok_or_else(missing)?;
         if fact.case() != pin.case
@@ -381,7 +432,7 @@ impl NativeAssignedCaseCacheV2 {
             root: self.root,
             context: *ctx,
             assignment: a.id(),
-            result: self.court.result(),
+            result: self.checker.court.result(),
             case: bundle.case,
             head: pin.head,
             policy: &self.material.certification_policy,
@@ -446,13 +497,16 @@ fn prover_step(
     let mut count = 0u32;
     let mut requests = TirNativeRequestsV1::new();
     requests.exact_v1::<u8>(1024).map_err(PalwStateV2Error::NativeResource)?;
-    requests.exact_v1::<u8>(misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES as u64)
+    requests
+        .exact_v1::<u8>(misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES as u64)
         .map_err(PalwStateV2Error::NativeResource)?;
-    let _range_owner = reserve_native_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
-        PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowKey>(
-            "assigned Case prover role range", "actual checker is not armed",
-        ))
-    })?;
+    let _range_owner =
+        reserve_native_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowKey>(
+                "assigned Case prover role range",
+                "actual checker is not armed",
+            ))
+        })?;
     let mut prefix = NativeRowKey::AssignmentRole { assignment, role: AssignmentRoleV2::Prover, bond: a.bundle.terms.prover }.encode();
     // The canonical last field is the outpoint (64-byte txid and u32 index).
     // Keep AssignmentId AND role in the prefix before entering the ordered map.
@@ -538,14 +592,6 @@ impl NativeAssignedCaseCacheV2 {
         action: &PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<NativeAssignedCourtAdvanceV2, PalwStateV2Error> {
-        use crate::palw_positive_common_replay_v2::{LocalCourtErrorV2, LocalCourtOutcomeV2 as Outcome};
-        use crate::palw_positive_court_v2::coordinator::{
-            carrier::PanelPacketSignatureV2,
-            contract::{CandidateOpenV2, CourtErrorV2},
-            native_body::PositiveNativeOperationV2 as Op,
-            record_ingress::preflight_witness_record_v2,
-        };
-        use misaka_palw_positive_contract::wire::EvidenceFrame;
         if state.state_root() != self.root
             || self.context != *ctx
             || action.origin().accepting_block.0 != ctx.block.as_bytes()
@@ -555,8 +601,27 @@ impl NativeAssignedCaseCacheV2 {
         {
             return Err(refuse("actual native Case current prefix/raw operation"));
         }
+        self.checker.advance(state, (&self.assignment, &self.material, self.pin), action.origin(), body)
+    }
+}
+
+impl NativeAssignedCourtV2 {
+    fn advance(
+        &mut self,
+        state: &PalwChainStateV2,
+        (assignment, material, pin): (&AssignmentRow, &AssignmentAdmissionMaterialV2, CaseJournalPinV2),
+        origin: AcceptedOrigin,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+    ) -> Result<NativeAssignedCourtAdvanceV2, PalwStateV2Error> {
+        use crate::palw_positive_common_replay_v2::{LocalCourtErrorV2, LocalCourtOutcomeV2 as Outcome};
+        use crate::palw_positive_court_v2::coordinator::{
+            carrier::PanelPacketSignatureV2,
+            contract::{CandidateOpenV2, CourtErrorV2},
+            native_body::PositiveNativeOperationV2 as Op,
+            record_ingress::preflight_witness_record_v2,
+        };
+        use misaka_palw_positive_contract::wire::EvidenceFrame;
         let before = snapshot(&self.court);
-        let origin = action.origin();
         let semantic = |error| -> Result<Outcome, PalwStateV2Error> {
             let error = match error {
                 CourtErrorV2::Check(error) => LocalCourtErrorV2::Check(error),
@@ -568,7 +633,7 @@ impl NativeAssignedCaseCacheV2 {
         };
         let outcome = match &body.operation {
             Op::WitnessCommit { witness, panel_signature, .. } => {
-                let step = prover_step(state, &self.assignment, &self.material, witness.author, origin, true)?;
+                let step = prover_step(state, assignment, material, witness.author, origin, true)?;
                 let key = step.key;
                 *self.authority.step.borrow_mut() = Some(step);
                 let limits = self.record_limits;
@@ -579,16 +644,18 @@ impl NativeAssignedCaseCacheV2 {
                     .map_err(refuse)?;
                 match self.court.open_candidate(witness.clone(), &key, panel_signature, context, origin.accepted_daa) {
                     Ok(CandidateOpenV2::Opened) => Outcome::CandidateOpened,
-                    Ok(CandidateOpenV2::AlreadyActive) => return Err(refuse("fully idempotent candidate has no new journal event")),
+                    Ok(CandidateOpenV2::AlreadyActive) => {
+                        return Err(refuse("fully idempotent candidate has no new journal event"));
+                    }
                     Err(error) => semantic(error)?,
                 }
             }
             Op::ExactFrame { frame, panel_signature } => {
-                let frame = EvidenceFrame::decode(frame, self.material.positive_policy.max_frame_bytes).map_err(refuse)?;
+                let frame = EvidenceFrame::decode(frame, material.positive_policy.max_frame_bytes).map_err(refuse)?;
                 let header = frame.header();
                 let active = self.court.last_attempt().ok_or_else(|| refuse("frame without active candidate"))?;
-                if header.case != self.pin.case
-                    || header.result != self.pin.result
+                if header.case != pin.case
+                    || header.result != pin.result
                     || header.witness != active.witness
                     || header.relation_count != 1
                     || header.first_relation != self.court.cursor()
@@ -599,7 +666,7 @@ impl NativeAssignedCaseCacheV2 {
                     return Err(refuse("actual witness row"));
                 };
                 witness.witness.authenticate(self.court.result(), &witness.panel_key, &witness.panel_signature).map_err(refuse)?;
-                let step = prover_step(state, &self.assignment, &self.material, witness.witness.author, origin, false)?;
+                let step = prover_step(state, assignment, material, witness.witness.author, origin, false)?;
                 if step.key != witness.panel_key {
                     return Err(refuse("exact frame work key substitution"));
                 }
@@ -611,15 +678,12 @@ impl NativeAssignedCaseCacheV2 {
                 }
             }
             Op::Finish { case, result, witness } => {
-                if *case != self.pin.case
-                    || *result != self.pin.result
-                    || self.court.last_attempt().map(|a| a.witness) != Some(*witness)
-                {
+                if *case != pin.case || *result != pin.result || self.court.last_attempt().map(|a| a.witness) != Some(*witness) {
                     return Err(refuse("Finish exact active candidate"));
                 }
                 match self.court.finish(origin.accepted_daa) {
                     Ok(fact) => {
-                        if self.facts.len() as u64 >= u64::from(self.material.positive_policy.max_attempts)
+                        if self.facts.len() as u64 >= u64::from(material.positive_policy.max_attempts)
                             || self.facts.len() == self.facts.capacity()
                         {
                             return Err(refuse("actual finite fact capacity"));
@@ -632,7 +696,7 @@ impl NativeAssignedCaseCacheV2 {
                 }
             }
             Op::Expire { case, result } => {
-                if *case != self.pin.case || *result != self.pin.result {
+                if *case != pin.case || *result != pin.result {
                     return Err(refuse("Expire Case identity"));
                 }
                 match self.court.expire_pending_v2(origin.accepted_daa) {
@@ -641,19 +705,23 @@ impl NativeAssignedCaseCacheV2 {
                 }
             }
             Op::SourceRequest { request, .. } => {
-                if request.case != self.pin.case {
+                if request.case != pin.case {
                     return Err(refuse("source request Case"));
                 }
                 Outcome::External
             }
             Op::SourceResponse { case, .. } => {
-                if *case != self.pin.case {
+                if *case != pin.case {
                     return Err(refuse("source response Case"));
                 }
                 Outcome::External
             }
-            Op::ResultAdmission { .. } => return Err(refuse("assigned admission must be genuine op9")),
-            Op::PositiveCourtAttestation { .. } => return Err(refuse("P owner handles actual op7")),
+            Op::ResultAdmission { .. } => {
+                return Err(refuse("assigned admission must be genuine op9"));
+            }
+            Op::PositiveCourtAttestation { .. } => {
+                return Err(refuse("P owner handles actual op7"));
+            }
         };
         *self.authority.step.borrow_mut() = None;
         let after = snapshot(&self.court);
@@ -755,7 +823,10 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         record: CaseJournalRecordView<'_>,
         carriage: &NativeAcceptedCaseCarriageV2,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, initial_assigned_case_bind_header_v2};
+        use crate::{
+            palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, rooted_initial_assigned_case_bind_v2},
+            palw_positive_rows_v2::PositiveRowErrorV2,
+        };
         let tx = carriage.transaction();
         let h = record.header();
         if !tx.id_is_current()
@@ -788,18 +859,10 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         boundary.check_populated_data(tx, carriage.entries(), carriage.fee()).map_err(refuse)?;
         if h.sequence == 1 {
             let id = backing.assignment().id();
-            let NativeRowBody::AssignmentUse(use_row) = required(current, NativeRowKey::AssignmentUse(id))? else {
-                return Err(refuse("actual initial Case has no AssignmentUse row"));
-            };
-            let bind = initial_assigned_case_bind_header_v2(record, boundary, &use_row).map_err(refuse)?;
-            let NativeRowBody::AssignmentJournalFrame(frame) =
-                required(current, NativeRowKey::AssignmentJournalFrame { assignment: id, ordinal: bind.ordinal })?
-            else {
-                return Err(refuse("actual initial Case has no BindResult frame"));
-            };
-            if frame.header != bind {
-                return Err(refuse("initial Case differs from the rooted BindResult frame"));
-            }
+            rooted_initial_assigned_case_bind_v2(current, id, record, boundary).map_err(|why| match why {
+                PositiveRowErrorV2::MissingRequiredRow | PositiveRowErrorV2::MissingKernelRoute => missing(),
+                other => refuse(other),
+            })?;
             // The current pre-event Assignment can be cancelled/consumed only
             // after this exact op9; a final saved Use is not historical authority.
             let a = assignment(prefix, backing.assignment().id())?;
@@ -837,24 +900,509 @@ impl CaseJournalSourceV2 for NativeAssignedArchiveV2<'_> {
     }
 }
 
+/// Authenticate the same initial checker that a cold Case replay will use.
+/// The derivation uses the original registered program and job inputs before
+/// op8, while payer identity comes from the actual state immediately before
+/// op9. A stored coverage descriptor is only a comparison target.
+fn prepare_initial_case_checker_v2(
+    backing: &NativeCommittedAssignedCaseV2,
+    bundle: &PositiveRowBundleV2,
+) -> Result<NativeAssignedCourtV2, PalwStateV2Error> {
+    use crate::{
+        palw_native_resource_v1::{NativeHeapV1, preflight_native_value_v1},
+        palw_positive_assignment_material_v2::AssignmentSourceQuoteDescriptorV2,
+        palw_positive_assignment_resources_v2::{AssignmentResourceErrorV2, ReservedAssignmentDerivedResourcesV2},
+        palw_positive_court_v2::coordinator::assignment_body::{
+            PositiveAssignmentNativeOperationV2 as Op, decode_assignment_body_v2, scan_assignment_body_v2,
+        },
+        palw_tir_class_v1::PalwTirLayoutV1,
+    };
+
+    let capacity = || {
+        PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+        )
+    };
+    let reserve = |bytes| reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity);
+    let material = backing.material();
+    let row = backing.assignment();
+    let policy = &material.assignment_policy;
+    let positive = &material.positive_policy;
+    let physical = &material.native_preimages;
+    let max_heap = positive.max_case_heap_bytes.min(policy.max_heap_bytes).min(physical.physical.max_heap_bytes);
+    let retained = backing.native_heap_v1("retained initial Case archive");
+    let retained = retained.bytes().ok_or(PalwStateV2Error::NativeResource(retained))?;
+    let mut heap = max_heap.checked_sub(retained).ok_or_else(capacity)?;
+    let rules = NativeAssignmentRulesV2::from_original_material_data_v2(row, material).map_err(refuse)?;
+    let limits = rules.body_limits().map_err(refuse)?;
+    let open = backing.open_carriage();
+    let first = backing.records().first().ok_or_else(missing)?.carriage();
+    let native_body = |tx: &crate::tx::Transaction| {
+        tx.payload.get(..3) == Some(&[1, 0, 176]) && tx.subnetwork_id == crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+    };
+    if !native_body(open.transaction())
+        || !native_body(first.transaction())
+        || open.origin() != row.origin
+        || first.origin() != bundle.result.origin
+        || backing.pin().scope != bundle.result.result.scope
+    {
+        return Err(refuse("initial Case carrier origins and scope"));
+    }
+    let open_raw = &open.transaction().payload[3..];
+    let bind_raw = &first.transaction().payload[3..];
+    let open_shape = scan_assignment_body_v2(open_raw, limits).map_err(refuse)?;
+    let bind_shape = scan_assignment_body_v2(bind_raw, limits).map_err(refuse)?;
+    let decode_heap = open_shape
+        .heap
+        .checked_add(bind_shape.heap)
+        .and_then(|n| n.checked_add((2 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64))
+        .ok_or_else(capacity)?;
+    heap = heap.checked_sub(decode_heap).ok_or_else(capacity)?;
+    let _decode = reserve(decode_heap)?;
+    let open_body = decode_assignment_body_v2(open_raw, limits).map_err(refuse)?;
+    let bind_body = decode_assignment_body_v2(bind_raw, limits).map_err(refuse)?;
+    let Op::AcceptCanonicalAssignment { bundle: signed, source, prover, signatures, layout } = &open_body.operation else {
+        return Err(refuse("original op8 body"));
+    };
+    let Op::AdmitAssignedResult { assignment: id, payload } = &bind_body.operation else {
+        return Err(refuse("original op9 body"));
+    };
+    if signed != &row.bundle
+        || source != &row.source_consent
+        || prover != &row.prover_consent
+        || *id != row.id()
+        || payload.result != bundle.result.result
+        || payload.service != bundle.case.service
+        || payload.result.case_id() != backing.pin().case
+        || payload.result.id() != backing.pin().result
+    {
+        return Err(refuse("initial Case and original Assignment identities"));
+    }
+    let bind_prefix = first.prefix_state().map_err(|_| missing())?;
+    let prior = assignment(bind_prefix, *id)?;
+    if prior.status != AssignmentStatusV2::Open
+        || prior.bundle != row.bundle
+        || prior.admission_material != row.admission_material
+        || prior.worker_key != row.worker_key
+    {
+        return Err(refuse("original op9 did not consume the same open Assignment"));
+    }
+    let NativeRowBody::AssignmentFunding(funding) = required(bind_prefix, NativeRowKey::AssignmentFunding(*id))? else {
+        return Err(refuse("original Case payer row"));
+    };
+    if funding.authorization != row.bundle.funding || funding.funding_origin != row.origin {
+        return Err(refuse("original Case payer identity"));
+    }
+    payload
+        .consent
+        .authenticate(
+            &payload.result,
+            &payload.service,
+            &payload.basis,
+            first.origin().accepted_daa,
+            &funding.payer_key,
+            &payload.payer_signature,
+        )
+        .map_err(refuse)?;
+    let layout_quote = preflight_native_value_v1::<PalwTirLayoutV1>(layout.as_slice(), layout.len() as u64).map_err(refuse)?;
+    let layout_heap = layout_quote.logical_requests_v1();
+    heap = heap.checked_sub(layout_heap).ok_or_else(capacity)?;
+    let _layout = reserve(layout_heap)?;
+    let layout: PalwTirLayoutV1 = borsh::from_slice(layout).map_err(refuse)?;
+    let open_prefix = open.prefix_state().map_err(|_| missing())?;
+    let registered = open_prefix.tir_class_v1(&Hash64::from_bytes(row.bundle.terms.registered_class.0)).ok_or_else(missing)?;
+    let prompt_form = registered.facts.prompt_ids_form(material.network_prompt_form);
+    if prompt_form != material.class_prompt_form {
+        return Err(refuse("original Case prompt commitment form"));
+    }
+    let reserved = ReservedAssignmentDerivedResourcesV2::derive(
+        open_prefix,
+        signed.terms,
+        &layout,
+        policy,
+        positive,
+        &physical.source_policy,
+        material.network_prompt_form,
+        heap,
+    )
+    .map_err(|why| match why {
+        AssignmentResourceErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+        AssignmentResourceErrorV2::MissingNativeLease | AssignmentResourceErrorV2::ConstructionCap { .. } => capacity(),
+        other => refuse(other),
+    })?;
+    let resources = reserved.resources();
+    let binding = resources.binding();
+    material.job.check_native(binding.job()).map_err(refuse)?;
+    binding.authenticate_bundle_roles(open_prefix, signed, signatures).map_err(refuse)?;
+    binding.check_result(&payload.result).map_err(refuse)?;
+    if material.source != AssignmentSourceQuoteDescriptorV2::from(resources.source_quote())
+        || payload.basis.source_catalog != material.source.digest
+        || payload.basis.policy != row.positive_policy
+        || payload.basis.schedule != policy.case_fee_schedule
+    {
+        return Err(refuse("original Case source and policy"));
+    }
+    let horizon =
+        super::positive_assignment::assignment_horizon_v2(&rules, signed, source, prover, resources, row.origin.accepted_daa)?;
+    let accepted_daa = first.origin().accepted_daa;
+    let gate_c = rules.gate_c_clock(accepted_daa).map_err(refuse)?;
+    horizon.check_case_source_floor_v2(&payload.service, &gate_c, policy.refund_window_daa, positive.max_attempts).map_err(refuse)?;
+    if bundle.case.maturity_daa < accepted_daa
+        || bundle.case.maturity_daa >= row.bundle.terms.reserve_until_daa
+        || bundle.funding.basis != payload.basis
+        || payload.basis.required_fee < horizon.case_money.fee
+        || payload.basis.required_capital < horizon.case_money.capital
+    {
+        return Err(refuse("recovered Case funding or maturity differs from its original envelope"));
+    }
+    // The preparation retains another class, job, and plan while the original
+    // derivation is still live. Reuse the typed program/StepSpace quote for
+    // that second owner and reserve it before authenticating the Result.
+    let derived_heap = reserved.allocation_quote().total_requests;
+    let checker_heap = derived_heap.checked_add(size_of::<PreparedCheck>() as u64).ok_or_else(capacity)?;
+    let fact_count = usize::try_from(positive.max_attempts.min(payload.service.budget.witness_attempts)).map_err(|_| capacity())?;
+    let fact_heap = (fact_count as u64).checked_mul(size_of::<LocalCheckedCourtFactV2>() as u64).ok_or_else(capacity)?;
+    let checker_heap = checker_heap
+        .checked_add(fact_heap)
+        .and_then(|n| n.checked_add(size_of::<NativeAssignedCourtV2>() as u64))
+        .ok_or_else(capacity)?;
+    if heap.checked_sub(derived_heap).is_none_or(|left| checker_heap > left) {
+        return Err(capacity());
+    }
+    let lease = reserve(checker_heap)?;
+    let prepared = PreparedCheck::authenticate(
+        binding.admission(),
+        resources.class(),
+        Hash64::from_bytes(binding.admission().artifact.0),
+        binding.job(),
+        prompt_form,
+        resources.check_limits(),
+        payload.result.clone(),
+        &row.worker_key,
+        &payload.miner_signature,
+    )
+    .map_err(refuse)?;
+    let coverage = prepared.descriptor();
+    if coverage != bundle.case.coverage
+        || coverage.mandatory_relations != payload.basis.mandatory_relations
+        || coverage.profile != payload.basis.profile
+    {
+        return Err(refuse("independently prepared Case coverage differs from initial and rooted coverage"));
+    }
+    use crate::palw_positive_court_v2::coordinator::contract::CourtLimitsV2;
+    let receipt_bytes = coverage.mandatory_relations.checked_mul(64).ok_or_else(capacity)?;
+    let max_generated_heap_bytes = u64::from(payload.result.decode) * size_of::<u32>() as u64;
+    let record_limits = crate::palw_positive_contract_v2::record::RecordLimits {
+        max_record_bytes: positive
+            .max_case_journal_bytes
+            .min(crate::palw_positive_court_v2::coordinator::native_body::MAX_OPAQUE_BYTES_V2),
+        max_generated_heap_bytes,
+    };
+    let authority = NativeAssignedPanelAuthorityV2 { step: Rc::new(RefCell::new(None)) };
+    let court = ContractCourtV2::new(
+        TirCourtCheckerV2,
+        PanelSignatureVerifierV2::new(authority.clone()),
+        binding.admission(),
+        payload.result.clone(),
+        &row.worker_key,
+        &payload.miner_signature,
+        payload.service,
+        CourtLimitsV2 {
+            max_attempts: fact_count as u32,
+            max_total_wire_bytes: positive.max_all_attempt_bytes,
+            max_part_bytes: positive.max_frame_bytes,
+            max_receipt_bytes: receipt_bytes,
+            max_reserved_elements: positive.max_all_attempt_elements,
+            max_reserved_terms: positive.max_all_attempt_terms,
+            deadline: horizon.court_before_daa,
+        },
+        first.origin().accepted_daa,
+    )
+    .map_err(refuse)?;
+    let mut facts = Vec::new();
+    facts.try_reserve_exact(fact_count).map_err(|_| capacity())?;
+    if facts.capacity() > fact_count {
+        return Err(capacity());
+    }
+    Ok(NativeAssignedCourtV2 {
+        prepared,
+        record_limits,
+        authority,
+        court,
+        facts,
+        check_limits: resources.check_limits(),
+        derived_heap,
+        checker_heap,
+        available_heap: max_heap - retained,
+        remaining_work: positive.max_case_work.min(policy.max_replay_work),
+        candidate_heap: 0,
+        candidate_lease: None,
+        _lease: lease,
+    })
+}
+
+fn check_replayed_court_projection_v2(
+    state: &PalwChainStateV2,
+    row: &CaseRow,
+    checked: crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2,
+) -> Result<(), PalwStateV2Error> {
+    use misaka_palw_positive_contract::{
+        messages::{ClaimStatus, WitnessStatus},
+        rows::CoverageState,
+    };
+    let status_matches = checked.status == row.status
+        || (checked.status == ClaimStatus::Pending && checked.attempts == 0 && row.status == ClaimStatus::ResultCommitted);
+    let witness =
+        if checked.status == ClaimStatus::PositivePassed { Some(checked.last_attempt.ok_or_else(missing)?.witness) } else { None };
+    if !status_matches
+        || checked.attempts != row.usage.witness_attempts
+        || checked.last_attempt.map_or(WitnessStatus::Building, |attempt| attempt.status) != row.witness_status
+        || witness != row.positive_witness
+    {
+        return Err(refuse("replayed arithmetic outcome differs from rooted Case"));
+    }
+    if let Some(active) = checked.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) {
+        let NativeRowBody::Coverage(coverage) = required(state, NativeRowKey::Coverage(active.witness))? else {
+            return Err(refuse("archived active Coverage row"));
+        };
+        if coverage.witness != active.witness
+            || coverage.case != row.case
+            || coverage.result != row.result
+            || coverage.plan != row.coverage.plan
+            || coverage.mandatory_relations != row.coverage.mandatory_relations
+            || coverage.next_relation != checked.cursor
+            || coverage.state != CoverageState::Checking
+        {
+            return Err(refuse("replayed active cursor differs from rooted Coverage"));
+        }
+    }
+    Ok(())
+}
+
+impl NativeAssignedCourtV2 {
+    /// Admit this exact operation before decoding or applying it. A candidate's
+    /// allocation lease travels with the machine across cold and current steps.
+    fn reserve_operation_v2(
+        &mut self,
+        body_bytes: &[u8],
+        material: &AssignmentAdmissionMaterialV2,
+    ) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
+        use crate::{
+            palw_positive_assignment_resources_v2::AssignmentWorkQuantitiesV2,
+            palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, scan_native_body_v2},
+        };
+        let capacity = || {
+            PalwStateV2Error::NativeContextUnavailable(
+                crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+            )
+        };
+        let policy = &material.positive_policy;
+        let bytes = body_bytes.len() as u64;
+        let schedule = &material.native_preimages.source_policy.work;
+        let codec_work = schedule
+            .charge(AssignmentWorkQuantitiesV2 {
+                codec_steps: bytes,
+                hash_bytes: bytes,
+                signatures: 0,
+                elements: 0,
+                terms: 0,
+                io_bytes: 0,
+                controls: 1,
+            })
+            .map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(codec_work).ok_or_else(|| refuse("Case replay codec work"))?;
+        let shape = scan_native_body_v2(body_bytes, case_replay_body_limits_v2(policy)).map_err(refuse)?;
+        let is_witness = shape.kind == 1;
+        let is_frame = shape.kind == 2;
+        let check = self.check_limits;
+        let authentication_work = schedule
+            .charge(AssignmentWorkQuantitiesV2 {
+                codec_steps: 0,
+                hash_bytes: 0,
+                signatures: shape.signatures + u64::from(is_witness || is_frame) * 3,
+                elements: if is_frame { check.max_elements_per_leaf } else { 0 },
+                terms: if is_frame { check.max_terms_per_leaf } else { 0 },
+                io_bytes: 0,
+                controls: if is_witness || is_frame { u64::from(material.assignment_policy.max_role_candidates) } else { 0 },
+            })
+            .map_err(refuse)?;
+        self.remaining_work =
+            self.remaining_work.checked_sub(authentication_work).ok_or_else(|| refuse("Case replay operation work"))?;
+        if is_witness && self.candidate_lease.is_none() {
+            // A new candidate can coexist with the old context and progress.
+            // Quote both pairs plus the temporary authentication copy.
+            self.candidate_heap = self
+                .derived_heap
+                .checked_mul(5)
+                .and_then(|n| self.record_limits.max_generated_heap_bytes.checked_mul(5).and_then(|g| n.checked_add(g)))
+                .and_then(|n| self.prepared.descriptor().mandatory_relations.checked_mul(128).and_then(|r| n.checked_add(r)))
+                .ok_or_else(capacity)?;
+            if self.available_heap.checked_sub(self.checker_heap).is_none_or(|left| self.candidate_heap > left) {
+                return Err(capacity());
+            }
+            self.candidate_lease =
+                Some(reserve_native_requests_v1(self.candidate_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?);
+        }
+        let body_heap = shape
+            .opaque_bytes
+            .checked_mul(2)
+            .and_then(|n| n.checked_add(size_of::<PositiveNativeBodyV2>() as u64))
+            .and_then(|n| n.checked_add((4 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64))
+            .and_then(|n| n.checked_add(if is_frame { policy.max_part_heap } else { 0 }))
+            .ok_or_else(capacity)?;
+        let role_heap =
+            if is_witness || is_frame { (1024 + misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES) as u64 } else { 0 };
+        if self
+            .available_heap
+            .checked_sub(self.checker_heap)
+            .and_then(|left| left.checked_sub(self.candidate_heap))
+            .and_then(|left| left.checked_sub(role_heap))
+            .is_none_or(|left| body_heap > left)
+        {
+            return Err(capacity());
+        }
+        reserve_native_requests_v1(body_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)
+    }
+}
+
+fn case_replay_body_limits_v2(
+    policy: &crate::config::params::PositiveCourtPolicyV2,
+) -> crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {
+    use crate::palw_positive_court_v2::coordinator::native_body::{
+        MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2,
+    };
+    NativeBodyLimitsV2 {
+        max_body_bytes: policy.max_case_journal_bytes.min(MAX_BODY_BYTES_V2),
+        max_opaque_bytes: policy.max_case_journal_bytes.min(MAX_OPAQUE_BYTES_V2),
+        max_exact_relations: MAX_EXACT_RELATIONS_V2,
+        max_signatures: MAX_SIGNATURES_V2,
+    }
+}
+
+/// Replay the arithmetic projection in event order against actual native
+/// pre-event role state. Source and certification reconcile separately.
+fn replay_assigned_court_history_v2(
+    state: &PalwChainStateV2,
+    backing: &NativeCommittedAssignedCaseV2,
+    rooted: &PositiveRowBundleV2,
+) -> Result<NativeAssignedCourtV2, PalwStateV2Error> {
+    use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeOperationV2 as Op, decode_native_body_v2};
+    let mut machine = prepare_initial_case_checker_v2(backing, rooted)?;
+    let material = backing.material();
+    let pin = *backing.pin();
+    let limits = case_replay_body_limits_v2(&material.positive_policy);
+    for record in backing.records().iter().skip(1) {
+        let carriage = record.carriage();
+        let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
+        let _body = machine.reserve_operation_v2(body_bytes, material)?;
+        let body = decode_native_body_v2(body_bytes, limits).map_err(refuse)?;
+        let Some((case, result)) = body.operation.case_target_v2().map_err(refuse)? else {
+            return Err(refuse("legacy admission in assigned Case history"));
+        };
+        if case != pin.case || result.is_some_and(|id| id != pin.result) {
+            return Err(refuse("archived Court operation subject differs"));
+        }
+        let prefix = carriage.prefix_state().map_err(|_| missing())?;
+        let a = assignment(prefix, backing.assignment().id())?;
+        if a.bundle != backing.assignment().bundle
+            || a.admission_material != backing.assignment().admission_material
+            || a.status != (AssignmentStatusV2::Consumed { case: pin.case, result: pin.result })
+        {
+            return Err(refuse("archived Court Assignment prefix differs"));
+        }
+        let NativeRowBody::Case(prior) = required(prefix, NativeRowKey::Case(pin.case))? else {
+            return Err(refuse("archived pre-event Case row"));
+        };
+        check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
+        if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
+            machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
+        }
+    }
+    check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))?;
+    Ok(machine)
+}
+
+impl TransitionBuilder<'_> {
+    fn prepare_case_predecessor_v2<'a>(
+        &self,
+        action: &'a PositiveAssignmentRawActionV2,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+    ) -> Result<(&'a NativeCommittedAssignedCaseV2, NativeAssignedCourtV2, CaseRow), PalwStateV2Error> {
+        let backing = action.case_backing().map_err(|_| missing())?;
+        let NativeAssignedCaseBackingV2::Committed(backing) = backing else {
+            return Err(missing());
+        };
+        let assignment = backing.assignment().id();
+        let pin = *backing.pin();
+        let record = backing.records().last().ok_or_else(missing)?;
+        if backing.records().len() as u64 != pin.head.sequence || record.carriage().origin() != pin.head.history.origin {
+            return Err(refuse("Case archive differs from its rooted journal extent or latest origin"));
+        }
+        let Some((case, expected_result)) = body.operation.case_target_v2().map_err(refuse)? else {
+            return Err(refuse("a Case follow-up requires an explicit subject"));
+        };
+        if backing.parent() != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
+            return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
+        }
+        let (_, bundle, current) = rooted_bundle(&self.state, assignment)?;
+        if current != pin {
+            // A preceding operation in this block can advance the head. Its
+            // unpublished material must be replayed before this operation.
+            return Err(missing());
+        }
+        let machine = replay_assigned_court_history_v2(&self.state, backing, &bundle)?;
+        Ok((backing, machine, bundle.case))
+    }
+}
+
 // The concrete archive/Remaining/service factory is still required. These raw
 // routes explicitly preserve unavailability instead of constructing a session
 // from rooted summaries or accepting a local cached positive verdict.
 impl TransitionBuilder<'_> {
     pub(super) fn apply_positive_assignment_case_raw_v2(
         &mut self,
-        _ctx: &PalwBlockContextV2,
-        _action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
-        _body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+        ctx: &PalwBlockContextV2,
+        action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
+        let (backing, mut machine, prior) = self.prepare_case_predecessor_v2(action, body)?;
+        let origin = action.origin();
+        if origin.accepting_block.0 != ctx.block.as_bytes()
+            || origin.accepted_daa != ctx.daa_score
+            || origin.accepted_blue_score != ctx.blue_score
+        {
+            return Err(refuse("current Court operation clock and origin"));
+        }
+        let material = backing.material();
+        let raw = action.transaction().payload.get(3..).ok_or_else(missing)?;
+        let _body = machine.reserve_operation_v2(raw, material)?;
+        if !canonical_equal(body, raw) {
+            return Err(refuse("current Court operation differs from literal carrier"));
+        }
+        let current_assignment = assignment(&self.state, backing.assignment().id())?;
+        let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
+        let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
+            .map_err(refuse)?;
+        if prior
+            .usage
+            .transmitted_bytes
+            .checked_add(delta.signed_wire_bytes)
+            .is_none_or(|n| n > prior.service.budget.transmitted_bytes)
+            || prior.usage.witness_attempts.checked_add(delta.attempts).is_none_or(|n| n > prior.service.budget.witness_attempts)
+        {
+            return Err(refuse("current Court operation exceeds signed service usage"));
+        }
+        // The source and retained-duty owners still have to authorize the
+        // complete proposed usage before the checkpoint can publish it.
         Err(missing())
     }
     pub(super) fn apply_positive_assignment_attestation_raw_v2(
         &mut self,
         _ctx: &PalwBlockContextV2,
-        _action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
-        _body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
+        action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
+        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
+        self.prepare_case_predecessor_v2(action, body)?;
         Err(missing())
     }
 }
@@ -927,10 +1475,7 @@ mod tests {
         assert!(matches!(builder.write_claim(claim, Some(row)), Err(PalwStateV2Error::KernelRouteRefused(_))));
         let panel = PalwPanelStateV2 { anchor: other, seats: Vec::new(), bound_daa: 12 };
         assert!(matches!(builder.write_panel(claim, Some(panel)), Err(PalwStateV2Error::KernelRouteRefused(_))));
-        assert!(matches!(
-            builder.write_legacy_dispute(claim, Some(Default::default())),
-            Err(PalwStateV2Error::KernelRouteRefused(_))
-        ));
+        assert!(matches!(builder.write_legacy_dispute(claim, Some(Default::default())), Err(PalwStateV2Error::KernelRouteRefused(_))));
 
         use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
         let bond = PalwBondKeyV2(TransactionOutpoint::new(other, 0));

@@ -55,7 +55,7 @@ fn assignment_resource_error(error: crate::palw_positive_assignment_resources_v2
 fn missing_assignment_history() -> PalwStateV2Error {
     PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable)
 }
-fn assignment_horizon_v2(
+pub(super) fn assignment_horizon_v2(
     rules: &NativeAssignmentRulesV2,
     bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
     source: &misaka_palw_positive_contract::assignment::consents::AssignmentSourceConsentV2,
@@ -802,7 +802,9 @@ impl TransitionBuilder<'_> {
                     return Err(refusal("assigned Case no longer accepts additional prover work"));
                 }
             }
-            _ => return Err(refusal("join does not match the current open Assignment or active Case")),
+            _ => {
+                return Err(refusal("join does not match the current open Assignment or active Case"));
+            }
         }
         consent.check(&row.bundle, ctx.daa_score).map_err(refusal)?;
         if consent.max_attempts > row.prover_consent.max_attempts {
@@ -1821,9 +1823,7 @@ impl TransitionBuilder<'_> {
         } else {
             None
         };
-        if payload.basis.required_fee < horizon.case_money.fee
-            || payload.basis.required_capital < horizon.case_money.capital
-        {
+        if payload.basis.required_fee < horizon.case_money.fee || payload.basis.required_capital < horizon.case_money.capital {
             return Err(refusal("Case funding does not cover the original native quote"));
         }
         Ok(relay)

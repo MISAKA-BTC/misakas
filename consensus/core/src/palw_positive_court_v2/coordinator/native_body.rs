@@ -106,6 +106,27 @@ pub enum PositiveNativeOperationV2 {
     } = 7,
 }
 
+impl PositiveNativeOperationV2 {
+    /// The fixed journal subject carried by a follow-up. Full operation
+    /// authentication remains the native Case writer's responsibility.
+    pub fn case_target_v2(&self) -> Result<Option<(CaseId, Option<ResultId>)>, NativeBodyErrorV2> {
+        Ok(Some(match self {
+            Self::ResultAdmission { .. } => return Ok(None),
+            Self::WitnessCommit { witness, .. } => (witness.case, Some(witness.result)),
+            Self::ExactFrame { frame, .. } => {
+                let evidence = misaka_palw_positive_contract::wire::EvidenceFrame::decode(frame, MAX_OPAQUE_BYTES_V2)
+                    .map_err(|_| NativeBodyErrorV2::Wire)?;
+                let header = evidence.header();
+                (header.case, Some(header.result))
+            }
+            Self::SourceRequest { request, .. } => (request.case, None),
+            Self::SourceResponse { case, .. } => (*case, None),
+            Self::Finish { case, result, .. } | Self::Expire { case, result } => (*case, Some(*result)),
+            Self::PositiveCourtAttestation { attestation, .. } => (attestation.case, Some(attestation.result)),
+        }))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NativeBodySummaryV2 {
     pub kind: u8,

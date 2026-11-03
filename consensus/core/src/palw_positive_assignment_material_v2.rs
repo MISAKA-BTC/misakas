@@ -214,7 +214,7 @@ impl AssignmentAdmissionMaterialV2 {
         Ok(value)
     }
     /// Unique retained history must also fit two complete reads during replay.
-    pub(crate) fn native_assignment_journal_storage_limit_v2(&self) -> u64 {
+    pub fn native_assignment_journal_storage_limit_v2(&self) -> u64 {
         self.assignment_policy.max_history_bytes.min(self.money.usage.retained_bytes).min(self.money.usage.replay_bytes / 2)
     }
 
