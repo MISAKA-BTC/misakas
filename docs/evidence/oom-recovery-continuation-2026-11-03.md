@@ -566,3 +566,21 @@ producer's journal matched it to a refusal at 20,606 remaining DAA
 against 20,608 required. At the paired read's DAA 19,597 the claim
 row, assignment and exportable provider roots were absent. The
 public Explorer REST and WebSocket were available at DAA 19,597.
+
+## Independent seat availability and relay memory — 04:50 UTC
+
+A bounded read on B0 and the Explorer relay compared ten Qwen-class
+bond rows at the same selected tip at DAA 19,597. Nine rows were
+eligible and independent of the producer by bond, registered key and
+operator identity. The only ready row was the producer's own. Its
+readiness was recorded at DAA 19,588 and expired at 19,612. No seat
+was assigned. The class inventory does not determine the later G14
+draw, which uses the eligible global bond state for an accepted claim.
+
+The same public relay invocation had zero restarts and zero cgroup
+OOM or OOM-kill events at 04:50 UTC. Current memory was 1,671,737,344
+bytes and the peak stayed 2,719,289,344 bytes under an 8 GiB limit.
+B0's producer invocation also showed zero restarts and zero OOM or
+OOM-kill events, with 7,289,430,016 bytes current and 9,459,302,400
+bytes peak under its 20 GiB limit. These are continuity samples under
+the currently observed traffic. They do not establish Panel capacity.
