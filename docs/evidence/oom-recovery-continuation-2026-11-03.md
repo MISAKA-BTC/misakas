@@ -1826,3 +1826,14 @@ one held dissection and created no chain session or credit.
 B0, relay and the public index subsequently agreed at DAA 19,651.
 Qwen #68's carrier at 19,648 was referenced at 19,649. Both nodes
 lacked the claim and B0 recorded 20,607 DAA against 20,608.
+
+Seat5's exact worker check reached its 960-second time guard while
+still checking Consensus Core under `memory.high` throttling. At
+the last live cgroup sample no OOM or OOM kills were counted. The
+terminal unit had PID 0, failed with exit 1 and had the original
+invocation identity. No compiler verdict on the worker was reached.
+The terminal result, complete log, resource samples, source pins
+and runner were copied and matched the remote SHA-256 manifest.
+The owned RAM source stage was then released, restoring
+1,029,152,768 bytes of tmpfs space. This did not qualify Seat5
+for unsigned IBD or change the persistent storage requirement.
