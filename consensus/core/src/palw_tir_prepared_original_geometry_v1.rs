@@ -150,6 +150,42 @@ impl PreparedOriginalGeometryV1 {
             .expect("enrichment checked actual registration")
             .1
     }
+    /// Price the numerical delivery envelope from the paired original before
+    /// creating any Claim or materializing the legacy shared graph.
+    pub(super) fn streaming_batch_envelope_v1(
+        &self,
+        b: &TransitionBuilder<'_>,
+        ctx: &PalwBlockContextV2,
+        limits: crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1,
+        maximum_ranges: usize,
+    ) -> Result<
+        crate::palw_native_resource_v1::NativeRetainedV1<
+            crate::palw_court_shared_material_intake_v1::batch::native_ranges::NumericalBatchEnvelopeV1,
+        >,
+        PreparedGeometryErrorV1,
+    > {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1;
+        self.prepared.check_preclaim_context_v1(b, ctx)?;
+        let book = b.state.court_service_state_v1().ok_or(PreparedGeometryErrorV1::MissingSharedServiceNamespace)?;
+        let profile = crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(book.profile_id);
+        let frame = self.frame_v1();
+        let class = frame.original_v1().job.class_id;
+        let record = b.state.tir_class_v1(&class)
+            .ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared Batch class absent")))?;
+        let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, class)
+            .ok_or_else(|| PreparedGeometryErrorV1::State(refused("prepared Batch layout absent")))?;
+        let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|error| {
+            PreparedGeometryErrorV1::Native(match error {
+                NativeDecodeErrorV1::Resource(coverage) => NativeDecodeErrorV1::Resource(coverage),
+                NativeDecodeErrorV1::Decode(why) => NativeDecodeErrorV1::Decode(why.to_string()),
+            })
+        })?;
+        crate::palw_court_shared_material_intake_v1::batch::native_ranges::numerical_batch_streaming_envelope_v1(
+            frame, &self.source, record, layout, &program, profile, limits, maximum_ranges,
+        )
+        .map_err(PreparedGeometryErrorV1::Native)
+    }
+
     /// Namespace from current native service state, not a caller-signed profile
     /// hash. This is NOT the missing authoritative fee/capital/retention bodies.
     pub(super) fn source_graph_v3(

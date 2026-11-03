@@ -3753,3 +3753,29 @@ agreed at virtual DAA 19,729. The page contained three selected
 blocks and zero Qwen carrier references.
 See `/private/tmp/misaka-t12-oom-20261102/tfp1-notice-route.gEX0Z2/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-notice-route-recheck.MasuqY/page.json`.
+
+## Project numerical Batch capacity before constructing the legacy frontier
+
+The native paired-original geometry can now derive its numerical
+Batch envelope directly from the prepared source, current registered
+layout and current service namespace. The same projection supplies
+the Open quote and the preclaim position maxima. Admission mode
+keeps no selected root and releases each root's range map after
+folding it. Quote mode keeps the selected ranges and still visits all
+later roots before deciding the shared partition.
+
+Three extracted projection tests passed with stubbed source walks.
+They cover identical maxima between both modes, a late bound change,
+source mismatch, empty and over-cap input, and preservation of a
+late local resource refusal. The native funded fixture now computes
+this envelope before constructing the legacy requirements, compares
+it with the old projection, and uses the new envelope for the
+reservation dry run. The integrated fixture has not run. The live
+funded coordinator still uses the legacy source graph. The verified
+numerical envelope must be joined to the complete terminal, role,
+funding and retention graph before switching its admission path.
+
+B0 and relay agreed at virtual DAA 19,730. The two selected blocks
+contained no new Qwen carrier reference.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-streamed-preclaim.ekAdNq/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-streamed-preclaim-live.GbbvxY/page.json`.

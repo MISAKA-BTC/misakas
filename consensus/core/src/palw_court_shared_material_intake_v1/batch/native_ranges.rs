@@ -26,6 +26,7 @@ use misaka_palw_tir::program::TirProgramV1;
 use std::collections::{BTreeMap, BTreeSet};
 
 type E = NativeDecodeErrorV1<String>;
+type RootRanges = NativeRetainedV1<BTreeMap<Hash64, (MaterialTargetV1, u64)>>;
 
 /// Maximum byte cap per canonical range position across all numerical roots.
 /// This covers one selected root's inputs, including the root leaf. It does
@@ -197,10 +198,48 @@ pub(crate) fn numerical_batch_streaming_demand_v1(
     leaf: u64,
     demand_index: usize,
 ) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
+    let (envelope, selected) = project_numerical_batch_streaming_v1(
+        frame, source, record, layout, program, profile, streaming, maximum_ranges, Some(leaf),
+    )?;
+    let selected = selected.ok_or_else(|| E::Decode("numerical Batch root is absent from the original".into()))?;
+    finish_root_demand_v1(frame.plan_v1().original_claim, envelope.scope, &envelope.maximums, &selected, demand_index)
+}
+
+/// Preclaim envelope without retaining the per-root input cover or deriving
+/// the legacy shared frontier. The streaming limits belong to the caller's
+/// native profile; an envelope alone does not admit a claim.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn numerical_batch_streaming_envelope_v1(
+    frame: &PalwTirPublicClaimV1,
+    source: &NativeRetainedV1<PalwTirPublicSourceV1>,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    program: &TirProgramV1,
+    profile: Hash64,
+    streaming: StreamingParameterCoverBudgetV1,
+    maximum_ranges: usize,
+) -> Result<NativeRetainedV1<NumericalBatchEnvelopeV1>, E> {
+    project_numerical_batch_streaming_v1(frame, source, record, layout, program, profile, streaming, maximum_ranges, None)
+        .map(|(envelope, _)| envelope)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn project_numerical_batch_streaming_v1(
+    frame: &PalwTirPublicClaimV1,
+    source: &NativeRetainedV1<PalwTirPublicSourceV1>,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    program: &TirProgramV1,
+    profile: Hash64,
+    streaming: StreamingParameterCoverBudgetV1,
+    maximum_ranges: usize,
+    leaf: Option<u64>,
+) -> Result<(NativeRetainedV1<NumericalBatchEnvelopeV1>, Option<RootRanges>), E> {
     let set = TirSharedRequestSetV1::new(frame, source, profile).map_err(E::Decode)?;
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<u64>(maximum_ranges as u64).map_err(E::Resource)?;
-    let _maxima_lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    q.exact_v1::<NumericalBatchEnvelopeV1>(1).map_err(E::Resource)?;
+    let lease = reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
     let mut maximums = Vec::with_capacity(maximum_ranges);
     let mut selected = None;
     let mut callback_error = None;
@@ -214,7 +253,7 @@ pub(crate) fn numerical_batch_streaming_demand_v1(
                 "numerical Batch range projection failed".to_string()
             })?;
             fold_maximums(&mut maximums, ranges.values().map(|(_, bytes)| *bytes), maximum_ranges)?;
-            if root == leaf {
+            if Some(root) == leaf {
                 selected = Some(ranges);
             }
             Ok(0)
@@ -223,11 +262,11 @@ pub(crate) fn numerical_batch_streaming_demand_v1(
     if let Some(error) = callback_error {
         return Err(error);
     }
-    if summary?.source_id != set.source_id() {
+    if summary?.source_id != set.source_id() || maximums.is_empty() {
         return Err(E::Decode("streamed Batch cover differs from the original".into()));
     }
-    let selected = selected.ok_or_else(|| E::Decode("numerical Batch root is absent from the original".into()))?;
-    finish_root_demand_v1(frame.plan_v1().original_claim, set.scope_id().map_err(E::Decode)?, &maximums, &selected, demand_index)
+    let scope = set.scope_id().map_err(E::Decode)?;
+    Ok((NativeRetainedV1::from_owner_reserved_v1(NumericalBatchEnvelopeV1 { scope, maximums }, lease), selected))
 }
 
 fn partition_maximums_v1(mut remaining: &[u64]) -> impl Iterator<Item = &[u64]> {

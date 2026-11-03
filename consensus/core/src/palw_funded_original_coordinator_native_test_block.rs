@@ -182,12 +182,26 @@
             {
                 let b = TransitionBuilder::try_new(&served, &params, false, false, false, false, &ok).unwrap();
                 let prepared = prepare_paired_original_v1(&b, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
-                let req = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap().prepare_requirements_v1(&b, &ctx,
+                let geometry = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap();
+                let streaming_budget = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
+                    total: budgets.1,
+                    per_root_edges: budgets.1.max_total_edges,
+                    per_root_coordinates: budgets.1.max_total_coordinates,
+                    per_root_memberships: budgets.1.max_root_memberships,
+                    max_workspace_bytes: 128 << 20,
+                };
+                let streamed_envelope = geometry.streaming_batch_envelope_v1(&b, &ctx, streaming_budget, 4_096).unwrap();
+                assert!(geometry.streaming_batch_envelope_v1(
+                    &b, &ctx, streaming_budget, streamed_envelope.maximums_v1().len() - 1,
+                ).is_err());
+                let req = geometry.prepare_requirements_v1(&b, &ctx,
                     PreparedRequirementBudgetsV1 { numerical: budgets.0, input: budgets.1, source: budgets.2 }).unwrap();
                 let envelope = req.numerical_batch_envelope_v1(&b, &ctx, 4_096).unwrap();
                 assert!(req.constraint_stop_batch_operands_v1(&b, &ctx).unwrap().is_none(),
                     "this numerical fixture has no verified tokenizer registration");
                 assert_eq!(envelope.scope, req.source_graph_v1().unwrap().absolute_scope_v3());
+                assert_eq!(streamed_envelope.scope, envelope.scope);
+                assert_eq!(streamed_envelope.maximums_v1(), envelope.maximums_v1());
                 assert!(!envelope.maximums_v1().is_empty());
                 assert_eq!(envelope.demand_ranges_v1().flatten().copied().collect::<Vec<_>>(), envelope.maximums_v1());
                 assert!(req.numerical_batch_envelope_v1(&b, &ctx, envelope.maximums_v1().len() - 1).is_err());
@@ -241,13 +255,13 @@
                 };
                 use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
                 let verification = h(0xB47D).as_bytes();
-                let demands = envelope.demand_ranges_v1().enumerate()
+                let demands = streamed_envelope.demand_ranges_v1().enumerate()
                     .map(|(ordinal, range_maximums)| MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification })
                     .collect::<Vec<_>>();
                 let notice = bound.original_accepted_daa + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
                 let terminal = h(0xB47C).as_bytes();
                 let plan = BatchAdmissionV1 {
-                    claim, scope: envelope.scope, demands: &demands, retained_controls: &[], terminal, recovery_daa: 1, maximum_packets: 32_768,
+                    claim, scope: streamed_envelope.scope, demands: &demands, retained_controls: &[], terminal, recovery_daa: 1, maximum_packets: 32_768,
                     window: crate::palw_batch_court_v1::BatchCourtWindowV1 {
                         claim_accepted_daa: bound.original_accepted_daa, challenge_opened_daa: notice,
                         collect_until_daa: bound.hard_deadline_daa, material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa,
