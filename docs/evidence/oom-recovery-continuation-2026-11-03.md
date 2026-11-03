@@ -2066,3 +2066,36 @@ independently eligible seats and zero independently ready or assigned.
 No public claim or deployment was made. The second guarded Core build
 queue timed out waiting for existing rustc processes. It did not start
 a compiler. Full all-root measurement and native owner replay remain open.
+
+## Batch range authentication and public index advance
+
+The Batch Court candidate now commits each range's native authentication
+mode in the demand root. A whole-body source format rejects independent
+part verification. Its checkpoint can hold either all verified slots or
+none, and restore rejects a partial whole-body range even if the supplied
+checkpoint digest matches. The native caller remains responsible for
+deriving the mode from the accepted source and binding the archive to the
+branch. Six focused tests passed, including codec and restart checks.
+
+The exact 2,019-byte SmolLM2 StepRun was refused through the independent
+part entry point. The unmodified body passed native whole-range
+verification and restored both slots from its 134-byte checkpoint. A
+modified sibling and a different branch checkpoint root were refused.
+The harness linked the cached Studio Core for native source verification
+and the current Batch source directly. It exercised local authentication
+and checkpoint restoration. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-real-batch-auth.fTSgtO/run.stdout`.
+
+Two public Explorer reads showed the selected REST index and the serving
+WebSocket advance together from DAA 19,670 to 19,671 on the pinned relay.
+B0 and the relay agreed at the second tip. Qwen #81 was in the selected
+mergeset, while the B0 fold refused its claim at 20,606 of 20,608 DAA
+required retention. Both nodes lacked that claim. The class view had nine
+independently eligible, zero independently ready and zero assigned seats.
+The observations are under
+`/private/tmp/misaka-t12-oom-20261102/g14-serial-core-live.NOaqnT`.
+
+The serial LLVM retry reached 69% reported host memory availability with
+zero swap growth, below its 70% guard. It stopped and detached its owned
+RAM disk before linking the all-root fixture. The build receipt is
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stream-core-runtime-r4.vmql3jjq/result.json`.
