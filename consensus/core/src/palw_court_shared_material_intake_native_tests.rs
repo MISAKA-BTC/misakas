@@ -301,6 +301,33 @@ fn material_intake_rooted_store_builds_identical_evidence_to_borrowed_path() {
     assert!(build_tir_cone_refutation_v1(binding, early_leaf, &missing, &court).is_err(), "absent material is never a fallback");
     let profile = crate::palw_court_shared_tir_state_v1::context(&b.state, claim).unwrap().profile_id;
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
+    // The same original evidence can be consumed from authenticated StepRuns.
+    // Use the native ordinal projection that the signed material intake reads.
+    use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1;
+    let boundaries = needed.iter().copied().map(RootInputBoundaryV1::CommittedStepLeaf).collect();
+    let mut run_units = Vec::new();
+    set.visit_batch_step_targets_v1(&boundaries, 256, needed.len(), |target, request_id, bound| {
+        let MaterialTargetV1::Unit { ordinal } = target else { panic!("StepRun material target") };
+        assert_eq!(set.request_id(ordinal)?, request_id);
+        let request = set.request_at(ordinal)?;
+        let Q::StepRun { first, count } = request else { panic!("StepRun request") };
+        let end = first + u64::from(count);
+        let response = R::StepRun {
+            preimages: (first..end).map(|i| fx.execution.step_leaf(i).unwrap()).collect(),
+            range: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                first_leaf_index: first,
+                leaf_hashes: (first..end).map(|i| fx.execution.step_opening(i).unwrap().leaf_hash).collect(),
+                siblings: fx.execution.step_range_siblings(first, u64::from(count)).unwrap(),
+            },
+        };
+        assert!((borsh::object_length(&response).unwrap() as u64) <= bound.maximum_response_bytes);
+        run_units.push(source.authenticate_v1(&request, &response, None)?);
+        Ok(())
+    }).unwrap();
+    let run_store = MaterialStore::new_with_prompt(&state, claim, scope, &run_units, &borrowed_params, None,
+        PromptMaterialV1::Flat(&fx.execution.prompt)).unwrap();
+    let run_result = build_tir_cone_refutation_v1(binding, early_leaf, &run_store, &court).unwrap();
+    assert_eq!(borsh::to_vec(&run_result).unwrap(), borsh::to_vec(&reference).unwrap());
     let mut daa = 1;
     for index in needed.iter().copied() {
         let ordinal = (0..set.len()).find(|&o| set.request_at(o).unwrap() == Q::StepLeaf { index }).unwrap();

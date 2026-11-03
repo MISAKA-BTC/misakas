@@ -41,6 +41,20 @@ struct Geometry {
     total: u64,
 }
 impl Geometry {
+    fn step_run_ordinal(&self, first: u64, count: u32) -> Result<u64, String> {
+        if !(1..=PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1).contains(&count)
+            || first.checked_add(u64::from(count)).is_none_or(|end| end > self.n)
+        {
+            return Err("shared StepRun interval outside native source".into());
+        }
+        // Widths are ordered before offsets. Count the intervals of all
+        // preceding widths without enumerating the request universe.
+        let preceding = u128::from(count - 1);
+        let prefix = preceding * (2 * u128::from(self.n) + 1 - preceding) / 2;
+        let prefix = u64::try_from(prefix).map_err(|_| "shared StepRun prefix overflows")?;
+        add(add(self.families[0], self.families[1])?, add(prefix, first)?)
+    }
+
     fn new(n: u64, d: u64, vocab: u64, tiled: bool) -> Result<Self, String> {
         if n == 0 || vocab == 0 {
             return Err("shared request geometry is empty".into());
@@ -450,6 +464,34 @@ impl<'a> TirSharedRequestSetV1<'a> {
             return Err("shared StepLeaf ordinal roundtrip differs".into());
         }
         Ok(ordinal)
+    }
+
+    /// Map a root-local Batch plan to the existing immutable material target
+    /// and shared request identity. The caller derives `boundaries` from the
+    /// selected original root and accounts the returned native bounds. No
+    /// response slot, duty or accepted evidence is created by this projection.
+    pub(crate) fn visit_batch_step_targets_v1(
+        &self,
+        boundaries: &std::collections::BTreeSet<crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1>,
+        max_parts_per_demand: usize,
+        max_demands: usize,
+        mut visit: impl FnMut(
+            crate::palw_court_shared_material_intake_v1::MaterialTargetV1,
+            Hash64,
+            crate::palw_tir_public_source_v1::PalwTirPublicUnitBoundV1,
+        ) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        use crate::palw_court_shared_material_intake_v1::MaterialTargetV1;
+        self.source.visit_batch_step_material_cover_v1(boundaries, max_parts_per_demand, max_demands, |request, bound| {
+            let Request::StepRun { first, count } = request else {
+                return Err("Batch material cover produced a foreign request".into());
+            };
+            let ordinal = self.geometry.step_run_ordinal(first, count)?;
+            if self.request_at(ordinal)? != request {
+                return Err("shared StepRun ordinal roundtrip differs".into());
+            }
+            visit(MaterialTargetV1::Unit { ordinal }, self.request_id(ordinal)?, bound)
+        })
     }
     /// Shared request identity only, NOT a complete service-packet/duty ID:
     /// signer role, turn, carrier fragment and original eligibility remain to bind.
@@ -1110,6 +1152,16 @@ mod tests {
                 assert_eq!(u128::from(g.families[2]), u128::from(r) * (2 * u128::from(n) - u128::from(r) + 1) / 2);
                 let last_run = g.families[..3].iter().sum::<u64>() - 1;
                 assert_eq!(g.at(last_run).unwrap(), Request::StepRun { first: n - r, count: r as u32 });
+                for count in 1..=r as u32 {
+                    let last = n - u64::from(count);
+                    for first in [0, last / 2, last] {
+                        let ordinal = g.step_run_ordinal(first, count).unwrap();
+                        assert_eq!(g.at(ordinal).unwrap(), Request::StepRun { first, count });
+                    }
+                    assert!(g.step_run_ordinal(last + 1, count).is_err());
+                }
+                assert!(g.step_run_ordinal(0, 0).is_err());
+                assert!(g.step_run_ordinal(u64::MAX, 2).is_err());
                 let mut first = 0;
                 for (family, &count) in g.families.iter().enumerate() {
                     if count != 0 {
