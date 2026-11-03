@@ -184,6 +184,122 @@ fn material_intake_partial_bodies_coexist_first_complete_wins_and_reorg_reverts(
 }
 
 #[test]
+fn pipelined_material_restores_out_of_order_parts_before_native_authentication() {
+    use crate::palw_court_shared_material_intake_v1::*;
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, palw_tir_public_body_hash_v1};
+    use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
+    use super::super::palw_court_shared_material_intake_fold_v1::{material_intake, material_intake_pipelined_codec_test as material_intake_pipelined, MaterialIntakeEffectV1 as E};
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_wide_v1(Some((7, 1)), 4);
+    let frame = &fx.frame;
+    let (mut state, params, extras, claim, scope_id) = material_intake_world(&fx);
+    let who = outsider();
+    let kp = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([75; 32]);
+    state.bonds.get_mut(&who).unwrap().pubkey = kp.verification_key.as_ref().to_vec();
+    material_test_schedule();
+    let network = extras.tir_public_network_domain_v1.unwrap();
+    let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let context = crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap();
+    let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, context.profile_id).unwrap();
+    let (index, _) = fx.execution.preimages.iter().enumerate().max_by_key(|(_, leaf)| leaf.values_le.len()).unwrap();
+    let index = index as u64;
+    let ordinal = (0..set.len()).find(|&ordinal| set.request_at(ordinal).unwrap() == Q::StepLeaf { index }).unwrap();
+    let target = MaterialTargetV1::Unit { ordinal };
+    let body = borsh::to_vec(&R::StepLeaf {
+        preimage: fx.execution.step_leaf(index).unwrap(), opening: fx.execution.step_opening(index).unwrap(),
+    }).unwrap();
+    assert!(body.len() > PART);
+    let hash = palw_tir_public_body_hash_v1(&body);
+    use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1};
+    let demand = BatchDemandV1 {
+        case_id: Hash64::from_u64_word(986),
+        case_window: BatchCourtWindowV1 {
+            claim_accepted_daa: context.original_accepted_daa,
+            challenge_opened_daa: context.original_accepted_daa,
+            collect_until_daa: context.hard_daa,
+            material_until_daa: context.material_until_daa,
+        },
+        opened_daa: context.original_accepted_daa,
+        response_deadline_daa: context.hard_daa - 1,
+        maximum_bytes: body.len() as u64,
+        part_bytes: PART as u32,
+        ranges: vec![BatchRangeV1 {
+            id: target.id_v1(claim).unwrap(),
+            bytes: body.len() as u32,
+            authentication: BatchRangeAuthenticationV1::WholeRange,
+        }],
+    };
+    let request_root = demand.checked_request_root_v1().unwrap();
+    let other_root = Hash64::from_u64_word(987);
+    let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
+    assert_ne!(draft_id, material_batch_draft_id_v1(other_root, claim, target).unwrap());
+    assert_ne!(draft_id, material_draft_id_for_version(2, claim, target, who, body.len() as u64, hash).unwrap());
+    assert_ne!(draft_id, material_draft_id_v1(claim, target, who, body.len() as u64, hash).unwrap());
+    let signed_at = |action, root| {
+        let mut s = SignedMaterialIntakeV1 { version: MATERIAL_BATCH_VERSION, claim, scope_id, target, submitter: who, action, signature: vec![] };
+        s.signature = libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, s.batch_signing_message_v1(network, root).unwrap().as_byte_slice(),
+            MATERIAL_BATCH_CONTEXT_V1, [76; 32]).unwrap().as_ref().to_vec();
+        s
+    };
+    let signed = |action| signed_at(action, request_root);
+    let begin = signed(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
+    let finish = signed(MaterialActionV1::Finish { draft_id });
+    let part = |index: usize, bytes: &[u8]| signed(MaterialActionV1::Part { draft_id, offset: (index * PART) as u64, bytes: bytes.to_vec() });
+    let last = (body.len() - 1) / PART;
+    let tail = &body[last * PART..];
+    let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    assert!(material_intake(&mut builder, &at(frame, 1), &begin).is_err());
+    let before_unfunded = builder.state.state_root();
+    use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchMaterialControlV1};
+    let wire = BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: 0, intake: begin.clone() });
+    assert!(builder.apply_batch_court_wire_v1(&at(frame, 1), &wire, None).is_err());
+    assert_eq!(builder.state.state_root(), before_unfunded);
+    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 1), &begin, request_root).unwrap(), E::Begun);
+    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail), request_root).unwrap(), E::Part);
+    let partial_root = builder.state.state_root();
+    let copied = part(last, tail);
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 2), &copied, other_root).is_err());
+    let resigned = signed_at(copied.action.clone(), other_root);
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 2), &resigned, other_root).is_err());
+    assert_eq!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, tail), request_root).unwrap(), E::Retried);
+    let mut corrupt = tail.to_vec();
+    corrupt[0] ^= 1;
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 2), &part(last, &corrupt), request_root).is_err());
+    assert!(material_intake_pipelined(&mut builder, &at(frame, 3), &finish, request_root).is_err());
+    assert_eq!(builder.state.state_root(), partial_root);
+    let target_key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
+    assert!(builder.state.staged_court_row_v1(&target_key).is_none());
+
+    let mut partial = builder.state.clone();
+    partial.set_last_point_for_tests(Some(at(frame, 2)));
+    let mut missing = partial.clone();
+    missing.staged_courts.remove(&Key::CourtMaterialPart(draft_id, (last * PART) as u64));
+    let Some(Row::CourtMaterialDraft(draft)) = missing.staged_court_row_v1(&Key::CourtMaterialDraft(claim, draft_id)) else { panic!() };
+    assert!(draft.check_loaded_context(&missing).is_err());
+    let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(&partial)).unwrap();
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, Some(partial.state_root())).unwrap();
+    let draft_key = Key::CourtMaterialDraft(claim, draft_id);
+    let Some(Row::CourtMaterialDraft(draft)) = restored.staged_court_row_v1(&draft_key) else { panic!() };
+    assert_eq!(draft.head, request_root);
+    let mut changed_request = (**draft).clone();
+    changed_request.head = other_root;
+    assert!(changed_request.check(&draft_key).is_err());
+    let mut resumed = TransitionBuilder::new(&restored, &params, false, false, false, false, &extras);
+    for (index, bytes) in body.chunks(PART).enumerate().take(last).rev() {
+        assert_eq!(material_intake_pipelined(&mut resumed, &at(frame, 3), &part(index, bytes), request_root).unwrap(), E::Part);
+    }
+    assert!(material_intake_pipelined(&mut resumed, &at(frame, 3), &finish, request_root).is_err());
+    assert_eq!(material_intake_pipelined(&mut resumed, &at(frame, 4), &finish, request_root).unwrap(), E::Completed);
+    let Some(Row::CourtMaterial(material)) = resumed.state.staged_court_row_v1(&target_key) else { panic!() };
+    assert_eq!(material.bytes, body);
+    assert!(resumed.state.staged_court_row_v1(&Key::CourtMaterialPart(draft_id, (last * PART) as u64)).is_none());
+    let mut reverted = resumed.state.clone();
+    for entry in resumed.entries.iter().rev() { apply_delta_entry(&mut reverted, entry, true).unwrap(); }
+    assert_eq!(reverted.state_root(), restored.state_root());
+    set_material_intake_test_schedule_v1(None);
+}
+
+#[test]
 fn material_intake_rooted_store_builds_identical_evidence_to_borrowed_path() {
     use crate::palw_court_shared_material_intake_v1::*;
     use crate::palw_tir_court_v1::{PalwTirEvidenceStoreV1, PalwTirCourtRulesV1, build_tir_cone_refutation_v1};
@@ -232,6 +348,33 @@ fn material_intake_rooted_store_builds_identical_evidence_to_borrowed_path() {
     assert!(build_tir_cone_refutation_v1(binding, early_leaf, &missing, &court).is_err(), "absent material is never a fallback");
     let profile = crate::palw_court_shared_tir_state_v1::context(&b.state, claim).unwrap().profile_id;
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, profile).unwrap();
+    // The same original evidence can be consumed from authenticated StepRuns.
+    // Use the native ordinal projection that the signed material intake reads.
+    use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1;
+    let boundaries = needed.iter().copied().map(RootInputBoundaryV1::CommittedStepLeaf).collect();
+    let mut run_units = Vec::new();
+    set.visit_batch_step_targets_v1(&boundaries, 256, needed.len(), |target, request_id, bound| {
+        let MaterialTargetV1::Unit { ordinal } = target else { panic!("StepRun material target") };
+        assert_eq!(set.request_id(ordinal)?, request_id);
+        let request = set.request_at(ordinal)?;
+        let Q::StepRun { first, count } = request else { panic!("StepRun request") };
+        let end = first + u64::from(count);
+        let response = R::StepRun {
+            preimages: (first..end).map(|i| fx.execution.step_leaf(i).unwrap()).collect(),
+            range: crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                first_leaf_index: first,
+                leaf_hashes: (first..end).map(|i| fx.execution.step_opening(i).unwrap().leaf_hash).collect(),
+                siblings: fx.execution.step_range_siblings(first, u64::from(count)).unwrap(),
+            },
+        };
+        assert!((borsh::object_length(&response).unwrap() as u64) <= bound.maximum_response_bytes);
+        run_units.push(source.authenticate_v1(&request, &response, None)?);
+        Ok(())
+    }).unwrap();
+    let run_store = MaterialStore::new_with_prompt(&state, claim, scope, &run_units, &borrowed_params, None,
+        PromptMaterialV1::Flat(&fx.execution.prompt)).unwrap();
+    let run_result = build_tir_cone_refutation_v1(binding, early_leaf, &run_store, &court).unwrap();
+    assert_eq!(borsh::to_vec(&run_result).unwrap(), borsh::to_vec(&reference).unwrap());
     let mut daa = 1;
     for index in needed.iter().copied() {
         let ordinal = (0..set.len()).find(|&o| set.request_at(o).unwrap() == Q::StepLeaf { index }).unwrap();
@@ -793,4 +936,432 @@ fn rfc23s2_persistent_descriptor_preserves_coordinate_logical_bytes_cold_and_reo
     // Old archive root remains complete even though owned current coordinate
     // pointers advanced; GC follows scalar-set and coordinate-ref child roots.
     context::validate_context_rows_v2(&rewound,&params).unwrap();
+}
+
+#[test]
+fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
+    use crate::palw_batch_court_v1::carriage::{
+        BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, quote_batch_open_v1,
+    };
+    use crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
+    use crate::palw_batch_court_v1::{BatchRangeAuthenticationV1, BatchRangeV1};
+    use crate::palw_court_service_v1::{ServiceCost, ServiceReservations};
+    use crate::palw_court_shared_material_intake_v1::*;
+    use crate::palw_court_shared_tir_frontier_v1::{SHARED_REQUEST_CONTEXT_V1, SignedSharedRequestV1};
+    use crate::palw_tir_public_owned_v1::{PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART, palw_tir_public_body_hash_v1};
+
+    let fx = crate::palw_tir_public_claim_v1::palw_tir_public_material_frame_fixture_v1(true);
+    let frame = &fx.frame;
+    let (mut state, params, mut extras, claim, scope_id) = material_intake_world(&fx);
+    extras.batch_court_active_v1 = true;
+    let network = extras.tir_public_network_domain_v1.unwrap();
+    let context = crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap().clone();
+    let who = outsider();
+    let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([105; 32]);
+    state.bonds.get_mut(&who).unwrap().pubkey = keys.verification_key.as_ref().to_vec();
+    let sign = |message: Hash64, context: &[u8]| {
+        libcrux_ml_dsa::ml_dsa_87::sign(&keys.signing_key, message.as_byte_slice(), context, [106; 32])
+            .unwrap().as_ref().to_vec()
+    };
+    let source = output_source_owned_v2::source_v2(&state, frame).unwrap();
+    let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, context.profile_id).unwrap();
+    let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
+    set_material_intake_test_schedule_v1(Some(storage));
+    use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1;
+    use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
+    use batch::native_ranges::{NumericalBatchEnvelopeV1, numerical_batch_envelope_v1, numerical_batch_root_demand_v1};
+    let cover = PalwTirPublicSourceV1::root_input_cover_native_v1(source.retained_v2(), &fx.record, &fx.layout, storage.cover).unwrap();
+    let notice_leaf = cover.roots_v1().iter().find(|root| {
+        root.inputs.iter().any(|input| matches!(input, RootInputBoundaryV1::PromptPosition(_)))
+    }).unwrap().leaf;
+    let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(fx.record.program.as_slice()).unwrap();
+    let projected = numerical_batch_envelope_v1(frame, &source, &cover, &program, context.profile_id, 4_096).unwrap();
+    let plan = numerical_batch_root_demand_v1(frame, &source, &cover, &program, context.profile_id, &projected, notice_leaf, 0).unwrap();
+    let notice_ordinal = set.step_leaf_ordinal_v1(notice_leaf).unwrap();
+    let notice_id = set.request_id(notice_ordinal).unwrap();
+    let mut notice = SignedSharedRequestV1 {
+        version: 1, scope: scope_id, ordinal: notice_ordinal, request_id: notice_id, signer: who, signature: vec![],
+    };
+    notice.signature = sign(notice.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
+    let notice_at = at(frame, NOTICE_WINDOW_DAA);
+    let open_at = at(frame, NOTICE_WINDOW_DAA + 1);
+    let begin_at = at(frame, NOTICE_WINDOW_DAA + 5);
+    let part_at = at(frame, NOTICE_WINDOW_DAA + 7);
+    let finish_at = at(frame, NOTICE_WINDOW_DAA + 9);
+    let response_deadline = at(frame, NOTICE_WINDOW_DAA + 12).daa_score;
+    let (target, body) = plan.ranges_v1().iter().find_map(|&(target, _)| {
+        let body = match target {
+            MaterialTargetV1::PromptFlat => borsh::to_vec(&fx.execution.prompt).unwrap(),
+            MaterialTargetV1::PromptTile { tile } => borsh::to_vec(
+                &crate::palw_prompt_ids_v1::prompt_ids_opening_v1(
+                    &fx.execution.prompt, tile * crate::palw_prompt_ids_v1::PALW_PROMPT_IDS_TILE_LEN,
+                ).unwrap(),
+            ).unwrap(),
+            MaterialTargetV1::Unit { ordinal } => {
+                use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Q, PalwTirPublicResponseV1 as R};
+                let Q::StepLeaf { index } = set.request_at(ordinal).ok()? else { return None };
+                borsh::to_vec(&R::StepLeaf {
+                    preimage: fx.execution.step_leaf(index).unwrap(),
+                    opening: fx.execution.step_opening(index).unwrap(),
+                }).unwrap()
+            }
+            _ => return None,
+        };
+        (body.len() <= PART).then_some((target, body))
+    }).expect("the selected demand contains a fixture body that fits one part");
+    assert!(body.len() <= PART);
+    let hash = palw_tir_public_body_hash_v1(&body);
+    let ordinal = 0;
+    // Only the selected material is delivered in this fixture. The remaining signed
+    // declarations exercise canonical target checks without filing bodies.
+    let lengths = plan.ranges_v1().iter().map(|&(planned, _)| (planned, if planned == target { body.len() as u64 } else { 1 }))
+        .collect::<Vec<_>>();
+    assert!(lengths.iter().any(|(planned, _)| *planned == target));
+    let ranges = lengths.iter().map(|&(planned, bytes)| BatchRangeV1 {
+        id: planned.id_v1(claim).unwrap(), bytes: bytes as u32, authentication: BatchRangeAuthenticationV1::WholeRange,
+    }).collect::<Vec<_>>();
+    let range_count = ranges.len();
+    let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
+    use batch::admission::{NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1, reserve_native_batch_delivery_v1};
+    use batch::numerical_verification::NumericalBatchReplayBudgetV1;
+    let mut service = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(state.court_service_state_v1().unwrap());
+    service.state.book = ServiceReservations::new(ServiceCost { bytes: 64 * 64 * 1024, work: 64, io: 64, controls: 64 }).unwrap();
+    service.state.claims.get_mut(&claim).unwrap().packet_ids.clear();
+    let envelope = NumericalBatchEnvelopeV1::test_only_v1(claim, context.profile_id, scope_id, vec![PART as u64; range_count]);
+    let costs = NativeBatchDeliveryCostsV1 {
+        numerical_verification: NumericalBatchReplayBudgetV1::test_only_v1(),
+        terminal: NumericalBatchReplayBudgetV1::test_only_v1().service_cost_v1().unwrap(), recovery_daa: 1, maximum_packets: 3 + 3 * range_count,
+        timing: NativeBatchDeliveryTimingV1 {
+            open_daa: 2, provider_wait_daa: 2, begin_daa: 2, parts_daa: 2,
+            finish_daa: 3, verification_daa: 2, stop_daa: 1, terminal_daa: 1,
+        },
+    };
+    let replay_budget = costs.numerical_verification;
+    let (verification, _) = batch::admission::batch_numerical_service_ids_v1(claim, scope_id).unwrap();
+    let (quote, service) = reserve_native_batch_delivery_v1(service, frame, &envelope, None, costs, storage, |_, bytes| Ok(cost(bytes))).unwrap();
+    assert!(quote.required_daa <= 10_000);
+    assert_eq!(service.state.book.packet(&verification).unwrap().cost, replay_budget.service_cost_v1().unwrap());
+    assert_eq!(quote.retained_numerical_fault_bytes, replay_budget.max_fault_bytes);
+    assert_eq!(quote.numerical_fault_storage_rent_sompi, replay_budget.max_fault_bytes * storage.sompi_per_byte);
+    let earliest_verification = service.state.book.packet(&verification).unwrap().release_daa;
+    assert_eq!(
+        quote.retained_numerical_fault_byte_daa,
+        replay_budget.max_fault_bytes * (context.material_until_daa - earliest_verification),
+    );
+    assert_eq!(quote.carrier_storage_rent_sompi, range_count as u64 * PART as u64 * storage.sompi_per_byte);
+    // The original coordinator has not published a book or context yet.
+    state.staged_courts.remove(&Key::CourtService);
+    state.staged_courts.remove(&Key::CourtSharedContext(claim));
+    let install_extras = PalwTransitionExtrasV1 {
+        batch_numerical_profile_v1: Some(NumericalBatchReplayProfileV1 { service_profile: service.state.profile_id, budget: replay_budget }),
+        ..extras.clone()
+    };
+    let mut install = TransitionBuilder::new(&state, &params, false, false, false, false, &install_extras);
+    use super::super::palw_court_service_lifecycle_fold_v1::install_prepared_batch_frontier_v1;
+    let mut unbooked = service.clone();
+    unbooked.causal.retain(|_, parents| !parents.contains(&verification));
+    let before_install = install.state.state_root();
+    assert!(install_prepared_batch_frontier_v1(&mut install, &at(frame, 0), None, unbooked, &quote).is_err());
+    assert_eq!(install.state.state_root(), before_install);
+    install_prepared_batch_frontier_v1(&mut install, &at(frame, 0), None, service, &quote).unwrap();
+    state = install.state;
+    assert!(crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap().batch_notice_only_v1());
+    let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).is_err());
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 4_096, &lengths),
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch has no accepted notice"));
+    use super::super::palw_court_shared_tir_fold_v1::request;
+    use crate::palw_court_shared_tir_frontier_v1::SharedRequestEffectV1;
+    let before = b.state.state_root();
+    assert_ne!(notice_ordinal, 0);
+    let mut node_notice = notice.clone();
+    node_notice.ordinal = 0;
+    node_notice.request_id = set.request_id(0).unwrap();
+    node_notice.signature = sign(node_notice.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
+    assert!(request(&mut b, &notice_at, claim, &node_notice).is_err(), "a StepNode is not a Batch opening coordinate");
+    assert_eq!(b.state.state_root(), before);
+    assert!(request(&mut b, &open_at, claim, &notice).is_err(), "a first notice one DAA late");
+    assert_eq!(b.state.state_root(), before);
+    assert!(matches!(request(&mut b, &notice_at, claim, &notice), Ok(SharedRequestEffectV1::Opened)));
+    assert!(matches!(request(&mut b, &notice_at, claim, &notice), Ok(SharedRequestEffectV1::Coalesced)));
+    let Some(Row::CourtSharedQuery(accepted)) = b.state.staged_court_row_v1(&Key::CourtSharedQuery(notice_id)) else {
+        panic!("Batch initial notice was not retained");
+    };
+    assert!(accepted.service.is_none() && accepted.body.is_none());
+    assert_eq!(
+        quote_batch_open_v1(&b.state, claim, notice_id, BATCH_STOP_ORDINAL_V1, ranges.clone()).unwrap_err(),
+        "Batch Open route differs from its initial notice",
+    );
+    let other_leaf = u64::from(notice_leaf == 0);
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, other_leaf, 0, 4_096, &lengths),
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch leaf differs from its initial notice"));
+    let mut follow_up = notice.clone();
+    follow_up.ordinal = set.step_leaf_ordinal_v1(other_leaf).unwrap();
+    follow_up.request_id = set.request_id(follow_up.ordinal).unwrap();
+    follow_up.signature = sign(follow_up.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
+    let after_notice = b.state.state_root();
+    assert!(request(&mut b, &open_at, claim, &follow_up).is_err());
+    assert_eq!(b.state.state_root(), after_notice);
+    let mut open = quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).unwrap();
+    let operator_quote = quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 4_096, &lengths).unwrap();
+    assert_eq!(*operator_quote, open);
+    assert_eq!((open.signer, open.demand.opened_daa, open.demand.response_deadline_daa), (who, open_at.daa_score, response_deadline));
+    let request_root = open.demand.checked_request_root_v1().unwrap();
+    open.signature = sign(open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
+    let respond = |action| {
+        let mut intake = SignedMaterialIntakeV1 { version: MATERIAL_BATCH_VERSION, claim, scope_id, target, submitter: who,
+            action, signature: vec![] };
+        intake.signature = sign(intake.batch_signing_message_v1(network, request_root).unwrap(), MATERIAL_BATCH_CONTEXT_V1);
+        BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: ordinal, intake })
+    };
+    let begin = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
+    use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry, ValidatedTransaction};
+    let apply = |b: &mut TransitionBuilder<'_>, point: &PalwBlockContextV2, wire: &BatchCourtWireV1, fee, preceding| {
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(wire).unwrap());
+        let tx = Transaction::new(
+            0,
+            vec![TransactionInput::new(TransactionOutpoint::new(point.block, 0), vec![], 0, 0)],
+            vec![TransactionOutput::new(1, ScriptPublicKey::default())],
+            0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload,
+        );
+        let entry = UtxoEntry::new(1 + fee, ScriptPublicKey::default(), 1, false);
+        let native = ValidatedTransaction::new(PopulatedTransaction::new(&tx, vec![entry]), fee);
+        let accepted = ValidatedBatchCarrierV1::prepare_v1(&native, preceding, *point).unwrap().unwrap();
+        let split = accepted.fee_v1();
+        assert_eq!(split, material_batch_carrier_fee_v1(&tx, fee - preceding).unwrap());
+        let rehearsal = crate::palw_state_v2::palw_v2_apply_one_batch_carrier_retained_v1(
+            &b.state, &params, point, &accepted, false, false, false, false, b.extras,
+        );
+        let folded = b.apply_batch_court_carrier_v1(point, &accepted);
+        assert_eq!(rehearsal.is_ok(), folded.is_ok());
+        if let Ok(rehearsed) = rehearsal {
+            assert_eq!(rehearsed.state_root(), b.state.state_root());
+        }
+        folded.map(|()| split)
+    };
+    let before_open = b.state.state_root();
+    let mut foreign_open = open.clone();
+    foreign_open.demand.ranges[0].id = MaterialTargetV1::PromptTile { tile: u32::MAX }.id_v1(claim).unwrap();
+    foreign_open.demand.ranges.sort_unstable_by_key(|range| range.id);
+    foreign_open.signature = sign(foreign_open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
+    assert!(apply(&mut b, &open_at, &BatchCourtWireV1::Open(foreign_open), 0, 0).is_err());
+    assert_eq!(b.state.state_root(), before_open);
+    let mut late_open = open.clone();
+    late_open.demand.response_deadline_daa += 1;
+    late_open.signature = sign(late_open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
+    assert!(apply(&mut b, &open_at, &BatchCourtWireV1::Open(late_open), 0, 0).is_err());
+    assert_eq!(b.state.state_root(), before_open);
+    let opening = BatchCourtWireV1::Open(open);
+    let template_ready = |state: &PalwChainStateV2, point: &PalwBlockContextV2, wire: &BatchCourtWireV1| {
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(wire).unwrap());
+        let tx = Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
+        crate::palw_state_v2::palw_batch_template_slot_v1(state, &tx, point)
+    };
+    assert!(template_ready(&b.state, &open_at, &opening).is_ok());
+    assert!(template_ready(&b.state, &notice_at, &opening).is_err());
+    assert!(template_ready(&b.state, &begin_at, &begin).is_err());
+    apply(&mut b, &open_at, &opening, 0, 0).unwrap();
+    assert!(template_ready(&b.state, &open_at, &opening).is_err());
+    assert!(template_ready(&b.state, &begin_at, &begin).is_ok());
+    let service = b.state.court_service_row_v3_v1().unwrap();
+    let mut missed = service.state.book.clone();
+    missed.observe_block(open_at.daa_score, open_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    missed.observe_block(begin_at.daa_score, begin_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    missed.observe_block(part_at.daa_score, part_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    let repair_at = at(frame, NOTICE_WINDOW_DAA + 10);
+    missed.observe_block(repair_at.daa_score, repair_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    let ids = &service.state.claims[&claim].packet_ids;
+    let mut repaired = missed.clone();
+    assert_eq!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut repaired), Ok(range_count));
+    let finish_packet = ids.iter().find(|id| service.state.book.assigned_daa(id) == Some(finish_at.daa_score)).unwrap();
+    assert_eq!(repaired.assigned_daa(finish_packet), Some(response_deadline - 1));
+    let Some(Row::CourtBatchDemand(accepted)) = b.state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)) else {
+        panic!("missing accepted Batch Open");
+    };
+    assert_eq!(accepted.request_root, request_root);
+    assert!(batch::check_open_response_slots_v1(accepted, &repaired, ids, storage, true).is_ok());
+    missed.observe_block(response_deadline, [7; 64], ServiceCost::default()).unwrap();
+    let before = missed.clone();
+    assert!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &service.causal, &mut missed).is_err());
+    assert_eq!(missed, before);
+    assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges).is_err());
+    let quote = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert_eq!(quote.request_root, request_root);
+    assert_eq!((quote.begin_daa, quote.finish_daa, quote.retained_submitter), (begin_at.daa_score, finish_at.daa_score, None));
+    assert_eq!(quote.total_bytes, body.len() as u64);
+    assert_eq!(quote.parts, [BatchResponsePartSlotV1 {
+        offset: 0, bytes: body.len() as u64, assigned_daa: part_at.daa_score, accepted_daa: None,
+    }]);
+    assert!(quote_batch_response_v1(&b.state, claim, ordinal, MaterialTargetV1::PromptTile { tile: u32::MAX }).is_err());
+    let after_open = b.state.state_root();
+    apply(&mut b, &open_at, &opening, 0, 0).unwrap();
+    assert_eq!(b.state.state_root(), after_open);
+    // The accepted Open already checked this root. Its responses must not
+    // try to materialize the entire original under a legacy cover budget.
+    set_material_intake_test_schedule_v1(Some(MaterialIntakeScheduleV1 {
+        cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 0, ..storage.cover
+        },
+        ..storage
+    }));
+    let rent = body.len() as u64 * storage.sompi_per_byte;
+    assert!(apply(&mut b, &begin_at, &begin, rent, 1).is_err());
+    assert_eq!(b.state.state_root(), after_open);
+    let fee = apply(&mut b, &begin_at, &begin, rent + 2, 1).unwrap();
+    assert_eq!((fee.withheld_storage_rent, fee.collectible_fee), (rent, 1));
+    let after_begin = b.state.state_root();
+    apply(&mut b, &begin_at, &begin, rent + 2, 1).unwrap();
+    let conflicting = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: Hash64::from_u64_word(999) });
+    assert!(apply(&mut b, &begin_at, &conflicting, rent + 2, 1).is_err());
+    assert_eq!(b.state.state_root(), after_begin);
+    let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
+    assert_eq!(draft_id, quote.draft_id);
+    apply(&mut b, &part_at, &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), 1, 0).unwrap();
+    let resumed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert!(!resumed.material_available);
+    assert_eq!((resumed.retained_submitter, resumed.retained_body_hash), (Some(who), Some(hash)));
+    assert_eq!(resumed.parts[0].accepted_daa, Some(quote.parts[0].assigned_daa));
+    use crate::palw_user_views_v1::{PalwCourtTargetV1, PalwUserViewClockV1, palw_court_state_json_v1};
+    let view = palw_court_state_json_v1(&b.state, &params, PalwCourtTargetV1::BatchResponse { claim, ordinal, target },
+        &PalwUserViewClockV1::default()).unwrap();
+    assert_eq!(view["kind"], "palwBatchResponse");
+    assert_eq!(view["target"], "prompt-flat");
+    assert_eq!(view["response"]["requestRoot"], request_root.to_string());
+    assert_eq!(view["response"]["responseDeadlineDaa"], response_deadline);
+    assert_eq!(view["response"]["parts"][0]["acceptedDaa"], quote.parts[0].assigned_daa);
+    let draft_key = Key::CourtMaterialDraft(claim, draft_id);
+    let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&draft_key) else { panic!("missing Batch draft") };
+    use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
+    let after_part = b.state.state_root();
+    let refused = draft.body_reserved_with_v1(&b.state, |bytes| {
+        assert_eq!(bytes, body.len() as u64);
+        Err(NativeCoverageV1::unsupported::<Vec<u8>>("Batch test", "no assembly capacity"))
+    });
+    assert!(matches!(refused, Err(NativeDecodeErrorV1::Resource(_))));
+    assert_eq!(b.state.state_root(), after_part);
+    let mut incomplete = (**draft).clone();
+    incomplete.accepted_bytes -= 1;
+    assert!(matches!(
+        incomplete.body_reserved_with_v1(&b.state, |_| panic!("incomplete draft must fail before allocation")),
+        Err(NativeDecodeErrorV1::Decode(_)),
+    ));
+    apply(&mut b, &finish_at, &respond(MaterialActionV1::Finish { draft_id }), 1, 0).unwrap();
+    let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
+    let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
+    assert_eq!(material.bytes, body);
+    let verify_daa = response_deadline;
+    assert!(RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &[target], finish_at.daa_score).is_err());
+    assert!(RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &[target, target], verify_daa).is_err());
+    let mut selected = lengths.iter().map(|(target, _)| *target).collect::<Vec<_>>();
+    selected.push(MaterialTargetV1::PromptTile { tile: u32::MAX });
+    selected.sort_unstable_by_key(|target| target.id_v1(claim).unwrap());
+    assert!(RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &selected, verify_daa).is_err());
+    let material = RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &[target], verify_daa).unwrap();
+    let store = material.store_v1(&b.state, claim, scope_id).unwrap();
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    assert_eq!(store.prompt_token_ids().unwrap(), fx.execution.prompt);
+    set_material_intake_test_schedule_v1(Some(storage));
+    assert!(matches!(
+        batch::native_ranges::prepare_numerical_batch_material_v1(&b.state, claim, verify_daa),
+        Err(NativeDecodeErrorV1::Decode(why)) if why == "selected Batch material is missing" || why == "selected Batch FullIds are missing",
+    ));
+    let completed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
+    assert!(completed.material_available);
+    assert!(completed.retained_submitter.is_none());
+    let view = palw_court_state_json_v1(&b.state, &params, PalwCourtTargetV1::BatchResponse { claim, ordinal, target },
+        &PalwUserViewClockV1::default()).unwrap();
+    assert_eq!(view["response"]["materialAvailable"], true);
+    let Some(Row::CourtBatchDemand(rooted)) = b.state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)) else {
+        panic!("Batch demand did not stay rooted");
+    };
+    assert_eq!(rooted.request_root, request_root);
+    use crate::palw_batch_court_v1::carriage::{BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1, SignedNumericalBatchVerificationV1};
+    let service = b.state.court_service_state_v1().unwrap();
+    let booked = service.book.assigned_daa(&verification).unwrap();
+    let point = at(frame, booked - context.original_accepted_daa);
+    let rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 {
+        network_domain: network, at: point, court: fx.rules.court, step_ladder: fx.rules.maximum_leaves,
+        prompt_ids_merkle: false, held_regime: false, decode_close_convicts_only: false,
+        fp_decode_from_daa: None, cell_closure_from_daa: None, memory_routing_from_daa: None,
+        tir_active: true, gen_active: false, task_heads_active: false, improvement_active: false, constraint_active: false,
+    };
+    let mut signed = SignedNumericalBatchVerificationV1 {
+        version: 1, claim, scope: scope_id, notice: notice_id, leaf: notice_leaf,
+        policy: crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(&rules).unwrap(),
+        filer: who, signature: vec![],
+    };
+    signed.signature = sign(signed.signing_message_v1(network).unwrap(), BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1);
+    let verify = BatchCourtWireV1::VerifyNumerical(signed);
+    assert!(template_ready(&b.state, &point, &verify).is_ok());
+    assert!(template_ready(&b.state, &finish_at, &verify).is_err());
+    let extras = PalwTransitionExtrasV1 { native_court_rules_v1: Some(rules), ..extras.clone() };
+    let mut missing = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
+    assert!(matches!(apply(&mut missing, &point, &verify, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "numerical Batch receipt has no matching native replay profile"));
+    let extras = PalwTransitionExtrasV1 {
+        batch_numerical_profile_v1: Some(NumericalBatchReplayProfileV1 { service_profile: service.profile_id, budget: replay_budget }),
+        ..extras
+    };
+    let quote = crate::palw_user_views_v1::palw_batch_numerical_verify_quote_json_v1(&b.state, &params, claim, booked, |_| None);
+    assert_eq!(quote["error"], "numerical Batch has no native replay profile at the booked DAA");
+    let quote = crate::palw_user_views_v1::palw_batch_numerical_verify_quote_json_v1(&b.state, &params, claim, booked, |daa| {
+        assert_eq!(daa, booked);
+        Some((rules, extras.batch_numerical_profile_v1.unwrap()))
+    });
+    assert!(quote["verify"].is_null());
+    assert!(matches!(quote["error"].as_str(), Some("selected Batch material is missing" | "selected Batch FullIds are missing")));
+    let mut incomplete = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
+    let mut forged = verify.clone();
+    let BatchCourtWireV1::VerifyNumerical(control) = &mut forged else { unreachable!() };
+    control.signature[0] ^= 1;
+    assert!(matches!(apply(&mut incomplete, &point, &forged, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "invalid numerical Batch verification signature"));
+    assert!(matches!(apply(&mut incomplete, &point, &verify, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "selected Batch material is missing" || why == "selected Batch FullIds are missing"));
+    assert_eq!(incomplete.state.state_root(), b.state.state_root());
+    assert!(incomplete.state.staged_court_row_v1(&Key::CourtBatchNumericalReceipt(claim)).is_none());
+    use crate::palw_batch_court_v1::rooted::{RootedBatchNumericalReceiptV1, reserved_numerical_terminal_v1};
+    let (_, terminal) = batch::admission::batch_numerical_service_ids_v1(claim, scope_id).unwrap();
+    let terminal_daa = service.book.assigned_daa(&terminal).unwrap();
+    let terminal_at = at(frame, terminal_daa - context.original_accepted_daa);
+    let receipt = RootedBatchNumericalReceiptV1 {
+        version: 1, claim, scope: scope_id, source: context.source_id, notice: notice_id, leaf: notice_leaf,
+        intent_digest: Hash64::from_u64_word(812), at: point, material_until_daa: context.material_until_daa,
+        fault_evidence: None, fault_bytes: None,
+    };
+    let digest = receipt.digest_v1().unwrap();
+    assert!(reserved_numerical_terminal_v1(&b.state, claim, digest, &terminal_at).is_err());
+    // Exercise the terminal reader with an already accepted row. The incomplete
+    // material above never produces a verification receipt.
+    let mut verified = b.state.clone();
+    verified.staged_courts.insert(Key::CourtBatchNumericalReceipt(claim), Row::CourtBatchNumericalReceipt(Box::new(receipt.clone())));
+    let view = palw_court_state_json_v1(&verified, &params, PalwCourtTargetV1::Claim(claim), &PalwUserViewClockV1::default()).unwrap();
+    let finding = &view["batchNumericalFinding"];
+    assert_eq!(finding["receiptDigest"], digest.to_string());
+    assert_eq!(finding["verificationDaa"], point.daa_score);
+    assert_eq!(finding["terminalDaa"], terminal_daa);
+    assert!(finding["faultEvidenceId"].is_null());
+    assert_eq!(reserved_numerical_terminal_v1(&verified, claim, digest, &terminal_at).unwrap(), &receipt);
+    let terminal_rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 { at: terminal_at, ..rules };
+    assert!(batch::native_ranges::recheck_numerical_terminal_v1(&verified, claim, digest, &terminal_rules, replay_budget)
+        .unwrap().is_none());
+    let terminal = BatchCourtWireV1::ConvictNumerical(crate::palw_batch_court_v1::carriage::BatchNumericalTerminalV1 {
+        claim, receipt_digest: digest,
+    });
+    assert!(template_ready(&verified, &terminal_at, &terminal).is_err());
+    let terminal_extras = PalwTransitionExtrasV1 { native_court_rules_v1: Some(terminal_rules), ..extras.clone() };
+    let mut terminal_fold = TransitionBuilder::new(&verified, &params, false, false, false, false, &terminal_extras);
+    assert!(matches!(apply(&mut terminal_fold, &terminal_at, &terminal, 1, 0),
+        Err(PalwStateV2Error::CarriageInconsistent(why)) if why == "numerical terminal receipt contains no fault"));
+    assert_eq!(terminal_fold.state.state_root(), verified.state_root());
+    assert!(reserved_numerical_terminal_v1(&verified, claim, digest, &point).is_err());
+    assert!(reserved_numerical_terminal_v1(&verified, claim, Hash64::from_u64_word(999), &terminal_at).is_err());
+    let old_fault = RootedBatchNumericalReceiptV1 { fault_evidence: Some(Hash64::from_u64_word(9)), ..receipt };
+    let digest = old_fault.digest_v1().unwrap();
+    verified.staged_courts.insert(Key::CourtBatchNumericalReceipt(claim), Row::CourtBatchNumericalReceipt(Box::new(old_fault)));
+    assert!(matches!(reserved_numerical_terminal_v1(&verified, claim, digest, &terminal_at),
+        Err(why) if why == "numerical terminal fault has no retained adjudication material"));
+    set_material_intake_test_schedule_v1(None);
 }

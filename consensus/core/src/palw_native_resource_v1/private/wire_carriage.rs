@@ -881,11 +881,6 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
             crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), ()>,
         >(),
     )?;
-    let n = count("funded_escrows", false)?;
-    sum = sum.allocation(
-        n,
-        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), ()>>(),
-    )?;
     let n = count("legacy_disputes", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
@@ -1054,6 +1049,10 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
             crate::palw_improve_state_v1::PalwPoolEntryV2,
         >,
     >() as u64);
+    n = n.max(
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, u8, crate::Hash64), ()>>()
+            as u64,
+    );
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (crate::palw_state_v2::PalwBondKeyV2, bool, u64, crate::Hash64),
@@ -1157,6 +1156,7 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
     >() as u64);
     n = n.max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, u64), u16>>() as u64);
     n = n.max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u8, Vec<u8>), Vec<u8>>>() as u64);
+    n = n.max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u8, u64, crate::Hash64), ()>>() as u64);
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (u8, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1),

@@ -80,19 +80,42 @@ impl Deserializer for GetPalwClaimDetailRequest {
     }
 }
 
-/// Exactly one of `claim_hex` (every session of a claim) or `session_hex` (one court session), 128 hex digits.
+/// Exactly one of `claim_hex` or `session_hex`, 128 hex digits. With a claim,
+/// `batch_ordinal` (decimal u64 text) and `batch_target` (`full-ids`,
+/// `prompt-flat`, `prompt-tile:N`, `parameter:N`, `unit:N`) select one response.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetPalwCourtStateRequest {
     pub claim_hex: String,
     pub session_hex: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub batch_ordinal: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub batch_target: String,
+    /// Batch quote selector: `notice/leaf/target=bytes,target=bytes`, `notice/stop-full-ids`, or `stop`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub batch_open: String,
 }
 
 impl Serializer for GetPalwCourtStateRequest {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        let version = if !self.batch_open.is_empty() {
+            3
+        } else if self.batch_ordinal.is_empty() && self.batch_target.is_empty() {
+            1
+        } else {
+            2
+        };
+        store!(u16, &version, writer)?;
         store!(String, &self.claim_hex, writer)?;
         store!(String, &self.session_hex, writer)?;
+        if version >= 2 {
+            store!(String, &self.batch_ordinal, writer)?;
+            store!(String, &self.batch_target, writer)?;
+        }
+        if version == 3 {
+            store!(String, &self.batch_open, writer)?;
+        }
         Ok(())
     }
 }
@@ -100,12 +123,18 @@ impl Serializer for GetPalwCourtStateRequest {
 impl Deserializer for GetPalwCourtStateRequest {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let version = load!(u16, reader)?;
-        if version != 1 {
+        if !matches!(version, 1..=3) {
             return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "unknown getPalwCourtState request version"));
         }
         let claim_hex = load!(String, reader)?;
         let session_hex = load!(String, reader)?;
-        Ok(Self { claim_hex, session_hex })
+        let (batch_ordinal, batch_target) = if version >= 2 {
+            (load!(String, reader)?, load!(String, reader)?)
+        } else {
+            (String::new(), String::new())
+        };
+        let batch_open = if version == 3 { load!(String, reader)? } else { String::new() };
+        Ok(Self { claim_hex, session_hex, batch_ordinal, batch_target, batch_open })
     }
 }
 
@@ -204,9 +233,34 @@ mod tests {
 
     #[test]
     fn user_view_messages_round_trip_on_the_borsh_wire() {
-        let req = round_trip(&GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), session_hex: String::new() });
+        let req = round_trip(&GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), session_hex: String::new(), ..Default::default() });
         assert_eq!(req.claim_hex, "ab".repeat(64));
         assert!(req.session_hex.is_empty());
+        assert!(req.batch_ordinal.is_empty() && req.batch_target.is_empty());
+        let mut legacy = Vec::new();
+        store!(u16, &1, &mut legacy).unwrap();
+        store!(String, &req.claim_hex, &mut legacy).unwrap();
+        store!(String, &req.session_hex, &mut legacy).unwrap();
+        let mut actual = Vec::new();
+        Serializer::serialize(&req, &mut actual).unwrap();
+        assert_eq!(actual, legacy);
+        let batch = GetPalwCourtStateRequest { batch_ordinal: u64::MAX.to_string(), batch_target: "full-ids".into(), ..req };
+        let restored = round_trip(&batch);
+        assert_eq!((restored.batch_ordinal, restored.batch_target), (batch.batch_ordinal, batch.batch_target));
+        assert!(restored.batch_open.is_empty());
+        let open = GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), batch_ordinal: "0".into(),
+            batch_open: format!("{}/18446744073709551615/unit:0=1", "cd".repeat(64)), ..Default::default() };
+        let mut open_wire = Vec::new();
+        Serializer::serialize(&open, &mut open_wire).unwrap();
+        assert_eq!(&open_wire[..2], &3u16.to_le_bytes());
+        assert_eq!(round_trip(&open).batch_open, open.batch_open);
+        let stop = GetPalwCourtStateRequest {
+            batch_ordinal: u64::MAX.to_string(),
+            batch_open: format!("{}/stop-full-ids", "cd".repeat(64)),
+            ..open
+        };
+        let restored = round_trip(&stop);
+        assert_eq!((restored.batch_ordinal, restored.batch_open), (stop.batch_ordinal, stop.batch_open));
         let bond = round_trip(&GetPalwBondDetailRequest { bond: "00:1".into() });
         assert_eq!(bond.bond, "00:1");
         let plain = round_trip(&GetPalwFenceScheduleRequest::default());

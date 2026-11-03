@@ -46,6 +46,7 @@ mod palw_derived;
 mod palw_economics;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
 mod palw_extension;
+mod palw_batch;
 mod palw_fp;
 mod palw_gen;
 mod palw_job;
@@ -1727,6 +1728,108 @@ enum PalwCmd {
         /// Refuse the entire batch before broadcast if its actual carrier fees exceed this total.
         #[arg(long)]
         maximum_total_fee_sompi: Option<u64>,
+    },
+    /// Sign and fund a reserved Batch Open using the accepted notice's bond.
+    BatchOpen {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        notice: String,
+        /// Open the dedicated FullIds request for a constrained EOG dispute.
+        #[arg(long, conflicts_with_all = ["leaf", "ordinal", "ranges"])]
+        stop_full_ids: bool,
+        #[arg(long, required_unless_present = "stop_full_ids")]
+        leaf: Option<u64>,
+        #[arg(long, required_unless_present = "stop_full_ids")]
+        ordinal: Option<u64>,
+        /// Exact encoded size of a material target as target=bytes. Repeat for each target.
+        #[arg(long = "range", required_unless_present = "stop_full_ids")]
+        ranges: Vec<String>,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
+    /// Sign and fund numerical verification for the accepted notice and leaf.
+    BatchVerifyNumerical {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        notice: String,
+        #[arg(long)]
+        leaf: u64,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
+    /// Fund the booked numerical fault terminal for an accepted finding.
+    BatchConvict {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        claim: String,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
+    /// Sign and fund the booked Batch Stop with a local tokenizer or EOG opening.
+    BatchStop {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long, required_unless_present = "tokenizer_json", conflicts_with = "tokenizer_json")]
+        eog_opening: Option<std::path::PathBuf>,
+        /// Original tokenizer JSON, authenticated against the accepted registration.
+        #[arg(long, requires = "eog_ids")]
+        tokenizer_json: Option<std::path::PathBuf>,
+        /// EOG ID from the model configuration. Repeat for each ID.
+        #[arg(long = "eog-id", requires = "tokenizer_json", conflicts_with = "eog_opening")]
+        eog_ids: Vec<u32>,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
+    /// Sign and fund one reserved Batch Court response. Preview unless --submit is set.
+    BatchRespond {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        ordinal: u64,
+        #[arg(long)]
+        target: String,
+        #[arg(long, value_enum)]
+        step: palw_batch::ResponseStep,
+        #[arg(long)]
+        offset: Option<u64>,
+        /// Exact encoded native material body, before dividing it into parts.
+        #[arg(long)]
+        body: std::path::PathBuf,
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
     },
     /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
     ///
@@ -3683,6 +3786,31 @@ async fn run_cli() -> std::process::ExitCode {
                 .await
                 .map(|_| ())
         }),
+        Command::Palw(PalwCmd::BatchRespond { key, bond, claim, ordinal, target, step, offset, body, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::respond(ctx, &key.source(), &bond, &claim, ordinal, &target, step, offset, &body,
+                submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi, .. }) => {
+            Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
+                submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchVerifyNumerical { key, bond, claim, notice, leaf, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::verify_numerical(ctx, &key.source(), &bond, &claim, &notice, leaf,
+                submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchConvict { key, claim, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::convict_numerical(ctx, &key.source(), &claim, submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchStop { key, bond, claim, eog_opening, tokenizer_json, eog_ids, submit, maximum_fee_sompi }) => {
+            Box::pin(async move {
+                let source = match (eog_opening.as_deref(), tokenizer_json.as_deref()) {
+                    (Some(path), None) => palw_batch::StopEogSource::Opening(path),
+                    (None, Some(path)) => palw_batch::StopEogSource::Tokenizer { path, eog_ids },
+                    _ => return Err(CliError::new(exit::GENERIC, "provide an EOG opening or a tokenizer and EOG IDs")),
+                };
+                palw_batch::stop(ctx, &key.source(), &bond, &claim, source, submit, maximum_fee_sompi).await
+            })
+        }
         Command::Palw(PalwCmd::TirRegistration {
             key,
             artifact,

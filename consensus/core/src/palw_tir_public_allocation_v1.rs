@@ -189,6 +189,10 @@ pub struct PalwTirDoorDiagnosticsV1 {
     pub semantic_families: Vec<PalwTirSemanticFamilyDiagnosticsV1>,
     pub semantic_inventory: Option<PalwRenderingResourcePlanV1>,
     pub semantic_resources: Option<PalwRenderingResourcePlanV1>,
+    /// Prospective Batch Court operands if the accepted snapshot can reuse
+    /// the exact tokenizer registration. Kept separate from the legacy total.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_tokenizer_openings: Option<crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerOpeningBoundsV1>,
     pub filing_daa: u64,
     pub collection_daa: u64,
     pub total_daa: u64,
@@ -1146,6 +1150,7 @@ fn finish_allocation_source_v2(
                 }),
                 semantic_inventory: bundle.and_then(|bundle| bundle.inventory.as_ref().map(|inventory| inventory.envelope)),
                 semantic_resources: bundle.map(|bundle| bundle.terms.plan),
+                batch_tokenizer_openings: None,
                 filing_daa: filing,
                 collection_daa: collection,
                 total_daa: door,
@@ -1828,6 +1833,7 @@ mod tests {
             }
             let value = serde_json::to_value(breakdown).unwrap();
             assert_eq!(value["ownerQueueWaitDaa"].as_u64(), Some(breakdown.owner_queue_wait_daa));
+            assert!(value.get("batchTokenizerOpenings").is_none());
             assert_eq!(serde_json::from_value::<PalwTirDoorDiagnosticsV1>(value).unwrap(), **breakdown);
 
             f.rules.clock.maximum_door_daa = door;

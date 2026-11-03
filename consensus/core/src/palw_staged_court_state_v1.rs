@@ -112,6 +112,12 @@ pub enum PalwStagedCourtKeyV1 {
     TirOwnerSchedule(Hash64),
     /// Immutable verified tokenizer for (class, exact prospective semantics), key 31.
     VerifiedTokenizerRegistration(Hash64, Hash64),
+    /// Original and reserved opening ordinal. Appended key 32.
+    CourtBatchDemand(Hash64, u64),
+    /// Verified constrained Stop result, appended key 33.
+    CourtBatchStopReceipt(Hash64),
+    /// Verified numerical leaf, appended key 34.
+    CourtBatchNumericalReceipt(Hash64),
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStagedClaimContractV1 {
@@ -174,6 +180,12 @@ pub enum PalwStagedCourtRowV1 {
     TirOwnerSchedule(Box<crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2>),
     /// Immutable tokenizer registration, appended row 38.
     VerifiedTokenizerRegistration(Box<crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1>),
+    /// Accepted Batch request, appended row 39.
+    CourtBatchDemand(Box<crate::palw_batch_court_v1::rooted::RootedBatchDemandV1>),
+    /// Verified constrained Stop result, appended row 40.
+    CourtBatchStopReceipt(Box<crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1>),
+    /// Verified numerical leaf, appended row 41.
+    CourtBatchNumericalReceipt(Box<crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1>),
 }
 impl PalwStagedCourtRowV1 {
     pub fn active_row_v1(&self) -> Option<&Self> {
@@ -211,7 +223,10 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtMaterialLedger(_)
             | Self::CourtServiceV3(_)
             | Self::TirOwnerSchedule(_)
-            | Self::VerifiedTokenizerRegistration(_) => None,
+            | Self::VerifiedTokenizerRegistration(_)
+            | Self::CourtBatchDemand(_)
+            | Self::CourtBatchStopReceipt(_)
+            | Self::CourtBatchNumericalReceipt(_) => None,
             _ => Some(self),
         }
     }
@@ -250,7 +265,10 @@ impl PalwStagedCourtRowV1 {
             | Self::CourtMaterialLedger(_)
             | Self::CourtServiceV3(_)
             | Self::TirOwnerSchedule(_)
-            | Self::VerifiedTokenizerRegistration(_) => None,
+            | Self::VerifiedTokenizerRegistration(_)
+            | Self::CourtBatchDemand(_)
+            | Self::CourtBatchStopReceipt(_)
+            | Self::CourtBatchNumericalReceipt(_) => None,
             _ => Some(self),
         }
     }
@@ -398,6 +416,9 @@ impl PalwStagedCourtRowV1 {
             (PalwStagedCourtKeyV1::CourtMaterialLedger(..), Self::CourtMaterialLedger(row)) => row.check(key),
             (PalwStagedCourtKeyV1::TirOwnerSchedule(_), Self::TirOwnerSchedule(row)) => row.check(key),
             (PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(..), Self::VerifiedTokenizerRegistration(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtBatchDemand(..), Self::CourtBatchDemand(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtBatchStopReceipt(_), Self::CourtBatchStopReceipt(row)) => row.check(key),
+            (PalwStagedCourtKeyV1::CourtBatchNumericalReceipt(_), Self::CourtBatchNumericalReceipt(row)) => row.check(key),
             _ => Err("staged rooted row has inconsistent key/immutable contract".into()),
         }
     }

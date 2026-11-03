@@ -3260,6 +3260,45 @@ impl VirtualStateProcessor {
         Ok(Some((next_daa, view(&state, params, &clock, anchor_delay))))
     }
 
+    pub fn palw_batch_stop_quote_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<(u64, Option<String>)>, String> {
+        self.palw_user_view_v1_impl(|state, params, clock, _| {
+            let doc = kaspa_consensus_core::palw_user_views_v1::palw_batch_stop_quote_json_v1(
+                state, params, claim, clock.next_daa, |daa_score| {
+                    // The signed policy ID excludes the block point. Native rules resolve
+                    // every fence at the reserved DAA, then the fold checks the real point.
+                    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { daa_score, ..*state.last_point()? };
+                    let extras = self.palw_transition_extras_for(&point).into_legacy_extras();
+                    extras.native_court_rules_v1.filter(|rules| {
+                        extras.batch_court_active_v1 && extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+                    })
+                },
+            );
+            Some(doc.to_string())
+        })
+    }
+
+    pub fn palw_batch_numerical_verify_quote_v1_impl(
+        &self,
+        claim: kaspa_consensus_core::Hash64,
+    ) -> Result<Option<(u64, Option<String>)>, String> {
+        self.palw_user_view_v1_impl(|state, params, clock, _| {
+            let doc = kaspa_consensus_core::palw_user_views_v1::palw_batch_numerical_verify_quote_json_v1(
+                state, params, claim, clock.next_daa, |daa_score| {
+                    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 { daa_score, ..*state.last_point()? };
+                    let extras = self.palw_transition_extras_for(&point).into_legacy_extras();
+                    let rules = extras.native_court_rules_v1.filter(|rules| {
+                        extras.batch_court_active_v1 && extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+                    })?;
+                    Some((rules, extras.batch_numerical_profile_v1?))
+                },
+            );
+            Some(doc.to_string())
+        })
+    }
+
     pub fn palw_rfc0016_report_v1_impl(
         &self,
         class: Option<kaspa_consensus_core::Hash64>,

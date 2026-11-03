@@ -3054,6 +3054,9 @@ impl VirtualStateProcessor {
                     {
                         ctx.positive_accepting_point = Some(positive_point);
                     }
+                    if self.palw_lifecycle_kind_fences.batch_court_in_force_at(pov_daa_score) {
+                        ctx.palw_batch_accepting_point_v1 = Some(positive_point);
+                    }
                     self.calculate_utxo_state(
                         &mut ctx,
                         &selected_parent_utxo_view,
@@ -3277,7 +3280,7 @@ impl VirtualStateProcessor {
                                 // produced rather than from the store — the store row is written
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
-                                let objects = self.palw_v2_objects_of_block(
+                                let (objects, batch_candidates) = self.palw_v2_objects_of_block(
                                     &ctx.mergeset_acceptance_data,
                                     state,
                                     current,
@@ -3286,6 +3289,7 @@ impl VirtualStateProcessor {
                                     // by the UTXO walk two frames up, where the fee is knowable.
                                     &ctx.palw_v2_accepted_tx_fees,
                                     &ctx.palw_v2_rent_available_fees,
+                                    &ctx.palw_batch_handoffs_v1,
                                 )?;
                                 let history_custody_pledges = objects
                                     .iter()
@@ -3384,6 +3388,7 @@ impl VirtualStateProcessor {
                                 } else {
                                     None
                                 };
+                                let mut accepted_batch = Vec::new();
                                 let (
                                     (
                                         objects,
@@ -3409,6 +3414,8 @@ impl VirtualStateProcessor {
                                     assignment_raw_actions,
                                     &ctx.accepted_tx_ids,
                                     palw_accept::NativeAssignmentRehearsalModeV2::Observed,
+                                    &batch_candidates,
+                                    &mut accepted_batch,
                                 )?;
                                 let palw_accept::NativeAssignmentRehearsalResultV2::Observed(
                                     assignment_raw_schedule,
@@ -3681,6 +3688,7 @@ impl VirtualStateProcessor {
                                     extras.history_custody_pledges = history_custody_pledges;
                                     extras.tir_public_originals = tir_public_originals;
                                     extras.tir_funded_originals = tir_funded_originals;
+                                        extras.batch_court_carriers_v1 = accepted_batch;
                                     extras.carrier_input_spends = carrier_input_spends;
                                     extras.public_original_bindings = public_original_bindings;
                                     extras.producer_custody_delegations =

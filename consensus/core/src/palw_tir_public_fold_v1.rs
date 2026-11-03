@@ -643,7 +643,15 @@ pub fn palw_tir_public_original_quote_with_diagnostics_v1(
         }
     }
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?.with_native_original_parent_v19(base);
-    let (plan, _, _, geometry) = original_plan_mode_v4(&builder, now_daa, original, header, false, diagnostics)?;
+    let quoted = original_plan_mode_v4(&builder, now_daa, original, header, false, diagnostics.as_deref_mut());
+    if let Some(Some(breakdown)) = diagnostics
+        && breakdown.semantic_families.iter().any(|stage| stage.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer)
+    {
+        breakdown.batch_tokenizer_openings = crate::palw_tokenizer_rendering_v2::palw_rooted_tokenizer_opening_bounds_v1(
+            base, extras, now_daa, original, header,
+        );
+    }
+    let (plan, _, _, geometry) = quoted?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
     let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
     // Mirrors `prepare_original_v1`: a semantic stage is framed only where its staged court can open (G-18).
@@ -960,6 +968,19 @@ pub(super) fn install_original_v1(
     frame: Frame,
     prompt: &PalwFpClaimPromptV1,
 ) -> Result<(), PalwStateV2Error> {
+    let claim = frame.plan_v1().original_claim;
+    install_original_frame_rows_v1(b, ctx, frame, prompt)?;
+    super::palw_court_service_lifecycle_fold_v1::install_court_service_binding_v1(b, ctx, claim)?;
+    super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, claim)?;
+    Ok(())
+}
+
+fn install_original_frame_rows_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    frame: Frame,
+    prompt: &PalwFpClaimPromptV1,
+) -> Result<(), PalwStateV2Error> {
     let native = rules(b)?;
     frame.check_structure_v1(&frame.key_v1()).map_err(refused)?;
     let p = frame.plan_v1();
@@ -1045,16 +1066,8 @@ pub(super) fn install_original_v1(
     keep_original_prompt_ids_v1(b, &frame, native.prompt_form, prompt)?;
     // The native dispatcher atomically owns the ordinary FP writes and these two
     // rows. Neither a separately submitted quote nor a historical FP can enter.
-    let original_claim = p.original_claim;
     b.write_staged_row_v1(frame.preparation_key_v1(), Some(Row::TirPreparation(Box::new(prep).into())))?;
-    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))?;
-    // G14 lane court-f02 (RFC-0028): ordinary admission installs the original's court service binding once its frame row exists.
-    // Dormant (no row) below `palw_tir_public_conviction_v1` or without a pinned service profile.
-    super::palw_court_service_lifecycle_fold_v1::install_court_service_binding_v1(b, ctx, original_claim)?;
-    // G14 lane F03b (ADR-0192 A/A): the claim-common shared frontier, fixed here from the original alone (dormant without a
-    // binding or below the shared lifecycle fences).
-    super::palw_court_service_lifecycle_fold_v1::install_shared_frontier_context_v1(b, ctx, original_claim)?;
-    Ok(())
+    b.write_staged_row_v1(frame.key_v1(), Some(Row::TirClaim(Box::new(frame).into())))
 }
 
 /// **G14 G-T3: the ORIGINAL frame keeps its own public replay input** — the prompt ids the claim was accepted with, under the
@@ -7702,6 +7715,63 @@ mod conviction_e2e_tests {
             matches!(a.evidence.as_ref(),crate::palw_court_end_archive_v1::CourtEndEvidenceV1::TirConviction {evidence:e,point,..} if **e==evidence && *point==at(&frame,6))
         );
         archive_roundtrip(&mut b, &params, &frame, id, at(&frame, 6), state.state_root());
+    }
+
+    #[test]
+    fn batch_stop_verified_fault_is_atomic_and_retains_its_archive_cause() {
+        use crate::palw_batch_court_v1::{carriage::BatchStopControlV1, rooted::RootedBatchStopReceiptV1};
+        use crate::palw_court_end_archive_v1::{CourtEndDispositionV1, CourtEndEvidenceV1};
+        use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::SignedConstraintStopIntentV1;
+        use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1};
+
+        // This fixture starts at the writer boundary, after native adjudication.
+        let (fx, semantics, table) = crate::palw_tir_public_claim_v1::palw_tir_public_constraint_frame_fixture_v1();
+        let frame = &fx.frame;
+        let plan = frame.plan_v1();
+        let claim = plan.original_claim;
+        let (state, params, extras) = world(&fx, frame);
+        let point = at(frame, 6);
+        let intent = SignedConstraintStopIntentV1 {
+            version: 1, claim, scope_id: h(2), policy_id: h(3), semantics_id: semantics.commitment(), material_id: h(4),
+            position: frame.original_v1().decode_tokens_executed, stop_reason: frame.original_v1().stop_reason,
+            filer: outsider(), signature: vec![7; SIG],
+        };
+        let operands = borsh::to_vec(&(&intent, table.eog_opening().unwrap(), Vec::<u8>::new())).unwrap();
+        let receipt = RootedBatchStopReceiptV1 {
+            version: 2, claim, source_id: plan.source_id,
+            operands_digest: RootedBatchStopReceiptV1::digest_operands(&operands).unwrap(), at: point,
+            material_until_daa: plan.terms.material_until_daa, fault_position: Some(0),
+            operands: Some(Box::new(BatchStopControlV1 { operands }).into()),
+        };
+        let mut clean = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        let mut no_fault = receipt.clone();
+        no_fault.fault_position = None;
+        clean.commit_batch_stop_finding_for_tests_v1(no_fault, outsider()).unwrap();
+        assert_eq!(clean.state.claim(&claim), state.claim(&claim));
+
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        archive_service(&mut b, frame);
+        let (session, _) = archive_session(&mut b, frame);
+        let before = b.state.state_root();
+        let count = b.entries.len();
+        assert!(b.commit_batch_stop_finding_for_tests_v1(receipt.clone(), frame.custody_v1().pledge_v1().producer).is_err());
+        assert_eq!((b.state.state_root(), b.entries.len()), (before, count));
+        b.commit_batch_stop_finding_for_tests_v1(receipt.clone(), outsider()).unwrap();
+        let settled = b.state.state_root();
+        assert!(b.commit_batch_stop_finding_for_tests_v1(receipt.clone(), outsider()).is_err());
+        assert_eq!(b.state.state_root(), settled);
+        assert!(matches!(b.state.claim(&claim).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }));
+        let archive = b.state.court_end_archive_v1(session).unwrap();
+        assert_eq!(archive.adjudication(), CourtEndDispositionV1::TirClaimFault);
+        assert_eq!(archive.evidence.as_ref(), &CourtEndEvidenceV1::BatchStop { receipt: Box::new(receipt) });
+        archive.check_context(&b.state).unwrap();
+        let bytes = borsh::to_vec(archive.evidence.as_ref()).unwrap();
+        assert_eq!(bytes[0], 4);
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        CourtEndEvidenceV1::scan_native_wire_v1(&mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(&borsh::from_slice::<CourtEndEvidenceV1>(&bytes).unwrap(), archive.evidence.as_ref());
     }
 
     /// fix-b (audit B-04): the court DEADLINE sweep no longer skips a service-bound session — it ends at its own deadline with the

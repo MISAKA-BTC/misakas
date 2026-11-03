@@ -1578,6 +1578,7 @@ pub(super) fn apply_raw_before_object_v2(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     index: usize,
+    before_ordinal: Option<usize>,
     cursor: &mut usize,
     previous_ordinal: &mut Option<u32>,
 ) -> Result<(), PalwStateV2Error> {
@@ -1590,6 +1591,15 @@ pub(super) fn apply_raw_before_object_v2(
             return Err(refusal("raw action schedule moved backward"));
         }
         let origin = scheduled.action.origin();
+        if let Some(limit) = before_ordinal {
+            let ordinal = origin.accepted_tx_ordinal as usize;
+            if ordinal == limit {
+                return Err(refusal("Batch and Assignment share an accepted transaction ordinal"));
+            }
+            if ordinal > limit {
+                break;
+            }
+        }
         if previous_ordinal.is_some_and(|previous| origin.accepted_tx_ordinal <= previous) {
             return Err(refusal(
                 "raw native accepted ordinals are not strictly increasing",

@@ -12,7 +12,7 @@ use crate::palw_step_leg::{PalwStepOpeningV1, step_merkle_leaf_v1, step_merkle_n
 use crate::palw_tir_frame_cost_v1::PalwTirFrameClockV1;
 use crate::palw_tir_public_source_v1::{
     PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicAuthenticatedIdsV1, PalwTirPublicAuthenticatedUnitV1, PalwTirPublicDemandScopeV1,
-    PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1, PalwTirPublicSourceV1,
+    PalwTirPublicIdsAssemblerV1, PalwTirPublicRequestV1, PalwTirPublicResponseV1, PalwTirPublicSourceV1, full_ids_wire_bytes_v1,
 };
 use crate::{Hash64, palw_state_v2::PalwBondKeyV2};
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -1144,13 +1144,10 @@ pub fn request_body_bound_v1(source: &PalwTirPublicSourceV1, request: PalwTirPub
         if offset != 0 {
             return Err("owned IDs acquire the complete original sequence, not an unauthenticated fragment".into());
         }
-        let mut bytes = 0u64;
-        let mut ram = 0u64;
-        for offset in (0..source.decode_count_v1()).step_by(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
-            let bound = source.unit_bound_v1(&PalwTirPublicRequestV1::Ids { offset })?;
-            bytes = bytes.checked_add(bound.maximum_response_bytes).ok_or("TIR ID body overflow")?;
-            ram = ram.max(bound.resident_ram_bytes);
-        }
+        let bytes = full_ids_wire_bytes_v1(source.decode_count_v1());
+        // The first response is a largest chunk. Its RAM bound also includes
+        // the same original-length allowance as every subsequent response.
+        let ram = source.unit_bound_v1(&request)?.resident_ram_bytes;
         return Ok((bytes, ram.checked_add(bytes.checked_mul(8).ok_or("TIR ID RAM overflow")?).ok_or("TIR ID RAM overflow")?));
     }
     let bound = source.unit_bound_v1(&request)?;

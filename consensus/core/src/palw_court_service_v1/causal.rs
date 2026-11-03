@@ -17,6 +17,17 @@ impl ServiceReservations {
     /// No wider interval/hard deadline, probabilistic overbooking or owner input.
     /// The caller budgets graph/index/clone ownership and slot-search work first.
     pub fn reserve_causal_v1(&mut self, graph: &[CausalServicePacketV1], hard: u64) -> Result<(), ServiceRefusal> {
+        self.reserve_causal_checked_v1(graph, hard, |_| Ok(()))
+    }
+
+    /// Run a native constraint on the proposed assignments before committing
+    /// the candidate. A constraint failure leaves the original book intact.
+    pub(crate) fn reserve_causal_checked_v1(
+        &mut self,
+        graph: &[CausalServicePacketV1],
+        hard: u64,
+        check_assignments: impl FnOnce(&Self) -> Result<(), ServiceRefusal>,
+    ) -> Result<(), ServiceRefusal> {
         if graph.is_empty() {
             return Err(ServiceRefusal::InvalidState);
         }
@@ -98,6 +109,7 @@ impl ServiceReservations {
         }
         candidate.check().map_err(|_| ServiceRefusal::InvalidState)?;
         candidate.check_causal_v1(graph)?;
+        check_assignments(&candidate)?;
         *self = candidate;
         Ok(())
     }

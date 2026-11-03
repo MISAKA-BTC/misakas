@@ -1041,3 +1041,4 @@ effective_deadline = min(proposed_challenge_deadline, hard_deadline)
 - B の「通常どおり担保を解放」は無条件の全額返還ではない。post-Final の公開告発 window、Gate C、monetary material の保持、同じ bond の別 claim の責任を満たしてから(RFC-0026 §3.3)。
 - A の分岐数の表は 16 分岐の仮定例。監査の読み取りでは出荷 t12 preset は 4 分岐で、32K は 6 往復、2M は 9 往復になる(RFC-0026 §7.1)。
 - 10-12 改定の `d <= deadline` は例示であり、`collect_until` の排他的境界とは別の時計。変数ごとの境界表を RFC-0026 §2.2 で要求する(F09)。
+- TFP1 で B の二段階期限を使う一括対話の実装候補は [RFC-0026 §11](0026-court-policy-master-contract.md#11-tfp1-の一括対話batch-pipelined-court) に記載する。取得を並行できる資料はまとめて要求し、前の結果に依存する手番を分ける。最遅の有効な申立てから裁定と回復まで収まることを有効化条件にする。

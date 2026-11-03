@@ -433,15 +433,15 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     let retained=store.build_constraint_stop_terminal_retained_v1(&b.state,&params,&rules,&intent,&owner,budget).unwrap();
     assert_eq!(retained.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
     let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,fx.rules.maximum_leaves).unwrap();
-    let view_identity=borsh::to_vec(source.header_v1()).unwrap();
     let direct=|candidate:&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,actual_ids:&crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1| {
         crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_tiled_ids_with_original_stop_context_v1(
-            crate::palw_freeprompt_v3::fp_claim_id_v3(candidate),outsider(),p.terms.accepted_daa,&view,&view_identity,&source,actual_ids,candidate,
+            crate::palw_freeprompt_v3::fp_claim_id_v3(candidate),outsider(),p.terms.accepted_daa,&view,&source,actual_ids,candidate,
             eog.ids.len() as u32,&eog.opening,h(981))
     };
     // Prove that this route reaches the normative terminal-stop predicate,
     // not the deliberately false rendering/grammar arm of this fixture.
     let base=direct(frame.original_v1(),&ids).unwrap();
+    assert_eq!(base.seed_id(),h(981));
     use crate::palw_constraint_stream_court_v1::{PalwConstraintStreamPhaseV1 as Phase,canonical_replay as stop_replay};
     assert_eq!(base.phase(),Phase::Eog);assert!(base.rendering_cursor_v1().is_none());
     assert_eq!(base.selection_for_tests_v1(),(source.decode_count_v1(),None,false));
@@ -457,6 +457,16 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     assert_eq!(only.rendering_calls.get(),0,"stop path must never enter grammar/rendering");
     assert_eq!(terminal.work().material_bytes,eog.ids.len() as u64*4);
     assert_eq!(terminal.work().calls,2,"one EOG part and finish only");
+    let planned=stop_replay::eog_stop_work_v1(eog.ids.len() as u32);
+    assert_eq!(planned,terminal.work());
+    let exact=WorkBudget{max_material_bytes:planned.material_bytes,max_calls:planned.calls};
+    let dedicated=stop_replay::build_eog_stop_v1(base.clone(),&eog.ids,exact).unwrap();
+    assert_eq!(dedicated.identity(),terminal.identity());
+    assert_eq!(dedicated.finding(),terminal.finding());
+    assert!(matches!(
+        stop_replay::build_eog_stop_v1(base.clone(),&eog.ids,WorkBudget{max_calls:exact.max_calls-1,..exact}),
+        Err(stop_replay::Refusal::Budget),
+    ));
     assert_eq!(terminal.finding().is_some(),fault);
     if let Some(found)=terminal.finding(){
         assert_eq!(found.position,if stop==Stop::ExactBudgetReached{0}else{source.decode_count_v1()-1});
@@ -469,6 +479,53 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     // unrelated invalid-rendering result can make the positive pass by accident.
     let eog_only=ConstraintMaterialV1{eog:&eog,renderings:&[]};
     let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
+    assert_eq!(borsh::object_length(&end_only).unwrap() as u64,
+        crate::palw_court_shared_material_intake_v1::batch::constraint_stop::STOP_INTENT_BYTES_V1);
+    use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::BatchStopPayloadV1;
+    let wire=borsh::to_vec(&(&end_only,&eog,eog_only.renderings)).unwrap();
+    {
+        use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchStopSigningV1};
+        let signing = || BatchStopSigningV1 {
+            claim, scope_id: scope, policy_id: end_only.policy_id, semantics_id: end_only.semantics_id,
+            position: end_only.position, stop_reason: stop, filer: end_only.filer, table_root: table.root(), vocab: table.vocab(),
+        };
+        let signed = signing().build_v1(rules.network_domain, &borsh::to_vec(&eog).unwrap(), |message, context| {
+            libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, message.as_byte_slice(), context, [97; 32]).unwrap().as_ref().to_vec()
+        }).unwrap();
+        let BatchCourtWireV1::Stop(signed) = signed else { panic!("expected Stop") };
+        assert_eq!(signed.operands, wire);
+        assert!(signing().build_v1(rules.network_domain, &borsh::to_vec(&eog_bad).unwrap(),
+            |_, _| panic!("invalid opening must be rejected before signing")).is_err());
+    }
+    {
+        use crate::palw_batch_court_v1::carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, BatchStopControlV1};
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(&BatchCourtWireV1::Stop(BatchStopControlV1 { operands: wire.clone() })).unwrap());
+        let tx = crate::tx::Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
+        assert!(matches!(crate::palw_state_v2::palw_batch_template_slot_v1(&b.state, &tx, &rules.at),
+            Err(reason) if reason.contains("no accepted FullIds")));
+    }
+    assert!(matches!(
+        crate::palw_court_shared_tir_builder_store_v1::constraint_stop::verify_rooted_batch_stop_v1(
+            &b.state,&params,&rules,&wire,
+        ),
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(reason)) if reason.contains("no accepted FullIds")
+    ));
+    let mut producer_intent = end_only.clone();
+    producer_intent.filer = frame.custody_v1().pledge_v1().producer;
+    sign(&mut producer_intent);
+    let producer_wire = borsh::to_vec(&(&producer_intent, &eog, eog_only.renderings)).unwrap();
+    assert!(matches!(
+        crate::palw_court_shared_tir_builder_store_v1::constraint_stop::verify_rooted_batch_stop_v1(
+            &b.state, &params, &rules, &producer_wire,
+        ),
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(reason)) if reason.contains("filer is liable")
+    ));
+    let eog_bytes=borsh::object_length(&eog).unwrap() as u64;
+    let decoded=BatchStopPayloadV1::decode_v1(&wire,eog_bytes).unwrap();
+    assert_eq!(decoded.eog,eog);
+    assert_eq!(decoded.intent.signature,end_only.signature);
+    let from_wire=store.verify_batch_stop_payload_v1(&b.state,&params,&rules,&decoded,budget).unwrap();
     let projected_end=store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&duty).unwrap();
     assert!(store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&token_duty).is_err());
     // Seed = signed intent message (binds material_id): exact equality is against
@@ -477,6 +534,7 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     let end_seed=end_only.signing_message(rules.network_domain).unwrap();
     let end_only=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&end_only,eog_only,budget).unwrap();
     let end_found=end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap();
+    assert_eq!(from_wire,end_found);
     assert_eq!(projected_end.recheck(&store,&b.state,&params,&rules,budget).unwrap(),end_found);
     assert_eq!(end_found.is_some(),fault);
     let full_found=evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap();

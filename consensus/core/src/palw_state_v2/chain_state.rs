@@ -2542,11 +2542,18 @@ impl PalwChainStateV2 {
     /// (`CourtSharedQuery`) recorded for it, if any. Rooted: the rows come and go with the staged-court delta on reorg.
     /// G14 lane r5-f02-wire: the index's first kind-0 entry is the earliest notice (entries sort by `(kind, daa, key)`).
     pub fn court_shared_initial_notice_daa_v1(&self, claim: Hash64) -> Option<u64> {
+        self.court_shared_initial_notice_v1(claim).map(|(daa, _)| daa)
+    }
+
+    pub(crate) fn court_shared_initial_notice_v1(
+        &self,
+        claim: Hash64,
+    ) -> Option<(u64, &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)> {
         self.staged_court_service_by_claim
             .get(&claim)?
             .iter()
             .find(|(kind, _, _)| *kind == crate::palw_staged_court_state_v1::COURT_INDEX_SHARED_NOTICE_V1)
-            .map(|(_, daa, _)| *daa)
+            .map(|(_, daa, key)| (*daa, key))
     }
 
     /// Ordered read of staged rows in `[from, to]` (RFC-0032 A material intake).
@@ -4469,6 +4476,22 @@ impl PalwChainStateV2 {
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::VerifiedTokenizerRegistration(registration) = row {
                 registration.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchDemand(demand) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < demand.material_until()
+            {
+                demand.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchStopReceipt(receipt) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < receipt.material_until_daa
+            {
+                receipt.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchNumericalReceipt(receipt) = row {
+                let point = self.last_point().ok_or(PalwStateV2Error::DeltaMismatch("numerical Batch receipt has no snapshot point"))?;
+                if point.daa_score < receipt.material_until_daa {
+                    receipt.check_context(self, point).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                }
+            }
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(schedule) = row
                 && self.last_point().map_or(0, |point| point.daa_score) < schedule.material_until()
             {
@@ -4545,7 +4568,8 @@ impl PalwChainStateV2 {
                 R::CourtSharedBottom(r) => r.check_loaded_context(self),
                 R::CourtSharedStream(s) => s.check_context(self),
                 R::CourtSharedChunk(c) => c.check_context(self),
-                R::CourtMaterialDraft(d) => d.check_context(self),
+                R::CourtMaterialDraft(d) => d.check_loaded_context(self),
+                R::CourtMaterialPart(p) => p.check_loaded_context(self),
                 R::CourtMaterial(m) => m.check_context(self),
                 _ => Ok(()),
             }

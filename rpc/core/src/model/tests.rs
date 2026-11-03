@@ -2745,7 +2745,7 @@ mod mockery {
     test!(GetPalwClaimDetailRequest);
     impl Mock for GetPalwCourtStateRequest {
         fn mock() -> Self {
-            GetPalwCourtStateRequest { claim_hex: String::new(), session_hex: "cd".repeat(64) }
+            GetPalwCourtStateRequest { claim_hex: String::new(), session_hex: "cd".repeat(64), ..Default::default() }
         }
     }
     test!(GetPalwCourtStateRequest);

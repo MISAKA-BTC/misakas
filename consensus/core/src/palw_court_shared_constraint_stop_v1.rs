@@ -11,6 +11,103 @@ use crate::{
     Hash64,
     palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwStateParamsV2},
 };
+#[path = "palw_court_batch_stop_payload_v1.rs"]
+pub(crate) mod batch_payload;
+
+/// The signed fields and tokenizer context returned for a booked Stop.
+pub struct BatchStopSigningV1 {
+    pub claim: Hash64,
+    pub scope_id: Hash64,
+    pub policy_id: Hash64,
+    pub semantics_id: Hash64,
+    pub position: u32,
+    pub stop_reason: PalwFpStopReasonV3,
+    pub filer: PalwBondKeyV2,
+    pub table_root: Hash64,
+    pub vocab: u32,
+}
+
+impl BatchStopSigningV1 {
+    /// Authenticate the local EOG opening and sign the existing EOG-only wire.
+    /// The accepting node verifies this carrier against its own retained original.
+    pub fn build_v1(
+        self,
+        network: Hash64,
+        eog_bytes: &[u8],
+        sign: impl FnOnce(Hash64, &[u8]) -> Vec<u8>,
+    ) -> Result<crate::palw_batch_court_v1::carriage::BatchCourtWireV1, String> {
+        use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchStopControlV1};
+        use crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+        if self.position == 0 || eog_bytes.len() > batch_payload::MAX_BATCH_STOP_EOG_OPENING_BYTES_V1 {
+            return Err("Batch Stop position or EOG opening length".into());
+        }
+        let mut intent = SignedConstraintStopIntentV1 {
+            version: 1, claim: self.claim, scope_id: self.scope_id, policy_id: self.policy_id, semantics_id: self.semantics_id,
+            material_id: Hash64::default(), position: self.position, stop_reason: self.stop_reason, filer: self.filer,
+            signature: vec![0; MLDSA87_SIGNATURE_LEN],
+        };
+        let mut operands = borsh::to_vec(&intent).map_err(|why| why.to_string())?;
+        operands.extend_from_slice(eog_bytes);
+        let empty_renderings: &[crate::palw_fp_constraint_job_v1::PalwTokenTableOpeningV1] = &[];
+        operands.extend_from_slice(&0u32.to_le_bytes());
+        let decoded = batch_payload::BatchStopPayloadV1::decode_v1(&operands, eog_bytes.len() as u64)
+            .map_err(|why| why.to_string())?;
+        if !decoded.eog.verifies(&self.table_root, self.vocab) {
+            return Err("Batch Stop EOG opening does not match the quoted token table".into());
+        }
+        let material = Material { eog: &decoded.eog, renderings: empty_renderings };
+        intent.material_id = material.identity(replay::WorkBudget { max_material_bytes: eog_bytes.len() as u64 + 4, max_calls: 0 })?;
+        intent.signature = sign(intent.signing_message(network)?, CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1);
+        if intent.signature.len() != MLDSA87_SIGNATURE_LEN {
+            return Err("Batch Stop signer returned the wrong signature length".into());
+        }
+        let operands = borsh::to_vec(&(&intent, &decoded.eog, empty_renderings)).map_err(|why| why.to_string())?;
+        Ok(BatchCourtWireV1::Stop(BatchStopControlV1 { operands }))
+    }
+}
+
+/// From the accepted BCT1 operand bytes to a native finding. The caller
+/// still owns the terminal state transition and any resulting economic effect.
+pub(crate) fn verify_rooted_batch_stop_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    rules: &NativeCourtRulesV1,
+    operands: &[u8],
+) -> Result<Option<Fault>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::check_batch_stop_slot_v1;
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let (claim, filer) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| E::Decode(why.to_string()))?;
+    let bytes = operands.len() as u64 + crate::palw_batch_court_v1::carriage::BATCH_STOP_WIRE_OVERHEAD_V1;
+    if bytes > rules.court.max_close_bytes() {
+        return Err(E::Decode("Batch Stop exceeds the native close byte limit".into()));
+    }
+    let bounds = check_batch_stop_slot_v1(state, claim, filer, rules.at.daa_score, bytes).map_err(E::Decode)?;
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(E::Decode)?;
+    let key = Key::CourtSharedIds(claim);
+    let Some(Row::CourtSharedIds(shared_ids)) = state.staged_court_row_v1(&key) else {
+        return Err(E::Decode("Batch Stop has no accepted FullIds".into()));
+    };
+    let source = context.source(state).map_err(E::Decode)?;
+    let ids = source.retain_complete_ids_classified_v2(shared_ids.rows_root, &shared_ids.ids)?;
+    let tokenizer = palw_rooted_claim_tokenizer_v1(state, claim, &source, &ids)
+        .map_err(E::Decode)?
+        .ok_or_else(|| E::Decode("Batch Stop has no verified tokenizer registration for the original".into()))?;
+    if tokenizer.opening_bounds_v1() != bounds {
+        return Err(E::Decode("Batch Stop operand bounds changed during source authentication".into()));
+    }
+    let payload = batch_payload::BatchStopPayloadV1::decode_v1(operands, bounds.eog_opening_bytes)?;
+    let store = Store {
+        source,
+        units: crate::palw_court_shared_tir_builder_store_v1::UnitMaterialV1::Retained(&[]),
+        params: super::ParameterMaterialV1::Borrowed(&[]),
+        ids: Some(&ids),
+        prompt: super::PromptMaterialV1::Missing,
+    };
+    let budget = replay::WorkBudget { max_material_bytes: bounds.eog_opening_bytes + 4, max_calls: bounds.eog_replay_calls };
+    store.verify_batch_stop_payload_v1(state, params, rules, &payload, budget).map_err(E::Decode)
+}
+
 pub(crate) const CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/shared-constraint-stop/v1/mldsa87";
 #[derive(Clone, borsh::BorshSerialize)]
 pub(crate) struct SignedConstraintStopIntentV1 {
@@ -97,6 +194,21 @@ impl replay::Material for RootedStopMaterialV1<'_> {
 }
 
 impl Store<'_> {
+    /// Verify one decoded Batch filing against this branch's authenticated
+    /// FullIds. The resulting finding still needs the native terminal fold.
+    pub(crate) fn verify_batch_stop_payload_v1(
+        &self,
+        state: &PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        rules: &NativeCourtRulesV1,
+        payload: &batch_payload::BatchStopPayloadV1,
+        budget: replay::WorkBudget,
+    ) -> Result<Option<Fault>, String> {
+        let material = Material { eog: &payload.eog, renderings: &[] };
+        let result = self.replay_constraint_stop_v1(state, params, rules, &payload.intent, material, budget)?;
+        Ok(result.finding().cloned())
+    }
+
     /// Native caller resolves actual rules and separately admits source, parser,
     /// body proof/hash, actor signature, Court clone and evidence ownership.
     pub(crate) fn build_constraint_stop_terminal_v1<'a>(
@@ -164,13 +276,16 @@ impl Store<'_> {
         if intent.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
             || !matches!(bond.status, PalwBondStatusV2::Active)
             || bond.collateral < params.min_collateral_sompi()
-            || !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
-                &bond.pubkey,
-                intent.signing_message(rules.network_domain)?.as_byte_slice(),
-                &intent.signature,
-                CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1,
-            )
         {
+            return Err("constraint stop current filer authority/signature invalid".into());
+        }
+        let signed_context = intent.signing_message(rules.network_domain)?;
+        if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
+            &bond.pubkey,
+            signed_context.as_byte_slice(),
+            &intent.signature,
+            CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1,
+        ) {
             return Err("constraint stop current filer authority/signature invalid".into());
         }
         let record = state.tir_class_v1(&job.class_id).ok_or("constraint stop actual registered class missing")?;
@@ -186,24 +301,27 @@ impl Store<'_> {
             return Err("constraint stop actual material opening mismatch".into());
         }
         let ids = self.ids.ok_or("constraint stop source-authenticated FullIds missing")?;
-        let identity = borsh::to_vec(header).map_err(|e| e.to_string())?;
         let base = Court::new_from_tiled_ids_with_original_stop_context_v1(
             intent.claim,
             intent.filer,
             c.original_accepted_daa,
             &view,
-            &identity,
             &source,
             ids,
             original,
             u32::try_from(material.eog.ids.len()).map_err(|_| "constraint stop EOG count overflow")?,
             &material.eog.opening,
-            intent.signing_message(rules.network_domain)?,
+            signed_context,
         )?;
-        match rooted_material {
-            Some(material) => replay::build(&base, &material, budget),
-            None => replay::build(&base, &material, budget),
-        }
-        .map_err(|e| format!("constraint stop replay: {e:?}"))
+        let replayed = if material.renderings.is_empty() {
+            let eog = rooted_material.as_ref().map_or(material.eog.ids.as_slice(), |rooted| rooted.eog);
+            replay::build_eog_stop_v1(base, eog, budget)
+        } else {
+            match rooted_material {
+                Some(material) => replay::build(&base, &material, budget),
+                None => replay::build(&base, &material, budget),
+            }
+        };
+        replayed.map_err(|e| format!("constraint stop replay: {e:?}"))
     }
 }

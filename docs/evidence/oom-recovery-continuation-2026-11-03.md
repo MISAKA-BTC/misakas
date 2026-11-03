@@ -2066,3 +2066,2350 @@ independently eligible seats and zero independently ready or assigned.
 No public claim or deployment was made. The second guarded Core build
 queue timed out waiting for existing rustc processes. It did not start
 a compiler. Full all-root measurement and native owner replay remain open.
+
+## Batch range authentication and public index advance
+
+The Batch Court candidate now commits each range's native authentication
+mode in the demand root. A whole-body source format rejects independent
+part verification. Its checkpoint can hold either all verified slots or
+none, and restore rejects a partial whole-body range even if the supplied
+checkpoint digest matches. The native caller remains responsible for
+deriving the mode from the accepted source and binding the archive to the
+branch. Six focused tests passed, including codec and restart checks.
+
+The exact 2,019-byte SmolLM2 StepRun was refused through the independent
+part entry point. The unmodified body passed native whole-range
+verification and restored both slots from its 134-byte checkpoint. A
+modified sibling and a different branch checkpoint root were refused.
+The harness linked the cached Studio Core for native source verification
+and the current Batch source directly. It exercised local authentication
+and checkpoint restoration. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-real-batch-auth.fTSgtO/run.stdout`.
+
+Two public Explorer reads showed the selected REST index and the serving
+WebSocket advance together from DAA 19,670 to 19,671 on the pinned relay.
+B0 and the relay agreed at the second tip. Qwen #81 was in the selected
+mergeset, while the B0 fold refused its claim at 20,606 of 20,608 DAA
+required retention. Both nodes lacked that claim. The class view had nine
+independently eligible, zero independently ready and zero assigned seats.
+The observations are under
+`/private/tmp/misaka-t12-oom-20261102/g14-serial-core-live.NOaqnT`.
+
+The serial LLVM retry reached 69% reported host memory availability with
+zero swap growth, below its 70% guard. It stopped and detached its owned
+RAM disk before linking the all-root fixture. The build receipt is
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stream-core-runtime-r4.vmql3jjq/result.json`.
+
+## Batch delivery slots and native source measurement
+
+The Batch candidate can project an exact demand into the existing causal
+service scheduler. Each part becomes an independently eligible packet.
+Whole-body verification depends on all parts of that range. The projection
+preserves a hard response boundary and refuses a declared part cost below
+its encoded body and inner header size. A full deadline, capacity, and
+storage admission still depends on the native caller's profile and funded
+service book. Subsequent adaptive turns and terminal filing require their
+own reservations. The existing public material intake still uses the
+serial accepted-offset cursor.
+
+Using the exact 2,019-byte SmolLM2 StepRun and two raw Batch carriers
+totalling 2,419 bytes, the illustrative service book placed both parts at
+3,222 and the verification control at 3,223. Adding the old serial
+dependency placed the second part at 3,223 and verification at 3,224
+under the same illustrative capacity. This is a single local topology
+comparison. Outer carrier bytes, actual per-DAA supply and the full Court
+path remain unmeasured. The exact native opening and checkpoint checks
+also passed. Thirteen focused Batch and causal service tests passed.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-real-batch-reservation.CWbqvK/run.stdout`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-reservation.DLPc3z/focused-final.log`.
+
+The exact Core metadata queue for the dynamic-input streaming change
+expired before invoking the compiler. The last admission sample was
+77% available memory with 8,281,407,488 bytes of other compiler RSS.
+The all-root runtime and new native fixture test remain unverified.
+At DAA 19,673 B0 and relay agreed on the selected chain. Qwen #82 was
+referenced by the selected mergeset and rejected at 20,607 of 20,608 DAA
+required retention. Both claim reads were absent. Raw evidence is in
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-service-live.zVWFZS`.
+
+## Pipelined native material staging and tokenizer registration
+
+Integration commit `7f104d648` adds a private version-2 material intake
+adapter using the existing native draft, part and canonical material rows.
+The signed version and draft namespace distinguish the new adapter. Each
+draft has at most 256 canonical part offsets. The native adapter journals
+valid parts in arbitrary arrival order, rejects conflicting duplicates,
+checks branch-retained offsets and the received byte total on load, and
+assembles only after all required parts arrive. Finish retains its assembly
+memory reservation through the existing native source authentication and
+atomic material write. The existing public dispatcher accepts version 1.
+The version-2 adapter still needs a funded Batch coordinator, admitted
+service slots and measured costs before use by the public dispatcher.
+
+An isolated one-test harness exercised the exact draft and part geometry,
+codec, orphan rejection, missing-part rejection and canonical reassembly
+over a stand-in map with a bounded scratch stub. It did not exercise the
+signed native fold or real branch carriage. The signed wide-leaf native
+fixture for those paths is in the Core test source. The focused log is
+`/private/tmp/misaka-t12-oom-20261102/tfp1-material-offset-focused.o2yTgA/result.log`.
+
+Integration commit `62f634cad` brings in the tokenizer candidate from
+`92ead1945`. The private writer derives the whole-table result from raw
+bytes and the authenticated EOG opening, checking PALWART3, semantics and
+accepted EOF on the exact parent. A versioned immutable record is installed
+by the native writer and tied to the accepting point. Trusted journal
+replay and carriage load check its branch context and registration digest.
+The seven focused tests used a lightweight wrapper, with the native
+replay and carriage fixture remaining a separate verification item. The
+full generator run stopped at the existing `NumericalManifestV1` review
+pin mismatch. Only the relevant bounded visitor changes were integrated.
+The rooted registration is ready for a future authorized writer and quote
+integration. The public quote still includes the full tokenizer path.
+See `/private/tmp/misaka-t12-oom-20261102/tokenizer-rooted.8KHieL/test-final.log`.
+
+Core test metadata compiled successfully at exact integration
+`62f634cad985f922bb3679b41afe84214d92f59b` with default and pq-only
+features. It covered the new native fixture source, the dynamic input
+streaming change and both integrations. The run took 73.691 seconds,
+peaked at 5,920,145,408 bytes of direct compiler RSS and detached its
+owned RAM disk. This run emitted metadata and did not execute the native
+fixtures. The guarded build receipt is
+`/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-batch-meta.siplgade/result.json`.
+
+## Root-local TIR demand coverage and the control budget
+
+The retained SmolLM2 worker capture has 15,252 leaves. The legacy query
+universe contains 3,871,872 overlapping StepRun requests alone. Using the
+new native bounded partitioner to cover the whole execution with disjoint
+runs yields 119 demands and 15,430 raw parts at the native response
+ceilings. The provisional service profile allocates one control per DAA,
+so even this disjoint whole-source reservation exceeds the 6,879 DAA
+remaining after the latest notice and the exclusive-boundary allowance.
+This comparison covers raw parts for one copy. Authentication, Begin and
+Finish, role multiplicity, unrelated obligations and recovery require
+their own costs. The capacity is provisional and the source cover is a
+specific disjoint partition, rather than a proof of a minimum across
+possible redesigned codecs. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-step-cover-capacity.CFjcnW/run.stdout`.
+
+The integrated candidate `3ef2a2177` selects StepRun intervals from one
+root's input cover. It merges repeated step indices, preserves gaps and
+refuses to exceed the demand budget. The proof-of-geometry harness used a
+257-leaf selection with a duplicate and a gap on the exact source. It
+returned widths 1, 254 and 2. For the original honest cone at leaf 14,511,
+the retained execution yields eight distinct step leaves, with eight
+authenticated requests, eight actual raw parts and 16 upper-bound raw
+parts. The native cone verdict is NoFaultFound. This sample leaves the
+parameter, prompt and terminal costs outside its measured scope. The
+harness links the cached Studio verifier and uses the extracted new
+planner, with mirrored typed scratch arithmetic at the private API seam.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-cone-batch.vesgS5/run.stdout`.
+
+The worktree also integrates `dbb715eeb` for latest-notice reservation,
+`bce856c03` for native run partitioning and `07cf09dd1` for rooted tokenizer
+use in claim-specific stop replay. The raw tokenizer quote still needs a
+versioned replacement with the accepted record and funded acquisition
+and replay obligations. The all-root runtime queue for `f5f39b2dc`
+expired before starting a compiler. Its last sample had 66% reported
+memory availability and three other compiler processes. B0 and relay
+agreed at DAA 19,677, with no new Qwen carrier since the prior cursor.
+
+## Native StepRun projection and T12 selected-chain follow-up
+
+The Batch planner projects root-local step intervals into canonical shared
+material targets with the same identity as native intake. The Court
+builder can now read a leaf and its opening from an authenticated
+StepRun. The local candidate retains support for individual StepLeaf
+units. RFC-0026 §11.3 specifies the projection, authentication, and
+reservation boundaries.
+
+The standalone SmolLM2 harness authenticated a 256-leaf interval as two
+runs of 254 and 2 under the 256-part ceiling. It compared all 256
+extracted leaf preimages and openings with the individual leaf material.
+It reproduced the canonical range siblings across the split and refused
+an absent leaf. The two runs used 16 and 1 actual parts, with native
+reserved upper bounds of 256 and 3 parts. This harness links the cached
+Studio verifier and uses the candidate projection and builder methods,
+with mirrored scratch accounting at the private API seam. It does not
+execute signed material intake or the full live Court.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-step-run-builder.WATEkR/run.stdout`.
+
+B0 and the relay agreed on the selected tip at DAA 19,678. The paired
+read observed the Qwen carrier at DAA 19,676 referenced by the selected
+fold at DAA 19,677. Its signed retention is 40,284 DAA and both
+readers returned an absent live claim row. The exact producer journal
+shows submission. No rejecting fold reason or accepting claim row was
+observed. See
+`/private/tmp/misaka-t12-oom-20261102/g14-run-builder-live.rLm3LS/page.json`
+and its sibling `journal.txt`.
+
+## Bounded native intake ledger computation
+
+The first material Begin for a submitter computed its existing ledger
+limit by visiting every source ordinal, even when submitting one
+root-local StepRun. The candidate groups requests with identical native
+byte ceilings. It accounts for the ragged last frontier separately at
+each tree level and adds the same complete sequence of ID chunk bytes.
+The existing parameter and prompt allowances are unchanged. This is a
+CPU-path improvement, independent of the funded Batch service budget.
+
+The retained SmolLM2 execution had 15,252 step leaves and 3,902,405
+source ordinals. The exact grouped result from 294 representative bounds
+and the legacy per-ordinal result were both 8,180,678,236,677 bytes.
+The timings in one local sample were 12.2 microseconds and 1.91 seconds
+for those two loops. The harness uses the candidate aggregation and
+cached Studio Core native bounds. It does not time parameter cover,
+ledger persistence, or the deployed fold.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-exact-intake-budget.zzSidY/run.stdout`.
+
+B0 and relay agreed at DAA 19,679. Both returned no claim row for the
+Qwen carrier at DAA 19,677, referenced by the selected fold at DAA 19,678.
+The producer journal confirms the submission. The exact fold refusal
+was not observed. See
+`/private/tmp/misaka-t12-oom-20261102/g14-intake-budget-live.pHse47/page.json`
+and the sibling `journal.txt`.
+
+## Signed Batch delivery and the original service book
+
+The candidate projects one declared material body into Begin, parallel
+part slots and a Finish that depends on every part. The exact Borsh
+sizes include the ML-DSA signature for every control. The proposed
+native adapter checks the exact action, reserved DAA, signed byte
+budget and ownership of the packet by the original claim's rooted
+service binding. The existing native fold still checks the signature,
+persisted draft and material authentication. The branch projection does
+not itself reserve the maximum native branch at original admission,
+authenticate the demand root in the wire, or install an active
+dispatcher.
+
+The extracted Core scheduling and Batch delivery tests ran seven
+checks. Under a two-control fixture profile the two parts use the same
+DAA in either arrival order, with Begin and Finish on separate DAA.
+The test rejects an underpriced envelope and wrong demand, signer,
+draft and slot. The isolated harness does not run the full fold.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-signed-batch-delivery.66FDlS/tests.log`.
+
+B0 and relay agreed at DAA 19,680, with no new Qwen carrier since the
+previous cursor. The StepRun integration metadata queue expired before
+compilation at 68% reported memory availability, with other rustc
+processes using about 8.6 GB RSS in total.
+
+## Demand-bound signatures and resumable V3 drafts
+
+The V3 candidate uses the accepted Batch request root in the ML-DSA
+message for Begin, Part and Finish and in the draft identity. It
+retains that root in the V3 draft while preserving the original shared
+scope and the V1 and V2 identity formulas. A part re-signed under
+another request still cannot attach to the prior draft. A completed
+material row keeps the existing original-source authentication rules.
+
+The focused harness ran eight checks, including real signatures over all
+three actions, rejection of the same signatures under a second root
+and a Borsh round trip of the retained V3 draft. Replacing the request
+root under the restored draft key was rejected. The harness runs the
+candidate code with cached Studio Core cryptographic and key types.
+It does not run the native claim lifecycle or the public dispatcher.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-demand-bound-v3.y9hVEj/tests.log`.
+
+At DAA 19,680 B0 and relay agreed. The selected fold at DAA 19,680
+references the new Qwen carrier at DAA 19,678. Signed retention is
+40,286. The producer journal confirms submission and the paired RPC
+read found no claim row. The exact fold refusal was not observed.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-bound-signature-live.ONTcBa/page.json`
+and its sibling `journal.txt`.
+
+## Batch V3 carrier storage fee allocation
+
+The Batch candidate now accepts a positive storage charge only with a
+debit matching the exact V3 Begin declaration, accepted demand root and
+accepting point. Its price is the existing per-byte schedule. The
+allocation uses the same checked transaction fee budget as other
+obligations, has a fixed per-carrier purpose and cannot draw on escrow
+principal. Legacy intake still has no debit source. The public route must
+pass the native budget after the other mandatory allocations and exclude
+the allocated amount from collectible fees. The accepted-demand
+dispatcher and coinbase integration remain open.
+
+Three focused checks ran against the candidate allocation and cached
+native transaction/carrier code. They cover the exact paid carrier,
+an insufficient remainder after another allocation, duplicate allocation
+of the same carrier, substitution of the request, accepting point and
+declaration bytes, and native fee conservation. The payload uses a
+signature-width fixture and does not exercise the native fold's signature
+verification. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-carrier-rent.BbvNSz/tests.log`.
+
+B0 and relay agreed at DAA 19,681 with no new Qwen carrier since the
+previous cursor. The preceding integration metadata queue expired before
+starting a compiler at 63% reported memory availability.
+
+## Accepted Batch range and collectible fee projection
+
+The native delivery constructor now checks the canonical demand root,
+the original's acceptance and material horizon, exact target and byte
+length, whole-range authentication, native maximum, and part width. The
+first delivery slot follows the demand's opening DAA. A service graph
+or actual action outside the exclusive response window is refused.
+
+The carrier fee projection now gives the same storage requirement,
+withheld portion and collectible remainder to storage admission and the
+future coinbase caller. The split preserves the fee left after senior
+obligations. A short payment can yield no collectible remainder and
+still refuses a storage debit. The live dispatcher and the coinbase
+caller still require wiring under the Batch ruleset.
+
+The extracted current demand, signature, reservation and storage code
+passed 17 demand/scheduler checks and three carrier fee checks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-fee-split-demand.Dhi1th/tests-demand.log`
+and `tests-fee.log` in the same directory. Full native fold validation
+is separate.
+
+B0 and relay agreed at DAA 19,682. The Qwen carrier at DAA 19,680 is
+referenced by the selected fold at DAA 19,681 and has signed retention
+40,288. The producer journal records submission, and paired reads
+found no live claim row or exact fold refusal. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-fee-split-live.pdmCMN/page.json`
+and its sibling `journal.txt`.
+
+## Native draft expiry in the latest-notice reservation
+
+The Batch candidate checks Begin, every Part and Finish inside the
+delivery window and checks the Begin-to-Finish span against the
+existing draft expiry. The reservation and the native fold use one
+expiry calculation. Every part has its Begin predecessor and Finish
+depends on all parts. A missing edge or expired draft rolls back the
+entire proposed reservation before the service book is changed.
+
+The latest-notice fixture used a three-DAA draft TTL to hit equality:
+the general case still fit its terminal and recovery budget, but its
+Finish was assigned exactly to the draft expiry. The native guard
+refused it and the book remained byte-equivalent. Moving Finish one
+DAA earlier succeeded. A separate missing-edge variant was refused
+atomically. Eighteen extracted Core checks passed.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-material-expiry.weI0Mo/tests.log`.
+This fixture uses an isolated TTL and does not measure the public
+profile or exercise the production dispatcher.
+
+B0 and relay agreed on the selected tip at DAA 19,683. The bounded
+selected-chain read found no new Qwen carrier after the previous
+cursor. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-expiry-live.PYjEXy/page.json`.
+
+## Batch recovery under the retained draft deadline
+
+The native recovery adapter checks that the service book, binding,
+packet ownership and retained drafts come from the same claim state.
+A retained Begin keeps its accepted DAA. The missing-slot scheduler
+uses the retained exclusive expiry for the remaining parts and Finish,
+then checks the repaired graph and draft spans before committing any
+assignment. An expired or foreign draft leaves the existing book
+intact, with no new default authority.
+
+Nineteen extracted Core checks passed. The recovery fixture Borsh
+round-tripped the book and draft, repaired one missed Part ahead of its
+retained Finish, and rejected recovery at the original expiry even
+with a longer current schedule. It also refused a substituted draft
+root. This harness does not exercise the native state lookup or the
+production dispatcher.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-material-repair.r6RwFg/tests.log`.
+
+B0 and relay agreed at DAA 19,684. A new Qwen carrier at DAA 19,681
+was referenced by the selected fold at DAA 19,683. Its signed retention
+is 40,289, and the paired reads found no claim row. The producer
+journal confirms the submission. No exact fold refusal was observed.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-repair-live.ELiRuy/page.json`.
+
+## Branch-retained Batch demand and opening slot
+
+The candidate appends a staged demand row and key without renumbering
+old variants. The native opening writer checks the accepted shared
+notice, original scope and clocks, and a prebookable opening packet
+identified by claim, scope and ordinal. One slot can retain one exact
+demand. The material adapter now requires the retained demand root
+before it checks the response slot. Carriage checks the live notice
+binding and the demand's canonical identity, and the staged expiry
+index keeps the row through the original material horizon.
+
+The extracted suite passed 19 checks, including a Borsh round trip,
+request-root and ordinal substitution rejection, a different notice
+block changing the case identity, and an oversized range count refused
+by both the decoder and the actual native shape scanner. The extracted
+harness uses a key shim and leaves the native writer, snapshot and
+enum-tag assertions for the integrated Core build. The accepted wire
+dispatcher, notice authorization and full maximum-branch reservation
+remain open.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-demand.VEvPYM/tests.log`.
+
+B0 and relay agreed at DAA 19,684 with no new Qwen carrier since the
+previous cursor. The previous metadata queue expired before starting a
+compiler at 74% reported memory availability.
+
+## Signed Batch opening and bounded native carrier
+
+The RFC now specifies the handoff from a timely notice to a signed Batch
+opening and the separate Node adjudication. The isolated candidate uses
+one BCT1 carrier for opening, response, and fee parsing. It checks the
+accepted notice issuer and original opening slot before retaining a demand.
+Response handling derives its slot from that demand and the declaration or
+draft. Reservation sizes include the BCT1 envelope and the response
+ordinal. The storage debit checks the ordinal, root, signed operation,
+accepting point, and amount against the same carrier.
+
+The extracted suite passed 25 checks, including bounded decoding,
+request/root/signer substitution, native carrier fee allocation, and
+scheduler recovery. The candidate adds a Core test from a signed accepted
+notice through Begin, Part, and Finish in a seeded service book. The
+extracted run does not execute that Core test or the public transaction
+validator. Full maximum-branch admission and public activation are pending.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-signed-rooted-open.ttr8c3/tests-final.log`.
+
+B0 and relay agreed at DAA 19,685. The new Qwen carrier at DAA 19,683 was
+referenced at DAA 19,684 with signed retention 40,291. Both readers returned
+no accepted claim row for it. The producer journal records submission
+with local validation and public acceptance pending. The sampled lines
+do not establish a rejection cause.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-signed-open-live.0A5OPd/page.json`
+and the accompanying `journal.txt`.
+
+## Prebookable Batch response positions
+
+The previous response packet ID included the actual request root and
+draft ID. The draft ID included the body hash and supplier. Those inputs
+cannot be known when the original reserves service. The candidate now
+books a maximum Begin/Part/Finish graph by original claim, scope, demand
+ordinal and canonical range position. The signed Open verifies ownership,
+encoded byte capacity, assigned order, and the native draft deadline
+for every requested position. The request identity also binds the
+ordinal. The first authenticated Begin fixes the supplier and declaration
+in one draft per request range. A conflicting Begin cannot create a
+second draft in the same reserved position.
+
+The extracted suite passed 27 checks, including a short late declaration
+against a previously reserved maximum, and refusal for a missing owned
+slot or a draft expiring at Finish. The seeded Core fixture now books
+maximum capacity independently of the signed response and includes
+an identical Begin retry and a conflicting signed Begin. This fixture
+still needs the integrated Core build and execution. Native original
+admission must derive the complete maximum graph, including any permitted
+alternative after responder contention or silence. Public transaction
+validation, coinbase accounting and activation are separate outstanding
+work. See `/private/tmp/misaka-t12-oom-20261102/tfp1-prebooked-response.DLUAmD/tests.log`.
+
+B0 and relay agreed at DAA 19,687. The selected interval from the last
+cursor had no new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-dispatch-live.KOtYNh/page.json`.
+
+## Maximum Batch reservation at the latest notice
+
+The candidate prepares a single causal reservation for each bounded
+maximum demand, its signed Open, parallel response parts, native
+verification/control nodes and terminal. It quotes exact BCT1 opening
+size from range count. Each response Begin depends on its reserved
+Open; an alternative demand can depend on the prior response opportunity.
+It verifies every draft's exclusive finish bound before committing the
+book. The rooted candidate returns one row with the original's packet
+ownership and canonical recovery edges.
+
+The extracted suite passed 28 checks. A synthetic maximum-demand
+schedule reaches 10,000 DAA with the latest 3,120 DAA notice and an
+explicit recovery allowance, with two parts assigned the same DAA.
+Adding one DAA of recovery, shortening the draft to expire at Finish,
+or lowering the packet cap refuses the reservation without changing the
+book. The test also checks a later alternative and rejects double
+booking. The native fixture uses the rooted candidate before a signed
+notice-to-Finish sequence. The extracted suite does not run that
+fixture or prove an actual model profile fits. The native profile still
+has to derive every legal demand and the semantic/control graph from
+the authenticated original before publishing the book. The public
+transaction route remains disabled.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-latest-notice-plan.Klmg3H/tests.log`.
+
+B0 and relay agreed at DAA 19,689 and the selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-plan-live.gLbK4c/page.json`.
+
+## Native numerical input ranges before original admission
+
+The prepared-original candidate now derives a response envelope from
+its authenticated Source and all-root input cover. For each possible
+selected numerical root it coalesces step boundaries into native
+StepRuns, accounts the root itself, and uses the native parameter,
+prompt and FullIds body bounds. It deduplicates repeated material and
+takes the maximum at each canonical range position. A single
+partition of those positions fits both the range and part limits, so
+every covered root uses the same prebookable demand positions. Resource
+quotes cover retained maxima and per-root scratch.
+
+The preclaim funded fixture passes the real native input envelope to
+the latest-notice planner against a rooted-book candidate. It uses
+fixture service costs and an artificial terminal. The native test
+still needs integrated compilation and execution. The extracted suite
+passed 30 checks, including per-position dominance, partitioning by
+both wire limits and no partial update when the range cap is exceeded.
+This covers the inputs of one selected numerical root. Additional
+turns, simultaneous roots, semantic and verdict costs, and public
+carrier accounting remain unverified.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-range-envelope.p0ElGo/tests.log`.
+
+B0 and relay agreed at DAA 19,690, with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-native-ranges-live.CtYRSX/page.json`.
+
+## Batch carrier UTXO-to-Court handoff
+
+The candidate decodes BCT1 from the literal validated transaction.
+It recomputes input minus output from the same populated UTXOs and
+checks the native fee. Existing allocations come out first. The
+resulting temporary handoff contains the decoded carrier, remaining
+budget and exact accepting point. Court can consume it after the UTXO
+entries are dropped. Begin derives its request root from the retained
+demand and can allocate storage rent once. A wrong accepting block,
+underpayment or mismatched request fails before writing material.
+
+The extracted suite passed 31 checks, including fee reconciliation,
+the same split for the decoded handoff and fee projection, rejecting a
+different accepting block at the same DAA, and the existing
+cross-request and underpayment cases. The seeded native test now
+constructs paid BCT1 transactions through signed notice, Open, Begin,
+Part and Finish, with one refused underpaid Begin. This native test has
+not run in the integrated Core. Public lifecycle routing, fee map
+collection and the virtual processor's coinbase call site still need
+a shared prospective gate and integration verification.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-carrier-fee.cqn1sP/tests.log`.
+
+B0 and relay agreed at DAA 19,692. The selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-fees-live.1Mjs9y/page.json`.
+
+## Batch lifecycle and fee activation boundary
+
+The BCT1 transaction shape check and the virtual processor's shared
+collectible fee calculation use the same prospective Batch Court
+fence. The latter is already the path for Round preflight, template and
+coinbase. It applies the BCT1 storage debit only to the fee left after
+existing allocations. Malformed historical carriers have no Batch fee
+effect; above the fence a malformed new carrier fails the header
+shape check. Other lifecycle payloads use the existing rules.
+
+The independent fence is named in the schedule and fork ID logic.
+Every preset leaves it absent, and validation refuses an attempt to
+arm it while native profile and accepted object folding are incomplete.
+The candidate adds native identity/schedule tests. The extracted suite
+passed 32 checks, including agreement of shape and fee at fence minus
+one, equality and plus one. The complete Params identity and
+consensus integration tests were not run on this build host.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-lifecycle-gate.1vvoQv/tests.log`.
+
+B0 and relay agreed at DAA 19,692. This page reported no new Qwen
+carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-batch-gate-live.ryzBqR/page.json`.
+
+## Accepted-order Batch folding and rehearsal
+
+The Core transition can interleave validated Batch handoffs before any
+ordinary accepted object or after the last one. An index counts accepted
+ordinary objects, so adjacent Batch carriers keep their incoming order
+even if ordinary candidates were filtered out. Regressing or out-of-range
+indices fail the transition. BCT1 does not consume an ordinary wire tag
+or enter through lifecycle object chunks. A common one-object rehearsal
+uses the same accepting point, fee evidence and native state writer as
+the final fold. Both can borrow the same handoff without cloning its
+payload. The processor resolves the independent Batch fence for this
+Core entry, and a dormant entry refuses a handoff.
+
+The extracted suite passed 33 checks, including order around a notice
+and close, stable order at the same index, empty lists, index rejection
+and repeatable rent projection. The native paid fixture compares the
+rehearsal and actual fold, but that fixture has not run in the integrated
+Core. Processor-side accepted UTXO capture and assembly of the actual
+ordered handoff list are still pending. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-fold-order.SbdjrR/tests.log`.
+
+B0 and relay agreed at DAA 19,693, with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-ordered-live.7pokAY/page.json`.
+
+## Processor integration of accepted Batch carriers
+
+The block-validation path now captures a BCT1 handoff from the actual
+UTXO-validated transaction at the accepting block. Its fee projection
+uses the existing deductions, and that same handoff supplies the
+collectible fee. Virtual fee projection uses the same calculation
+without retaining a handoff for a block that does not exist yet.
+
+The processor indexes Batch handoffs against the accepted transaction
+stream, preserving the existing derived and free-prompt prefix and the
+relative order of lifecycle notices. It rehearses each candidate in that
+order. A semantic refusal drops the Court effect and keeps the block;
+local resource and context faults propagate. Accepted handoffs are
+indexed relative to the surviving ordinary objects and replayed by the
+final Core transition with the same accepting point and fee fact.
+
+The extracted suite passed 34 checks, including indexing around skipped
+transactions and rejection when the extracted lifecycle order differs.
+The full processor build, isolated activation and public T12 execution
+remain unverified. Production activation still requires the full native
+profile, terminal adjudication and resource bounds.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-processor-ingress.pa7jeB/tests.log`.
+
+B0 and relay agreed at DAA 19,694. The selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-processor-live.53cslt/page.json`.
+
+## Batch handoff memory reservations
+
+The accepting UTXO walk now reserves a conservative typed allocation
+bound before decoding a BCT1 signature, range list or response part.
+The retained lease covers the decoded value, shared owner, handoff
+indices and replay fee allocation. The fee input set has a separate
+temporary reservation. Rehearsal and final replay share the retained
+value and lease. Local reservation and wire allocation failures in
+this handoff stop the local transition before commit. Malformed
+carriers keep their existing handling and the fee calculation uses
+the same validated difference. The stateless fee quote and header
+shape path remain separate bounded decoders.
+
+The extracted suite passed 34 checks, including early refusal of an
+unknown carrier kind, typed reservation failure, and matching fee
+projection. It uses a shim for the retained owner and prebuilt Core
+dependencies. The integrated ledger fixture for rollback and shared
+lease lifetime has been added and remains unrun, along with the
+processor build and isolated activation. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-handoff-quota.HjeGul/tests.log`.
+
+B0 and relay agreed at DAA 19,695. The selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-quota-live.950Rz9/page.json`.
+
+## Batch verification after material delivery
+
+The maximum-demand planner now requires each demand to reference a
+separately priced verification node in the native graph. Every range's
+Finish precedes that verification, and the terminal filing depends on
+all such verification nodes. Multiple demands can join at one
+verification. An adaptive Open can depend on the verifier's reserved
+slot. Native ingress must separately check that the prerequisite
+actually completed.
+
+The extracted suite passed 34 checks. Its synthetic latest-notice case
+books sibling parts in the same DAA, then Finish, verification, and
+terminal in order, with the recovery and boundary terms bringing the
+total to exactly 10,000 DAA. The book is unchanged on an extra DAA of
+recovery, an expired draft, a packet cap, or a missing verifier. It
+also exercises an adaptive Open after verification. The native
+notice-to-Finish and preclaim geometry fixtures were updated, and
+their integrated build and real model cost verification remain open.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-verification-edge.1tUlGg/tests.log`.
+
+B0 and relay agreed at DAA 19,696 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-verification-live.zF6QyN/page.json`.
+
+## Rooted tokenizer operands in the pre-signing quote
+
+The horizon-refusal diagnostic can now report a separate prospective
+Batch tokenizer envelope when the old plan has a tokenizer stage.
+The envelope comes from the accepted branch's verified registration
+for the original and pins its registration ID. It reports the Borsh
+bound for one rendering opening and the exact Borsh size of the EOG
+opening from the registered vocabulary, rendering length and EOG
+count. The quote withholds that envelope when the registration is
+absent, dormant, too recent or belongs to a different context.
+Authenticated ID transport, carrier overhead, operation counts, CPU,
+and terminal execution still require their own Batch reservations.
+The old quote's resource totals, wire plan and acceptance rule
+continue to use their existing route.
+
+The extracted renderer suite passed nine checks, including comparing
+the bounds to actual serialized table openings with an odd leaf
+count. The new accepted-branch fixture checks the previous branch,
+same-DAA rejection, mismatched tokenizer and restored state. It and the
+RPC diagnostic wiring still need an integrated build and run. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-tokenizer-quote.enQA0Z/test.log`.
+
+B0 and relay agreed on DAA 19,696 and the newly selected block in
+the scanned interval had no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-rooted-tokenizer-quote-live.bofd73/page.json`.
+
+## Exact FullIds body for Batch and tokenizer quotes
+
+The rooted tokenizer diagnostic now reports the complete native FullIds
+body size for a nonempty tiled decode. The same calculation serves
+the single-chunk size, owned acquisition quote and shared decoder.
+It counts the response tag, rows root and vector length for every
+chunk including the last short chunk, plus four bytes for each ID.
+The owned acquisition quote takes the existing RAM bound from the
+largest chunk without walking every response.
+
+The Batch FullIds decoder rejects a wrong total length before
+reservation, reserves the accumulated ID vector, then decodes each
+bounded native response and authenticates the exact original outer
+trace at EOF. The authenticated owner reuses the vector. Batch maps
+decoder capacity faults to a local resource error. Draft body
+assembly before this decoder remains a separate allocation path.
+The tokenizer diagnostic still excludes carrier, scheduling and
+terminal costs.
+
+The extracted renderer and size checks passed 10 tests, including
+native Borsh comparisons at 1,023/1,024/1,025 and 2,050 IDs. The
+native 2,050-ID fixture now checks the actual decoder and rejects
+truncation and an altered stream. The integrated fixture, processor
+and public quote were not run. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-full-ids-body.YKw1QO/test.log`.
+
+B0 and relay agreed on DAA 19,697 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-full-ids-body-live.219trY/page.json`.
+
+## Batch response assembly under memory pressure
+
+Batch Part copying and completed draft assembly reserve memory before
+allocating. A reservation or allocation refusal in these paths is a
+local resource fault. The accepting fold's checkpoint is restored on
+failure, so the same block can be retried without consuming the
+draft. Malformed, missing or incomplete material remains a decode
+refusal. The body assembly also checks a legacy part's endpoint
+against the retained prefix before appending bytes. The older public
+body reader keeps its string error interface.
+
+The extracted suite passed 35 checks. Its new fixture uses the actual
+body assembly logic with a lightweight retained-row map and injected
+reservation result. It refuses a complete draft under pressure,
+reassembles the same two parts in canonical order on retry, and
+rejects an incomplete draft before requesting memory. The native
+notice-to-Finish fixture now checks draft resource refusal against
+the real rooted state before attempting Finish. The integrated
+fixture, live process quota and full processor build remain unverified.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-body-retry.gcSBn5/tests.log`.
+
+B0 and relay agreed at DAA 19,698 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-body-retry-live.j55Mpe/page.json`.
+
+## EOG-only constrained stop replay and work quote
+
+The signed constrained Stop adapter now selects an explicit EOG-only
+replay when the filing contains no renderings. It consumes the freshly
+built Court rather than cloning it. The route still checks signed
+intent, authenticated FullIds, the registered table and the original
+stop reason. A filing that includes renderings keeps the generic path.
+
+Replay now quotes and charges the whole EOG stage before the first
+mutation: four bytes per EOG ID and one call per native chunk plus
+one Finish. The rooted tokenizer diagnostic reports this call count
+alongside the exact EOG opening and FullIds body sizes. These terms
+do not price the original-ID scans, proof verification, carrier
+inclusion, I/O or recovery. They are inputs for the Batch service
+profile and do not constitute a DAA reservation.
+
+The extracted suite passed 11 checks. Its new fixture runs the actual
+EOG stream and replay code with a small Court adapter. It verifies
+the exact call and byte counts at one ID, the chunk limit, and one
+past the chunk limit. One fewer call refuses the replay before it
+starts. The native Stop fixture also compares the dedicated result
+to generic replay, but the integrated fixture and real model timing
+remain unrun. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-eog-stop-work.VvWUzG/test.log`.
+
+B0 and relay agreed on DAA 19,699 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-eog-stop-work-live.8raIHF/page.json`.
+
+## Signed constrained Stop initialization
+
+The signed Stop adapter now computes the intent digest once and uses
+the same digest for signature verification and the Court seed. The
+constructor still binds the actual native decode view, original
+commitment and source-authenticated FullIds. It skips serializing
+the header and complete ID vector for the unused legacy seed.
+Legacy unsigned seeds keep the existing derivation. Stop has no
+auxiliary witness or beat and now supplies the already authenticated
+ID slice directly to the EOG constructor, saving one temporary copy.
+
+The extracted suite passed 12 checks. The old and new unsigned
+derivations agree on the same fixture, and the signed case succeeds
+with a serializer that would fail if the unused legacy branch ran.
+The native Stop fixture also checks the signed seed explicitly.
+Integrated execution, original-ID scan timing and complete Batch
+service reservation remain open. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-signed-seed.TmhWqY/test.log`.
+
+B0 and relay agreed at DAA 19,699 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-signed-seed-live.AMS1pO/page.json`.
+
+## Rooted constrained Stop branch in the Batch reservation graph
+
+The native prepared-original candidate can derive a constrained
+Stop branch from the actual original, its rooted service scope and
+its current verified tokenizer registration. The branch includes
+the exact FullIds delivery size, original ID count, EOG replay calls
+and serialized signed Stop operands. It reserves delivery Finish
+before FullIds verification and that verification before Stop.
+The complete profile joins Stop to the case terminal. The graph
+refuses a stop cost whose byte allowance cannot hold the signed
+intent and EOG-only material. CPU, I/O and carrier overhead still
+need costs from the native service profile.
+
+The extracted suite passed 36 checks. The new fixture exercises
+the actual Batch scheduler from the latest notice with a 2,050-ID
+body and fixture service costs. It checks Finish, verification,
+Stop and terminal ordering and refuses a one-byte short allowance.
+The native fixture comparing signed operand size with Borsh and
+the prepared-original test remain unrun. This branch does not
+establish the complete profile or a live T12 terminal carrier.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-branch-reservation.PfGHDE/tests.log`.
+
+B0 and relay agreed at DAA 19,700 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-branch-reservation-live.HtdMFF/page.json`.
+
+## Bounded EOG-only Stop payload
+
+The prospective Batch Stop payload now decodes the signed intent,
+EOG opening and empty rendering list against the registered EOG
+byte allowance. It checks exact body length, intent version,
+signature length, EOG count, opening depth and the empty list before
+reserving the decoded vectors. The allocation lease stays with the
+decoded payload. Capacity refusal is typed separately from bad
+encoding. The native verifier runs the existing signed Stop predicate
+once against authenticated FullIds. Applying the finding in the
+terminal fold remains a separate integration step.
+
+The extracted suite passed 37 checks. The codec fixture checks
+canonical Borsh byte parity, exact vector reservation, capacity
+refusal and malformed or truncated input before allocation. It uses
+prebuilt dependencies and a reservation shim. The native constraint
+fixture now decodes a signed filing and compares the one-pass finding
+with the existing path. That integrated test and the public carrier
+remain unverified. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-payload.p0xYRw/tests.log`.
+
+B0 and relay agreed at DAA 19,700 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-payload-live.Uv6A1k/page.json`.
+
+## BCT1 Stop framing and accepting handoff
+
+The dormant Batch carrier now appends Stop at discriminant 2.
+It carries only the bounded signed Stop operands. Lifecycle shape
+and the collectible fee quote validate the literal framing and
+operand lengths without allocating a second body. The accepting
+UTXO handoff reserves the raw operand length before retaining it.
+Stop has no Begin storage debit, so its existing available fee
+remains collectible. The reservation counts the four-byte BCT1
+prefix, the discriminant and the four-byte vector length.
+
+The extracted suite passed 37 checks. The Stop fixture checks
+canonical carrier bytes, shape and decode agreement, truncation,
+the fee split and the exact framing overhead. Open and Respond
+round-trip tests also passed. The native terminal fold still
+refuses this operation until its rooted slot, duty and verdict
+effects are connected. The integrated build and public activation
+remain unverified. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-carrier.epPS3c/tests.log`.
+
+B0 and relay agreed at DAA 19,701 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-carrier-live.sEHazw/page.json`.
+
+## Rooted prerequisites for the Batch Stop slot
+
+The candidate slot check derives the same packet IDs as the planner.
+It requires the original's accepted one-range FullIds demand, a
+rooted FullIds row with the matching scope, retention and count,
+and live ownership of the Finish, verification and Stop packets.
+The rooted causal book must link the three in order and reserve the
+exact Stop DAA and enough bytes. FullIds may have been accepted
+earlier on the same branch, but must be available by the reserved
+Finish DAA. The verifier slot is a capacity reservation. The actual
+Stop verifier and verdict fold still need to consume these checks.
+
+The extracted suite passed 37 checks. The slot fixture accepts
+timely FullIds and rejects late material, the wrong Stop DAA, a
+different carrier length, missing packet ownership and a missing
+causal edge. This uses the actual scheduler with synthetic costs.
+The rooted-state adapter and integrated Node build remain unrun.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-rooted-slot.OYy2TC/tests.log`.
+
+B0 and relay agreed at DAA 19,702 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-rooted-slot-live.tJLf8Y/page.json`.
+
+## Stop carrier to native adjudication
+
+The dormant accepting dispatcher now sends the literal Stop carrier
+to the native verifier at the exact accepting point and network. It
+reads the claim without allocating, checks the close byte ceiling,
+loads the same branch's FullIds and re-authenticates them against
+the original. The applicable registration comes from that original's
+historical tokenizer binding. The planner and verifier use one
+dedicated demand ordinal for constrained Stop. The verifier checks
+the rooted causal reservation, decodes against the registered EOG
+length, then invokes the one-pass Stop predicate. The dispatcher
+still refuses the terminal effect, so there is no rooted verdict,
+settlement or credit from this path.
+
+The extracted suite passed 37 checks, including literal claim
+extraction and refusal of a different demand ordinal. The native
+fixture now also tests refusal when a signed carrier has only
+locally available IDs and no accepted FullIds row. The integrated
+fixture and full processor build remain unrun. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-carrier-adjudication.bSRVOI/tests.log`.
+
+B0 and relay agreed at DAA 19,703 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-carrier-adjudication-live.QMbPer/page.json`.
+
+## Branch-retained Batch Stop receipt
+
+The native Stop dispatcher journals one fixed-size receipt per
+original after adjudication. The receipt records the original Source,
+signed operand digest, accepting point, retention horizon and
+optional fault position. The writer accepts identical data again
+at the same accepting point and refuses replacement. The generic
+row writer cannot introduce a Stop receipt. Replay checks the
+insertion point and retention boundary. Snapshot validation binds
+a live receipt to its retained original. The appended key and row
+tags are 33 and 40. The existing service hold and expiry index
+include the receipt. This path journals the finding only, pending
+the separate terminal economic effects.
+
+The extracted suite passed 38 checks. The new fixture verifies
+fixed receipt round-trip, key and clock checks, and bounded
+truncation handling. The native enum tags, full journal replay,
+restart and pruned IBD remain unrun in the integrated build.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-receipt.6afeYq/tests.log`.
+
+B0 and relay agreed at DAA 19,704 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-receipt-live.AbQR12/page.json`.
+
+## Batch Stop filing authority
+
+The reserved Stop now resolves its opener from the same-branch notice
+already bound to its accepted FullIds demand. The signed Stop must use
+that notice bond. A producer or a seat holding an original custody
+grant or credit cannot consume the terminal slot. The native replay
+continues to check the live bond floor and the signature. The old
+private Stop adapter and the BCT1 wire format are unchanged.
+
+The extracted suite passed 38 checks, including fixed-prefix claim and
+filer extraction and malformed operands. The native fixture now checks
+producer refusal before FullIds intake, but the full native fixture
+has not been executed. An economic transition and its archive evidence
+still need to be connected to the authenticated finding. The local
+worktree had 453 MiB free at the start and a separate checkout was
+running Cargo, so this pass used the focused harness.
+
+The read-only paired scan agreed at DAA 19,705 and found no Qwen
+carrier in the newly scanned selected interval. The production
+retention threshold at 20,000 was still ahead.
+Evidence is in
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-filer.uGanGJ/tests.log` and
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-filer-live.et1i0S/page.json`.
+
+## Native inventory for accepted Batch handoffs
+
+The exhaustive `PalwTransitionExtrasV1` visitor was missing both BCT1
+fields. Its struct destructure could not cover the accepting fold as
+written. The inventory now covers all 99 fields in source order. The
+typed visitor also includes the Open ranges and signature, the Respond
+intake, the Stop bytes, the decoded carrier, and the fee-allocation map.
+The extras scanner describes both fields and uses the existing refusal
+for runtime-owned handoffs. This is a transient handoff, with no change
+to the persisted formats or fee policy.
+
+The extracted Rust 1.93 suite passed 38 checks, including the accepted
+Respond handoff's allocation ticket covering the typed heap of the
+retained carrier and its fee map. The harness uses cached Core and
+cannot invoke the crate-private lease test helper. Whole-Core metadata
+and native replay remain unrun here. Local memory reported 67% free
+and disk had 428 MiB free, below the existing guarded build floors.
+
+The paired read agreed at DAA 19,706 and found no Qwen carrier in the
+newly scanned selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-native-handoff-inventory.dfyZTI/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-handoff-live.ysomEA/page.json`.
+
+## Retained signed Batch Stop operands
+
+New Stop receipts save the signed intent and EOG opening in version 2,
+in the same row as the accepting point and finding. The existing key,
+row tag and retention horizon apply. Version 1 remains byte-for-byte
+readable as a digest-only receipt. Version 2 validates the retained
+claim and operand digest and shares the immutable payload between
+branch state and journal copies. The native writer and restore scanner
+account for the bounded payload before allocation.
+
+The extracted Rust suite passed 39 checks, including version 1 byte
+compatibility, version 2 round trip, shared ownership, scan accounting,
+and refusal of changed, truncated or oversized operands. This is codec
+and local resource evidence. The whole-Core build, pruned IBD, a full
+re-adjudication from restored state, terminal accounting, and funded
+storage for the complete profile still require verification.
+
+B0 and relay agreed at DAA 19,707. The newly scanned selected interval
+had no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-durable.G0k4E0/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-stop-durable-live.TZqUzd/page.json`.
+
+## Batch Stop fault settlement and archive cause
+
+An accepted, independently verified Stop fault now calls the existing
+original-claim conviction funnel. The writer verifies the finding's
+claim, notice signer and original clock, and requires the version 2
+signed material. The funnel checks the original producer and credited
+custody locks, uses existing offence keys and applies `CourtFraud` to
+the original claim. A finding-free Stop records only the scoped result.
+The receipt and liability effects share a rollback boundary. A retry
+of the same accepted object does not apply the effects again.
+
+The court-end archive appends evidence variant 4, carrying the same
+signed receipt. It checks the rooted receipt while that row is live and
+keeps the actual operands if a pending archive outlasts the row. New
+archives require the matching native close event. Prior archive tags
+retain their original decoding.
+
+The extracted suite passed 39 checks, including the appended archive
+codec, signed operand round trip and wire allocation count. The new
+native fixture covers a no-fault result, refused-filer rollback,
+duplicate refusal and a settled fault with a same-claim archive. The
+native fixture and whole-Core build remain unrun. The complete funded
+Batch profile, pruned IBD and public same-claim G0–G7 remain unverified.
+
+B0 and relay agreed on an advanced selected tip at DAA 19,707 and the
+newly scanned interval contained no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-accounting.TKCQk2/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-stop-accounting-live.LRx9zg/page.json`.
+
+## Batch Stop signed material storage fee
+
+The Stop carrier now prices the exact signed operand bytes saved in the
+version 2 receipt at the existing Batch material rate. The shape-only
+coinbase projection and the decoded UTXO handoff use the same function
+and take the charge from the fee remaining after preceding allocations.
+The native Court fold refuses an underpaid Stop before adjudication or
+retention. The fee projection can still withhold only what the UTXO
+transaction actually paid. Respond Begin continues to use its separate
+request-bound debit and storage ledger.
+
+The extracted Rust suite passed 39 checks. The Stop case compared both
+projections and the handoff at one sompi short, exact fee, and excess
+fee, with a preceding allocation in every case. The complete original
+profile still needs worst-case Court storage and archive exposure,
+capacity reservation, native integration and live measurements.
+
+B0 and relay agreed at DAA 19,708. The newly scanned interval contained
+no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-rent.AI2wG9/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-stop-rent-live.70CIzK/page.json`.
+
+## Native workspace for the latest-notice reservation
+
+The latest-notice Batch scheduler now reserves typed local workspace
+before building reachability indexes or cloning the service book. The
+quote includes the existing book, the rebuilt residual map, new packet
+and assignment rows, and the causal node, edge and queue owners. Local
+resource refusal returns a separate typed error before mutating the
+book. Packet geometry, capacity prices and clocks are unchanged.
+
+The extracted suite passed 39 checks. The latest-notice fixture still
+fits exactly at 10,000 DAA, refuses a larger recovery allowance, and
+now verifies unchanged state on a local workspace refusal and a larger
+quote with an occupied book. This covers the scheduler workspace for
+an already compiled graph. The full native profile compiler, pricing
+and admission at the original, integrated build, and public completion
+remain open.
+
+B0 and relay agreed at DAA 19,709 with no Qwen carrier in the newly
+scanned selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-workspace.EnboGP/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-workspace-live.FmeDg3/page.json`.
+
+## Quote an Open from the accepted notice and reservation
+
+Core can now build an unsigned BCT1 Open from the same-branch notice,
+original service book, requested ranges and reserved opening ordinal.
+The quote returns the original notice signer, canonical case and range
+ordering, the reserved opening DAA, and the exclusive response deadline
+one DAA after the last booked Finish. It refuses an absent notice, an
+already opened ordinal, missing or undersized slots, and a deadline
+outside the native collection window. Open acceptance uses the same
+deadline calculation and still checks live bond authority and signature.
+
+The extracted suite passed 39 checks, including Finish equality refusal,
+the first valid exclusive deadline, the collection boundary and the
+native draft expiry. A native fixture now builds and signs a quoted
+Open before submitting the actual Respond sequence. The full native
+fixture, Studio or RPC integration, the full preclaim profile and live
+completion remain unverified.
+
+B0 and relay agreed on an advanced selected tip at DAA 19,709 with no
+Qwen carrier in the new selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-open-quote.dsc4oo/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-open-quote-live.HTUX0l/page.json`.
+
+## Quote the booked response and retained part progress
+
+The Core response quote reads an accepted BCT1 demand and one canonical
+material target from the selected branch. It returns the request root,
+draft ID, exact Begin, Part and Finish slots, and draft expiry. When a
+draft remains, it returns the original submitter and body hash, plus the
+accepting DAA of each still-retained part. The same slot checker verifies
+ownership, byte capacity and causal order for Open and for this quote.
+The quote is read-only. The accepting fold authenticates the sender and
+body separately.
+
+The extracted suite passed 39 checks, including the shared slot and
+expiry predicates. The updated native fixture queries the empty draft
+plan and then the same plan after Part acceptance, with the same request
+root and draft ID. The native fixture, actual restart, Panel/RPC client
+connection and public G0–G7 remain unverified.
+
+B0 and relay agreed at DAA 19,710. The newly scanned selected interval
+contained no Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-response-quote.ytMks8/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-response-quote-live.FlXRXl/page.json`.
+
+## Batch response reads through the existing court RPC
+
+Op 226 now accepts a claim with `batchOrdinal` and `batchTarget`, such
+as `"18446744073709551615"` and `"full-ids"`. The decimal string keeps
+the exact 64-bit ordinal in JavaScript clients. The `palwBatchResponse`
+view uses the Core quote from one selected snapshot and includes the
+tip hash, reserved slots and still-retained part progress. It carries
+no signed carriers or raw material. An absent demand returns `found:
+false`. A held demand that cannot quote the requested target returns
+an explicit error in the view. Clients distinguish the Batch answer
+from an older node's ordinary `palwCourtState` response by `kind`.
+
+The extracted request test passed legacy byte equality, v2 round trip,
+full-width ordinal parsing and bad target rejection. `protoc` compiled
+the updated schema. Native service and accepted-draft view assertions
+were added but have not run in a whole-node build. Public deployment,
+Studio consumption, full original capacity and live completion remain
+unverified.
+
+B0 and relay agreed at DAA 19,711 with no Qwen carrier in the newly
+scanned interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-response-rpc.h2cqD8/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-response-rpc-live.e9FTeC/page.json`.
+
+## Studio Batch response observation
+
+Studio `d2197d4` reads the existing court RPC through its synced public
+node selector. Its runtime route is
+`GET /api/v1/network/prompt-mining/claims/{claim}/batch/{ordinal}?target=full-ids`.
+The ordinal stays decimal text end to end. Core returns the canonical
+target name, and Studio matches the view version, kind, claim, ordinal,
+target and tip hash before selecting a response. The endpoint preserves
+the remote provenance. An absent view remains an observation of absence
+from that endpoint, with no certification or submission effect.
+
+Studio TypeScript typechecking passed. Two extracted Rust tests passed,
+including the actual Axum handler with a mocked wRPC reader, rejection of
+the old court view, and rejection of substituted identities. A whole
+Studio runtime and the new public node build have not been run together.
+This connects the observation path. End-to-end Panel operation, the full
+funded profile and public 10,000 DAA verification remain open.
+
+B0 and relay agreed on an advanced selected tip at DAA 19,711 with no
+new Qwen carrier in the scanned interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-studio-batch-view.mb2kYg/route-tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-studio-batch-view-live.SQMsoH/page.json`.
+
+## Sign and fund a booked Batch response
+
+The `misaka palw batch-respond` command reads one accepted response quote,
+checks its claim, scope, target and draft identity, and signs one Begin,
+Part or Finish with the registered bond key. The bounded local material
+body must match the retained Begin on resume. The command refuses a Part
+already observed or a Finish with missing Parts. The wallet funds a
+literal BCT1 lifecycle carrier and includes the existing storage-rent
+projection in its fee. Preview is the default. Submission requires the
+exact reserved accepting DAA and an unchanged quote from a second read.
+
+The extracted Rust action test passed, including accepted-part resume,
+foreign signer refusal and Finish gating. The whole CLI, funding and
+submission against an isolated armed node have not run. No signed
+transaction was sent during this check. The automatic Panel worker,
+complete funded original profile and public deadline audit remain open.
+
+B0 and relay agreed at DAA 19,712 and the scanned interval contained no
+Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-respond-cli.TfTkm4/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-respond-cli-live.aBTzNv/page.json`.
+
+## Batch Open deadline matches reserved response service
+
+The rooted Open admission now requires the signed response deadline to
+equal the DAA after the latest reserved Finish across the demand. The
+quote and accepting fold use the same derivation. A notice signer could
+previously declare a later deadline even though no additional response
+slot was reserved. The response view now reports the demand-wide cutoff
+alongside the target-specific Finish slot.
+
+The extracted suite passed 39 checks, including exact, one-slot early,
+and one-slot late deadline assertions and the 10,000 DAA scheduler
+fixture. A native regression assertion also checks that a valid
+signature over a late deadline cannot mutate the branch. That native
+fixture and the public Batch path remain unrun. The production funded
+schedule resolver still returns typed `Missing(Schedule)`, and the
+native profile has no complete original-admission Batch graph.
+
+B0 and relay agreed at virtual DAA 19,713 with zero new Qwen carriers.
+See `/private/tmp/misaka-t12-oom-20261102/g14-profile-audit.iqmutK/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-canonical-response-deadline.NjdWhR/tests.log`.
+
+## Selected numerical root uses the original Batch positions
+
+The numerical planner now shares its source-bound target enumeration
+between the preclaim maximum envelope and a selected root's demand
+projection. It retains the canonical target coordinates and their
+native size ceilings for the selected demand. The partition comes from
+the maximum envelope, so smaller actual targets do not move into a
+different demand or borrow another reserved position. A missing root,
+out-of-range demand index, or oversized range refuses the projection.
+The returned lengths are ceilings. Open still needs the exact body
+lengths and must pass the branch's slot and signer checks.
+
+Three extracted tests passed for maximum folding, wire partition caps,
+and a shorter selected root spanning two prebooked partitions. The
+signed native original fixture now checks the selected target order and
+size bounds; that full fixture was not run. This is a native planning
+projection, before the full funded profile and automatic Panel path.
+
+B0 and relay agreed at virtual DAA 19,714 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-root-demand-live.5dfpEU/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-demand-plan.ou51Q3/tests.log`.
+
+## Numerical Open from an accepted reservation
+
+Core now exposes an unsigned numerical Open quote. It first checks the
+accepted notice and the original's still-available opening slot on the
+supplied branch. It then derives the numerical envelope from that
+original's registered layout and program. The selected demand binds its
+claim, scope and ordinal. The supplied encoded body lengths must cover
+every selected material target in canonical order and fit its bound.
+The existing rooted quote derives the response window and names the
+notice issuer whose signature the accepting fold requires.
+
+Four extracted tests passed, including refusal of substituted, repeated,
+reordered, omitted, zero-length and oversized material declarations.
+The native fixture now exercises the unsigned entry point before notice
+acceptance. Whole-Core execution, Panel/RPC wiring, signed submission
+and the complete funded original profile remain unverified.
+
+B0 and relay still agreed at virtual DAA 19,714. The scanner found no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-root-open-live.ElMRSJ/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-open-plan.1HzgXg/tests.log`.
+
+## Operator RPC for numerical Batch Open quotes
+
+Court RPC op 226 now accepts a version-3 numerical Open request. The
+request names the claim, demand ordinal, accepted notice, disputed leaf
+and exact target lengths. The selected snapshot supplies the quote tip,
+signer, request root, windows and canonical ranges. The route requires
+the existing operator RPC setting and admits one quote at a time across
+connections. It caps the input list at 64 entries, the selector at 4,096
+bytes and the native enumeration at 4,096 positions. Existing claim,
+session and response reads retain their previous request versions.
+
+Three extracted tests passed for legacy request bytes, version-3 round
+trip, full-width leaf text and malformed or oversized selectors. Protoc
+compiled the updated schema. The RPC service and Core have not run
+together with this change. A Panel client must still reconstruct and
+verify the request root before signing, then fund and file the carrier
+at its booked DAA. The production funded original profile remains open.
+
+B0 and relay agreed at virtual DAA 19,715, with no newly scanned Qwen
+carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-root-open-rpc-live.1q4n0T/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-open-rpc.EP0ttk/tests.log`.
+
+## Sign and fund a numerical Batch Open
+
+The `misaka palw batch-open` command takes a claim, notice, selected
+leaf, booked ordinal and each exact target length. It canonicalizes
+target IDs, reads the operator RPC quote, verifies the quote identity
+and notice bond, and recomputes the BCT1 request root locally before
+signing in the node's network domain. Open and Respond now use the
+same funded lifecycle builder and fee cap. Preview is the default.
+With `--submit`, the command requires the exact booked DAA and an
+identical second read before broadcast.
+
+The extracted suite passed 40 checks, including quote reconstruction,
+refusal of a changed clock, wrong signer or substituted range, and
+the native wire's notice, ordinal and network signature binding.
+The whole CLI, wallet funding and live submission against an armed
+isolated node remain unverified. The Panel can use this manual command
+after an original has a funded, accepted reservation. Automatic Panel
+coordination and the complete native funded original profile are open.
+
+B0 and relay still agreed at virtual DAA 19,715, with no newly scanned
+Qwen carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-root-open-cli-live.2IFo7v/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-open-cli.pmrwbc/tests.log`.
+
+## Local memory admission for preclaim Batch graph expansion
+
+The preclaim Batch planner now counts the expanded packet and range
+geometry before allocating delivery packets, causal edges or indexes.
+It reserves native memory for that expansion before invoking the cost
+projection or scheduler. A local quota refusal leaves the service book
+unchanged and is distinct from a consensus window or capacity refusal.
+The expanded graph keeps its memory lease until its consumer takes over
+the edges during preparation of the rooted service row.
+
+The extracted suite passed 39 checks. The maximum case still schedules
+at 10,000 DAA including recovery and the boundary margin. The quota
+assertion verifies refusal before cost projection and no book mutation.
+The rooted original write and full funded profile are outside this
+extracted suite and still require native and live verification.
+
+B0 and relay agreed at virtual DAA 19,716. The scanned interval had no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-preclaim-graph-live.SXiyAc/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-preclaim-graph-quota.6LSqsO/tests.log`.
+
+## Resource and carrier rent quote at Batch admission
+
+The admission planner now returns the scheduled DAA and aggregate wire,
+work, I/O and control costs of the candidate graph. It totals the maximum
+retained response and signed Stop operands, and computes payload byte-DAA
+from each assigned Begin or Stop slot to the material horizon. It uses
+the same per-byte rent formula as the accepting carrier. Carrier rent
+is a separate amount from escrow capital. Payload byte-DAA does not
+include archive extensions, metadata or database amplification.
+
+The extracted suite passed 39 checks. It covers the 10,000 DAA maximum
+case, Stop operand pricing, rent overflow before reservation and retention
+overflow during candidate validation, with no mutation on refusal. The
+native original fixture asserts the same quote against the prepared
+numerical envelope but was not run in this check. The complete production
+profile must still use these resources and independently fund all duties
+and archive horizons before activating original admission.
+
+B0 and relay agreed at virtual DAA 19,717 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-preclaim-budget-live.LFkTrt/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-preclaim-budget.S3FmZc/tests.log`.
+
+## Funded admission checks the complete journal row
+
+The funded original coordinator now constructs and validates the
+service journal row, including its causal edges, during the reservation
+precheck before checking payer consent. Install compares the current
+rooted row with the prechecked row and allows only the expected signer
+prefix from the ordinary frame install. Existing resolved records and
+causal edges remain in the checked candidate. The native Batch fixture
+extends this same row and asserts that the source edges survive the
+extension. A v2-to-v3 test conversion no longer drops those edges.
+
+Rust parsing and diff checks passed. The native fixture was not run.
+The build guard still observed low physical disk and available memory
+on the Mac. The production funded schedule and complete Batch graph
+are still unconnected to original admission.
+
+B0 and relay agreed at virtual DAA 19,717 on a newer selected tip with
+no new Qwen carrier in the scan. See
+`/private/tmp/misaka-t12-oom-20261102/g14-funded-seam-live.y5Wjsu/page.json`.
+
+## Rooted Batch deadlines constrain service recovery
+
+The canonical recovery sweep now reads accepted Batch demands and draft
+rows from the same branch when the Batch fence applies. It preserves
+the accepted Open, Begin and Part positions and bounds missed response
+opportunities by the signed demand and retained draft deadlines. It
+checks the moved Finish against the resulting Begin and lifetime before
+committing the book. The ordinary path remains available for claims
+without Batch demands. Additional Batch scratch is reserved by the
+largest affected binding before the sweep.
+
+The extracted suite passed 40 checks. The new scheduler fixture, using
+mocked rooted-row reads, moves a missed Part within the signed window and
+refuses a move after the deadline without changing the book. The full
+native fixture now compares ordinary and rooted repair on the same
+missed slots. It was not run. This addresses scheduler recovery and
+does not establish a live reorg or the full funded original path.
+
+B0 and relay agreed at virtual DAA 19,718 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-rooted-repair-live.nMhP9W/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-repair.1tviwt/tests.log`.
+
+## Batch repair skips unused response positions
+
+A signed Open may use fewer ranges and shorter bodies than the maximum
+layout reserved at original acceptance. The recovery sweep now skips
+those unused ranges and part positions. It retains their original slots
+and causal edges in the service book. Missing active parts still use the
+existing signed deadline and draft checks.
+
+The extracted suite passed 41 checks. Its mocked rooted-row case has
+one missed active Part, one unused tail and one omitted range. It moves
+only the active Part, keeps both unused slots at their original DAA,
+and refuses a recovery outside the signed window. Whole-node and
+public recovery under a funded profile remain unverified.
+
+B0 and relay still agreed at virtual DAA 19,718, with no new Qwen
+carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-unused-slots-live.UXWfK7/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-repair-unused-slots.qyAd7v/tests.log`.
+
+## Batch resume recognizes already authenticated material
+
+The response quote now exposes whether the selected branch already
+holds authenticated material for the original target. The CLI checks
+this before reading the local body and refuses a redundant Begin or
+Part. It also refuses stale slots at preview. A Finish for a retained
+draft can still follow the existing cleanup path. The recovery sweep
+skips slots for material already available through any valid request;
+it records neither new supply nor fulfilment of a specific signer's duty.
+
+The extracted suite passed 42 checks, including the case where a late
+missing Part is superseded by canonical shared material and no slot
+moves. The native fixture now checks the response view both during
+assembly and after Finish removes the draft. That fixture has not run.
+Public and whole-node validation still require the funded profile.
+
+B0 and relay agreed at virtual DAA 19,718, with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-shared-material-live.IOZNPK/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-shared-material-resume.84DH16/tests.log`.
+
+## Template selection checks rooted Batch Open and Respond slots
+
+Past the Batch fence, the ordinary selector and its refill read the
+authenticated template parent before keeping Open or Respond. Open
+requires the accepted notice and booked DAA. Respond shares its slot
+and draft precheck with the accepting fold. Begin and Part are deferred
+when the source material is already available. Out-of-slot carriers
+stay in the mempool. Stop still uses its own terminal verifier. The
+selector does not establish delivery or replace the accepting fold.
+
+The demand root now streams the original Borsh fields into the same
+hash domain. The extracted suite passed 43 checks, including equality
+with the previous serialized root. The added native fixture tests Open
+at the wrong DAA, duplicate Open, and Respond before and after Open.
+The native fixture, template process and deployed path have not run.
+
+B0 and relay agreed at virtual DAA 19,719 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-template-slot-live.rcClXb/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-template-slot.htSv69/tests.log`.
+
+## Template selection checks the booked Batch Stop
+
+The template now borrows the length-delimited Stop operands and checks
+the selected parent's claim, original tokenizer registration, accepted
+FullIds and notice signer against the reserved terminal slot. The slot
+check uses the actual FullIds acceptance DAA and requires the booked
+verification and Stop positions in causal order. The accepting fold
+shares that preflight and independently authenticates the FullIds and
+EOG material before deciding the verdict.
+
+The extracted suite passed 44 checks, including borrowed Stop framing
+and the causal FullIds, verification and Stop reservation. Rustfmt
+parsed the six changed Rust files. A native fixture also checks that
+the template defers a Stop without accepted FullIds. The native fixture,
+whole-node template path and same-claim terminal flow remain unverified.
+
+B0 and relay agreed at virtual DAA 19,719. The selected chain advanced
+by one block in the scanned page and contained no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-stop-template-live.sHoAz8/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-template.ue9GpH/tests.log`.
+
+## Operator path for the booked Stop FullIds Open
+
+`misaka palw batch-open --stop-full-ids` now uses the operator Court
+RPC to quote the dedicated `u64::MAX` request for an accepted notice.
+The node derives the single WholeRange target and its exact encoded
+length from the original constrained claim and its accepted tokenizer
+record, then checks the original's booked Open and response slots.
+The CLI reconstructs the range and request root before signing. The
+existing fee, selected-tip recheck and exact-DAA submit path applies.
+
+Five extracted tests passed for chunk length and overflow, RPC selector
+and request compatibility, and CLI flag exclusivity. The sizing fixture
+uses a stand-in for the target-ID lookup. The complete Node/RPC/CLI build,
+wallet-funded submission, Panel automation and same-claim terminal
+flow remain unverified.
+
+B0 and relay agreed at virtual DAA 19,721, with no new Qwen carrier
+in the scanned page. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-fullids-live.PzdOSG/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-fullids-open.BhowUP/tests.log`.
+
+## Sign and fund a booked Batch Stop
+
+The operator Court RPC can quote the original's booked Stop after
+accepted FullIds. It checks the causal reservation and the notice
+signer, and uses the same network policy resolver as the accepting fold
+at the assigned DAA. `misaka palw batch-stop --eog-opening FILE` checks
+the selected snapshot and local EOG opening, builds the existing signed
+EOG-only carrier and funds its fee. With `--submit` it checks the exact
+fold DAA and rereads the quote before broadcast. The local EOG file must
+be produced by the Panel or operator.
+
+The extracted signing and protocol suite passed 45 checks. The added
+test compares the carrier operands byte for byte with the native intent
+for both stop reasons, using a real token table opening and ML-DSA
+signing. Altered and truncated openings fail before signing. Six
+separate selector and request checks passed. The added native fixture,
+complete Node/CLI build and wallet-funded filing remain unverified.
+
+B0 and relay agreed at virtual DAA 19,722, with no new Qwen carrier
+in the scanned page. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-filing-live.8Lq7Zo/page.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-signing.TyGvQf/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-quote-selector.iQo28j/tests.log`.
+
+## Build the Batch Stop EOG opening from the original tokenizer
+
+The booked Stop quote now exposes the original tokenizer commitment,
+exact raw length, rendering rule and EOG count. The operator command
+`misaka palw batch-stop --tokenizer-json FILE --eog-id ID` builds the
+opening locally with the native rendering rules. Repeat `--eog-id` for
+the EOG set from the model configuration. The builder bounds its input
+and scratch, checks the exact JSON commitment and authenticates the
+result against the quoted table root before signing. The existing
+`--eog-opening` input still accepts a prepared opening.
+
+The extracted tokenizer tests passed for altered input, incorrect IDs
+and a byte-identical opening against the full-table builder. The real
+local Qwen 8K tokenizer matched the recorded T12 tokenizer commitment.
+With the Qwen test geometry of 151,936 entries and two EOG IDs, the
+opening was 408 bytes and local derivation plus verification took
+1,837 ms. The reference table root for that comparison was computed
+locally. The CLI argument extraction passed one test for both input
+modes and their conflicts. Whole-node/CLI filing and Panel automation
+under the funded profile remain unverified.
+
+B0 and relay agreed at virtual DAA 19,724, with no new Qwen carrier in
+the scanned page. See
+`/private/tmp/misaka-t12-oom-20261102/g14-eog-derive-live.osM9DH/page.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-eog-derive.E67SXc/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-eog-cli.a45ROE/tests.log`.
+
+## Price the complete response at its Batch Finish slot
+
+The preclaim cost projection now receives the operation, demand
+position and original maximum body length as well as the signed carrier
+length. This lets a profile reserve authentication work and IO at
+Finish, where the whole response is checked. Open also requires one
+control and positive work before the graph can be reserved.
+
+The extracted suite passed 45 checks. Its latest-notice case still
+fits exactly 10,000 DAA with separately priced Finish work and IO.
+Increasing Finish work beyond a slot's capacity refuses the graph
+atomically. The fixture uses synthetic service costs. The production
+funded-original schedule resolver still returns typed-missing
+`Schedule`, so these results do not qualify the existing estimate or
+verify original admission for a real model.
+
+B0 and relay agreed at virtual DAA 19,724 on a newer selected tip.
+The scanned page contained no new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stage-cost-live.zijqG3/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stage-cost.LwBogh/tests.log`.
+
+## Stream numerical root inputs when quoting a Batch Open
+
+The operator quote now visits all authenticated numerical roots one at
+a time. It uses the same canonical target enumerator as the native
+envelope, retaining only the positional maxima and the selected root's
+range map. It resolves the demand partition after the whole traversal,
+including maxima contributed by later roots. The existing quote path
+still checks the signed notice, booked Open and response slots.
+
+The extracted suite passed 48 checks, including a later root that
+changes the partition of an earlier selection. The native funded
+fixture now compares the streamed range list with the retained
+preclaim envelope. That fixture has not run. The cached Studio Core
+lacks the streaming API, so it cannot verify the all-root runtime
+against the candidate. The current material estimate allows 4,096
+leaves, while the retained SmolLM2 execution has 15,252. A qualified
+profile and a guarded integrated build remain necessary for the real
+model and original-admission test.
+
+B0 and relay agreed at virtual DAA 19,725, with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-streamed-open-live.glDhTO/page.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-streamed-open.mVpk2D/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-cached-cover.CGbHR7/build.log`.
+
+## Measure every numerical root of the retained SmolLM2 execution
+
+The pinned SmolLM2-135M fixture was walked through all 15,252 leaves,
+including all 810 numerical roots. The offline harness compiles the
+candidate's per-root dependency walker and coordinate resolver, and
+links the cached Studio Core binding verifier. It avoids rebuilding
+all of Core while the full build's memory and disk entry guards are
+unmet. It runs with a 1.5 GiB native limit and a separate scratch
+reservation for the extracted walk.
+
+| Quantity | Whole traversal | Maximum per root |
+|---|---:|---:|
+| Explored edges | 16,092,270 | 26,326 |
+| Explored coordinates | 3,427,110 | 5,491 |
+| Parameter memberships | 3,240 | 4 |
+
+The 26,326-edge per-root limit reproduces the result. The 26,325-edge
+limit refuses at leaf 10,143 without a completion result. The first run
+took 4.225 seconds for the walk. A second pass with native response
+byte ceilings found at most 10 numerical ranges, 265,397 bytes in any
+one range and 38 raw parts for any one root. Bounding each of the 10
+reservation positions by the global maximum yields a conservative 170
+raw parts regardless of target order. This calculation includes the
+three-token prompt with its larger Merkle allowance and complete IDs
+when required. It excludes alternate actors, terminal replay, fees,
+retention, recovery and concurrent obligations. It provides input to
+profile measurement, without qualifying a T12 service schedule.
+
+The streaming numerical quote now accepts explicit cumulative and
+per-root bounds from its caller. Its live quote still uses the
+existing estimate. The native funded fixture compares the retained
+and streamed demand under distinct per-root limits, but has not run.
+
+B0 and relay agreed at virtual DAA 19,726 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-smol-cover-live.JOlv0E/page.json`
+and the baseline, edge-cap and wire receipts under
+`/private/tmp/misaka-t12-oom-20261102/tfp1-smol-all-root-extracted.G1ixPg`.
+
+## Measure the legacy frontier and the numerical delivery reservation
+
+The original install still checks the legacy shared frontier against
+its whole-universe service budget. For the pinned SmolLM2 source,
+3,902,405 legal coordinates already exceed the 10,000-packet estimate.
+Counting each native response bound with the legacy per-coordinate
+rounding gives 242,570,073 packets. The candidate now rejects the
+obvious over-capacity case from the coordinate count and otherwise
+groups equal native bounds for the exact packet count. The grouped
+and per-coordinate counts matched in the extracted run. This
+preserves the legacy capacity rule.
+
+The measured numerical envelope of ten 265,397-byte ranges was also
+booked through the candidate scheduler. One selected root requires
+170 raw parts and 193 total packets in this scenario. With one
+control per DAA, placeholder verification and terminal costs, an empty
+book and one DAA of recovery, the schedule used 3,315 DAA from original
+acceptance, including the latest notice. Carrier bytes were 3,595,856.
+The extracted suite passed 49 checks. The native fixture's cost
+callback was updated to the stage-aware API, but the fixture has not
+run. This scenario excludes the full adjudication graph, concurrent
+claims and role obligations.
+
+Batch originals still need an independently funded admission path
+that binds their complete native graph to the original. The existing
+full-universe frontier check cannot qualify that path, and its legacy
+requests require their own reservation contract.
+
+B0 and relay agreed at virtual DAA 19,727 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-frontier-count.t1Oqgm/result.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-smol-reservation.GFHELe/scenario.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-smol-frontier-live.eR22Ff/page.json`.
+
+## Separate the Batch initial notice from legacy delivery
+
+The candidate shared context has a version for Batch originals. Under
+the Batch fence it accepts one signed initial notice inside the
+existing RFC-0031 window. The notice must find the original's own
+future numerical or Stop FullIds opening slot in the rooted service
+book. The notice carries no legacy delivery allocation. The old
+request replay remains idempotent, and a distinct follow-up cannot
+open a legacy slot. The legacy shared body, numerical and material
+ingress reject this context. An actual Batch Open and its subsequent
+responses still require their separately validated reservations.
+
+The extracted slot check passed for both opening kinds and rejected
+missing, foreign, stale, undersized and out-of-window bookings. It
+uses a stub for the service book. The native fixture now starts at
+the last valid notice DAA, checks rejection one DAA later, coalesces
+the replay and rejects a new legacy request before continuing through
+Open and Finish. That native fixture has not run. No production
+installer creates this context version yet. That requires the
+complete, funded Batch admission graph and its rule profile.
+
+B0 and relay agreed at virtual DAA 19,728 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-notice-live.Zm2tIg/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-notice-slot.gxG348/tests.log`.
+
+## Bind the initial Batch notice to its opening route
+
+A Batch-only initial notice names a StepLeaf for numerical delivery
+or Ids at offset zero for Stop FullIds. Admission looks up only the
+corresponding opening slot in the original's rooted service book.
+Open quotes and rooted demand validation resolve the exact initial
+notice key. A Stop opening requires the canonical single FullIds
+range. The numerical operator quote checks the chosen leaf against
+the notice before building the demand. The legacy shared context
+keeps its existing interpretation.
+
+Three extracted tests passed with stubbed service-book and frame
+reads. They cover route derivation, cross-route and invalid bookings,
+and the canonical Stop range. The extended native fixture has not
+run. It now covers a signed unsupported coordinate and mismatched
+Stop and numerical Open quotes before proceeding through the signed
+native Open and Finish. The complete numerical graph and its rooted
+admission contract still require native validation, measured costs,
+role consent and real funds. No production installer or activation
+was exercised.
+
+The paired read-only scan resumed after one RPC timeout. B0 and relay
+agreed at virtual DAA 19,729. The page contained three selected
+blocks and zero Qwen carrier references.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-notice-route.gEX0Z2/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-notice-route-recheck.MasuqY/page.json`.
+
+## Project numerical Batch capacity before constructing the legacy frontier
+
+The native paired-original geometry can now derive its numerical
+Batch envelope directly from the prepared source, current registered
+layout and current service namespace. The same projection supplies
+the Open quote and the preclaim position maxima. Admission mode
+keeps no selected root and releases each root's range map after
+folding it. Quote mode keeps the selected ranges and still visits all
+later roots before deciding the shared partition.
+
+Three extracted projection tests passed with stubbed source walks.
+They cover identical maxima between both modes, a late bound change,
+source mismatch, empty and over-cap input, and preservation of a
+late local resource refusal. The native funded fixture now computes
+this envelope before constructing the legacy requirements, compares
+it with the old projection, and uses the new envelope for the
+reservation dry run. The integrated fixture has not run. The live
+funded coordinator still uses the legacy source graph. The verified
+numerical envelope must be joined to the complete terminal, role,
+funding and retention graph before switching its admission path.
+
+B0 and relay agreed at virtual DAA 19,730. The two selected blocks
+contained no new Qwen carrier reference.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-streamed-preclaim.ekAdNq/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-streamed-preclaim-live.GbbvxY/page.json`.
+
+## Book numerical verification and Stop on the same original service row
+
+The delivery join matches the prepared frame and numerical envelope
+to the candidate service row's claim, allocation, source, acceptance
+point and profile. Verification and terminal packet identities are
+derived from the original and scope. All numerical Finish packets
+precede verification. For a constrained frame the same candidate
+requires the matching Stop operands and books its FullIds delivery,
+verification and signed filing. The common terminal follows both
+paths. Retention and carrier storage rent include the Stop operands.
+An absent or foreign Stop and an underpriced Stop carrier are refused.
+
+The extracted scheduler suite passed 50 tests. The added scenario
+used the retained SmolLM2 numerical bounds of ten 265,397-byte ranges
+plus a synthetic constrained Stop with 2,050 IDs. On an empty
+book with placeholder verification and terminal costs and one DAA
+of recovery, it booked 199 packets and 3,629,249 wire bytes in
+3,321 DAA from original acceptance. Frame and rooted row reads were
+stubbed. The funded native fixture now calls the delivery join and
+checks that an unrelated profile is refused. The native fixture has
+not run. Binding the measured response opportunities, complete
+adjudication, role consent and payer funds to original admission
+remains necessary. The join does not record execution or a verdict.
+
+B0 and relay still agreed at virtual DAA 19,730 and the scan returned
+no additional selected blocks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-native-delivery.YYKOiB/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-native-delivery-live.JEbQ9S/page.json`.
+
+## Keep the provider response wait in the original reservation
+
+The native delivery candidate previously booked causally ordered
+slots without reserving provider preparation time. It now gives
+Open, Begin, Parts, Finish, verification, optional Stop and the
+terminal filing distinct immutable service intervals. A positive
+provider wait follows the latest permitted Open. The earliest
+Begin and latest Finish must fit the draft TTL together. The
+terminal quote uses the last DAA in its interval plus the separate
+recovery and exclusive-boundary margins. Existing unphased callers
+keep their previous scheduling behavior.
+
+The extracted scheduler suite passed 50 tests. The measured
+SmolLM2 numerical bounds plus the synthetic Stop used 199 packets
+and a 3,514 DAA upper bound with the scenario's 64 DAA provider
+wait and placeholder service costs. The test skipped an Open
+opportunity and repaired it inside the Open interval. The Begin
+slot still allowed the full wait. The test also refused an
+undersized Parts interval, a missing wait and a draft TTL shorter
+than the allowed Begin-to-Finish span. Frame and rooted row reads
+were stubbed. The integrated fixture has not run. Post-Open repair
+remains subject to the signed response deadline. The production
+profile still needs measured per-phase capacities, signed deadlines
+that cover its legal repair opportunities, funded roles and actual
+adjudication through the public path.
+
+B0 and relay agreed at virtual DAA 19,731. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-phase.dcq9og/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-phase-live.yXudci/page.json`.
+
+## Keep the signed response deadline stable across Finish repair
+
+Batch-only Open quotes and acceptance now derive the response
+deadline from the exclusive end of the original's booked Finish
+interval. Validation checks ownership, assigned slots, separation
+between prerequisite phases and the provider preparation interval.
+The earliest possible Begin and latest possible Finish must fit
+the draft TTL. The older shared context continues to use the
+deadline derived from assigned slots.
+
+The extracted suite passed 51 tests after serializing code generation
+following a local disk-space error. The new test moved an unsupplied
+Finish from DAA 17 to 20 without changing the request root or the
+signed exclusive deadline of 21. It rejected a changed deadline and
+a draft TTL that could expire before the latest slot. The native
+fixture now also tests repair against the signed Open, but has not run.
+An inactive alternative can still interfere with combined-route
+repair. Selecting one route must retire the unused route from the
+repair candidate while preserving its rooted reservation history.
+
+B0 and relay still agreed at virtual DAA 19,731. The scan returned no
+additional selected blocks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-signed-phase.CmDSmR/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-signed-phase-live.UdYiPy/page.json`.
+
+## Repair only the route selected by the initial notice
+
+The recovery sweep resolves the accepted Batch-only notice even
+before its first Open. It follows the original service row's causal
+edges and excludes packets specific to the unselected numerical or
+Stop route from the repair set. Shared predecessors, the common
+terminal and independent obligations remain repairable. Inactive
+packets, their original capacity and their recorded dependencies
+stay in the rooted service row for replay and reorg.
+
+The extracted suite passed 52 tests. The added regression shows
+that ordinary repair fails atomically when an unused Stop Open
+expires, while the selected numerical Finish can move to DAA 17
+under the new filter. It checks the inverse route selection and
+retention of the unused slot's assignment. The test exercises the
+real scheduler and extracted route filter. The native state lookup
+and combined-route fold have not run in the integrated node.
+
+B0 and relay agreed at virtual DAA 19,732. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-route-repair.YBjLTB/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-route-repair-live.maEHcy/page.json`.
+
+## Quote the selected numerical leaf from the booked range layout
+
+The Batch-only numerical Open quote now visits the signed notice's
+single leaf using the bounded native input walk. It derives the
+canonical material targets for that leaf and reads each group's
+position count from the original's owned Begin packets. It uses the
+same partition the preclaim all-root projection booked, without
+scanning unrelated roots on every quote. The signed lengths still
+have to match those targets and fit the original response slots.
+The original admission projection and the older quote path retain
+their existing full traversal.
+
+The partition regression checks every prefix and ordinal in a
+multi-group envelope and rejects a missing earlier group. The native
+source fixture now compares the one-leaf walk with the complete
+parameter and dynamic input cover, and checks the invalid leaf
+boundary. The full native fixture has not run. The accepted-carrier
+fold still needs to call the same selected-leaf projection so a
+directly signed carrier cannot bypass the operator quote.
+
+B0 and relay agreed at virtual DAA 19,733. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-booked-leaf.xysTP1/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-booked-leaf-live.9yk7gS/page.json`.
+
+## Validate numerical Open targets in the accepting fold
+
+For the Batch-only context the accepting Node now reconstructs the
+selected numerical leaf's targets from the accepted notice, source
+and owned reservation. It checks the complete group of range IDs,
+body bounds, authentication modes and original collection deadline.
+The RPC quote and accepted carrier use the same selected-leaf
+projection. Local resource exhaustion is propagated as a native
+resource refusal. Retained response checks continue to use the
+already accepted immutable demand.
+
+The extracted suite passed 54 tests. The added test rejects a
+substituted or omitted target, zero or over-bound length, and a
+different authentication mode. The updated native fixture derives
+an actual numerical leaf and verifies that a directly signed foreign
+target is refused before the valid Open is applied. The integrated
+fixture has not run. Production admission, terminal numerical
+adjudication and the public same-claim path still need verification.
+
+B0 and relay agreed at virtual DAA 19,734. The one selected block
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-native-leaf-open.pIlDum/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-native-leaf-open-live.VSzttL/page.json`.
+
+## Use the booked range when admitting Batch material responses
+
+The Batch-only response path no longer re-enumerates the legacy
+all-root input cover at Begin or at a parameter Finish. The accepted
+Open already checked the selected leaf's target, declared length and
+authentication mode. Each response still checks the exact owned
+slot, signed request root, draft and applicable carrier fee. Finish
+still authenticates the full body against the original before making
+it canonical. Parts no longer reconstruct the source when the
+operation only needs the retained draft and signed slot.
+
+A new submitter's draft ledger uses a conservative ceiling from the
+original's owned packet byte costs. It includes carrier overhead and
+therefore serves as a ceiling, with exact range and slot enforcement
+remaining independent. Missing packet identities and overflow fail
+closed. The extracted suite passed 55 tests, including unrelated,
+missing and overflowing packet costs. The native fixture reduces the legacy cover limit to zero
+after accepting Open and then exercises Begin, Part and Finish.
+The integrated fixture has not run.
+
+B0 and relay agreed at virtual DAA 19,735. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-booked-response.uxlcTw/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-booked-response-live.pAWgzc/page.json`.
+
+## Load selected Batch inputs for the numerical verifier
+
+The material adapter now accepts a canonical selected target list
+and a verification DAA. It looks up those rooted inputs directly,
+checks their original and retention interval, and re-authenticates
+their bodies before constructing the existing evidence store. It
+quotes retained step and prompt workspace before decoding and
+keeps the memory lease with the loaded material. The generic
+loader also skips the legacy shared-query scan for Batch-only
+contexts, where those rows cannot contain bodies.
+
+The extracted timing test passed all seven boundary assertions.
+The native fixture adds missing, duplicate and same-DAA refusal
+checks and reads back the authenticated prompt through the evidence
+store. The integrated fixture has not run. The loader is a
+preparation API. The reserved terminal operation must still derive
+the complete selected list, invoke the numerical verifier and
+commit its outcome with the claim.
+
+B0 and relay agreed at virtual DAA 19,735. The one additional
+selected block contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-selected-material.ojxsDg/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-selected-material-live.8lMql9/page.json`.
+
+## Prepare the complete numerical leaf at its reserved verification point
+
+The preparation API derives the leaf from the accepted initial
+notice and walks it once. It reads the same booked range partition
+used by Open admission, requires every necessary accepted Open,
+and checks that each Finish is owned, precedes verification and is
+recorded as a causal dependency. Its material must already be
+canonical by that Finish and match the signed length. Only after
+the complete set is present does the preparation API load and
+authenticate it for the numerical verifier. Unused reserved groups
+do not become required inputs.
+
+The extracted group traversal test passed on Linux with a 1 GiB
+virtual-memory limit and single-threaded linking after the local
+disk was unable to create compiler scratch. The native fixture
+adds a refusal for an incomplete accepted group. The integrated
+fixture and the terminal arithmetic/verdict wiring remain open.
+
+B0 and relay agreed at virtual DAA 19,736. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-material-closure.oKThNp/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-material-closure-live.hTO9Qs/page.json`.
+
+## Replay the selected numerical leaf with the existing TIR checker
+
+The read-only Batch verifier now prepares all selected inputs at
+the booked verification point, rehydrates the original binding from
+the registered class and layout, and applies the existing cone
+builder and objective checker to the authenticated material store.
+Both passes use bounded work, and the canonical carriage must fit
+the native close ceiling. Only a checked equality or a checked
+fault yields a finding. Missing inputs, work refusal and malformed
+material remain errors.
+
+The extracted test compiled the candidate replay helper and the
+tiny execution fixture against the cached native TIR builder and
+checker. An honest leaf matched, the forged leaf reproduced the
+existing fault and evidence ID, and byte/work caps refused replay.
+The test has not exercised the integrated Batch fold. The remaining
+terminal path needs an authenticated carrier, a rooted finding,
+measured workspace and work prices, and the separate claim-level
+credit rules.
+
+B0 and relay agreed at virtual DAA 19,737. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-replay.zPzNBl/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-numerical-replay-live.MkveFL/page.json`.
+
+## Authenticate the booked numerical verification intent
+
+The candidate signs the network, version, original claim, scope,
+accepted initial notice, selected leaf, native policy, filer and
+the deterministic verification and terminal packet IDs. Before
+replay, the verifier checks the original notice and active
+eligible external filer, the original's packet ownership, and the
+encoded size and accepting DAA against the current assignment.
+Permitted repair can move the slot before inclusion without
+changing the signature. The verifier returns a local finding.
+This change has no new BCT1 operation, rooted verdict writer or
+public activation.
+
+The extracted suite passed 55 tests, including an actual ML-DSA-87
+round trip, altered signature scope, and refusal of unsupported
+versions, oversized signature lengths, truncation and trailing
+bytes. This extraction exercises the signature and bounded codec.
+The native accepting-state checks and verdict path have not run
+in an integrated fixture. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-signed-numerical.IroyTP/tests.log`.
+
+B0 and relay agreed at virtual DAA 19,739. Four additional
+selected blocks across the two contiguous pages contained no new
+Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-signed-numerical-live.IbSgtC/page.json`
+and
+`/private/tmp/misaka-t12-oom-20261102/g14-signed-verification-pair.P80gmo/page.json`.
+
+## Journal the authenticated numerical Batch result
+
+The native writer now verifies the signed intent before storing one
+immutable numerical finding per original. The row binds the source,
+notice, selected leaf, signed intent digest, accepting point and original
+material horizon. A reproduced fault records its existing evidence ID.
+The row does not apply claim credit, slash, settlement or Final. Identical
+replay at the same accepting point is idempotent.
+
+The staged row appends key 34 and row 41. Native byte and heap visitors,
+retention indexing, snapshot checks and delta replay cover the new row.
+A journal insertion must match its accepting point. Removal requires the
+material horizon, and reversing either transition uses the exact prior
+value. A retained row must still point to the original's accepted
+numerical notice on the restored branch.
+
+The extracted wire test passed the original-key, tag, bounded scan,
+round trip, truncation and unsupported version checks. Rust files parsed
+with rustfmt and the diff passed whitespace checks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-receipt.zTst91/tests.log`.
+The integrated journal and native acceptance fixture have not run.
+The BCT1 dispatcher still needs an admitted replay budget from the
+native profile and a separate terminal operation using the receipt.
+
+B0 and relay agreed at virtual DAA 19,740. The additional selected block
+had DAA 19,739 and no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-receipt-live.s4EXlY/page.json`.
+
+## Quote the actual numerical verification slot
+
+The native delivery planner now derives the numerical verification cost
+from the typed replay budget. The signed BCT1 body and tag take 4,970
+bytes. The quote includes the two arithmetic passes, target and source
+limits, and profile-supplied non-arithmetic work and IO. A missing
+workspace or required limit, or overflowing work, refuses the quote.
+Before source reconstruction, the native verifier checks the reserved
+packet cost and current accepting DAA against the same quote.
+
+The extracted suite passed 56 tests. The signed codec test compared its
+actual encoded length with the fixed quote. The cost test covered both
+passes, missing workspace, missing non-arithmetic work or IO, and
+overflow. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-service-price.rBdHnf/tests.log`.
+The native reservation fixture also asserts that the booked packet uses
+this quote, but the integrated fixture has not run. The profile's
+production values still require measurements. The BCT1 dispatcher and
+terminal credit remain separate outstanding work.
+
+B0 and relay agreed at virtual DAA 19,740. The additional selected block
+had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-price-live.C6ZsYY/page.json`.
+
+## Dispatch the signed numerical Batch carrier
+
+BCT1 appends tag 3, VerifyNumerical, without changing the previous
+three tags. Its fixed signed envelope is decoded through the existing
+bounded UTXO handoff and carries no Begin storage debit. The template
+checks the current assignment. In accepting order, the fold requires
+native rules at the same point and a replay profile matching the rooted
+service book. The numerical verifier still checks the exact booked
+cost, signer and original notice before replay and receipt insertion.
+The production processor supplies no numerical profile pending
+measurement and admission of that profile.
+
+The extracted suite passed 56 tests. The numerical test uses a real
+signature, checks the full BCT1 tag and size, refuses truncated
+carriage, and exercises UTXO handoff, accepting point and fees. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-carrier.y7oTgK/tests.log`.
+The native test additionally covers slot selection, missing profile,
+forged signature and incomplete material without a receipt. That
+integrated fixture has not run. A complete numerical case, terminal
+settlement and public activation still need verification.
+
+B0 and relay agreed at virtual DAA 19,742. The four additional
+selected blocks contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-carrier-live.gjtGVL/page.json`.
+
+## Bind numerical terminal lookup to the accepted branch and booking
+
+The terminal reader requires the rooted numerical receipt digest,
+the original's owned verification and terminal packets, the causal
+edge between them, and the exact later accepting DAA within the
+original deadlines. Recovery keeps an accepted verification slot
+fixed while the outstanding terminal remains repairable. The reader
+does not yet issue a terminal carrier or apply settlement.
+
+The native fixture now checks missing and substituted receipts and
+early terminal attempts using a fixture receipt. The integrated
+fixture has not run. Rust parser and whitespace checks passed.
+
+At the user status check, remote main was
+`4128e4d85aad2a88fc0c7a27d8e5bd95bd33913a` and did not contain the
+Batch verification candidate. B0 and relay still agreed at virtual
+DAA 19,742 with no additional selected blocks.
+
+## Retain the bounded numerical fault material
+
+A confirmed local fault now returns the actual checked TIR cone and
+its evidence ID. The Batch adapter strips the registered program,
+reserves the encoded memory, and retains the canonical bytes with the
+finding. The V2 receipt caps bytes at the native maximum close size,
+uses shared ownership across journal copies, and refuses a fault
+without material. V1 receipt bytes remain readable. The terminal
+reader refuses to use a V1 fault with only an ID.
+
+Two extracted tests passed. The replay test distinguished an honest
+leaf from a forged leaf and returned exactly the cone the checker
+used. The receipt test checked V1 byte compatibility, V2 round trip
+and oversized-length refusal in both scanner and decoder. Logs:
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-fault-retain.l4GMpu/replay-tests.log`
+and
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-fault-retain.l4GMpu/receipt-tests.log`.
+Rust parsing and whitespace checks passed. Native verification and
+journal integration still need execution. The production profile must
+price retained bytes and archive lifetime, and the terminal must
+consume verified material through the existing accounting and archive
+rules. The candidate remains dormant.
+
+B0 and relay agreed at virtual DAA 19,743. The two additional selected
+blocks had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-fault-live.YwNJb8/page.json`.
+
+## Book retention for a numerical Batch fault
+
+The replay profile now declares a positive, native-bounded maximum
+fault size. The original's verification packet books that maximum
+in addition to the actual carrier size. Acceptance compares the
+packet with the same profile quote and refuses a fault above the
+booked limit before serializing retained material. The admission
+quote separates Node-written bytes, byte-DAA from the earliest
+verification through the original retention horizon, and the
+corresponding storage rent from fees on provider carriers. Archive
+lifetime and the production payer still require integration.
+
+The extracted suite passed 56 tests, including carrier size,
+verification capacity, and zero or oversized retention limits. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-retention-book.FmpuO2/tests.log`.
+The native fixture asserts the reserved cost and the resulting
+retention quote, but has not run. Rust parsing and whitespace
+checks passed. Public activation and terminal accounting remain open.
+
+B0 and relay agreed at virtual DAA 19,744. The additional selected
+block had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-retention-live.DavLY4/page.json`.
+
+## Recheck retained fault material in the numerical terminal slot
+
+The terminal adapter reads the same accepted receipt and original
+booking, checks the verification quote and independently reserved
+terminal work and IO, and bounds the retained wire shape before
+decoding. It restores the original registered program only after
+comparing the program-free binding and selected leaf. The native
+checker must reproduce the receipt's evidence ID within the replay
+ceiling. The returned proof is program-free and retains its memory
+ticket. A local match carries no claim-level credit.
+
+The extracted TIR fixture reproduced the stored fault and refused a
+different execution, leaf or evidence ID. The extracted service suite
+passed 56 tests, including short work and IO reservations. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-terminal-replay.xk0UY6/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-terminal-price.dxCOy6/tests.log`.
+Native fold and terminal settlement integration remain unexecuted.
+The adapter is not yet called by a terminal carrier.
+
+B0 and relay remained at virtual DAA 19,744 with the same selected
+tip. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-terminal-replay-live.FJUqfc/page.json`.
+
+## Dispatch the numerical fault terminal carrier
+
+BCT1 tag 4 carries the original claim and rooted finding digest in
+133 bytes. The original terminal reservation must cover its bytes,
+work and IO. The accepting fold uses the native replay profile and
+independently reproduces the fault from retained material. It takes
+the filer from the accepted notice, invokes the existing shared
+claim conviction, and saves the verified arithmetic cone in the
+existing Court archive evidence format. A failed economic transition
+restores its checkpoint. A local match refuses this fault operation
+and grants no claim credit. The production numerical profile remains
+unset.
+
+The extracted suite passed 57 tests, including terminal encoding,
+length and trailing-byte refusal. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-terminal-carrier.L93HmB/tests.log`.
+The native fixture now routes a local-match receipt through the
+terminal handoff and checks refusal without state changes. It has not
+run. A complete native fault settlement and positive claim path still
+need integration verification, as do archive pricing and public
+activation.
+
+B0 and relay agreed at virtual DAA 19,744 on the new selected block.
+There was no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-terminal-carrier-live.yZrlxj/page.json`.
+
+## Expose and relay the rooted numerical terminal finding
+
+The existing claim Court view now includes the selected branch's
+numerical finding digest, verification block and DAA, retained fault
+availability, and currently booked terminal DAA. The new
+`misaka palw batch-convict` command funds a terminal carrier from
+that view. It previews by default. Submission requires the booked
+DAA and a second, identical view after funding. The carrier uses a
+funding key and leaves the original notice issuer as the filer.
+
+The extracted CLI quote test passed for matching claims and the exact
+submission DAA, and rejected another claim, missing material, a
+local match and early submission. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-cli-quote.cWyuhT/tests.log`.
+Rust parsing and whitespace checks passed. The RPC fixture was added
+but has not run. No transaction was submitted.
+
+The isolated Linux check of `587a1808c` is still active on IBM under
+`t12-batch-native-587a1808c-check.service`, invocation
+`460e5e2f1da647b784dd040aab7462cf`. It is compiling dependencies
+with 6 GiB MemoryMax and one job. The newer RPC and CLI changes are
+outside that source snapshot.
+
+## Quote and sign the numerical verification carrier
+
+The operator Court RPC now accepts the verify-numerical selector.
+The quote resolves the native profile at the actual reservation,
+checks its cost and the accepted material, and returns the original
+notice issuer, leaf, network, scope and signing policy. The new
+`misaka palw batch-verify-numerical` command requires the claim,
+notice and leaf explicitly. It verifies the quote against the
+signer and network, signs the bounded carrier, and funds it.
+Broadcast requires the booked DAA and the same quote and tip
+immediately before submission. The shipped profile is unset.
+
+The extracted CLI quote test passed, including the full u64 leaf
+range and mismatched notice, leaf, signer and network. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-verify-cli-quote.SHpceB/tests.log`.
+Rust parsing and whitespace checks passed. The RPC selector and
+native missing-profile/missing-material assertions have not run.
+The earlier isolated Linux check remains active on its original
+`587a1808c` snapshot. No carrier was submitted.
+
+## Commit the relative Batch funding graph
+
+The admission quote now commits the actual bounded Batch graph.
+It includes the original, relative windows, recovery, service
+costs, target size ceilings, retained control bytes, storage
+schedule and dependencies. It uses the native expansion's stage
+and range order to number nodes. Actual packet IDs include the
+accepted allocation and are excluded, as are assigned DAA values.
+The rooted book still validates and retains the actual packet IDs.
+
+The extracted suite passed 55 tests. The 10,000 DAA reservation
+fixture checked that a shifted acceptance and renamed packet IDs
+produce the same relative digest, and a changed IO price changes
+the digest. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-funding-graph.qZagCs/tests.log`.
+The production payer's signature, role consents and complete graph
+are not yet bound to this quote.
+
+The existing isolated Linux check of `587a1808c` continued under
+invocation `460e5e2f1da647b784dd040aab7462cf`. It was observed
+compiling RocksDB objects in the same cgroup.
+
+## Bind a native Batch reservation to the payer's original scope
+
+The escrow precheck can now derive a joint scope from the original
+duties and the Batch reservation. It requires the same original,
+a valid reserved duration and a priced retention envelope. The
+joint digest binds the two graph identities and the Node-produced
+storage fee. The expected original funding includes that fee once
+and covers the longer material horizon. Provider carrier rent is
+still checked against the corresponding carriers' own funds.
+
+The extracted escrow suite passed six tests. A real payer signature
+and real transaction output covered the combined scope at both
+ends of the acceptance interval. Legacy consent, another graph,
+underfunding and short retention were refused. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-payer-scope.SBV74P/tests.log`.
+The native coordinator fixture now attempts the old signature
+against its actual expanded Batch graph, but has not run. Production
+admission still needs to choose, price and install that complete
+Batch contract atomically.
+
+The existing IBM Linux check of `587a1808c` remained active under
+invocation `460e5e2f1da647b784dd040aab7462cf`. B0 and relay agreed
+at virtual DAA 19,749. Nine additional selected blocks across the
+two contiguous pages had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-payer-scope-live.qcKCA2`.
+
+## Install the prepared Batch book and frontier together
+
+The native admission writer now checks the unchanged service row,
+same-block original acceptance, prepared scope, material horizon and
+matching replay profile. The new book must own the first Open,
+verification and terminal slots, schedule them in order after the
+latest notice and within the admitted hard window, and carry the
+terminal's causal edge and full costs. It journals the book and
+Batch-only context in one rollback boundary. This writer is separate
+from the existing legacy frontier path.
+
+The native material fixture now uses this writer instead of directly
+inserting the Batch context and book. It exercises a missing terminal
+dependency and asserts an unchanged state root before the valid
+installation. Rust parsing and whitespace checks passed. The native
+fixture has not run. The production coordinator still has to call
+the writer with a complete payer-approved book in the original
+admission checkpoint. The existing isolated Linux job is compiling
+its older `587a1808c` snapshot.
+
+## Reserve the original duties separately from Batch material
+
+The Batch base candidate now derives the liable signer turns and
+holding packet from the native original without constructing a legacy
+source projection. It preserves previous release records and causal
+edges in the candidate service row. Its relative funding digest binds
+the liable signers, service profile, holding window, costs and capital.
+The ordinary funded admission continues to reserve its full legacy
+source projection.
+
+The native fixture now reserves Batch material on this smaller base,
+checks that no legacy source packet is included, and prepares a signed
+TFO1 output for the combined scope. It asserts that the earlier scope
+is refused and the newly signed scope resolves to the actual funding
+outpoint. The fixture has not run. Rust parsing and whitespace checks
+passed. Production still needs a pinned Batch schedule and the
+coordinator must install the resulting book and escrow together.
+
+The IBM Linux check of `587a1808c` remained active under invocation
+`460e5e2f1da647b784dd040aab7462cf`, with 104 RocksDB objects observed.
+This source change is outside that snapshot. No public carrier was
+submitted during this step.
+
+## Use the signed Batch reservation at the paired original admission seam
+
+The paired FP object now selects Batch only when the native schedule
+and fence agree. It derives the bounded numerical envelope from the
+prepared original, reads the rooted tokenizer registration for a
+constrained Stop, and reserves the delivery and independent replay
+before checking the payer's exact TFO1 output and signature. A missing
+or mismatched replay profile refuses the candidate. At installation it
+checks the fixed original dispute clock and writes the frame, Batch
+frontier, service book and funded escrow inside the paired checkpoint.
+Ordinary originals continue to use the legacy frontier hooks.
+
+The tiny TIR fixture now calls the actual object fold twice. It asserts
+that an old payer scope is refused with the same state root, then that a
+signed Batch scope admits the original and roots its full service book,
+frontier and matching escrow. This fixture uses synthetic service rates
+and has not run. Rust parsing and whitespace checks passed. Neither the
+production schedule resolver nor the preset activation guard has been
+armed. No public carrier was submitted.
+
+The earlier isolated IBM check continued on `587a1808c`, invocation
+`460e5e2f1da647b784dd040aab7462cf`, with 146 RocksDB objects observed.
+It does not include this coordinator change.

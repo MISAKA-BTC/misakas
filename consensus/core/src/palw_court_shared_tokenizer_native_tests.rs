@@ -446,7 +446,9 @@ fn verified_tokenizer_registration_root_replay_and_carriage_require_native_conte
     use crate::palw_native_resource_v1::{NativeHeapV1, NativeWireReaderV1, NativeWireScanV1};
     use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2};
     use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
-    use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, palw_rooted_tokenizer_registration_v1};
+    use crate::palw_tokenizer_rendering_v2::{
+        PalwTfp1TokenizerIntakePinsV2, palw_rooted_tokenizer_opening_bounds_v1, palw_rooted_tokenizer_registration_v1,
+    };
 
     let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
     let (mut base, params, mut extras) = world(&fx, &fx.frame);
@@ -510,11 +512,22 @@ fn verified_tokenizer_registration_root_replay_and_carriage_require_native_conte
     let record = palw_rooted_tokenizer_registration_v1(&next, &extras, class, point.daa_score + 1).unwrap();
     assert_eq!(record.facts_v1().eog_count, 1);
     assert_eq!(record.facts_v1().lowest_eog_id, 7);
+    let quote = |state, daa, original| palw_rooted_tokenizer_opening_bounds_v1(state, &extras, daa, original, fx.frame.header_v1());
+    let original = fx.frame.original_v1();
+    assert!(quote(&parent, point.daa_score + 1, original).is_none());
+    assert!(quote(&next, point.daa_score, original).is_none());
+    let bounds = quote(&next, point.daa_score + 1, original).unwrap();
+    assert_eq!(bounds.registration_id, record.record_id_v1());
+    assert_eq!(bounds.eog_opening_bytes, borsh::object_length(&eog).unwrap() as u64);
+    let mut changed = original.clone();
+    changed.job.tokenizer_id = Hash64::from_u64_word(778);
+    assert!(quote(&next, point.daa_score + 1, &changed).is_none());
     let restored = borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&PalwStateCarriageV2::from_state(&next)).unwrap())
         .unwrap()
         .into_state(&params, Some(next.state_root()))
         .unwrap();
     assert_eq!(palw_rooted_tokenizer_registration_v1(&restored, &extras, class, point.daa_score + 1), Some(record));
+    assert_eq!(quote(&restored, point.daa_score + 1, original), Some(bounds));
 
     let mut prefix_filled = restored.clone();
     prefix_filled.class_semantics.get_mut(&class).unwrap().prefix_state_relation =

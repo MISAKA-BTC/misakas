@@ -2,6 +2,7 @@
 //! settlement, default permission, credit or a funded original admission.
 use crate::{
     Hash64,
+    palw_batch_court_v1::rooted::RootedBatchStopReceiptV1,
     palw_staged_court_state_v1::{PalwSharedCourtV1, PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row},
     palw_state_v2::*,
 };
@@ -31,6 +32,10 @@ pub enum CourtEndEvidenceV1 {
     /// material retention (user decision D3).
     DeadlineSweep {
         point: PalwBlockContextV2,
+    },
+    /// The exact accepted finding and signed operands survive an unresolved archive's longer lifetime.
+    BatchStop {
+        receipt: Box<RootedBatchStopReceiptV1>,
     },
 }
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -127,6 +132,7 @@ impl PendingCourtArchiveV1 {
                 _ => CourtEndDispositionV1::RelatedNativeTransition,
             },
             CourtEndEvidenceV1::TirConviction { claim, .. } if *claim == self.session.claim => CourtEndDispositionV1::TirClaimFault,
+            CourtEndEvidenceV1::BatchStop { receipt } if receipt.claim == self.session.claim => CourtEndDispositionV1::TirClaimFault,
             CourtEndEvidenceV1::DeadlineSweep { .. } => CourtEndDispositionV1::DeadlineSwept,
             _ => CourtEndDispositionV1::RelatedNativeTransition,
         }
@@ -205,6 +211,16 @@ impl PendingCourtArchiveV1 {
             CourtEndEvidenceV1::Native { point, .. } => Some(point),
             CourtEndEvidenceV1::TirConviction { point, .. } => Some(point),
             CourtEndEvidenceV1::DeadlineSweep { point } => Some(point),
+            CourtEndEvidenceV1::BatchStop { receipt } => {
+                receipt.check(&Key::CourtBatchStopReceipt(receipt.claim))?;
+                if receipt.operands.is_none() || receipt.fault_position.is_none()
+                    || (receipt.claim == self.session.claim
+                        && (receipt.source_id != self.source_id || receipt.material_until_daa > self.material_until_daa))
+                {
+                    return Err("court archive lacks the exact Batch Stop fault and source".into());
+                }
+                Some(&receipt.at)
+            }
         };
         if point.is_some_and(|p| p.daa_score < self.session.opened_daa) {
             return Err("court archive cause predates the active session".into());
@@ -233,6 +249,13 @@ impl PendingCourtArchiveV1 {
         {
             return Err("court archive substitutes original scope/material".into());
         }
+        if let CourtEndEvidenceV1::BatchStop { receipt } = self.evidence.as_ref()
+            && state.last_point().map_or(0, |point| point.daa_score) < receipt.material_until_daa
+            && !matches!(state.staged_court_row_v1(&Key::CourtBatchStopReceipt(receipt.claim)),
+                Some(Row::CourtBatchStopReceipt(saved)) if saved == receipt)
+        {
+            return Err("court archive substitutes the branch's retained Batch Stop receipt".into());
+        }
         for bond in [self.producer, self.session.challenger_bond] {
             if self.pending_nominal(&bond) != 0 && state.bond(&bond).is_none() {
                 return Err("court archive lost a pending financial actor".into());
@@ -249,6 +272,7 @@ impl PendingCourtArchiveV1 {
             CourtEndEvidenceV1::Native { point, .. }
             | CourtEndEvidenceV1::TirConviction { point, .. }
             | CourtEndEvidenceV1::DeadlineSweep { point } => Some(point),
+            CourtEndEvidenceV1::BatchStop { receipt } => Some(&receipt.at),
         };
         if point.is_some_and(|p| state.last_point().is_none_or(|tip| p.daa_score > tip.daa_score)) {
             return Err("court archive receipt is beyond the loaded accepted clock".into());

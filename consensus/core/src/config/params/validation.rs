@@ -383,6 +383,7 @@ impl Params {
         self.validate_palw_court_commitment_scope_v1()?;
         self.validate_palw_staged_public_court_v1()?;
         self.validate_palw_staged_route_extensions_v1()?;
+        self.validate_palw_batch_court_v1()?;
         // **The cross-lane G14 gates** (`crate::palw_g14_gates_v1`): G-18's legacy-filer prerequisite of the staged court, and the
         // arm-readiness record of every gated fence (G-10, N4, G-01 option (b), the reward liability horizon).
         self.validate_palw_g14_gates_in_v1(records)?;
@@ -3029,6 +3030,17 @@ impl Params {
             }
         }
         Ok(())
+    }
+
+    pub fn validate_palw_batch_court_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error::InvalidParams;
+        if !self.palw_batch_court_v1.is_some_and(|f| f != ForkActivation::never()) {
+            return Ok(());
+        }
+        if self.palw_batch_court_v1_fence().is_none() {
+            return Err(InvalidParams("Batch Court requires lifecycle audit and native TIR conviction at or below its fence"));
+        }
+        Err(InvalidParams("Batch Court requires a complete native profile and accepted carrier fold before activation"))
     }
 
     pub fn validate_palw_staged_public_court_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {

@@ -5,6 +5,15 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+'crate::tx::script_public_key::ScriptPublicKey': ('adapter', 'b09c259eb179559998c7f9db8a51f40dc7afd81c0b2b5851f126ccba479b7f4b'),
+'crate::tx::TransactionMass': ('adapter', '65e95a8b99dee19d4612d720ab0fa64e28ef24c2f571a0c862690dbb22773151'),
+# Version 2 alone appends the shared Stop control.
+'crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1': ('adapter', '06958b87167ebde2acab9689616e2fc2a4784667e75ac4b9ac0815d55f775246'),
+# Version 2 alone appends bounded fault bytes and accounts for their shared allocation.
+'crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1': ('adapter', '00f7469a8c407735da42f28069ac9f18c71da49c7d37cb3e40e51b8e00f1aac0'),
+'crate::palw_batch_court_v1::carriage::BatchStopControlV1': ('adapter', 'e2132316d25a649f99bb6b92e8d8d0a3bb75cee3119abc6641f4359d82f1e1db'),
+# Derived field order with a bounded range count and semantic checks on decode.
+'crate::palw_batch_court_v1::BatchDemandV1': ('reviewed-field-layout', '02af5a97321c0edb32931097314e522c65f1b28876950f965e959a28f539c297'),
 # Rooted v2 writes version, frame hashes and clocks, then the bounded roster.
 # The owner scanner restricts acquisition keys and quotes the complete roster.
 'crate::palw_tir_owner_schedule_rooted_v2::TirOwnerScheduleRowV2': ('adapter', 'd64b982f7b119a607b7c298bd09c89d7518bc720b7f1c2f6bf344a549922f55e'),
@@ -19,7 +28,7 @@ PINNED = {
 # aux151 key/value before allocation and rejects duplicate aux keys. Both the
 # direct decoder and shape adapter reject descending Positive key order before
 # map collection; the shape adapter additionally checks literal VALUE identity.
-'crate::palw_kernel_route_v1::PalwKernelRouteStateV1': ('adapter','43bd5d8077ef50e25f90fd5c4f3e155d03edc9fc02fe7fcad4ebeb8b0cef6154'),
+'crate::palw_kernel_route_v1::PalwKernelRouteStateV1': ('adapter','9f63d148fe50e24fb17c040dcf65c7128524c382dd1928ef84681d4d3f9918a6'),
 # Claude 2026-10-22: shared request intent: derived order; signature length exactly ML-DSA-87.
 'crate::palw_court_shared_tir_frontier_v1::SignedSharedRequestV1': ('reviewed-field-layout','71cf3dc5061b5f7d67717d6aa541b520a745f8183aa7e62af6585738e9afae8d'),
 # Claude 2026-10-22: tag 178 shared op: derived enum framing (u8 variant, fields in order, u32-length vecs); every bound checked before allocation.

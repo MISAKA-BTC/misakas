@@ -227,7 +227,11 @@ def aux_root(value):
         references(re.sub(r'mirror:[\w:]+','u8',alt),AUX_ORIGIN)
 for _n in AUX.NS:aux_root(_n['value'])
 FUNDED_MANUAL={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1'}
-while queue:
+wire_visited = None
+while queue or wire_visited is None:
+ if not queue:
+    wire_visited = visited.copy()
+    queue.append('crate::palw_batch_court_v1::carriage::BatchCourtWireV1')
  path=queue.pop(0)
  if path in visited:continue
  visited.add(path)
@@ -319,6 +323,53 @@ OWNER_NATIVE_HEAP = {
     'crate::palw_fork_choice_commitment_v1::PalwWeightAllocationSlotV1',
     'crate::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1',
 }
+OWNER_NATIVE_HEAP.update({
+    'crate::config::params::positive_assignment_v2::AssignmentNativePreimagesV2',
+    'crate::config::params::positive_court_v2::CheckProfile',
+    'crate::config::params::positive_court_v2::PositiveCourtPolicyV2',
+    'crate::config::params::positive_funding_relay_v2::AssignmentFundingRelayProfileV2',
+    'crate::config::params::positive_funding_relay_v2::FundingRelayFeeScheduleV2',
+    'crate::config::params::positive_funding_relay_v2::FundingRelayPhysicalProfileV2',
+    'crate::config::params::positive_funding_relay_v2::FundingRelayPolicyV2',
+    'crate::palw_batch_court_v1::rooted::RootedBatchDemandV1',
+    'crate::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1',
+    'crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayProfileV1',
+    'crate::palw_native_resource_v1::demand::MemoryLease',
+    'crate::palw_native_resource_v1::demand::Mutex',
+    'crate::palw_positive_assignment_funds_v2::AssignmentFeeScheduleV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentMoneyQuoteV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentPhysicalProfileV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentPhysicalUsageV2',
+    'crate::palw_positive_assignment_material_v2::AcceptedMaterial',
+    'crate::palw_positive_assignment_material_v2::AcceptedOrigin',
+    'crate::palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentCustodyDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentId',
+    'crate::palw_positive_assignment_material_v2::AssignmentJobDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentPolicyV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentRegisteredDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentSourceQuoteDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::NativeHash64',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCancellationPolicyV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCancellationRuleV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCaseFeeScheduleV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentSourcePolicyV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentSourceReleaseV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentSourceResponsibilityV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentWorkScheduleV2',
+    'crate::palw_positive_journal_chain_v2::CaseId',
+    'crate::palw_positive_journal_chain_v2::ChainScope',
+    'crate::palw_positive_journal_chain_v2::JournalHeadRow',
+    'crate::palw_positive_journal_chain_v2::ResultId',
+    'crate::palw_state_v2::positive_assignment_backing::AcceptedOrigin',
+    'crate::palw_state_v2::positive_assignment_backing::AssignmentRow',
+    'crate::palw_state_v2::positive_assignment_backing::NativePositiveDecisionHistoryV2',
+    'crate::tx::AtomicU64',
+    'crate::tx::TransactionInput',
+    'crate::tx::TransactionOutput',
+    'crate::tx::UtxoEntry',
+    'crate::tx::script_public_key::ScriptPublicKey',
+})
 manual.update(OWNER_NATIVE_HEAP)
 private={}; public=[]
 for item,code,is_private in generated:

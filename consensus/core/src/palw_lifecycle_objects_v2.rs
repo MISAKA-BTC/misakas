@@ -1911,6 +1911,7 @@ pub struct PalwLifecycleKindFencesV1 {
         crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
     )>,
     funding_relay_frame_cap_v2: Option<(crate::config::params::ForkActivation, u64)>,
+    batch_court_v1: Option<crate::config::params::ForkActivation>,
 }
 
 impl PalwLifecycleKindFencesV1 {
@@ -1971,6 +1972,38 @@ impl PalwLifecycleKindFencesV1 {
         self.activation(fence).is_some_and(|activation| activation.is_active(daa_score))
     }
 
+    pub fn batch_court_in_force_at(&self, daa_score: u64) -> bool {
+        self.batch_court_v1.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// Fee projection after all preceding allocations. None retains the
+    /// legacy amount, including malformed historical carriers in a mergeset.
+    pub fn batch_court_collectible_fee_v1(&self, tx: &Transaction, remaining: u64, daa: u64) -> Option<u64> {
+        if !self.batch_court_in_force_at(daa)
+            || tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE
+            || !tx.payload.starts_with(crate::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1)
+        {
+            return None;
+        }
+        crate::palw_court_shared_material_intake_v1::material_batch_carrier_fee_v1(tx, remaining)
+            .ok()
+            .map(|split| split.collectible_fee)
+    }
+
+    fn validate_batch_court_shape_v1(&self, payload: &[u8], daa: u64) -> Result<bool, PalwLifecycleTxError> {
+        if !self.batch_court_in_force_at(daa) {
+            return Ok(false);
+        }
+        if crate::palw_batch_court_v1::carriage::batch_stop_wire_shape_v1(payload)
+            .map_err(|_| PalwLifecycleTxError::Undecodable)?
+        {
+            return Ok(true);
+        }
+        crate::palw_batch_court_v1::carriage::decode_batch_court_payload_v1(payload)
+            .map(|wire| wire.is_some())
+            .map_err(|_| PalwLifecycleTxError::Undecodable)
+    }
+
     /// **Does this build read `object` as a statement at `daa_score`** — a kind the live build knows, or one whose owning fence is in
     /// force there? `false` means: read its bytes as the live build does, undecodable — skip it, charge nothing.
     pub fn kind_in_force_at(&self, object: &PalwConsensusObjectV2, daa_score: u64) -> bool {
@@ -1986,7 +2019,7 @@ impl crate::config::params::Params {
     pub fn palw_lifecycle_kind_fences_v1(&self) -> PalwLifecycleKindFencesV1 {
         let mut fences = PalwLifecycleKindFenceV1::ALL
             .into_iter()
-            .fold(PalwLifecycleKindFencesV1::default(), |fences, fence| {
+            .fold(PalwLifecycleKindFencesV1 { batch_court_v1: self.palw_batch_court_v1_fence(), ..Default::default() }, |fences, fence| {
                 fences.with(
                     fence,
                     match fence {
@@ -2113,6 +2146,9 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
     fences: &PalwLifecycleKindFencesV1,
     ctx_daa_score: u64,
 ) -> Result<(), PalwLifecycleTxError> {
+    if fences.validate_batch_court_shape_v1(payload, ctx_daa_score)? {
+        return Ok(());
+    }
     if palw_positive_lifecycle_unjudged_v2(payload, fences, ctx_daa_score) {
         return Ok(());
     }
@@ -5992,5 +6028,62 @@ pub(crate) mod tests {
         super::palw_lifecycle_object_may_ride_v2(&part(16_384)).expect("one full part rides");
         assert!(super::palw_lifecycle_object_may_ride_v2(&part(0)).is_err());
         assert!(super::palw_lifecycle_object_may_ride_v2(&part(16_385)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod batch_lifecycle_gate_tests {
+    use super::*;
+    use crate::config::params::ForkActivation;
+    use crate::palw_batch_court_v1::carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, BatchMaterialControlV1};
+    use crate::palw_court_shared_material_intake_v1::{
+        MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1, SignedMaterialIntakeV1,
+    };
+    use crate::palw_state_v2::PalwBondKeyV2;
+    use crate::tx::TransactionOutpoint;
+
+    #[test]
+    fn batch_door_and_collectible_fee_use_the_same_height() {
+        let h = crate::Hash64::from_u64_word;
+        let begin = SignedMaterialIntakeV1 {
+            version: MATERIAL_BATCH_VERSION, claim: h(1), scope_id: h(2), target: MaterialTargetV1::PromptFlat,
+            submitter: PalwBondKeyV2(TransactionOutpoint::new(h(3), 0)),
+            action: MaterialActionV1::Begin { total_bytes: 1_024, body_hash: h(4) },
+            signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let rent = crate::palw_court_shared_material_intake_v1::material_batch_storage_rent_v1(&begin).unwrap().unwrap();
+        assert!(rent > 0);
+        let wire = BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: 0, intake: begin });
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(&wire).unwrap());
+        let tx = |payload| Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
+        let good = tx(payload.clone());
+        payload.push(0);
+        let malformed = tx(payload);
+        let gates = PalwLifecycleKindFencesV1 { batch_court_v1: Some(ForkActivation::new(20)), ..Default::default() };
+        assert!(validate_palw_lifecycle_tx(&good.payload, true).is_ok());
+        assert!(validate_palw_lifecycle_tx_in_context_v1(&malformed.payload, &gates, 19).is_ok());
+        assert_eq!(gates.batch_court_collectible_fee_v1(&good, rent + 1, 19), None);
+        for daa in [20, 21] {
+            assert!(validate_palw_lifecycle_tx_in_context_v1(&good.payload, &gates, daa).is_ok());
+            assert!(validate_palw_lifecycle_tx_in_context_v1(&malformed.payload, &gates, daa).is_err());
+            assert_eq!(gates.batch_court_collectible_fee_v1(&good, rent + 1, daa), Some(1));
+            assert_eq!(gates.batch_court_collectible_fee_v1(&good, rent - 1, daa), Some(0));
+            assert_eq!(gates.batch_court_collectible_fee_v1(&malformed, rent + 1, daa), None);
+        }
+    }
+
+    #[test]
+    fn batch_fence_changes_identity_only_when_explicitly_scheduled() {
+        let base = crate::config::params::TESTNET_PARAMS;
+        assert!(base.validate_palw_batch_court_v1().is_ok());
+        let never = crate::config::params::Params { palw_batch_court_v1: Some(ForkActivation::never()), ..base.clone() };
+        assert_eq!(base.consensus_params_id(), never.consensus_params_id());
+        assert_eq!(base.consensus_schedule_id(), never.consensus_schedule_id());
+        let scheduled = crate::config::params::Params { palw_batch_court_v1: Some(ForkActivation::new(20)), ..base.clone() };
+        assert_ne!(base.consensus_params_id(), scheduled.consensus_params_id());
+        assert_ne!(base.consensus_schedule_id(), scheduled.consensus_schedule_id());
+        assert_eq!(base.consensus_identity_id(), scheduled.consensus_identity_id());
+        assert!(scheduled.validate_palw_batch_court_v1().is_err());
     }
 }

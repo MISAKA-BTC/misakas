@@ -70,6 +70,10 @@ fn request_inner(
 ) -> Result<SharedRequestEffectV1, PalwStateV2Error> {
     let c = shared::context(&b.state, claim).map_err(refused)?;
     clock(c, ctx)?;
+    let batch_notice = c.batch_notice_only_v1();
+    if batch_notice && !b.extras.batch_court_active_v1 {
+        return Err(refused("Batch initial notice requires the Batch Court fence"));
+    }
     let source = c.source(&b.state).map_err(refused)?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim)
         .ok_or_else(|| refused("shared original missing"))?;
@@ -95,8 +99,11 @@ fn request_inner(
     // claim's first is its initial notice (a <= d <= a+3,120), later ones are follow-ups bound to it (before hard). The original
     // must already be accepted at `a` earlier in this fold (same-DAA causal order is the block's object order). Signature and
     // dedupe (Coalesced) are checked above; the row is journalled, so reorg removes/restores it with the rooted delta.
-    if super::palw_court_service_lifecycle_fold_v1::shared_court_lifecycle_active_v1(b, ctx.daa_score) {
+    if batch_notice || super::palw_court_service_lifecycle_fold_v1::shared_court_lifecycle_active_v1(b, ctx.daa_score) {
         let prior = b.state.court_shared_initial_notice_daa_v1(claim);
+        if batch_notice && prior.is_some() {
+            return Err(refused("Batch original already has its initial notice"));
+        }
         crate::palw_court_service_binding_v1::classify_shared_notice_v1(c.original_accepted_daa, ctx.daa_score, prior)
             .map_err(refused)?;
         if b.state.claim(&claim).is_none_or(|k| k.accepted_daa != c.original_accepted_daa) {
@@ -107,16 +114,23 @@ fn request_inner(
     // capacity reserved at acceptance and record its deterministic service slot. All shared deadlines are the original's hard
     // DAA, so earliest-deadline-first is arrival order (in-block: object order); the slot starts after the claim's last slot.
     // Size never refuses; only a slot that cannot end before hard (no reserved capacity left) is refused, with no state change.
-    let packets = shared::shared_coordinate_packets_v1(&source, &set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
-    let cursor = shared_service_cursor_v1(&b.state, claim);
-    let start = ctx.daa_score.max(cursor.map_or(c.original_accepted_daa, |end| end.saturating_add(1)));
-    let per = crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1;
-    let end = start.checked_add(packets.div_ceil(per) - 1).ok_or_else(|| refused("shared service slot overflow"))?;
-    if end >= c.hard_daa {
-        return Err(refused("shared request has no reserved service capacity before the original's hard DAA"));
-    }
+    let service = if batch_notice {
+        let target = shared::BatchNoticeTargetV1::from_request(set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
+        check_batch_notice_open_slot_v1(&b.state, c, ctx.daa_score, target.first_open_ordinal()).map_err(refused)?;
+        None
+    } else {
+        let packets = shared::shared_coordinate_packets_v1(&source, &set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
+        let cursor = shared_service_cursor_v1(&b.state, claim);
+        let start = ctx.daa_score.max(cursor.map_or(c.original_accepted_daa, |end| end.saturating_add(1)));
+        let per = crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1;
+        let end = start.checked_add(packets.div_ceil(per) - 1).ok_or_else(|| refused("shared service slot overflow"))?;
+        if end >= c.hard_daa {
+            return Err(refused("shared request has no reserved service capacity before the original's hard DAA"));
+        }
+        Some(shared::SharedServiceSlotV1 { packets, start_daa: start, end_daa: end })
+    };
     let row = shared::SharedTirQueryV1 {
-        version: shared::SHARED_QUERY_SERVICE_VERSION_V2,
+        version: if batch_notice { 1 } else { shared::SHARED_QUERY_SERVICE_VERSION_V2 },
         claim,
         scope_id: c.scope_id,
         ordinal: intent.ordinal,
@@ -127,10 +141,27 @@ fn request_inner(
         intent_digest: intent.signing_message(network).map_err(refused)?,
         material_until_daa: c.material_until_daa,
         body: None,
-        service: Some(shared::SharedServiceSlotV1 { packets, start_daa: start, end_daa: end }),
+        service,
     };
     b.write_staged_row_v1(key, Some(Row::CourtSharedQuery(Box::new(row))))?;
     Ok(SharedRequestEffectV1::Opened)
+}
+
+fn check_batch_notice_open_slot_v1(
+    state: &PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    at: u64,
+    ordinal: u64,
+) -> Result<(), String> {
+    use crate::palw_batch_court_v1::{carriage::batch_open_wire_bytes_v1, rooted::reserved_open_slot_v1};
+    let first = c.original_accepted_daa.checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
+        .ok_or("Batch initial notice clock overflows")?;
+    let bytes = batch_open_wire_bytes_v1(1)?;
+    let (_, _, slot) = reserved_open_slot_v1(state, c.claim, c.scope_id, ordinal, bytes)?;
+    if slot <= at || !(first..c.hard_daa).contains(&slot) {
+        return Err("Batch initial notice has no booked original Open".into());
+    }
+    Ok(())
 }
 /// F03b2: the last recorded service DAA among the claim's shared requests (per-claim index, no global scan).
 pub(super) fn shared_service_cursor_v1(state: &PalwChainStateV2, claim: Hash64) -> Option<u64> {
@@ -197,7 +228,7 @@ fn share_body_inner(
     b.write_staged_row_v1(key, Some(Row::CourtSharedQuery(Box::new(row))))?;
     Ok(true)
 }
-fn shared_ids_auth_fault_v2(why: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwStateV2Error {
+pub(super) fn shared_ids_auth_fault_v2(why: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwStateV2Error {
     match why {
         crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
         crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
@@ -271,6 +302,9 @@ fn stream_control_inner(
     use crate::palw_court_shared_tir_stream_state_v1 as stream;
     use crate::palw_court_shared_tir_stream_v1::{SharedStreamActionV1 as Action, SharedStreamTargetV1 as Target};
     let c = shared::context(&b.state, control.claim).map_err(refused)?;
+    if c.batch_notice_only_v1() {
+        return Err(refused("Batch original requires its reserved stream delivery route"));
+    }
     clock(c, ctx)?;
     if control.scope != c.scope_id {
         return Err(refused("shared stream native scope mismatch"));

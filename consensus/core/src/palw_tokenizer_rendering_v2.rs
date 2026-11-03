@@ -7,7 +7,7 @@ use crate::{
     palw_class_semantics_v1::PalwClassSemanticsV1,
     palw_fp_constraint_job_v1::{
         PALW_TOKEN_TABLE_MAX_LEAVES_V1, PalwTokenTableEogOpeningV1, PalwTokenTableOpeningV1, palw_fp_constraint_table_root_v1,
-        table_leaf_hash_v1,
+        table_eog_leaf_hash_v1, table_leaf_hash_v1,
     },
     palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
@@ -15,7 +15,7 @@ use crate::{
     palw_state_v2::{
         PalwChainStateV2, PalwStateParamsV2, PalwStateV2Error, PalwTransitionExtrasV1, palw_tir_public_original_quote_v1,
     },
-    palw_step_leg::PalwStepPrefixStreamV1,
+    palw_step_leg::{PalwStepPrefixStreamV1, step_opening_from_leaf_source_capped_v1},
     palw_tir_container_v1::{PalwTirContainerRowV1, palw_tir_bound_container_v1},
     palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
     palw_tir_public_source_v1::{PalwTirPublicAuthenticatedIdsV1, PalwTirPublicSourceV1},
@@ -71,28 +71,13 @@ pub fn derive_tokenizer_rendering_v2(
     eog: &PalwTokenTableEogOpeningV1,
     budget: PalwTokenizerRenderingBudgetV2,
 ) -> Result<PalwDerivedTokenizerRenderingV2, String> {
-    check_operands(statement, raw, eog, budget)?;
+    check_operands(statement, raw, eog.ids.len(), budget)?;
     let leaf_count = u64::from(statement.vocab) + 1;
     let lowest_eog_id = eog.lowest().ok_or("tokenizer table has no EOG")?;
     if eog.ids.iter().any(|id| *id >= statement.vocab) || !eog.verifies(&statement.table_root, statement.vocab) {
         return Err("tokenizer EOG does not open the registered table".into());
     }
-    if palw_tokenizer_raw_commitment_v1(raw) != statement.tokenizer_id {
-        return Err("tokenizer does not open the exact raw commitment".into());
-    }
-
-    let json = palw_unique_json_v1(raw)?;
-    let key_events = tokenizer_key_events_from_unique_json(&json)?;
-    if key_events > budget.key_events {
-        return Err("tokenizer exceeds its key event limit".into());
-    }
-    let rendering = match statement.rule {
-        PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1 => PalwQwenRenderingMapV1::from_unique_json(&json)?,
-    };
-    drop(json);
-    if rendering.highest_id() >= statement.vocab {
-        return Err("tokenizer names a token outside the registered vocabulary".into());
-    }
+    let (rendering, key_events) = checked_rendering_map_v2(statement, raw, budget.key_events)?;
 
     let mut tree = PalwStepPrefixStreamV1::new_capped_v1(leaf_count, &eog.opening, &[], PALW_TOKEN_TABLE_MAX_LEAVES_V1)
         .map_err(|err| err.to_string())?;
@@ -126,10 +111,76 @@ pub fn derive_tokenizer_rendering_v2(
     })
 }
 
+/// Construct the last-leaf opening from the original tokenizer and EOG IDs.
+/// This is an operator-side build. The registered root authenticates the EOG
+/// list, which is supplied separately from the tokenizer JSON.
+pub fn build_registered_tokenizer_eog_opening_v1(
+    statement: PalwTokenizerRenderingStatementV2,
+    raw: &[u8],
+    mut ids: Vec<u32>,
+) -> Result<PalwTokenTableEogOpeningV1, String> {
+    let budget = ROOTED_TOKENIZER_LIMITS_V1;
+    check_operands(statement, raw, ids.len(), budget)?;
+    if ids.is_empty() || ids.iter().any(|&id| id >= statement.vocab) {
+        return Err("tokenizer EOG IDs are empty or outside the registered vocabulary".into());
+    }
+    ids.sort_unstable();
+    if ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("tokenizer EOG IDs contain a duplicate".into());
+    }
+    let scratch = tokenizer_scratch_bytes_v2(statement, ids.len()).ok_or("tokenizer scratch estimate overflow")?;
+    let _lease = global_memory_budget().try_reserve(MemoryClass::Native, scratch).map_err(|why| why.to_string())?;
+    let (rendering, _) = checked_rendering_map_v2(statement, raw, budget.key_events)?;
+    let eog_leaf = table_eog_leaf_hash_v1(&ids);
+    let vocab = u64::from(statement.vocab);
+    let rendered_bytes = std::cell::Cell::new(0u64);
+    let opening = step_opening_from_leaf_source_capped_v1(vocab + 1, vocab, PALW_TOKEN_TABLE_MAX_LEAVES_V1, |id| {
+        if id == vocab {
+            eog_leaf
+        } else {
+            let id = id as u32;
+            let entry = rendering.rendering(id);
+            rendered_bytes.set(rendered_bytes.get().saturating_add(entry.as_ref().map_or(0, |bytes| bytes.len() as u64)));
+            table_leaf_hash_v1(id, entry.as_deref())
+        }
+    })
+    .map_err(|why| why.to_string())?;
+    if rendered_bytes.get() > budget.total_rendering_bytes {
+        return Err("tokenizer exceeds its total rendering byte limit".into());
+    }
+    let eog = PalwTokenTableEogOpeningV1 { ids, opening };
+    if !eog.verifies(&statement.table_root, statement.vocab) {
+        return Err("derived tokenizer EOG does not open the registered table".into());
+    }
+    Ok(eog)
+}
+
+fn checked_rendering_map_v2(
+    statement: PalwTokenizerRenderingStatementV2,
+    raw: &[u8],
+    key_limit: u64,
+) -> Result<(PalwQwenRenderingMapV1, u64), String> {
+    if palw_tokenizer_raw_commitment_v1(raw) != statement.tokenizer_id {
+        return Err("tokenizer does not open the exact raw commitment".into());
+    }
+    let json = palw_unique_json_v1(raw)?;
+    let key_events = tokenizer_key_events_from_unique_json(&json)?;
+    if key_events > key_limit {
+        return Err("tokenizer exceeds its key event limit".into());
+    }
+    let rendering = match statement.rule {
+        PalwTokenizerRenderingRuleV1::QwenByteLevelJsonV1 => PalwQwenRenderingMapV1::from_unique_json(&json)?,
+    };
+    if rendering.highest_id() >= statement.vocab {
+        return Err("tokenizer names a token outside the registered vocabulary".into());
+    }
+    Ok((rendering, key_events))
+}
+
 fn check_operands(
     statement: PalwTokenizerRenderingStatementV2,
     raw: &[u8],
-    eog: &PalwTokenTableEogOpeningV1,
+    eog_count: usize,
     budget: PalwTokenizerRenderingBudgetV2,
 ) -> Result<(), String> {
     let leaf_count = u64::from(statement.vocab) + 1;
@@ -139,12 +190,16 @@ fn check_operands(
         || statement.vocab == 0
         || statement.vocab > budget.vocab
         || leaf_count > PALW_TOKEN_TABLE_MAX_LEAVES_V1
-        || eog.ids.len() > budget.eog_ids as usize
-        || eog.ids.len() > statement.vocab as usize
+        || eog_count > budget.eog_ids as usize
+        || eog_count > statement.vocab as usize
     {
         return Err("tokenizer rendering operands exceed their exact length or work limits".into());
     }
     Ok(())
+}
+
+fn tokenizer_scratch_bytes_v2(statement: PalwTokenizerRenderingStatementV2, eog_count: usize) -> Option<u64> {
+    statement.exact_raw_bytes.checked_mul(128)?.checked_add(4 * eog_count as u64 + 16_384)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
@@ -330,13 +385,10 @@ fn derive_with_native_scratch(
     use PalwVerifiedTokenizerRegistrationErrorV1::Evidence;
     let statement = identity.statement;
     budget.key_events = budget.key_events.min(identity.declared_key_events);
-    check_operands(statement, raw, eog, budget).map_err(Evidence)?;
+    check_operands(statement, raw, eog.ids.len(), budget).map_err(Evidence)?;
     // Same conservative parser multiplier as the existing Node tokenizer
     // check. Includes separate EOG-sort scratch and bounded tree overhead.
-    let scratch = statement
-        .exact_raw_bytes
-        .checked_mul(128)
-        .and_then(|bytes| bytes.checked_add(4 * eog.ids.len() as u64 + 16_384))
+    let scratch = tokenizer_scratch_bytes_v2(statement, eog.ids.len())
         .ok_or_else(|| Evidence("tokenizer scratch estimate overflow".into()))?;
     let _lease = memory.try_reserve(MemoryClass::Native, scratch)?;
     derive_tokenizer_rendering_v2(statement, raw, eog, budget).map_err(Evidence)
@@ -599,6 +651,21 @@ mod tests {
     }
 
     #[test]
+    fn builds_the_registered_eog_opening_and_rejects_substitution() {
+        let (mut statement, mut table) = fixture();
+        table.eog_token_ids = vec![0, 2];
+        statement.table_root = table.root();
+        let opening = build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![2, 0]).unwrap();
+        assert_eq!(opening, table.eog_opening().unwrap());
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![2, 2]).is_err());
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![1, 2]).is_err());
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, RAW, vec![0, 4]).is_err());
+        let mut modified = RAW.to_vec();
+        modified[2] ^= 1;
+        assert!(build_registered_tokenizer_eog_opening_v1(statement, &modified, vec![0, 2]).is_err());
+    }
+
+    #[test]
     fn derives_full_table_bounds_with_override_hole_and_padding() {
         let (statement, table) = fixture();
         let eog = table.eog_opening().unwrap();
@@ -610,6 +677,14 @@ mod tests {
         assert_eq!(facts.eog_leaf, eog.opening.leaf_hash);
         assert_eq!(facts.eog_count, 1);
         assert_eq!(facts.lowest_eog_id, 2);
+        let registration = Hash64::from_u64_word(1);
+        let bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(registration, &facts);
+        assert_eq!(bounds.registration_id, registration);
+        assert_eq!(bounds.eog_opening_bytes, borsh::object_length(&eog).unwrap() as u64);
+        assert_eq!(bounds.eog_replay_calls, 2);
+        let openings = (0..statement.vocab).map(|id| table.opening_of(id).unwrap());
+        let actual = openings.map(|opening| borsh::object_length(&opening).unwrap() as u64).max().unwrap();
+        assert_eq!(bounds.maximum_rendering_opening_bytes, actual);
     }
 
     #[test]
@@ -863,8 +938,10 @@ mod tests {
 
 // Fixed limits for the private native adapter. They are part of the record
 // identity and may only change under a new registration ruleset/version.
+pub const MAX_REGISTERED_TOKENIZER_RAW_BYTES_V1: u64 = 8 * 1024 * 1024;
+
 pub(crate) const ROOTED_TOKENIZER_LIMITS_V1: PalwTokenizerRenderingBudgetV2 = PalwTokenizerRenderingBudgetV2 {
-    raw_bytes: 8 * 1024 * 1024,
+    raw_bytes: MAX_REGISTERED_TOKENIZER_RAW_BYTES_V1,
     vocab: 262_144,
     key_events: 4 * 1024 * 1024,
     eog_ids: 4096,
@@ -1059,6 +1136,70 @@ pub(crate) fn palw_rooted_tokenizer_registration_v1<'a>(
     (row.point.daa_score < candidate_daa && row.key() == key && row.check_context(state).is_ok()).then_some(row.as_ref())
 }
 
+/// Claim-local operand bounds after reuse of a verified registration. These
+/// sizes exclude the carrier, authenticated ID source and terminal execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PalwRootedTokenizerOpeningBoundsV1 {
+    pub registration_id: Hash64,
+    pub maximum_rendering_opening_bytes: u64,
+    pub eog_opening_bytes: u64,
+    /// Native EOG stream calls, including the finish call.
+    #[serde(default)]
+    pub eog_replay_calls: u64,
+    /// Complete native ID response body before Batch carrier framing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_ids_body_bytes: Option<u64>,
+}
+
+impl PalwRootedTokenizerOpeningBoundsV1 {
+    fn from_facts(registration_id: Hash64, facts: &PalwDerivedTokenizerRenderingV2) -> Self {
+        let vocab = u64::from(facts.statement.vocab);
+        let leaves = vocab + 1;
+        let rendering_siblings = crate::palw_step_leg::step_leg_max_opening_siblings_v1(leaves) as u64;
+        let eog_siblings = crate::palw_step_leg::step_range_sibling_count_v1(leaves, vocab, 1);
+        // PalwStepOpeningV1: u64 index, 64-byte hash, Vec length and sibling hashes.
+        let step_opening_bytes = |siblings| 8 + 64 + 4 + 64 * siblings;
+        Self {
+            registration_id,
+            // ID, Some discriminant, Vec length, rendering bytes and opening.
+            maximum_rendering_opening_bytes: 4 + 1 + 4 + facts.maximum_rendering_bytes + step_opening_bytes(rendering_siblings),
+            eog_opening_bytes: 4 + 4 * u64::from(facts.eog_count) + step_opening_bytes(eog_siblings),
+            eog_replay_calls: crate::palw_constraint_stream_court_v1::canonical_replay::eog_stop_work_v1(facts.eog_count).calls,
+            full_ids_body_bytes: None,
+        }
+    }
+}
+
+pub(crate) fn palw_rooted_tokenizer_opening_bounds_v1(
+    state: &PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    candidate_daa: u64,
+    original: &PalwFreePromptCommitmentV3,
+    header: &PalwPublicTirBindingHeaderV1,
+) -> Option<PalwRootedTokenizerOpeningBoundsV1> {
+    let class = original.job.class_id;
+    let row = palw_rooted_tokenizer_registration_v1(state, extras, class, candidate_daa)?;
+    let record = state.tir_class_v1(&class)?;
+    let facts = row.facts_v1();
+    if !row.semantics.well_formed_for(&class, &header.artifact_root)
+        || !row.semantics.matches_context(&header.job_context)
+        || original.job.tokenizer_id != facts.statement.tokenizer_id
+        || original.execution_root != header.committed_execution_root
+        || original.decode_tokens_executed != header.job_context.exact_decode_tokens
+        || record.logits_vocab != facts.statement.vocab
+        || palw_fp_constraint_table_root_v1(&original.job).is_some_and(|root| root != facts.statement.table_root)
+    {
+        return None;
+    }
+    let mut bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(row.record_id_v1(), facts);
+    if record.facts.tiled && original.decode_tokens_executed > 0 {
+        bounds.full_ids_body_bytes =
+            Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(original.decode_tokens_executed));
+    }
+    Some(bounds)
+}
+
 /// Borrowed facts for one accepted original and its source-authenticated IDs.
 /// This grants no verdict, claim eligibility, credit or material availability.
 pub(crate) struct PalwRootedClaimTokenizerV1<'a> {
@@ -1067,6 +1208,10 @@ pub(crate) struct PalwRootedClaimTokenizerV1<'a> {
 }
 
 impl<'a> PalwRootedClaimTokenizerV1<'a> {
+    pub(crate) fn opening_bounds_v1(&self) -> PalwRootedTokenizerOpeningBoundsV1 {
+        self.row.opening_bounds_for_generated_ids_v1(self.ids.ids_v1().len() as u32)
+    }
+
     /// Check against an ID supplied by the native ordered court cursor.
     pub(crate) fn verifies_rendering(&self, expected_id: u32, opening: &PalwTokenTableOpeningV1) -> bool {
         self.row.facts_v1().verifies_rendering(expected_id, opening)
@@ -1090,14 +1235,20 @@ impl<'a> PalwRootedClaimTokenizerV1<'a> {
     }
 }
 
-/// Historical claims and claims without a matching registration keep the
-/// ordinary route. A present prospective row with broken context fails closed.
-pub(crate) fn palw_rooted_claim_tokenizer_v1<'a>(
-    state: &'a PalwChainStateV2,
+impl PalwRootedTokenizerRegistrationRowV1 {
+    pub(crate) fn opening_bounds_for_generated_ids_v1(&self, count: u32) -> PalwRootedTokenizerOpeningBoundsV1 {
+        let mut bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(self.record_id_v1(), self.facts_v1());
+        bounds.full_ids_body_bytes = Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(count));
+        bounds
+    }
+}
+
+/// Resolve the registration that was available at this claim's acceptance.
+/// The caller still checks the original, source and authenticated operands.
+pub(crate) fn palw_claim_tokenizer_registration_v1(
+    state: &PalwChainStateV2,
     claim_id: Hash64,
-    source: &PalwTirPublicSourceV1,
-    ids: &'a PalwTirPublicAuthenticatedIdsV1,
-) -> Result<Option<PalwRootedClaimTokenizerV1<'a>>, String> {
+) -> Result<Option<&PalwRootedTokenizerRegistrationRowV1>, String> {
     let Some(claim) = state.claim(&claim_id) else { return Ok(None) };
     let Some(semantics) = state.claim_semantics_v1(&claim_id) else { return Ok(None) };
     let key = PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(claim.class_id, semantics.commitment());
@@ -1115,6 +1266,20 @@ pub(crate) fn palw_rooted_claim_tokenizer_v1<'a>(
         return Err("rooted claim tokenizer record or acceptance point changed".into());
     }
     row.check_context(state)?;
+    Ok(Some(row.as_ref()))
+}
+
+/// Historical claims and claims without a matching registration keep the
+/// ordinary route. A present prospective row with broken context fails closed.
+pub(crate) fn palw_rooted_claim_tokenizer_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: Hash64,
+    source: &PalwTirPublicSourceV1,
+    ids: &'a PalwTirPublicAuthenticatedIdsV1,
+) -> Result<Option<PalwRootedClaimTokenizerV1<'a>>, String> {
+    let Some(row) = palw_claim_tokenizer_registration_v1(state, claim_id)? else { return Ok(None) };
+    let claim = state.claim(&claim_id).ok_or("rooted claim tokenizer lost its claim")?;
+    let semantics = state.claim_semantics_v1(&claim_id).ok_or("rooted claim tokenizer lost its semantics")?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim_id)
         .ok_or("rooted claim tokenizer original frame absent")?;
     let original = frame.original_v1();

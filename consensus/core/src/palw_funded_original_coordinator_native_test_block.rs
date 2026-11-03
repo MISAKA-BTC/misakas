@@ -243,8 +243,65 @@
             {
                 let b = TransitionBuilder::try_new(&served, &params, false, false, false, false, &ok).unwrap();
                 let prepared = prepare_paired_original_v1(&b, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
-                let req = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap().prepare_requirements_v1(&b, &ctx,
+                let geometry = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap();
+                let req = geometry.prepare_requirements_v1(&b, &ctx,
                     PreparedRequirementBudgetsV1 { numerical: budgets.0, input: budgets.1, source: budgets.2 }).unwrap();
+                let roots = &req.inputs_v1().parameters_v1().roots;
+                let streaming_budget = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
+                    total: budgets.1,
+                    per_root_edges: roots.iter().map(|root| root.explored_edges).max().unwrap_or(1).max(1),
+                    per_root_coordinates: roots.iter().map(|root| root.explored_coordinates).max().unwrap_or(1).max(1),
+                    per_root_memberships: roots.iter().map(|root| root.parameters.len() as u64).max().unwrap_or(1).max(1),
+                    max_workspace_bytes: 128 << 20,
+                };
+                let streamed_envelope = req.geometry.streaming_batch_envelope_v1(&b, &ctx, streaming_budget, 4_096).unwrap();
+                assert!(req.geometry.streaming_batch_envelope_v1(
+                    &b, &ctx, streaming_budget, streamed_envelope.maximums_v1().len() - 1,
+                ).is_err());
+                let envelope = req.numerical_batch_envelope_v1(&b, &ctx, 4_096).unwrap();
+                assert!(req.constraint_stop_batch_operands_v1(&b, &ctx).unwrap().is_none(),
+                    "this numerical fixture has no verified tokenizer registration");
+                assert_eq!(envelope.scope_v1(), req.source_graph_v1().unwrap().absolute_scope_v3());
+                assert_eq!(streamed_envelope.scope_v1(), envelope.scope_v1());
+                assert_eq!(streamed_envelope.maximums_v1(), envelope.maximums_v1());
+                assert!(!envelope.maximums_v1().is_empty());
+                assert_eq!(envelope.demand_ranges_v1().flatten().copied().collect::<Vec<_>>(), envelope.maximums_v1());
+                assert!(req.numerical_batch_envelope_v1(&b, &ctx, envelope.maximums_v1().len() - 1).is_err());
+                let class = req.frame_v1().original_v1().job.class_id;
+                let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(
+                    b.state.tir_class_v1(&class).unwrap().program.as_slice(),
+                ).unwrap();
+                let profile = crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(
+                    b.state.court_service_state_v1().unwrap().profile_id,
+                );
+                use crate::palw_court_shared_material_intake_v1::batch::native_ranges::{
+                    numerical_batch_root_demand_v1, numerical_batch_streaming_demand_v1,
+                };
+                let first_root = req.inputs_v1().roots_v1()[0].leaf;
+                let selected = numerical_batch_root_demand_v1(
+                    req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, first_root, 0,
+                ).unwrap();
+                let selected = selected.ranges_v1();
+                let input_roots = &req.inputs_v1().parameters_v1().roots;
+                let streaming = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
+                    total: budgets.1,
+                    per_root_edges: input_roots.iter().map(|root| root.explored_edges).max().unwrap_or(1).max(1),
+                    per_root_coordinates: input_roots.iter().map(|root| root.explored_coordinates).max().unwrap_or(1).max(1),
+                    per_root_memberships: input_roots.iter().map(|root| root.parameters.len() as u64).max().unwrap_or(1).max(1),
+                    max_workspace_bytes: 128 << 20,
+                };
+                let streamed = numerical_batch_streaming_demand_v1(
+                    req.frame_v1(), req.geometry.source_v1(), b.state.tir_class_v1(&class).unwrap(),
+                    crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, class).unwrap(),
+                    &program, profile, streaming, 4_096, first_root, 0,
+                ).unwrap();
+                assert_eq!(streamed.ranges_v1(), selected);
+                assert!(!selected.is_empty());
+                assert!(selected.iter().zip(envelope.demand_ranges_v1().next().unwrap()).all(|((_, bytes), cap)| bytes <= cap));
+                assert!(selected.windows(2).all(|pair| pair[0].0.id_v1(claim).unwrap() < pair[1].0.id_v1(claim).unwrap()));
+                assert!(numerical_batch_root_demand_v1(
+                    req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, u64::MAX, 0,
+                ).is_err());
                 let signers = req.frame_v1().custody_v1().liable_signers_v1();
                 let (after_signer, full) = funded_book_candidate_v1(&b, &req, &derivation, &admission, &signers).ok().unwrap();
                 let bound = &full.claims[&claim];
@@ -252,6 +309,125 @@
                 assert_eq!(bound.packet_ids.len() as u64, derivation.branch_count());
                 assert_eq!(full.book.packets.len() as u64, derivation.branch_count());
                 assert_eq!(after_signer.claims[&claim].packet_ids.len() as u64, liable * service_profile.packets_per_signer);
+                // Feed the actual numerical input geometry into the Batch
+                // scheduler while the original still has no Claim row.
+                use crate::palw_court_shared_material_intake_v1::{
+                    material_intake_schedule_v1,
+                    batch::admission::{
+                        NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1, batch_numerical_service_ids_v1,
+                        reserve_native_batch_delivery_v1,
+                    },
+                };
+                use crate::palw_court_service_v1::ServiceCost;
+                use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayBudgetV1;
+                let (verification, terminal) = batch_numerical_service_ids_v1(claim, streamed_envelope.scope_v1()).unwrap();
+                let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
+                let costs = NativeBatchDeliveryCostsV1 {
+                    numerical_verification: NumericalBatchReplayBudgetV1::test_only_v1(),
+                    terminal: NumericalBatchReplayBudgetV1::test_only_v1().service_cost_v1().unwrap(), recovery_daa: 1, maximum_packets: 32_768,
+                    timing: NativeBatchDeliveryTimingV1 {
+                        open_daa: 8, provider_wait_daa: 64, begin_daa: 16, parts_daa: 512,
+                        finish_daa: 16, verification_daa: 16, stop_daa: 16, terminal_daa: 16,
+                    },
+                };
+                let storage = material_intake_schedule_v1().unwrap();
+                let journal = funded_journal_row_candidate_v1(&b, &req, &derivation, full.clone()).unwrap();
+                let expected_edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
+                    req.source_graph_v1().unwrap(), &derivation,
+                ).unwrap();
+                let journal = match journal {
+                    Row::CourtServiceV3(row) => (*row).clone(),
+                    Row::CourtService(row) => crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&row),
+                    _ => unreachable!("funded book journal row"),
+                };
+                assert_eq!(journal.causal, expected_edges);
+                let mut foreign = journal.clone();
+                foreign.state.profile_id = h(0xB47C);
+                assert!(matches!(
+                    reserve_native_batch_delivery_v1(
+                        foreign, req.frame_v1(), &streamed_envelope, None,
+                        NativeBatchDeliveryCostsV1 { ..costs }, storage, |_, bytes| Ok(cost(bytes)),
+                    ),
+                    Err(crate::palw_batch_court_v1::BatchCourtErrorV1::CaseGraph),
+                ));
+                let (base, base_book, base_scope) = crate::palw_funded_original_admission_v1::funded_batch_base_candidate_v1(
+                    &b.state, req.frame_v1(), &admission,
+                ).unwrap();
+                assert!(base.source_packets.is_empty());
+                assert_eq!(base.signer_packets, derivation.signer_packets);
+                assert_eq!(base.branch_count(), liable * service_profile.packets_per_signer + 1);
+                assert_eq!(base_book.state.claims[&claim].packet_ids, base.packet_ids());
+                let (quote, batch) = reserve_native_batch_delivery_v1(
+                    base_book, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
+                ).unwrap();
+                let batch_packets = &batch.state.claims[&claim].packet_ids;
+                assert!(quote.required_daa <= 10_000 && base.packet_ids().is_subset(batch_packets));
+                assert!(derivation.source_packets.iter().all(|packet| !batch_packets.contains(&packet.id)));
+                // The original payer consent accepted above cannot authorize
+                // this additional native Batch graph.
+                use crate::palw_court_original_escrow_v1::{FundingRefusalV1, OriginalFundingScopeV1, prepare_funding_v1};
+                let funded = pairing.envelope();
+                let t = &funded.funding.terms;
+                let batch_scope = OriginalFundingScopeV1 {
+                    claim, job_identity: t.job_identity, execution_root: t.execution_root, source_id: t.source_id,
+                    relative_graph_id: base_scope, fee_profile_id: t.fee_profile_id,
+                    capital_profile_id: t.capital_profile_id, retention_profile_id: t.retention_profile_id,
+                    settlement_policy_id: t.settlement_policy_id,
+                    required_amount_sompi: crate::palw_funded_original_admission_v1::funded_required_amount_v1(
+                        700, 300, base.capital_sompi, deposit,
+                    ).unwrap(),
+                    required_material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa.max(ctx.daa_score + 10_000),
+                }.with_native_batch_v1(&quote).unwrap();
+                assert!(matches!(prepare_funding_v1(
+                    funded.inspect_carrier_v1(pairing.carrier()).unwrap(), &funded.funding, &funded.payer_pubkey,
+                    &batch_scope, t.network_domain, ctx.daa_score,
+                ), Err(FundingRefusalV1::Scope)));
+                let amount = batch_scope.required_amount_sompi;
+                let (batch_carrier, batch_pairing) = carrier_with(amount, amount, &|terms| {
+                    terms.relative_graph_id = batch_scope.relative_graph_id;
+                    terms.material_until_daa = batch_scope.required_material_until_daa;
+                }, &|_| {}).unwrap();
+                let funded_batch = batch_pairing.envelope();
+                let checked = prepare_funding_v1(
+                    funded_batch.inspect_carrier_v1(&batch_carrier).unwrap(), &funded_batch.funding, &funded_batch.payer_pubkey,
+                    &batch_scope, t.network_domain, ctx.daa_score,
+                ).unwrap();
+                assert_eq!(checked.actual().outpoint(), batch_pairing.outpoint());
+                let batch_schedule = schedule(all_roles).with_batch_v1(FundedBatchScheduleV1 {
+                    cover: streaming_budget, maximum_ranges: 4_096, delivery: costs,
+                    carrier_costs: [cost(0); 4], open_work_per_range: 0, finish_work_per_byte: 0, finish_io_per_byte: 0,
+                    stop_verification: cost(1), stop_filing: cost(1),
+                });
+                let batch_extras = |pairing: &PalwFundedOriginalPairingV1| {
+                    let mut e = with(Some(batch_schedule), pairing);
+                    e.tir_public_conviction_active = true;
+                    e.batch_court_active_v1 = true;
+                    e.batch_numerical_profile_v1 = Some(crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1 {
+                        service_profile: batch.state.profile_id, budget: costs.numerical_verification,
+                    });
+                    e
+                };
+                let batch_params = params.clone().with_court_clock_v2_from_daa(Some(ctx.daa_score));
+                let old_extras = batch_extras(&pairing);
+                let mut refused = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &old_extras).unwrap();
+                let before = refused.state.state_root();
+                assert!(super::super::apply_object(&mut refused, &ctx, &object).is_err());
+                assert_eq!(refused.state.state_root(), before);
+                let funded_extras = batch_extras(&batch_pairing);
+                let mut accepted = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &funded_extras).unwrap();
+                super::super::apply_object(&mut accepted, &ctx, &object).unwrap();
+                assert_eq!(accepted.state.claim(&claim).unwrap().accepted_block, ctx.block);
+                let installed = crate::palw_court_shared_tir_state_v1::context(&accepted.state, claim).unwrap();
+                assert!(installed.batch_notice_only_v1());
+                assert_eq!(installed.hard_daa, ctx.daa_score + 10_000);
+                assert_eq!(accepted.state.court_service_row_v3_v1(), Some(&batch));
+                assert_eq!(accepted.state.funded_escrows_v1()[&checked.consent().terms.id_v1()].funding_outpoint, batch_pairing.outpoint());
+                assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
+                assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
+                assert_eq!(batch.causal[&terminal], [verification]);
+                assert_eq!(batch.causal[&verification].len(), envelope.maximums_v1().len());
+                let book = &batch.state.book;
+                assert!(book.assigned_daa(&terminal).unwrap() > book.assigned_daa(&verification).unwrap());
                 // The served book itself is untouched by the dry run.
                 assert!(b.state.court_service_state_v1().unwrap().claims.is_empty());
             }

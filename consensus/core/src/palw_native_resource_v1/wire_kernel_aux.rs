@@ -111,7 +111,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
     {
         return Err(wire::wire_bad("a liability frame contains its own namespace"));
     }
-    let mut shape = match table {
+    Ok(match table {
         32 => <crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         33 => <crate::palw_kernel_route_v1::KernelAssignmentV1 as NativeWireScanV1>::scan_native_wire_v1(frame)?,
         34 => <Vec<misaka_palw_kernel::receipt::PalwConstraintReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(frame)?,
@@ -1349,17 +1349,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
                 ),
             ));
         }
-    };
-    // Restore and delta replay rebuild the derived indexes from the canonical rows.
-    use super::typed::BTreeNodeEnvelopeV1;
-    use crate::palw_kernel_route_v1::{is_positive_gate_c_schedule_row_v2, is_positive_job_owner_row_v2};
-    if is_positive_job_owner_row_v2(table, key) {
-        shape = shape.allocation(1, std::mem::size_of::<BTreeNodeEnvelopeV1<(crate::Hash64, u8, crate::Hash64), ()>>())?;
-    }
-    if is_positive_gate_c_schedule_row_v2(table, key) {
-        shape = shape.allocation(1, std::mem::size_of::<BTreeNodeEnvelopeV1<(u8, u64, crate::Hash64), ()>>())?;
-    }
-    Ok(shape)
+    })
 }
 
 /// The longest aux key any fold writes is far below this; a longer key is malformed, never truncated.

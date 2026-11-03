@@ -380,6 +380,9 @@ impl Params {
         if self.palw_staged_tir_route_v1 == Some(ForkActivation::never()) {
             self.palw_staged_tir_route_v1 = None;
         }
+        if self.palw_batch_court_v1 == Some(ForkActivation::never()) {
+            self.palw_batch_court_v1 = None;
+        }
         if self.palw_tir_public_conviction_v1 == Some(ForkActivation::never()) {
             self.palw_tir_public_conviction_v1 = None;
         }
@@ -1186,6 +1189,7 @@ impl Params {
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
+            palw_batch_court_v1,
             palw_tir_public_conviction_v1,
             palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: _,
@@ -1547,6 +1551,7 @@ impl Params {
             ("palw_court_commitment_scope_v1", *palw_court_commitment_scope_v1),
             ("palw_staged_public_court_v1", *palw_staged_public_court_v1),
             ("palw_staged_tir_route_v1", *palw_staged_tir_route_v1),
+            ("palw_batch_court_v1", *palw_batch_court_v1),
             ("palw_tir_public_conviction_v1", *palw_tir_public_conviction_v1),
             ("palw_tir_container_identity_v1", *palw_tir_container_identity_v1),
             ("palw_staged_float_constraint_v1", *palw_staged_float_constraint_v1),
@@ -2087,6 +2092,10 @@ impl Params {
         }
         if let Some(at) = self.palw_staged_tir_route_v1 {
             h.write(b"palw_staged_tir_route_v1");
+            h.write(at.daa_score().to_le_bytes());
+        }
+        if let Some(at) = self.palw_batch_court_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_batch_court_v1");
             h.write(at.daa_score().to_le_bytes());
         }
         if let Some(at) = self.palw_tir_public_conviction_v1 {
@@ -3035,6 +3044,7 @@ impl Params {
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
+            palw_batch_court_v1,
             palw_tir_public_conviction_v1,
             palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: _,
@@ -3700,6 +3710,9 @@ impl Params {
             fork(activation, visit);
         }
         if let Some(activation) = palw_staged_tir_route_v1.as_mut() {
+            fork(activation, visit);
+        }
+        if let Some(activation) = palw_batch_court_v1.as_mut().filter(|f| **f != ForkActivation::never()) {
             fork(activation, visit);
         }
         if let Some(activation) = palw_tir_public_conviction_v1.as_mut() {
@@ -4668,6 +4681,7 @@ impl Params {
             palw_court_commitment_scope_v1,
             palw_staged_public_court_v1,
             palw_staged_tir_route_v1,
+            palw_batch_court_v1,
             palw_tir_public_conviction_v1,
             palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1,
@@ -5405,6 +5419,10 @@ impl Params {
         }
         if let Some(activation) = palw_staged_tir_route_v1.filter(|f| *f != ForkActivation::never()) {
             h.write(b"palw_staged_tir_route_v1");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        if let Some(activation) = palw_batch_court_v1.filter(|f| *f != ForkActivation::never()) {
+            h.write(b"palw_batch_court_v1");
             h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(activation) = palw_tir_public_conviction_v1.filter(|f| *f != ForkActivation::never()) {

@@ -600,3 +600,16 @@ impl NativeWireScanV1 for crate::palw_court_shared_tir_bottom_v1::SharedTirBotto
         Ok(sum)
     }
 }
+
+// The atomic mass is serialized as one little-endian u64.
+impl NativeWireScanV1 for crate::tx::TransactionMass {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        u64::scan_native_wire_v1(reader)
+    }
+}
+
+impl NativeWireScanV1 for crate::tx::ScriptPublicKey {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        u16::scan_native_wire_v1(reader)?.merge(Vec::<u8>::scan_native_wire_v1(reader)?)
+    }
+}

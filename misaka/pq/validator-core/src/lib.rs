@@ -1232,6 +1232,24 @@ impl ValidatorKey {
         )
     }
 
+    /// Fund an already signed BCT1 control on the PALW lifecycle subnetwork.
+    pub fn build_palw_batch_court_tx(
+        &self,
+        wire: &kaspa_consensus_core::palw_batch_court_v1::carriage::BatchCourtWireV1,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        fee: u64,
+    ) -> Result<Transaction, String> {
+        use kaspa_consensus_core::palw_batch_court_v1::carriage::{BATCH_COURT_CARRIER_MAGIC_V1, decode_batch_court_carrier_v1};
+        let mut bytes = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        borsh::BorshSerialize::serialize(wire, &mut bytes).map_err(|e| format!("Batch Court payload: {e}"))?;
+        let tx = self.build_funded_overlay_tx(
+            kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, bytes, funding_outpoint, funding, fee, false,
+        )?;
+        decode_batch_court_carrier_v1(&tx)?.ok_or("missing Batch Court payload")?;
+        Ok(tx)
+    }
+
     /// MISAKA PALW Stage-0 chain carriage (ADR-0029 §5): a fee-funded, signed
     /// **native-subnetwork** transaction carrying an opaque payload — the
     /// `"MPALW2" ‖ kind ‖ borsh` envelope built by `kaspa_consensus_core::palw_carriage`.

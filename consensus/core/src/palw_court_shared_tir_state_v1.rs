@@ -165,8 +165,15 @@ pub fn shared_body_digest_v1(bytes: &[u8]) -> Hash64 {
     )
 }
 impl SharedTirContextV1 {
+    /// Candidate originals whose material service comes from booked Batch slots.
+    pub(crate) const BATCH_NOTICE_ONLY_VERSION_V1: u16 = 2;
+
+    pub(crate) fn batch_notice_only_v1(&self) -> bool {
+        self.version == Self::BATCH_NOTICE_ONLY_VERSION_V1
+    }
+
     pub fn check(&self, key: &Key) -> Result<(), String> {
-        if self.version != 1
+        if !matches!(self.version, 1 | Self::BATCH_NOTICE_ONLY_VERSION_V1)
             || *key != Key::CourtSharedContext(self.claim)
             || self.queries == 0
             || self.original_accepted_daa.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA) != Some(self.hard_daa)
@@ -300,7 +307,7 @@ pub fn shared_frontier_universe_packets_v1(state: &PalwChainStateV2, c: &SharedT
     let source = c.source(state)?;
     let frame =
         crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim).ok_or("shared frontier: original frame absent")?;
-    shared_universe_packets_v1(&source, &TirSharedRequestSetV1::new(frame, &source, c.profile_id)?)
+    TirSharedRequestSetV1::new(frame, &source, c.profile_id)?.shared_frontier_packets_v1()
 }
 pub(crate) fn context(state: &PalwChainStateV2, claim: Hash64) -> Result<&SharedTirContextV1, String> {
     match state.staged_court_row_v1(&Key::CourtSharedContext(claim)) {
@@ -308,6 +315,31 @@ pub(crate) fn context(state: &PalwChainStateV2, claim: Hash64) -> Result<&Shared
         _ => Err("no installed native shared context".into()),
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BatchNoticeTargetV1 {
+    Numerical { leaf: u64 },
+    StopFullIds,
+}
+
+impl BatchNoticeTargetV1 {
+    pub(crate) fn from_request(request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1) -> Result<Self, String> {
+        use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as Request;
+        match request {
+            Request::StepLeaf { index } => Ok(Self::Numerical { leaf: index }),
+            Request::Ids { offset: 0 } => Ok(Self::StopFullIds),
+            _ => Err("Batch initial notice must name a numerical leaf or Stop FullIds".into()),
+        }
+    }
+
+    pub(crate) fn first_open_ordinal(self) -> u64 {
+        match self {
+            Self::Numerical { .. } => 0,
+            Self::StopFullIds => crate::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1,
+        }
+    }
+}
+
 impl SharedTirQueryV1 {
     pub fn check(&self, key: &Key) -> Result<(), String> {
         let service_ok = match (self.version, &self.service) {
@@ -354,8 +386,20 @@ impl SharedTirQueryV1 {
         )
     }
     pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        self.check_context_and_batch_target(state).map(|_| ())
+    }
+
+    pub(crate) fn check_context_and_batch_target(&self, state: &PalwChainStateV2) -> Result<Option<BatchNoticeTargetV1>, String> {
         self.check(&Key::CourtSharedQuery(self.request_id))?;
         let c = context(state, self.claim)?;
+        if c.batch_notice_only_v1()
+            && (self.version != 1
+                || self.body.is_some()
+                || !crate::palw_court_policy_v1::shared_initial_notice_daa_in_window_v1(c.original_accepted_daa, self.opened_daa)
+                    .map_err(|_| "Batch notice clock overflows")?)
+        {
+            return Err("Batch shared row must be an initial notice without legacy delivery".into());
+        }
         let source = c.source(state)?;
         let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, self.claim).ok_or("shared query lost frame")?;
         let set = TirSharedRequestSetV1::new(frame, &source, c.profile_id)?;
@@ -379,7 +423,10 @@ impl SharedTirQueryV1 {
         }
         // Historical requester identity was checked at acceptance. A requester
         // exiting later must not invalidate public data or transfer it to an owner.
-        Ok(())
+        if c.batch_notice_only_v1() {
+            return BatchNoticeTargetV1::from_request(set.request_at(self.ordinal)?).map(Some);
+        }
+        Ok(None)
     }
 }
 impl SharedTirIdsV1 {

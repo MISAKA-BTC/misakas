@@ -81,6 +81,7 @@ impl ArchiveDeclarationProgressV1 {
             .ok_or("archive progress lost original service binding")?;
         let ended = match a.evidence.as_ref() {
             CourtEndEvidenceV1::Native { point, .. } | CourtEndEvidenceV1::TirConviction { point, .. } => point,
+            CourtEndEvidenceV1::BatchStop { receipt } => &receipt.at,
             CourtEndEvidenceV1::Uncaptured | CourtEndEvidenceV1::DeadlineSweep { .. } => {
                 return Err("archive progress has no native origin point".into());
             }

@@ -40,9 +40,45 @@ manual.update({
 
 # A newly reached handwritten decoder must be explicitly reviewed. Generic
 # struct/enum fields cannot silently stand in for an unrelated custom codec.
+manual.add('crate::palw_batch_court_v1::carriage::BatchStopControlV1')
+manual.add('crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1')
+manual.add('crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1')
+manual.add('crate::tx::TransactionMass')
+manual.add('crate::tx::script_public_key::ScriptPublicKey')
 import hashlib
+manual.update({
+    'crate::config::params::positive_assignment_v2::AssignmentNativePreimagesV2',
+    'crate::config::params::positive_court_v2::PositiveCourtPolicyV2',
+    'crate::config::params::positive_funding_relay_v2::AssignmentFundingRelayProfileV2',
+    'crate::palw_batch_court_v1::rooted::RootedBatchDemandV1',
+    'crate::palw_native_resource_v1::demand::NativeDemandLeaseV1',
+    'crate::palw_positive_assignment_funds_v2::AssignmentFeeScheduleV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentMoneyQuoteV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentPhysicalProfileV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentPhysicalUsageV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentCustodyDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentJobDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentRegisteredDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentSourceQuoteDescriptorV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCancellationPolicyV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCaseFeeScheduleV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentSourcePolicyV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentWorkScheduleV2',
+    'crate::palw_positive_journal_chain_v2::CaseJournalPinV2',
+    'crate::palw_state_v2::positive_assignment_backing::NativeAcceptedCaseCarriageV2',
+    'crate::palw_state_v2::positive_assignment_backing::NativeCommittedAssignedCaseV2',
+    'crate::palw_state_v2::positive_assignment_backing::NativeCommittedAssignmentRecordV2',
+    'crate::palw_state_v2::positive_assignment_backing::NativeCommittedCaseRecordV2',
+    'crate::palw_state_v2::positive_assignment_backing::NativePositiveDecisionHistoryV2',
+    'crate::tx::Transaction',
+    'crate::tx::TransactionInput',
+    'crate::tx::TransactionOutput',
+    'crate::tx::UtxoEntry',
+})
+manual.update({'crate::palw_positive_assignment_resources_v2::' + name for name in ('AssignmentCancellationRuleV2', 'AssignmentSourceResponsibilityV2', 'AssignmentSourceReleaseV2')})
 REVIEW=runpy.run_path(str(Path(__file__).with_name('rfc06_native_manual_wire_review_v1.py')))['PINNED']
-for _path in sorted(G['visited']):
+for _path in sorted(G['wire_visited']):
  _item=defs.get(_path)
  if not _item:continue
  _raw=(ROOT/_item['file']).read_text();_bodies=[];_custom=False
@@ -98,7 +134,7 @@ private={};public=[]
 # Runtime authorities retain the own authenticated snapshot. They have no
 # transport codec; reaching one through a future wire field is a source error.
 runtime_authorities={'PalwNativeRoutingExecutionAuthorityV2', 'PalwNativeRoutingClaimAuthorityV2', 'PalwNativeRoutingWorkAuthorityV2'}
-for path in sorted(G['visited']):
+for path in sorted(G['wire_visited']):
     item=defs.get(path)
     if not item or path in manual:continue
     if item['name'] in runtime_authorities:

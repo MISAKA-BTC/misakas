@@ -14862,6 +14862,136 @@ fn palw_v2_apply_one_object_input_context_inner_v19(
     extras: &PalwTransitionExtrasV1,
     context: Option<&PalwNativeOriginalInputContextV19<'_>>,
 ) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+    rehearse_palw_object_retained_v1(base, params, ctx, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras, context, |builder| apply_object(builder, ctx, object))
+}
+
+/// Rehearse one BCT1 in the same pre-object state as ordinary acceptance.
+/// The processor appends a handoff only after this rehearsal succeeds.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_apply_one_batch_carrier_retained_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    carrier: &crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
+    rehearse_palw_object_retained_v1(
+        base,
+        params,
+        ctx,
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+        da_court,
+        extras,
+        None,
+        |builder| builder.apply_batch_court_carrier_v1(ctx, carrier),
+    )
+}
+
+/// Read-only block-template filter for reserved Batch Court slots.
+/// This is a selection hint. The accepting fold verifies signatures, fees,
+/// delivery, the actual accepting point and all state changes independently.
+pub fn palw_batch_template_slot_v1(
+    state: &PalwChainStateV2,
+    tx: &crate::tx::Transaction,
+    at: &PalwBlockContextV2,
+) -> Result<(), String> {
+    use crate::palw_batch_court_v1::{
+        BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
+        carriage::{BATCH_CONVICT_NUMERICAL_TAG_V1, BATCH_COURT_CARRIER_MAGIC_V1, BATCH_VERIFY_NUMERICAL_TAG_V1, BatchCourtWireV1, decode_batch_court_carrier_v1},
+        rooted::reserved_open_slot_v1,
+    };
+    use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_requests_v1};
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+        return Ok(());
+    }
+    let Some(payload) = tx.payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else { return Ok(()) };
+    // Stop does not need an owned wire copy for the template's slot check.
+    if payload.first() == Some(&2) {
+        return crate::palw_court_shared_material_intake_v1::batch::constraint_stop::check_batch_stop_template_slot_v1(
+            state, at.daa_score, &tx.payload,
+        );
+    }
+    let mut q = TirNativeRequestsV1::new();
+    if payload.first().copied() != Some(BATCH_CONVICT_NUMERICAL_TAG_V1) {
+        q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(|why| why.to_string())?;
+    }
+    match payload.first().copied() {
+        Some(0) => q.exact_v1::<BatchRangeV1>(MAX_BATCH_RANGES_V1 as u64),
+        Some(1) => q.exact_v1::<u8>(u64::from(MAX_BATCH_PART_BYTES_V1)),
+        Some(BATCH_VERIFY_NUMERICAL_TAG_V1 | BATCH_CONVICT_NUMERICAL_TAG_V1) => Ok(()),
+        _ => return Err("unknown Batch template carrier kind".into()),
+    }
+    .map_err(|why| why.to_string())?;
+    let _lease = reserve_native_requests_v1(q.bytes_v1()).map_err(|why| why.to_string())?;
+    match decode_batch_court_carrier_v1(tx)?.ok_or("Batch template carrier lost its wire payload")? {
+        BatchCourtWireV1::Open(signed) => {
+            let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(signed.notice_id)) else {
+                return Err("Batch template opening has no accepted notice".into());
+            };
+            if (notice.opened_by, notice.claim, notice.scope_id) != (signed.signer, signed.claim, signed.scope_id)
+                || state.staged_court_row_v1(&Key::CourtBatchDemand(signed.claim, signed.ordinal)).is_some()
+            {
+                return Err("Batch template opening differs from the notice or is already accepted".into());
+            }
+            let (_, _, slot) = reserved_open_slot_v1(state, signed.claim, signed.scope_id, signed.ordinal, tx.payload.len() as u64)?;
+            if signed.demand.opened_daa != slot || slot != at.daa_score {
+                return Err("Batch template opening is outside its booked DAA".into());
+            }
+            Ok(())
+        }
+        BatchCourtWireV1::Respond(control) => {
+            use crate::palw_court_shared_material_intake_v1::{MaterialActionV1, target_complete_v1};
+            let intake = &control.intake;
+            if !matches!(intake.action, MaterialActionV1::Finish { .. }) && target_complete_v1(state, intake.claim, intake.target)? {
+                return Err("Batch template response material is already available".into());
+            }
+            palw_court_shared_material_intake_fold_v1::checked_batch_response_slot_v1(
+                state,
+                at.daa_score,
+                intake,
+                control.demand_ordinal,
+            )
+            .map(|_| ())
+            .map_err(|why| why.to_string())
+        }
+        BatchCourtWireV1::Stop(_) => Err("unexpected decoded Batch Stop during template slot check".into()),
+        BatchCourtWireV1::VerifyNumerical(signed) => {
+            use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::reserved_numerical_verification_slot_v1;
+            if state.staged_court_row_v1(&Key::CourtBatchNumericalReceipt(signed.claim)).is_some() {
+                return Err("numerical Batch verification is already accepted".into());
+            }
+            reserved_numerical_verification_slot_v1(state, &signed, at.daa_score).map(|_| ())
+        }
+        BatchCourtWireV1::ConvictNumerical(control) => {
+            let receipt = crate::palw_batch_court_v1::rooted::reserved_numerical_terminal_v1(state, control.claim, control.receipt_digest, at)?;
+            if receipt.fault_evidence.is_none() {
+                return Err("numerical terminal receipt contains no fault".into());
+            }
+            Ok(())
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn rehearse_palw_object_retained_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+    uncertified_weightless: bool,
+    da_court: bool,
+    extras: &PalwTransitionExtrasV1,
+    context: Option<&PalwNativeOriginalInputContextV19<'_>>,
+    apply: impl FnOnce(&mut TransitionBuilder<'_>) -> Result<(), PalwStateV2Error>,
+) -> Result<crate::palw_native_resource_v1::NativeChainStateV1, PalwStateV2Error> {
     let mut builder =
         TransitionBuilder::try_new(base, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
     if let Some(context) = context {
@@ -14875,7 +15005,7 @@ fn palw_v2_apply_one_object_input_context_inner_v19(
     // `PalwTransitionExtrasV1::own_attempt_class`).
     builder.own_attempt_class = extras.own_attempt_class.filter(|_| extras.audit_2026_09_23_active);
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    apply_object(&mut builder, ctx, object)?;
+    apply(&mut builder)?;
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     palw_claim_local_execution_cohort_census_v15::invalidate_partial_view_v15(&mut builder);
     palw_claim_local_context_gc_v3::settle_builder_v3(&mut builder).map_err(palw_claim_local_paid_archive_v2::state_error)?;
@@ -15555,27 +15685,29 @@ fn apply_palw_transition_v7_inner(
         builder.own_attempt_class = Some(envelope.attempt.class_id);
     }
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
-    if extras.positive_assignment_actions.is_empty() {
-        for object in accepted_objects {
-            apply_object(&mut builder, ctx, object)?;
+    use crate::palw_batch_court_v1::fold_order::{AcceptedCourtItemV1, in_accepted_order_v1};
+    let ordered = in_accepted_order_v1(accepted_objects.iter(), &extras.batch_court_carriers_v1)
+        .ok_or_else(|| PalwStateV2Error::CarriageInconsistent("Batch carriers do not follow accepted lifecycle order".into()))?;
+    let mut raw_cursor = 0;
+    let mut previous_raw_ordinal = None;
+    let mut index = 0;
+    for item in ordered {
+        let before = match &item {
+            AcceptedCourtItemV1::Ordinary(_) => None,
+            AcceptedCourtItemV1::Batch(carrier) => Some(carrier.accepted_ordinal_v1()),
+        };
+        positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, before, &mut raw_cursor, &mut previous_raw_ordinal)?;
+        match item {
+            AcceptedCourtItemV1::Ordinary(object) => {
+                apply_object(&mut builder, ctx, object)?;
+                index += 1;
+            }
+            AcceptedCourtItemV1::Batch(carrier) => builder.apply_batch_court_carrier_v1(ctx, carrier)?,
         }
-    } else {
-        let mut raw_cursor = 0usize;
-        let mut previous_raw_ordinal = None;
-        for (index, object) in accepted_objects.iter().enumerate() {
-            positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, &mut raw_cursor, &mut previous_raw_ordinal)?;
-            apply_object(&mut builder, ctx, object)?;
-        }
-        positive_assignment::apply_raw_before_object_v2(
-            &mut builder,
-            ctx,
-            accepted_objects.len(),
-            &mut raw_cursor,
-            &mut previous_raw_ordinal,
-        )?;
-        if raw_cursor != builder.extras.positive_assignment_actions.len() {
-            return Err(PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix"));
-        }
+    }
+    positive_assignment::apply_raw_before_object_v2(&mut builder, ctx, index, None, &mut raw_cursor, &mut previous_raw_ordinal)?;
+    if raw_cursor != extras.positive_assignment_actions.len() {
+        return Err(PalwStateV2Error::DeltaMismatch("Assignment action points beyond accepted object prefix"));
     }
     // G14 lane court-f02 (RFC-0026 F02 / ADR-0192 A): this accepting block's actual reserved court service supply, after every
     // object (so the block's own unreserved court spend is known). Dormant: past `palw_tir_public_conviction_v1` with a pinned
@@ -21392,6 +21524,13 @@ pub struct PalwTransitionExtrasV1 {
     /// `palw_staged_tir_route_v1` at this block: TIR required-family claims are admitted to the
     /// staged route (native-context seeds and answers). False below it: refused, A-2 uniform.
     pub staged_tir_route_active: bool,
+    /// Prospective BCT1 gate, resolved by the block processor.
+    pub batch_court_active_v1: bool,
+    /// Native-resolved replay ceilings, pinned to the original service profile.
+    pub batch_numerical_profile_v1: Option<crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1>,
+    /// The accepted UTXO facts, in accepted carrier order. The index is the
+    /// count of already accepted ordinary objects immediately before the carrier.
+    pub batch_court_carriers_v1: Vec<(usize, crate::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1)>,
     /// Native-resolved original TIR rules, never limits deserialized from a carrier.
     /// None keeps the new original-allocation route dormant.
     pub tir_public_allocation_rules_v1: Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1>,
@@ -23418,7 +23557,33 @@ pub(crate) fn replay_delta_owned_v1(
     // insertion. Its prerequisite rows must already exist on the exact parent,
     // including when unrelated writes occur before it in this journal.
     let mut tokenizer_registration_changed = false;
+    let mut batch_numerical_receipt_changed = false;
     for entry in &delta.entries {
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
+            && (matches!(key, CourtKey::CourtBatchNumericalReceipt(_))
+                || matches!(old, Some(CourtRow::CourtBatchNumericalReceipt(_)))
+                || matches!(new, Some(CourtRow::CourtBatchNumericalReceipt(_))))
+        {
+            let row = match (old, new) {
+                (None, Some(CourtRow::CourtBatchNumericalReceipt(row))) if row.at == delta.point => row,
+                (Some(CourtRow::CourtBatchNumericalReceipt(row)), None) if delta.point.daa_score >= row.material_until_daa => row,
+                _ => return Err(PalwStateV2Error::DeltaMismatch("numerical Batch receipt changes its accepting point or retention")),
+            };
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            batch_numerical_receipt_changed = true;
+        }
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
+            && (matches!(key, CourtKey::CourtBatchStopReceipt(_))
+                || matches!(old, Some(CourtRow::CourtBatchStopReceipt(_)))
+                || matches!(new, Some(CourtRow::CourtBatchStopReceipt(_))))
+        {
+            let row = match (old, new) {
+                (None, Some(CourtRow::CourtBatchStopReceipt(row))) if row.at == delta.point => row,
+                (Some(CourtRow::CourtBatchStopReceipt(row)), None) if delta.point.daa_score >= row.material_until_daa => row,
+                _ => return Err(PalwStateV2Error::DeltaMismatch("Batch Stop receipt changes its accepting point or retention")),
+            };
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        }
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
             && (matches!(key, CourtKey::VerifiedTokenizerRegistration(..))
                 || matches!(old, Some(CourtRow::VerifiedTokenizerRegistration(_)))
@@ -23468,6 +23633,17 @@ pub(crate) fn replay_delta_owned_v1(
             if let PalwDeltaEntryV2::StagedCourtSeed { new: Some(CourtRow::VerifiedTokenizerRegistration(row)), .. } = entry {
                 if revert { row.check_adoption(&state, &delta.point) } else { row.check_child(&state, &delta.point) }
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+    }
+    if batch_numerical_receipt_changed {
+        let point = state.last_point().ok_or(PalwStateV2Error::DeltaMismatch("numerical Batch receipt has no snapshot point"))?;
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::StagedCourtSeed { key: key @ CourtKey::CourtBatchNumericalReceipt(_), .. } = entry
+                && let Some(CourtRow::CourtBatchNumericalReceipt(row)) = state.staged_court_row_v1(key)
+                && point.daa_score < row.material_until_daa
+            {
+                row.check_context(&state, point).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
     }

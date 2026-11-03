@@ -32,6 +32,26 @@ fn node_at(n: u64, mut ordinal: u64) -> Result<(u8, u64), String> {
     }
     Err("shared tree ordinal is outside geometry".into())
 }
+// Only the rightmost node can have a shorter frontier at a given level.
+fn visit_node_groups(
+    leaves: u64,
+    copies: u64,
+    exact: bool,
+    request: impl Fn(u8, u64) -> Request,
+    charge: &mut impl FnMut(u64, Request) -> Result<(), String>,
+) -> Result<(), String> {
+    for level in 1..=height(leaves) {
+        let count = width(leaves, level).ok_or("shared node geometry")?;
+        if exact {
+            charge(mul(copies, count - 1)?, request(level, 0))?;
+            charge(copies, request(level, count - 1))?;
+        } else {
+            charge(mul(copies, count)?, request(level, 0))?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 struct Geometry {
     n: u64,
@@ -41,6 +61,20 @@ struct Geometry {
     total: u64,
 }
 impl Geometry {
+    fn step_run_ordinal(&self, first: u64, count: u32) -> Result<u64, String> {
+        if !(1..=PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1).contains(&count)
+            || first.checked_add(u64::from(count)).is_none_or(|end| end > self.n)
+        {
+            return Err("shared StepRun interval outside native source".into());
+        }
+        // Widths are ordered before offsets. Count the intervals of all
+        // preceding widths without enumerating the request universe.
+        let preceding = u128::from(count - 1);
+        let prefix = preceding * (2 * u128::from(self.n) + 1 - preceding) / 2;
+        let prefix = u64::try_from(prefix).map_err(|_| "shared StepRun prefix overflows")?;
+        add(add(self.families[0], self.families[1])?, add(prefix, first)?)
+    }
+
     fn new(n: u64, d: u64, vocab: u64, tiled: bool) -> Result<Self, String> {
         if n == 0 || vocab == 0 {
             return Err("shared request geometry is empty".into());
@@ -300,15 +334,47 @@ impl<'a> TirSharedRequestSetV1<'a> {
     /// NOT a full service graph, signature/IO/fee or physical capacity bound.
     pub fn source_data_upper(&self) -> Result<TirSharedSourceDataUpperV1, String> {
         let mut result = TirSharedSourceDataUpperV1::default();
-        self.visit_source_bounds(|count, _, bound| result.add(count, bound))?;
+        self.visit_source_bounds(false, |count, _, bound| result.add(count, bound))?;
         if result.queries != self.len() {
             return Err("shared source bound omitted a legal family".into());
         }
         Ok(result)
     }
-    /// Grouped maxima cover every source choice without enumerating queries.
+    /// Sum the native maximum response bytes for each distinct material
+    /// target. The ID chunks together contribute one complete FullIds body.
+    /// This is the existing intake ledger limit, independent of a case's
+    /// funded service reservation.
+    pub(crate) fn material_body_budget_v1(&self) -> Result<u64, String> {
+        let mut bytes = 0;
+        self.visit_source_bounds(true, |count, _, bound| {
+            bytes = add(bytes, mul(count, bound.maximum_response_bytes)?)?;
+            Ok(())
+        })?;
+        Ok(bytes)
+    }
+
+    /// Exact legacy frontier cost. Round each coordinate before multiplying
+    /// by the number of coordinates with that same bound.
+    pub(crate) fn shared_frontier_packets_v1(&self) -> Result<u64, String> {
+        let mut packets = 0;
+        let mut queries = 0;
+        self.visit_source_bounds(true, |count, _, bound| {
+            let per_query = crate::palw_court_shared_frontier_budget_v1::packets_for_bytes_v1(bound.maximum_response_bytes);
+            packets = add(packets, mul(count, per_query)?)?;
+            queries = add(queries, count)?;
+            Ok(())
+        })?;
+        if queries != self.len() {
+            return Err("shared frontier accounting omitted a legal family".into());
+        }
+        Ok(packets)
+    }
+
+    /// Group source choices by their response bound. The conservative mode
+    /// retains the original first-node maximum for all nodes at a level.
     fn visit_source_bounds(
         &self,
+        exact_nodes: bool,
         mut visit: impl FnMut(u64, Request, crate::palw_tir_public_source_v1::PalwTirPublicUnitBoundV1) -> Result<(), String>,
     ) -> Result<(), String> {
         let mut charge = |count: u64, q: Request| -> Result<(), String> {
@@ -317,26 +383,21 @@ impl<'a> TirSharedRequestSetV1<'a> {
             }
             visit(count, q, self.source.unit_bound_v1(&q)?)
         };
-        // At each level the first node is full or the only partial node. Its
-        // frontier is maximal; the ragged last node never has more children.
-        for level in 1..=height(self.geometry.n) {
-            charge(width(self.geometry.n, level).ok_or("shared node geometry")?, Request::StepNode { level, index: 0 })?;
-        }
+        visit_node_groups(self.geometry.n, 1, exact_nodes, |level, index| Request::StepNode { level, index }, &mut charge)?;
         charge(self.geometry.n, Request::StepLeaf { index: 0 })?;
         for count in 1..=self.geometry.n.min(u64::from(PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1)) {
             charge(self.geometry.n - (count - 1), Request::StepRun { first: 0, count: count as u32 })?;
         }
         if self.geometry.families[3..].iter().any(|&n| n != 0) && self.geometry.d != 0 {
             let d = self.geometry.d;
-            for level in 1..=height(d) {
-                charge(width(d, level).ok_or("shared rows geometry")?, Request::RowsNode { level, index: 0 })?;
-            }
-            for level in 1..=height(self.geometry.tiles) {
-                charge(
-                    mul(d, width(self.geometry.tiles, level).ok_or("shared tile geometry")?)?,
-                    Request::TileNode { row: 0, level, index: 0 },
-                )?;
-            }
+            visit_node_groups(d, 1, exact_nodes, |level, index| Request::RowsNode { level, index }, &mut charge)?;
+            visit_node_groups(
+                self.geometry.tiles,
+                d,
+                exact_nodes,
+                |level, index| Request::TileNode { row: 0, level, index },
+                &mut charge,
+            )?;
             let last = self.geometry.tiles - 1;
             charge(mul(d, last)?, Request::TraceTile { row: 0, tile: 0 })?;
             charge(d, Request::TraceTile { row: 0, tile: u32::try_from(last).map_err(|_| "shared tile overflow")? })?;
@@ -411,7 +472,7 @@ impl<'a> TirSharedRequestSetV1<'a> {
             let finish = signed_wire_length(&sample(A::Finish { stream_id: self.source.source_id_v1() }))?;
             result.add_streams(streams, body, begin, part, finish)
         };
-        self.visit_source_bounds(|count, q, bound| {
+        self.visit_source_bounds(false, |count, q, bound| {
             if !matches!(q, Request::Ids { .. }) {
                 charge(count, bound.maximum_response_bytes, T::Unit { ordinal: 0, request_id })?;
             }
@@ -450,6 +511,34 @@ impl<'a> TirSharedRequestSetV1<'a> {
             return Err("shared StepLeaf ordinal roundtrip differs".into());
         }
         Ok(ordinal)
+    }
+
+    /// Map a root-local Batch plan to the existing immutable material target
+    /// and shared request identity. The caller derives `boundaries` from the
+    /// selected original root and accounts the returned native bounds. No
+    /// response slot, duty or accepted evidence is created by this projection.
+    pub(crate) fn visit_batch_step_targets_v1(
+        &self,
+        boundaries: &std::collections::BTreeSet<crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1>,
+        max_parts_per_demand: usize,
+        max_demands: usize,
+        mut visit: impl FnMut(
+            crate::palw_court_shared_material_intake_v1::MaterialTargetV1,
+            Hash64,
+            crate::palw_tir_public_source_v1::PalwTirPublicUnitBoundV1,
+        ) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        use crate::palw_court_shared_material_intake_v1::MaterialTargetV1;
+        self.source.visit_batch_step_material_cover_v1(boundaries, max_parts_per_demand, max_demands, |request, bound| {
+            let Request::StepRun { first, count } = request else {
+                return Err("Batch material cover produced a foreign request".into());
+            };
+            let ordinal = self.geometry.step_run_ordinal(first, count)?;
+            if self.request_at(ordinal)? != request {
+                return Err("shared StepRun ordinal roundtrip differs".into());
+            }
+            visit(MaterialTargetV1::Unit { ordinal }, self.request_id(ordinal)?, bound)
+        })
     }
     /// Shared request identity only, NOT a complete service-packet/duty ID:
     /// signer role, turn, carrier fragment and original eligibility remain to bind.
@@ -993,10 +1082,23 @@ mod tests {
         let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
         let set = TirSharedRequestSetV1::new(&fx.frame, &source, Hash64::from_u64_word(1)).unwrap();
         let bound = set.source_data_upper().unwrap();
+        assert_eq!(
+            set.shared_frontier_packets_v1().unwrap(),
+            crate::palw_court_shared_tir_state_v1::shared_universe_packets_v1(&source, &set).unwrap(),
+        );
         let mut actual = TirSharedSourceDataUpperV1::default();
         for i in 0..set.len() {
             actual.add(1, source.unit_bound_v1(&set.request_at(i).unwrap()).unwrap()).unwrap();
         }
+        let owned = crate::palw_tir_public_owned_v1::request_body_bound_v1;
+        let legacy_bytes = (0..set.len())
+            .map(|i| set.request_at(i).unwrap())
+            .filter(|q| !matches!(q, Request::Ids { .. }))
+            .map(|q| owned(&source, q).unwrap().0)
+            .sum::<u64>()
+            + owned(&source, Request::Ids { offset: 0 }).map_or(0, |(bytes, _)| bytes);
+        assert_eq!(set.material_body_budget_v1().unwrap(), legacy_bytes);
+        assert_eq!(actual.response_bytes, legacy_bytes);
         assert_eq!(actual.queries, bound.queries);
         assert_eq!(bound.queries, set.len());
         assert!(
@@ -1014,9 +1116,13 @@ mod tests {
         for n in [2, 3, 1023, 1024, 1025, 4097, 65_537] {
             for level in 1..=height(n) {
                 let (_, first, end) = crate::palw_tir_court_v1::palw_tir_step_node_frontier_v1(n, level, 0).unwrap();
-                for index in 0..width(n, level).unwrap() {
+                let nodes = width(n, level).unwrap();
+                for index in 0..nodes {
                     let (_, lo, hi) = crate::palw_tir_court_v1::palw_tir_step_node_frontier_v1(n, level, index).unwrap();
                     assert!(hi - lo <= end - first, "n={n}, level={level}, index={index}");
+                    if index + 1 < nodes {
+                        assert_eq!(hi - lo, end - first, "n={n}, level={level}, index={index}");
+                    }
                 }
             }
         }
@@ -1110,6 +1216,16 @@ mod tests {
                 assert_eq!(u128::from(g.families[2]), u128::from(r) * (2 * u128::from(n) - u128::from(r) + 1) / 2);
                 let last_run = g.families[..3].iter().sum::<u64>() - 1;
                 assert_eq!(g.at(last_run).unwrap(), Request::StepRun { first: n - r, count: r as u32 });
+                for count in 1..=r as u32 {
+                    let last = n - u64::from(count);
+                    for first in [0, last / 2, last] {
+                        let ordinal = g.step_run_ordinal(first, count).unwrap();
+                        assert_eq!(g.at(ordinal).unwrap(), Request::StepRun { first, count });
+                    }
+                    assert!(g.step_run_ordinal(last + 1, count).is_err());
+                }
+                assert!(g.step_run_ordinal(0, 0).is_err());
+                assert!(g.step_run_ordinal(u64::MAX, 2).is_err());
                 let mut first = 0;
                 for (family, &count) in g.families.iter().enumerate() {
                     if count != 0 {

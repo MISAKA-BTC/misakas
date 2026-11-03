@@ -220,6 +220,36 @@ pub struct OriginalFundingScopeV1 {
     pub required_amount_sompi: u64,
     pub required_material_until_daa: u64,
 }
+
+impl OriginalFundingScopeV1 {
+    /// Compose a native Batch reservation with the remaining original duties
+    /// before matching the actual signed funding output. Provider carrier rent
+    /// has its own fee source. Only the separately priced node writes enter
+    /// this original's storage funding requirement.
+    pub(crate) fn with_native_batch_v1(
+        mut self,
+        batch: &crate::palw_court_shared_material_intake_v1::batch::admission::BatchAdmissionQuoteV1,
+    ) -> Result<Self, FundingRefusalV1> {
+        if self.claim != batch.claim || [self.relative_graph_id, batch.relative_graph_id].contains(&Hash64::default()) {
+            return Err(FundingRefusalV1::Scope);
+        }
+        if !(1..=crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).contains(&batch.required_daa)
+            || batch.material_until_daa == 0
+            || batch.retained_numerical_fault_bytes == 0
+            || batch.retained_numerical_fault_byte_daa < batch.retained_numerical_fault_bytes
+        {
+            return Err(FundingRefusalV1::Coverage);
+        }
+        self.relative_graph_id = crate::palw_court_shared_tir_stream_v1::stream_digest(
+            b"misaka-palw/funded-original-batch-scope/v1",
+            &(self.claim, self.relative_graph_id, batch.relative_graph_id, batch.numerical_fault_storage_rent_sompi),
+        ).map_err(|_| FundingRefusalV1::Scope)?;
+        self.required_amount_sompi = self.required_amount_sompi.checked_add(batch.numerical_fault_storage_rent_sompi)
+            .ok_or(FundingRefusalV1::Coverage)?;
+        self.required_material_until_daa = self.required_material_until_daa.max(batch.material_until_daa);
+        Ok(self)
+    }
+}
 /// Preparation result only. No serialization, Clone, paid/complete boolean,
 /// state-root funding certificate, mutation method or public spend privilege.
 #[derive(Debug)]
@@ -418,6 +448,42 @@ mod tests {
         let mut inverted = restored;
         inverted.terms.accept_until_daa = 9;
         assert_eq!(inverted.check_v1(), Err(FundingRefusalV1::Contract));
+    }
+
+    #[test]
+    fn batch_funding_binds_native_graph_and_retention_to_actual_payer() {
+        use crate::palw_court_shared_material_intake_v1::batch::admission::BatchAdmissionQuoteV1;
+        let (public, mut consent, tx, base) = fixture();
+        let mut quote = BatchAdmissionQuoteV1 {
+            claim: base.claim, relative_graph_id: h(98), required_daa: 10_000, material_until_daa: 11_500,
+            retained_numerical_fault_bytes: 10, retained_numerical_fault_byte_daa: 80_000,
+            numerical_fault_storage_rent_sompi: 25, carrier_storage_rent_sompi: 90, ..Default::default()
+        };
+        let expected = base.clone().with_native_batch_v1(&quote).unwrap();
+        assert_eq!(expected.required_amount_sompi, 125);
+        assert_eq!(expected.required_material_until_daa, 11_500);
+        let prepare = |consent: &FundingConsentV1, expected: &OriginalFundingScopeV1, daa| {
+            prepare_funding_v1(inspect_transaction_v1(&tx, 0).unwrap(), consent, &public, expected, h(1), daa).map(|_| ())
+        };
+        assert!(matches!(prepare(&consent, &expected, 10), Err(FundingRefusalV1::Scope)));
+        consent.terms.relative_graph_id = expected.relative_graph_id;
+        assert!(prepare(&consent, &expected, 10).is_err(), "the new graph must be signed");
+        let keys = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([91; 32]);
+        consent.signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keys.signing_key, consent.terms.id_v1().as_byte_slice(), COURT_ORIGINAL_FUNDING_SIGNATURE_CONTEXT_V1, [94; 32],
+        ).unwrap().as_ref().to_vec();
+        for daa in [10, 20] {
+            assert!(prepare(&consent, &expected, daa).is_ok());
+        }
+        let underpaid = OriginalFundingScopeV1 { required_amount_sompi: 151, ..expected.clone() };
+        assert!(matches!(prepare(&consent, &underpaid, 20), Err(FundingRefusalV1::Coverage)));
+        let expired = OriginalFundingScopeV1 { required_material_until_daa: 12_001, ..expected };
+        assert!(matches!(prepare(&consent, &expired, 20), Err(FundingRefusalV1::Coverage)));
+        quote.relative_graph_id = h(99);
+        let other = base.clone().with_native_batch_v1(&quote).unwrap();
+        assert!(matches!(prepare(&consent, &other, 20), Err(FundingRefusalV1::Scope)));
+        quote.required_daa += 1;
+        assert!(matches!(base.with_native_batch_v1(&quote), Err(FundingRefusalV1::Coverage)));
     }
 
     #[test]

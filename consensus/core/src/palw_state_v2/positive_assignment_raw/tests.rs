@@ -173,7 +173,7 @@ fn final_raw_schedule_rejects_reverse_ordinals_without_state_change() {
     let mut cursor = 0;
     let mut previous = None;
     assert!(
-        super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, &mut cursor, &mut previous).is_err()
+        super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, None, &mut cursor, &mut previous).is_err()
     );
     assert_eq!(builder.state.state_root_preimage(), before);
     assert!(builder.entries.is_empty());
@@ -190,7 +190,7 @@ fn final_raw_schedule_rejects_a_slot_behind_current_prefix() {
     let mut cursor = 0;
     let mut previous = None;
     assert!(
-        super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 1, &mut cursor, &mut previous).is_err()
+        super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 1, None, &mut cursor, &mut previous).is_err()
     );
     assert!(builder.entries.is_empty());
 }
@@ -249,7 +249,7 @@ fn missing_native_history_aborts_without_advancing_the_raw_schedule() {
     let before = builder.state.state_root_preimage();
     let mut cursor = 0;
     let mut previous = None;
-    let error = super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, &mut cursor, &mut previous)
+    let error = super::super::positive_assignment::apply_raw_before_object_v2(&mut builder, &point(), 0, None, &mut cursor, &mut previous)
         .unwrap_err();
     assert!(matches!(error, PalwStateV2Error::NativeContextUnavailable(_)));
     assert_eq!(cursor, 0);

@@ -193,7 +193,6 @@ impl PalwConstraintStreamCourtV1 {
         owner: PalwBondKeyV2,
         reserved_daa: u64,
         view: &crate::palw_decode_view_v1::PalwDecodeViewV1,
-        view_identity: &[u8],
         source: &crate::palw_tir_public_source_v1::PalwTirPublicSourceV1,
         ids: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1,
         original: &PalwFreePromptCommitmentV3,
@@ -238,14 +237,15 @@ impl PalwConstraintStreamCourtV1 {
             return Err("terminal TIR predicate delegates out-of-vocabulary IDs to native Output".into());
         }
         let position = u32::try_from(ids.ids_v1().len()).map_err(|_| "terminal TIR position overflow")?;
-        let canonical = borsh::to_vec(&(source.source_id_v1(), ids.rows_root_v1(), ids.ids_v1())).map_err(|e| e.to_string())?;
+        // The native signed intent supplies the seed. Source and FullIds
+        // were bound above, so no legacy seed preimage needs encoding.
         Self::from_authenticated_selection_view_v1(
             claim_id,
             owner,
             reserved_daa,
             original.execution_root,
             view,
-            view_identity,
+            &[],
             job,
             ids.ids_v1(),
             position,
@@ -255,7 +255,7 @@ impl PalwConstraintStreamCourtV1 {
             eog_count,
             eog_opening,
             Some(signed_context),
-            &canonical,
+            &[],
             Some(original.stop_reason),
         )
     }
@@ -733,23 +733,24 @@ impl PalwConstraintStreamCourtV1 {
         }
         let constraint = palw_fp_constraint_shape_v1(job).map_err(|e| e.to_string())?;
         let table_root = palw_fp_constraint_table_root_v1(job).ok_or("stream job names no legacy table root")?;
-        let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/constraint-stream/seed/v1").to_state();
-        for hash in [claim_id, expected_root] {
-            h.update(hash.as_byte_slice());
-        }
-        h.update(&borsh::to_vec(&owner).map_err(|e| e.to_string())?);
-        h.update(&reserved_daa.to_le_bytes());
-        // Canonical seed identity retains the actual pin, job and binding, not a caller-reencoded fault.
-        h.update(view_identity);
-        h.update(&borsh::to_vec(job).map_err(|e| e.to_string())?);
-        h.update(canonical_pin);
-        h.update(&borsh::to_vec(&witness).map_err(|e| e.to_string())?);
-        h.update(&eog_count.to_le_bytes());
-        h.update(&borsh::to_vec(eog_opening).map_err(|e| e.to_string())?);
-        let context = signed_context.unwrap_or_else(|| Hash64::from_bytes(h.finalize().as_bytes().try_into().unwrap()));
-        let mut relevant = generated.to_vec();
-        relevant.extend(witness);
-        relevant.extend(beat);
+        let context = if let Some(context) = signed_context {
+            context
+        } else {
+            let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/constraint-stream/seed/v1").to_state();
+            for hash in [claim_id, expected_root] {
+                h.update(hash.as_byte_slice());
+            }
+            h.update(&borsh::to_vec(&owner).map_err(|e| e.to_string())?);
+            h.update(&reserved_daa.to_le_bytes());
+            // The legacy seed commits the actual pin, job and binding.
+            h.update(view_identity);
+            h.update(&borsh::to_vec(job).map_err(|e| e.to_string())?);
+            h.update(canonical_pin);
+            h.update(&borsh::to_vec(&witness).map_err(|e| e.to_string())?);
+            h.update(&eog_count.to_le_bytes());
+            h.update(&borsh::to_vec(eog_opening).map_err(|e| e.to_string())?);
+            Hash64::from_bytes(h.finalize().as_bytes().try_into().unwrap())
+        };
         // An original selected ID outside the registered vocabulary cannot be output by
         // the same selection kernel. No rendering, EOG membership or logit is required.
         let invalid = if terminal_stop.is_some() {
@@ -760,7 +761,16 @@ impl PalwConstraintStreamCourtV1 {
         let eog = if invalid.is_some() {
             None
         } else {
-            Some(PalwEogStreamV1::new(context, table_root, vocab_size, eog_count, &relevant, eog_opening)?)
+            let mut with_auxiliary_ids;
+            let relevant = if witness.is_some() || beat.is_some() {
+                with_auxiliary_ids = generated.to_vec();
+                with_auxiliary_ids.extend(witness);
+                with_auxiliary_ids.extend(beat);
+                with_auxiliary_ids.as_slice()
+            } else {
+                generated
+            };
+            Some(PalwEogStreamV1::new(context, table_root, vocab_size, eog_count, relevant, eog_opening)?)
         };
         let prefix_state = constraint_start_state_v1(&constraint);
         Ok(Self {
