@@ -166,6 +166,9 @@ struct NativeAssignedCourtV2 {
     derived_heap: u64,
     checker_heap: u64,
     available_heap: u64,
+    remaining_work: u64,
+    candidate_heap: u64,
+    candidate_lease: Option<NativeDemandLeaseV1>,
     _lease: NativeDemandLeaseV1,
 }
 /// Private current-step role cursor. It contains an actually resolved current
@@ -457,6 +460,17 @@ struct NativeAssignedCourtAdvanceV2 {
     outcome: crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2,
 }
 
+fn assigned_prover_rows_v2(
+    aux: &std::collections::BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+    prefix: Vec<u8>,
+) -> impl Iterator<Item = (&[u8], &[u8])> {
+    use misaka_palw_positive_contract::native::KERNEL_AUX_TABLE;
+
+    aux.range((KERNEL_AUX_TABLE, prefix.clone())..)
+        .take_while(move |((table, key), _)| *table == KERNEL_AUX_TABLE && key.starts_with(&prefix))
+        .map(|((_, key), bytes)| (key.as_slice(), bytes.as_slice()))
+}
+
 /// Resolve the literal original or accepted funded op13 role in the ACTUAL
 /// prefix. Historical replay calls with carriage.prefix_state(), never a later
 /// state, and a retired actor cannot buy a replacement global Court budget.
@@ -471,34 +485,36 @@ fn prover_step(
     use misaka_palw_positive_contract::assignment::{AssignmentRoleV2, rows::AssignmentRoleAuthorizationV2};
     use misaka_palw_positive_contract::rows::NativeRowValue;
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
+    let assignment = a.id();
     let mut resolved = None;
     let mut count = 0u32;
-    use misaka_palw_positive_contract::{
-        native::KERNEL_AUX_TABLE,
-        rows::{NativeHash64, NativeOutpoint},
-    };
-    let role_key = |byte, index| {
-        (
-            KERNEL_AUX_TABLE,
-            NativeRowKey::AssignmentRole {
-                assignment: a.id(),
-                role: AssignmentRoleV2::Prover,
-                bond: NativeOutpoint { transaction: NativeHash64([byte; 64]), index },
-            }
-            .encode(),
-        )
-    };
-    for ((_, key), bytes) in route.aux.range(role_key(0, 0)..=role_key(u8::MAX, u32::MAX)) {
+    let mut requests = TirNativeRequestsV1::new();
+    requests.exact_v1::<u8>(1024).map_err(PalwStateV2Error::NativeResource)?;
+    requests
+        .exact_v1::<u8>(misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES as u64)
+        .map_err(PalwStateV2Error::NativeResource)?;
+    let _range_owner =
+        reserve_native_requests_v1(requests.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<NativeRowKey>(
+                "assigned Case prover role range",
+                "actual checker is not armed",
+            ))
+        })?;
+    let mut prefix = NativeRowKey::AssignmentRole { assignment, role: AssignmentRoleV2::Prover, bond: a.bundle.terms.prover }.encode();
+    // The canonical last field is the outpoint (64-byte txid and u32 index).
+    // Keep AssignmentId AND role in the prefix before entering the ordered map.
+    prefix.truncate(prefix.len() - (64 + 4));
+    for (key, bytes) in assigned_prover_rows_v2(&route.aux, prefix) {
+        count = count.checked_add(1).ok_or_else(|| refuse("role count overflow"))?;
+        if count > material.assignment_policy.max_role_candidates {
+            return Err(refuse("bounded native role candidates"));
+        }
         let value = NativeRowValue::decode(key, bytes).map_err(refuse)?;
         let NativeRowBody::AssignmentRole(role) = value.body else {
             return Err(refuse("role key/value"));
         };
-        if role.assignment != a.id() || role.role != AssignmentRoleV2::Prover {
-            return Err(refuse("prover role range subject"));
-        }
-        count = count.checked_add(1).ok_or_else(|| refuse("role count overflow"))?;
-        if count > material.assignment_policy.max_role_candidates {
-            return Err(refuse("bounded native role candidates"));
+        if role.assignment != assignment || role.role != AssignmentRoleV2::Prover {
+            return Err(refuse("foreign native prover role key/value"));
         }
         if misaka_palw_positive_contract::identity::principal(&role.key) != author {
             continue;
@@ -674,7 +690,7 @@ impl NativeAssignedCourtV2 {
                 if *case != pin.case || *result != pin.result {
                     return Err(refuse("Expire Case identity"));
                 }
-                match self.court.expire(origin.accepted_daa) {
+                match self.court.expire_pending_v2(origin.accepted_daa) {
                     Ok(()) => Outcome::Expired,
                     Err(error) => semantic(error)?,
                 }
@@ -1092,6 +1108,9 @@ fn prepare_initial_case_checker_v2(
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
+        remaining_work: positive.max_case_work.min(policy.max_replay_work),
+        candidate_heap: 0,
+        candidate_lease: None,
         _lease: lease,
     })
 }
@@ -1134,43 +1153,24 @@ fn check_replayed_court_projection_v2(
     Ok(())
 }
 
-/// Replay the arithmetic projection in event order against actual native
-/// pre-event role state. The source and certification owners still have to
-/// reconcile their transitions before the writer may publish any Case change.
-fn replay_assigned_court_history_v2(
-    state: &PalwChainStateV2,
-    backing: &NativeCommittedAssignedCaseV2,
-    rooted: &PositiveRowBundleV2,
-) -> Result<(), PalwStateV2Error> {
-    use crate::{
-        palw_positive_assignment_resources_v2::AssignmentWorkQuantitiesV2,
-        palw_positive_court_v2::coordinator::native_body::{
-            MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2,
-            PositiveNativeBodyV2, PositiveNativeOperationV2 as Op, decode_native_body_v2, scan_native_body_v2,
-        },
-    };
-
-    let capacity = || {
-        PalwStateV2Error::NativeContextUnavailable(
-            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
-        )
-    };
-    let mut candidate_lease = None;
-    let mut machine = prepare_initial_case_checker_v2(backing, rooted)?;
-    let material = backing.material();
-    let pin = *backing.pin();
-    let policy = &material.positive_policy;
-    let limits = NativeBodyLimitsV2 {
-        max_body_bytes: policy.max_case_journal_bytes.min(MAX_BODY_BYTES_V2),
-        max_opaque_bytes: policy.max_case_journal_bytes.min(MAX_OPAQUE_BYTES_V2),
-        max_exact_relations: MAX_EXACT_RELATIONS_V2,
-        max_signatures: MAX_SIGNATURES_V2,
-    };
-    let mut remaining_work = policy.max_case_work.min(material.assignment_policy.max_replay_work);
-    let mut candidate_heap = 0u64;
-    for record in backing.records().iter().skip(1) {
-        let carriage = record.carriage();
-        let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
+impl NativeAssignedCourtV2 {
+    /// Admit this exact operation before decoding or applying it. A candidate's
+    /// allocation lease travels with the machine across cold and current steps.
+    fn reserve_operation_v2(
+        &mut self,
+        body_bytes: &[u8],
+        material: &AssignmentAdmissionMaterialV2,
+    ) -> Result<NativeDemandLeaseV1, PalwStateV2Error> {
+        use crate::{
+            palw_positive_assignment_resources_v2::AssignmentWorkQuantitiesV2,
+            palw_positive_court_v2::coordinator::native_body::{PositiveNativeBodyV2, scan_native_body_v2},
+        };
+        let capacity = || {
+            PalwStateV2Error::NativeContextUnavailable(
+                crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+            )
+        };
+        let policy = &material.positive_policy;
         let bytes = body_bytes.len() as u64;
         let schedule = &material.native_preimages.source_policy.work;
         let codec_work = schedule
@@ -1184,11 +1184,11 @@ fn replay_assigned_court_history_v2(
                 controls: 1,
             })
             .map_err(refuse)?;
-        remaining_work = remaining_work.checked_sub(codec_work).ok_or_else(|| refuse("Case replay codec work"))?;
-        let shape = scan_native_body_v2(body_bytes, limits).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(codec_work).ok_or_else(|| refuse("Case replay codec work"))?;
+        let shape = scan_native_body_v2(body_bytes, case_replay_body_limits_v2(policy)).map_err(refuse)?;
         let is_witness = shape.kind == 1;
         let is_frame = shape.kind == 2;
-        let check = machine.check_limits;
+        let check = self.check_limits;
         let authentication_work = schedule
             .charge(AssignmentWorkQuantitiesV2 {
                 codec_steps: 0,
@@ -1200,21 +1200,22 @@ fn replay_assigned_court_history_v2(
                 controls: if is_witness || is_frame { u64::from(material.assignment_policy.max_role_candidates) } else { 0 },
             })
             .map_err(refuse)?;
-        remaining_work = remaining_work.checked_sub(authentication_work).ok_or_else(|| refuse("Case replay operation work"))?;
-        if is_witness && candidate_lease.is_none() {
+        self.remaining_work =
+            self.remaining_work.checked_sub(authentication_work).ok_or_else(|| refuse("Case replay operation work"))?;
+        if is_witness && self.candidate_lease.is_none() {
             // A new candidate can coexist with the old context and progress.
             // Quote both pairs plus the temporary authentication copy.
-            candidate_heap = machine
+            self.candidate_heap = self
                 .derived_heap
                 .checked_mul(5)
-                .and_then(|n| machine.record_limits.max_generated_heap_bytes.checked_mul(5).and_then(|g| n.checked_add(g)))
-                .and_then(|n| machine.prepared.descriptor().mandatory_relations.checked_mul(128).and_then(|r| n.checked_add(r)))
+                .and_then(|n| self.record_limits.max_generated_heap_bytes.checked_mul(5).and_then(|g| n.checked_add(g)))
+                .and_then(|n| self.prepared.descriptor().mandatory_relations.checked_mul(128).and_then(|r| n.checked_add(r)))
                 .ok_or_else(capacity)?;
-            if machine.available_heap.checked_sub(machine.checker_heap).is_none_or(|left| candidate_heap > left) {
+            if self.available_heap.checked_sub(self.checker_heap).is_none_or(|left| self.candidate_heap > left) {
                 return Err(capacity());
             }
-            candidate_lease =
-                Some(reserve_native_requests_v1(candidate_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?);
+            self.candidate_lease =
+                Some(reserve_native_requests_v1(self.candidate_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?);
         }
         let body_heap = shape
             .opaque_bytes
@@ -1223,15 +1224,51 @@ fn replay_assigned_court_history_v2(
             .and_then(|n| n.checked_add((4 * size_of::<misaka_palw_positive_contract::rows::NativeRowValue>()) as u64))
             .and_then(|n| n.checked_add(if is_frame { policy.max_part_heap } else { 0 }))
             .ok_or_else(capacity)?;
-        if machine
+        let role_heap =
+            if is_witness || is_frame { (1024 + misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES) as u64 } else { 0 };
+        if self
             .available_heap
-            .checked_sub(machine.checker_heap)
-            .and_then(|left| left.checked_sub(candidate_heap))
+            .checked_sub(self.checker_heap)
+            .and_then(|left| left.checked_sub(self.candidate_heap))
+            .and_then(|left| left.checked_sub(role_heap))
             .is_none_or(|left| body_heap > left)
         {
             return Err(capacity());
         }
-        let _body = reserve_native_requests_v1(body_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
+        reserve_native_requests_v1(body_heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)
+    }
+}
+
+fn case_replay_body_limits_v2(
+    policy: &crate::config::params::PositiveCourtPolicyV2,
+) -> crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {
+    use crate::palw_positive_court_v2::coordinator::native_body::{
+        MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2,
+    };
+    NativeBodyLimitsV2 {
+        max_body_bytes: policy.max_case_journal_bytes.min(MAX_BODY_BYTES_V2),
+        max_opaque_bytes: policy.max_case_journal_bytes.min(MAX_OPAQUE_BYTES_V2),
+        max_exact_relations: MAX_EXACT_RELATIONS_V2,
+        max_signatures: MAX_SIGNATURES_V2,
+    }
+}
+
+/// Replay the arithmetic projection in event order against actual native
+/// pre-event role state. Source and certification reconcile separately.
+fn replay_assigned_court_history_v2(
+    state: &PalwChainStateV2,
+    backing: &NativeCommittedAssignedCaseV2,
+    rooted: &PositiveRowBundleV2,
+) -> Result<NativeAssignedCourtV2, PalwStateV2Error> {
+    use crate::palw_positive_court_v2::coordinator::native_body::{PositiveNativeOperationV2 as Op, decode_native_body_v2};
+    let mut machine = prepare_initial_case_checker_v2(backing, rooted)?;
+    let material = backing.material();
+    let pin = *backing.pin();
+    let limits = case_replay_body_limits_v2(&material.positive_policy);
+    for record in backing.records().iter().skip(1) {
+        let carriage = record.carriage();
+        let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
+        let _body = machine.reserve_operation_v2(body_bytes, material)?;
         let body = decode_native_body_v2(body_bytes, limits).map_err(refuse)?;
         let Some((case, result)) = body.operation.case_target_v2().map_err(refuse)? else {
             return Err(refuse("legacy admission in assigned Case history"));
@@ -1255,15 +1292,16 @@ fn replay_assigned_court_history_v2(
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
         }
     }
-    check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))
+    check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))?;
+    Ok(machine)
 }
 
 impl TransitionBuilder<'_> {
-    fn check_case_predecessor_v2(
+    fn prepare_case_predecessor_v2<'a>(
         &self,
-        action: &PositiveAssignmentRawActionV2,
+        action: &'a PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
-    ) -> Result<(), PalwStateV2Error> {
+    ) -> Result<(&'a NativeCommittedAssignedCaseV2, NativeAssignedCourtV2, CaseRow), PalwStateV2Error> {
         let backing = action.case_backing().map_err(|_| missing())?;
         let NativeAssignedCaseBackingV2::Committed(backing) = backing else {
             return Err(missing());
@@ -1286,7 +1324,8 @@ impl TransitionBuilder<'_> {
             // unpublished material must be replayed before this operation.
             return Err(missing());
         }
-        replay_assigned_court_history_v2(&self.state, backing, &bundle)
+        let machine = replay_assigned_court_history_v2(&self.state, backing, &bundle)?;
+        Ok((backing, machine, bundle.case))
     }
 }
 
@@ -1296,11 +1335,39 @@ impl TransitionBuilder<'_> {
 impl TransitionBuilder<'_> {
     pub(super) fn apply_positive_assignment_case_raw_v2(
         &mut self,
-        _ctx: &PalwBlockContextV2,
+        ctx: &PalwBlockContextV2,
         action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
-        self.check_case_predecessor_v2(action, body)?;
+        let (backing, mut machine, prior) = self.prepare_case_predecessor_v2(action, body)?;
+        let origin = action.origin();
+        if origin.accepting_block.0 != ctx.block.as_bytes()
+            || origin.accepted_daa != ctx.daa_score
+            || origin.accepted_blue_score != ctx.blue_score
+        {
+            return Err(refuse("current Court operation clock and origin"));
+        }
+        let material = backing.material();
+        let raw = action.transaction().payload.get(3..).ok_or_else(missing)?;
+        let _body = machine.reserve_operation_v2(raw, material)?;
+        if !canonical_equal(body, raw) {
+            return Err(refuse("current Court operation differs from literal carrier"));
+        }
+        let current_assignment = assignment(&self.state, backing.assignment().id())?;
+        let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
+        let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
+            .map_err(refuse)?;
+        if prior
+            .usage
+            .transmitted_bytes
+            .checked_add(delta.signed_wire_bytes)
+            .is_none_or(|n| n > prior.service.budget.transmitted_bytes)
+            || prior.usage.witness_attempts.checked_add(delta.attempts).is_none_or(|n| n > prior.service.budget.witness_attempts)
+        {
+            return Err(refuse("current Court operation exceeds signed service usage"));
+        }
+        // The source and retained-duty owners still have to authorize the
+        // complete proposed usage before the checkpoint can publish it.
         Err(missing())
     }
     pub(super) fn apply_positive_assignment_attestation_raw_v2(
@@ -1309,7 +1376,7 @@ impl TransitionBuilder<'_> {
         action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
-        self.check_case_predecessor_v2(action, body)?;
+        self.prepare_case_predecessor_v2(action, body)?;
         Err(missing())
     }
 }

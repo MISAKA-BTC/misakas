@@ -529,6 +529,21 @@ impl<C: CourtCheckerV2, V: CarrierVerifierV2> ContractCourtV2<C, V> {
         }
         Ok((status, last, receipts))
     }
+    /// A journaled op6 requires an actual Pending to EndedUnverified
+    /// transition. Ordinary clock observation uses expire or preview_expiry_v2.
+    pub(crate) fn expire_pending_v2(&mut self, now: u64) -> Result<(), CourtErrorV2<C::Error, V::Error>> {
+        if now < self.now {
+            return Err(CourtErrorV2::Order);
+        }
+        if self.claim_status != ClaimStatus::Pending {
+            return Err(CourtErrorV2::Closed);
+        }
+        if now < self.limits.deadline {
+            return Err(CourtErrorV2::Deadline);
+        }
+        self.expire(now)
+    }
+
     pub fn expire(&mut self, now: u64) -> Result<(), CourtErrorV2<C::Error, V::Error>> {
         if now < self.now {
             return Err(CourtErrorV2::Order);
