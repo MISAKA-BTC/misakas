@@ -475,10 +475,11 @@ impl VirtualStateProcessor {
     fn check_exact_relay_archive_v2(
         &self,
         parent: BlockHash,
+        now: u64,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         body: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayRegistrationBodyV2,
         payload: &[u8],
-    ) -> Result<(), NativeCoverageV1> {
+    ) -> Result<Option<kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2>, NativeCoverageV1> {
         use crate::model::stores::ghostdag::GhostdagStoreReader;
         use kaspa_consensus_core::{
             config::params::AssignmentFundingRelayProfileV2,
@@ -498,14 +499,14 @@ impl VirtualStateProcessor {
         let rows = PositiveRowsV2::new(state);
         let row = match rows.read(NativeRowKey::FundingRelayAuthorization { funding, purpose }) {
             Ok(Some(row)) => row,
-            Ok(None) | Err(PositiveRowErrorV2::MissingKernelRoute) => return Ok(()),
+            Ok(None) | Err(PositiveRowErrorV2::MissingKernelRoute) => return Ok(None),
             Err(_) => return Err(fault("malformed rooted relay authorization")),
         };
         let NativeRowBody::FundingRelayAuthorization(auth) = row.body else {
             return Err(fault("unexpected rooted relay authorization kind"));
         };
         if auth.terms != body.terms || auth.purpose_signature != body.purpose_signature {
-            return Ok(()); // Core deterministically refuses the different package.
+            return Ok(None); // Core deterministically refuses the different package.
         }
         let Some(NativeRowBody::FundingRelayCustody(custody)) = rows
             .read(NativeRowKey::FundingRelayCustody { funding, purpose })
@@ -515,9 +516,12 @@ impl VirtualStateProcessor {
             return Err(fault("missing rooted relay custody"));
         };
         if custody.relay_signature != body.relay_signature {
-            return Ok(()); // A different literal package cannot use the archive.
+            return Ok(None); // A different literal package cannot use the archive.
         }
         custody.check_pair(&auth).map_err(|_| fault("rooted relay rows disagree"))?;
+        if custody.binding.is_some() || now >= custody.retention_until_daa {
+            return Ok(None);
+        }
         // Two rooted rows, two reachability checks, header, selected parent,
         // acceptance index and both material keys.
         if auth.quote.usage.replay_reads < 9 || auth.quote.usage.heap_bytes < workspace {
@@ -624,7 +628,13 @@ impl VirtualStateProcessor {
                 FundingRelayBodyErrorV2::Contract(_) => fault("original relay purpose or settlement signature invalid"),
                 FundingRelayBodyErrorV2::Native(why) => why,
             }
-        })
+        })?;
+        Ok(Some(kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2 {
+            selected_parent: parent,
+            reservation: custody.reservation,
+            fees: observed_fees,
+            physical: auth.physical,
+        }))
     }
 }
 
@@ -805,16 +815,13 @@ impl PositiveCarrierPhaseTwoV2 {
                 let AssignmentFundingRelayProfileV2::RequiresRelayV2 { physical, .. } = rules.funding_relay_profile() else {
                     continue;
                 };
-                Some((physical.max_frame_bytes, physical.max_decoded_bytes, physical.max_heap_bytes))
+                Some(*physical)
             } else {
                 None
             };
             let Ok(limits) = rules.body_limits() else { continue };
-            let heap = if let Some((frame, decoded, heap)) = relay_cap {
-                let Ok(quote) = quote_funding_relay_body_v2(&tx.payload[3..], frame) else { continue };
-                if quote.decoded_inline_bytes > decoded || quote.logical_decode_requests > heap {
-                    continue;
-                }
+            let heap = if let Some(physical) = relay_cap {
+                let Ok(quote) = quote_funding_relay_body_v2(&tx.payload[3..], physical.max_frame_bytes) else { continue };
                 Some(quote.logical_decode_requests)
             } else if kind <= 7 {
                 let Ok(summary) = scan_native_body_v2(&tx.payload[3..], old_limits) else {
@@ -840,22 +847,39 @@ impl PositiveCarrierPhaseTwoV2 {
                 .ok_or_else(|| NativeCoverageV1::overflow::<Self>("native Positive raw retained action"))?;
             let decode = require_positive_carrier_lease_v2(reserve_native_requests_v1(bytes)?)?;
             let mut signed_anchor = None;
-            let output = if let Some((frame, _, _)) = relay_cap {
-                let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], frame) else { continue };
+            let mut pending_relay = None;
+            let output = if let Some(physical) = relay_cap {
+                let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], physical.max_frame_bytes) else { continue };
                 if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. }) {
                     continue; // Other purposes need their own original account owner.
                 }
-                let anchor = BlockHash::from_bytes(body.terms.contract_anchor.0);
-                if !processor.reachability_service.try_is_chain_ancestor_of(anchor, carrier.prefix.selected_parent).unwrap_or(false) {
+                if let Some(state) = selected_parent_state {
+                    pending_relay = processor.check_exact_relay_archive_v2(
+                        carrier.prefix.selected_parent,
+                        point.daa_score,
+                        state,
+                        &body,
+                        &tx.payload,
+                    )?;
+                }
+                let decode_profile = pending_relay.as_ref().map_or(&physical, |archive| &archive.physical);
+                if size_of_val(&body) as u64 > decode_profile.max_decoded_bytes || heap > decode_profile.max_heap_bytes {
                     continue;
                 }
-                let daa = processor.headers_store.get_daa_score(anchor).map_err(|_| {
-                    NativeCoverageV1::unsupported::<Self>("funding relay signed ancestor", "verified ancestor header unavailable")
-                })?;
-                if let Some(state) = selected_parent_state {
-                    processor.check_exact_relay_archive_v2(carrier.prefix.selected_parent, state, &body, &tx.payload)?;
+                if pending_relay.is_none() {
+                    let anchor = BlockHash::from_bytes(body.terms.contract_anchor.0);
+                    if !processor
+                        .reachability_service
+                        .try_is_chain_ancestor_of(anchor, carrier.prefix.selected_parent)
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    let daa = processor.headers_store.get_daa_score(anchor).map_err(|_| {
+                        NativeCoverageV1::unsupported::<Self>("funding relay signed ancestor", "verified ancestor header unavailable")
+                    })?;
+                    signed_anchor = Some((anchor, daa));
                 }
-                signed_anchor = Some((anchor, daa));
                 None
             } else if kind <= 7 {
                 let Ok(body) = decode_native_body_v2(&tx.payload[3..], old_limits) else {
@@ -934,6 +958,10 @@ impl PositiveCarrierPhaseTwoV2 {
             };
             let action = match signed_anchor {
                 Some((block, daa)) => action.with_signed_anchor_clock_v2(block, daa)?,
+                None => action,
+            };
+            let action = match pending_relay {
+                Some(archive) => action.with_pending_relay_replay_v2(archive)?,
                 None => action,
             };
             let action = match open_carriage {

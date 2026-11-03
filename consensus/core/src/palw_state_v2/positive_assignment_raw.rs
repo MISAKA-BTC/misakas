@@ -11,11 +11,23 @@ use crate::{
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
 };
 use misaka_palw_positive_contract::{
-    assignment::{funding_relay_rows::FundingRelayCarrierFeesV2, policy::AssignmentPolicyV2},
+    assignment::{
+        funding_relay_policy::FundingRelayPhysicalProfileV2, funding_relay_rows::FundingRelayCarrierFeesV2, policy::AssignmentPolicyV2,
+    },
     identity::Digest,
     rows::{AcceptedMaterial, AcceptedOrigin},
 };
 use std::sync::Arc;
+
+/// Historical material replayed by the native selected-parent reader. The
+/// final fold must still match the current pending row and its actual charge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NativePendingRelayReplayV2 {
+    pub selected_parent: BlockHash,
+    pub reservation: AcceptedMaterial,
+    pub fees: FundingRelayCarrierFeesV2,
+    pub physical: FundingRelayPhysicalProfileV2,
+}
 
 /// Immutable policy data from the native intake Params or the rooted original
 /// material of a continuation. The fold checks the current prefix before use.
@@ -134,6 +146,7 @@ struct PositiveAssignmentRawDataV2 {
     original_open: Option<Arc<NativeAcceptedCaseCarriageV2>>,
     signed_anchor: Option<(BlockHash, u64)>,
     relay_carrier_fees: Option<FundingRelayCarrierFeesV2>,
+    pending_relay_replay: Option<NativePendingRelayReplayV2>,
     _transport: Arc<NativeDemandLeaseV1>,
     _decode: Arc<NativeDemandLeaseV1>,
 }
@@ -171,6 +184,7 @@ impl PositiveAssignmentRawActionV2 {
             original_open: None,
             signed_anchor: None,
             relay_carrier_fees: None,
+            pending_relay_replay: None,
             _transport: Arc::new(transport),
             _decode: Arc::new(decode),
         })))
@@ -217,6 +231,24 @@ impl PositiveAssignmentRawActionV2 {
 
     pub fn relay_carrier_fees_v2(&self) -> Option<FundingRelayCarrierFeesV2> {
         self.0.relay_carrier_fees
+    }
+
+    pub fn with_pending_relay_replay_v2(mut self, replay: NativePendingRelayReplayV2) -> Result<Self, NativeCoverageV1> {
+        let invalid = || NativeCoverageV1::unsupported::<Self>("pending relay replay", "wrong operation, selected parent or owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
+        if data.pending_relay_replay.is_some()
+            || data.body[data.index as usize].payload.get(7) != Some(&14)
+            || replay.selected_parent != data.selected_parent
+            || replay.reservation.origin.accepting_block.0 == data.origin.accepting_block.0
+        {
+            return Err(invalid());
+        }
+        data.pending_relay_replay = Some(replay);
+        Ok(self)
+    }
+
+    pub(super) fn pending_relay_replay_v2(&self) -> Option<NativePendingRelayReplayV2> {
+        self.0.pending_relay_replay
     }
 
     /// Retain the original accepted op8 and executed prefix for op9 replay.
@@ -304,6 +336,7 @@ impl PartialEq for PositiveAssignmentRawActionV2 {
             && self.rules() == other.rules()
             && self.signed_anchor_clock_v2() == other.signed_anchor_clock_v2()
             && self.relay_carrier_fees_v2() == other.relay_carrier_fees_v2()
+            && self.pending_relay_replay_v2() == other.pending_relay_replay_v2()
             && match (&self.0.original_open, &other.0.original_open) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -398,6 +431,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             original_open,
             signed_anchor: _,
             relay_carrier_fees: _,
+            pending_relay_replay: _,
             _transport: _,
             _decode: _,
         } = &*self.0;

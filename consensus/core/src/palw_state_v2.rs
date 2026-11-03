@@ -13977,7 +13977,9 @@ pub use positive_assignment_funds::{
 pub use positive_assignment_materials::{
     PositiveAssignmentAcceptedMaterialV2, PositiveAssignmentMaterialOutcomeV2, PositiveCaseAcceptedMaterialV2,
 };
-pub use positive_assignment_raw::{NativeAssignmentRulesV2, PositiveAssignmentRawActionV2, PositiveAssignmentScheduledActionV2};
+pub use positive_assignment_raw::{
+    NativeAssignmentRulesV2, NativePendingRelayReplayV2, PositiveAssignmentRawActionV2, PositiveAssignmentScheduledActionV2,
+};
 // G14 item 6 (ADR-0200 C1, lane r5-d2-c1): the D2 readiness registry's one writer and the disclosure court's fold.
 mod d2_readiness;
 pub use input_views::{PalwBlockFactsV1, PalwRulesAtBlockV1, PalwRulesForClaimV1};

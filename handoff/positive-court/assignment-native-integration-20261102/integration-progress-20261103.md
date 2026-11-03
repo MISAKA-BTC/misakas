@@ -925,3 +925,31 @@ Clippy passed with warnings denied. All Consensus test targets typechecked,
 including the synthetic missing-seal and duplicate-observation test, which
 was not executed. The commands, source map and logs are retained in the
 relay-debit-conservation verification archive.
+
+## Exact retry of a pending initial relay
+
+The selected-parent reader passes the original pending reservation and fee
+partition to the raw native action only after replaying the original accepted
+carrier, scope, payer and both signatures. The writer compares that evidence
+against the current-prefix pair and its original charge. A live exact pending
+retry with zero new registration debit then has no state or custody effect.
+The carrier's ordinary transaction fee is separate. The retry uses the original
+physical profile, while a fresh registration still uses the current profile.
+
+An exact duplicate within the accepting block can use an earlier registration
+already present in the canonical prefix. The original row must have that
+block's exact clock and a strictly earlier accepted ordinal. The final DB
+staging still reconciles the first debit with the first fresh pair. A changed
+package, stale pending slot, additional debit, or a later-prefix slot change
+cannot become an exact retry. Bound packages still require the account-slot
+custody owner. Archive replay still requires the retained history and its
+original limits.
+
+This connects the conditional pending retry. The native UTXO allocation of
+the first registration charge, live new-registration/retry runs, binding,
+retirement and recovery after historical pruning remain open.
+
+Strict Contract/Core/Consensus library Clippy and Core test-target checking
+passed. The new selected-parent/duplicate-attachment regression typechecked
+and was not executed. The initial type error and the stopped library-only
+check are retained alongside the final verification.

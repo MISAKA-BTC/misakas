@@ -106,6 +106,40 @@ fn point() -> PalwBlockContextV2 {
 fn state_params() -> PalwStateParamsV2 {
     PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_bytes([1; 64]), 4, 1000, 100, 1000, 0).unwrap()
 }
+
+#[test]
+fn pending_relay_archive_transport_requires_its_exact_parent_and_earlier_block() {
+    let relay = || action_payload(2, vec![1, 0, 176, 2, 0, 1, 0, 14]);
+    let carrier = relay();
+    let original = AcceptedOrigin { accepting_block: NativeHash64([9; 64]), accepted_tx_ordinal: 1, ..carrier.origin() };
+    let replay = NativePendingRelayReplayV2 {
+        selected_parent: carrier.selected_parent(),
+        reservation: AcceptedMaterial { origin: original, digest: d(10) },
+        fees: FundingRelayCarrierFeesV2::new(7, 1, 5, 2).unwrap(),
+        physical: FundingRelayPhysicalProfileV2 {
+            version: 2,
+            revision: 1,
+            max_frame_bytes: 32_000,
+            max_decoded_bytes: 32_000,
+            max_heap_bytes: 128_000,
+            max_retained_bytes: 64_000,
+            max_database_bytes: 64_000,
+            max_batch_bytes: 64_000,
+            max_replay_reads: 100,
+            max_replay_work: 1_000_000,
+            max_signatures: 2,
+        },
+    };
+    assert!(action(2).with_pending_relay_replay_v2(replay).is_err());
+    assert!(relay().with_pending_relay_replay_v2(NativePendingRelayReplayV2 { selected_parent: point().block, ..replay }).is_err());
+    let same_block =
+        NativePendingRelayReplayV2 { reservation: AcceptedMaterial { origin: carrier.origin(), ..replay.reservation }, ..replay };
+    assert!(relay().with_pending_relay_replay_v2(same_block).is_err());
+    let attached = carrier.with_pending_relay_replay_v2(replay).unwrap();
+    assert_eq!(attached.pending_relay_replay_v2(), Some(replay));
+    assert!(attached.with_pending_relay_replay_v2(replay).is_err());
+}
+
 #[test]
 fn rejected_raw_action_restores_exact_canonical_state_and_delta() {
     let state = PalwChainStateV2::genesis();

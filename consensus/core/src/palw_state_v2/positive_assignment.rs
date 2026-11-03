@@ -915,14 +915,15 @@ impl TransitionBuilder<'_> {
             .transpose()
     }
 
-    /// An existing relay owns the whole outpoint across the three purposes.
-    /// Even byte-identical replay needs the original native custody reader.
+    /// An existing relay owns the whole outpoint across all purposes. An
+    /// exact pending retry is a read-only outcome of this current prefix.
     #[inline(never)]
-    fn require_unused_relay_outpoint_v2(
+    fn check_relay_outpoint_v2(
         &self,
         body: &FundingRelayRegistrationBodyV2,
+        action: &PositiveAssignmentRawActionV2,
         budget: &mut FundingRelayAuxScanBudgetV2,
-    ) -> Result<(), PalwStateV2Error> {
+    ) -> Result<bool, PalwStateV2Error> {
         use RelayFundingPurposeV2::{CaseC, PosterA, ProverJoin};
 
         let funding = body.terms.funding_outpoint;
@@ -939,19 +940,47 @@ impl TransitionBuilder<'_> {
                         return Err(missing_assignment_history());
                     };
                     custody.check_pair(&auth).map_err(|_| missing_assignment_history())?;
-                    existing = Some(
-                        auth.terms == body.terms
-                            && auth.purpose_signature == body.purpose_signature
-                            && custody.relay_signature == body.relay_signature,
-                    );
+                    let origin = action.origin();
+                    let result = if auth.terms != body.terms
+                        || auth.purpose_signature != body.purpose_signature
+                        || custody.relay_signature != body.relay_signature
+                    {
+                        Err(refusal("relay funding outpoint already has a different signed package"))
+                    } else if custody.binding.is_some() || origin.accepted_daa >= custody.retention_until_daa {
+                        Err(refusal("relay retry does not name a live pending custody slot"))
+                    } else if action.relay_carrier_fees_v2().is_none_or(|fees| fees.relay_charge() != 0) {
+                        Err(refusal("an exact relay retry cannot charge a second registration fee"))
+                    } else if auth.origin.accepting_block == origin.accepting_block {
+                        // The same block's canonical prefix already wrote
+                        // this pair. Its accepted debit will be reconciled
+                        // with that write in the enclosing commit.
+                        if auth.origin.accepted_daa != origin.accepted_daa
+                            || auth.origin.accepted_blue_score != origin.accepted_blue_score
+                            || auth.origin.event_ordinal != 0
+                            || auth.origin.accepted_tx_ordinal >= origin.accepted_tx_ordinal
+                        {
+                            Err(missing_assignment_history())
+                        } else {
+                            Ok(true)
+                        }
+                    } else if action.pending_relay_replay_v2().is_some_and(|archive| {
+                        archive.reservation == custody.reservation
+                            && archive.physical == auth.physical
+                            && auth.carrier_charge_material(archive.fees).ok() == Some(auth.metadata_charge)
+                    }) {
+                        Ok(true)
+                    } else {
+                        Err(missing_assignment_history())
+                    };
+                    existing = Some(result);
                 }
                 _ => return Err(missing_assignment_history()),
             }
         }
         match existing {
-            None => Ok(()),
-            Some(false) => Err(refusal("relay funding outpoint already has a different signed package")),
-            Some(true) => Err(missing_assignment_history()),
+            Some(outcome) => outcome,
+            None if action.pending_relay_replay_v2().is_some() => Err(refusal("original pending relay changed before the retry")),
+            None => Ok(false),
         }
     }
 
@@ -1052,27 +1081,25 @@ impl TransitionBuilder<'_> {
         else {
             return Err(refusal("initial relay fence is dormant"));
         };
-        let reserved =
-            ReservedFundingRelayBodyV2::decode(&action.transaction().payload[3..], physical.max_frame_bytes, physical.max_heap_bytes)
-                .map_err(|error| match error {
-                    FundingRelayBodyErrorV2::Contract(why) => refusal(why),
-                    FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
-                })?;
+        let replay = action.pending_relay_replay_v2();
+        let decode_profile = replay.as_ref().map_or(physical, |original| &original.physical);
+        let reserved = ReservedFundingRelayBodyV2::decode(
+            &action.transaction().payload[3..],
+            decode_profile.max_frame_bytes,
+            decode_profile.max_heap_bytes,
+        )
+        .map_err(|error| match error {
+            FundingRelayBodyErrorV2::Contract(why) => refusal(why),
+            FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+        })?;
         let body = reserved.body();
         let terms = &body.terms;
         let observed = action.relay_carrier_fees_v2().ok_or_else(missing_assignment_history)?;
         let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
             return Err(refusal("relay target needs the original Case, join or continuation owner"));
         };
-        let (anchor, _) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
-        if terms.contract_network != rules.network()
-            || terms.contract_ruleset.0 != rules.rule_scope().ruleset().as_bytes()
-            || terms.relay_ruleset != *ruleset
-            || terms.contract_anchor.0 != anchor.as_bytes()
-            || terms.expected_amount > crate::constants::MAX_SOMPI
-            || reserved.quote().decoded_inline_bytes > physical.max_decoded_bytes
-        {
-            return Err(refusal("initial relay differs from the current contract or native relay scope"));
+        if reserved.quote().decoded_inline_bytes > decode_profile.max_decoded_bytes {
+            return Err(refusal("initial relay exceeds the decoded size cap"));
         }
         {
             let mut requests = TirNativeRequestsV1::new();
@@ -1084,7 +1111,7 @@ impl TransitionBuilder<'_> {
             // exact lookup/decode key workspace.
             requests.exact_v1::<u8>(3 * 1024 + 4 * 74).map_err(PalwStateV2Error::NativeResource)?;
             let workspace = requests.bytes_v1();
-            if reserved.quote().logical_decode_requests.checked_add(workspace).is_none_or(|n| n > physical.max_heap_bytes) {
+            if reserved.quote().logical_decode_requests.checked_add(workspace).is_none_or(|n| n > decode_profile.max_heap_bytes) {
                 return Err(refusal("initial relay rooted checks exceed the native heap cap"));
             }
             let _lease = reserve_native_requests_v1(workspace).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
@@ -1093,8 +1120,19 @@ impl TransitionBuilder<'_> {
                     "native owner is not armed",
                 ))
             })?;
-            let mut budget = FundingRelayAuxScanBudgetV2::new(physical).map_err(refusal)?;
-            self.require_unused_relay_outpoint_v2(body, &mut budget)?;
+            let mut budget = FundingRelayAuxScanBudgetV2::new(decode_profile).map_err(refusal)?;
+            if self.check_relay_outpoint_v2(body, action, &mut budget)? {
+                return Ok(());
+            }
+            let (anchor, _) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
+            if terms.contract_network != rules.network()
+                || terms.contract_ruleset.0 != rules.rule_scope().ruleset().as_bytes()
+                || terms.relay_ruleset != *ruleset
+                || terms.contract_anchor.0 != anchor.as_bytes()
+                || terms.expected_amount > crate::constants::MAX_SOMPI
+            {
+                return Err(refusal("initial relay differs from the current contract or native relay scope"));
+            }
             let registration = fees.registration_quote(policy, physical, terms, ctx.daa_score).map_err(refusal)?;
             if registration.usage.frame_bytes != reserved.quote().encoded_bytes {
                 return Err(refusal("initial relay frame differs from the registration quote"));
