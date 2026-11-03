@@ -446,3 +446,28 @@ operation may hold a slot beyond that deadline. Nineteen scoped tests
 passed, including real Qwen material, slow sender and reader cases, and
 normal service after the slots were released. Log SHA256 is
 `6c1872ff3746098ac4e00a0cb1bbac081fb2f19418970c2417c8e322f9212476`. The listener change has yet to run in production.
+
+## Exact Qwen comparison setup correction — 04:37 UTC
+
+The first attempt #21 offline comparison verified the registered 8K
+artifact and exited before running the mirror. It passed the native
+held history cap of 2^21 positions into the diagnostic TIR, where the
+key history exceeded the existing per-tensor element limit. Peak RSS
+was 1,845,297,152 bytes before the refusal. The failure did not compare
+the native and mirror outputs.
+
+Commit `ec171af98` bounds the diagnostic history to the authenticated
+8,192-position class context. At every allowed position, both sides
+still see the complete prefix. The existing selector, normal-form
+limit, native class identity and native execution rules remain in use.
+Four scoped tests passed, including reproduction of the old structural
+refusal and validation of both 8K history windows. The rebuilt
+diagnostic executable SHA256 is
+`ac7bffa3aae8d830db7aa0534f3dc1d500ee399802ab3f97e8bd3a22b1fb4d6f`.
+The exact real comparison is queued behind the active local compiler.
+
+For Qwen #34, both B0 and the relay returned the original BLUE carrier
+and the same recomputed claim ID at a stable selected tip. No claim
+row or Panel assignment was present. The carrier's block DAA was
+19,588, and the observed virtual DAA was 19,592. Public REST and
+WebSocket still agreed on the ready relay.
