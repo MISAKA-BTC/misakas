@@ -60,6 +60,10 @@ pub(crate) struct BatchAdmissionQuoteV1 {
     pub retained_payload_byte_daa: u64,
     /// Maximum sum of carrier storage charges, independent of escrow funding.
     pub carrier_storage_rent_sompi: u64,
+    /// Node-produced bytes are charged separately from the provider's carriers.
+    pub retained_numerical_fault_bytes: u64,
+    pub retained_numerical_fault_byte_daa: u64,
+    pub numerical_fault_storage_rent_sompi: u64,
 }
 
 /// Costs supplied by the versioned native profile. A reservation covers
@@ -189,6 +193,13 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         return Err(Window);
     }
     let verification_window = take_service_window_v1(&mut cursor, timing.verification_daa, before)?;
+    let retained_numerical_fault_bytes = costs.numerical_verification.max_fault_bytes;
+    let retention_daa = original.terms.material_until_daa.checked_sub(verification_window.start).ok_or(Window)?;
+    if retention_daa == 0 {
+        return Err(Window);
+    }
+    let retained_numerical_fault_byte_daa = retained_numerical_fault_bytes.checked_mul(retention_daa).ok_or(DeliveryCost)?;
+    let numerical_fault_storage_rent_sompi = storage.rent_for_bytes_v1(retained_numerical_fault_bytes).map_err(|_| DeliveryCost)?;
     let stop_window = stop.map(|_| take_service_window_v1(&mut cursor, timing.stop_daa, before)).transpose()?;
     let terminal_window = take_service_window_v1(&mut cursor, timing.terminal_daa, before)?;
     let packet = |id, cost, window: &Range<u64>| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
@@ -245,6 +256,9 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     // The earliest assigned slot may move during repair. Report the bound
     // for the latest terminal permitted by its immutable packet interval.
     quote.required_daa = terminal_window.end - a + costs.recovery_daa;
+    quote.retained_numerical_fault_bytes = retained_numerical_fault_bytes;
+    quote.retained_numerical_fault_byte_daa = retained_numerical_fault_byte_daa;
+    quote.numerical_fault_storage_rent_sompi = numerical_fault_storage_rent_sompi;
     Ok((quote, candidate))
 }
 
@@ -464,6 +478,9 @@ impl BatchAdmissionV1<'_> {
             retained_payload_bytes,
             retained_payload_byte_daa,
             carrier_storage_rent_sompi,
+            retained_numerical_fault_bytes: 0,
+            retained_numerical_fault_byte_daa: 0,
+            numerical_fault_storage_rent_sompi: 0,
         };
         Ok((quote, NativeRetainedV1::from_owner_reserved_v1(graph, lease)))
     }

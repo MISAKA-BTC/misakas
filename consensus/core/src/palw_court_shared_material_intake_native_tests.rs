@@ -782,6 +782,13 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let (quote, service) = reserve_native_batch_delivery_v1(service, frame, &envelope, None, costs, storage, |_, bytes| Ok(cost(bytes))).unwrap();
     assert!(quote.required_daa <= 10_000);
     assert_eq!(service.state.book.packet(&verification).unwrap().cost, replay_budget.service_cost_v1().unwrap());
+    assert_eq!(quote.retained_numerical_fault_bytes, replay_budget.max_fault_bytes);
+    assert_eq!(quote.numerical_fault_storage_rent_sompi, replay_budget.max_fault_bytes * storage.sompi_per_byte);
+    let earliest_verification = service.state.book.packet(&verification).unwrap().release_daa;
+    assert_eq!(
+        quote.retained_numerical_fault_byte_daa,
+        replay_budget.max_fault_bytes * (context.material_until_daa - earliest_verification),
+    );
     assert_eq!(quote.carrier_storage_rent_sompi, range_count as u64 * PART as u64 * storage.sompi_per_byte);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
 

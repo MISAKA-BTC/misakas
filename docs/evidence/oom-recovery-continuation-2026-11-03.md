@@ -4183,3 +4183,26 @@ rules. The candidate remains dormant.
 B0 and relay agreed at virtual DAA 19,743. The two additional selected
 blocks had no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-numerical-fault-live.YwNJb8/page.json`.
+
+## Book retention for a numerical Batch fault
+
+The replay profile now declares a positive, native-bounded maximum
+fault size. The original's verification packet books that maximum
+in addition to the actual carrier size. Acceptance compares the
+packet with the same profile quote and refuses a fault above the
+booked limit before serializing retained material. The admission
+quote separates Node-written bytes, byte-DAA from the earliest
+verification through the original retention horizon, and the
+corresponding storage rent from fees on provider carriers. Archive
+lifetime and the production payer still require integration.
+
+The extracted suite passed 56 tests, including carrier size,
+verification capacity, and zero or oversized retention limits. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-retention-book.FmpuO2/tests.log`.
+The native fixture asserts the reserved cost and the resulting
+retention quote, but has not run. Rust parsing and whitespace
+checks passed. Public activation and terminal accounting remain open.
+
+B0 and relay agreed at virtual DAA 19,744. The additional selected
+block had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-retention-live.DavLY4/page.json`.

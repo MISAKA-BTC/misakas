@@ -12,6 +12,7 @@ pub const BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/batch-nume
 const SIGNATURE_BYTES: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
 // Version, four identifiers, leaf, filer outpoint, vector length and signature.
 const SIGNED_BODY_BYTES: u64 = (2 + 4 * 64 + 8 + 64 + 4 + 4 + SIGNATURE_BYTES) as u64;
+const VERIFICATION_CARRIER_BYTES: u64 = SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1;
 
 /// The native profile supplies the replay ceilings and the costs outside the
 /// arithmetic meter. Admission and acceptance use the same service quote.
@@ -19,6 +20,8 @@ const SIGNED_BODY_BYTES: u64 = (2 + 4 * 64 + 8 + 64 + 4 + 4 + SIGNATURE_BYTES) a
 pub struct NumericalBatchReplayBudgetV1 {
     pub work: PalwTirBuilderWorkLimitsV1,
     pub workspace_bytes: u64,
+    /// Maximum bytes the verification can write as its retained TIR finding.
+    pub max_fault_bytes: u64,
     /// Non-arithmetic work, including signature, source and evidence checks.
     pub base_work: u64,
     pub io: u64,
@@ -34,6 +37,7 @@ pub struct NumericalBatchReplayProfileV1 {
 impl NumericalBatchReplayBudgetV1 {
     pub(crate) fn service_cost_v1(self) -> Option<ServiceCost> {
         if self.workspace_bytes == 0 || self.base_work == 0 || self.io == 0
+            || !(1..=crate::palw_batch_court_v1::rooted::MAX_NUMERICAL_FAULT_BYTES_V1 as u64).contains(&self.max_fault_bytes)
             || self.work.max_source_reads == 0 || self.work.max_target_requests == 0
             || self.work.evaluation.max_elements == 0 || self.work.evaluation.max_terms == 0
         {
@@ -46,7 +50,8 @@ impl NumericalBatchReplayBudgetV1 {
             .checked_add(self.work.max_target_requests)?
             .checked_add(self.work.max_source_reads)?
             .checked_add(self.base_work)?;
-        Some(ServiceCost { bytes: SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1, work, io: self.io, controls: 1 })
+        let bytes = VERIFICATION_CARRIER_BYTES.checked_add(self.max_fault_bytes)?;
+        Some(ServiceCost { bytes, work, io: self.io, controls: 1 })
     }
 
     #[cfg(test)]
@@ -58,6 +63,7 @@ impl NumericalBatchReplayBudgetV1 {
                 max_source_reads: 4,
             },
             workspace_bytes: 4096,
+            max_fault_bytes: 2048,
             base_work: 5,
             io: 6,
         }
@@ -142,7 +148,7 @@ pub(crate) fn reserved_numerical_verification_slot_v1<'a>(
         return Err("numerical Batch verification is outside its reserved slot".into());
     }
     service.book.packet(&packet)
-        .filter(|packet| packet.cost.bytes == SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1)
+        .filter(|packet| packet.cost.bytes > VERIFICATION_CARRIER_BYTES)
         .ok_or_else(|| "numerical Batch verification has no correctly sized slot".into())
 }
 
@@ -217,7 +223,7 @@ mod tests {
         let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
         payload.extend(borsh::to_vec(&wire).unwrap());
         assert_eq!(payload[BATCH_COURT_CARRIER_MAGIC_V1.len()], BATCH_VERIFY_NUMERICAL_TAG_V1);
-        assert_eq!(payload.len() as u64, NumericalBatchReplayBudgetV1::test_only_v1().service_cost_v1().unwrap().bytes);
+        assert_eq!(payload.len() as u64, VERIFICATION_CARRIER_BYTES);
         assert_eq!(decode_batch_court_payload_v1(&payload).unwrap(), Some(wire.clone()));
         use crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1;
         use crate::palw_state_v2::PalwBlockContextV2;
@@ -273,11 +279,13 @@ mod tests {
         let mut budget = NumericalBatchReplayBudgetV1::test_only_v1();
         let cost = budget.service_cost_v1().unwrap();
         assert_eq!(cost, ServiceCost {
-            bytes: SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1, work: 18, io: 6, controls: 1,
+            bytes: VERIFICATION_CARRIER_BYTES + budget.max_fault_bytes, work: 18, io: 6, controls: 1,
         });
         assert!(NumericalBatchReplayBudgetV1 { workspace_bytes: 0, ..budget }.service_cost_v1().is_none());
         assert!(NumericalBatchReplayBudgetV1 { base_work: 0, ..budget }.service_cost_v1().is_none());
         assert!(NumericalBatchReplayBudgetV1 { io: 0, ..budget }.service_cost_v1().is_none());
+        assert!(NumericalBatchReplayBudgetV1 { max_fault_bytes: 0, ..budget }.service_cost_v1().is_none());
+        assert!(NumericalBatchReplayBudgetV1 { max_fault_bytes: u64::MAX, ..budget }.service_cost_v1().is_none());
         budget.work.evaluation.max_terms = u64::MAX;
         assert!(budget.service_cost_v1().is_none());
     }

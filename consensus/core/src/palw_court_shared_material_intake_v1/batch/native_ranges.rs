@@ -343,8 +343,10 @@ pub(crate) fn replay_numerical_batch_v1(
     let fault = if let Some((fault, mut cone)) = finding {
         crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut cone.binding);
         let len = borsh::object_length(&cone).map_err(|why| E::Decode(why.to_string()))?;
-        if len == 0 || len > crate::palw_batch_court_v1::rooted::MAX_NUMERICAL_FAULT_BYTES_V1 {
-            return Err(E::Decode("numerical Batch fault exceeds its retained byte cap".into()));
+        if len == 0 || len as u64 > budget.max_fault_bytes
+            || len > crate::palw_batch_court_v1::rooted::MAX_NUMERICAL_FAULT_BYTES_V1
+        {
+            return Err(E::Decode("numerical Batch fault exceeds its reserved retention".into()));
         }
         let lease = reserve_native_requests_v1(len as u64).map_err(E::Resource)?;
         let mut bytes = Vec::new();
