@@ -1,4 +1,4 @@
-//! Local diagnostic for one original T12 A16 embedding, RMS normalization or query projection tile.
+//! Local diagnostic for one original T12 A16 tile, including position-zero fused attention.
 //! The Panel command opens the mapped artifact. The verifier has no artifact argument.
 use kaspa_consensus_core::{
     Hash64,
@@ -26,17 +26,18 @@ use kaspa_consensus_core::{
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, palw_prompt_ids_form_of_class_v1},
     palw_shard_court_v1::{PalwLeafEvidenceV1, PalwOneMoveClaimV2, PalwShardCourtError, PalwShardCourtVerdictV1},
     palw_step::{
-        PalwStepCoordinateV1, PalwStepOutLenV1, canonical_step_coordinates, canonical_step_leaf_index, kernel_semantics_id_v1,
-        step_leaf_count_capped_v1,
+        PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepCoordinateV1, PalwStepOpKindV1, PalwStepOutLenV1, PalwStepTableV1,
+        canonical_step_coordinates, canonical_step_leaf_index, kernel_semantics_id_v1, step_leaf_count_capped_v1,
     },
     palw_step_leg::{
         PalwStepEvidenceV1, PalwStepFaultV1, PalwStepLegError, PalwStepOpeningV1, PalwStepRangeOpeningV1, PalwStepRefutationV1,
-        binding_commitment_root_v1, check_step_refutation_capped_v1, step_merkle_leaf_v1, step_merkle_node_v1,
-        step_opening_root_capped_v1, step_range_opening_root_capped_v1, step_tile_leaf_hash_ctx_v1,
+        PalwStepRefutationVerdictV1, binding_commitment_root_v1, check_step_refutation_capped_v1, step_merkle_leaf_v1,
+        step_merkle_node_v1, step_opening_root_capped_v1, step_range_opening_root_capped_v1, step_tile_leaf_hash_ctx_v1,
     },
     palw_step_refute::{
-        KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, KDESC_A16_RMS_NORM, PalwStepRefuteError, canonical_input_leaves_v1,
-        check_execution_step_refutation_opened_capped_v1, palw_refutation_prompt_carriage_v1,
+        KDESC_A16_ATTN_FUSED, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, KDESC_A16_RMS_NORM, PalwStepRefuteError,
+        canonical_input_leaves_v1, check_execution_step_refutation_opened_capped_v1, palw_attn_fused_tensors_v1,
+        palw_refutation_prompt_carriage_v1,
     },
     palw_v2::PalwJobContextV2,
     pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
@@ -60,6 +61,7 @@ use sha2::{Digest, Sha256};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::{
+    borrow::Cow,
     fs::OpenOptions,
     io::{Read, Write},
     path::Path,
@@ -83,10 +85,11 @@ enum Relation {
     Embedding,
     RmsNorm,
     QueryProjection,
+    FusedAttention,
 }
 
 struct OperandKey<'a> {
-    name: &'a str,
+    name: Cow<'a, str>,
     layer: Option<u16>,
     offset: u32,
     width: u32,
@@ -95,7 +98,7 @@ struct OperandKey<'a> {
 struct Target<'a> {
     relation: Relation,
     leaf: u64,
-    inputs: usize,
+    input_tiles: Vec<usize>,
     output_lanes: u32,
     operands: Vec<OperandKey<'a>>,
 }
@@ -252,6 +255,17 @@ fn target(claim: &RootedClaim, relation: Relation) -> Result<Target<'_>, String>
             canonical_step_coordinates(profile, &claim.job, EMBEDDING_LEAF).ok_or("first leaf has no coordinates")?,
             KDESC_A16_EMBED,
         ),
+        Relation::FusedAttention => {
+            let index = profile
+                .attn_nodes
+                .iter()
+                .position(|node| node.op_kind == PalwStepOpKindV1::AttnFused)
+                .ok_or("first attention layer has no fused node")?;
+            let slot = profile.global_node_slot(PalwStepTableV1::Attn, 0, index).ok_or("fused node has no canonical slot")?;
+            let coord = PalwStepCoordinateV1 { call_index: 0, position: 0, tile_index: 0, node_slot: slot };
+            let leaf = canonical_step_leaf_index(profile, &claim.job, &coord).ok_or("first fused attention tile is absent")?;
+            (leaf, coord, KDESC_A16_ATTN_FUSED)
+        }
         Relation::RmsNorm | Relation::QueryProjection => {
             let (offset, kernel) = match relation {
                 Relation::RmsNorm => (0, KDESC_A16_RMS_NORM),
@@ -285,7 +299,7 @@ fn target(claim: &RootedClaim, relation: Relation) -> Result<Target<'_>, String>
         Relation::Embedding => {
             require(node.input_refs.is_empty(), "embedding must have no committed input row")?;
             let offset = claim.prompt[0].checked_mul(elements).ok_or("embedding byte offset overflow")?;
-            vec![OperandKey { name: &node.weight_name, layer, offset, width: elements }]
+            vec![OperandKey { name: node.weight_name.as_str().into(), layer, offset, width: elements }]
         }
         Relation::RmsNorm => {
             require(
@@ -307,31 +321,63 @@ fn target(claim: &RootedClaim, relation: Relation) -> Result<Target<'_>, String>
             require(code_bytes as usize <= 192 << 10, "query weight tile exceeds diagnostic cap")?;
             let quant_bytes = output_lanes * A16QuantParams::WIRE_BYTES as u32;
             vec![
-                OperandKey { name: QUERY_WEIGHTS, layer, offset: 0, width: code_bytes },
-                OperandKey { name: QUERY_QUANT, layer, offset: 0, width: quant_bytes },
+                OperandKey { name: QUERY_WEIGHTS.into(), layer, offset: 0, width: code_bytes },
+                OperandKey { name: QUERY_QUANT.into(), layer, offset: 0, width: quant_bytes },
             ]
         }
+        Relation::FusedAttention => {
+            require(
+                layer == Some(0)
+                    && matches!(node.input_refs.as_slice(), [q, PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V] if *q < PALW_STEP_INPUT_KV_V)
+                    && elements == profile.hidden_dim
+                    && output_lanes > 0
+                    && output_lanes <= 128,
+                "target differs from first-position fused attention",
+            )?;
+            let tensors = palw_attn_fused_tensors_v1(&node.weight_name).ok_or("fused attention operands are absent")?;
+            [
+                (tensors.softmax_up, 1),
+                (tensors.scores, A16QuantParams::WIRE_BYTES as u32),
+                (tensors.probs, A16QuantParams::WIRE_BYTES as u32),
+                (tensors.values, A16QuantParams::WIRE_BYTES as u32),
+            ]
+            .into_iter()
+            .map(|(name, width)| OperandKey { name: name.into(), layer, offset: 0, width })
+            .collect()
+        }
     };
-    let inputs = if matches!(relation, Relation::Embedding) {
-        0
+    let input_tiles = if matches!(relation, Relation::Embedding) {
+        Vec::new()
     } else {
         let rows = canonical_input_leaves_v1(profile, &claim.job, &coord).ok_or("step has no canonical input set")?;
-        let [row] = rows.as_slice() else { return Err("step must read one committed activation row".into()) };
+        let expected_rows = if matches!(relation, Relation::FusedAttention) { 3 } else { 1 };
         require(
-            leaf < 1 << PALW_BASE0_SPARSE_RETAIN_LEVEL_V1
-                && !row.is_empty()
-                && row.len() <= 32
-                && row.iter().all(|(input, coord)| *input < leaf && coord.position == 0 && coord.call_index == 0),
+            rows.len() == expected_rows
+                && leaf < 1 << PALW_BASE0_SPARSE_RETAIN_LEVEL_V1
+                && rows.iter().all(|row| {
+                    !row.is_empty()
+                        && row.len() <= 32
+                        && row.iter().all(|(input, coord)| *input < leaf && coord.position == 0 && coord.call_index == 0)
+                }),
             "step inputs are outside the first bounded replay block",
         )?;
-        row.len()
+        rows.iter().map(Vec::len).collect()
     };
-    Ok(Target { relation, leaf, inputs, output_lanes, operands })
+    Ok(Target { relation, leaf, input_tiles, output_lanes, operands })
 }
 
 fn operand_digests(target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Vec<Hash64>, String> {
     let bytes: Vec<Vec<u8>> = match target.relation {
         Relation::RmsNorm => Vec::new(),
+        Relation::FusedAttention => target
+            .operands
+            .iter()
+            .map(|key| {
+                let bytes = artifact.a16_param(&key.name, key.layer).ok_or("first fused attention parameter is missing")?;
+                require(bytes.len() == key.width as usize, "fused attention parameter width differs")?;
+                Ok(bytes.to_vec())
+            })
+            .collect::<Result<_, String>>()?,
         Relation::Embedding => {
             let key = &target.operands[0];
             let end = key.offset.checked_add(key.width).ok_or("embedding row end overflow")?;
@@ -352,7 +398,7 @@ fn operand_digests(target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Ve
             vec![codes.iter().map(|byte| *byte as u8).collect(), quant]
         }
     };
-    Ok(target.operands.iter().zip(bytes).map(|(key, row)| artifact_leaf_parts_v1(key.name, key.layer, key.offset, &row)).collect())
+    Ok(target.operands.iter().zip(bytes).map(|(key, row)| artifact_leaf_parts_v1(&key.name, key.layer, key.offset, &row)).collect())
 }
 
 fn open_operands(claim: &RootedClaim, target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Vec<PalwArtifactOpeningV1>, String> {
@@ -461,7 +507,7 @@ fn build(claim: &RootedClaim, target: &Target<'_>, capture: &Path, path: &Path) 
     Ok(PalwLeafEvidenceV1 { refutation, artifact_openings, prompt_ids_opening })
 }
 
-fn verdict(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidenceV1) -> Result<PalwShardCourtVerdictV1, String> {
+fn validate_packet(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidenceV1) -> Result<(), String> {
     let binding = &evidence.refutation.binding;
     require(
         evidence.leaf_index() == target.leaf
@@ -475,7 +521,7 @@ fn verdict(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidence
     for (key, opening) in target.operands.iter().zip(&evidence.artifact_openings) {
         let operand = &opening.operand;
         require(
-            operand.tensor_name == key.name
+            operand.tensor_name == key.name.as_ref()
                 && operand.layer == key.layer
                 && operand.row_start == key.offset
                 && operand.bytes.len() == key.width as usize,
@@ -484,13 +530,59 @@ fn verdict(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidence
     }
     let inputs = &evidence.refutation.inputs;
     require(
-        match target.relation {
-            Relation::Embedding => inputs.is_empty(),
-            Relation::RmsNorm | Relation::QueryProjection => inputs.len() == 1 && inputs[0].preimages.len() == target.inputs,
-        },
-        "evidence exceeds the bounded canonical input row",
-    )?;
-    evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true).map_err(|e| format!("{e:?}"))
+        inputs.len() == target.input_tiles.len()
+            && inputs.iter().zip(&target.input_tiles).all(|(row, &count)| row.preimages.len() == count),
+        "evidence exceeds the bounded canonical input rows",
+    )
+}
+
+fn check_fused_arithmetic(
+    claim: &RootedClaim,
+    evidence: &PalwLeafEvidenceV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwShardCourtError> {
+    let weights = PalwProvenOperandsV1::from_openings_v1(&evidence.artifact_openings, claim.expected.artifact_root)
+        .map_err(|error| PalwShardCourtError::ArtifactOpenings(format!("{error:?}")))?;
+    check_execution_step_refutation_opened_capped_v1(
+        &evidence.refutation,
+        &weights,
+        evidence.prompt_ids_opening.as_ref(),
+        MAX_STEP_LEAVES,
+    )
+    .map_err(PalwShardCourtError::Refutation)
+}
+
+fn check_matching_tile(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidenceV1) -> Result<(), String> {
+    validate_packet(claim, target, evidence)?;
+    if matches!(target.relation, Relation::FusedAttention) {
+        require(evidence.refutation.kv_checkpoint.is_none(), "position zero must not carry a checkpoint")?;
+        require(
+            matches!(
+                evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true),
+                Err(PalwShardCourtError::FusedLeafCarriesTheHistory { .. })
+            ),
+            "bound one-move unexpectedly accepted fused attention history",
+        )?;
+        require(
+            evidence
+                .clone()
+                .for_the_one_move_v2()
+                .verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true)
+                .map_err(|error| format!("{error:?}"))?
+                == PalwShardCourtVerdictV1::NeedsDissection,
+            "bound one-move did not defer the original fused attention tile",
+        )?;
+        match check_fused_arithmetic(claim, evidence) {
+            Err(PalwShardCourtError::Refutation(PalwStepRefuteError::NoFaultFound)) => Ok(()),
+            Err(error) => Err(format!("fused attention check refused evidence: {error:?}")),
+            Ok(verdict) => Err(format!("fused attention check found {:?}", verdict.fault)),
+        }
+    } else {
+        require(
+            evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true).map_err(|error| format!("{error:?}"))?
+                == PalwShardCourtVerdictV1::FalseAccusation,
+            "the named original tile did not recompute",
+        )
+    }
 }
 
 fn read_evidence(path: &Path) -> Result<(Vec<u8>, PalwLeafEvidenceV1), String> {
@@ -503,10 +595,10 @@ fn read_evidence(path: &Path) -> Result<(Vec<u8>, PalwLeafEvidenceV1), String> {
 
 fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), String> {
     let (bytes, mut evidence) = read_evidence(path)?;
-    require(
-        verdict(claim, target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation,
-        "the named original tile did not recompute",
-    )?;
+    check_matching_tile(claim, target, &evidence)?;
+    if matches!(target.relation, Relation::FusedAttention) {
+        return verify_fused(claim, target, &bytes, evidence);
+    }
 
     for index in 0..evidence.artifact_openings.len() {
         let mut opening = evidence.artifact_openings.remove(index);
@@ -536,7 +628,7 @@ fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), S
         )?;
         evidence.refutation.inputs = inputs;
     }
-    if target.inputs > 0 {
+    if !target.input_tiles.is_empty() {
         let input = &mut evidence.refutation.inputs[0].preimages[0].values_le;
         *input.first_mut().ok_or("verified activation input is empty")? ^= 1;
         require(
@@ -551,6 +643,7 @@ fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), S
         Relation::Embedding => "one-original-t12-a16-embedding-tile",
         Relation::RmsNorm => "one-original-t12-a16-rms-norm-tile",
         Relation::QueryProjection => "one-original-t12-a16-query-projection-tile",
+        Relation::FusedAttention => unreachable!("fused evidence has a separate diagnostic report"),
     };
     let mut report = json!({
         "scope": scope,
@@ -573,13 +666,93 @@ fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), S
     if matches!(target.relation, Relation::RmsNorm) {
         report["missingInputRejected"] = json!(true);
     }
-    if target.inputs > 0 {
+    if !target.input_tiles.is_empty() {
         report["artifactOpenings"] = json!(target.operands.len());
-        report["authenticatedInputTiles"] = json!(target.inputs);
+        report["authenticatedInputTiles"] = json!(target.input_tiles[0]);
         report["outputLanes"] = json!(target.output_lanes);
         report["tamperedInputRejected"] = json!(true);
     }
     println!("{report}");
+    Ok(())
+}
+
+// Position zero has exactly one cache position. Use the native whole-row kernel
+// offline, while the bound one-move route above still defers to held dissection.
+fn verify_fused(claim: &RootedClaim, target: &Target<'_>, bytes: &[u8], mut evidence: PalwLeafEvidenceV1) -> Result<(), String> {
+    for index in 0..target.input_tiles.len() {
+        let row = evidence.refutation.inputs.remove(index);
+        require(
+            matches!(
+                check_fused_arithmetic(claim, &evidence),
+                Err(PalwShardCourtError::Refutation(PalwStepRefuteError::InputSetNotCanonical(_)))
+            ),
+            "native fused attention accepted a withheld input row",
+        )?;
+        evidence.refutation.inputs.insert(index, row);
+        let value = evidence.refutation.inputs[index].preimages[0].values_le.first_mut().ok_or("empty fused input")?;
+        *value ^= 1;
+        require(
+            matches!(
+                check_fused_arithmetic(claim, &evidence),
+                Err(PalwShardCourtError::Refutation(PalwStepRefuteError::Leg(PalwStepLegError::CommittedRootMismatch)))
+            ),
+            "native fused attention accepted a modified input row",
+        )?;
+        evidence.refutation.inputs[index].preimages[0].values_le[0] ^= 1;
+    }
+    for index in 0..target.operands.len() {
+        let opening = evidence.artifact_openings.remove(index);
+        require(
+            matches!(
+                check_fused_arithmetic(claim, &evidence),
+                Err(PalwShardCourtError::Refutation(PalwStepRefuteError::Unadjudicable | PalwStepRefuteError::WeightUnavailable))
+            ),
+            "native fused attention accepted a withheld artifact operand",
+        )?;
+        evidence.artifact_openings.insert(index, opening);
+        evidence.artifact_openings[index].operand.bytes[0] ^= 1;
+        require(
+            matches!(check_fused_arithmetic(claim, &evidence), Err(PalwShardCourtError::ArtifactOpenings(_))),
+            "native fused attention accepted a modified artifact operand",
+        )?;
+        evidence.artifact_openings[index].operand.bytes[0] ^= 1;
+    }
+    let output = evidence.refutation.output_preimage.values_le.first_mut().ok_or("empty fused output")?;
+    *output ^= 1;
+    require(
+        matches!(
+            check_fused_arithmetic(claim, &evidence),
+            Err(PalwShardCourtError::Refutation(PalwStepRefuteError::Leg(PalwStepLegError::LeafPreimageMismatch { .. })))
+        ),
+        "native fused attention accepted a modified output tile",
+    )?;
+    println!(
+        "{}",
+        json!({
+            "scope": "one-original-t12-a16-fused-attention-position-zero-tile",
+            "claimId": claim.observation.claim_id,
+            "blockHash": claim.observation.block_hash,
+            "anchor": claim.roots.anchor,
+            "daa": claim.daa,
+            "leaf": target.leaf,
+            "evidenceBytes": bytes.len(),
+            "evidenceSha256": sha256(bytes),
+            "matched": true,
+            "queryKeyValueInputTiles": target.input_tiles,
+            "artifactOpenings": target.operands.len(),
+            "outputLanes": target.output_lanes,
+            "withheldInputRowsRejected": true,
+            "tamperedInputRowsRejected": true,
+            "tamperedOutputRejected": true,
+            "withheldArtifactOperandsRejected": true,
+            "tamperedArtifactOperandsRejected": true,
+            "boundOneMoveNeedsDissection": true,
+            "heldDissectionVerified": false,
+            "fullExecutionVerified": false,
+            "chainAcceptanceInferred": false,
+            "gateCInferred": false,
+        })
+    );
     Ok(())
 }
 
@@ -635,7 +808,7 @@ fn replace_later_range_sibling(
 fn verify_counterfactual_projection(claim: &RootedClaim, path: &Path) -> Result<(), String> {
     let target = target(claim, Relation::QueryProjection)?;
     let (bytes, mut evidence) = read_evidence(path)?;
-    require(verdict(claim, &target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation, "original projection did not recompute")?;
+    check_matching_tile(claim, &target, &evidence)?;
 
     let refutation = &mut evidence.refutation;
     let binding = &mut refutation.binding;
@@ -736,12 +909,17 @@ fn verify_counterfactual_projection(claim: &RootedClaim, path: &Path) -> Result<
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
-        [mode, input, sha, capture, artifact, output] if mode == "build" || mode == "build-rms-norm" || mode == "build-projection" => {
+        [mode, input, sha, capture, artifact, output] if mode == "build" || mode == "build-rms-norm" || mode == "build-projection" || mode == "build-fused-attention" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
-            let relation = if mode == "build-rms-norm" { Relation::RmsNorm } else if mode == "build" { Relation::Embedding } else { Relation::QueryProjection };
+            let relation = match mode.to_str() {
+                Some("build") => Relation::Embedding,
+                Some("build-rms-norm") => Relation::RmsNorm,
+                Some("build-fused-attention") => Relation::FusedAttention,
+                _ => Relation::QueryProjection,
+            };
             let target = target(&claim, relation)?;
             let evidence = build(&claim, &target, Path::new(capture), Path::new(artifact))?;
-            require(verdict(&claim, &target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation, "built tile did not recompute")?;
+            check_matching_tile(&claim, &target, &evidence)?;
             let size = borsh::object_length(&evidence).map_err(|e| e.to_string())?;
             require(size <= MAX_EVIDENCE, "encoded evidence exceeds cap")?;
             let mut options = OpenOptions::new();
@@ -752,16 +930,21 @@ fn run() -> Result<(), String> {
             borsh::to_writer(&mut file, &evidence).map_err(|e| e.to_string())?;
             file.flush().and_then(|()| file.sync_all()).map_err(|e| e.to_string())
         }
-        [mode, input, sha, evidence] if mode == "verify" || mode == "verify-rms-norm" || mode == "verify-projection" => {
+        [mode, input, sha, evidence] if mode == "verify" || mode == "verify-rms-norm" || mode == "verify-projection" || mode == "verify-fused-attention" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
-            let relation = if mode == "verify-rms-norm" { Relation::RmsNorm } else if mode == "verify" { Relation::Embedding } else { Relation::QueryProjection };
+            let relation = match mode.to_str() {
+                Some("verify") => Relation::Embedding,
+                Some("verify-rms-norm") => Relation::RmsNorm,
+                Some("verify-fused-attention") => Relation::FusedAttention,
+                _ => Relation::QueryProjection,
+            };
             verify(&claim, &target(&claim, relation)?, Path::new(evidence))
         }
         [mode, input, sha, evidence] if mode == "verify-counterfactual-projection" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
             verify_counterfactual_projection(&claim, Path::new(evidence))
         }
-        _ => Err("usage: check-t12-a16-source build|build-rms-norm|build-projection OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify|verify-rms-norm|verify-projection|verify-counterfactual-projection OBSERVATION OBS_SHA256 EVIDENCE".into()),
+        _ => Err("usage: check-t12-a16-source build|build-rms-norm|build-projection|build-fused-attention OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify|verify-rms-norm|verify-projection|verify-fused-attention|verify-counterfactual-projection OBSERVATION OBS_SHA256 EVIDENCE".into()),
     }
 }
 
