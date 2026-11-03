@@ -3326,3 +3326,26 @@ at its booked DAA. The production funded original profile remains open.
 B0 and relay agreed at virtual DAA 19,715, with no newly scanned Qwen
 carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-root-open-rpc-live.1q4n0T/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-root-open-rpc.EP0ttk/tests.log`.
+
+## Sign and fund a numerical Batch Open
+
+The `misaka palw batch-open` command takes a claim, notice, selected
+leaf, booked ordinal and each exact target length. It canonicalizes
+target IDs, reads the operator RPC quote, verifies the quote identity
+and notice bond, and recomputes the BCT1 request root locally before
+signing in the node's network domain. Open and Respond now use the
+same funded lifecycle builder and fee cap. Preview is the default.
+With `--submit`, the command requires the exact booked DAA and an
+identical second read before broadcast.
+
+The extracted suite passed 40 checks, including quote reconstruction,
+refusal of a changed clock, wrong signer or substituted range, and
+the native wire's notice, ordinal and network signature binding.
+The whole CLI, wallet funding and live submission against an armed
+isolated node remain unverified. The Panel can use this manual command
+after an original has a funded, accepted reservation. Automatic Panel
+coordination and the complete native funded original profile are open.
+
+B0 and relay still agreed at virtual DAA 19,715, with no newly scanned
+Qwen carrier. See `/private/tmp/misaka-t12-oom-20261102/g14-root-open-cli-live.2IFo7v/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-open-cli.pmrwbc/tests.log`.

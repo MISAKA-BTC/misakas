@@ -1729,6 +1729,29 @@ enum PalwCmd {
         #[arg(long)]
         maximum_total_fee_sompi: Option<u64>,
     },
+    /// Sign and fund a reserved numerical Batch Open using the accepted notice's bond.
+    BatchOpen {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        notice: String,
+        #[arg(long)]
+        leaf: u64,
+        #[arg(long)]
+        ordinal: u64,
+        /// Exact encoded size of a material target as target=bytes. Repeat for each target.
+        #[arg(long = "range", required = true)]
+        ranges: Vec<String>,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
     /// Sign and fund one reserved Batch Court response. Preview unless --submit is set.
     BatchRespond {
         #[command(flatten)]
@@ -3710,6 +3733,10 @@ async fn run_cli() -> std::process::ExitCode {
         }),
         Command::Palw(PalwCmd::BatchRespond { key, bond, claim, ordinal, target, step, offset, body, submit, maximum_fee_sompi }) => {
             Box::pin(async move { palw_batch::respond(ctx, &key.source(), &bond, &claim, ordinal, &target, step, offset, &body,
+                submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
                 submit, maximum_fee_sompi).await })
         }
         Command::Palw(PalwCmd::TirRegistration {

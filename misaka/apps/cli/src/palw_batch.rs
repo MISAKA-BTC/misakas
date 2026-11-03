@@ -1,10 +1,11 @@
-//! Fund and file one response in its rooted BCT1 service slot.
+//! Sign and fund Batch Court controls for their rooted BCT1 service slots.
 use crate::{CliError, CliResult, exit, keys::KeySource, node::Ctx, wallet::NodeView};
 use kaspa_consensus_core::{
     Hash64,
     palw_batch_court_v1::{
-        MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1,
-        carriage::{BatchCourtWireV1, BatchMaterialControlV1},
+        BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1,
+        MAX_BATCH_RANGES_V1,
+        carriage::{BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1},
     },
     palw_court_shared_material_intake_v1::{
         MATERIAL_BATCH_CONTEXT_V1, MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1, SignedMaterialIntakeV1,
@@ -53,9 +54,172 @@ fn refused(reason: impl Into<String>) -> CliError {
 async fn read_quote(nv: &NodeView, request: GetPalwCourtStateRequest) -> Result<(u64, String), CliError> {
     let answer = nv.client.get_palw_court_state(request).await.map_err(|e| CliError::connection(e.to_string()))?;
     if !answer.available || !answer.found {
-        return Err(refused("the node does not report an accepted Batch response reservation"));
+        return Err(refused("the node did not return a Batch Court quote"));
     }
     Ok((answer.now_daa, answer.view_json))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenRange {
+    id: String,
+    bytes: u32,
+    authentication: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenQuote {
+    wire_version: u16,
+    scope_id: String,
+    signer: String,
+    request_root: String,
+    case_id: String,
+    original_accepted_daa: String,
+    notice_daa: String,
+    collect_until_daa: String,
+    material_until_daa: String,
+    opened_daa: String,
+    response_deadline_daa: String,
+    part_bytes: u32,
+    maximum_bytes: u64,
+    ranges: Vec<OpenRange>,
+}
+
+impl OpenQuote {
+    fn checked_open(
+        self,
+        claim: Hash64,
+        notice: Hash64,
+        ordinal: u64,
+        signer: PalwBondKeyV2,
+        ranges: Vec<BatchRangeV1>,
+    ) -> Result<SignedBatchDemandV1, CliError> {
+        use crate::palw_user::parse_hash;
+        let daa = |value: &str| value.parse::<u64>().map_err(|_| refused("invalid DAA in numerical Open quote"));
+        if self.wire_version != 1
+            || self.signer != bond_text(signer)
+            || self.part_bytes != MAX_BATCH_PART_BYTES_V1
+            || self.ranges.len() != ranges.len()
+            || self.ranges.iter().zip(&ranges).any(|(quoted, expected)| {
+                quoted.id != expected.id.to_string() || quoted.bytes != expected.bytes || quoted.authentication != "whole-range"
+            })
+            || self.maximum_bytes != ranges.iter().map(|range| u64::from(range.bytes)).sum::<u64>()
+        {
+            return Err(refused("numerical Open quote substituted the signer or requested ranges"));
+        }
+        let demand = BatchDemandV1 {
+            case_id: parse_hash("case", &self.case_id)?,
+            case_window: BatchCourtWindowV1 {
+                claim_accepted_daa: daa(&self.original_accepted_daa)?,
+                challenge_opened_daa: daa(&self.notice_daa)?,
+                collect_until_daa: daa(&self.collect_until_daa)?,
+                material_until_daa: daa(&self.material_until_daa)?,
+            },
+            opened_daa: daa(&self.opened_daa)?,
+            response_deadline_daa: daa(&self.response_deadline_daa)?,
+            maximum_bytes: self.maximum_bytes,
+            part_bytes: self.part_bytes,
+            ranges,
+        };
+        let root = demand.checked_request_root_v1().map_err(|why| refused(format!("numerical Open demand: {why:?}")))?;
+        if root != parse_hash("request root", &self.request_root)? {
+            return Err(refused("numerical Open request root differs from the locally derived demand"));
+        }
+        Ok(SignedBatchDemandV1 {
+            version: self.wire_version,
+            claim,
+            scope_id: parse_hash("scope", &self.scope_id)?,
+            ordinal,
+            notice_id: notice,
+            signer,
+            demand,
+            signature: Vec::new(),
+        })
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn open(
+    ctx: &Ctx,
+    key_source: &KeySource,
+    bond: &str,
+    claim: &str,
+    notice: &str,
+    leaf: u64,
+    ordinal: u64,
+    entries: &[String],
+    submit: bool,
+    maximum_fee: Option<u64>,
+) -> CliResult {
+    use crate::palw_user::parse_hash;
+    let claim = parse_hash("claim", claim)?;
+    let notice = parse_hash("notice", notice)?;
+    if !(1..=MAX_BATCH_RANGES_V1).contains(&entries.len()) {
+        return Err(refused("provide between 1 and 64 --range values"));
+    }
+    let mut material = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let (target, bytes) = entry.split_once('=').ok_or_else(|| refused("--range must be target=bytes"))?;
+        let parsed: MaterialTargetV1 = target.parse().map_err(refused)?;
+        let bytes = bytes
+            .parse::<u32>()
+            .ok()
+            .filter(|&bytes| bytes != 0)
+            .ok_or_else(|| refused("--range byte count must be a positive u32"))?;
+        let range =
+            BatchRangeV1 { id: parsed.id_v1(claim).map_err(refused)?, bytes, authentication: BatchRangeAuthenticationV1::WholeRange };
+        material.push((range, format!("{target}={bytes}")));
+    }
+    material.sort_unstable_by_key(|(range, _)| range.id);
+    if material.windows(2).any(|pair| pair[0].0.id == pair[1].0.id) {
+        return Err(refused("duplicate --range target"));
+    }
+    let (ranges, lengths): (Vec<_>, Vec<_>) = material.into_iter().unzip();
+    let request = GetPalwCourtStateRequest {
+        claim_hex: claim.to_string(),
+        batch_ordinal: ordinal.to_string(),
+        batch_open: format!("{notice}/{leaf}/{}", lengths.join(",")),
+        ..Default::default()
+    };
+    let (nv, key, signer) = crate::palw_user::bond_signer_v1(ctx, key_source, bond).await?;
+    let (now, raw) = read_quote(&nv, request.clone()).await?;
+    let doc: serde_json::Value = serde_json::from_str(&raw).map_err(|e| refused(e.to_string()))?;
+    if doc["version"] != 1
+        || doc["kind"] != "palwNumericalBatchOpen"
+        || doc["claimId"] != request.claim_hex
+        || doc["noticeId"] != notice.to_string()
+        || doc["ordinal"] != request.batch_ordinal
+        || doc["leaf"] != leaf.to_string()
+        || doc["nowDaa"] != now
+        || doc["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
+    {
+        return Err(refused("the node returned a different numerical Batch case"));
+    }
+    if let Some(error) = doc["error"].as_str() {
+        return Err(refused(error));
+    }
+    let quote: OpenQuote = serde_json::from_value(doc["open"].clone()).map_err(|e| refused(e.to_string()))?;
+    let mut open = quote.checked_open(claim, notice, ordinal, signer, ranges)?;
+    let slot = open.demand.opened_daa;
+    if submit && now != slot {
+        return Err(refused(format!("Batch Open is booked at DAA {slot}, current fold DAA is {now}")));
+    }
+    let message = open.signing_message_v1(crate::bond::network_domain(&nv)).map_err(refused)?;
+    open.signature = key.sign_with_context(message.as_byte_slice(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1).to_vec();
+    let (tx, fee, _) = fund_control(&nv, &key, &BatchCourtWireV1::Open(open), maximum_fee).await?;
+    if submit {
+        if read_quote(&nv, request).await? != (now, raw) {
+            return Err(refused("the Batch Open reservation or selected tip changed before submission"));
+        }
+        nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|e| refused(e.to_string()))?;
+    }
+    println!(
+        "{}",
+        serde_json::json!({ "submitted": submit, "txid": tx.id().to_string(), "assignedDaa": slot,
+        "observedDaa": now, "feeSompi": fee, "requestRoot": doc["open"]["requestRoot"] })
+    );
+    Ok(())
 }
 
 impl ResponseQuote {
@@ -188,29 +352,7 @@ pub(crate) async fn respond(
     let message = intake.batch_signing_message_v1(crate::bond::network_domain(&nv), request_root).map_err(refused)?;
     intake.signature = key.sign_with_context(message.as_byte_slice(), MATERIAL_BATCH_CONTEXT_V1).to_vec();
     let wire = BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: ordinal, intake });
-    let addr = key.funding_address(nv.params.prefix());
-    let (outpoint, entry) = crate::palw_fp::lifecycle_candidates_v1(&nv, &addr)
-        .await?
-        .into_iter()
-        .next()
-        .ok_or_else(|| refused("no mature unspent UTXO funds the Batch response"))?;
-    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
-    let probe = key.build_palw_batch_court_tx(&wire, outpoint, &entry, floor).map_err(refused)?;
-    let rent = material_batch_carrier_fee_v1(&probe, 0).map_err(refused)?.required_storage_rent;
-    let params = &nv.params;
-    let mass = kaspa_consensus_core::mass::MassCalculator::new(
-        params.mass_per_tx_byte,
-        params.mass_per_script_pub_key_byte,
-        params.mass_per_sig_op,
-        params.storage_mass_parameter,
-    )
-    .calc_non_contextual_masses(&probe)
-    .compute_mass;
-    let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(mass).max(floor).max(rent);
-    if maximum_fee.is_some_and(|limit| fee > limit) {
-        return Err(refused(format!("Batch response fee {fee} exceeds the maximum fee")));
-    }
-    let tx = key.build_palw_batch_court_tx(&wire, outpoint, &entry, fee).map_err(refused)?;
+    let (tx, fee, rent) = fund_control(&nv, &key, &wire, maximum_fee).await?;
     if submit {
         if read_quote(&nv, request).await? != (now, raw) {
             return Err(refused("the Batch response reservation or selected tip changed before submission"));
@@ -225,6 +367,38 @@ pub(crate) async fn respond(
     Ok(())
 }
 
+async fn fund_control(
+    nv: &NodeView,
+    key: &kaspa_pq_validator_core::ValidatorKey,
+    wire: &BatchCourtWireV1,
+    maximum_fee: Option<u64>,
+) -> Result<(kaspa_consensus_core::tx::Transaction, u64, u64), CliError> {
+    let addr = key.funding_address(nv.params.prefix());
+    let (outpoint, entry) = crate::palw_fp::lifecycle_candidates_v1(nv, &addr)
+        .await?
+        .into_iter()
+        .next()
+        .ok_or_else(|| refused("no mature unspent UTXO funds the Batch control"))?;
+    let floor = kaspa_pq_validator_core::PALW_TX_FEE_FLOOR_SOMPI;
+    let probe = key.build_palw_batch_court_tx(wire, outpoint, &entry, floor).map_err(refused)?;
+    let rent = material_batch_carrier_fee_v1(&probe, 0).map_err(refused)?.required_storage_rent;
+    let params = &nv.params;
+    let mass = kaspa_consensus_core::mass::MassCalculator::new(
+        params.mass_per_tx_byte,
+        params.mass_per_script_pub_key_byte,
+        params.mass_per_sig_op,
+        params.storage_mass_parameter,
+    )
+    .calc_non_contextual_masses(&probe)
+    .compute_mass;
+    let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(mass).max(floor).max(rent);
+    if maximum_fee.is_some_and(|limit| fee > limit) {
+        return Err(refused(format!("Batch control fee {fee} exceeds the maximum fee")));
+    }
+    let tx = key.build_palw_batch_court_tx(wire, outpoint, &entry, fee).map_err(refused)?;
+    Ok((tx, fee, rent))
+}
+
 fn bond_text(bond: PalwBondKeyV2) -> String {
     kaspa_consensus_core::palw_user_views_v1::palw_bond_key_text_v1(&bond)
 }
@@ -232,6 +406,52 @@ fn bond_text(bond: PalwBondKeyV2) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numerical_open_recomputes_the_root_and_checks_the_signing_bond() {
+        let h = Hash64::from_u64_word;
+        let signer = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(11), 0));
+        let ranges = vec![BatchRangeV1 { id: h(5), bytes: 13, authentication: BatchRangeAuthenticationV1::WholeRange }];
+        let demand = BatchDemandV1 {
+            case_id: h(6),
+            case_window: BatchCourtWindowV1 {
+                claim_accepted_daa: 10,
+                challenge_opened_daa: 20,
+                collect_until_daa: 100,
+                material_until_daa: 100,
+            },
+            opened_daa: 30,
+            response_deadline_daa: 40,
+            maximum_bytes: 13,
+            part_bytes: MAX_BATCH_PART_BYTES_V1,
+            ranges: ranges.clone(),
+        };
+        let quote = || OpenQuote {
+            wire_version: 1,
+            scope_id: h(7).to_string(),
+            signer: bond_text(signer),
+            request_root: demand.checked_request_root_v1().unwrap().to_string(),
+            case_id: h(6).to_string(),
+            original_accepted_daa: "10".into(),
+            notice_daa: "20".into(),
+            collect_until_daa: "100".into(),
+            material_until_daa: "100".into(),
+            opened_daa: "30".into(),
+            response_deadline_daa: "40".into(),
+            part_bytes: MAX_BATCH_PART_BYTES_V1,
+            maximum_bytes: 13,
+            ranges: vec![OpenRange { id: h(5).to_string(), bytes: 13, authentication: "whole-range".into() }],
+        };
+        let check = |q: OpenQuote| q.checked_open(h(1), h(2), 0, signer, ranges.clone());
+        let opened = check(quote()).unwrap();
+        assert_eq!(opened.demand, demand);
+        assert_eq!((opened.claim, opened.notice_id, opened.signer), (h(1), h(2), signer));
+        assert!(check(OpenQuote { opened_daa: "31".into(), ..quote() }).is_err());
+        assert!(check(OpenQuote { signer: "other".into(), ..quote() }).is_err());
+        let mut swapped = quote();
+        swapped.ranges[0].id = h(9).to_string();
+        assert!(check(swapped).is_err());
+    }
 
     #[test]
     fn batches_sign_only_the_booked_step_and_resume_the_accepted_body() {
