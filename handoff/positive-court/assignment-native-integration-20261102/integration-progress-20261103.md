@@ -1690,3 +1690,29 @@ The [integrated test-target check](archive-custody-check-20261103.json.gz)
 exited zero with identical source maps. The native store execution stage has
 started compiling. The EVM-off Linux relay run was still compiling Consensus
 at this checkpoint. Neither has reported a runtime verdict.
+
+### Integrated prospective ingress and optimized rebuild
+
+Commits `f6ab6a1f2` and `6323c1e17` integrate the reconciled archive
+classification, job and claim indexes, and prospective collision guards in
+A0. The additional legacy dispute, panel, liability and session writers
+check the Positive claim identity before writing. The staged writer also
+checks the underlying claim of a duty/query when the row's key represents
+the duty or query. The focused native regression covers a separate session
+ID and a separate duty ID targeting the same rooted Positive claim.
+
+The preceding optimized archive run stopped during compilation. Its
+[execution manifest](archive-custody-runtime-first-20261103.json.gz) and
+[log](archive-custody-runtime-first-20261103.log.gz) show Cargo reusing a
+shared-cache Contract artifact whose metadata did not expose the Case relay
+retention function present in the pinned source. No store test executed.
+Updating the local dependency source timestamp triggered a real Contract
+rebuild on the integrated source. The
+[replacement runner](integrated-ingress-verification-runner-20261103.py)
+starts with the focused claim/job runtime, then runs the staged, legacy
+index, Gate C, strict Clippy, typecheck and native store checks. Its first
+command was compiling at this checkpoint.
+
+The guards close additional legacy alias surfaces. The prospective all-branch
+Gate C reservation owner, Positive Case session factory and accepted
+settlement remain open.
