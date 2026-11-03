@@ -1909,3 +1909,73 @@ calculation. It preserves the refusal and existing binary
 representations. The added tests have not run. Reorg work is
 reported as quantities and the acquisition DAA still includes
 its existing replay cost.
+
+## Studio TFP1 registration and native quote follow-up
+
+At DAA 19,660 two synced public T12 RPCs returned ADMISSION_OK for
+the same unsigned SmolLM2-135M class registration under v10. Both
+still reported that the class had no accepted registration, so the
+unsigned claim quote stopped at the registry check. Both RPCs
+reported the Studio bond Active at 19,661. The class registrar
+signs the registration and, after it folds, the PALWART3 binding.
+The unsigned registration, exact container and binding, class
+semantics declaration, and native checks are pinned in
+`/private/tmp/misaka-t12-oom-20261102/g14-smol-registration-preflight.GJLVP4/receipt.json`.
+The class semantics fence remains unscheduled. An accepted signed
+inventory with EOF is also required for the tokenizer route.
+
+The historical Studio worker fixture names a synthetic executor bond.
+A public attempt needs a new worker result for the real bond and
+current anchor. The native fixture-EOF quote reproduced 8,782,776
+DAA against 3,120. Its non-tokenizer subtotal was 347,858 DAA,
+including 60,000 for owner queuing and 287,806 for TIR acquisition.
+Four exact numerical leaves had parameter-opening sizes of 7,511,
+7,511, 7,511 and 7,575 bytes. They are samples, and the all-root
+run refused the native logical memory reservation before completing
+the walk. See `/private/tmp/misaka-t12-oom-20261102/tfp1-exact-cover.Ov7I5J`.
+
+The integration branch reports the over-horizon terms from the
+actual native JSON quote and checks witness continuation identity
+before copying the committed prefix once. Its prospective
+tokenizer intake checks the accepted parent for an exact PALWART3
+binding, class semantics and a signed inventory's accepted EOF.
+Six focused tokenizer checks passed. The local preparation and
+cache have no consensus pricing authority. A versioned native
+record of validated tokenizer facts and independent retrieval of
+rendering and EOG openings remain required. Claim-specific prompt,
+output, constraint and stop checks remain part of the route.
+
+The isolated owner bridge `80e3b1f5d` parks a runnable owner on
+the checked acquisition demand and releases the processing slot
+while its response clock remains in force. It requeues after
+literal completion from all assigned custodians or native default.
+Four standalone scheduler checks passed. The bridge still needs
+rooted atomic state transitions and reorg/IBD reconstruction.
+
+No carrier, signature or public deployment was produced by this
+follow-up. The same-claim Panel response, Gate C, PFS4 block and
+payout remain unobserved.
+
+The 38-unit default and EVM metadata closure passed at `08a67143a`
+in 207.12 seconds with no swap growth. This included the Core and
+Kaspad test crates. It does not execute the native tests. The
+initial closure caught five fixture calls missing the optional quote
+diagnostics argument. The retry included those fixes.
+
+The default runtime-pack check reached the 3,000,000 KiB RSS guard.
+Streamed verification reached the first of five positions with peak
+RSS 818,448 KiB before the 150-second guard. Registration now exposes
+`--pack-stream` while preserving the required artifact and conformance
+checks. The argument-parser test passed. A single read-only
+streamed retry with a 1,000-second guard is recorded in
+`/private/tmp/misaka-t12-oom-20261102/g14-smol-registration-preflight.GJLVP4/runtime-pack-long.log`.
+
+The isolated all-root reservation fixes `b411f521e` and `bfb455ac7`
+separately cover the maximum actual cloned node and the retained
+range prelude, and report the bytes when native reservation refuses.
+Native parity and the full SmolLM2 measurement are pending.
+
+At 08:16 UTC Explorer REST and WebSocket agreed on the selected
+tip at DAA 19,661. REST returned HTTP 200 with a current index.
+This was a single synchronized sample. The last three selected
+blocks were heartbeats and the serving relay counted no PFS4 spends.
