@@ -2302,6 +2302,26 @@ impl FlowContext {
         ))
     }
 
+    /// The locally authorized carrier path checks its guard in the actual worker.
+    /// Successful insertions follow the ordinary RPC priority and broadcast policy.
+    pub async fn submit_rpc_transaction_guarded(
+        &self,
+        consensus: &ConsensusProxy,
+        transaction: Transaction,
+        rbf_policy: RbfPolicy,
+        guard: kaspa_mining::manager::LocalTransactionSubmissionGuard,
+    ) -> Result<Option<Arc<Transaction>>, ProtocolError> {
+        let priority = rpc_transaction_priority(&transaction);
+        let insertion = self
+            .mining_manager()
+            .clone()
+            .validate_and_insert_transaction_guarded(consensus, transaction, priority, Orphan::Forbidden, rbf_policy, guard)
+            .await?;
+        self.broadcast_transactions(insertion.accepted.iter().map(|tx| tx.id()), rpc_transaction_should_throttle_broadcast(priority))
+            .await;
+        Ok(insertion.removed)
+    }
+
     /// Returns true if the time has come for running the task cleaning mempool transactions.
     async fn should_run_mempool_scanning_task(&self) -> bool {
         self.transactions_spread.write().await.should_run_mempool_scanning_task()

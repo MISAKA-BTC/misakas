@@ -3873,10 +3873,9 @@ impl ConsensusApi for Consensus {
         &self,
         duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
         roots: &kaspa_consensus_core::palw_evidence_v1::ClaimRoots,
-        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-        manifest: Option<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2>,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
     ) -> Result<Option<u64>, String> {
-        self.virtual_processor.palw_provider_da_answer_current_v1(duty, roots, object, manifest)
+        self.virtual_processor.palw_provider_da_answer_current_v1(duty, roots, stage)
     }
 
     fn palw_da_accusation_check_v1(

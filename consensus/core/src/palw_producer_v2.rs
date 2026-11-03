@@ -2047,6 +2047,63 @@ pub fn palw_disclosure_duty_v1(
     ))
 }
 
+/// Fixed-size metadata for the exact packet admitted by the Panel outbox.
+#[derive(Clone, Copy)]
+pub struct PalwProviderDaAnswerStageV1 {
+    claim: Hash64,
+    unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    discloser: PalwBondKeyV2,
+    kind: PalwProviderDaAnswerKindV1,
+}
+
+#[derive(Clone, Copy)]
+enum PalwProviderDaAnswerKindV1 {
+    Material,
+    LegacyDirect,
+    LegacyDeclaration {
+        parts: usize,
+    },
+    LegacyChunk {
+        manifest: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2,
+        chunk: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkPinV2,
+    },
+}
+
+impl PalwProviderDaAnswerStageV1 {
+    pub fn from_object(
+        object: &crate::palw_state_v2::PalwConsensusObjectV2,
+        manifest: Option<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2>,
+    ) -> Option<Self> {
+        use crate::palw_da_rcore_v1::PalwDaUnitV1;
+        use crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkPinV2;
+        use crate::palw_state_v2::PalwConsensusObjectV2 as O;
+        use PalwProviderDaAnswerKindV1 as Kind;
+
+        let (claim, unit, discloser, kind) = match (object, manifest) {
+            (O::MaterialDisclosedV2 { claim, unit, discloser, .. }, None) if !matches!(unit, PalwDaUnitV1::LegacyHeldV2(_)) => {
+                (*claim, *unit, *discloser, Kind::Material)
+            }
+            (O::LegacyHeldAnsweredV2 { answer }, None) => {
+                (answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit), answer.discloser, Kind::LegacyDirect)
+            }
+            (O::LegacyHeldAnswerDeclaredV2 { declaration }, None) => (
+                declaration.claim,
+                PalwDaUnitV1::LegacyHeldV2(declaration.unit),
+                declaration.discloser,
+                Kind::LegacyDeclaration { parts: declaration.chunk_digests.len() },
+            ),
+            (O::LegacyHeldAnswerChunkV2 { chunk }, Some(manifest)) => (
+                chunk.claim,
+                PalwDaUnitV1::LegacyHeldV2(chunk.unit),
+                chunk.discloser,
+                Kind::LegacyChunk { manifest, chunk: PalwLegacyAnswerChunkPinV2::new(chunk) },
+            ),
+            _ => return None,
+        };
+        Some(Self { claim, unit, discloser, kind })
+    }
+}
+
 /// Check the provider binding and the exact queued stage on one accepted snapshot.
 pub fn palw_provider_da_answer_matches_v1(
     state: &PalwChainStateV2,
@@ -2054,44 +2111,33 @@ pub fn palw_provider_da_answer_matches_v1(
     extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
     duty: &PalwDisclosureDutyV1,
     roots: &crate::palw_evidence_v1::ClaimRoots,
-    object: &crate::palw_state_v2::PalwConsensusObjectV2,
-    manifest: Option<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2>,
+    stage: PalwProviderDaAnswerStageV1,
     now_daa: u64,
 ) -> bool {
+    use crate::palw_da_rcore_v1::PalwDaUnitV1;
+    use crate::palw_state_v2::PALW_COURT_CLOSE_INCLUSION_MARGIN;
+    use PalwProviderDaAnswerKindV1 as Kind;
     let Some(claim) = state.claim(&duty.claim_id) else { return false };
-    if !matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt)
+    if (stage.claim, stage.unit, stage.discloser) != (duty.claim_id, duty.unit, duty.discloser)
+        || !matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt)
         || (claim.trace_root, claim.output_root, claim.execution_root, claim.trace_chunk_count, claim.trace_retention_daa)
             != (roots.trace_root, roots.output_root, roots.execution_root, roots.trace_chunk_count, roots.retention_deadline)
         || palw_disclosure_duty_v1(state, params, extras, duty, now_daa).as_ref() != Some(duty)
     {
         return false;
     }
-    use crate::palw_da_rcore_v1::PalwDaUnitV1;
-    use crate::palw_state_v2::PalwConsensusObjectV2 as O;
-    let legacy_key_matches =
-        |claim, unit, discloser| (claim, PalwDaUnitV1::LegacyHeldV2(unit), discloser) == (duty.claim_id, duty.unit, duty.discloser);
-    match (object, manifest) {
-        (O::MaterialDisclosedV2 { claim, unit, discloser, .. }, None) => {
-            (*claim, *unit, *discloser) == (duty.claim_id, duty.unit, duty.discloser) && !matches!(unit, PalwDaUnitV1::LegacyHeldV2(_))
+    let PalwDaUnitV1::LegacyHeldV2(unit) = stage.unit else { return matches!(stage.kind, Kind::Material) };
+    let pending = state.legacy_answer_pending_v2(&(stage.claim, unit, stage.discloser));
+    match stage.kind {
+        Kind::LegacyDirect => pending.is_none(),
+        Kind::LegacyDeclaration { parts } => {
+            pending.is_none()
+                && now_daa.saturating_add(PALW_COURT_CLOSE_INCLUSION_MARGIN.saturating_mul(parts as u64)) < duty.deadline_daa
         }
-        (O::LegacyHeldAnsweredV2 { answer }, None) => {
-            legacy_key_matches(answer.claim, answer.unit, answer.discloser)
-                && state.legacy_answer_pending_v2(&(answer.claim, answer.unit, answer.discloser)).is_none()
+        Kind::LegacyChunk { manifest, chunk } => {
+            pending.is_some_and(|pending| pending.matches_queued_chunk_v2(chunk, manifest, now_daa, duty.deadline_daa))
         }
-        (O::LegacyHeldAnswerDeclaredV2 { declaration }, None) => {
-            use crate::palw_state_v2::PALW_COURT_CLOSE_INCLUSION_MARGIN;
-            legacy_key_matches(declaration.claim, declaration.unit, declaration.discloser)
-                && state.legacy_answer_pending_v2(&declaration.key()).is_none()
-                && now_daa.saturating_add(PALW_COURT_CLOSE_INCLUSION_MARGIN.saturating_mul(declaration.chunk_digests.len() as u64))
-                    < duty.deadline_daa
-        }
-        (O::LegacyHeldAnswerChunkV2 { chunk }, Some(manifest)) => {
-            legacy_key_matches(chunk.claim, chunk.unit, chunk.discloser)
-                && state
-                    .legacy_answer_pending_v2(&chunk.key())
-                    .is_some_and(|pending| pending.matches_queued_chunk_v2(chunk, manifest, now_daa, duty.deadline_daa))
-        }
-        _ => false,
+        Kind::Material => false,
     }
 }
 

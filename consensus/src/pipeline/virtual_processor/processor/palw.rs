@@ -1219,8 +1219,7 @@ impl VirtualStateProcessor {
         &self,
         duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
         roots: &kaspa_consensus_core::palw_evidence_v1::ClaimRoots,
-        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
-        manifest: Option<kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2>,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
     ) -> Result<Option<u64>, String> {
         use kaspa_consensus_core::{palw_producer_v2::palw_provider_da_answer_matches_v1, palw_state_v2::PalwTransitionExtrasV1};
         let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
@@ -1248,7 +1247,7 @@ impl VirtualStateProcessor {
             ..Default::default()
         };
         let matches = roots.network_domain == self.palw_network_domain_v2()
-            && palw_provider_da_answer_matches_v1(&state, params, &extras, duty, roots, object, manifest, now);
+            && palw_provider_da_answer_matches_v1(&state, params, &extras, duty, roots, stage, now);
         if before_epoch != epoch()? || !Arc::ptr_eq(&before, &self.lkg_virtual_state.load_full()) {
             return Err("provider DA accepted view changed".into());
         }

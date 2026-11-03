@@ -19,6 +19,7 @@ pub(in crate::palw_panel) struct ProviderDaBuiltAnswerV1 {
     pub manifest: Option<PalwLegacyAnswerManifestPinV2>,
 }
 
+#[derive(Clone)]
 pub(in crate::palw_panel) struct ProviderDaStampV1 {
     pub duty: PalwDisclosureDutyV1,
     pub roots: ClaimRoots,

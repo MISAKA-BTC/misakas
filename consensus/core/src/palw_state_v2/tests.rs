@@ -21069,7 +21069,8 @@ fn provider_da_single_duty_agrees_with_batch_and_rejects_stale_answer() {
         palw_evidence_v1::ClaimRoots,
         palw_panel_var_v1::PalwSlashableLockV1,
         palw_producer_v2::{
-            PalwDisclosureRoleV1, palw_disclosure_duties_v1, palw_disclosure_duty_v1, palw_provider_da_answer_matches_v1,
+            PalwDisclosureRoleV1, PalwProviderDaAnswerStageV1, palw_disclosure_duties_v1, palw_disclosure_duty_v1,
+            palw_provider_da_answer_matches_v1,
         },
         palw_verification_v2::PalwSegmentMaskV2,
     };
@@ -21141,8 +21142,9 @@ fn provider_da_single_duty_agrees_with_batch_and_rejects_stale_answer() {
         answer: PalwDaAnswerV1::Event(disclosure),
         signature: Vec::new(),
     };
+    let stage = PalwProviderDaAnswerStageV1::from_object(&answer, None).unwrap();
     let current = |state: &PalwChainStateV2, roots: &ClaimRoots, now| {
-        palw_provider_da_answer_matches_v1(state, &params, &extras, &signer_duty, roots, &answer, None, now)
+        palw_provider_da_answer_matches_v1(state, &params, &extras, &signer_duty, roots, stage, now)
     };
     assert!(current(&state, &roots, 109));
     assert!(!current(&state, &roots, 110), "an unexpired later duty has a different deadline");
@@ -21153,7 +21155,7 @@ fn provider_da_single_duty_agrees_with_batch_and_rejects_stale_answer() {
     state.slashable_locks.insert((bond_key(2), claim_id), earlier);
     assert!(current(&state, &roots, 109));
     state.claims.get_mut(&claim_id).unwrap().accepted_block = h64(91);
-    assert!(!palw_provider_da_answer_matches_v1(&state, &params, &extras, &signer_duty, &roots, &answer, None, 109));
+    assert!(!palw_provider_da_answer_matches_v1(&state, &params, &extras, &signer_duty, &roots, stage, 109));
     state.da_claims.get_mut(&claim_id).unwrap().answered.insert(unit);
     assert!(palw_disclosure_duty_v1(&state, &params, &extras, &producer_duty, 109).is_none());
 }

@@ -1602,8 +1602,7 @@ pub trait ConsensusApi: Send + Sync {
         &self,
         _duty: &crate::palw_producer_v2::PalwDisclosureDutyV1,
         _roots: &crate::palw_evidence_v1::ClaimRoots,
-        _object: &crate::palw_state_v2::PalwConsensusObjectV2,
-        _manifest: Option<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2>,
+        _stage: crate::palw_producer_v2::PalwProviderDaAnswerStageV1,
     ) -> Result<Option<u64>, String> {
         Err("provider DA reader unavailable".into())
     }
