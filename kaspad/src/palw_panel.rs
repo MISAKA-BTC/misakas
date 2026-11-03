@@ -14862,6 +14862,10 @@ impl PalwPanelService {
         };
         match self.fetch_directory_provider_material(claim, roots, limits).await {
             Ok(material) => {
+                // A directory read can straddle a reorg or a new acceptance.
+                if self.provider_claim_roots(network_domain, claim) != Some(roots) {
+                    return;
+                }
                 let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &material.bytes);
                 info!(
                     "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from evidence provider(s) {:?} ({admitted:?}); {} failed attempt(s) on the way",
@@ -14916,13 +14920,13 @@ impl PalwPanelService {
                         return Err("evidence HTTP fetch deadline reached".into());
                     }
                 };
-                // Re-read the stored acceptance after a network delay or reorg.
-                if self.provider_claim_roots(network_domain, claim) != Some(roots) {
-                    return Err("claim evidence roots or accepted retention changed during HTTP fetch".into());
-                }
                 material
             }
         };
+        // Both directory and HTTP reads may have started on an earlier branch.
+        if self.provider_claim_roots(network_domain, claim) != Some(roots) {
+            return Err("claim evidence roots or accepted retention changed during provider fetch".into());
+        }
         let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
             let parent = target.parent().ok_or("retention path has no parent")?;
