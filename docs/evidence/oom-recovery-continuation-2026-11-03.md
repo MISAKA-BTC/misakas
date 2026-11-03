@@ -363,3 +363,11 @@ a temporary RAM disk. The 360 combinations agreed on logits and KV
 state between the ordinary and capture paths. The test used local model
 fixtures and cached dependencies. Rebuilding the full worker and running
 the actual T12 8K comparison are separate checks.
+
+The diagnostic `palw-tir-equiv` now selects the exact Testnet 12 CoreV1
+draw from its anchor and block DAA. The four focused tests passed on the
+exact diagnostic sources, including the T12 selector, the one-token draw,
+the prior comparison mode and a changed-weight case. The real 8K
+artifact has not yet been executed in this comparison. A model-free
+Node verdict and native accounting still require the separate Positive
+Court route.
