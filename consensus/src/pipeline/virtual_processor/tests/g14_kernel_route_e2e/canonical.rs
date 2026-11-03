@@ -37,7 +37,7 @@ use super::*;
 use kaspa_consensus_core::config::premine::{MAIN_PREMINE_INDEX, PALW_T12_GENESIS_BOND_COLLATERAL_SOMPI, premine_outpoint_for};
 use kaspa_consensus_core::mldsa87_primitives::p2pkh_mldsa87_spk;
 use kaspa_consensus_core::muhash::MuHashExtensions;
-use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, PalwKernelRouteHeaderV1};
+use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteHeaderV1;
 use kaspa_consensus_core::palw_state_v2::{
     PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_OPERATOR_POSSESSION_MLDSA87_CONTEXT, palw_bond_registration_message_v2,
     palw_operator_possession_message_v1,
@@ -56,7 +56,6 @@ use misaka_palw_kernel::job::DecodeFaultV1;
 use misaka_palw_kernel::ledger::LedgerPolicyV1;
 use misaka_palw_kernel::ledger::proof_seal_v1;
 use misaka_palw_kernel::opv::OpvPolicyV1;
-use misaka_palw_kernel::rows::LedgerRowsV1;
 
 /// The public participant: registry row 8, the first harness key no genesis card holds.
 const NEWCOMER: usize = 8;
@@ -405,7 +404,7 @@ impl Rpc {
             GetPalwKernelRowsRequest { has_cursor: false, after_table: 0, after_key: String::new(), max_bytes: ROWS_PAGE_BYTES };
         let mut header: Option<PalwKernelRouteHeaderV1> = None;
         let mut roots: Option<(String, String)> = None;
-        let (mut rows, mut aux) = (LedgerRowsV1::new(), BTreeMap::new());
+        let mut rows = Vec::new();
         let (mut seen, mut total, mut pages) = (0u64, None, 0u32);
         loop {
             let request_wire = Self::wire(request.clone());
@@ -427,12 +426,7 @@ impl Rpc {
             for row in &page.rows {
                 seen += 1;
                 let table = u8::try_from(row.table).expect("a table fits a u8");
-                let key = (table, unhex(&row.key));
-                if table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 {
-                    rows.insert(key, unhex(&row.row));
-                } else {
-                    aux.insert(key, unhex(&row.row));
-                }
+                rows.push((table, unhex(&row.key), unhex(&row.row)));
             }
             if !page.more {
                 break;
@@ -445,11 +439,13 @@ impl Rpc {
             };
         }
         assert_eq!(Some(seen), total, "every row exactly once, over {pages} page(s)");
-        let state = PalwKernelRouteStateV1 { header: header.expect("a first page"), rows, aux, ledger_cache: Default::default() };
+        let header = borsh::to_vec(&header.expect("a first page")).expect("a canonical header");
         let (ledger_root, aux_root) = roots.expect("a first page");
-        assert_eq!(state.ledger_root().to_string(), ledger_root, "the served rows root to the served ledger root");
-        assert_eq!(state.aux_root().to_string(), aux_root, "and the served aux rows to the served aux root");
-        (state, ledger_root.parse().expect("a Hash64"))
+        let ledger_root: Hash64 = ledger_root.parse().expect("a ledger Hash64");
+        let aux_root: Hash64 = aux_root.parse().expect("an aux Hash64");
+        let state = PalwKernelRouteStateV1::from_served_rows_v1(&header, rows, &ledger_root, &aux_root)
+            .expect("every served row reconstructs the two roots");
+        (state, ledger_root)
     }
 
     /// **The fresh verifier, built from op 211 alone** (the parent's [`Fresh`], over the rows the RPC served), with its own salt; and
