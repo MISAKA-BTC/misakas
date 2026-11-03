@@ -425,7 +425,7 @@ impl TirSourceCatalogV2 {
     }
     /// Exact canonical opening bytes for an individual unit's service price.
     /// The signed catalog continues to commit to the conservative unit bounds.
-    pub(crate) fn canonical_opening_bytes_v2(&self, kind: SourceKind, index: u64) -> Result<u64, PositiveSourceGeometryErrorV2> {
+    pub fn canonical_opening_bytes_v2(&self, kind: SourceKind, index: u64) -> Result<u64, PositiveSourceGeometryErrorV2> {
         let bound = self.unit_bound(kind, index)?;
         if kind == SourceKind::Input && self.input_form == PalwPromptIdsFormV1::MerkleV1 {
             // Prompt IDs and the V4 tree use the same promote-odd path shape.
