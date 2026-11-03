@@ -1664,3 +1664,40 @@ deadline, covering rank and multipart progress. Full Node and
 native fixture validation remain open. The first exact Core
 metadata attempt was stopped at its 3 GiB child RSS guard while
 the separate A0 build was active. The owned RAM volume detached.
+
+## Exact claim observer and queued provider handoff — 07:24 UTC
+
+B0 and the public relay agreed on Qwen #63 and #64. The respective
+carrier/selected-fold DAA pairs were 19,639/19,641 and 19,641/19,643.
+For each, B0 logged the 20,606/20,608 retention refusal, and both
+claim-detail RPCs returned absent. The independent class inventory at
+DAA 19,643 had nine eligible bonds, zero independently ready and zero
+assigned. At DAA 19,644 both nodes still reported the retention rule
+scheduled at 20,000 and unarmed. The public REST index and WebSocket
+agreed at 19,644.
+
+The read-only claim observer in
+`/private/tmp/misaka-t12-oom-20261102/g14-live-goal.W3V5gB`
+now separates the carrier from the exact selected fold. It pins both
+nodes' frontier, requires the claim state's exact tip and matches the
+fold's hash, DAA, blue score and carrier relationship. Ten local cases
+passed, including same-DAA disagreement and missing coordinates.
+The live negative path reported no assignment for #63 and #64.
+The same observer read an historical voided Qwen row on both nodes.
+That row's current retention is later than its initial signed deadline
+and the running RPC omits fold coordinates. The observer reports both
+facts separately and withholds an exact fold or provider export for it.
+
+The isolated provider provenance candidate `a926c1a49` adds a
+fixed-size local authorization check inside the blocking transaction
+worker and repeats it under the mempool write lock before insertion or
+replacement. It preserves ordinary/RBF policy and compares the pinned
+worker instance to the current instance. A queued-worker race fixture
+is present. Compilation and runtime validation remain open, and a
+change after the last check is outside the guard's scope.
+
+The private held-dissection harness for the original Qwen #58 prepares
+the position-zero terminal checker with a checkpoint anchor and
+original signed openings, plus altered and missing operands. The
+guarded launch stopped before compilation at the 1 GiB APFS floor
+and detached its owned RAM volume. There is no held verdict.
