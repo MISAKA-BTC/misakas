@@ -360,6 +360,7 @@ pub fn palw_claim_detail_json_v1(
 pub enum PalwCourtTargetV1 {
     Claim(Hash64),
     Session(Hash64),
+    BatchResponse { claim: Hash64, ordinal: u64, target: crate::palw_court_shared_material_intake_v1::MaterialTargetV1 },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -375,6 +376,7 @@ pub fn palw_court_state_json_v1(
     let (claim_id, only_session) = match target {
         PalwCourtTargetV1::Claim(c) => (c, None),
         PalwCourtTargetV1::Session(s) => (state.court_session(&s)?.claim, Some(s)),
+        PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => return batch_response_json_v1(state, claim, ordinal, target, now),
     };
     let sessions: Vec<Value> = state
         .court_sessions_iter()
@@ -398,6 +400,38 @@ pub fn palw_court_state_json_v1(
         "daSessions": da_sessions_json(state, &claim_id, now),
         "dispute": dispute_json(state, &claim_id),
         "courtClocks": claim.map(|c| court_clocks_json(state, params, &claim_id, c)).unwrap_or(Value::Null),
+    }))
+}
+
+fn batch_response_json_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    ordinal: u64,
+    target: crate::palw_court_shared_material_intake_v1::MaterialTargetV1,
+    now: u64,
+) -> Option<Value> {
+    use crate::palw_court_shared_material_intake_v1::quote_batch_response_v1;
+    use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
+    state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtBatchDemand(claim, ordinal))?;
+    let tip = state.last_point();
+    let (response, error) = match quote_batch_response_v1(state, claim, ordinal, target) {
+        Ok(quote) => (json!({
+            "requestRoot": quote.request_root.to_string(), "draftId": quote.draft_id.to_string(),
+            "totalBytes": quote.total_bytes, "beginDaa": quote.begin_daa, "finishDaa": quote.finish_daa,
+            "draftExpiresDaa": quote.draft_expires_daa,
+            "retainedSubmitter": quote.retained_submitter.as_ref().map(palw_bond_key_text_v1),
+            "retainedBodyHash": quote.retained_body_hash.map(|hash| hash.to_string()),
+            "parts": quote.parts.iter().map(|part| json!({
+                "offset": part.offset, "bytes": part.bytes, "assignedDaa": part.assigned_daa, "acceptedDaa": part.accepted_daa,
+            })).collect::<Vec<_>>(),
+        }), None),
+        Err(error) => (Value::Null, Some(error)),
+    };
+    Some(json!({
+        "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchResponse", "nowDaa": now,
+        "tipDaa": tip.map(|p| p.daa_score), "tipBlock": tip.map(|p| p.block.to_string()),
+        "claimId": claim.to_string(), "ordinal": ordinal.to_string(),
+        "targetId": target.id_v1(claim).ok().map(|id| id.to_string()), "response": response, "error": error,
     }))
 }
 

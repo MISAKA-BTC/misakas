@@ -383,8 +383,8 @@ pub(crate) async fn court_state(ctx: &Ctx, claim: Option<&str>, session: Option<
 pub(crate) fn court_state_request(claim: Option<&str>, session: Option<&str>) -> Result<GetPalwCourtStateRequest, CliError> {
     let id = |s: &str| crate::palw_derived::parse_claim_id(s).map(|h| h.to_string());
     match (claim, session) {
-        (Some(c), None) => Ok(GetPalwCourtStateRequest { claim_hex: id(c)?, session_hex: String::new() }),
-        (None, Some(s)) => Ok(GetPalwCourtStateRequest { claim_hex: String::new(), session_hex: id(s)? }),
+        (Some(c), None) => Ok(GetPalwCourtStateRequest { claim_hex: id(c)?, session_hex: String::new(), ..Default::default() }),
+        (None, Some(s)) => Ok(GetPalwCourtStateRequest { claim_hex: String::new(), session_hex: id(s)?, ..Default::default() }),
         _ => Err(CliError::new(exit::GENERIC, "name exactly one of --claim or --session")),
     }
 }

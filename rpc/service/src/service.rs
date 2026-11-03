@@ -4003,9 +4003,20 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetPalwCourtStateRequest,
     ) -> RpcResult<GetPalwCourtStateResponse> {
         use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1;
-        let target = match (request.claim_hex.is_empty(), request.session_hex.is_empty()) {
-            (false, true) => PalwCourtTargetV1::Claim(palw_user_view_hash64("claim", &request.claim_hex)?),
-            (true, false) => PalwCourtTargetV1::Session(palw_user_view_hash64("session", &request.session_hex)?),
+        let target = match (
+            request.claim_hex.is_empty(), request.session_hex.is_empty(),
+            request.batch_ordinal.is_empty(), request.batch_target.is_empty(),
+        ) {
+            (false, true, true, true) => PalwCourtTargetV1::Claim(palw_user_view_hash64("claim", &request.claim_hex)?),
+            (true, false, true, true) => PalwCourtTargetV1::Session(palw_user_view_hash64("session", &request.session_hex)?),
+            (false, true, false, false) => PalwCourtTargetV1::BatchResponse {
+                claim: palw_user_view_hash64("claim", &request.claim_hex)?,
+                ordinal: palw_batch_view_ordinal(&request.batch_ordinal)?,
+                target: palw_batch_view_target(&request.batch_target)?,
+            },
+            (_, _, false, _) | (_, _, _, false) => {
+                return Err(RpcError::General("a Batch response needs a claim, batch ordinal and material target".into()));
+            }
             _ => return Err(RpcError::General("name exactly one of a claim id or a court session id".into())),
         };
         if palw_v2_bundle(&self.config.params).is_none() {
@@ -6161,6 +6172,28 @@ fn palw_user_view_hash64(what: &str, hex: &str) -> RpcResult<kaspa_consensus_cor
     let mut bytes = [0u8; 64];
     faster_hex::hex_decode(hex.as_bytes(), &mut bytes).map_err(|e| RpcError::General(format!("{what} id: {e}")))?;
     Ok(kaspa_consensus_core::Hash64::from_bytes(bytes))
+}
+
+fn palw_batch_view_ordinal(text: &str) -> RpcResult<u64> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(RpcError::General("Batch ordinal or target index must be decimal u64 text".into()));
+    }
+    text.parse().map_err(|_| RpcError::General("Batch ordinal or target index exceeds u64".into()))
+}
+
+fn palw_batch_view_target(text: &str) -> RpcResult<kaspa_consensus_core::palw_court_shared_material_intake_v1::MaterialTargetV1> {
+    use kaspa_consensus_core::palw_court_shared_material_intake_v1::MaterialTargetV1 as Target;
+    let index = |text| u32::try_from(palw_batch_view_ordinal(text)?).map_err(|_| RpcError::General("Batch target index exceeds u32".into()));
+    match text {
+        "full-ids" => Ok(Target::FullIds),
+        "prompt-flat" => Ok(Target::PromptFlat),
+        _ => match text.split_once(':') {
+            Some(("parameter", leaf)) => Ok(Target::Parameter { leaf: index(leaf)? }),
+            Some(("prompt-tile", tile)) => Ok(Target::PromptTile { tile: index(tile)? }),
+            Some(("unit", ordinal)) => Ok(Target::Unit { ordinal: palw_batch_view_ordinal(ordinal)? }),
+            _ => Err(RpcError::General("unknown Batch material target".into())),
+        },
+    }
 }
 
 /// `(available, found, now_daa, view_json)` of a consensus user-view answer (`None`: no PALW tip).

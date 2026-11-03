@@ -3170,3 +3170,27 @@ B0 and relay agreed at DAA 19,710. The newly scanned selected interval
 contained no Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-response-quote.ytMks8/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-batch-response-quote-live.FlXRXl/page.json`.
+
+## Batch response reads through the existing court RPC
+
+Op 226 now accepts a claim with `batchOrdinal` and `batchTarget`, such
+as `"18446744073709551615"` and `"full-ids"`. The decimal string keeps
+the exact 64-bit ordinal in JavaScript clients. The `palwBatchResponse`
+view uses the Core quote from one selected snapshot and includes the
+tip hash, reserved slots and still-retained part progress. It carries
+no signed carriers or raw material. An absent demand returns `found:
+false`. A held demand that cannot quote the requested target returns
+an explicit error in the view. Clients distinguish the Batch answer
+from an older node's ordinary `palwCourtState` response by `kind`.
+
+The extracted request test passed legacy byte equality, v2 round trip,
+full-width ordinal parsing and bad target rejection. `protoc` compiled
+the updated schema. Native service and accepted-draft view assertions
+were added but have not run in a whole-node build. Public deployment,
+Studio consumption, full original capacity and live completion remain
+unverified.
+
+B0 and relay agreed at DAA 19,711 with no Qwen carrier in the newly
+scanned interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-response-rpc.h2cqD8/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-response-rpc-live.e9FTeC/page.json`.

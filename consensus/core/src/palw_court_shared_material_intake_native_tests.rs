@@ -835,6 +835,12 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let resumed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
     assert_eq!((resumed.retained_submitter, resumed.retained_body_hash), (Some(who), Some(hash)));
     assert_eq!(resumed.parts[0].accepted_daa, Some(quote.parts[0].assigned_daa));
+    use crate::palw_user_views_v1::{PalwCourtTargetV1, PalwUserViewClockV1, palw_court_state_json_v1};
+    let view = palw_court_state_json_v1(&b.state, &params, PalwCourtTargetV1::BatchResponse { claim, ordinal, target },
+        &PalwUserViewClockV1::default()).unwrap();
+    assert_eq!(view["kind"], "palwBatchResponse");
+    assert_eq!(view["response"]["requestRoot"], request_root.to_string());
+    assert_eq!(view["response"]["parts"][0]["acceptedDaa"], quote.parts[0].assigned_daa);
     let draft_key = Key::CourtMaterialDraft(claim, draft_id);
     let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&draft_key) else { panic!("missing Batch draft") };
     use crate::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
