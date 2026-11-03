@@ -219,8 +219,12 @@ fn fixture_with_relay(requires_relay: bool) -> (AssignmentRow, AssignmentAdmissi
     use kaspa_consensus_core::config::params::{AssignmentFundingRelayProfileV2, PositiveAssignmentFenceV2, TESTNET_PARAMS};
     let mut params = TESTNET_PARAMS;
     params.palw_positive_court_v2 = Some(PositiveCourtFenceV2 { activation: ForkActivation::new(0), policy: positive.clone() });
-    params.palw_positive_assignment_v2 =
-        Some(PositiveAssignmentFenceV2 { activation: ForkActivation::new(0), policy, native_preimages: Some(native.clone()) });
+    params.palw_positive_assignment_v2 = Some(PositiveAssignmentFenceV2 {
+        activation: ForkActivation::new(0),
+        policy,
+        native_preimages: Some(native.clone()),
+        service_capacity: None,
+    });
     if requires_relay {
         params.palw_positive_funding_relay_v2 = Some(funding_relay_fixture::relay_fence(0));
     }

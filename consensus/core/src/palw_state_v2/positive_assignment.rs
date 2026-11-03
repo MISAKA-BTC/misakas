@@ -89,6 +89,53 @@ pub(super) fn assignment_horizon_v2(
     )
     .map_err(refusal)
 }
+fn assignment_service_demand_v2(
+    source: &misaka_palw_positive_contract::assignment::consents::AssignmentSourceConsentV2,
+    prover: &misaka_palw_positive_contract::assignment::consents::AssignmentProverConsentV2,
+) -> [u64; 6] {
+    [
+        source.budget.additional_work,
+        source.budget.transmitted_bytes,
+        source.budget.retained_bytes,
+        prover.max_build_work,
+        prover.max_submitted_bytes,
+        prover.max_retained_bytes,
+    ]
+}
+
+fn assignment_join_service_demand_v2(
+    join: &misaka_palw_positive_contract::assignment::role_actions::AssignmentProverJoinV2,
+) -> [u64; 6] {
+    [0, 0, 0, join.max_build_work, join.max_submitted_bytes, join.max_retained_bytes]
+}
+
+fn reserve_assignment_service_v2(available: &mut [u64; 6], demand: [u64; 6]) -> Result<(), PalwStateV2Error> {
+    let mut next = *available;
+    for (remaining, requested) in next.iter_mut().zip(demand) {
+        *remaining = remaining.checked_sub(requested).ok_or_else(|| refusal("shared Assignment service capacity exhausted"))?;
+    }
+    *available = next;
+    Ok(())
+}
+
+#[cfg(test)]
+mod service_capacity_tests {
+    use super::reserve_assignment_service_v2;
+
+    #[test]
+    fn combined_assignment_and_join_reservations_cannot_spend_another_dimension() {
+        let mut supply = [100, 200, 300, 400, 500, 600];
+        reserve_assignment_service_v2(&mut supply, [10, 20, 30, 40, 50, 60]).unwrap();
+        reserve_assignment_service_v2(&mut supply, [0, 0, 0, 10, 20, 30]).unwrap();
+        assert_eq!(supply, [90, 180, 270, 350, 430, 510]);
+        let original = supply;
+        assert!(reserve_assignment_service_v2(&mut supply, [1, 1, 1, 1, 1, 511]).is_err());
+        assert_eq!(supply, original);
+        reserve_assignment_service_v2(&mut supply, original).unwrap();
+        assert_eq!(supply, [0; 6]);
+    }
+}
+
 fn native_bond(outpoint: NativeOutpoint) -> PalwBondKeyV2 {
     PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(outpoint.transaction.0), outpoint.index))
 }
@@ -342,6 +389,54 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
+    /// Rebuild occupancy from the canonical prefix. The same funding rows
+    /// count after restart or rollback and across A-to-C consumption. A clock
+    /// or terminal status by itself does not retire the original obligation.
+    fn check_assignment_service_capacity_v2(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        rules: &NativeAssignmentRulesV2,
+        demand: [u64; 6],
+    ) -> Result<(), PalwStateV2Error> {
+        let supply = rules
+            .service_capacity_at_v2(ctx.daa_score)
+            .ok_or_else(|| refusal("shared Assignment service capacity is unavailable at this prefix"))?;
+        supply.validate_v2().map_err(refusal)?;
+        let mut available = supply.dimensions_v2();
+        reserve_assignment_service_v2(&mut available, demand)?;
+        let native = rules.native_preimages().ok_or_else(missing_assignment_history)?;
+        let mut remaining_work = rules.assignment_policy().max_replay_work;
+        let mut quote = native_writers::NativeWriteQuoteV1::new("native Assignment service census key workspace");
+        quote.exact::<u8>((2 * misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES) as u64)?;
+        self.admit_native_write_v1(quote)?;
+        let id = AssignmentId(Digest([0; 64]));
+        let bond = NativeOutpoint { transaction: misaka_palw_positive_contract::rows::NativeHash64([0; 64]), index: 0 };
+        let route = self.state.kernel_route.as_ref().ok_or_else(missing_assignment_history)?;
+        for subject in [NativeRowKey::Assignment(id), NativeRowKey::AssignmentProverFunding { assignment: id, prover: bond }] {
+            let mut prefix = subject.encode();
+            prefix.truncate(5);
+            let start = (KERNEL_AUX_TABLE, prefix);
+            for ((_, key), bytes) in route
+                .aux
+                .range(start.clone()..)
+                .take_while(|((table, key), _)| *table == KERNEL_AUX_TABLE && key.starts_with(&start.1))
+            {
+                let scan = native.source_policy.work.court_body_work(bytes.len() as u64).map_err(refusal)?;
+                remaining_work = remaining_work
+                    .checked_sub(scan)
+                    .and_then(|n| n.checked_sub(native.source_policy.work.per_control))
+                    .ok_or_else(|| refusal("Assignment service census exceeds original finite work budget"))?;
+                let used = match NativeRowValue::decode(key, bytes).map_err(refusal)?.body {
+                    NativeRowBody::Assignment(row) => assignment_service_demand_v2(&row.source_consent, &row.prover_consent),
+                    NativeRowBody::AssignmentProverFunding(row) => assignment_join_service_demand_v2(&row.consent),
+                    _ => return Err(refusal("wrong native Assignment service row kind")),
+                };
+                reserve_assignment_service_v2(&mut available, used)?;
+            }
+        }
+        Ok(())
+    }
+
     fn check_assignment_open_literal_v2(
         action: &PositiveAssignmentRawActionV2,
         row: &AssignmentRow,
@@ -444,6 +539,7 @@ impl TransitionBuilder<'_> {
         self.require_unowned_assignment_job_v2(Hash64::from_bytes(row.job.0))?;
         self.require_new_positive_draw_slot_v2(&material.certification_policy, ctx.daa_score)?;
         self.check_assignment_live_slots_v2(row.bundle.terms.prover, Some(&row.bundle.terms), rules)?;
+        self.check_assignment_service_capacity_v2(ctx, rules, assignment_service_demand_v2(&row.source_consent, &row.prover_consent))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentFunding(id))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentUse(id))?;
         plan.funding.validate_shape().map_err(refusal)?;
@@ -866,6 +962,7 @@ impl TransitionBuilder<'_> {
             return Err(refusal("original Assignment role or join cap exhausted"));
         }
         self.check_assignment_live_slots_v2(consent.prover, None, rules)?;
+        self.check_assignment_service_capacity_v2(ctx, rules, assignment_join_service_demand_v2(consent))?;
 
         let bond = self.state.bond(&native_bond(consent.prover)).ok_or_else(|| refusal("missing current prover bond"))?;
         if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
@@ -1662,6 +1759,7 @@ impl TransitionBuilder<'_> {
                     // changes cannot authorize the earlier carrier.
                     self.require_absent_assignment_key_v2(NativeRowKey::Assignment(bundle.terms.id()))?;
                     self.check_assignment_live_slots_v2(bundle.terms.prover, Some(&bundle.terms), rules)?;
+                    self.check_assignment_service_capacity_v2(ctx, rules, assignment_service_demand_v2(source, prover))?;
                     let class = Hash64::from_bytes(bundle.terms.registered_class.0);
                     if self.state.class(&class).is_none() || !self.state.tir_classes.contains_key(&class) {
                         return Err(refusal("actual registered TIR class missing at this accepted prefix"));

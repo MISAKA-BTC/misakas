@@ -54,8 +54,12 @@ fn relay_network(make: impl FnOnce(&Config) -> TestConsensus) -> Net {
     params.palw_dns_retirement = None;
     let activation = ForkActivation::new(RELAY_ACTIVATION_DAA);
     let positive = PositiveCourtFenceV2::unapproved_probe_at(activation);
-    params.palw_positive_assignment_v2 =
-        Some(PositiveAssignmentFenceV2 { activation, policy: assignment_fixture::policy(&positive), native_preimages: None });
+    params.palw_positive_assignment_v2 = Some(PositiveAssignmentFenceV2 {
+        activation,
+        policy: assignment_fixture::policy(&positive),
+        native_preimages: None,
+        service_capacity: None,
+    });
     params.palw_positive_court_v2 = Some(positive);
     params.palw_positive_funding_relay_v2 = Some(relay_fixture::relay_fence(activation.daa_score()));
     assert!(params.validate_palw_positive_funding_relay_v2().is_err());

@@ -4,7 +4,10 @@ use super::*;
 use crate::tx::{Transaction, UtxoEntry};
 use crate::{
     block::BlockTransactionsV3,
-    config::params::{AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, Params, PositiveAssignmentRuleScopeV2},
+    config::params::{
+        AssignmentFundingRelayProfileV2, AssignmentNativePreimagesV2, AssignmentServiceCapacityV2, Params,
+        PositiveAssignmentRuleScopeV2,
+    },
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1},
     palw_positive_assignment_certification_v2::{AssignmentGateCClockErrorV2, AssignmentGateCClockV2},
     palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
@@ -42,6 +45,7 @@ pub struct NativeAssignmentRulesV2 {
     network: Digest,
     prompt_form: PalwPromptIdsFormV1,
     gate_c: Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>,
+    service_capacity: Option<(u64, AssignmentServiceCapacityV2)>,
 }
 impl NativeAssignmentRulesV2 {
     pub fn resolve(params: &Params, daa: u64, network: Hash64, prompt_form: PalwPromptIdsFormV1) -> Option<Self> {
@@ -59,6 +63,7 @@ impl NativeAssignmentRulesV2 {
             network: Digest(network.as_bytes()),
             prompt_form,
             gate_c,
+            service_capacity: fence.service_capacity.map(|capacity| (daa, capacity)),
         })
     }
     /// Reconstruct original decode rules from a checked rooted material pair.
@@ -82,7 +87,18 @@ impl NativeAssignmentRulesV2 {
             network: material.network,
             prompt_form: material.network_prompt_form,
             gate_c: Some(material.certification_policy),
+            service_capacity: None,
         })
+    }
+    /// New joins use today's shared supply while preserving the original
+    /// contract and rules that govern already accepted obligations.
+    pub fn with_current_service_capacity_v2(mut self, params: &Params, daa: u64) -> Self {
+        self.service_capacity =
+            params.palw_positive_assignment_v2_at(daa).and_then(|fence| fence.service_capacity).map(|capacity| (daa, capacity));
+        self
+    }
+    pub(super) fn service_capacity_at_v2(&self, daa: u64) -> Option<AssignmentServiceCapacityV2> {
+        self.service_capacity.filter(|(at, _)| *at == daa).map(|(_, capacity)| capacity)
     }
     pub(super) fn original_material(&self) -> Option<AcceptedMaterial> {
         self.original_material.map(|(material, _)| material)
@@ -376,7 +392,18 @@ impl NativeHeapV1 for NativeAssignmentRulesV2 {
     fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
         // All fields are bounded fixed policy/preimage values. No Params or
         // peer variable collection is hidden behind this immutable descriptor.
-        let Self { scope, policy, positive, preimages, funding_relay_profile, original_material, network, prompt_form, gate_c } = self;
+        let Self {
+            scope,
+            policy,
+            positive,
+            preimages,
+            funding_relay_profile,
+            original_material,
+            network,
+            prompt_form,
+            gate_c,
+            service_capacity,
+        } = self;
         fn require_fixed_copy<T: Copy>(_: &T) {}
         require_fixed_copy(scope);
         require_fixed_copy(funding_relay_profile);
@@ -385,6 +412,7 @@ impl NativeHeapV1 for NativeAssignmentRulesV2 {
         require_fixed_copy(network);
         require_fixed_copy(prompt_form);
         require_fixed_copy(gate_c);
+        require_fixed_copy(service_capacity);
         if let Some(AssignmentNativePreimagesV2 { assignment_fees, physical, source_policy, case_fees, cancellation }) = preimages {
             require_fixed_copy(assignment_fees);
             require_fixed_copy(physical);

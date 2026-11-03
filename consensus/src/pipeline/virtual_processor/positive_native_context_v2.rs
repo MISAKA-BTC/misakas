@@ -928,6 +928,7 @@ impl PositiveCarrierPhaseTwoV2 {
             }) else {
                 continue;
             };
+            let rules = if kind == 13 { rules.with_current_service_capacity_v2(params, point.daa_score) } else { rules };
             let relay_cap = if kind == 14 {
                 let AssignmentFundingRelayProfileV2::RequiresRelayV2 { physical, .. } = rules.funding_relay_profile() else {
                     continue;
