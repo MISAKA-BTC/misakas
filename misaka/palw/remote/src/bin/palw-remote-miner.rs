@@ -28,6 +28,8 @@
 //! 128 hex). There is deliberately no built-in "demo" executor: an attempt whose execution a Panel cannot replay is fraud, and a miner must not be
 //! one flag away from producing one.
 //!
+//! Prefix a JSON wRPC URL with `json+` in `--rpc`. Unprefixed endpoints use Borsh.
+//!
 //! **Keeping the material.** The Panel pulls the capture from the miner (or a provider). The file is kept under `--state-dir/material/<attempt
 //! id>`; until the independent DA transport serves it for you (`misaka_palw_remote::evidence`), this machine must stay up and serve it — "the PC can
 //! be off after claiming" is NOT claimed here.
@@ -80,6 +82,7 @@ fn outpoint(text: &str) -> TransactionOutpoint {
 
 struct WrpcNode<'a> {
     endpoint: String,
+    p2p_id: String,
     runtime: &'a tokio::runtime::Runtime,
     client: KaspaRpcClient,
     pay_address: kaspa_addresses::Address,
@@ -138,6 +141,10 @@ impl RemoteNode for WrpcNode<'_> {
 
     fn chain_facts(&self) -> Result<NodeFacts, ViewError> {
         let info = self.runtime.block_on(self.client.get_block_dag_info()).map_err(|e| ViewError(e.to_string()))?;
+        let peer = self.runtime.block_on(self.client.get_info()).map_err(|e| ViewError(e.to_string()))?;
+        if !peer.is_synced || peer.p2p_id != self.p2p_id {
+            return Err(ViewError(format!("{} is unsynced or changed its node ID", self.endpoint)));
+        }
         Ok(NodeFacts {
             network_id: info.network.to_string(),
             sink: info.sink,
@@ -639,9 +646,13 @@ fn parse_args() -> Args {
 }
 
 fn connect(runtime: &tokio::runtime::Runtime, endpoint: &str) -> Result<KaspaRpcClient, String> {
+    let (encoding, endpoint) = match endpoint.strip_prefix("json+") {
+        Some(url) => (WrpcEncoding::SerdeJson, url),
+        None => (WrpcEncoding::Borsh, endpoint),
+    };
     let url = if endpoint.contains("://") { endpoint.to_string() } else { format!("ws://{endpoint}") };
-    let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
-        .map_err(|e| format!("cannot build a client for {url}: {e}"))?;
+    let client =
+        KaspaRpcClient::new(encoding, Some(&url), None, None, None).map_err(|e| format!("cannot build a client for {url}: {e}"))?;
     let options = ConnectOptions {
         block_async_connect: true,
         connect_timeout: Some(std::time::Duration::from_secs(10)),
@@ -683,16 +694,29 @@ fn main() {
     }
 
     let mut clients = Vec::new();
+    let mut node_ids = std::collections::BTreeSet::new();
     for endpoint in &args.rpc {
         match connect(&runtime, endpoint) {
-            Ok(client) => clients.push((endpoint.clone(), client)),
+            Ok(client) => {
+                let info =
+                    runtime.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(10), client.get_info()).await });
+                match info {
+                    Ok(Ok(info)) if !info.p2p_id.is_empty() && node_ids.insert(info.p2p_id.clone()) => {
+                        clients.push((endpoint.clone(), info.p2p_id, client));
+                    }
+                    Ok(Ok(_)) => eprintln!("[palw-remote-miner] {endpoint}: missing or duplicate node ID — not counted"),
+                    Ok(Err(error)) => eprintln!("[palw-remote-miner] {endpoint}: getInfo: {error} — not counted"),
+                    Err(_) => eprintln!("[palw-remote-miner] {endpoint}: getInfo timed out — not counted"),
+                }
+            }
             Err(e) => eprintln!("[palw-remote-miner] {e} — not counted"),
         }
     }
     let nodes: Vec<WrpcNode<'_>> = clients
         .into_iter()
-        .map(|(endpoint, client)| WrpcNode {
+        .map(|(endpoint, p2p_id, client)| WrpcNode {
             endpoint,
+            p2p_id,
             runtime: &runtime,
             client,
             pay_address: pay_address.clone(),
