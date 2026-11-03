@@ -1,7 +1,7 @@
 use super::compression::{decompress, CompressionEncoding, CompressionSettings};
 use super::{BufferSettings, DecodeBuf, Decoder, DEFAULT_MAX_RECV_MESSAGE_SIZE, HEADER_SIZE};
 use crate::{body::Body, metadata::MetadataMap, Code, Status};
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use http::{HeaderMap, StatusCode};
 use http_body::Body as HttpBody;
 use http_body_util::BodyExt;
@@ -54,6 +54,7 @@ struct StreamingInner {
     state: State,
     direction: Direction,
     buf: BytesMut,
+    unread_data: Bytes,
     trailers: Option<HeaderMap>,
     decompress_buf: BytesMut,
     encoding: Option<CompressionEncoding>,
@@ -138,6 +139,7 @@ impl<T> Streaming<T> {
                 state: State::ReadHeader,
                 direction,
                 buf: BytesMut::with_capacity(buffer_size),
+                unread_data: Bytes::new(),
                 trailers: None,
                 decompress_buf: BytesMut::new(),
                 encoding,
@@ -150,6 +152,7 @@ impl<T> Streaming<T> {
 impl StreamingInner {
     fn clear_decode_buffers(&mut self) {
         self.buf = BytesMut::new();
+        self.unread_data = Bytes::new();
         self.decompress_buf = BytesMut::new();
     }
 
@@ -201,8 +204,8 @@ impl StreamingInner {
                 )));
             }
 
-            self.buf.reserve(len);
-
+            // A length prefix does not establish that the body will arrive.
+            // Grow scratch only when an HTTP DATA frame supplies bytes.
             self.state = State::ReadBody { compression: compression_encoding, len }
         }
 
@@ -248,8 +251,38 @@ impl StreamingInner {
         Ok(None)
     }
 
+    fn append_received_data(&mut self, mut data: Bytes) {
+        if let State::ReadBody { len, .. } = self.state {
+            let needed = len.saturating_sub(self.buf.len());
+            if len > MAX_RETAINED_DECODER_BUFFER_SIZE && needed > 0 {
+                // Keep a coalesced suffix in the already owned DATA frame.
+                // Appending it to a full-size message could move the whole buffer.
+                if data.len() > needed {
+                    let body = data.split_to(needed);
+                    self.unread_data = data;
+                    data = body;
+                }
+                if !self.buf.try_reclaim(data.len()) {
+                    let required = self.buf.len() + data.len();
+                    // Align geometric growth to the declared length, so a
+                    // fragmented 320 MiB frame does not round up to 512 MiB.
+                    let capacity = len >> (len / required).ilog2();
+                    let mut next = BytesMut::with_capacity(capacity);
+                    next.extend_from_slice(&self.buf);
+                    self.buf = next;
+                }
+            }
+        }
+        self.buf.put(data);
+    }
+
     // Returns Some(()) if data was found or None if the loop in `poll_next` should break
     fn poll_frame(&mut self, cx: &mut Context<'_>) -> Poll<Result<Option<()>, Status>> {
+        if !self.unread_data.is_empty() {
+            let data = std::mem::take(&mut self.unread_data);
+            self.append_received_data(data);
+            return Poll::Ready(Ok(Some(())));
+        }
         let frame = match ready!(Pin::new(self.body.get_mut()).poll_frame(cx)) {
             Some(Ok(frame)) => frame,
             Some(Err(status)) => {
@@ -272,7 +305,7 @@ impl StreamingInner {
         };
 
         Poll::Ready(if frame.is_data() {
-            self.buf.put(frame.into_data().unwrap());
+            self.append_received_data(frame.into_data().unwrap());
             Ok(Some(()))
         } else if frame.is_trailers() {
             if self.incomplete_message() {
