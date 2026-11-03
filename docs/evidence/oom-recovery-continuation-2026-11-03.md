@@ -700,3 +700,38 @@ admission after retirement. Log SHA256 is
 Node default/EVM test metadata also compiled with the resident cap.
 At 05:01 UTC the unsigned seat5 trial was still stopped. Its volume
 had 21,634,891,776 bytes free, below the 21 GiB launch floor.
+
+## Retention planning cost and Qwen carrier #40 — 05:04 UTC
+
+Commit `2b5047c22` builds reclaim candidates in one pass and sorts
+eligible rows only when pressure remains after age-based pruning.
+The scoped regression measured 11 chain reads and 9 obligation reads
+for five files before the change, and five of each after it. Existing
+selection order and the independent unlink guard were preserved.
+Twelve tests passed. Log SHA256 is
+`441fdc7990933934925fc050c32de387376a92dfecff6bc0e77c62add92e602c`.
+
+Commit `6e1285b78` uses the resident material-obligation read for own
+attempts and foreign copies, removing the separate full derived
+artifact read for both. Free-prompt age pruning still uses the claim
+phase. A scoped test of the actual janitor pass with a stub consensus
+session reduced two derived artifact reads to zero for two
+captures, while keeping four resident obligation reads across
+planning and unlink. Thirteen tests passed. Log SHA256 is
+`18cf9569123a98b8d9e2f16198c17fabde68ab5a667ca0b702f99f7c203d9aa6`.
+The independent review matched the DA gate and pressure ordering.
+Post-submit capture ownership across an unresolved merge or restart
+still needs qualification.
+
+The B0 producer logged Qwen carrier #40, and B0 and the relay returned
+the same exact attempt ID. The public WebSocket served the original
+REAL carrier. The journal recorded 20,606 remaining DAA against
+20,608 required for the same block, and B0 returned no exact claim.
+Its receipt and kernel Final counters were zero. At DAA 19,601, the
+public REST index and WebSocket agreed with the B0 and relay tips.
+No additional load cohort was started.
+The matched B0 and relay class inventory at the same tip showed nine
+eligible independent Qwen bonds and zero ready independent bonds.
+The producer's own row was the only ready one. No seats were assigned.
+This inventory precedes an accepted claim and a claim-specific draw.
+Node default/EVM test metadata compiled on `6e1285b78`.
