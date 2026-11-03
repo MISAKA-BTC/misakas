@@ -1430,3 +1430,9 @@ regressions now also assert lookup results after replay, undo and carriage
 restore, including the original serialized bytes. Those Core regressions
 have yet to execute. The candidate remains outside the source pinned by the
 bound-slot verification.
+
+The full Core unit-test source typechecked with the candidate applied to
+the committed base and its matching cached dependencies. The first unit
+typecheck caught an extra field in a carriage-only test pattern, which
+was removed. The archive records both outcomes. Runtime coverage remains
+limited to the standalone lookup regression.
