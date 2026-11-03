@@ -51,7 +51,7 @@ const PALW_RETENTION_PERIOD: Duration = Duration::from_secs(60);
 const FP_CAPTURE_MAGIC: &[u8; 4] = b"FPC1";
 const ATTEMPT_PRESSURE_GRACE_MAGIC: &[u8; 4] = b"APG1";
 const ATTEMPT_PRESSURE_GRACE_EXTENSION: &str = "attempt-pressure";
-pub(crate) const ATTEMPT_PRESSURE_GRACE_BYTES: usize = 4 + 64 + 64 + 40;
+const ATTEMPT_PRESSURE_GRACE_BYTES: usize = 4 + 64 + 64 + 40;
 
 // Lead and rider publications stay registered through their in-process handoff.
 // The guard can cross asynchronous submission without holding the mutex.
@@ -274,6 +274,19 @@ fn attempt_capture_identity(meta: &std::fs::Metadata) -> Option<[u8; 40]> {
         out.copy_from_slice(&value.to_le_bytes());
     }
     Some(bytes)
+}
+
+pub(crate) fn attempt_pressure_grace_disk_quote_v1(material: &Path) -> std::io::Result<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(std::fs::symlink_metadata(material)?.blksize().max(4 << 10))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = material;
+        Ok(64 << 10)
+    }
 }
 
 pub(crate) fn stage_attempt_pressure_grace_v1(
@@ -864,6 +877,7 @@ mod tests {
         let material = dir.path().join(format!("{id}.material"));
         let marker = material.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
         publish_retained_file(&material, b"the exact capture", RetainedPublication::DurableReplace).unwrap();
+        assert!(attempt_pressure_grace_disk_quote_v1(&material).unwrap() >= 4 << 10);
         let written = std::fs::metadata(&material).unwrap().modified().unwrap();
         let horizon = 60 * MIN;
         let early = written + 59 * MIN;
