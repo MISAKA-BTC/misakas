@@ -168,6 +168,7 @@ struct NativeAssignedCourtV2 {
     source: crate::palw_positive_assignment_resources_v2::ReservedAssignmentSourceGeometryV2,
     source_requests:
         BTreeMap<misaka_palw_positive_contract::identity::RequestId, crate::palw_positive_source_v2::RetainedSourceRequestV2>,
+    source_responses: BTreeMap<Digest, source::CheckedAssignedSourceResponseV2>,
     derived_heap: u64,
     checker_heap: u64,
     available_heap: u64,
@@ -1213,6 +1214,7 @@ fn prepare_initial_case_checker_v2(
         check_limits,
         source,
         source_requests: BTreeMap::new(),
+        source_responses: BTreeMap::new(),
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1482,6 +1484,7 @@ fn replay_assigned_court_history_v2(
                 None => state,
             };
             response.check_committed(after, &prior)?;
+            machine.remember_source_response_v2(material, response, _body.memory_v1())?;
         }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
@@ -1497,6 +1500,18 @@ impl TransitionBuilder<'_> {
         action: &'a PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(&'a NativeCommittedAssignedCaseV2, NativeAssignedCourtV2, CaseRow), PalwStateV2Error> {
+        let Some((case, expected_result)) = body.operation.case_target_v2().map_err(refuse)? else {
+            return Err(refuse("a Case follow-up requires an explicit subject"));
+        };
+        self.prepare_case_subject_v2(action, case, expected_result)
+    }
+
+    fn prepare_case_subject_v2<'a>(
+        &self,
+        action: &'a PositiveAssignmentRawActionV2,
+        case: CaseId,
+        expected_result: Option<ResultId>,
+    ) -> Result<(&'a NativeCommittedAssignedCaseV2, NativeAssignedCourtV2, CaseRow), PalwStateV2Error> {
         let backing = action.case_backing().map_err(|_| missing())?;
         let NativeAssignedCaseBackingV2::Committed(backing) = backing else {
             return Err(missing());
@@ -1507,9 +1522,6 @@ impl TransitionBuilder<'_> {
         if backing.records().len() as u64 != pin.head.sequence || record.carriage().origin() != pin.head.history.origin {
             return Err(refuse("Case archive differs from its rooted journal extent or latest origin"));
         }
-        let Some((case, expected_result)) = body.operation.case_target_v2().map_err(refuse)? else {
-            return Err(refuse("a Case follow-up requires an explicit subject"));
-        };
         if backing.parent() != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
             return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
         }

@@ -1051,6 +1051,34 @@ impl PositiveCarrierPhaseTwoV2 {
                         }
                         Some(payload.consent.funding_output_index)
                     }
+                    A::SettleAssignment { case: Some(case), .. } => {
+                        use kaspa_consensus_core::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2;
+                        use misaka_palw_positive_contract::{native::NativeRowKey, rows::NativeRowBody};
+                        if let Some(state) = selected_parent_state {
+                            let row = kaspa_consensus_core::palw_positive_rows_v2::PositiveRowsV2::new(state)
+                                .read(NativeRowKey::Funding(*case))
+                                .map_err(|why| {
+                                    NativeCoverageV1::unsupported::<Self>("Case settlement funding row", &format!("{why:?}"))
+                                })?;
+                            if let Some(NativeRowBody::Funding(funding)) = row.map(|row| row.body)
+                                && funding.current_outpoint.is_some_and(|outpoint| {
+                                    tx.inputs
+                                        .first()
+                                        .is_some_and(|input| input.previous_outpoint == native_assignment_outpoint_v2(outpoint))
+                                })
+                            {
+                                case_backing = processor
+                                    .prepare_committed_case_history_v2(carrier.prefix.selected_parent, state, (*case, None))
+                                    .map_err(|why| match why {
+                                        E::Resource(why) => why,
+                                        why => {
+                                            NativeCoverageV1::unsupported::<Self>("Case settlement predecessor", &format!("{why:?}"))
+                                        }
+                                    })?;
+                            }
+                        }
+                        None
+                    }
                     A::JoinAssignmentProver { consent, .. } => Some(consent.funding_output_index),
                     _ => None,
                 }

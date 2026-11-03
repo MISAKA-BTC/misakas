@@ -168,6 +168,16 @@ impl TransitionBuilder<'_> {
         if &decoded != body {
             return Err(refused("raw op12 body changed"));
         }
+        if let PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, case: Some(case), receipts } = &body.operation
+            && let Some(NativeRowBody::Funding(funding)) =
+                PositiveRowsV2::new(&self.state).read(NativeRowKey::Funding(*case)).map_err(refused)?.map(|row| row.body)
+            && funding.current_outpoint.is_some_and(|point| {
+                tx.inputs.first().is_some_and(|input| input.previous_outpoint == native_assignment_outpoint_v2(point))
+            })
+        {
+            self.check_case_source_settlement_v2(action, *assignment, *case, receipts)?;
+            return Err(refused("qualified Case source settlement writer unavailable"));
+        }
         if self.native_writers_tracking_v1() {
             let mut quote = native_writers::NativeWriteQuoteV1::new("Assignment settlement input amount workspace");
             quote.exact::<u64>(action.entries().len() as u64)?;
