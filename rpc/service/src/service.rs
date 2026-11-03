@@ -6211,13 +6211,16 @@ fn palw_batch_quote_target(
 ) -> RpcResult<kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1> {
     use kaspa_consensus_core::{palw_batch_court_v1::MAX_BATCH_RANGES_V1, palw_user_views_v1::PalwCourtTargetV1};
     use kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1;
-    let invalid = || RpcError::General("a Batch quote needs a claim and stop, or a claim, ordinal and notice/leaf/target=bytes or notice/stop-full-ids".into());
+    let invalid = || RpcError::General("a Batch quote needs a claim and stop or verify-numerical, or a claim, ordinal and notice/leaf/target=bytes or notice/stop-full-ids".into());
     if !request.session_hex.is_empty() || !request.batch_target.is_empty() || request.batch_open.len() > 4_096 {
         return Err(invalid());
     }
     let claim = palw_user_view_hash64("claim", &request.claim_hex)?;
     if request.batch_open == "stop" {
         return request.batch_ordinal.is_empty().then_some(PalwCourtTargetV1::BatchStop { claim }).ok_or_else(invalid);
+    }
+    if request.batch_open == "verify-numerical" {
+        return request.batch_ordinal.is_empty().then_some(PalwCourtTargetV1::BatchVerifyNumerical { claim }).ok_or_else(invalid);
     }
     let ordinal = palw_batch_view_ordinal(&request.batch_ordinal)?;
     let (notice, selection) = request.batch_open.split_once('/').ok_or_else(invalid)?;
@@ -6279,6 +6282,11 @@ fn numerical_batch_open_selector_is_bounded_and_exclusive() {
     assert!(palw_batch_quote_target(&request).is_err());
     request.batch_ordinal.clear();
     assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchStop { .. })));
+    request.batch_open = "verify-numerical".into();
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchVerifyNumerical { .. })));
+    request.batch_ordinal = "0".into();
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_ordinal.clear();
     request.batch_target = "full-ids".into();
     assert!(palw_batch_quote_target(&request).is_err());
 }

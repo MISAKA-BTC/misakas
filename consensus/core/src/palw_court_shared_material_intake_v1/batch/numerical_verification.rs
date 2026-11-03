@@ -161,6 +161,61 @@ pub(crate) fn reserved_numerical_verification_slot_v1<'a>(
         .ok_or_else(|| "numerical Batch verification has no correctly sized slot".into())
 }
 
+pub(crate) fn quote_numerical_verification_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    params: &crate::palw_state_v2::PalwStateParamsV2,
+    claim: Hash64,
+    now: u64,
+    rules_at: impl FnOnce(u64) -> Option<(
+        crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+        NumericalBatchReplayProfileV1,
+    )>,
+) -> Result<serde_json::Value, String> {
+    use crate::palw_court_shared_tir_state_v1::context;
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    use crate::palw_state_v2::PalwBondStatusV2;
+    if state.staged_court_row_v1(&Key::CourtBatchNumericalReceipt(claim)).is_some() {
+        return Err("numerical Batch already has a verification receipt".into());
+    }
+    let scope = context(state, claim)?.scope_id;
+    let service = state.court_service_state_v1().ok_or("numerical Batch has no original service book")?;
+    let (verification, _) = batch_numerical_service_ids_v1(claim, scope).map_err(|_| "invalid numerical service identities")?;
+    let slot = service.book.assigned_daa(&verification).ok_or("numerical Batch has no reserved verification DAA")?;
+    if slot < now {
+        return Err("numerical Batch verification DAA has passed".into());
+    }
+    let (rules, profile) = rules_at(slot).ok_or("numerical Batch has no native replay profile at the booked DAA")?;
+    if rules.at.daa_score != slot || profile.service_profile != service.profile_id {
+        return Err("numerical Batch native replay profile differs from the original service book".into());
+    }
+    let policy = crate::palw_court_shared_tir_root_v1::shared_tir_root_policy_id_v1(&rules)?;
+    let cost = profile.budget.service_cost_v1().ok_or("invalid numerical Batch replay budget")?;
+    if !service.book.packet(&verification).is_some_and(|packet| packet.cost == cost) {
+        return Err("numerical Batch verification exceeds its reserved slot".into());
+    }
+    let prepared = super::native_ranges::prepare_numerical_batch_material_v1(state, claim, slot).map_err(|err| err.to_string())?;
+    let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(prepared.notice)) else {
+        return Err("numerical Batch has no accepted notice".into());
+    };
+    let signed = SignedNumericalBatchVerificationV1 {
+        version: 1, claim, scope, notice: prepared.notice, leaf: prepared.leaf, policy, filer: notice.opened_by, signature: vec![],
+    };
+    let frame = super::super::frame_of(state, claim)?;
+    super::check_external_batch_filer_v1(frame, signed.filer)?;
+    let bond = state.bond(&signed.filer).ok_or("numerical Batch filer is absent")?;
+    if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
+        return Err("numerical Batch filer is no longer eligible".into());
+    }
+    reserved_numerical_verification_slot_v1(state, &signed, slot)?;
+    Ok(serde_json::json!({
+        "wireVersion": signed.version,
+        "scopeId": scope.to_string(), "noticeId": signed.notice.to_string(), "leaf": signed.leaf.to_string(),
+        "policyId": policy.to_string(), "networkDomain": rules.network_domain.to_string(),
+        "signer": crate::palw_user_views_v1::palw_bond_key_text_v1(&signed.filer),
+        "assignedDaa": slot,
+    }))
+}
+
 /// Authenticate the verification control and charge the originally booked
 /// service before running the bounded replay.
 pub(crate) fn verify_rooted_numerical_batch_v1(

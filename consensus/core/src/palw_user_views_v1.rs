@@ -365,6 +365,7 @@ pub enum PalwCourtTargetV1 {
     NumericalBatchOpen { claim: Hash64, ordinal: usize, notice: Hash64, leaf: u64, lengths: Vec<(MaterialTargetV1, u64)> },
     BatchStopFullIdsOpen { claim: Hash64, notice: Hash64 },
     BatchStop { claim: Hash64 },
+    BatchVerifyNumerical { claim: Hash64 },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -381,7 +382,7 @@ pub fn palw_court_state_json_v1(
         PalwCourtTargetV1::Claim(c) => (c, None),
         PalwCourtTargetV1::Session(s) => (state.court_session(&s)?.claim, Some(s)),
         PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => return batch_response_json_v1(state, claim, ordinal, target, now),
-        PalwCourtTargetV1::BatchStop { .. } => return None, // Requires the node's native rules at the reserved DAA.
+        PalwCourtTargetV1::BatchStop { .. } | PalwCourtTargetV1::BatchVerifyNumerical { .. } => return None,
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
             return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
         }
@@ -475,6 +476,30 @@ pub fn palw_batch_stop_quote_json_v1(
         "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchStop", "nowDaa": now,
         "tipBlock": state.last_point().map(|point| point.block.to_string()),
         "claimId": claim.to_string(), "stop": stop, "error": error,
+    })
+}
+
+pub fn palw_batch_numerical_verify_quote_json_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    claim: Hash64,
+    now: u64,
+    rules_at: impl FnOnce(u64) -> Option<(
+        crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+        crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1,
+    )>,
+) -> Value {
+    let result = crate::palw_court_shared_material_intake_v1::batch::numerical_verification::quote_numerical_verification_v1(
+        state, params, claim, now, rules_at,
+    );
+    let (verify, error) = match result {
+        Ok(verify) => (verify, None),
+        Err(error) => (Value::Null, Some(error)),
+    };
+    json!({
+        "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchVerifyNumerical", "nowDaa": now,
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "claimId": claim.to_string(), "verify": verify, "error": error,
     })
 }
 

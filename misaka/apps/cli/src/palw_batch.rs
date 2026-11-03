@@ -6,9 +6,10 @@ use kaspa_consensus_core::{
         BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1,
         MAX_BATCH_RANGES_V1,
         carriage::{
-            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1,
+            BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1,
+            BatchCourtWireV1, BatchMaterialControlV1,
             BatchNumericalTerminalV1,
-            BatchStopSigningV1, MAX_BATCH_STOP_EOG_OPENING_BYTES_V1, SignedBatchDemandV1,
+            BatchStopSigningV1, MAX_BATCH_STOP_EOG_OPENING_BYTES_V1, SignedBatchDemandV1, SignedNumericalBatchVerificationV1,
         },
     },
     palw_freeprompt_v3::PalwFpStopReasonV3,
@@ -402,6 +403,76 @@ pub(crate) async fn respond(
     Ok(())
 }
 
+pub(crate) async fn verify_numerical(
+    ctx: &Ctx,
+    key_source: &KeySource,
+    bond: &str,
+    claim: &str,
+    notice: &str,
+    leaf: u64,
+    submit: bool,
+    maximum_fee: Option<u64>,
+) -> CliResult {
+    use crate::palw_user::parse_hash;
+    let claim = parse_hash("claim", claim)?;
+    let notice = parse_hash("notice", notice)?;
+    let request = GetPalwCourtStateRequest { claim_hex: claim.to_string(), batch_open: "verify-numerical".into(), ..Default::default() };
+    let (nv, key, filer) = crate::palw_user::bond_signer_v1(ctx, key_source, bond).await?;
+    let network = crate::bond::network_domain(&nv);
+    let (now, raw) = read_quote(&nv, request.clone()).await?;
+    let view: serde_json::Value = serde_json::from_str(&raw).map_err(|err| refused(err.to_string()))?;
+    let (mut signed, slot) = checked_numerical_verification_quote(&view, claim, notice, leaf, filer, network, now)?;
+    if now > slot || (submit && now != slot) {
+        return Err(refused(format!("numerical verification is booked at DAA {slot}, current fold DAA is {now}")));
+    }
+    let message = signed.signing_message_v1(network).map_err(refused)?;
+    signed.signature = key.sign_with_context(message.as_byte_slice(), BATCH_NUMERICAL_SIGNATURE_CONTEXT_V1).to_vec();
+    let wire = BatchCourtWireV1::VerifyNumerical(signed);
+    let (tx, fee, _) = fund_control(&nv, &key, &wire, maximum_fee).await?;
+    if submit {
+        if read_quote(&nv, request).await? != (now, raw) {
+            return Err(refused("the numerical verification reservation or selected tip changed before submission"));
+        }
+        nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|err| refused(err.to_string()))?;
+    }
+    println!("{}", serde_json::json!({
+        "submitted": submit, "txid": tx.id().to_string(), "claimId": claim.to_string(), "assignedDaa": slot,
+        "observedDaa": now, "feeSompi": fee, "noticeId": notice.to_string(), "leaf": leaf.to_string(),
+    }));
+    Ok(())
+}
+
+fn checked_numerical_verification_quote(
+    view: &serde_json::Value,
+    claim: Hash64,
+    notice: Hash64,
+    leaf: u64,
+    filer: PalwBondKeyV2,
+    network: Hash64,
+    now: u64,
+) -> Result<(SignedNumericalBatchVerificationV1, u64), CliError> {
+    use crate::palw_user::parse_hash;
+    if view["version"] != 1 || view["kind"] != "palwBatchVerifyNumerical" || view["claimId"] != claim.to_string()
+        || view["nowDaa"] != now || view["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
+    {
+        return Err(refused("the node returned a different numerical verification case"));
+    }
+    if let Some(error) = view["error"].as_str() {
+        return Err(refused(error));
+    }
+    let quote = &view["verify"];
+    if quote["wireVersion"] != 1 || quote["noticeId"] != notice.to_string() || quote["leaf"] != leaf.to_string()
+        || quote["signer"] != bond_text(filer) || quote["networkDomain"] != network.to_string()
+    {
+        return Err(refused("the numerical verification quote substituted the notice, leaf, signer or network"));
+    }
+    let read_hash = |key: &str| parse_hash(key, quote[key].as_str().ok_or_else(|| refused("the numerical verification quote omitted an ID"))?);
+    let slot = quote["assignedDaa"].as_u64().ok_or_else(|| refused("the numerical verification quote omitted the booked DAA"))?;
+    Ok((SignedNumericalBatchVerificationV1 {
+        version: 1, claim, scope: read_hash("scopeId")?, notice, leaf, policy: read_hash("policyId")?, filer, signature: vec![],
+    }, slot))
+}
+
 pub(crate) async fn convict_numerical(
     ctx: &Ctx,
     key_source: &KeySource,
@@ -640,6 +711,27 @@ fn bond_text(bond: PalwBondKeyV2) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numerical_verification_quote_binds_notice_leaf_signer_and_network() {
+        let h = Hash64::from_u64_word;
+        let filer = PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(h(6), 1));
+        let mut view = serde_json::json!({
+            "version": 1, "kind": "palwBatchVerifyNumerical", "claimId": h(1).to_string(), "nowDaa": 20,
+            "tipBlock": h(2).to_string(),
+            "verify": {
+                "wireVersion": 1, "scopeId": h(3).to_string(), "noticeId": h(4).to_string(), "leaf": u64::MAX.to_string(),
+                "policyId": h(5).to_string(), "signer": bond_text(filer), "networkDomain": h(7).to_string(), "assignedDaa": 21,
+            }
+        });
+        let (intent, slot) = checked_numerical_verification_quote(&view, h(1), h(4), u64::MAX, filer, h(7), 20).unwrap();
+        assert_eq!((intent.notice, intent.leaf, intent.policy, slot), (h(4), u64::MAX, h(5), 21));
+        assert!(checked_numerical_verification_quote(&view, h(1), h(9), u64::MAX, filer, h(7), 20).is_err());
+        assert!(checked_numerical_verification_quote(&view, h(1), h(4), 0, filer, h(7), 20).is_err());
+        assert!(checked_numerical_verification_quote(&view, h(1), h(4), u64::MAX, filer, h(9), 20).is_err());
+        view["verify"]["signer"] = format!("{}:0", h(6)).into();
+        assert!(checked_numerical_verification_quote(&view, h(1), h(4), u64::MAX, filer, h(7), 20).is_err());
+    }
 
     #[test]
     fn numerical_terminal_quote_requires_the_exact_claim_fault_and_slot() {

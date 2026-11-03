@@ -1755,6 +1755,24 @@ enum PalwCmd {
         #[arg(long)]
         maximum_fee_sompi: Option<u64>,
     },
+    /// Sign and fund numerical verification for the accepted notice and leaf.
+    BatchVerifyNumerical {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        notice: String,
+        #[arg(long)]
+        leaf: u64,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
     /// Fund the booked numerical fault terminal for an accepted finding.
     BatchConvict {
         #[command(flatten)]
@@ -3774,6 +3792,10 @@ async fn run_cli() -> std::process::ExitCode {
         }
         Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi, .. }) => {
             Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
+                submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchVerifyNumerical { key, bond, claim, notice, leaf, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::verify_numerical(ctx, &key.source(), &bond, &claim, &notice, leaf,
                 submit, maximum_fee_sompi).await })
         }
         Command::Palw(PalwCmd::BatchConvict { key, claim, submit, maximum_fee_sompi }) => {

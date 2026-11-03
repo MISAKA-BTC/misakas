@@ -1033,6 +1033,14 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         batch_numerical_profile_v1: Some(NumericalBatchReplayProfileV1 { service_profile: service.profile_id, budget: replay_budget }),
         ..extras
     };
+    let quote = crate::palw_user_views_v1::palw_batch_numerical_verify_quote_json_v1(&b.state, &params, claim, booked, |_| None);
+    assert_eq!(quote["error"], "numerical Batch has no native replay profile at the booked DAA");
+    let quote = crate::palw_user_views_v1::palw_batch_numerical_verify_quote_json_v1(&b.state, &params, claim, booked, |daa| {
+        assert_eq!(daa, booked);
+        Some((rules, extras.batch_numerical_profile_v1.unwrap()))
+    });
+    assert!(quote["verify"].is_null());
+    assert!(matches!(quote["error"].as_str(), Some("selected Batch material is missing" | "selected Batch FullIds are missing")));
     let mut incomplete = TransitionBuilder::new(&b.state, &params, false, false, false, false, &extras);
     let mut forged = verify.clone();
     let BatchCourtWireV1::VerifyNumerical(control) = &mut forged else { unreachable!() };

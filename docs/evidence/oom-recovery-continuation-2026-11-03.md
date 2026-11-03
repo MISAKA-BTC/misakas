@@ -4278,3 +4278,23 @@ The isolated Linux check of `587a1808c` is still active on IBM under
 `460e5e2f1da647b784dd040aab7462cf`. It is compiling dependencies
 with 6 GiB MemoryMax and one job. The newer RPC and CLI changes are
 outside that source snapshot.
+
+## Quote and sign the numerical verification carrier
+
+The operator Court RPC now accepts the verify-numerical selector.
+The quote resolves the native profile at the actual reservation,
+checks its cost and the accepted material, and returns the original
+notice issuer, leaf, network, scope and signing policy. The new
+`misaka palw batch-verify-numerical` command requires the claim,
+notice and leaf explicitly. It verifies the quote against the
+signer and network, signs the bounded carrier, and funds it.
+Broadcast requires the booked DAA and the same quote and tip
+immediately before submission. The shipped profile is unset.
+
+The extracted CLI quote test passed, including the full u64 leaf
+range and mismatched notice, leaf, signer and network. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-verify-cli-quote.SHpceB/tests.log`.
+Rust parsing and whitespace checks passed. The RPC selector and
+native missing-profile/missing-material assertions have not run.
+The earlier isolated Linux check remains active on its original
+`587a1808c` snapshot. No carrier was submitted.
