@@ -198,7 +198,7 @@ impl TransitionBuilder<'_> {
             None => Err(refusal("missing accepted Assignment journal head")),
         }
     }
-    fn check_assignment_next_journal_extent_v2(
+    pub(super) fn check_assignment_next_journal_extent_v2(
         &self,
         row: &AssignmentRow,
         head: &AssignmentJournalHeadRow,
@@ -1670,6 +1670,12 @@ impl TransitionBuilder<'_> {
             return Err(refusal("Case relation count differs from the original registered program"));
         }
         let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
+        let gate_c = rules.gate_c_clock(ctx.daa_score).map_err(refusal)?;
+        if payload.service.deadline < horizon.court_before_daa.max(gate_c.latest_failed_attestation_decision_daa)
+            || budget.retention_until < source.budget.retention_until
+        {
+            return Err(refusal("Case service does not cover the signed retention and decision windows"));
+        }
         if rules.funding_relay_profile().requires_relay() {
             let cutoff = self.initial_f_relay_service_cutoff_v2(
                 ctx,

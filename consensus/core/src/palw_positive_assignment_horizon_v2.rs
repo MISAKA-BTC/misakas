@@ -87,6 +87,28 @@ fn ceil(n: u64, d: u64) -> Result<u64, AssignmentHorizonErrorV2> {
     }
     Ok(n / d + u64::from(!n.is_multiple_of(d)))
 }
+/// First DAA at which the entire quoted liability and retention envelope
+/// can be closed. P release requires a DAA strictly after the last verdict.
+fn assignment_refund_start_v2(
+    clock: &AssignmentGateCClockV2,
+    latest_prosecution: u64,
+    liability_until: u64,
+    source_before: u64,
+    source_retention: u64,
+    prover_retention: u64,
+) -> Result<u64, AssignmentHorizonErrorV2> {
+    let required = clock
+        .no_draw_expiry_daa
+        .max(clock.latest_failed_attestation_decision_daa)
+        .max(add(latest_prosecution, 1)?)
+        .max(liability_until)
+        .max(source_before)
+        .max(prover_retention);
+    if source_retention < required {
+        return Err(AssignmentHorizonErrorV2::Window);
+    }
+    Ok(source_retention)
+}
 impl AssignmentHorizonSpecV2 {
     /// Pure quote. The native factory must resolve certification from the
     /// actual original Params (not choose a shorter one), prove the INITIAL
@@ -135,23 +157,26 @@ impl AssignmentHorizonSpecV2 {
             return Err(AssignmentHorizonErrorV2::Window);
         }
         let latest_prosecution = clock.prosecution_not_before_daa(court_before)?;
-        let last_p = clock.no_draw_expiry_daa.max(clock.latest_failed_attestation_decision_daa).max(latest_prosecution);
         // This numeric tail is an ORIGINAL signed liability rule, not the
         // pending-fraud proof. A real closed-ingress owner is mandatory.
         let liability_until = add(court_before, assignment.fraud_tail_daa)?;
-        let service_need = court_before.max(clock.latest_attestation_deadline_daa);
+        let service_need = court_before.max(clock.latest_failed_attestation_decision_daa);
         if source.service_before_daa < service_need {
             return Err(AssignmentHorizonErrorV2::Window);
         }
-        let end = last_p.max(liability_until).max(source.service_before_daa).max(prover.retention_until_daa);
-        let refund_before = add(end, assignment.refund_window_daa)?;
-        // max_retention_daa is a cap, not an additive period. The actual
-        // native rollback/custody owner must additionally cover its own tail
-        // before this prospective data can support an admission.
-        let retention_until = refund_before.max(source.budget.retention_until).max(prover.retention_until_daa);
-        if retention_until.checked_sub(now).is_none_or(|n| n > positive.max_retention_daa)
-            || retention_until > terms.reserve_until_daa
-            || source.budget.retention_until < end
+        let refund_start = assignment_refund_start_v2(
+            &clock,
+            latest_prosecution,
+            liability_until,
+            source.service_before_daa,
+            source.budget.retention_until,
+            prover.retention_until_daa,
+        )?;
+        let refund_before = add(refund_start, assignment.refund_window_daa)?;
+        // The retention cap includes the whole refund window after the signed
+        // source duty. Native rollback/custody must cover its own tail as well.
+        let retention_until = refund_before;
+        if retention_until.checked_sub(now).is_none_or(|n| n > positive.max_retention_daa) || retention_until > terms.reserve_until_daa
         {
             return Err(AssignmentHorizonErrorV2::Window);
         }
@@ -215,5 +240,32 @@ impl AssignmentHorizonSpecV2 {
             case_money,
             positive_policy: assignment.positive_policy,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refund_window_starts_after_the_signed_retention_and_last_gate_c_verdict() {
+        let policy = PalwSecurityCertificationPolicyV1 {
+            m: 3,
+            k: 2,
+            attest_window_daa: 5,
+            certify_by_daa: 7,
+            prosecution_window_daa: 20,
+            draws_per_epoch: 4,
+            epoch_daa: 11,
+            ..Default::default()
+        };
+        let clock = AssignmentGateCClockV2::from_existing_policy(&policy, 100).unwrap();
+        let latest = clock.prosecution_not_before_daa(130).unwrap();
+        assert_eq!(latest, 150);
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 150, 144), Err(AssignmentHorizonErrorV2::Window));
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 151, 144), Ok(151));
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 180, 144), Ok(180));
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 180, 181), Err(AssignmentHorizonErrorV2::Window));
+        assert_eq!(assignment_refund_start_v2(&clock, u64::MAX, 140, 132, u64::MAX, 144), Err(AssignmentHorizonErrorV2::Overflow));
     }
 }
