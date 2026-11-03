@@ -1827,8 +1827,10 @@ impl TransitionBuilder<'_> {
             work_before,
         )?;
         let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
-        let expired = matches!(replayed.outcome, crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2::Expired);
-        let journal = (expired || source.as_ref().is_some_and(|update| update.changes_case()))
+        use crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2;
+        let expired = matches!(replayed.outcome, LocalCourtOutcomeV2::Expired);
+        let passed = matches!(replayed.outcome, LocalCourtOutcomeV2::Finished(TerminalKindV2::PositivePassed));
+        let journal = (expired || passed || source.as_ref().is_some_and(|update| update.changes_case()))
             .then(|| {
                 self.prepare_assigned_case_journal_v2(
                     backing,
@@ -1848,10 +1850,21 @@ impl TransitionBuilder<'_> {
         {
             return Err(refuse("current Court operation exceeds signed service usage"));
         }
-        if expired {
+        if expired || passed {
             use misaka_palw_positive_contract::{messages::WitnessStatus, rows::CoverageState};
+            let (positive_witness, coverage_descriptor, coverage_state) = if passed {
+                let fact = machine.facts.last().ok_or_else(missing)?;
+                if fact.case() != prior.case || fact.result() != prior.result || fact.scope() != prior.coverage.scope {
+                    return Err(refuse("checked Finish differs from the rooted Case"));
+                }
+                (Some(fact.witness()), fact.terminal().descriptor(), CoverageState::Matched)
+            } else {
+                (None, prior.coverage, CoverageState::EndedUnverified)
+            };
             let case = CaseRow {
                 status: replayed.after.status,
+                positive_witness,
+                coverage: coverage_descriptor,
                 witness_status: replayed.after.last_attempt.map_or(WitnessStatus::Building, |attempt| attempt.status),
                 last_event: origin,
                 ..prior
@@ -1861,9 +1874,9 @@ impl TransitionBuilder<'_> {
             let result = (|| {
                 if let Some(attempt) = replayed.before.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) {
                     let NativeRowBody::Coverage(mut coverage) = required(&self.state, NativeRowKey::Coverage(attempt.witness))? else {
-                        return Err(refuse("expiry requires the active Coverage row"));
+                        return Err(refuse("Court terminal requires the active Coverage row"));
                     };
-                    coverage.state = CoverageState::EndedUnverified;
+                    coverage.state = coverage_state;
                     coverage.last_event = origin;
                     self.write_assignment_aux_v2(NativeRowBody::Coverage(coverage))?;
                 }
