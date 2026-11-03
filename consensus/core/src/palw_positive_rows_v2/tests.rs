@@ -223,12 +223,18 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         assert_eq!(p.positive_positions(), 3);
         assert_eq!(route.due_positive_certification_subjects_v2(deadline + 1).next(), None);
         assert_eq!(positive_certification_failure_v2(&p, deadline + 1, true), None);
+        let prosecution = finality.origin.accepted_daa + h.policy.prosecution_window_daa;
+        assert_eq!(route.due_positive_quorum_subjects_v2(prosecution - 1).next(), None);
+        assert!(route.due_positive_quorum_subjects_v2(prosecution).eq([subject]));
+        let restored: PalwKernelRouteStateV1 = borsh::from_slice(&borsh::to_vec(&route).unwrap()).unwrap();
+        assert!(restored.due_positive_quorum_subjects_v2(prosecution).eq([subject]));
 
         p.votes[0].statement.verdict = PositiveCourtVerdictV2::NotReproducible;
         p.votes[0].liability_amount = 0;
         install(&mut route, &p);
         assert_eq!(route.due_positive_certification_subjects_v2(at - 1).next(), None);
         assert!(route.due_positive_certification_subjects_v2(at).eq([subject]));
+        assert_eq!(route.due_positive_quorum_subjects_v2(u64::MAX).next(), None);
         assert_eq!(positive_certification_failure_v2(&p, at, true), Some(PositiveCertificationOutcomeV2::Vetoed));
         p.votes.clear();
         install(&mut route, &p);

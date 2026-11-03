@@ -15612,6 +15612,7 @@ fn apply_palw_transition_v7_inner(
     // 3″. G14 lane D: the kernel route's closing step — demand deadlines, windows, Final, liability release, and the settlements
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
+    builder.decide_due_positive_certification_failures_v2(ctx)?;
     source_bootstrap_v1::settle(&mut builder, ctx)?;
     #[cfg(test)]
     for (table, key, row) in &extras.exec_v2_test_kernel_rows {
