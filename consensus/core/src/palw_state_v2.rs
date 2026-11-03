@@ -13679,8 +13679,6 @@ struct TransitionBuilder<'a> {
     assignment_case_materials: Vec<PositiveCaseAcceptedMaterialV2>,
     assignment_active_raw: Option<PositiveAssignmentRawActionV2>,
     assignment_raw_boundary: Option<(Hash64, usize)>,
-    assignment_case_cache:
-        BTreeMap<misaka_palw_positive_contract::identity::CaseId, positive_assignment_case::NativeAssignedCaseCacheV2>,
     native_reservation: crate::palw_native_resource_v1::NativeTransitionReservationV1,
     claim_local_gc_undo_v3: BTreeMap<u64, palw_claim_local_context_gc_v3::GcUndoV3>,
     claim_local_gc_sequence_v3: u64,

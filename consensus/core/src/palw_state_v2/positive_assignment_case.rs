@@ -9,7 +9,6 @@ use crate::{
     palw_positive_assignment_case_material_v2::assigned_case_native_carrier_matches_v2,
     palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2,
     palw_positive_common_replay_v2::LocalCheckedCourtFactV2,
-    palw_positive_common_source_replay_v2::CommonSourceReplayStateV2,
     palw_positive_contract_v2::PreparedCheck,
     palw_positive_court_v2::coordinator::{
         carrier::{PanelFrameAuthorityV2, PanelSignatureVerifierV2},
@@ -139,23 +138,6 @@ impl ClosedAssignedFraudV2 {
     }
 }
 
-/// Actual retained nonserialized machine. Native writer owns this map and drops
-/// it on checkpoint rollback/DB failure/reorg. `root` is refreshed only AFTER
-/// successful native row/journal writes; mismatches require one cold full replay.
-/// `ContractCourtV2` and `PreparedCheck` have no Deserialize path.
-pub(super) struct NativeAssignedCaseCacheV2 {
-    root: Hash64,
-    context: PalwBlockContextV2,
-    assignment: AssignmentRow,
-    material: AssignmentAdmissionMaterialV2,
-    pin: CaseJournalPinV2,
-    checker: NativeAssignedCourtV2,
-    source: CommonSourceReplayStateV2,
-    terminal_material: Option<AcceptedMaterial>,
-    positive_final: Option<AcceptedOrigin>,
-    _lease: NativeDemandLeaseV1,
-}
-
 /// Arithmetic replay keeps the checked state and its native allocation owner
 /// together. Source charges and Gate C votes have separate replay owners.
 struct NativeAssignedCourtV2 {
@@ -164,6 +146,7 @@ struct NativeAssignedCourtV2 {
     authority: NativeAssignedPanelAuthorityV2,
     court: ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
     facts: Vec<LocalCheckedCourtFactV2>,
+    positive_final: Option<AcceptedMaterial>,
     check_limits: crate::palw_positive_check_v2::CheckLimits,
     source: crate::palw_positive_assignment_resources_v2::ReservedAssignmentSourceGeometryV2,
     source_requests:
@@ -419,63 +402,74 @@ pub(super) fn reject_legacy_aliases(
     Ok(())
 }
 
-impl NativeAssignedCaseCacheV2 {
-    pub(super) fn session<'a>(
+impl NativeAssignedCourtV2 {
+    fn bind_positive_finish_v2(&mut self, material: AcceptedMaterial) -> Result<(), PalwStateV2Error> {
+        if self.positive_final.is_some() {
+            return Err(refuse("duplicate checked Positive Finish"));
+        }
+        self.positive_final = Some(material);
+        Ok(())
+    }
+
+    fn session<'a>(
         &'a self,
         state: &PalwChainStateV2,
         ctx: &PalwBlockContextV2,
+        backing: &'a NativeCommittedAssignedCaseV2,
     ) -> Result<NativeAssignedCaseSessionV2<'a>, PalwStateV2Error> {
-        if self.root != state.state_root() || self.context != *ctx {
-            return Err(refuse("cache root/context stale; cold replay required"));
-        }
-        let (a, bundle, pin) = rooted_bundle(state, self.assignment.id())?;
-        self.material.check_row(&a).map_err(refuse)?;
-        if a != self.assignment
-            || pin != self.pin
-            || self.source.case_row().map_err(refuse)? != bundle.case
-            || self.checker.court.result() != &bundle.result.result
+        let (a, bundle, pin) = rooted_bundle(state, backing.assignment().id())?;
+        let material = backing.material();
+        material.check_row(&a).map_err(refuse)?;
+        if a.bundle != backing.assignment().bundle
+            || a.admission_material != backing.assignment().admission_material
+            || pin.scope != backing.pin().scope
+            || pin.case != backing.pin().case
+            || pin.result != backing.pin().result
+            || self.court.result() != &bundle.result.result
             || bundle.case.unresolved_fraud != 0
         {
             return Err(refuse("actual replay before rows disagree"));
         }
-        let terminal = self.checker.facts.last();
-        let material = self.terminal_material.ok_or_else(missing)?;
-        let fact = terminal.ok_or_else(missing)?;
+        check_replayed_court_projection_v2(state, &bundle.case, snapshot(&self.court))?;
+        self.check_source_fee_projection_v2(&bundle.case)?;
+        self.check_source_union_projection_v2(state, &bundle.case)?;
+        let final_material = self.positive_final.ok_or_else(missing)?;
+        let fact = self.facts.last().ok_or_else(missing)?;
         if fact.case() != pin.case
             || fact.result() != pin.result
             || fact.scope() != pin.scope
+            || fact.terminal_kind() != TerminalKindV2::PositivePassed
             || fact.terminal().descriptor() != bundle.case.coverage
-            || bundle.case.positive_witness != (fact.terminal_kind() == TerminalKindV2::PositivePassed).then_some(fact.witness())
+            || bundle.case.positive_witness != Some(fact.witness())
         {
             return Err(refuse("actual checked terminal/coverage links"));
         }
-        let origin = self.positive_final.ok_or_else(missing)?;
-        if origin != material.origin || origin.accepted_daa > ctx.daa_score {
-            return Err(refuse("Finish material/origin"));
+        let origin = final_material.origin;
+        if origin.accepted_daa > ctx.daa_score || origin.accepted_blue_score > ctx.blue_score {
+            return Err(refuse("future checked Finish"));
         }
         let latest = origin
             .accepted_daa
-            .checked_add(self.material.certification_policy.prosecution_window_daa)
+            .checked_add(material.certification_policy.prosecution_window_daa)
             .ok_or_else(|| refuse("finite actual Final prosecution"))?;
         // The native release path starts strictly after the last decision.
-        // Preserve the entire original refund window after that point.
         let refund_before = latest
             .checked_add(1)
-            .and_then(|daa| daa.max(bundle.case.maturity_daa).checked_add(self.material.assignment_policy.refund_window_daa))
+            .and_then(|daa| daa.max(bundle.case.maturity_daa).checked_add(material.assignment_policy.refund_window_daa))
             .ok_or_else(|| refuse("finite actual Final refund window"))?;
         if refund_before > a.bundle.terms.reserve_until_daa {
             return Err(refuse("actual Final exceeds original liability and refund reservation"));
         }
         let session = NativeAssignedCaseSessionV2 {
-            root: self.root,
+            root: state.state_root(),
             context: *ctx,
             assignment: a.id(),
-            result: self.checker.court.result(),
+            result: self.court.result(),
             case: bundle.case,
             head: pin.head,
-            policy: &self.material.certification_policy,
-            terminal,
-            material,
+            policy: &material.certification_policy,
+            terminal: Some(fact),
+            material: final_material,
             positive_final: Some(origin),
             closed: ClosedAssignedFraudV2 { latest_decision_daa: latest, pending: false },
         };
@@ -634,31 +628,6 @@ fn find_prover_step(
         });
     }
     Ok(resolved)
-}
-
-impl NativeAssignedCaseCacheV2 {
-    /// Advances the SAME real global Court, with A1 authentication/evaluation.
-    /// Caller must own event work/heap, exact current root/head and native raw
-    /// acceptance. Any failure after mutation drops this cache and restores the
-    /// enclosing native checkpoint; there is no reusable prepared-row DTO.
-    fn advance_court(
-        &mut self,
-        state: &PalwChainStateV2,
-        ctx: &PalwBlockContextV2,
-        action: &PositiveAssignmentRawActionV2,
-        body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
-    ) -> Result<NativeAssignedCourtAdvanceV2, PalwStateV2Error> {
-        if state.state_root() != self.root
-            || self.context != *ctx
-            || action.origin().accepting_block.0 != ctx.block.as_bytes()
-            || action.origin().accepted_daa != ctx.daa_score
-            || action.origin().accepted_blue_score != ctx.blue_score
-            || !canonical_equal(body, action.transaction().payload.get(3..).ok_or_else(missing)?)
-        {
-            return Err(refuse("actual native Case current prefix/raw operation"));
-        }
-        self.checker.advance(state, (&self.assignment, &self.material, self.pin), action.origin(), body)
-    }
 }
 
 impl NativeAssignedCourtV2 {
@@ -1357,6 +1326,7 @@ fn prepare_initial_case_checker_v2(
         authority,
         court,
         facts,
+        positive_final: None,
         check_limits,
         source,
         source_requests: BTreeMap::new(),
@@ -2071,6 +2041,42 @@ fn replay_assigned_court_history_v2(
                         return Err(refuse("archived Finish differs from exact checker replay"));
                     }
                 }
+                if case.status == misaka_palw_positive_contract::messages::ClaimStatus::PositivePassed {
+                    let NativeRowBody::JournalHead(head) = required(after, NativeRowKey::JournalHead(pin.case))? else {
+                        return Err(refuse("archived Finish has no rooted head"));
+                    };
+                    let limits = CaseJournalLimits {
+                        max_record_bytes: material.positive_policy.max_case_journal_bytes,
+                        max_payload_bytes: material.positive_policy.max_case_journal_bytes,
+                        max_aux_entries: 2,
+                        max_aux_preimage_bytes: crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2
+                            as u64,
+                        max_total_preimage_bytes: material.positive_policy.max_case_journal_bytes,
+                        max_logical_heap_bytes: material.positive_policy.max_case_heap_bytes,
+                    };
+                    let record = CaseJournalRecordView::decode(record.raw(), limits).map_err(refuse)?;
+                    let header = record.header();
+                    if header.scope != pin.scope
+                        || header.case != pin.case
+                        || header.result != pin.result
+                        || header.origin != carriage.origin()
+                        || !assigned_case_native_carrier_matches_v2(carriage.transaction(), record)
+                        || head.sequence != header.sequence
+                        || head.previous != header.previous
+                        || head.head != record.head()
+                        || head.history != record.history()
+                    {
+                        return Err(refuse("archived Finish head differs from literal checked material"));
+                    }
+                    let witness = case.positive_witness.ok_or_else(missing)?;
+                    super::positive_assignment_certification::check_rooted_positive_finish_v2(
+                        after,
+                        machine.court.result(),
+                        witness,
+                        head.history,
+                    )?;
+                    machine.bind_positive_finish_v2(head.history)?;
+                }
             }
             if matches!(&body.operation, Op::Expire { .. }) {
                 let (expected_case, expected_coverage) =
@@ -2300,7 +2306,21 @@ impl TransitionBuilder<'_> {
             )?;
             self.write_assignment_aux_v2(NativeRowBody::Coverage(coverage))?;
             self.write_assignment_aux_v2(NativeRowBody::Case(case))?;
-            return self.write_assigned_case_followup_journal_v2(backing);
+            self.write_assigned_case_followup_journal_v2(backing)?;
+            if case.status == misaka_palw_positive_contract::messages::ClaimStatus::PositivePassed {
+                let NativeRowBody::JournalHead(head) = required(&self.state, NativeRowKey::JournalHead(case.case))? else {
+                    return Err(refuse("checked Finish has no new journal head"));
+                };
+                if head.history.origin != origin {
+                    return Err(refuse("checked Finish journal origin differs from native carrier"));
+                }
+                machine.bind_positive_finish_v2(head.history)?;
+                let session = machine.session(&self.state, ctx, backing)?;
+                self.advance_positive_certification_session_v2(ctx, &session)?;
+                // Include the Gate C target write in the same archived event.
+                self.assignment_case_materials.last_mut().ok_or_else(missing)?.delta_end = self.entries.len();
+            }
+            return Ok(());
         }
         if expires {
             let (case, coverage) = project_assigned_case_expiry_v2(&self.state, &prior, &replayed, origin)?;
