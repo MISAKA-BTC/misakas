@@ -4,7 +4,7 @@
 //! the actual global/local reservations. Actual C/Finish/P recheck the same
 //! original policy; a positive-row counter or caller TTL is never that owner.
 use crate::{
-    config::params::PositiveCourtPolicyV2,
+    config::params::{AssignmentFundingRelayProfileV2, PositiveCourtPolicyV2},
     palw_positive_assignment_certification_v2::{AssignmentGateCClockErrorV2, AssignmentGateCClockV2},
     palw_positive_assignment_resources_v2::{
         AssignmentCaseFeeScheduleV2, AssignmentCaseMoneyQuoteV2, AssignmentDerivedResourcesV2, AssignmentResourceErrorV2,
@@ -102,6 +102,7 @@ impl AssignmentHorizonSpecV2 {
         positive: &PositiveCourtPolicyV2,
         certification: &PalwSecurityCertificationPolicyV1,
         case_fees: &AssignmentCaseFeeScheduleV2,
+        funding_relay: &AssignmentFundingRelayProfileV2,
         resources: &AssignmentDerivedResourcesV2,
         max_source_units_per_request: u64,
         now: u64,
@@ -180,12 +181,17 @@ impl AssignmentHorizonSpecV2 {
         {
             return Err(AssignmentHorizonErrorV2::Budget);
         }
-        let case_money = case_fees.quote(
-            &catalog,
-            resources.all_attempt_relations(),
-            record_bytes_all_attempts,
-            source.budget.retained_bytes.max(positive.max_case_journal_bytes),
-        )?;
+        let retained = source.budget.retained_bytes.max(positive.max_case_journal_bytes);
+        let retained = match funding_relay {
+            AssignmentFundingRelayProfileV2::CooperativeV1 => retained,
+            AssignmentFundingRelayProfileV2::RequiresRelayV2 { policy, .. } => add(
+                retained,
+                misaka_palw_positive_contract::assignment::funding_relay_policy::case_relay_bound_retained_bytes_v2(
+                    policy.max_account_continuations,
+                )?,
+            )?,
+        };
+        let case_money = case_fees.quote(&catalog, resources.all_attempt_relations(), record_bytes_all_attempts, retained)?;
         if case_money.fee > bundle.future_case.max_case_fee
             || case_money.capital > bundle.future_case.max_case_capital
             || add(case_money.fee, case_money.capital)? > bundle.future_case.max_case_locked

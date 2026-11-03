@@ -1436,3 +1436,13 @@ the committed base and its matching cached dependencies. The first unit
 typecheck caught an extra field in a carriage-only test pattern, which
 was removed. The archive records both outcomes. Runtime coverage remains
 limited to the standalone lookup regression.
+
+### Integrated bound Case restore and retention quote
+
+Warnings-denied Contract, Core and Consensus library Clippy and the two
+focused Core test-target checks passed on one unchanged native source map.
+The [guarded logs and source maps](case-relay-bound-slot-integrated-20261103.tar.gz)
+record both results. This integrates the bound restore crosslinks and exact
+slot quote. The guarded commands typechecked the regressions. The isolated
+crosslink and literal-byte checks described above are the runtime evidence
+for this change.

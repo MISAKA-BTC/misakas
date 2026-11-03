@@ -71,6 +71,7 @@ fn assignment_horizon_v2(
         rules.positive_policy(),
         certification,
         &preimages.case_fees,
+        rules.funding_relay_profile(),
         resources,
         preimages.source_policy.max_units_per_request,
         original_daa,

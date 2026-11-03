@@ -377,6 +377,25 @@ fn native_fixed_row_scanner_matches_all_targets_and_optional_bound_package() {
             }),
         };
         custody.check_pair(&auth).unwrap();
+        if matches!(variant, 1 | 3) {
+            let authorization = NativeRowValue::new(NativeRowBody::FundingRelayAuthorization(auth.clone())).unwrap();
+            let bound = NativeRowValue::new(NativeRowBody::FundingRelayCustody(custody.clone())).unwrap();
+            let actual = [
+                authorization.body.key().encode().len(),
+                authorization.encode().unwrap().len(),
+                bound.body.key().encode().len(),
+                bound.encode().unwrap().len(),
+                2 * FUNDING_RELAY_MATERIAL_KEY_BYTES_V2,
+                raw.len() + 3,
+                FUNDING_RELAY_CHARGE_BYTES_V2,
+            ]
+            .into_iter()
+            .sum::<usize>() as u64;
+            let initial = case_relay_bound_retained_bytes_v2(0).unwrap();
+            let quoted = if variant == 1 { initial } else { case_relay_bound_retained_bytes_v2(1).unwrap() - initial };
+            assert_eq!(actual, quoted);
+        }
+
         for body in [NativeRowBody::FundingRelayAuthorization(auth), NativeRowBody::FundingRelayCustody(custody)] {
             let row = NativeRowValue::new(body).unwrap();
             let raw = row.encode().unwrap();
@@ -420,4 +439,66 @@ fn case_relay_requires_original_open_and_registration_replay_budget() {
         assert_eq!(check_case_relay_minimum_replay_v2(&terms, &short, payload_bytes), Err(ContractError::Budget));
     }
     assert_eq!(check_case_relay_minimum_replay_v2(&terms, &physical, 0), Err(ContractError::Budget));
+}
+
+#[test]
+fn bound_case_relay_requires_the_canonical_assignment_use() {
+    use kaspa_consensus_core::palw_positive_rows_v2::PositiveRowErrorV2;
+
+    let (mut body, key) = fixture();
+    let keys = mldsa::generate_key_pair([51; 32]);
+    body.terms.funding_purpose = RelayFundingPurposeV2::CaseC;
+    let consent = FundingConsentId(d(63));
+    body.terms.target = RelayTargetV2::InitialCase { result: ResultId(d(61)), funding_scope: FundingScopeId(d(62)), consent };
+    body.purpose_signature =
+        *mldsa::sign(&keys.signing_key, &body.terms.id().0, FUNDING_RELAY_REGISTER_CONTEXT_V2, [68; 32]).unwrap().as_ref();
+    let origin = AcceptedOrigin {
+        accepting_block: NativeHash64([69; 64]),
+        carrier_block: NativeHash64([70; 64]),
+        carrier_transaction: NativeHash64([71; 64]),
+        accepted_tx_ordinal: 1,
+        event_ordinal: 0,
+        accepted_daa: 50,
+        accepted_blue_score: 50,
+    };
+    let (fees, physical, policy) = metadata_preimages();
+    let fee = fees.registration_quote(&policy, &physical, &body.terms, origin.accepted_daa).unwrap().fee;
+    let (auth, mut custody) = FundingRelayAuthorizationRowV2::registration_rows(
+        &body,
+        key,
+        origin,
+        policy,
+        fees,
+        physical,
+        FundingRelayCarrierFeesV2::new(fee, 0, fee, 0).unwrap(),
+    )
+    .unwrap();
+    let encode = |body| {
+        let row = NativeRowValue::new(body).unwrap();
+        ((KERNEL_AUX_TABLE, row.body.key().encode()), row.encode().unwrap())
+    };
+    let mut rows = std::collections::BTreeMap::from([
+        encode(NativeRowBody::FundingRelayAuthorization(auth.clone())),
+        encode(NativeRowBody::FundingRelayCustody(custody.clone())),
+    ]);
+    assert_eq!(validate_positive_aux_restore_v2(&rows).unwrap().rows, 2);
+
+    let bound_origin = AcceptedOrigin {
+        carrier_transaction: body.terms.funding_outpoint.transaction,
+        accepting_block: NativeHash64([73; 64]),
+        accepted_daa: 150,
+        accepted_blue_score: 150,
+        ..origin
+    };
+    custody.binding = Some(FundingRelayBindingV2 {
+        origin: bound_origin,
+        original_funding: body.terms.funding_outpoint,
+        predecessor: None,
+        original_contract: consent.0,
+        reservation: AcceptedMaterial { origin: bound_origin, digest: d(76) },
+    });
+    custody.check_pair(&auth).unwrap();
+    let (key, value) = encode(NativeRowBody::FundingRelayCustody(custody));
+    rows.insert(key, value);
+    assert!(matches!(validate_positive_aux_restore_v2(&rows), Err(PositiveRowErrorV2::MissingRequiredRow)));
 }
