@@ -4679,6 +4679,16 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.pruning_point_palw_state_shared_v1_impl(point)
     }
 
+    fn try_pruning_point_palw_state_shared_v1(
+        &self,
+        point: BlockHash,
+    ) -> Result<
+        Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>>,
+        kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1,
+    > {
+        self.virtual_processor.try_pruning_point_palw_state_shared_v1_impl(point)
+    }
+
     fn palw_class_carriages_for_snapshot_v1(
         &self,
         snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,

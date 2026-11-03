@@ -2532,6 +2532,19 @@ pub trait ConsensusApi: Send + Sync {
             .map(std::sync::Arc::new)
     }
 
+    /// Fallible shared read for serving diagnostics. Only a dormant lane or an
+    /// uncaptured/mismatching point is absence; local read failures remain errors.
+    /// Implementations without a checked read must not claim that a snapshot is absent.
+    fn try_pruning_point_palw_state_shared_v1(
+        &self,
+        _point: crate::BlockHash,
+    ) -> Result<
+        Option<std::sync::Arc<crate::palw_native_resource_v1::NativeStateCarriageV1>>,
+        crate::errors::pruning::PruningSnapshotReadErrorV1,
+    > {
+        Err(crate::errors::pruning::PruningSnapshotReadErrorV1::Unsupported)
+    }
+
     /// Snapshot-bound material, with explicit negotiated complete coverage.
     fn palw_class_carriages_for_snapshot_v1(
         &self,

@@ -18,6 +18,25 @@ fn tir_conviction_preflight_outcome_v2(
     }
 }
 
+fn pruning_snapshot_read_error_v1(
+    error: kaspa_database::prelude::StoreError,
+) -> kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1 {
+    use kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1 as ReadError;
+    use kaspa_database::prelude::StoreError;
+    match error {
+        StoreError::LocalResourceUnavailable(_) => ReadError::ResourceUnavailable,
+        StoreError::DbError(error) if error.kind() == rocksdb::ErrorKind::Corruption => ReadError::Corrupt,
+        StoreError::DbError(_) => ReadError::StorageUnavailable,
+        // The optional top-level snapshot/key has already been handled by the
+        // loader. A missing required nested row is not an uncaptured snapshot.
+        StoreError::KeyNotFound(_)
+        | StoreError::KeyAlreadyExists(_)
+        | StoreError::HashAlreadyExists(_)
+        | StoreError::DataInconsistency(_)
+        | StoreError::DeserializationError(_) => ReadError::Corrupt,
+    }
+}
+
 impl VirtualStateProcessor {
     /// **The 2026-09-23 Position route matrix, P-B3, at the mempool and at the template: the fold's
     /// market gate on a carrier before it relays and before it is mined.**
@@ -3153,8 +3172,18 @@ impl VirtualStateProcessor {
         &self,
         point: BlockHash,
     ) -> Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>> {
-        let params = self.palw_state_params_v2.as_ref()?;
-        self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, point).ok().flatten()
+        self.try_pruning_point_palw_state_shared_v1_impl(point).ok().flatten()
+    }
+
+    pub fn try_pruning_point_palw_state_shared_v1_impl(
+        &self,
+        point: BlockHash,
+    ) -> Result<
+        Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>>,
+        kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1,
+    > {
+        let Some(params) = self.palw_state_params_v2.as_ref() else { return Ok(None) };
+        self.palw_state_v2_store.read().load_pruning_snapshot_carriage_cached(params, point).map_err(pruning_snapshot_read_error_v1)
     }
 
     /// Declarations bound to the requested snapshot, never to this node's tip.
@@ -11832,5 +11861,30 @@ mod tir_preflight_fault_tests_v2 {
         }
         assert!(matches!(tir_conviction_preflight_outcome_v2(Err(E::MissingClaim(Default::default()))), Ok(Some(Err(_)))));
         assert!(matches!(tir_conviction_preflight_outcome_v2(Ok(())), Ok(Some(Ok(())))));
+    }
+}
+
+#[cfg(test)]
+mod pruning_snapshot_read_fault_tests_v1 {
+    use super::pruning_snapshot_read_error_v1;
+    use kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1 as ReadError;
+    use kaspa_database::prelude::{DbKey, StoreError};
+
+    #[test]
+    fn snapshot_local_faults_preserve_category_without_store_payload() {
+        for (error, expected) in [
+            (StoreError::LocalResourceUnavailable("private diagnostic payload".into()), ReadError::ResourceUnavailable),
+            (StoreError::DataInconsistency("private row payload".into()), ReadError::Corrupt),
+            (StoreError::KeyNotFound(DbKey::prefix_only(&[0x81])), ReadError::Corrupt),
+            (
+                StoreError::DeserializationError(Box::new(bincode::ErrorKind::Custom("private codec payload".into()))),
+                ReadError::Corrupt,
+            ),
+        ] {
+            let classified = pruning_snapshot_read_error_v1(error);
+            assert_eq!(classified, expected);
+            assert!(!classified.to_string().contains("private"));
+            assert!(!format!("{classified:?}").contains("private"));
+        }
     }
 }
