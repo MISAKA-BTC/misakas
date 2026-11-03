@@ -1054,11 +1054,56 @@ impl TransitionBuilder<'_> {
         self.write_staged_row_v1(PalwStagedCourtKeyV1::CourtService, Some(row))
     }
 
+    /// Private native installation seam. A future funded carrier must supply
+    /// the accepted parent and bounded replayable operands. A decoded row
+    /// cannot enter through this function or the generic staged writer.
+    pub(super) fn install_verified_tokenizer_registration_v1(
+        &mut self,
+        accepted_parent: &PalwChainStateV2,
+        point: PalwBlockContextV2,
+        pins: crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2,
+        raw: &[u8],
+        eog: &crate::palw_fp_constraint_job_v1::PalwTokenTableEogOpeningV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_tokenizer_rendering_v2::{PalwRootedTokenizerRegistrationRowV1, PalwVerifiedTokenizerRegistrationErrorV1};
+        let key = PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(pins.class_id, pins.semantics_id);
+        if self.state.last_point() != accepted_parent.last_point() || self.state.staged_courts.contains_key(&key) {
+            return Err(PalwStateV2Error::ImmutableModelUpdate("tokenizer registration changes the parent or an installed row"));
+        }
+        let row = PalwRootedTokenizerRegistrationRowV1::derive(accepted_parent, self.extras, point, pins, raw, eog).map_err(
+            |why| match why {
+                PalwVerifiedTokenizerRegistrationErrorV1::Capacity(capacity) => {
+                    PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                        PalwRootedTokenizerRegistrationRowV1,
+                    >("verified tokenizer registration", &capacity.to_string()))
+                }
+                _ => PalwStateV2Error::CarriageInconsistent(why.to_string()),
+            },
+        )?;
+        row.check_adoption(&self.state, &point).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("verified tokenizer registration row");
+        quote.exact::<PalwRootedTokenizerRegistrationRowV1>(1)?;
+        self.admit_native_write_v1(quote)?;
+        let new = Some(PalwStagedCourtRowV1::VerifiedTokenizerRegistration(Box::new(row)));
+        self.reserve_map_row_v1(&key, &new, |s| &s.staged_courts, false, "native tokenizer registration writer")?;
+        self.reserve_staged_indices_v1(&key, &new)?;
+        let row = new.as_ref().expect("the immutable registration exists");
+        self.state.staged_courts.insert(key, row.clone());
+        update_indices(&mut self.state, key, None, Some(row));
+        self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new });
+        Ok(())
+    }
+
     pub(super) fn write_staged_row_v1(
         &mut self,
         key: PalwStagedCourtKeyV1,
         new: Option<PalwStagedCourtRowV1>,
     ) -> Result<(), PalwStateV2Error> {
+        if matches!(key, PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(..))
+            || matches!(&new, Some(PalwStagedCourtRowV1::VerifiedTokenizerRegistration(_)))
+        {
+            return Err(PalwStateV2Error::ImmutableModelUpdate("verified tokenizer registration requires native operand replay"));
+        }
         self.check_archive_progress_write_v1(&key, new.as_ref())?;
         self.check_material_intake_write_v1(&key, new.as_ref())?;
         if matches!(key, PalwStagedCourtKeyV1::CourtSharedBottom(_))
@@ -3698,6 +3743,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::ArtifactInventory(_)
         | PalwStagedCourtRowV1::TirLayout(_)
         | PalwStagedCourtRowV1::TirContainer(_)
+        | PalwStagedCourtRowV1::VerifiedTokenizerRegistration(_)
         | PalwStagedCourtRowV1::CourtService(_)
         | PalwStagedCourtRowV1::CourtServiceV3(_) => (u64::MAX, Vec::new()),
         PalwStagedCourtRowV1::CourtDutyClock(c) => (c.material_until_daa, Vec::new()),

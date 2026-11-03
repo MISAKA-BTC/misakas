@@ -22675,6 +22675,25 @@ pub(crate) fn replay_delta_owned_v1(
     revert: bool,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as CourtKey, PalwStagedCourtRowV1 as CourtRow};
+    // A verified tokenizer may only enter a trusted journal as an immutable
+    // insertion. Its prerequisite rows must already exist on the exact parent,
+    // including when unrelated writes occur before it in this journal.
+    let mut tokenizer_registration_changed = false;
+    for entry in &delta.entries {
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
+            && (matches!(key, CourtKey::VerifiedTokenizerRegistration(..))
+                || matches!(old, Some(CourtRow::VerifiedTokenizerRegistration(_)))
+                || matches!(new, Some(CourtRow::VerifiedTokenizerRegistration(_))))
+        {
+            let (None, Some(CourtRow::VerifiedTokenizerRegistration(row))) = (old, new) else {
+                return Err(PalwStateV2Error::DeltaMismatch("verified tokenizer registration is immutable"));
+            };
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if revert { row.check_child(&state, &delta.point) } else { row.check_adoption(&state, &delta.point) }
+                .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            tokenizer_registration_changed = true;
+        }
+    }
     let mut owner_schedule_changed = false;
     let mut replay_entry = |entry: &PalwDeltaEntryV2| {
         owner_schedule_changed |= matches!(entry, PalwDeltaEntryV2::StagedCourtSeed { key: CourtKey::TirOwnerSchedule(_), .. });
@@ -22700,6 +22719,14 @@ pub(crate) fn replay_delta_owned_v1(
                 && now < row.material_until()
             {
                 row.check_context(&state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+    }
+    if tokenizer_registration_changed {
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::StagedCourtSeed { new: Some(CourtRow::VerifiedTokenizerRegistration(row)), .. } = entry {
+                if revert { row.check_adoption(&state, &delta.point) } else { row.check_child(&state, &delta.point) }
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
     }
