@@ -280,6 +280,7 @@ mod palw_claim_local_rewards_v1;
 mod palw_security_certification_fold_v1;
 #[path = "palw_state_v2/positive_assignment_certification.rs"]
 mod positive_assignment_certification;
+mod positive_assignment_verifiers;
 // RFC-0023 stage 2: per-claim settlement read (dormant `palw_claim_local_settlement_v1`).
 pub use palw_claim_local_rewards_v1::{PalwClaimLocalSettlementV1, palw_claim_local_settlement_v1};
 // RFC-0023 stage 2 (§4.1/§4.5): the fold-derived claim-local checkpoint row and its irreversible frontier (same dormant fence).

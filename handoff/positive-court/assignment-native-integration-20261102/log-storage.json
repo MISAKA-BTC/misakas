@@ -654,5 +654,29 @@
     "stored_sha256": "91a4bc19102ca31e64ca81a7e961945f530d7dca3f95a27473fd28b6b1fb8e98",
     "raw_bytes": 360530,
     "stored_bytes": 24896
+  },
+  {
+    "raw_name": "verifier-cohort-clippy-first.log",
+    "stored_name": "verifier-cohort-clippy-first.log.gz",
+    "raw_sha256": "40e769752c9dfdd3b317fb072eddd0de389ce150017813f5b0b0404b53c1483d",
+    "stored_sha256": "f9142a4483ad63023d1c94deff2264fa0bf6bc2636600cda9863c80a0f2ab553",
+    "raw_bytes": 660390,
+    "stored_bytes": 38550
+  },
+  {
+    "raw_name": "verifier-cohort-clippy-second.log",
+    "stored_name": "verifier-cohort-clippy-second.log.gz",
+    "raw_sha256": "89bef234367f153f790d7744b7bf545117a2add4b256c9ff3d4d36f9b921c4fb",
+    "stored_sha256": "c7c2f37f5efd5d62bec69a04b816751b6a06f093f6dcedff838516baa62e1463",
+    "raw_bytes": 660403,
+    "stored_bytes": 38113
+  },
+  {
+    "raw_name": "verifier-cohort-runtime-second.log",
+    "stored_name": "verifier-cohort-runtime-second.log.gz",
+    "raw_sha256": "20fdacfb1b12694ef30a1a7c0bae0b797c4b5fcc915b1f81ab3f4fe009442eed",
+    "stored_sha256": "f462724370ff48f86bc3713bbe578feb1344c7c2a1eb84455b02fd58cc99bd01",
+    "raw_bytes": 357623,
+    "stored_bytes": 24513
   }
 ]

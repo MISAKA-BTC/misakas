@@ -5,12 +5,17 @@
 //! original rule scope and actual physical/service reservations before calling.
 //! No independent store or success flag is maintained here. Every row uses the
 //! existing KernelRouteRow delta, and rollback restores nonce and locks together.
+use super::positive_assignment_verifiers::LeasedAssignmentVerifierCandidatesV2;
 use super::*;
-use crate::{palw_positive_assignment_v2::AssignmentJobBindingV2, palw_positive_rows_v2::PositiveRowsV2};
+use crate::{
+    palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, assignment_custody_bytes_id_v2},
+    palw_positive_assignment_v2::AssignmentJobBindingV2,
+    palw_positive_rows_v2::PositiveRowsV2,
+};
 use misaka_palw_positive_contract::{
     assignment::{
         AssignmentId, AssignmentNonceV2, AssignmentRoleV2, journal::AssignmentJournalEventKindV2,
-        role_actions::AssignmentCancellationV2, rows::*,
+        open_material::AssignmentOpenPreimageKindV2, role_actions::AssignmentCancellationV2, rows::*,
     },
     identity::{PUBKEY_BYTES, SIGNATURE_BYTES},
     native::{KERNEL_AUX_TABLE, NativeRowKey},
@@ -66,7 +71,10 @@ fn native_bond(outpoint: NativeOutpoint) -> PalwBondKeyV2 {
     PalwBondKeyV2(TransactionOutpoint::new(Hash64::from_bytes(outpoint.transaction.0), outpoint.index))
 }
 
-pub(super) struct AssignmentInstallV2 {
+pub(super) struct AssignmentInstallV2<'a> {
+    pub material: &'a AssignmentAdmissionMaterialV2,
+    pub reservation_preimage: &'a [u8],
+    pub verifier_candidates: &'a LeasedAssignmentVerifierCandidatesV2,
     pub assignment: AssignmentRow,
     pub funding: AssignmentFundingRow,
     pub roles: [AssignmentRoleRow; 3],
@@ -74,7 +82,8 @@ pub(super) struct AssignmentInstallV2 {
     pub retention_until_daa: u64,
 }
 
-pub(super) struct AssignedCaseInstallV2 {
+pub(super) struct AssignedCaseInstallV2<'a> {
+    pub material: &'a AssignmentAdmissionMaterialV2,
     pub expected_assignment: AssignmentRow,
     pub binding: AssignmentJobBindingV2,
     pub index: ClaimIndexRow,
@@ -202,10 +211,18 @@ impl TransitionBuilder<'_> {
     pub(super) fn install_positive_assignment_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
-        plan: AssignmentInstallV2,
+        plan: AssignmentInstallV2<'_>,
     ) -> Result<(), PalwStateV2Error> {
         let row = &plan.assignment;
-        row.validate_shape().map_err(refusal)?;
+        plan.material.check_row(row).map_err(refusal)?;
+        if plan.reservation_preimage.len() as u64
+            > plan.material.money.usage.retained_bytes.min(plan.material.money.usage.replay_bytes)
+            || !plan.reservation_preimage.starts_with(plan.verifier_candidates.bytes())
+            || assignment_custody_bytes_id_v2(plan.reservation_preimage)
+                != plan.material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize]
+        {
+            return Err(refusal("A reservation does not retain the actual prefix's verifier candidates"));
+        }
         let id = row.id();
         self.assignment_origin_v2(row.origin, ctx)?;
         if row.status != AssignmentStatusV2::Open
@@ -276,7 +293,7 @@ impl TransitionBuilder<'_> {
     pub(super) fn consume_positive_assignment_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
-        plan: AssignedCaseInstallV2,
+        plan: AssignedCaseInstallV2<'_>,
     ) -> Result<(), PalwStateV2Error> {
         let expected = &plan.expected_assignment;
         let id = expected.id();
@@ -346,6 +363,7 @@ impl TransitionBuilder<'_> {
             self.write_assignment_aux_v2(NativeRowBody::ClaimIndex(plan.index))?;
             self.write_assignment_aux_v2(NativeRowBody::Case(plan.case))?;
             self.write_assignment_aux_v2(NativeRowBody::Funding(plan.funding))?;
+            self.begin_positive_certification_v2(ctx, id, plan.material)?;
             self.append_assignment_frame_v2(plan.frame, retention)
         })();
         if result.is_err() {
@@ -620,26 +638,32 @@ impl TransitionBuilder<'_> {
                     }
                     let certification = rules.certification_policy().ok_or_else(|| refusal("missing actual Gate C policy"))?;
                     let maximum_scan = rules.assignment_policy().max_replay_work / preimages.source_policy.work.per_control;
-                    let registry_bound = crate::palw_positive_assignment_certification_v2::assignment_verifier_registry_bound_v2(
+                    let heap_budget = rules
+                        .assignment_policy()
+                        .max_heap_bytes
+                        .min(preimages.physical.max_heap_bytes)
+                        .min(rules.positive_policy().max_case_heap_bytes);
+                    let cohort = super::positive_assignment_verifiers::derive_assignment_verifier_candidates_v2(
+                        &self.state,
                         certification,
                         anchor_daa,
                         bundle.terms.result_before_daa,
                         ctx.daa_score,
                         maximum_scan,
-                        self.state.bonds.values().map(|bond| bond.registered_daa),
-                    )
-                    .map_err(refusal)?;
+                        rules
+                            .assignment_policy()
+                            .max_history_bytes
+                            .min(preimages.physical.max_retained_bytes)
+                            .min(preimages.physical.max_replay_bytes)
+                            .min(heap_budget),
+                    )?;
                     let workspace = super::positive_assignment_certification::positive_certification_workspace_bytes_v2(
                         certification.m,
-                        registry_bound,
+                        cohort.count(),
                     )?;
-                    if workspace
-                        > rules
-                            .assignment_policy()
-                            .max_heap_bytes
-                            .min(preimages.physical.max_heap_bytes)
-                            .min(rules.positive_policy().max_case_heap_bytes)
-                    {
+                    let simultaneous =
+                        workspace.checked_add(cohort.bytes().len() as u64).ok_or_else(|| refusal("Gate C workspace overflow"))?;
+                    if simultaneous > heap_budget {
                         return Err(refusal("original Assignment budget cannot cover Gate C draw workspace"));
                     }
                     // Check the real local workspace now. Persisting a future

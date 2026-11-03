@@ -1,13 +1,13 @@
 //! Actual native P fold. Private TransitionBuilder hooks, rooted C/A reads,
 //! actual round anchor/global bond pool/shared N queue, literal new attestations.
 //! This never calls old S/K/V/PublicCheckCertified or credits issuance/weight.
-use super::positive_assignment_case::NativeAssignedCaseSessionV2;
 use super::*;
+use super::{positive_assignment_case::NativeAssignedCaseSessionV2, positive_assignment_verifiers::AssignmentVerifierCandidatesV2};
 use crate::{
     palw_kernel_route_v1::palw_kernel_bond_id_v1,
     palw_model_eligibility_v1::PalwEligibilityVerifierV1,
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, TirNativeRequestsV1, reserve_native_requests_v1},
-    palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2,
+    palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, assignment_custody_bytes_id_v2},
     palw_positive_certification_v2::*,
     palw_positive_check_v2::CheckOutcome,
     palw_positive_court_v2::coordinator::contract::TerminalKindV2,
@@ -21,6 +21,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_positive_contract::{
     assignment::{
         AssignmentId,
+        open_material::AssignmentOpenPreimageKindV2,
         rows::{AssignmentRow, AssignmentStatusV2},
     },
     certification::*,
@@ -152,6 +153,28 @@ fn case_live(state: &PalwChainStateV2, h: &PositiveCertificationHeaderV2) -> Res
     Ok(case.result == h.result
         && !matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked | ClaimStatus::EndedUnverified))
 }
+pub(super) fn live_verifiers<'a>(
+    state: &'a PalwChainStateV2,
+    policy: &'a crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+    commit_daa: u64,
+    worker_operator: Digest,
+    keys: impl Iterator<Item = PalwBondKeyV2> + 'a,
+) -> impl Iterator<Item = PalwEligibilityVerifierV1> + 'a {
+    keys.filter_map(move |key| {
+        let bond = state.bonds.get(&key)?;
+        let operator = bond.operator_id.as_bytes();
+        palw_certification_pool_admits_v1(
+            policy,
+            commit_daa,
+            &worker_operator.0,
+            matches!(bond.status, PalwBondStatusV2::Active),
+            bond.registered_daa,
+            bond.collateral,
+            &operator,
+        )
+        .then(|| PalwEligibilityVerifierV1 { bond: palw_kernel_bond_id_v1(&key), operator, stake: bond.collateral })
+    })
+}
 impl TransitionBuilder<'_> {
     /// Call INSIDE the C install checkpoint, after exact aux151 Result/Case/Use
     /// and actual fresh C funds/reservation admission. Original C is the commit.
@@ -221,12 +244,14 @@ impl TransitionBuilder<'_> {
             },
         )
     }
-    /// Actual later seed + actual GLOBAL registry; N incrementsCLAIMS(+1), as
-    /// the existing native owner does. Reservation must price all75 positions.
-    pub(super) fn draw_positive_certification_v2(
+    /// Draw with the actual later seed and live global bond state. The
+    /// original reservation preimage bounds which keys need to be looked up.
+    fn draw_positive_certification_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
         subject: Digest,
+        material: &AssignmentAdmissionMaterialV2,
+        reservation_preimage: &[u8],
     ) -> Result<(), PalwStateV2Error> {
         let origin = PositiveCertificationDrawOriginV2 {
             block: NativeHash64(ctx.block.as_bytes()),
@@ -266,18 +291,21 @@ impl TransitionBuilder<'_> {
         if network.draws >= h.policy.draws_per_epoch {
             return Err(refuse("actual shared N queue full"));
         }
-        let eligible = |bond: &PalwBondStateV2| {
-            palw_certification_pool_admits_v1(
-                &h.policy,
-                h.commit_origin.accepted_daa,
-                &h.worker_operator.0,
-                matches!(bond.status, PalwBondStatusV2::Active),
-                bond.registered_daa,
-                bond.collateral,
-                &bond.operator_id.as_bytes(),
-            )
-        };
-        let count = self.state.bonds.values().filter(|bond| eligible(bond)).count();
+        let a = assignment(&self.state, h.assignment)?;
+        material.check_row(&a).map_err(refuse)?;
+        if a.status != (AssignmentStatusV2::Consumed { case: h.case, result: h.result }) || material.certification_policy != h.policy {
+            return Err(refuse("P draw differs from the original Assignment and Case"));
+        }
+        if reservation_preimage.len() as u64 > material.money.usage.retained_bytes.min(material.money.usage.replay_bytes)
+            || assignment_custody_bytes_id_v2(reservation_preimage)
+                != material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize]
+        {
+            return Err(unavailable("original P reservation preimage unavailable or corrupted"));
+        }
+        let candidates = AssignmentVerifierCandidatesV2::decode(reservation_preimage)
+            .map_err(|_| unavailable("invalid retained verifier candidates"))?;
+        let keys = candidates.keys();
+        let count = keys.len();
         let _pool_lease = reserve_p_workspace(pool_workspace_bytes(count as u64).map_err(PalwStateV2Error::NativeResource)?)?;
         let mut pool = Vec::new();
         let allocation = || {
@@ -290,13 +318,7 @@ impl TransitionBuilder<'_> {
         if pool.capacity() > count {
             return Err(allocation());
         }
-        for (key, bond) in self.state.bonds.iter().filter(|(_, bond)| eligible(bond)) {
-            pool.push(PalwEligibilityVerifierV1 {
-                bond: palw_kernel_bond_id_v1(key),
-                operator: bond.operator_id.as_bytes(),
-                stake: bond.collateral,
-            });
-        }
+        pool.extend(live_verifiers(&self.state, &h.policy, h.commit_origin.accepted_daa, h.worker_operator, keys));
         pool.sort_unstable_by_key(|member| member.bond);
         struct Roster<'a>(&'a [PalwEligibilityVerifierV1]);
         impl BorshSerialize for Roster<'_> {
@@ -505,9 +527,10 @@ impl TransitionBuilder<'_> {
     /// Run after the legacy sweep so both use the SAME actual N claim-unit
     /// owner. A full queue/missinglaterseed defers; after certify_by the original
     /// frozen clock expires. No fallback policy or synthetic seed is supplied.
-    pub(super) fn sweep_positive_certification_v2(
+    pub(super) fn sweep_positive_certification_v2<'a>(
         &mut self,
         ctx: &PalwBlockContextV2,
+        mut original_reservation: impl FnMut(AssignmentId) -> Result<(&'a AssignmentAdmissionMaterialV2, &'a [u8]), PalwStateV2Error>,
     ) -> Result<PositiveCertificationSweepReportV2, PalwStateV2Error> {
         let count = self.state.kernel_route.as_ref().map_or(0, |route| {
             route.aux.range((136, Vec::new())..(137, Vec::new())).filter(|((_, key), _)| key.first() == Some(&b'P')).count()
@@ -569,8 +592,9 @@ impl TransitionBuilder<'_> {
                 report.deferred_queue_or_seed += 1;
                 continue;
             }
+            let (material, reservation_preimage) = original_reservation(h.assignment)?;
             drop(owned);
-            self.draw_positive_certification_v2(ctx, subject)?;
+            self.draw_positive_certification_v2(ctx, subject, material, reservation_preimage)?;
             report.draws += 1;
         }
         Ok(report)

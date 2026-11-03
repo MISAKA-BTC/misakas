@@ -235,3 +235,50 @@ The final Core and Consensus library Clippy and focused test Clippy passed.
 All 11 Gate C and P cases passed on the same source. The census case verifies
 the bound against the existing live eligibility predicate and checks that the
 length guard refuses before scanning. The artifact audit records both binaries.
+
+## Registration candidates retained for the later Gate C draw
+
+The actual op8 preflight constructs the candidate keys from its accepted
+prefix and the signed ancestor's resolved DAA. The strict cutoff from the
+previous stage excludes registrations after intake, including blocks that
+share the anchor DAA. The scan includes inactive bonds and bonds with low
+collateral. A bounds two registry passes before scanning and obtains a
+logical allocation lease for the exact byte extent. The preflight checks
+the cohort bytes and the P workspace together against the applicable
+heap ceilings.
+
+The internal reservation custody preimage starts with `PC2ACOH1`, a
+little-endian u32 count, and 68-byte native outpoints in strict native key
+order. The remainder belongs to the reservation owner. This uses the
+existing ReservationCustody slot of `PC2AOPEN`. The private A checkpoint
+compares the candidate prefix against the independently derived bytes
+and checks the hash of the complete preimage. The private C checkpoint
+starts P in the same transaction as Result/Case/Funding/journal writes.
+
+The staged P sweep requires the original material and reservation preimage
+for the exact Assignment. P checks the rooted Assignment material,
+Case/Result binding, policy, original byte budget and preimage digest
+before reading the keys. It looks up one current bond per candidate,
+using the same active, commit maturity, collateral and operator
+predicates. Removal and retirement therefore affect eligibility, and a
+new registration of a reused outpoint has to satisfy the original
+commit-time maturity requirement. The roster sort, seed and weighted
+draw stay on the existing P path. The cost of these lookups also depends
+on native map depth. The shared N sweep still needs its own block-wide
+work accounting.
+
+The native dispatch still needs to publish the reservation preimage,
+reserve its lifetime storage and replay, and supply it to the P sweep
+from the accepted branch. The original cohort also needs to be rebuilt
+and compared during historical recovery. The combined replay budget
+for the cohort and the remaining owners is still open. These staged
+boundaries do not establish native A/C/P success or payment.
+
+Core strict library and all-test-target Clippy passed. The three scoped
+Core unit cases passed under the repository opt2 profile and normal stack.
+They exercise key framing and native order, preallocation work and byte
+bounds, and live eligibility for retained keys. The first Clippy run
+failed with a test closure borrow error before executing tests. The
+corrected Clippy and runtime runs share one unchanged source map.
+The documentation check recorded zero new issues against 43 existing
+missing references. See the verifier cohort artifact audit and log manifest.
