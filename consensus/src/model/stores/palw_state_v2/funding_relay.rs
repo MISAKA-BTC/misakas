@@ -194,7 +194,13 @@ impl DbPalwStateV2Store {
             if measured != expected {
                 return Err(invalid("encoded registration extent differs from preflight"));
             }
-            measured.check_usage(&auth.quote.usage).map_err(|_| invalid("registration exceeds its quoted storage extent"))?;
+            let quote = auth
+                .fees
+                .registration_quote(&auth.policy, &auth.physical, &auth.terms, origin.accepted_daa)
+                .map_err(|_| invalid("invalid original registration quote"))?;
+            if quote != auth.quote {
+                return Err(invalid("registration differs from the native reservation quote"));
+            }
             if let Some(saved) = self.db.get_pinned(material_key)? {
                 if saved.as_ref() != payload {
                     return Err(invalid("content address already contains different bytes"));

@@ -485,6 +485,26 @@ fn registration_fee_floor_matches_literal_payload_and_pending_row_images() {
         let complete = fees.quote(&policy, &physical, &terms, usage, 50).unwrap();
         let floor = fees.minimum_registration_fee(&policy, &physical, &terms).unwrap();
         assert_eq!(floor + fees.per_replay_read + fees.per_replay_work, complete.fee);
+        let registration = fees.registration_quote(&policy, &physical, &terms, 50).unwrap();
+        assert_eq!(
+            registration.usage,
+            FundingRelayUsageV2 {
+                decoded_bytes: physical.max_decoded_bytes,
+                heap_bytes: physical.max_heap_bytes,
+                replay_reads: physical.max_replay_reads,
+                replay_work: physical.max_replay_work,
+                ..usage
+            }
+        );
+        assert_eq!(
+            registration.fee,
+            floor + physical.max_replay_reads * fees.per_replay_read + physical.max_replay_work * fees.per_replay_work
+        );
+        assert_eq!(registration, fees.registration_quote(&policy, &physical, &terms, 99).unwrap());
+        let short = FundingRelayTermsV2 { max_metadata_fee: registration.fee - 1, ..terms };
+        assert!(fees.registration_quote(&policy, &physical, &short, 50).is_err());
+        let exact = FundingRelayTermsV2 { max_metadata_fee: registration.fee, ..terms };
+        assert_eq!(fees.registration_quote(&policy, &physical, &exact, 50).unwrap().fee, registration.fee);
 
         for undersized in [
             FundingRelayUsageV2 { frame_bytes: frame_bytes - 1, ..usage },

@@ -1190,5 +1190,21 @@
     "stored_sha256": "9d9b6c37854b5b9c73d19385a7af3c74c82acc5eb86b559fb6c385760f365c05",
     "raw_bytes": 4409,
     "stored_bytes": 1426
+  },
+  {
+    "raw_name": "relay-registration-quote-clippy.log",
+    "stored_name": "relay-registration-quote-clippy.log.gz",
+    "raw_sha256": "9b917e989bf3c19d0d86ad8883bcb9e7aaab4245ae1f6ee4d59d28af39063202",
+    "stored_sha256": "0f7b1fd13b9172d76dd6cade2f2216cea707d084c60e31d3dae489b48205d3fa",
+    "raw_bytes": 341860,
+    "stored_bytes": 23621
+  },
+  {
+    "raw_name": "relay-registration-quote-contract.log",
+    "stored_name": "relay-registration-quote-contract.log.gz",
+    "raw_sha256": "26878b4dcb873084b272f4806f229419977619c29d59885527b2dca86299022a",
+    "stored_sha256": "d7a60c88e1b248530460a445f73842cd73dc1839c31d4c95b53d9d451b83dd47",
+    "raw_bytes": 53248,
+    "stored_bytes": 4273
   }
 ]

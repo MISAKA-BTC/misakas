@@ -847,3 +847,29 @@ production RocksDB store suite passed 36 tests, including exact wire and
 heap thresholds and rejection one byte below each. The reverse payer walk
 was typechecked. No live native relay history ran through it. The failed
 initial typecheck and final execution records are retained.
+
+## Canonical full registration price
+
+Fresh op14 preflight now checks the complete registration price against the
+actual available native fee. The quote uses the terms-derived frame and storage
+extents and reserves the full original finite profile's replay reads and work,
+plus its decoded and heap ceilings. Only the priced resources affect the
+amount. The local allocator, the later branch, and a peer usage declaration
+cannot vary this quote. The same method is called for the actual RocksDB
+staging and when authenticating the archived quote under the original rules.
+The staging path continues to measure and check the actual encoded rows and
+requires an observed fee partition with the matching debit.
+
+The replay reservation is conservatively priced at the signed profile ceiling
+per registration. Contract tests cover all four targets, exact Borsh extents,
+equal prices across eligible inclusion clocks, exact signed fee caps and
+one-sompi-short rejection. Ten relay contract tests passed.
+
+This still needs the actual fee and custody owners. The shared UTXO walk
+reserves the Round budget before applying a merged body and computes the
+coinbase from that acceptance. The native Assignment rehearsal currently
+occurs after coinbase validation. Charging after this rehearsal would leave
+an inconsistent reward or reserve, while charging merely for a decoded
+op14 would burn fees for refused registrations. The accepted-prefix decision
+and reward accounting must meet before the shared fee sink publishes a
+debit, on both the candidate and virtual/template paths.

@@ -1092,13 +1092,13 @@ impl TransitionBuilder<'_> {
             })?;
             let mut budget = FundingRelayAuxScanBudgetV2::new(physical).map_err(refusal)?;
             self.require_unused_relay_outpoint_v2(body, &mut budget)?;
-            policy.check_terms(terms, ctx.daa_score).map_err(refusal)?;
-            // Include the actual package's required retained images. The
-            // storage and fee owners still determine the final charge.
-            let minimum_fee = fees.minimum_registration_fee(policy, physical, terms).map_err(refusal)?;
+            let registration = fees.registration_quote(policy, physical, terms, ctx.daa_score).map_err(refusal)?;
+            if registration.usage.frame_bytes != reserved.quote().encoded_bytes {
+                return Err(refusal("initial relay frame differs from the registration quote"));
+            }
             let available = action.relay_carrier_fees_v2().ok_or_else(missing_assignment_history)?.before_relay();
-            if minimum_fee > terms.max_metadata_fee || minimum_fee > available {
-                return Err(refusal("initial relay cannot fund the minimum metadata fee after mandatory burns"));
+            if registration.fee > available {
+                return Err(refusal("initial relay cannot fund the full registration fee after mandatory burns"));
             }
 
             self.check_initial_relay_slots_v2(terms, poster_nonce, policy, &mut budget)?;

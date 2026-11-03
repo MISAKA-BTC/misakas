@@ -195,7 +195,7 @@ impl FundingRelayAuxScanBudgetV2 {
     }
 }
 
-/// Counts from concrete native typed construction/staging, not remote caps.
+/// Canonical extents and resource reservations supplied by the native owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FundingRelayUsageV2 {
     pub frame_bytes: u64,
@@ -286,6 +286,38 @@ impl FundingRelayFeeScheduleV2 {
             return Err(ContractError::Budget);
         }
         self.storage_price(2, storage.body_bytes, storage.retained_bytes, storage.database_bytes, retention_daa)
+    }
+
+    /// Reserve the original physical profile's complete replay envelope for
+    /// one registration. The future branch and the local allocator cannot
+    /// determine the fee. Fixed wire and storage extents come from the terms;
+    /// the native reader still measures actual decoding and staging against
+    /// these reservations.
+    pub fn registration_quote(
+        &self,
+        policy: &FundingRelayPolicyV2,
+        physical: &FundingRelayPhysicalProfileV2,
+        terms: &FundingRelayTermsV2,
+        now: u64,
+    ) -> Result<FundingRelayMoneyQuoteV2, ContractError> {
+        let storage = FundingRelayStorageExtentV2::for_terms(terms)?;
+        self.quote(
+            policy,
+            physical,
+            terms,
+            FundingRelayUsageV2 {
+                frame_bytes: storage.body_bytes,
+                decoded_bytes: physical.max_decoded_bytes,
+                heap_bytes: physical.max_heap_bytes,
+                retained_bytes: storage.retained_bytes,
+                database_bytes: storage.database_bytes,
+                batch_bytes: storage.batch_bytes,
+                replay_reads: physical.max_replay_reads,
+                replay_work: physical.max_replay_work,
+                signatures: 2,
+            },
+            now,
+        )
     }
 
     pub fn quote(

@@ -533,6 +533,7 @@ impl VirtualStateProcessor {
             || auth.policy != policy
             || auth.fees != fees
             || auth.physical != physical
+            || fees.registration_quote(&policy, &physical, &auth.terms, origin.accepted_daa).ok() != Some(auth.quote)
         {
             return Err(fault("archived relay scope differs from original fired rules"));
         }
