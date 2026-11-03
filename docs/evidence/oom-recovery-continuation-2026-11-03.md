@@ -4346,3 +4346,23 @@ invocation `460e5e2f1da647b784dd040aab7462cf`. B0 and relay agreed
 at virtual DAA 19,749. Nine additional selected blocks across the
 two contiguous pages had no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-payer-scope-live.qcKCA2`.
+
+## Install the prepared Batch book and frontier together
+
+The native admission writer now checks the unchanged service row,
+same-block original acceptance, prepared scope, material horizon and
+matching replay profile. The new book must own the first Open,
+verification and terminal slots, schedule them in order after the
+latest notice and within the admitted hard window, and carry the
+terminal's causal edge and full costs. It journals the book and
+Batch-only context in one rollback boundary. This writer is separate
+from the existing legacy frontier path.
+
+The native material fixture now uses this writer instead of directly
+inserting the Batch context and book. It exercises a missing terminal
+dependency and asserts an unchanged state root before the valid
+installation. Rust parsing and whitespace checks passed. The native
+fixture has not run. The production coordinator still has to call
+the writer with a complete payer-approved book in the original
+admission checkpoint. The existing isolated Linux job is compiling
+its older `587a1808c` snapshot.

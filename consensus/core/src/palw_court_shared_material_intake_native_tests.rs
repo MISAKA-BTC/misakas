@@ -790,11 +790,23 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         replay_budget.max_fault_bytes * (context.material_until_daa - earliest_verification),
     );
     assert_eq!(quote.carrier_storage_rent_sompi, range_count as u64 * PART as u64 * storage.sompi_per_byte);
-    state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
-
-    let mut batch_context = context.clone();
-    batch_context.version = crate::palw_court_shared_tir_state_v1::SharedTirContextV1::BATCH_NOTICE_ONLY_VERSION_V1;
-    state.staged_courts.insert(Key::CourtSharedContext(claim), Row::CourtSharedContext(Box::new(batch_context)));
+    // The original coordinator has not published a book or context yet.
+    state.staged_courts.remove(&Key::CourtService);
+    state.staged_courts.remove(&Key::CourtSharedContext(claim));
+    let install_extras = PalwTransitionExtrasV1 {
+        batch_numerical_profile_v1: Some(NumericalBatchReplayProfileV1 { service_profile: service.state.profile_id, budget: replay_budget }),
+        ..extras.clone()
+    };
+    let mut install = TransitionBuilder::new(&state, &params, false, false, false, false, &install_extras);
+    use super::super::palw_court_service_lifecycle_fold_v1::install_prepared_batch_frontier_v1;
+    let mut unbooked = service.clone();
+    unbooked.causal.retain(|_, parents| !parents.contains(&verification));
+    let before_install = install.state.state_root();
+    assert!(install_prepared_batch_frontier_v1(&mut install, &at(frame, 0), None, unbooked, &quote).is_err());
+    assert_eq!(install.state.state_root(), before_install);
+    install_prepared_batch_frontier_v1(&mut install, &at(frame, 0), None, service, &quote).unwrap();
+    state = install.state;
+    assert!(crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap().batch_notice_only_v1());
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).is_err());
     assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, notice_leaf, 0, 64, &lengths),

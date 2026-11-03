@@ -55,6 +55,7 @@ pub(crate) enum BatchDeliveryV1 {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct BatchAdmissionQuoteV1 {
     pub claim: Hash64,
+    pub scope: Hash64,
     /// Canonical work and retention terms to bind into the payer's scope.
     /// Assigned DAA values are excluded because legal repair may move them.
     pub relative_graph_id: Hash64,
@@ -528,6 +529,7 @@ impl BatchAdmissionV1<'_> {
             })?;
         let quote = BatchAdmissionQuoteV1 {
             claim: self.claim,
+            scope: self.scope,
             relative_graph_id,
             required_daa,
             material_until_daa: self.window.material_until_daa,

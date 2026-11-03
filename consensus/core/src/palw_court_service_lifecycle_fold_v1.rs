@@ -116,6 +116,76 @@ pub(super) fn install_shared_frontier_context_v1(
     Ok(true)
 }
 
+/// Install the prepared native book and its Batch-only frontier together.
+/// The original coordinator owns the paired transaction and funding checks.
+pub(super) fn install_prepared_batch_frontier_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    before: Option<&Row>,
+    book: crate::palw_court_service_release_v1::CourtServiceRowV3,
+    quote: &crate::palw_court_shared_material_intake_v1::batch::admission::BatchAdmissionQuoteV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_court_shared_material_intake_v1::batch::admission::batch_numerical_service_ids_v1;
+    use crate::palw_court_shared_tir_state_v1::SharedTirContextV1;
+    let claim = quote.claim;
+    let key = Key::CourtSharedContext(claim);
+    if !b.extras.batch_court_active_v1
+        || b.state.staged_court_row_v1(&Key::CourtService) != before
+        || b.state.staged_court_row_v1(&key).is_some()
+    {
+        return Err(refused("Batch frontier requires the original's unchanged admission state"));
+    }
+    let profile = b.extras.batch_numerical_profile_v1.filter(|profile| profile.service_profile == book.state.profile_id)
+        .ok_or_else(|| refused("Batch frontier has no matching native profile"))?;
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim)
+        .ok_or_else(|| refused("Batch frontier has no accepted original frame"))?;
+    let binding = book.state.claims.get(&claim).ok_or_else(|| refused("Batch frontier has no original service binding"))?;
+    let plan = frame.plan_v1();
+    if (binding.allocation_id, binding.source_id, binding.original_accepted_daa) != (plan.allocation_id, plan.source_id, ctx.daa_score)
+        || plan.terms.accepted_daa != ctx.daa_score
+        || b.state.claim(&claim).is_none_or(|claim| claim.accepted_daa != ctx.daa_score)
+        || quote.material_until_daa != plan.terms.material_until_daa
+        || quote.relative_graph_id == Hash64::default()
+        || quote.retained_numerical_fault_bytes != profile.budget.max_fault_bytes
+    {
+        return Err(refused("Batch frontier substitutes original identity, clock or retention"));
+    }
+    let (verification, terminal) = batch_numerical_service_ids_v1(claim, quote.scope).map_err(|why| refused(format!("{why:?}")))?;
+    let first_open = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(claim, quote.scope, 0).map_err(refused)?.as_bytes();
+    let booked = |id: &[u8; 64]| binding.packet_ids.contains(id).then(|| book.state.book.assigned_daa(id)).flatten();
+    let (Some(open_at), Some(verify_at), Some(terminal_at)) = (booked(&first_open), booked(&verification), booked(&terminal)) else {
+        return Err(refused("Batch frontier is missing a required service slot"));
+    };
+    let service = profile.budget.service_cost_v1().ok_or_else(|| refused("Batch frontier replay budget is invalid"))?;
+    let first = ctx.daa_score.checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
+        .ok_or_else(|| refused("Batch frontier notice clock overflows"))?;
+    if open_at < first
+        || open_at >= verify_at || verify_at >= terminal_at
+        || terminal_at >= binding.hard_deadline_daa
+        || terminal_at.checked_sub(ctx.daa_score).is_none_or(|elapsed| elapsed >= quote.required_daa)
+        || quote.required_daa > crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA
+        || book.state.book.packet(&verification).is_none_or(|packet| packet.cost != service)
+        || book.state.book.packet(&terminal).is_none_or(|packet| !profile.budget.covers_terminal_recheck_v1(packet.cost))
+        || !book.causal.get(&terminal).is_some_and(|parents| parents.binary_search(&verification).is_ok())
+    {
+        return Err(refused("Batch frontier slots differ from the original reservation"));
+    }
+    let saved = b.try_checkpoint()?;
+    let result = (|| {
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(book).into())))?;
+        let mut context = crate::palw_court_shared_tir_state_v1::derive_shared_tir_context_v1(&b.state, claim).map_err(refused)?;
+        if context.scope_id != quote.scope {
+            return Err(refused("Batch frontier scope differs from the prepared reservation"));
+        }
+        context.version = SharedTirContextV1::BATCH_NOTICE_ONLY_VERSION_V1;
+        b.write_staged_row_v1(key, Some(Row::CourtSharedContext(Box::new(context))))
+    })();
+    if result.is_err() {
+        b.restore(saved);
+    }
+    result
+}
+
 /// **ADR-0192 A: record this accepting block's actual reserved service supply.** Called once per block after every object. The
 /// unreserved court cost is the block's deterministic court-capacity spend (`charge_court_op_v1`; zero below
 /// `palw_court_capacity_v1`). When unreserved court operations spent reserved capacity, the slot records NO supply (a later
