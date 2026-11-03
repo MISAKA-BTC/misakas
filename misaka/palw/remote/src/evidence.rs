@@ -161,8 +161,9 @@ pub fn fetch_material_any(
 pub mod fs {
     use super::*;
     use std::fs::{File, OpenOptions};
-    use std::io::{self, Read};
+    use std::io::{self, Read, Write};
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     #[derive(Debug, thiserror::Error)]
     pub(crate) enum BoundedFileError {
@@ -222,23 +223,66 @@ pub mod fs {
         material.chunks(size).map(<[u8]>::to_vec).collect()
     }
 
+    fn sync_directory(dir: &Path) -> io::Result<()> {
+        #[cfg(unix)]
+        File::open(dir)?.sync_all()?;
+        #[cfg(not(unix))]
+        let _ = dir;
+        Ok(())
+    }
+
+    /// Create and sync missing directory entries before publishing files in them.
+    fn ensure_provider_directory(dir: &Path) -> io::Result<()> {
+        if dir.is_dir() {
+            return Ok(());
+        }
+        let parent = dir.parent().ok_or_else(|| io::Error::other("provider directory has no parent"))?;
+        let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
+        ensure_provider_directory(parent)?;
+        match std::fs::create_dir(dir) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists && dir.is_dir() => {}
+            Err(error) => return Err(error),
+        }
+        sync_directory(parent)
+    }
+
+    /// Write a provider object without exposing partial bytes or sharing a temporary file with another writer.
+    pub(crate) fn write_provider_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let dir = path.parent().ok_or_else(|| io::Error::other("provider file has no directory"))?;
+        ensure_provider_directory(dir)?;
+        let seq = NEXT.fetch_add(1, Ordering::Relaxed);
+        let tmp = dir.join(format!(".evidence-{}-{seq}.partial", std::process::id()));
+        let mut file = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
+        let result = (|| {
+            file.write_all(bytes)?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&tmp, path)?;
+            sync_directory(dir)?;
+            // A concurrent writer can observe a directory before its creator
+            // syncs the entry. Sync the provider layout before returning success.
+            if let Some(parent) = dir.parent() {
+                let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
+                sync_directory(parent)?;
+            }
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
+    }
+
     /// Place a claim's material in a provider directory (the miner's last act before it may switch off). Write order is the safety:
-    /// chunks first, each `.partial` then renamed, the manifest last.
+    /// durably publish each chunk first, then publish the manifest.
     pub fn publish(root: &Path, claim_hex: &str, manifest: &EvidenceManifestV1, chunks: &[Vec<u8>]) -> std::io::Result<()> {
         let id = manifest_id_v1(manifest);
-        let dir = root.join("chunks").join(id.to_string());
-        std::fs::create_dir_all(&dir)?;
-        std::fs::create_dir_all(root.join("claims"))?;
         for (i, bytes) in chunks.iter().enumerate() {
-            let path = dir.join(format!("{i}.chunk"));
-            let tmp = path.with_extension("partial");
-            std::fs::write(&tmp, bytes)?;
-            std::fs::rename(&tmp, &path)?;
+            write_provider_file(&chunk_path(root, id, i as u32), bytes)?;
         }
-        let path = manifest_path(root, claim_hex);
-        let tmp = path.with_extension("partial");
-        std::fs::write(&tmp, borsh::to_vec(manifest).expect("borsh-serializable"))?;
-        std::fs::rename(&tmp, &path)
+        write_provider_file(&manifest_path(root, claim_hex), &borsh::to_vec(manifest)?)
     }
 
     /// **A free-prompt claim's material, placed with a provider directory** — the ONE manifest assembly the rail's `--evidence-out`

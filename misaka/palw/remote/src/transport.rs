@@ -120,11 +120,12 @@ impl EvidenceProvider for crate::evidence::fs::FsProvider {
     }
     fn put_chunk(&self, manifest_id: Hash64, index: u32, bytes: &[u8]) -> Result<(), ProviderError> {
         let path = crate::evidence::fs::chunk_path(&self.root, manifest_id, index);
-        write_atomic(&path, bytes).map_err(|e| ProviderError(e.to_string()))
+        crate::evidence::fs::write_provider_file(&path, bytes).map_err(|e| ProviderError(e.to_string()))
     }
     fn put_manifest(&self, claim_hex: &str, manifest: &EvidenceManifestV1) -> Result<(), ProviderError> {
         let path = crate::evidence::fs::manifest_path(&self.root, claim_hex);
-        write_atomic(&path, &borsh::to_vec(manifest).expect("borsh-serializable")).map_err(|e| ProviderError(e.to_string()))
+        crate::evidence::fs::write_provider_file(&path, &borsh::to_vec(manifest).expect("borsh-serializable"))
+            .map_err(|e| ProviderError(e.to_string()))
     }
     fn list_redemptions(&self) -> Result<Vec<String>, ProviderError> {
         list_redemption_ids(&self.root, || Ok(())).map_err(|e| ProviderError(e.to_string()))
@@ -1149,7 +1150,7 @@ impl RetentionMonitor {
 
 pub mod server {
     use super::*;
-    use crate::evidence::fs::{BoundedFileError, open_bounded_file, read_bounded_file};
+    use crate::evidence::fs::{BoundedFileError, open_bounded_file, read_bounded_file, write_provider_file};
 
     #[derive(Clone, Debug)]
     pub struct ServerConfig {
@@ -1455,7 +1456,7 @@ pub mod server {
                             Err(why) => respond(&mut stream, 409, why.as_bytes()),
                         }
                     }
-                    Target::Chunk(..) => match write_atomic(&file, &body) {
+                    Target::Chunk(..) => match write_provider_file(&file, &body) {
                         Ok(()) => respond(&mut stream, 201, b"stored"),
                         Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
                     },
@@ -1485,7 +1486,7 @@ pub mod server {
                                 }
                             }
                         }
-                        match write_atomic(&file, &body) {
+                        match write_provider_file(&file, &body) {
                             Ok(()) => respond(&mut stream, 201, b"stored"),
                             Err(e) => respond(&mut stream, 400, e.to_string().as_bytes()),
                         }
@@ -1628,6 +1629,37 @@ mod tests {
             fs::fetch_claim_material(&[dir.clone()], &claim, &roots, &limits, h(7)),
             Err(fs::ClaimFetchError::NoAdmissibleManifest { offered: 1, .. })
         ));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn concurrent_publishers_can_retry_without_sharing_temporary_files() {
+        use crate::evidence::fs;
+
+        let dir = scratch("concurrent-publish");
+        let claim = claim_hex();
+        let manifest = manifest();
+        let chunks = chunks();
+        let id = manifest_id_v1(&manifest);
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    barrier.wait();
+                    fs::publish(&dir, &claim, &manifest, &chunks).unwrap();
+                });
+            }
+        });
+        let target = fs::FsProvider::new(&dir);
+        assert_eq!(target.manifest_for(&claim).unwrap(), manifest);
+        let blocked = fs::chunk_path(&dir, id, 8);
+        std::fs::create_dir(&blocked).unwrap();
+        assert!(target.put_chunk(id, 8, b"write interrupted").is_err());
+        let dir_entries = std::fs::read_dir(blocked.parent().unwrap()).unwrap();
+        assert!(dir_entries.into_iter().all(|entry| !entry.unwrap().file_name().to_string_lossy().ends_with(".partial")));
+        std::fs::remove_dir(&blocked).unwrap();
+        target.put_chunk(id, 8, b"retry").unwrap();
+        assert_eq!(std::fs::read(blocked).unwrap(), b"retry");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
