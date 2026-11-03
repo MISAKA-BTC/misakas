@@ -88,7 +88,7 @@ pub(crate) fn quote_batch_stop_v1(
         return Err("Batch Stop reserved DAA has passed".into());
     }
     let filer = plan.check_rooted_slot_v1(state, at, plan.carrier_bytes_v1())?;
-    check_stop_filer_v1(frame, filer)?;
+    super::check_external_batch_filer_v1(frame, filer)?;
     let bond = state.bond(&filer).ok_or("Batch Stop filer absent")?;
     if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < params.min_collateral_sompi() {
         return Err("Batch Stop filer is no longer eligible".into());
@@ -144,7 +144,7 @@ pub(crate) fn check_batch_stop_slot_v1(
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
     let context = crate::palw_court_shared_tir_state_v1::context(state, claim)?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
-    check_stop_filer_v1(frame, filer)?;
+    super::check_external_batch_filer_v1(frame, filer)?;
     if !matches!(state.staged_court_row_v1(&Key::CourtSharedIds(claim)), Some(Row::CourtSharedIds(_))) {
         return Err("Batch Stop has no accepted FullIds".into());
     }
@@ -155,19 +155,6 @@ pub(crate) fn check_batch_stop_slot_v1(
         return Err("Batch Stop filer differs from the signer of the accepted notice".into());
     }
     Ok(bounds)
-}
-
-fn check_stop_filer_v1(
-    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
-    filer: crate::palw_state_v2::PalwBondKeyV2,
-) -> Result<(), String> {
-    if filer == frame.custody_v1().pledge_v1().producer
-        || frame.original_custody_v1().credit_v1(&filer).is_some()
-        || frame.original_custody_v1().grant_v1(&filer).is_some()
-    {
-        return Err("Batch Stop filer is liable on this claim".into());
-    }
-    Ok(())
 }
 
 pub(crate) struct ConstraintStopBatchOperandsV1 {

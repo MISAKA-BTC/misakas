@@ -4033,3 +4033,31 @@ B0 and relay agreed at virtual DAA 19,737. The two selected blocks
 contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-replay.zPzNBl/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-numerical-replay-live.MkveFL/page.json`.
+
+## Authenticate the booked numerical verification intent
+
+The candidate signs the network, version, original claim, scope,
+accepted initial notice, selected leaf, native policy, filer and
+the deterministic verification and terminal packet IDs. Before
+replay, the verifier checks the original notice and active
+eligible external filer, the original's packet ownership, and the
+encoded size and accepting DAA against the current assignment.
+Permitted repair can move the slot before inclusion without
+changing the signature. The verifier returns a local finding.
+This change has no new BCT1 operation, rooted verdict writer or
+public activation.
+
+The extracted suite passed 55 tests, including an actual ML-DSA-87
+round trip, altered signature scope, and refusal of unsupported
+versions, oversized signature lengths, truncation and trailing
+bytes. This extraction exercises the signature and bounded codec.
+The native accepting-state checks and verdict path have not run
+in an integrated fixture. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-signed-numerical.IroyTP/tests.log`.
+
+B0 and relay agreed at virtual DAA 19,739. Four additional
+selected blocks across the two contiguous pages contained no new
+Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-signed-numerical-live.IbSgtC/page.json`
+and
+`/private/tmp/misaka-t12-oom-20261102/g14-signed-verification-pair.P80gmo/page.json`.

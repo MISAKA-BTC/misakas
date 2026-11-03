@@ -17,8 +17,22 @@ use std::collections::BTreeMap;
 pub(crate) mod admission;
 pub(crate) mod constraint_stop;
 pub(crate) mod native_ranges;
+pub(crate) mod numerical_verification;
 
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
+
+fn check_external_batch_filer_v1(
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    filer: PalwBondKeyV2,
+) -> Result<(), String> {
+    if filer == frame.custody_v1().pledge_v1().producer
+        || frame.original_custody_v1().credit_v1(&filer).is_some()
+        || frame.original_custody_v1().grant_v1(&filer).is_some()
+    {
+        return Err("Batch filer is liable on this claim".into());
+    }
+    Ok(())
+}
 
 /// Per-submitter draft ceiling for a Batch-only original. Every reserved
 /// Part includes its full payload in the booked byte cost. Counting the

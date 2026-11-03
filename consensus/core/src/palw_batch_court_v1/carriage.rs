@@ -172,7 +172,7 @@ impl BorshDeserialize for BatchMaterialControlV1 {
     }
 }
 
-fn read_batch_signature_v1(r: &mut impl Read) -> io::Result<Vec<u8>> {
+pub(crate) fn read_batch_signature_v1(r: &mut impl Read) -> io::Result<Vec<u8>> {
     let length = u32::deserialize_reader(r)? as usize;
     if length != SIG {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Batch signature length"));
