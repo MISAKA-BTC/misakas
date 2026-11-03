@@ -1594,3 +1594,11 @@ was restarted against the same store. All 24 tests in the
 bounded run passed. Two unchanged tests that create multi-GiB
 sparse files returned ENOSPC in the initial HFS+ RAM-volume
 run and were filtered in this run.
+
+The two sparse-file tests also passed with the same pinned
+source in an APFS scratch directory. The 5 GiB sparse
+preflight added no allocated blocks to an empty file.
+Compiler output stayed in the owned RAM stage, the fixture
+files were removed, and the RAM volume was detached. The
+exact-source harness therefore has 26 passing cases across
+the two environments. This is transport-level coverage.
