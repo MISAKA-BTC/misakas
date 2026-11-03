@@ -1139,6 +1139,12 @@ pub(crate) struct PalwRootedClaimTokenizerV1<'a> {
 }
 
 impl<'a> PalwRootedClaimTokenizerV1<'a> {
+    pub(crate) fn opening_bounds_v1(&self) -> PalwRootedTokenizerOpeningBoundsV1 {
+        let mut bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(self.row.record_id_v1(), self.row.facts_v1());
+        bounds.full_ids_body_bytes = Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(self.ids.ids_v1().len() as u32));
+        bounds
+    }
+
     /// Check against an ID supplied by the native ordered court cursor.
     pub(crate) fn verifies_rendering(&self, expected_id: u32, opening: &PalwTokenTableOpeningV1) -> bool {
         self.row.facts_v1().verifies_rendering(expected_id, opening)

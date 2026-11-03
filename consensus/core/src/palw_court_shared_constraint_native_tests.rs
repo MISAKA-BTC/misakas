@@ -475,6 +475,12 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
         crate::palw_court_shared_material_intake_v1::batch::constraint_stop::STOP_INTENT_BYTES_V1);
     use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::BatchStopPayloadV1;
     let wire=borsh::to_vec(&(&end_only,&eog,eog_only.renderings)).unwrap();
+    assert!(matches!(
+        crate::palw_court_shared_tir_builder_store_v1::constraint_stop::verify_rooted_batch_stop_v1(
+            &b.state,&params,&rules,&wire,
+        ),
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(reason)) if reason.contains("no accepted FullIds")
+    ));
     let eog_bytes=borsh::object_length(&eog).unwrap() as u64;
     let decoded=BatchStopPayloadV1::decode_v1(&wire,eog_bytes).unwrap();
     assert_eq!(decoded.eog,eog);

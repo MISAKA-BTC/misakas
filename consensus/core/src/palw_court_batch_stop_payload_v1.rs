@@ -47,6 +47,12 @@ pub(crate) fn check_batch_stop_operands_v1(bytes: &[u8]) -> io::Result<(usize, u
     Ok((eog_count, siblings))
 }
 
+pub(crate) fn batch_stop_claim_v1(bytes: &[u8]) -> io::Result<Hash64> {
+    check_batch_stop_operands_v1(bytes)?;
+    let mut intent = &bytes[2..];
+    Hash64::deserialize_reader(&mut intent)
+}
+
 pub(crate) struct BatchStopPayloadV1 {
     pub intent: SignedConstraintStopIntentV1,
     pub eog: PalwTokenTableEogOpeningV1,
@@ -153,6 +159,7 @@ mod tests {
         let eog_bytes = borsh::object_length(&eog).unwrap() as u64;
         assert_eq!(borsh::object_length(&intent).unwrap() as u64, STOP_INTENT_BYTES_V1);
         let bytes = borsh::to_vec(&(&intent, &eog, Vec::<u8>::new())).unwrap();
+        assert_eq!(batch_stop_claim_v1(&bytes).unwrap(), intent.claim);
         let stop = BatchCourtWireV1::Stop(BatchStopControlV1 { operands: bytes.clone() });
         let mut carrier = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
         carrier.extend(borsh::to_vec(&stop).unwrap());

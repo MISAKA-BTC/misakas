@@ -1139,9 +1139,18 @@ impl TransitionBuilder<'_> {
                 )?;
                 Ok(())
             }
-            BatchCourtWireV1::Stop(_) => Err(PalwStateV2Error::CarriageInconsistent(
-                "Batch Stop terminal fold is dormant".into(),
-            )),
+            BatchCourtWireV1::Stop(control) => {
+                let rules = self.extras.native_court_rules_v1.filter(|rules| {
+                    &rules.at == at && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+                }).ok_or_else(|| {
+                    PalwStateV2Error::CarriageInconsistent("Batch Stop requires native rules at the accepting point and network".into())
+                })?;
+                let _finding = crate::palw_court_shared_tir_builder_store_v1::constraint_stop::verify_rooted_batch_stop_v1(
+                    &self.state, self.params, &rules, &control.operands,
+                )
+                .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
+                Err(PalwStateV2Error::CarriageInconsistent("Batch Stop terminal effects are dormant".into()))
+            }
         }
     }
 

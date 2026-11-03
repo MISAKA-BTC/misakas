@@ -2934,3 +2934,28 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-rooted-slot.OYy2TC/tests.log
 B0 and relay agreed at DAA 19,702 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-rooted-slot-live.tJLf8Y/page.json`.
+
+## Stop carrier to native adjudication
+
+The dormant accepting dispatcher now sends the literal Stop carrier
+to the native verifier at the exact accepting point and network. It
+reads the claim without allocating, checks the close byte ceiling,
+loads the same branch's FullIds and re-authenticates them against
+the original. The applicable registration comes from that original's
+historical tokenizer binding. The planner and verifier use one
+dedicated demand ordinal for constrained Stop. The verifier checks
+the rooted causal reservation, decodes against the registered EOG
+length, then invokes the one-pass Stop predicate. The dispatcher
+still refuses the terminal effect, so there is no rooted verdict,
+settlement or credit from this path.
+
+The extracted suite passed 37 checks, including literal claim
+extraction and refusal of a different demand ordinal. The native
+fixture now also tests refusal when a signed carrier has only
+locally available IDs and no accepted FullIds row. The integrated
+fixture and full processor build remain unrun. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-carrier-adjudication.bSRVOI/tests.log`.
+
+B0 and relay agreed at DAA 19,703 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-carrier-adjudication-live.QMbPer/page.json`.

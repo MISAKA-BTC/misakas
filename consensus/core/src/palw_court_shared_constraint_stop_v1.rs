@@ -14,6 +14,56 @@ use crate::{
 #[path = "palw_court_batch_stop_payload_v1.rs"]
 pub(crate) mod batch_payload;
 
+/// From the accepted BCT1 operand bytes to a native finding. The caller
+/// still owns the terminal state transition and any resulting economic effect.
+pub(crate) fn verify_rooted_batch_stop_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    rules: &NativeCourtRulesV1,
+    operands: &[u8],
+) -> Result<Option<Fault>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+    use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::ConstraintStopBatchOperandsV1;
+    use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let claim = batch_payload::batch_stop_claim_v1(operands).map_err(|why| E::Decode(why.to_string()))?;
+    let bytes = operands.len() as u64 + crate::palw_batch_court_v1::carriage::BATCH_STOP_WIRE_OVERHEAD_V1;
+    if bytes > rules.court.max_close_bytes() {
+        return Err(E::Decode("Batch Stop exceeds the native close byte limit".into()));
+    }
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(E::Decode)?;
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
+        .ok_or_else(|| E::Decode("Batch Stop original frame absent".into()))?;
+    let key = Key::CourtSharedIds(claim);
+    let Some(Row::CourtSharedIds(shared_ids)) = state.staged_court_row_v1(&key) else {
+        return Err(E::Decode("Batch Stop has no accepted FullIds".into()));
+    };
+    shared_ids.check(&key).map_err(E::Decode)?;
+    if shared_ids.scope_id != context.scope_id
+        || shared_ids.ids.len() != frame.original_v1().decode_tokens_executed as usize
+    {
+        return Err(E::Decode("Batch Stop FullIds differ from the original scope or count".into()));
+    }
+    let source = context.source(state).map_err(E::Decode)?;
+    let ids = source.retain_complete_ids_classified_v2(shared_ids.rows_root, &shared_ids.ids)?;
+    let tokenizer = palw_rooted_claim_tokenizer_v1(state, claim, &source, &ids)
+        .map_err(E::Decode)?
+        .ok_or_else(|| E::Decode("Batch Stop has no verified tokenizer registration for the original".into()))?;
+    let bounds = tokenizer.opening_bounds_v1();
+    let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(context.scope_id, frame.original_v1(), bounds)
+        .ok_or_else(|| E::Decode("Batch Stop original is outside the constrained Stop profile".into()))?;
+    plan.check_rooted_slot_v1(state, rules.at.daa_score, bytes).map_err(E::Decode)?;
+    let payload = batch_payload::BatchStopPayloadV1::decode_v1(operands, bounds.eog_opening_bytes)?;
+    let store = Store {
+        source,
+        units: &[],
+        params: super::ParameterMaterialV1::Borrowed(&[]),
+        ids: Some(&ids),
+        prompt: super::PromptMaterialV1::Missing,
+    };
+    let budget = replay::WorkBudget { max_material_bytes: bounds.eog_opening_bytes + 4, max_calls: bounds.eog_replay_calls };
+    store.verify_batch_stop_payload_v1(state, params, rules, &payload, budget).map_err(E::Decode)
+}
+
 pub(crate) const CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/shared-constraint-stop/v1/mldsa87";
 #[derive(Clone, borsh::BorshSerialize)]
 pub(crate) struct SignedConstraintStopIntentV1 {

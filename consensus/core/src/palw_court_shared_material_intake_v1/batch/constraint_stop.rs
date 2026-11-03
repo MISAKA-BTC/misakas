@@ -6,6 +6,7 @@ use crate::{
     palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptCommitmentV3, fp_claim_id_v3},
     palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     palw_state_v2::{PalwChainStateV2, PalwTransitionExtrasV1},
+    palw_tokenizer_rendering_v2::PalwRootedTokenizerOpeningBoundsV1,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -14,6 +15,8 @@ use std::ops::Range;
 // This is the signed intent size, before the EOG material and BCT1 framing.
 pub(crate) const STOP_INTENT_BYTES_V1: u64 =
     2 + 5 * 64 + 4 + 1 + (64 + 4) + 4 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
+/// One Stop delivery per original. Ordinary source demands use lower ordinals.
+pub(crate) const BATCH_STOP_ORDINAL_V1: u64 = u64::MAX;
 
 pub(crate) struct ConstraintStopBatchOperandsV1 {
     claim: Hash64,
@@ -52,6 +55,21 @@ impl ConstraintStopBatchOperandsV1 {
         original: &PalwFreePromptCommitmentV3,
         header: &PalwPublicTirBindingHeaderV1,
     ) -> Option<Self> {
+        let bounds = crate::palw_tokenizer_rendering_v2::palw_rooted_tokenizer_opening_bounds_v1(
+            state,
+            extras,
+            accepted_daa,
+            original,
+            header,
+        )?;
+        Self::from_bounds_v1(scope, original, bounds)
+    }
+
+    pub(crate) fn from_bounds_v1(
+        scope: Hash64,
+        original: &PalwFreePromptCommitmentV3,
+        bounds: PalwRootedTokenizerOpeningBoundsV1,
+    ) -> Option<Self> {
         let count = original.decode_tokens_executed;
         let limit = original.job.decode_token_limit;
         if !original.job.is_constraint()
@@ -64,13 +82,6 @@ impl ConstraintStopBatchOperandsV1 {
         {
             return None;
         }
-        let bounds = crate::palw_tokenizer_rendering_v2::palw_rooted_tokenizer_opening_bounds_v1(
-            state,
-            extras,
-            accepted_daa,
-            original,
-            header,
-        )?;
         Some(Self {
             claim: fp_claim_id_v3(original),
             scope,
@@ -88,7 +99,6 @@ impl ConstraintStopBatchOperandsV1 {
     /// The caller joins the returned Stop node to the case terminal.
     pub(crate) fn graph_v1(
         &self,
-        ordinal: u64,
         window: Range<u64>,
         verification_cost: ServiceCost,
         stop_cost: ServiceCost,
@@ -96,6 +106,7 @@ impl ConstraintStopBatchOperandsV1 {
         if stop_cost.bytes < self.carrier_bytes_v1() {
             return Err("Batch Stop cost omits signed carrier bytes".into());
         }
+        let ordinal = BATCH_STOP_ORDINAL_V1;
         let (verification, stop) = self.packet_ids_v1(ordinal)?;
         let packet = |id, cost| ServicePacket { id, release_daa: window.start, service_before: window.end, cost };
         let demand = MaximumBatchDemandV1 { ordinal, range_maximums: &self.full_ids_range, predecessors: &[], verification };
@@ -110,14 +121,9 @@ impl ConstraintStopBatchOperandsV1 {
 
     /// Check the retained original, actual FullIds acceptance and the exact
     /// Stop reservation. The scheduled verifier slot is a capacity promise.
-    pub(crate) fn check_rooted_slot_v1(
-        &self,
-        state: &PalwChainStateV2,
-        ordinal: u64,
-        at: u64,
-        carrier_bytes: u64,
-    ) -> Result<(), String> {
+    pub(crate) fn check_rooted_slot_v1(&self, state: &PalwChainStateV2, at: u64, carrier_bytes: u64) -> Result<(), String> {
         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+        let ordinal = BATCH_STOP_ORDINAL_V1;
         let key = Key::CourtBatchDemand(self.claim, ordinal);
         let Some(Row::CourtBatchDemand(demand)) = state.staged_court_row_v1(&key) else {
             return Err("Batch Stop has no accepted demand".into());
@@ -212,8 +218,8 @@ mod tests {
         let first = 3_121;
         let before = 9_999;
         let stop_bytes = operands.carrier_bytes_v1();
-        assert!(operands.graph_v1(0, first..before, cost(1), cost(stop_bytes - 1)).is_err());
-        let (demand, [verification, stop]) = operands.graph_v1(0, first..before, cost(1), cost(stop_bytes)).unwrap();
+        assert!(operands.graph_v1(first..before, cost(1), cost(stop_bytes - 1)).is_err());
+        let (demand, [verification, stop]) = operands.graph_v1(first..before, cost(1), cost(stop_bytes)).unwrap();
         let mut terminal = stop.clone();
         terminal.packet.id = h(4).as_bytes();
         terminal.predecessors = vec![stop.packet.id];
@@ -259,15 +265,16 @@ mod tests {
         for predecessors in causal.values_mut() {
             predecessors.sort_unstable();
         }
-        assert!(operands.check_slots_v1(0, finish_daa, stop_daa, stop_bytes, &book, &owned, &causal).is_ok());
-        assert!(operands.check_slots_v1(0, finish_daa - 1, stop_daa, stop_bytes, &book, &owned, &causal).is_ok());
-        assert!(operands.check_slots_v1(0, finish_daa + 1, stop_daa, stop_bytes, &book, &owned, &causal).is_err());
-        assert!(operands.check_slots_v1(0, finish_daa, stop_daa + 1, stop_bytes, &book, &owned, &causal).is_err());
-        assert!(operands.check_slots_v1(0, finish_daa, stop_daa, stop_bytes - 1, &book, &owned, &causal).is_err());
+        assert!(operands.check_slots_v1(BATCH_STOP_ORDINAL_V1, finish_daa, stop_daa, stop_bytes, &book, &owned, &causal).is_ok());
+        assert!(operands.check_slots_v1(0, finish_daa, stop_daa, stop_bytes, &book, &owned, &causal).is_err());
+        assert!(operands.check_slots_v1(BATCH_STOP_ORDINAL_V1, finish_daa - 1, stop_daa, stop_bytes, &book, &owned, &causal).is_ok());
+        assert!(operands.check_slots_v1(BATCH_STOP_ORDINAL_V1, finish_daa + 1, stop_daa, stop_bytes, &book, &owned, &causal).is_err());
+        assert!(operands.check_slots_v1(BATCH_STOP_ORDINAL_V1, finish_daa, stop_daa + 1, stop_bytes, &book, &owned, &causal).is_err());
+        assert!(operands.check_slots_v1(BATCH_STOP_ORDINAL_V1, finish_daa, stop_daa, stop_bytes - 1, &book, &owned, &causal).is_err());
         let mut foreign = owned.clone();
         foreign.remove(&verify_id);
-        assert!(operands.check_slots_v1(0, finish_daa, stop_daa, stop_bytes, &book, &foreign, &causal).is_err());
+        assert!(operands.check_slots_v1(BATCH_STOP_ORDINAL_V1, finish_daa, stop_daa, stop_bytes, &book, &foreign, &causal).is_err());
         causal.remove(&verify_id);
-        assert!(operands.check_slots_v1(0, finish_daa, stop_daa, stop_bytes, &book, &owned, &causal).is_err());
+        assert!(operands.check_slots_v1(BATCH_STOP_ORDINAL_V1, finish_daa, stop_daa, stop_bytes, &book, &owned, &causal).is_err());
     }
 }
