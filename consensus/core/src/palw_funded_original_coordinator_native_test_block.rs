@@ -184,6 +184,11 @@
                 let prepared = prepare_paired_original_v1(&b, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
                 let req = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap().prepare_requirements_v1(&b, &ctx,
                     PreparedRequirementBudgetsV1 { numerical: budgets.0, input: budgets.1, source: budgets.2 }).unwrap();
+                let envelope = req.numerical_batch_envelope_v1(&b, &ctx, 4_096).unwrap();
+                assert_eq!(envelope.scope, req.source_graph_v1().unwrap().absolute_scope_v3());
+                assert!(!envelope.maximums_v1().is_empty());
+                assert_eq!(envelope.demand_ranges_v1().flatten().copied().collect::<Vec<_>>(), envelope.maximums_v1());
+                assert!(req.numerical_batch_envelope_v1(&b, &ctx, envelope.maximums_v1().len() - 1).is_err());
                 let signers = req.frame_v1().custody_v1().liable_signers_v1();
                 let (after_signer, full) = funded_book_candidate_v1(&b, &req, &derivation, &admission, &signers).ok().unwrap();
                 let bound = &full.claims[&claim];
@@ -191,6 +196,36 @@
                 assert_eq!(bound.packet_ids.len() as u64, derivation.branch_count());
                 assert_eq!(full.book.packets.len() as u64, derivation.branch_count());
                 assert_eq!(after_signer.claims[&claim].packet_ids.len() as u64, liable * service_profile.packets_per_signer);
+                // Feed the actual numerical input geometry into the Batch
+                // scheduler while the original still has no Claim row.
+                use crate::palw_court_shared_material_intake_v1::{
+                    MaterialIntakeScheduleV1,
+                    batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1},
+                };
+                use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
+                let demands = envelope.demand_ranges_v1().enumerate()
+                    .map(|(ordinal, range_maximums)| MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[] })
+                    .collect::<Vec<_>>();
+                let notice = bound.original_accepted_daa + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
+                let terminal = h(0xB47C).as_bytes();
+                let plan = BatchAdmissionV1 {
+                    claim, scope: envelope.scope, demands: &demands, terminal, recovery_daa: 1, maximum_packets: 32_768,
+                    window: crate::palw_batch_court_v1::BatchCourtWindowV1 {
+                        claim_accepted_daa: bound.original_accepted_daa, challenge_opened_daa: notice,
+                        collect_until_daa: bound.hard_deadline_daa, material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa,
+                    },
+                };
+                let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
+                let graph = vec![CausalServicePacketV1 {
+                    packet: ServicePacket { id: terminal, release_daa: notice + 1, service_before: bound.hard_deadline_daa - 1, cost: cost(1) },
+                    predecessors: vec![],
+                }];
+                let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 100, cover: budgets.1 };
+                let (daa, batch) = plan.reserve_for_original_v1(
+                    crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(&full), graph, storage, |bytes| Ok(cost(bytes)),
+                ).unwrap();
+                assert!(daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
+                assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
                 // The served book itself is untouched by the dry run.
                 assert!(b.state.court_service_state_v1().unwrap().claims.is_empty());
             }

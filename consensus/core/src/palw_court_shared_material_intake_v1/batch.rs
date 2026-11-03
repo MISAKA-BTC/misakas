@@ -15,6 +15,7 @@ use borsh::BorshSerialize;
 use std::collections::BTreeMap;
 
 pub(crate) mod admission;
+pub(crate) mod native_ranges;
 
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
 

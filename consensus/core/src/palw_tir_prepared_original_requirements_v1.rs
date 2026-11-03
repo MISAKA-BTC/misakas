@@ -64,6 +64,39 @@ impl PreparedOriginalRequirementsV1 {
     pub(super) fn source_graph_v1(&self)->Result<&crate::palw_court_source_material_graph_v3::NativeSourceMaterialGraphV3,PreparedRequirementsErrorV1>{
         match &self.source{PreparedSourceRequirementsV1::Native{graph,..}=>Ok(graph),PreparedSourceRequirementsV1::MissingSharedServiceNamespace=>Err(PreparedRequirementsErrorV1::MissingSharedServiceNamespace)}
     }
+    /// Numerical input envelope from the authenticated preclaim snapshot.
+    /// Semantic and terminal profiles must be priced separately.
+    pub(super) fn numerical_batch_envelope_v1(
+        &self, b: &TransitionBuilder<'_>, ctx: &PalwBlockContextV2, maximum_ranges: usize,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<
+        crate::palw_court_shared_material_intake_v1::batch::native_ranges::NumericalBatchEnvelopeV1,
+    >, PreparedRequirementsErrorV1> {
+        self.geometry.prepared.check_preclaim_context_v1(b, ctx).map_err(PreparedRequirementsErrorV1::Geometry)?;
+        let PreparedSourceRequirementsV1::Native { namespace, graph } = &self.source else {
+            return Err(PreparedRequirementsErrorV1::MissingSharedServiceNamespace);
+        };
+        let book = b.state.court_service_state_v1().ok_or(PreparedRequirementsErrorV1::MissingSharedServiceNamespace)?;
+        if *namespace != crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(book.profile_id) {
+            return Err(PreparedRequirementsErrorV1::Geometry(PreparedGeometryErrorV1::State(refused("prepared Batch namespace changed"))));
+        }
+        let class = self.frame_v1().original_v1().job.class_id;
+        let record = b.state.tir_class_v1(&class).ok_or_else(|| PreparedRequirementsErrorV1::Geometry(
+            PreparedGeometryErrorV1::State(refused("prepared Batch class absent")),
+        ))?;
+        let program = crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|error|
+            PreparedRequirementsErrorV1::Native(match error {
+                crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(c) => crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(c),
+                crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e.to_string()),
+            })
+        )?;
+        let envelope = crate::palw_court_shared_material_intake_v1::batch::native_ranges::numerical_batch_envelope_v1(
+            self.frame_v1(), self.geometry.source_v1(), &self.inputs, &program, *namespace, maximum_ranges,
+        ).map_err(PreparedRequirementsErrorV1::Native)?;
+        if envelope.scope != graph.absolute_scope_v3() {
+            return Err(PreparedRequirementsErrorV1::Geometry(PreparedGeometryErrorV1::State(refused("prepared Batch graph scope differs"))));
+        }
+        Ok(envelope)
+    }
     /// Borrowing join avoids a self-referential owner and keeps all original
     /// Source/num/cover tickets alive. No caller profile or surrogate Claim.
     pub(super) fn numerical_material_join_v1<'a>(&'a self,b:&TransitionBuilder<'_>,ctx:&PalwBlockContextV2,max_visits:u64)

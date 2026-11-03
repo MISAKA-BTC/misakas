@@ -2527,3 +2527,30 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-latest-notice-plan.Klmg3H/tests.l
 B0 and relay agreed at DAA 19,689 and the selected interval contained no
 new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-plan-live.gLbK4c/page.json`.
+
+## Native numerical input ranges before original admission
+
+The prepared-original candidate now derives a response envelope from
+its authenticated Source and all-root input cover. For each possible
+selected numerical root it coalesces step boundaries into native
+StepRuns, accounts the root itself, and uses the native parameter,
+prompt and FullIds body bounds. It deduplicates repeated material and
+takes the maximum at each canonical range position. A single
+partition of those positions fits both the range and part limits, so
+every covered root uses the same prebookable demand positions. Resource
+quotes cover retained maxima and per-root scratch.
+
+The preclaim funded fixture passes the real native input envelope to
+the latest-notice planner against a rooted-book candidate. It uses
+fixture service costs and an artificial terminal. The native test
+still needs integrated compilation and execution. The extracted suite
+passed 30 checks, including per-position dominance, partitioning by
+both wire limits and no partial update when the range cap is exceeded.
+This covers the inputs of one selected numerical root. Additional
+turns, simultaneous roots, semantic and verdict costs, and public
+carrier accounting remain unverified.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-range-envelope.p0ElGo/tests.log`.
+
+B0 and relay agreed at DAA 19,690, with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-native-ranges-live.CtYRSX/page.json`.

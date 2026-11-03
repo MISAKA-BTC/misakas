@@ -568,6 +568,12 @@ pub(crate) fn required_parameter_leaves_v1(
     let cover = Source::root_input_cover_native_v1(&source, record, layout, budget).map_err(|e| e.to_string())?;
     Ok(cover.parameters_v1().union.clone())
 }
+fn parameter_body_bound_v1(program: &misaka_palw_tir::program::TirProgramV1, leaf: u32) -> Result<u64, String> {
+    use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
+    palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, &[leaf])
+        .and_then(|n| n.checked_sub(4))
+        .ok_or_else(|| "material parameter width not derivable".into())
+}
 /// Exact native byte bound of one target. Declared sizes above it are refused.
 pub(crate) fn target_bound_v1(
     state: &PalwChainStateV2,
@@ -577,15 +583,12 @@ pub(crate) fn target_bound_v1(
     program: &misaka_palw_tir::program::TirProgramV1,
     leaves: &[u32],
 ) -> Result<u64, String> {
-    use crate::palw_tir_court_v1::{PalwTirParamCarriageV1, palw_tir_param_carriage_bytes_v1};
     match target {
         MaterialTargetV1::Parameter { leaf } => {
             if leaves.binary_search(&leaf).is_err() {
                 return Err("material parameter is not an input of any numerical root of the original".into());
             }
-            palw_tir_param_carriage_bytes_v1(program, PalwTirParamCarriageV1::PerLeafOpenings, &[leaf])
-                .and_then(|n| n.checked_sub(4))
-                .ok_or_else(|| "material parameter width not derivable".into())
+            parameter_body_bound_v1(program, leaf)
         }
         MaterialTargetV1::PromptFlat => match prompt_form(state, c.claim)? {
             PromptForm::Flat => Ok(4 + 4 * u64::from(source.header_v1().job_context.declared_prefill_tokens)),
