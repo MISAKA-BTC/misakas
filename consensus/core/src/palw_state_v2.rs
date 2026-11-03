@@ -15055,6 +15055,7 @@ fn apply_palw_transition_v7_inner(
     let mut builder =
         TransitionBuilder::try_new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court, extras)?;
 
+    builder.native_reservation.reserve_output_owners_v1(ctx).map_err(PalwStateV2Error::NativeResource)?;
     builder.reserve_assignment_material_slots_v2(extras.positive_assignment_actions.len())?;
 
     // Prospective custody is authenticated against the pre-object parent. A same-block
@@ -15740,13 +15741,16 @@ fn apply_palw_transition_v7_inner(
     palw_claim_local_checkpoint_fold_v1::write_claim_local_checkpoint_v1(&mut builder, parent, ctx)?;
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
     // Weight / frontier / position entries, exactly once, at the end.
-    if (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature) {
+    let weights_changed = (parent.safe_weight, parent.bounded_immature) != (builder.state.safe_weight, builder.state.bounded_immature);
+    let frontier_changed = old_frontier != new_frontier;
+    builder.reserve_final_journal_v1(1 + usize::from(weights_changed) + usize::from(frontier_changed))?;
+    if weights_changed {
         builder.entries.push(PalwDeltaEntryV2::Weights {
             old: (parent.safe_weight, parent.bounded_immature),
             new: (builder.state.safe_weight, builder.state.bounded_immature),
         });
     }
-    if old_frontier != new_frontier {
+    if frontier_changed {
         builder.entries.push(PalwDeltaEntryV2::Frontier { old: old_frontier, new: new_frontier });
     }
     builder.entries.push(PalwDeltaEntryV2::LastPoint { old: parent.last_point, new: Some(*ctx) });

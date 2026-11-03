@@ -61,6 +61,19 @@ impl NativeTransitionReservationV1 {
         self.requests = requests;
         Ok(())
     }
+    /// Admit the fixed output frames before the fold builds their contents.
+    pub(crate) fn reserve_output_owners_v1(
+        &mut self,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), NativeCoverageV1> {
+        if !self.is_tracking_v1() {
+            return Ok(());
+        }
+        let delta = value_requests_v1(&PalwStateDeltaV2 { point: *point, entries: Vec::new() })?;
+        let skips = value_requests_v1(&Vec::<(crate::BlockHash, String)>::new())?;
+        let requests = delta.checked_add(skips).ok_or_else(|| NativeCoverageV1::overflow::<Self>("fresh output owners"))?;
+        self.grow_v1(requests)
+    }
     fn take_value_v1<T: NativeHeapV1>(&mut self, value: T) -> Result<NativeRetainedV1<T>, NativeCoverageV1> {
         let requests = value_requests_v1(&value)?;
         self.split_owner_v1(value, requests)
