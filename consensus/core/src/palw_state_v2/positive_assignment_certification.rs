@@ -558,71 +558,18 @@ impl TransitionBuilder<'_> {
         actual_origin(ctx, origin)?;
         let mut owned = read(&self.state, statement.subject, 0)?;
         let row = &mut owned.row;
-        let h = &row.fixed.header;
-        if row.fixed.outcome.is_some() {
-            return Err(refuse("P already decided"));
-        }
-        let draw = row.draw.as_ref().ok_or_else(|| refuse("P not drawn"))?;
-        let finality = row.fixed.finality.ok_or_else(|| refuse("actual full Finish target not fixed"))?;
-        if ctx.daa_score > draw.meta.deadline_daa {
-            return Err(refuse("P attestation deadline elapsed"));
-        }
-        let verifier = Digest(palw_kernel_bond_id_v1(signer));
-        if !draw.positions.contains(&verifier) || row.votes.iter().any(|v| v.statement.verifier_bond == verifier) {
-            return Err(refuse("not drawn or duplicate bond vote"));
-        }
-        let record = self.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
-        if !palw_certification_pool_admits_v1(
-            &h.policy,
-            h.commit_origin.accepted_daa,
-            &h.worker_operator.0,
-            matches!(record.status, PalwBondStatusV2::Active),
-            record.registered_daa,
-            record.collateral,
-            &record.operator_id.as_bytes(),
-        ) {
-            return Err(refuse("actual verifier eligibility changed"));
-        }
-        let key: &[u8; PUBKEY_BYTES] = record.pubkey.as_slice().try_into().map_err(refuse)?;
-        let result = PositiveRowsV2::new(&self.state).bundle(h.claim).map_err(refuse)?;
-        statement
-            .authenticate(
-                &result.result.result,
-                &PositiveAttestationExpectationsV2 {
-                    scope: h.scope,
-                    policy: h.policy_id,
-                    draw_anchor: draw.meta.id,
-                    witness: finality.witness,
-                    verifier_bond: verifier,
-                    verifier: principal(key),
-                    checked_material: finality.material.digest,
-                },
-                key,
-                signature,
-            )
-            .map_err(refuse)?;
-        let liability_amount = if statement.verdict == PositiveCourtVerdictV2::PositiveChecked {
+        let vote = project_positive_vote_v2(&self.state, row, signer, statement, signature, origin)?;
+        if statement.verdict == PositiveCourtVerdictV2::PositiveChecked {
             let session = session.ok_or_else(|| unavailable("complete native checked/closed-topology session missing"))?;
             check_session(self, ctx, row, session)?;
-            let amount = crate::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(h.worker_gain, h.policy.k as u8);
-            let free = u128::from(record.collateral)
+            let collateral = self.state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?.collateral;
+            let free = u128::from(collateral)
                 .checked_sub(self.committed_at(signer, ctx.daa_score))
                 .ok_or_else(|| refuse("verifier already overcommitted"))?;
-            if u128::from(amount) > free {
+            if u128::from(vote.liability_amount) > free {
                 return Err(refuse("verifier cannot back P liability"));
             }
-            amount
-        } else {
-            0
-        };
-        let vote = PositiveCertificationVoteV2 {
-            bond: NativeOutpoint { transaction: NativeHash64(signer.0.transaction_id.as_bytes()), index: signer.0.index },
-            key: *key,
-            statement: *statement,
-            signature: *signature,
-            origin,
-            liability_amount,
-        };
+        }
         row.votes.push(vote);
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
@@ -855,6 +802,99 @@ impl TransitionBuilder<'_> {
         });
         write(self, row)
     }
+}
+
+fn project_positive_vote_v2(
+    state: &PalwChainStateV2,
+    row: &PositiveCertificationRowV2,
+    signer: &PalwBondKeyV2,
+    statement: &PositiveCourtAttestationV2,
+    signature: &[u8; SIGNATURE_BYTES],
+    origin: AcceptedOrigin,
+) -> Result<PositiveCertificationVoteV2, PalwStateV2Error> {
+    let h = &row.fixed.header;
+    if row.fixed.outcome.is_some() {
+        return Err(refuse("P already decided"));
+    }
+    let draw = row.draw.as_ref().ok_or_else(|| refuse("P not drawn"))?;
+    let finality = row.fixed.finality.ok_or_else(|| refuse("actual full Finish target not fixed"))?;
+    if origin.accepted_daa < draw.meta.origin.daa
+        || origin.accepted_blue_score < draw.meta.origin.blue_score
+        || origin.accepted_daa > draw.meta.deadline_daa
+        || origin.accepted_daa < finality.origin.accepted_daa
+        || origin.accepted_blue_score <= finality.origin.accepted_blue_score
+    {
+        return Err(refuse("P attestation deadline elapsed"));
+    }
+    let verifier = Digest(palw_kernel_bond_id_v1(signer));
+    if !draw.positions.contains(&verifier) || row.votes.iter().any(|v| v.statement.verifier_bond == verifier) {
+        return Err(refuse("not drawn or duplicate bond vote"));
+    }
+    let record = state.bonds.get(signer).ok_or(PalwStateV2Error::MissingBond(*signer))?;
+    if !palw_certification_pool_admits_v1(
+        &h.policy,
+        h.commit_origin.accepted_daa,
+        &h.worker_operator.0,
+        matches!(record.status, PalwBondStatusV2::Active),
+        record.registered_daa,
+        record.collateral,
+        &record.operator_id.as_bytes(),
+    ) {
+        return Err(refuse("actual verifier eligibility changed"));
+    }
+    let key: &[u8; PUBKEY_BYTES] = record.pubkey.as_slice().try_into().map_err(refuse)?;
+    let result = PositiveRowsV2::new(state).bundle(h.claim).map_err(refuse)?;
+    check_positive_certification_result_links_v2(h, &result.result, &result.case).map_err(refuse)?;
+    statement
+        .authenticate(
+            &result.result.result,
+            &PositiveAttestationExpectationsV2 {
+                scope: h.scope,
+                policy: h.policy_id,
+                draw_anchor: draw.meta.id,
+                witness: finality.witness,
+                verifier_bond: verifier,
+                verifier: principal(key),
+                checked_material: finality.material.digest,
+            },
+            key,
+            signature,
+        )
+        .map_err(refuse)?;
+    let liability_amount = if statement.verdict == PositiveCourtVerdictV2::PositiveChecked {
+        crate::palw_g14_lane_closure_v1::palw_kernel_signer_lock_amount_v1(h.worker_gain, h.policy.k as u8)
+    } else {
+        0
+    };
+    Ok(PositiveCertificationVoteV2 {
+        bond: NativeOutpoint { transaction: NativeHash64(signer.0.transaction_id.as_bytes()), index: signer.0.index },
+        key: *key,
+        statement: *statement,
+        signature: *signature,
+        origin,
+        liability_amount,
+    })
+}
+
+pub(super) fn check_replayed_positive_vote_v2(
+    prefix: &PalwChainStateV2,
+    after: &PalwChainStateV2,
+    signer: &PalwBondKeyV2,
+    statement: &PositiveCourtAttestationV2,
+    signature: &[u8; SIGNATURE_BYTES],
+    origin: AcceptedOrigin,
+) -> Result<(), PalwStateV2Error> {
+    let prior = read(prefix, statement.subject, 0)?;
+    let vote = project_positive_vote_v2(prefix, &prior.row, signer, statement, signature, origin)?;
+    let next = read(after, statement.subject, 0)?;
+    if next.row.fixed.header != prior.row.fixed.header
+        || next.row.fixed.finality != prior.row.fixed.finality
+        || next.row.draw != prior.row.draw
+        || next.row.votes.split_last() != Some((&vote, prior.row.votes.as_slice()))
+    {
+        return Err(refuse("archived P vote differs from the literal checked transition"));
+    }
+    Ok(())
 }
 
 pub(super) fn check_rooted_positive_finish_v2(

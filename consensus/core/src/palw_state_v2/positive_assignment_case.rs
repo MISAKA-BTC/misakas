@@ -1720,6 +1720,98 @@ fn check_replayed_court_projection_v2(
 }
 
 impl NativeAssignedCourtV2 {
+    fn original_verifier_roster_v2<'a>(
+        backing: &'a NativeCommittedAssignedCaseV2,
+        assignment: &AssignmentRow,
+        remaining_work: &mut u64,
+    ) -> Result<super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2<'a>, PalwStateV2Error> {
+        use misaka_palw_positive_contract::assignment::{
+            control_material::AssignmentControlViewV2,
+            journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
+            open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
+        };
+        let material = backing.material();
+        let schedule = &material.native_preimages.source_policy.work;
+        let raw = backing.open_raw();
+        let quote = schedule.court_body_work(raw.len() as u64).map_err(refuse)?;
+        let quote = quote.checked_mul(2).ok_or_else(|| refuse("verifier roster wire work overflow"))?;
+        *remaining_work = remaining_work.checked_sub(quote).ok_or_else(|| refuse("verifier roster wire work"))?;
+        let open =
+            AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
+        let header = open.header();
+        if header.kind != AssignmentJournalEventKindV2::Open
+            || header.assignment != assignment.id()
+            || header.origin != assignment.origin
+        {
+            return Err(refuse("verifier roster must belong to the original Open"));
+        }
+        let cap = material.assignment_policy.max_frame_bytes;
+        let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
+        let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
+        let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
+        let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
+        if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
+            return Err(refuse("verifier roster differs from original custody"));
+        }
+        super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
+            roster,
+            schedule.per_control,
+            remaining_work,
+        )
+    }
+
+    fn project_assigned_vote_case_v2(
+        &mut self,
+        backing: &NativeCommittedAssignedCaseV2,
+        prefix: &PalwChainStateV2,
+        prior: &CaseRow,
+        statement: &misaka_palw_positive_contract::certification::PositiveCourtAttestationV2,
+        origin: AcceptedOrigin,
+        prior_journal: (u64, u64),
+        body_bytes: u64,
+    ) -> Result<(CaseRow, PalwBondKeyV2), PalwStateV2Error> {
+        let result = self.court.result();
+        let material = self.positive_final.ok_or_else(missing)?;
+        if prior.status != misaka_palw_positive_contract::messages::ClaimStatus::PositivePassed
+            || prior.positive_witness != Some(statement.witness)
+            || statement.checked_material != material.digest
+            || statement.subject != misaka_palw_positive_contract::native::certification_subject(result)
+            || statement.case != prior.case
+            || statement.result != prior.result
+            || statement.scope != result.scope
+        {
+            return Err(refuse("vote differs from the checked Case and Finish"));
+        }
+        use crate::palw_positive_certification_v2::{MAX_POSITIVE_DRAW_POSITIONS_V2, positive_certification_row_bytes_v2};
+        let row_bytes = positive_certification_row_bytes_v2(prefix, statement.subject)
+            .map_err(PalwStateV2Error::NativeResource)?
+            .ok_or_else(missing)?
+            .len() as u64;
+        let schedule = &backing.material().native_preimages.source_policy.work;
+        let positions = u64::from(MAX_POSITIVE_DRAW_POSITIONS_V2);
+        // Bound the row decodes and both live session vote-authentication passes
+        // before any of them runs. The same quote applies during cold replay.
+        let scan_bytes = row_bytes.checked_add(body_bytes).and_then(|bytes| bytes.checked_mul(4)).ok_or_else(source::capacity)?;
+        let scan = schedule.court_body_work(scan_bytes).map_err(refuse)?;
+        let authentication = schedule.court_operation_work(2 * positions, 2 * positions, 0, 0).map_err(refuse)?;
+        let work = scan.checked_add(authentication).ok_or_else(source::capacity)?;
+        self.remaining_work = self.remaining_work.checked_sub(work).ok_or_else(source::capacity)?;
+        let roster = Self::original_verifier_roster_v2(backing, backing.assignment(), &mut self.remaining_work)?;
+        let mut keys =
+            roster.keys().filter(|key| Digest(crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(key)) == statement.verifier_bond);
+        let signer = keys.next().ok_or_else(|| refuse("vote bond is absent from the original cohort"))?;
+        if keys.next().is_some() {
+            return Err(refuse("ambiguous vote bond in original cohort"));
+        }
+        let retained = crate::palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2(body_bytes)
+            .ok_or_else(source::capacity)?;
+        let mut case = *prior;
+        case.usage.retained_bytes = case.usage.retained_bytes.checked_add(retained).ok_or_else(source::capacity)?;
+        case.last_event = origin;
+        self.consume_court_transport_reserve_v2(backing.material(), &case, prior_journal, retained, 0)?;
+        Ok((case, signer))
+    }
+
     /// Authenticate the source request against its exact Case and pre-event role.
     fn check_source_request_v2(
         &mut self,
@@ -1731,11 +1823,6 @@ impl NativeAssignedCourtV2 {
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2;
-        use misaka_palw_positive_contract::assignment::{
-            control_material::AssignmentControlViewV2,
-            journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
-            open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
-        };
 
         let PositiveNativeOperationV2::SourceRequest { request, requester, signature } = &body.operation else {
             return Ok(());
@@ -1762,35 +1849,7 @@ impl NativeAssignedCourtV2 {
         {
             step.key
         } else {
-            // The archive already authenticated this Open record against the
-            // selected parent and actual op8. Bound the second read and the
-            // verifier lookups before decoding the retained roster.
-            let raw = backing.open_raw();
-            let quote = schedule.court_body_work(raw.len() as u64).map_err(refuse)?;
-            let quote = quote.checked_mul(2).ok_or_else(|| refuse("source roster wire work overflow"))?;
-            self.remaining_work = self.remaining_work.checked_sub(quote).ok_or_else(|| refuse("source roster wire work"))?;
-            let open =
-                AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
-            let header = open.header();
-            if header.kind != AssignmentJournalEventKindV2::Open
-                || header.assignment != assignment.id()
-                || header.origin != assignment.origin
-            {
-                return Err(refuse("source roster must belong to the original Open"));
-            }
-            let cap = material.assignment_policy.max_frame_bytes;
-            let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
-            let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
-            let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
-            let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
-            if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
-                return Err(refuse("source requester roster differs from original custody"));
-            }
-            let roster = super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
-                roster,
-                schedule.per_control,
-                &mut self.remaining_work,
-            )?;
+            let roster = Self::original_verifier_roster_v2(backing, assignment, &mut self.remaining_work)?;
             super::positive_assignment_certification::resolve_drawn_source_key_v2(
                 state,
                 assignment,
@@ -1895,6 +1954,42 @@ fn case_replay_body_limits_v2(
     }
 }
 
+fn check_replayed_case_journal_event_v2(
+    after: &PalwChainStateV2,
+    backing: &NativeCommittedAssignedCaseV2,
+    record: &NativeCommittedCaseRecordV2,
+) -> Result<AcceptedMaterial, PalwStateV2Error> {
+    let pin = backing.pin();
+    let material = backing.material();
+    let carriage = record.carriage();
+    let NativeRowBody::JournalHead(head) = required(after, NativeRowKey::JournalHead(pin.case))? else {
+        return Err(refuse("archived event has no rooted head"));
+    };
+    let limits = CaseJournalLimits {
+        max_record_bytes: material.positive_policy.max_case_journal_bytes,
+        max_payload_bytes: material.positive_policy.max_case_journal_bytes,
+        max_aux_entries: 2,
+        max_aux_preimage_bytes: crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2 as u64,
+        max_total_preimage_bytes: material.positive_policy.max_case_journal_bytes,
+        max_logical_heap_bytes: material.positive_policy.max_case_heap_bytes,
+    };
+    let record = CaseJournalRecordView::decode(record.raw(), limits).map_err(refuse)?;
+    let header = record.header();
+    if header.scope != pin.scope
+        || header.case != pin.case
+        || header.result != pin.result
+        || header.origin != carriage.origin()
+        || !assigned_case_native_carrier_matches_v2(carriage.transaction(), record)
+        || head.sequence != header.sequence
+        || head.previous != header.previous
+        || head.head != record.head()
+        || head.history != record.history()
+    {
+        return Err(refuse("archived Case head differs from literal accepted material"));
+    }
+    Ok(head.history)
+}
+
 /// Replay the arithmetic projection in event order against actual native
 /// pre-event role state. Source and certification reconcile separately.
 fn replay_assigned_court_history_v2(
@@ -1964,7 +2059,35 @@ fn replay_assigned_court_history_v2(
                 .ok_or_else(|| refuse("duplicate source event changed the rooted journal"))?;
             event.check_committed(after)?;
         }
-        if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
+        if let Op::PositiveCourtAttestation { attestation, signature } = &body.operation {
+            let after = match backing.records().get(index + 1) {
+                Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                None => state,
+            };
+            let origin = carriage.origin();
+            let (case, signer) = machine.project_assigned_vote_case_v2(
+                backing,
+                prefix,
+                &prior,
+                attestation,
+                origin,
+                (prior_journal, index as u64),
+                body_bytes.len() as u64,
+            )?;
+            reject_legacy_aliases(prefix, &a, machine.court.result())?;
+            if prior.unresolved_fraud != 0 || required(after, NativeRowKey::Case(pin.case))? != NativeRowBody::Case(case) {
+                return Err(refuse("archived vote has unresolved fraud or a different Case checkpoint"));
+            }
+            check_replayed_case_journal_event_v2(after, backing, record)?;
+            super::positive_assignment_certification::check_replayed_positive_vote_v2(
+                prefix,
+                after,
+                &signer,
+                attestation,
+                signature,
+                origin,
+            )?;
+        } else {
             let replayed = machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
             if matches!(&body.operation, Op::WitnessCommit { .. }) {
                 let expected = machine.project_witness_opening_v2(
@@ -2041,40 +2164,15 @@ fn replay_assigned_court_history_v2(
                     }
                 }
                 if case.status == misaka_palw_positive_contract::messages::ClaimStatus::PositivePassed {
-                    let NativeRowBody::JournalHead(head) = required(after, NativeRowKey::JournalHead(pin.case))? else {
-                        return Err(refuse("archived Finish has no rooted head"));
-                    };
-                    let limits = CaseJournalLimits {
-                        max_record_bytes: material.positive_policy.max_case_journal_bytes,
-                        max_payload_bytes: material.positive_policy.max_case_journal_bytes,
-                        max_aux_entries: 2,
-                        max_aux_preimage_bytes: crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2
-                            as u64,
-                        max_total_preimage_bytes: material.positive_policy.max_case_journal_bytes,
-                        max_logical_heap_bytes: material.positive_policy.max_case_heap_bytes,
-                    };
-                    let record = CaseJournalRecordView::decode(record.raw(), limits).map_err(refuse)?;
-                    let header = record.header();
-                    if header.scope != pin.scope
-                        || header.case != pin.case
-                        || header.result != pin.result
-                        || header.origin != carriage.origin()
-                        || !assigned_case_native_carrier_matches_v2(carriage.transaction(), record)
-                        || head.sequence != header.sequence
-                        || head.previous != header.previous
-                        || head.head != record.head()
-                        || head.history != record.history()
-                    {
-                        return Err(refuse("archived Finish head differs from literal checked material"));
-                    }
+                    let history = check_replayed_case_journal_event_v2(after, backing, record)?;
                     let witness = case.positive_witness.ok_or_else(missing)?;
                     super::positive_assignment_certification::check_rooted_positive_finish_v2(
                         after,
                         machine.court.result(),
                         witness,
-                        head.history,
+                        history,
                     )?;
-                    machine.bind_positive_finish_v2(head.history)?;
+                    machine.bind_positive_finish_v2(history)?;
                 }
             }
             if matches!(&body.operation, Op::Expire { .. }) {
@@ -2348,12 +2446,63 @@ impl TransitionBuilder<'_> {
     }
     pub(super) fn apply_positive_assignment_attestation_raw_v2(
         &mut self,
-        _ctx: &PalwBlockContextV2,
+        ctx: &PalwBlockContextV2,
         action: &super::positive_assignment_raw::PositiveAssignmentRawActionV2,
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
-        self.prepare_case_predecessor_v2(action, body)?;
-        Err(missing())
+        use crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeOperationV2 as Op;
+        let Op::PositiveCourtAttestation { attestation, signature } = &body.operation else {
+            return Err(refuse("expected literal Gate C attestation"));
+        };
+        let (backing, mut machine, prior) = self.prepare_case_predecessor_v2(action, body)?;
+        let origin = action.origin();
+        if prior.last_event.accepting_block.0 == ctx.block.as_bytes() {
+            return Err(refuse("vote requires a Case at the selected-parent frontier"));
+        }
+        let raw = action.transaction().payload.get(3..).ok_or_else(missing)?;
+        super::positive_assignment_materials::quote_assigned_case_followup_journal_v2(backing, raw.len())?;
+        let _body = machine.reserve_operation_v2(raw, backing.material())?;
+        if !canonical_equal(body, raw) {
+            return Err(refuse("current vote differs from literal carrier"));
+        }
+        let work = backing
+            .material()
+            .native_preimages
+            .source_policy
+            .work
+            .court_operation_work(0, self.extras.positive_assignment_actions.len() as u64, 0, 0)
+            .map_err(refuse)?;
+        machine.remaining_work = machine.remaining_work.checked_sub(work).ok_or_else(source::capacity)?;
+        if self.extras.positive_assignment_actions.iter().any(|scheduled| {
+            let other = &scheduled.action;
+            other.transaction().payload.get(7) == Some(&12)
+                && matches!(other.case_backing(), Ok(NativeAssignedCaseBackingV2::Committed(case)) if case.pin().case == prior.case)
+        }) {
+            return Err(refuse("vote shares the Case with an accepted settlement"));
+        }
+        let prior_bytes = backing
+            .records()
+            .iter()
+            .map(|record| record.raw().len() as u64)
+            .try_fold(0, u64::checked_add)
+            .ok_or_else(source::capacity)?;
+        let (case, signer) = machine.project_assigned_vote_case_v2(
+            backing,
+            &self.state,
+            &prior,
+            attestation,
+            origin,
+            (prior_bytes, backing.records().len() as u64),
+            raw.len() as u64,
+        )?;
+        let session = machine.session(&self.state, ctx, backing)?;
+        self.attest_positive_certification_v2(ctx, &signer, attestation, signature, origin, Some(&session))?;
+        self.write_assignment_aux_v2(NativeRowBody::Case(case))?;
+        self.write_assigned_case_followup_journal_v2(backing)?;
+        let session = machine.session(&self.state, ctx, backing)?;
+        self.advance_positive_certification_session_v2(ctx, &session)?;
+        self.assignment_case_materials.last_mut().ok_or_else(missing)?.delta_end = self.entries.len();
+        Ok(())
     }
 }
 
