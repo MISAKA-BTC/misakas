@@ -962,6 +962,12 @@ pub struct AssignmentSpendPlanV2 {
     pub(crate) authorization: AssignmentSpendAuthorizationV2,
 }
 impl AssignmentSpendPlanV2 {
+    pub fn matches_cooperative_refund_v2(&self, row: &AssignmentFundingRow, tx: &Transaction, amounts: &[u64], daa: u64) -> bool {
+        self.burned_now == 0
+            && self.paid_now == 0
+            && qualify_assignment_spend_v2(row, &self.authorization, tx, amounts, daa).is_ok_and(|expected| expected == *self)
+    }
+
     /// Called only after native accepted-prefix provenance has supplied the
     /// actual op12 material. A tentative preview cannot manufacture this row.
     pub(crate) fn accepted_funding_row_v2(

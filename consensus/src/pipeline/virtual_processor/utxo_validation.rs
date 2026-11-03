@@ -27,7 +27,6 @@ use crate::{
     },
 };
 use kaspa_consensus_core::BlockHash;
-use kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1;
 use kaspa_consensus_core::{
     BlockHashMap, BlockHashSet, HashMapCustomHasher,
     acceptance_data::{AcceptedTxEntry, MergesetBlockAcceptanceData},
@@ -55,6 +54,7 @@ use kaspa_consensus_core::{
         utxo_view::{UtxoView, UtxoViewComposition},
     },
 };
+use kaspa_consensus_core::{palw_native_resource_v1::NativeCoverageV1, palw_positive_assignment_funds_v2::AssignmentSpendPlanV2};
 use kaspa_core::{info, trace};
 use kaspa_muhash::MuHash;
 use kaspa_txscript::{script_class::parse_evm_deposit_lock, verify_mldsa87_with_context};
@@ -225,6 +225,7 @@ pub(super) struct UtxoProcessingContext<'a> {
     pub palw_assignment_settlements: Vec<kaspa_consensus_core::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2>,
     pub palw_case_source_spends: Vec<kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2>,
     case_source_spends_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+    assignment_refund_facts_lease: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
 }
 
 /// **G14 lane escrow-rfc08 (RFC-0035 A): what the funded-escrow half of the spend filter reads.**
@@ -285,16 +286,17 @@ impl PalwEscrowSpendLocksV1 {
         daa_score: u64,
         bond_burn: u64,
     ) -> Option<TransactionOutpoint> {
-        self.refusal_with_qualified_case_v2(tx, input_amounts, daa_score, bond_burn, None)
+        self.refusal_with_qualified_positive_v2(tx, input_amounts, daa_score, bond_burn, None, None)
     }
 
-    fn refusal_with_qualified_case_v2(
+    fn refusal_with_qualified_positive_v2(
         &self,
         tx: &Transaction,
         input_amounts: impl IntoIterator<Item = u64>,
         daa_score: u64,
         bond_burn: u64,
         qualified_case: Option<TransactionOutpoint>,
+        refund: Option<&AssignmentSpendPlanV2>,
     ) -> Option<TransactionOutpoint> {
         if self.assignment_invalid {
             return tx.inputs.first().map(|i| i.previous_outpoint);
@@ -326,6 +328,9 @@ impl PalwEscrowSpendLocksV1 {
                 }
             }
             if let Some((row, authorization)) = self.assignment.get(&outpoint) {
+                if refund.is_some_and(|plan| plan.matches_cooperative_refund_v2(row, tx, &amounts, daa_score)) {
+                    continue;
+                }
                 let Some(authorization) = authorization else { return Some(outpoint) };
                 match kaspa_consensus_core::palw_positive_assignment_funds_v2::qualify_assignment_spend_v2(
                     row,
@@ -427,7 +432,8 @@ impl<'a> UtxoProcessingContext<'a> {
         self.palw_round_fee_incomes.clear();
         self.palw_escrow_locks.provisional.clear();
         self.palw_escrow_settlements.clear();
-        self.palw_assignment_settlements.clear();
+        self.palw_assignment_settlements = Vec::new();
+        self.assignment_refund_facts_lease = None;
         self.palw_case_source_spends = Vec::new();
         self.case_source_spends_lease = None;
         self.relay_fee_plan = Some(plan);
@@ -466,6 +472,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_escrow_locks: Default::default(),
             palw_escrow_settlements: Vec::new(),
             palw_assignment_settlements: Vec::new(),
+            assignment_refund_facts_lease: None,
             palw_case_source_spends: Vec::new(),
             case_source_spends_lease: None,
         }
@@ -563,6 +570,7 @@ pub(crate) struct BondSpendFilter<'a> {
     /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow locks.** `None` where none exists (below the fence, and wherever no
     /// row or same-mergeset carrier exists — every network today), which leaves this filter's answers exactly as before.
     case_spends: Option<&'a std::collections::HashMap<TransactionId, kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2>>,
+    assignment_refunds: Option<&'a std::collections::HashMap<TransactionId, AssignmentSpendPlanV2>>,
     escrow: Option<&'a PalwEscrowSpendLocksV1>,
 }
 
@@ -576,7 +584,7 @@ impl<'a> BondSpendFilter<'a> {
         palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
         palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
     ) -> Self {
-        Self { bond_view: None, daa_score, palw_locked, palw_burns, case_spends: None, escrow: None }
+        Self { bond_view: None, daa_score, palw_locked, palw_burns, case_spends: None, assignment_refunds: None, escrow: None }
     }
 
     /// **G14 lane escrow-rfc08: the first input of `tx` that spends a locked funded-escrow outpoint without qualification**, or
@@ -590,12 +598,13 @@ impl<'a> BondSpendFilter<'a> {
             .and_then(|spends| spends.get(&tx.id()))
             .filter(|spend| spend.matches_v2(tx, entries))
             .map(|spend| spend.debit_v2());
-        locks.refusal_with_qualified_case_v2(
+        locks.refusal_with_qualified_positive_v2(
             tx,
             entries.iter().map(|entry| entry.amount),
             self.daa_score,
             self.burn_owed(tx),
             qualified,
+            self.assignment_refunds.and_then(|refunds| refunds.get(&tx.id())),
         )
     }
 
@@ -911,6 +920,98 @@ impl VirtualStateProcessor {
         Ok((spends, owner))
     }
 
+    fn prepare_assignment_refunds_v2(
+        &self,
+        state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        parent: BlockHash,
+        txs: &[Transaction],
+        view: &impl UtxoView,
+        daa: u64,
+        locks: &PalwEscrowSpendLocksV1,
+    ) -> Result<
+        (
+            std::collections::HashMap<TransactionId, AssignmentSpendPlanV2>,
+            Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+        ),
+        NativeCoverageV1,
+    > {
+        use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::reserve_native_requests_v1,
+            palw_positive_court_v2::coordinator::assignment_body::scan_assignment_continuation_id_v2,
+        };
+
+        let mut refunds = std::collections::HashMap::new();
+        let mut owner: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1> = None;
+        let Some(state) = state else { return Ok((refunds, owner)) };
+        if locks.assignment.is_empty()
+            || locks.assignment_invalid
+            || !self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
+            || !self.palw_positive_assignment_params_v2.as_ref().is_some_and(|p| p.palw_positive_assignment_v2_at(daa).is_some())
+            || !self.palw_state_params_v2.as_ref().is_some_and(|p| p.settlement_once_active_at(daa))
+        {
+            return Ok((refunds, owner));
+        }
+        let unavailable = |detail| NativeCoverageV1::unsupported::<Self>("closed Assignment refund", detail);
+        for tx in txs {
+            let Some((locked, _)) = tx.inputs.first().and_then(|input| locks.assignment.get(&input.previous_outpoint)) else {
+                continue;
+            };
+            if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE
+                || tx.payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 12])
+                // Assignment-only option tag and one fixed close receipt.
+                || tx.payload.get(72..77) != Some(&[0, 1, 0, 0, 0])
+                || tx.payload.len() > 512
+            {
+                continue;
+            }
+            let body = &tx.payload[3..];
+            let Ok(id) = scan_assignment_continuation_id_v2(body) else { continue };
+            if id != locked.assignment {
+                continue;
+            }
+            let (rules, _) = match self.original_assignment_rules_v2(parent, state, id, body) {
+                Ok(Some(value)) => value,
+                Ok(None) | Err(E::InvalidContinuation) => continue,
+                Err(E::Resource(why)) => return Err(why),
+                Err(_) => return Err(unavailable("checked close replay is unavailable")),
+            };
+            let Some(close) = rules.checked_unconsumed_close_v2() else { continue };
+            let bytes = (tx.inputs.len() as u64)
+                .checked_mul(size_of::<u64>() as u64)
+                .and_then(|n| n.checked_add((8 * size_of::<AssignmentSpendPlanV2>()) as u64))
+                .and_then(|n| n.checked_add(8 * tx.payload.len() as u64))
+                .ok_or_else(|| unavailable("refund workspace overflow"))?;
+            let _scratch = reserve_native_requests_v1(bytes)?.ok_or_else(|| unavailable("refund workspace is unavailable"))?;
+            let mut amounts = Vec::new();
+            amounts.try_reserve_exact(tx.inputs.len()).map_err(|_| unavailable("refund input allocation"))?;
+            for input in &tx.inputs {
+                let Some(entry) = view.get(&input.previous_outpoint) else { break };
+                amounts.push(entry.amount);
+            }
+            if amounts.len() != tx.inputs.len() {
+                continue;
+            }
+            let plan = match close.qualify_refund_candidate_v2(state, tx, &amounts, daa) {
+                Ok(plan) => plan,
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why)) => return Err(why),
+                Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(_)) => {
+                    return Err(unavailable("refund journal context is unavailable"));
+                }
+                Err(_) => continue,
+            };
+            match &mut owner {
+                Some(lease) => lease.grow_memory_v1(bytes)?,
+                None => {
+                    owner = Some(reserve_native_requests_v1(bytes)?.ok_or_else(|| unavailable("refund map owner is unavailable"))?)
+                }
+            }
+            refunds.try_reserve(1).map_err(|_| unavailable("refund map allocation"))?;
+            refunds.insert(tx.id(), plan);
+        }
+        Ok((refunds, owner))
+    }
+
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
@@ -1051,6 +1152,14 @@ impl VirtualStateProcessor {
                 pov_daa_score,
                 &ctx.palw_escrow_locks,
             )?;
+            let (assignment_refunds, _assignment_refunds_lease) = self.prepare_assignment_refunds_v2(
+                case_source_state,
+                selected_parent,
+                txs,
+                &composed_view,
+                pov_daa_score,
+                &ctx.palw_escrow_locks,
+            )?;
             let escrow_locked = !ctx.palw_escrow_locks.is_empty();
             let bond_filter = (bond_gate_view.is_some()
                 || !ctx.palw_v2_locked_bonds.is_empty()
@@ -1062,6 +1171,7 @@ impl VirtualStateProcessor {
                     palw_locked: &ctx.palw_v2_locked_bonds,
                     palw_burns: &ctx.palw_v2_bond_burns,
                     case_spends: Some(&case_spends),
+                    assignment_refunds: Some(&assignment_refunds),
                     escrow: escrow_locked.then_some(&ctx.palw_escrow_locks),
                 });
             let (mut validated_transactions, mut inner_multiset) =
@@ -1165,6 +1275,7 @@ impl VirtualStateProcessor {
                             palw_locked: &ctx.palw_v2_locked_bonds,
                             palw_burns: &ctx.palw_v2_bond_burns,
                             case_spends: Some(&case_spends),
+                            assignment_refunds: Some(&assignment_refunds),
                             escrow: locked.then_some(&ctx.palw_escrow_locks),
                         });
                     ctx.positive_native_carriers.capture(
@@ -1240,7 +1351,30 @@ impl VirtualStateProcessor {
                     }
                     ctx.palw_case_source_spends.push(*spend);
                 }
-                if !ctx.palw_escrow_locks.assignment.is_empty() {
+                if let Some(plan) = assignment_refunds.get(&validated_tx.tx.id()) {
+                    if let Some(point) = plan.new.current_outpoint {
+                        new_provisional_escrows
+                            .push(kaspa_consensus_core::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2(point));
+                    }
+                    use kaspa_consensus_core::palw_native_resource_v1::{NativeHeapV1, reserve_native_requests_v1};
+
+                    let quote = plan.native_heap_v1("accepted Assignment refund");
+                    let bytes = quote
+                        .bytes()
+                        .ok_or(quote)?
+                        .checked_mul(4)
+                        .ok_or_else(|| NativeCoverageV1::overflow::<AssignmentSpendPlanV2>("accepted Assignment refund"))?;
+                    let unavailable = |why| NativeCoverageV1::unsupported::<AssignmentSpendPlanV2>("accepted Assignment refund", why);
+                    match &mut ctx.assignment_refund_facts_lease {
+                        Some(lease) => lease.grow_memory_v1(bytes)?,
+                        None => {
+                            ctx.assignment_refund_facts_lease =
+                                Some(reserve_native_requests_v1(bytes)?.ok_or_else(|| unavailable("native owner is not armed"))?);
+                        }
+                    }
+                    ctx.palw_assignment_settlements.try_reserve_exact(1).map_err(|_| unavailable("fact allocation"))?;
+                    ctx.palw_assignment_settlements.push(plan.clone());
+                } else if !ctx.palw_escrow_locks.assignment.is_empty() {
                     let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();
                     for input in &validated_tx.tx.inputs {
                         if let Some((row, Some(authorization))) = ctx.palw_escrow_locks.assignment.get(&input.previous_outpoint) {
@@ -2764,12 +2898,28 @@ impl VirtualStateProcessor {
                     qualified = Some(proof.debit_v2());
                 }
             }
-            if let Some(outpoint) = locks.refusal_with_qualified_case_v2(
+            let (refunds, _refund_owner) = if let Some((parent, state)) = case_source_parent
+                && let Some(first) = tx.inputs.first().filter(|input| locks.assignment.contains_key(&input.previous_outpoint))
+            {
+                self.prepare_assignment_refunds_v2(
+                    Some(state),
+                    parent,
+                    std::slice::from_ref(tx.as_ref()),
+                    utxo_view,
+                    pov_daa_score,
+                    locks,
+                )
+                .map_err(|_| TxRuleError::SpendsLockedPalwEscrow(first.previous_outpoint))?
+            } else {
+                Default::default()
+            };
+            if let Some(outpoint) = locks.refusal_with_qualified_positive_v2(
                 tx,
                 mutable_tx.entries.iter().flatten().map(|entry| entry.amount),
                 pov_daa_score,
                 palw_burns.map(|burns| palw_bond_burn_owed(tx, burns)).unwrap_or(0),
                 qualified,
+                refunds.get(&tx.id()),
             ) {
                 return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
             }
@@ -4180,6 +4330,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: None,
             };
 
@@ -4211,6 +4362,7 @@ mod tests {
                 palw_locked: &palw,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: None,
             };
             assert!(both.locks(&dns_op));
@@ -4225,6 +4377,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: None,
             };
             assert!(dns_only.locks(&dns_op));
@@ -4237,6 +4390,7 @@ mod tests {
                 palw_locked: &palw,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: None,
             };
             assert!(palw_only.locks(&palw_op));
@@ -4264,6 +4418,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: None,
             };
 
@@ -4296,6 +4451,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &two,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: None,
             };
             assert_eq!(filter.burn_owed(&spend(vec![bond_op, other])), 1_000);
@@ -4333,6 +4489,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: Some(&malformed),
             };
             assert_eq!(filter.escrow_refusal(&transaction, &entries), Some(op));
@@ -4396,6 +4553,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: Some(&rooted),
             };
             assert_eq!(
@@ -4411,6 +4569,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: Some(&rooted),
             };
             assert_eq!(early.escrow_refusal(&payer_return, &entries), Some(escrow_op));
@@ -4430,6 +4589,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: Some(&provisional),
             };
             assert_eq!(filter.escrow_refusal(&payer_return, &entries), Some(escrow_op));
@@ -4442,6 +4602,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: None,
             };
             assert_eq!(none.escrow_refusal(&payer_return, &entries), None);
@@ -4518,6 +4679,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: Some(&locks),
             };
             let two_entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(1_000, payer.clone(), 100, false)];
@@ -4579,6 +4741,7 @@ mod tests {
                 palw_locked: &empty,
                 palw_burns: &no_burns,
                 case_spends: None,
+                assignment_refunds: None,
                 escrow: Some(&locks),
             };
             let relay_op = outpoint(22);

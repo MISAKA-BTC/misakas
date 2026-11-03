@@ -232,24 +232,15 @@ impl TransitionBuilder<'_> {
         storage_limit: u64,
         native_body_bytes: usize,
     ) -> Result<(), PalwStateV2Error> {
-        let max_frames_before = u64::from(policy.max_history_frames).checked_sub(1).ok_or_else(|| refusal("empty history policy"))?;
-        let header_bytes = misaka_palw_positive_contract::assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
-        let proposed = (native_body_bytes as u64)
-            .checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64)
-            .filter(|n| *n <= policy.max_frame_bytes)
-            .and_then(|n| n.checked_add(header_bytes))
-            .ok_or_else(|| refusal("Assignment control exceeds the original frame cap"))?;
-        let remaining = storage_limit.checked_sub(proposed).ok_or_else(|| refusal("Assignment history budget exhausted"))?;
-        let max_record_bytes = policy.max_frame_bytes.checked_add(header_bytes).ok_or_else(|| refusal("original frame cap"))?;
-        PositiveRowsV2::new(&self.state)
-            .assignment_journal_extent_v2(head, row.origin, max_frames_before, max_record_bytes, remaining)
-            .map_err(|error| match error {
-                crate::palw_positive_rows_v2::PositiveRowErrorV2::Contract(misaka_palw_positive_contract::ContractError::Budget) => {
-                    refusal("Assignment control exceeds the original cumulative history budget")
-                }
-                _ => missing_assignment_history(),
-            })?;
-        Ok(())
+        check_assignment_journal_extent_v2(
+            &self.state,
+            row,
+            head,
+            policy.max_frame_bytes,
+            policy.max_history_frames,
+            storage_limit,
+            native_body_bytes,
+        )
     }
 
     /// All purpose accounts share one ordinary native UTXO namespace. An
@@ -938,6 +929,35 @@ impl TransitionBuilder<'_> {
     }
 }
 
+fn check_assignment_journal_extent_v2(
+    state: &PalwChainStateV2,
+    row: &AssignmentRow,
+    head: &AssignmentJournalHeadRow,
+    max_frame_bytes: u64,
+    max_history_frames: u32,
+    storage_limit: u64,
+    native_body_bytes: usize,
+) -> Result<(), PalwStateV2Error> {
+    let max_frames_before = u64::from(max_history_frames).checked_sub(1).ok_or_else(|| refusal("empty history policy"))?;
+    let header_bytes = misaka_palw_positive_contract::assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+    let proposed = (native_body_bytes as u64)
+        .checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2 as u64)
+        .filter(|n| *n <= max_frame_bytes)
+        .and_then(|n| n.checked_add(header_bytes))
+        .ok_or_else(|| refusal("Assignment control exceeds the original frame cap"))?;
+    let remaining = storage_limit.checked_sub(proposed).ok_or_else(|| refusal("Assignment history budget exhausted"))?;
+    let max_record_bytes = max_frame_bytes.checked_add(header_bytes).ok_or_else(|| refusal("original frame cap"))?;
+    PositiveRowsV2::new(state)
+        .assignment_journal_extent_v2(head, row.origin, max_frames_before, max_record_bytes, remaining)
+        .map_err(|error| match error {
+            crate::palw_positive_rows_v2::PositiveRowErrorV2::Contract(misaka_palw_positive_contract::ContractError::Budget) => {
+                refusal("Assignment control exceeds the original cumulative history budget")
+            }
+            _ => missing_assignment_history(),
+        })?;
+    Ok(())
+}
+
 fn check_unconsumed_close_operation_v2(
     state: &PalwChainStateV2,
     row: &AssignmentRow,
@@ -975,6 +995,7 @@ fn check_unconsumed_close_operation_v2(
 
 /// Exact close replay for the original unspent A account. It carries no
 /// authority over Case funds, retained duties, fee or liability capital.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckedUnconsumedAssignmentCloseV2 {
     assignment: AssignmentId,
     original: AcceptedMaterial,
@@ -985,6 +1006,7 @@ pub struct CheckedUnconsumedAssignmentCloseV2 {
     limits: crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
     max_frame_bytes: u64,
     max_history_frames: u32,
+    history_storage_limit: u64,
     cooperative: bool,
 }
 impl CheckedUnconsumedAssignmentCloseV2 {
@@ -1033,6 +1055,15 @@ impl CheckedUnconsumedAssignmentCloseV2 {
         if assignment != self.assignment || receipts.as_slice() != [self.receipt] {
             return Err(refusal("unconsumed refund must name the exact accepted close receipt"));
         }
+        check_assignment_journal_extent_v2(
+            state,
+            &rooted.assignment,
+            &rooted.journal,
+            self.max_frame_bytes,
+            self.max_history_frames,
+            self.history_storage_limit,
+            tx.payload.len() - 3,
+        )?;
         let dues = [(0, funding.worker.remaining), (3, funding.surplus.remaining)]
             .into_iter()
             .filter(|&(_, amount)| amount != 0)
@@ -1228,6 +1259,7 @@ impl PalwChainStateV2 {
             limits,
             max_frame_bytes: policy.max_frame_bytes,
             max_history_frames: policy.max_history_frames,
+            history_storage_limit: rules.original_history_storage_limit_v2().ok_or_else(missing_assignment_history)?,
             cooperative: !rules.funding_relay_profile().requires_relay(),
         })
     }
