@@ -1983,10 +1983,12 @@ blocks were heartbeats and the serving relay counted no PFS4 spends.
 ## Batch Court clock and exact T12 recheck
 
 The candidate opens the detection and actionable challenge window at
-claim acceptance. It accepts an opening before accepted DAA + 3,120.
+claim acceptance. It uses the RFC-0031 / ADR-0198 A predicate and
+includes accepted DAA + 3,120.
 An eligible, admitted case may collect through a separate deadline
-bounded by accepted DAA + 10,000, with material retained after
-collection. A later batch cannot restart the case clock. This is a
+bounded by the inclusive hard deadline at accepted DAA + 10,000.
+The exclusive collection boundary can be one DAA later, with material
+retention covering the collection window. A later batch cannot restart the case clock. This is a
 prospective interpretation. The running TFP1 route still includes
 acquisition and final filing in its existing 3,120 DAA admission ceiling.
 An opening must have independently authenticated standing and actionable
@@ -1995,10 +1997,10 @@ grounds. The transport cannot establish a verdict or settlement credit.
 The candidate gate adds the opening delay to measured service, with
 independent wire, Node service and recovery terms. It conservatively
 assumes no overlap between these terms. The example 9,000 DAA service
-budget fits only with an opening by elapsed DAA 1,000. It would need
-12,119 DAA at the latest permissible opening. To qualify every timely
-opening, a profile needs a post-opening budget at most 6,881 DAA under
-this interpretation. The new code refuses over-target and overflow.
+budget fits only with an opening by elapsed DAA 999 after the
+T06 exclusive-collection margin. It would need 12,121 DAA at the
+latest permissible opening. The 6,880 DAA residual must include the
+1-DAA margin, leaving at most 6,879 DAA for the service terms. The new code refuses over-target and overflow.
 
 The dormant batch progress contract caps ranges, part count and exact
 payload. It accepts independently authenticated parts in canonical

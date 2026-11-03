@@ -2,14 +2,13 @@
 //! accepted source; the native caller must independently verify its opening
 //! and the responder's authority. Transport completeness grants no credit.
 use crate::Hash64;
+use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA, shared_initial_notice_daa_in_window_v1};
 use borsh::BorshSerialize;
 use kaspa_hashes::blake2b_512_keyed;
 
 pub const MAX_BATCH_RANGES_V1: usize = 64;
 pub const MAX_BATCH_PARTS_V1: usize = 256;
 pub const MAX_BATCH_PART_BYTES_V1: u32 = 16_384;
-pub const BATCH_CHALLENGE_OPEN_DAA_V1: u64 = 3_120;
-pub const MAX_BATCH_DOOR_TARGET_DAA_V1: u64 = 10_000;
 
 /// Prospective clocks for an admitted dispute. The accepting fold must check
 /// the opening's standing, bond, and actionable evidence before constructing
@@ -18,19 +17,24 @@ pub const MAX_BATCH_DOOR_TARGET_DAA_V1: u64 = 10_000;
 pub struct BatchCourtWindowV1 {
     pub claim_accepted_daa: u64,
     pub challenge_opened_daa: u64,
+    /// Exclusive collection boundary, at most one past the inclusive hard deadline.
     pub collect_until_daa: u64,
     pub material_until_daa: u64,
 }
 
 impl BatchCourtWindowV1 {
     pub fn check(self) -> Result<(), BatchCourtErrorV1> {
-        let open_until = self.claim_accepted_daa.checked_add(BATCH_CHALLENGE_OPEN_DAA_V1).ok_or(BatchCourtErrorV1::Clock)?;
-        let hard_end = self.claim_accepted_daa.checked_add(MAX_BATCH_DOOR_TARGET_DAA_V1).ok_or(BatchCourtErrorV1::Clock)?;
-        if self.challenge_opened_daa < self.claim_accepted_daa
-            || self.challenge_opened_daa >= open_until
+        let timely = shared_initial_notice_daa_in_window_v1(self.claim_accepted_daa, self.challenge_opened_daa)
+            .map_err(|_| BatchCourtErrorV1::Clock)?;
+        let maximum_collect_until = self
+            .claim_accepted_daa
+            .checked_add(DISPUTE_WINDOW_DAA)
+            .and_then(|hard| hard.checked_add(1))
+            .ok_or(BatchCourtErrorV1::Clock)?;
+        if !timely
             || self.collect_until_daa <= self.challenge_opened_daa
-            || self.collect_until_daa > hard_end
-            || self.material_until_daa <= self.collect_until_daa
+            || self.collect_until_daa > maximum_collect_until
+            || self.material_until_daa < self.collect_until_daa
         {
             return Err(BatchCourtErrorV1::Window);
         }
@@ -266,7 +270,7 @@ impl BatchCourtClockV1 {
     /// between these terms. The caller must justify the measured guarantees
     /// and reserve a separate liability/retention tail before activation.
     pub fn door_daa(self, open_elapsed_daa: u64) -> Result<u64, BatchCourtErrorV1> {
-        if open_elapsed_daa >= BATCH_CHALLENGE_OPEN_DAA_V1 {
+        if open_elapsed_daa > NOTICE_WINDOW_DAA {
             return Err(BatchCourtErrorV1::Window);
         }
         if self.wire_bytes == 0 || self.guaranteed_wire_bytes_per_daa == 0 || self.serial_round_daa == 0 || self.node_service_daa == 0
@@ -282,11 +286,12 @@ impl BatchCourtClockV1 {
             self.node_service_daa,
             self.filing_daa,
             self.recovery_daa,
+            1, // T06: reserve the exclusive collection boundary margin.
         ]
         .into_iter()
         .try_fold(0u64, u64::checked_add)
         .ok_or(BatchCourtErrorV1::Clock)?;
-        if required_daa > MAX_BATCH_DOOR_TARGET_DAA_V1 {
+        if required_daa > DISPUTE_WINDOW_DAA {
             return Err(BatchCourtErrorV1::OverTarget { required_daa });
         }
         Ok(required_daa)
@@ -295,7 +300,7 @@ impl BatchCourtClockV1 {
     /// Profile gate including the last allowed opening. A timely challenger
     /// must have the same reserved service opportunity as an early one.
     pub fn worst_case_door_daa(self) -> Result<u64, BatchCourtErrorV1> {
-        self.door_daa(BATCH_CHALLENGE_OPEN_DAA_V1 - 1)
+        self.door_daa(NOTICE_WINDOW_DAA)
     }
 }
 
@@ -391,14 +396,14 @@ mod tests {
     fn a_timely_open_can_use_the_extended_window_without_renewing_its_end() {
         let case = BatchCourtWindowV1 {
             claim_accepted_daa: 100,
-            challenge_opened_daa: 3_219,
-            collect_until_daa: 10_100,
+            challenge_opened_daa: 3_220,
+            collect_until_daa: 10_101,
             material_until_daa: 10_101,
         };
         assert_eq!(case.check(), Ok(()));
-        assert_eq!(BatchCourtWindowV1 { challenge_opened_daa: 3_220, ..case }.check(), Err(BatchCourtErrorV1::Window));
+        assert_eq!(BatchCourtWindowV1 { challenge_opened_daa: 3_221, ..case }.check(), Err(BatchCourtErrorV1::Window));
         assert_eq!(
-            BatchCourtWindowV1 { collect_until_daa: 10_101, material_until_daa: 20_000, ..case }.check(),
+            BatchCourtWindowV1 { collect_until_daa: 10_102, material_until_daa: 20_000, ..case }.check(),
             Err(BatchCourtErrorV1::Window)
         );
         assert_eq!(BatchCourtWindowV1 { material_until_daa: 10_100, ..case }.check(), Err(BatchCourtErrorV1::Window));
@@ -419,11 +424,11 @@ mod tests {
             filing_daa: 1_200,
             recovery_daa: 1_100,
         };
-        assert_eq!(clock.door_daa(0), Ok(9_000));
-        assert_eq!(clock.door_daa(1_000), Ok(10_000));
-        assert_eq!(clock.door_daa(1_001), Err(BatchCourtErrorV1::OverTarget { required_daa: 10_001 }));
-        assert_eq!(clock.door_daa(3_120), Err(BatchCourtErrorV1::Window));
-        assert_eq!(clock.worst_case_door_daa(), Err(BatchCourtErrorV1::OverTarget { required_daa: 12_119 }));
+        assert_eq!(clock.door_daa(0), Ok(9_001));
+        assert_eq!(clock.door_daa(999), Ok(10_000));
+        assert_eq!(clock.door_daa(1_000), Err(BatchCourtErrorV1::OverTarget { required_daa: 10_001 }));
+        assert_eq!(clock.door_daa(3_121), Err(BatchCourtErrorV1::Window));
+        assert_eq!(clock.worst_case_door_daa(), Err(BatchCourtErrorV1::OverTarget { required_daa: 12_121 }));
         assert_eq!(BatchCourtClockV1 { preparation_daa: u64::MAX, ..clock }.door_daa(0), Err(BatchCourtErrorV1::Clock));
     }
 }
