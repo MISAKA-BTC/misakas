@@ -426,6 +426,9 @@ impl PalwRetentionJanitor {
             })
         };
         let owed = |claim: &Hash64| {
+            if ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(claim) {
+                return Ok(true);
+            }
             if rcore {
                 session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
             } else {
@@ -591,6 +594,15 @@ mod tests {
         assert_eq!(std::fs::read(&material).unwrap(), b"new");
         drop(second);
         assert_eq!(prune_retained_claims_v1(&[row], vec![0], |_| Ok(false)), (1, 3));
+    }
+
+    #[test]
+    fn pressure_plan_can_reclaim_other_material_while_a_lead_is_publishing() {
+        let active = claim(16, RetainedKindV1::Attempt, 40, 90);
+        let other = claim(17, RetainedKindV1::Attempt, 50, 30);
+        let _pin = pin_attempt_publication(active.claim);
+        let owed = |claim: &Hash64| Ok(ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(claim));
+        assert_eq!(retention_prune_plan_with_material_v1(&[active, other], |_| None, owed, 60 * MIN, 0, 40), (vec![1], 0));
     }
 
     #[test]
