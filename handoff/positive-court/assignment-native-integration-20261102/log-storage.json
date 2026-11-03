@@ -726,5 +726,21 @@
     "stored_sha256": "90940a1c784a98c3e43e6a9d7abd1633ce55745107743502c35a038c625a7d43",
     "raw_bytes": 358900,
     "stored_bytes": 24668
+  },
+  {
+    "raw_name": "assignment-bind-writer-clippy-first.log",
+    "stored_name": "assignment-bind-writer-clippy-first.log.gz",
+    "raw_sha256": "92a3d9dd7543a37097435cafe2620367a9afbd28a1036fbbb6b543e7adf1df6f",
+    "stored_sha256": "3f1d3b5e9e4d6121ac287433c859da957a9f42aad8ae814f0005705bd7b872e5",
+    "raw_bytes": 341727,
+    "stored_bytes": 23642
+  },
+  {
+    "raw_name": "assignment-bind-writer-runtime-first.log",
+    "stored_name": "assignment-bind-writer-runtime-first.log.gz",
+    "raw_sha256": "d13bfa3a8e952973e97fea64f979138b6baca88661496fbd66d04f0db73a5a59",
+    "stored_sha256": "bc43bc179984994b45adb534d7b5f6a8537ca1f7b5c430ac644b0659743bce83",
+    "raw_bytes": 357623,
+    "stored_bytes": 24540
   }
 ]

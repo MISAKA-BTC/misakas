@@ -622,7 +622,11 @@ struct NativeAssignedArchiveV2<'a> {
     _index_lease: NativeDemandLeaseV1,
 }
 impl<'a> NativeAssignedArchiveV2<'a> {
-    fn new(backing: &'a NativeCommittedAssignedCaseV2, limits: CaseJournalLimits) -> Result<Self, PalwStateV2Error> {
+    fn new(
+        current: &PalwChainStateV2,
+        backing: &'a NativeCommittedAssignedCaseV2,
+        limits: CaseJournalLimits,
+    ) -> Result<Self, PalwStateV2Error> {
         limits.validate().map_err(refuse)?;
         backing.material().check_row(backing.assignment()).map_err(refuse)?;
         let count = backing.records().len() as u64;
@@ -674,7 +678,7 @@ impl<'a> NativeAssignedArchiveV2<'a> {
                     return Err(refuse("archive actual accepted-prefix ordering"));
                 }
             }
-            Self::check_carriage(backing, record, archived.carriage())?;
+            Self::check_carriage(current, backing, record, archived.carriage())?;
             let head = record.head();
             records.push((head, index));
             last = head;
@@ -694,11 +698,12 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         Ok(Self { backing, records, limits, _index_lease: lease })
     }
     fn check_carriage(
+        current: &PalwChainStateV2,
         backing: &NativeCommittedAssignedCaseV2,
         record: CaseJournalRecordView<'_>,
         carriage: &NativeAcceptedCaseCarriageV2,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2;
+        use crate::palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, initial_assigned_case_bind_header_v2};
         let tx = carriage.transaction();
         let h = record.header();
         if !tx.id_is_current()
@@ -744,6 +749,19 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         }
         boundary.check_populated_data(tx, carriage.entries(), carriage.fee()).map_err(refuse)?;
         if h.sequence == 1 {
+            let id = backing.assignment().id();
+            let NativeRowBody::AssignmentUse(use_row) = required(current, NativeRowKey::AssignmentUse(id))? else {
+                return Err(refuse("actual initial Case has no AssignmentUse row"));
+            };
+            let bind = initial_assigned_case_bind_header_v2(record, boundary, &use_row).map_err(refuse)?;
+            let NativeRowBody::AssignmentJournalFrame(frame) =
+                required(current, NativeRowKey::AssignmentJournalFrame { assignment: id, ordinal: bind.ordinal })?
+            else {
+                return Err(refuse("actual initial Case has no BindResult frame"));
+            };
+            if frame.header != bind {
+                return Err(refuse("initial Case differs from the rooted BindResult frame"));
+            }
             // The current pre-event Assignment can be cancelled/consumed only
             // after this exact op9; a final saved Use is not historical authority.
             let a = assignment(prefix, backing.assignment().id())?;

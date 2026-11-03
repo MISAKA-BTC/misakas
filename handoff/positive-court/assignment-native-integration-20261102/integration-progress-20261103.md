@@ -342,3 +342,33 @@ extent checks. Both successful runs share the same source map. The prior
 Clippy runs stopped at a borrow error and a boolean-style lint. Neither
 executed tests. The documentation check found zero new issues against the
 43 existing missing references.
+
+## BindResult and the initial Case journal
+
+The private op9 install checkpoint now checks the current original
+Assignment and actual event boundary. The literal op9 fields must match
+the Result, service, payer consent and signed Case funding rows. The
+separate C outpoint, amount and initial legs are qualified against the
+actual composed UTXO and the original A account. The initial Case starts
+with empty witness and source-use state.
+
+The checkpoint derives the BindResult frame from the actual carrier and
+current Assignment journal head. It writes AssignmentUse using that
+frame's identity. The first Case journal record contains the literal
+native transaction, the exact pre-op9 boundary and the BindResult header.
+Both journals, Case and funding rows and the initial P subject are
+published through one native checkpoint. The Case reader checks the
+BindResult header against the current rooted AssignmentUse and journal
+frame as well as the original Case carrier boundary.
+
+The dispatch still requires a concrete all-branch capacity owner,
+fresh reservation and relay/funds custody. The aggregate Assignment
+history-byte and replay-work quotes, native acceptance and multi-node
+recovery of these new rows remain open. This record linkage does not
+establish a Positive pass or a P approval.
+
+Core and Consensus library Clippy passed with warnings denied. Three
+Case material unit tests passed on the same source at opt2. The new
+case checks the reference and exact BindResult header, including missing,
+tampered and other-Assignment material. The docs check found zero new
+issues against the 43 known missing references.

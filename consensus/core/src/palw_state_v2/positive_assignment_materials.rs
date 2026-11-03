@@ -321,7 +321,95 @@ impl TransitionBuilder<'_> {
     ) -> impl Iterator<Item = &PositiveCaseAcceptedMaterialV2> {
         self.assignment_case_materials.iter().filter(move |r| r.header.case == case)
     }
-    pub(super) fn emit_positive_case_material_v2(
+    pub(super) fn write_initial_assigned_case_journal_v2(
+        &mut self,
+        use_row: &misaka_palw_positive_contract::assignment::rows::AssignmentUseRow,
+        scope: misaka_palw_positive_contract::identity::ChainScope,
+        bind: &AssignmentJournalHeaderV2,
+        policy: &crate::config::params::PositiveCourtPolicyV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
+        use misaka_palw_positive_contract::journal::{
+            CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES, CaseJournalAux, CaseJournalEventKind, CaseJournalHeader,
+            CaseJournalLimits, CaseJournalRecord,
+        };
+        let failure = |why| PalwStateV2Error::DeltaMismatch(why);
+        let action = self.assignment_active_raw.clone().ok_or_else(|| failure("initial Case journal has no actual carrier"))?;
+        let boundary = self.current_positive_case_boundary_v2(use_row.case)?;
+        let tx = action.transaction();
+        let tx_bytes = borsh::object_length(tx).map_err(|_| failure("initial Case native transaction extent"))?;
+        let aux_bytes = ASSIGNED_CASE_BOUNDARY_BYTES_V2 + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2;
+        let record_bytes = tx_bytes
+            .checked_add(aux_bytes + CASE_JOURNAL_MIN_RECORD_BYTES + 2 * (CASE_JOURNAL_AUX_MATERIAL_BYTES + 4))
+            .ok_or_else(|| failure("initial Case record extent"))?;
+        let logical = tx_bytes
+            .checked_add(aux_bytes + 2 * std::mem::size_of::<CaseJournalAux>())
+            .ok_or_else(|| failure("initial Case material extent"))?;
+        if record_bytes as u64 > policy.max_case_journal_bytes || logical as u64 > policy.max_case_heap_bytes {
+            return Err(PalwStateV2Error::KernelRouteRefused("initial assigned Case journal exceeds original policy".into()));
+        }
+        let mut quote = native_writers::NativeWriteQuoteV1::new("initial Case journal literal bytes");
+        quote.exact::<u8>((tx_bytes + aux_bytes) as u64)?;
+        quote.exact::<CaseJournalAux>(2)?;
+        self.admit_native_write_v1(quote)?;
+        fn encode_exact<T: borsh::BorshSerialize>(value: &T, bytes: usize) -> Result<Vec<u8>, PalwStateV2Error> {
+            let mut out = Vec::new();
+            out.try_reserve_exact(bytes).map_err(|_| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<T>("initial Case journal", "allocation refused"))
+            })?;
+            if out.capacity() > bytes {
+                return Err(PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<T>(
+                    "initial Case journal",
+                    "allocation exceeded the quote",
+                )));
+            }
+            out.resize(bytes, 0);
+            let mut writer = out.as_mut_slice();
+            borsh::to_writer(&mut writer, value)
+                .map_err(|_| PalwStateV2Error::DeltaMismatch("initial Case journal extent changed"))?;
+            if !writer.is_empty() {
+                return Err(PalwStateV2Error::DeltaMismatch("initial Case journal extent changed"));
+            }
+            Ok(out)
+        }
+        let mut aux = [
+            CaseJournalAux { material: boundary.material(), preimage: encode_exact(&boundary, ASSIGNED_CASE_BOUNDARY_BYTES_V2)? },
+            CaseJournalAux { material: use_row.binding, preimage: encode_exact(bind, ASSIGNMENT_JOURNAL_HEADER_BYTES_V2)? },
+        ];
+        // Both references have the exact same origin, so canonical order is
+        // digest order. The codec still rejects equal reference bytes.
+        if aux[0].material.digest.0 > aux[1].material.digest.0 {
+            aux.swap(0, 1);
+        }
+        let record = CaseJournalRecord {
+            header: CaseJournalHeader {
+                version: 2,
+                revision: 1,
+                scope,
+                case: use_row.case,
+                result: use_row.result,
+                sequence: 1,
+                previous: misaka_palw_positive_contract::identity::Digest([0; 64]),
+                origin: use_row.origin,
+                kind: CaseJournalEventKind::NativeTransaction,
+            },
+            payload: encode_exact(tx, tx_bytes)?,
+            aux: Vec::from(aux),
+        };
+        self.write_and_emit_positive_case_material_v2(
+            &record,
+            CaseJournalLimits {
+                max_record_bytes: policy.max_case_journal_bytes,
+                max_payload_bytes: policy.max_case_journal_bytes,
+                max_aux_entries: 2,
+                max_aux_preimage_bytes: ASSIGNED_CASE_BOUNDARY_BYTES_V2 as u64,
+                max_total_preimage_bytes: policy.max_case_journal_bytes,
+                max_logical_heap_bytes: policy.max_case_heap_bytes,
+            },
+        )
+    }
+
+    fn write_and_emit_positive_case_material_v2(
         &mut self,
         record: &misaka_palw_positive_contract::journal::CaseJournalRecord,
         limits: misaka_palw_positive_contract::journal::CaseJournalLimits,
@@ -378,7 +466,13 @@ impl TransitionBuilder<'_> {
         {
             return Err(failure("Case material emitted twice"));
         }
-        let _head = view.head();
+        self.write_assignment_aux_v2(NativeRowBody::JournalHead(misaka_palw_positive_contract::rows::JournalHeadRow {
+            case: record.header.case,
+            sequence: record.header.sequence,
+            previous: record.header.previous,
+            head: view.head(),
+            history: view.history(),
+        }))?;
         self.assignment_case_materials.push(PositiveCaseAcceptedMaterialV2 {
             header: record.header,
             raw,

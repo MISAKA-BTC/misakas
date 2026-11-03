@@ -89,8 +89,6 @@ pub(super) struct AssignedCaseInstallV2<'a> {
     pub result: ResultRow,
     pub case: CaseRow,
     pub funding: FundingRow,
-    pub use_row: AssignmentUseRow,
-    pub frame: AssignmentJournalFrameRow,
 }
 
 impl TransitionBuilder<'_> {
@@ -168,10 +166,10 @@ impl TransitionBuilder<'_> {
         self.write_assignment_aux_v2(NativeRowBody::AssignmentJournalFrame(frame))?;
         self.write_assignment_aux_v2(NativeRowBody::AssignmentJournalHead(head))
     }
-    pub(super) fn assignment_retention_v2(&self, id: AssignmentId) -> Result<u64, PalwStateV2Error> {
+    fn assignment_head_v2(&self, id: AssignmentId) -> Result<AssignmentJournalHeadRow, PalwStateV2Error> {
         match PositiveRowsV2::new(&self.state).read(NativeRowKey::AssignmentJournalHead(id)).map_err(refusal)? {
             Some(value) => match value.body {
-                NativeRowBody::AssignmentJournalHead(head) => Ok(head.retention_until_daa),
+                NativeRowBody::AssignmentJournalHead(head) => Ok(head),
                 _ => Err(refusal("wrong Assignment journal head kind")),
             },
             None => Err(refusal("missing accepted Assignment journal head")),
@@ -381,29 +379,59 @@ impl TransitionBuilder<'_> {
         ctx: &PalwBlockContextV2,
         plan: AssignedCaseInstallV2<'_>,
     ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_court_v2::coordinator::assignment_body::{
+            AssignedResultPayloadV2, scan_assignment_body_v2, scan_assignment_continuation_id_v2,
+        };
+        use misaka_palw_positive_contract::{
+            messages::{ClaimStatus, MinerDataStatus, WitnessStatus},
+            rows::{AcceptedMaterial, AggregateUsage},
+        };
+
         let expected = &plan.expected_assignment;
         let id = expected.id();
+        let origin = plan.result.origin;
+        self.assignment_origin_v2(origin, ctx)?;
+        let action = self.assignment_active_raw.clone().ok_or_else(missing_assignment_history)?;
+        if action.origin() != origin
+            || action.transaction().payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 9])
+            || self.assignment_raw_boundary.is_none_or(|(_, end)| end != self.entries.len())
+            || action.rules().original_material() != Some(expected.admission_material)
+        {
+            return Err(refusal("BindResult does not belong to the current pre-op9 boundary"));
+        }
+        plan.material.check_row(expected).map_err(refusal)?;
+        let literal = &action.transaction().payload[3..];
+        scan_assignment_body_v2(literal, action.rules().body_limits().map_err(refusal)?).map_err(refusal)?;
+        let carried = borsh::from_slice::<AssignedResultPayloadV2>(&literal[69..]).map_err(refusal)?;
+        if scan_assignment_continuation_id_v2(literal).map_err(refusal)? != id
+            || carried.result != plan.result.result
+            || carried.miner_signature != plan.result.miner_signature
+            || carried.service != plan.case.service
+            || carried.basis != plan.funding.basis
+            || carried.consent != plan.funding.consent
+            || carried.payer_signature != plan.funding.payer_signature
+        {
+            return Err(refusal("BindResult rows differ from the literal carrier"));
+        }
         if self.assignment_row_v2(id)?.as_ref() != Some(expected)
             || expected.status != AssignmentStatusV2::Open
             || ctx.daa_score >= expected.bundle.terms.result_before_daa
-            || plan.use_row.assignment != id
-            || plan.use_row.result != plan.result.result.id()
-            || plan.use_row.case != plan.case.case
-            || plan.use_row.origin != plan.result.origin
-            || plan.frame.header.origin != plan.result.origin
-            || plan.frame.header.assignment != id
-            || plan.frame.header.kind != AssignmentJournalEventKindV2::BindResult
+            || plan.case.last_event != origin
+            || plan.case.status != ClaimStatus::ResultCommitted
+            || plan.case.miner_data != MinerDataStatus::NotRequested
+            || plan.case.witness_status != WitnessStatus::Building
+            || plan.case.positive_witness.is_some()
+            || plan.case.usage != AggregateUsage::default()
+            || plan.case.unresolved_fraud != 0
             || plan.result.policy != expected.positive_policy
             || plan.result.fired_fork != expected.fired_rules
             || plan.result.dependencies != expected.dependencies
             || plan.result.miner_key != expected.worker_key
-            || plan.result.role_assignment
-                != (misaka_palw_positive_contract::rows::AcceptedMaterial { origin: expected.origin, digest: id.0 })
+            || plan.result.role_assignment != (AcceptedMaterial { origin: expected.origin, digest: id.0 })
             || plan.binding.terms() != &expected.bundle.terms
         {
             return Err(refusal("Assignment is stale, expired, consumed or differently bound"));
         }
-        self.assignment_origin_v2(plan.result.origin, ctx)?;
         plan.binding.check_result(&plan.result.result).map_err(refusal)?;
         validate_bundle(&plan.index, &plan.result, &plan.case, &plan.funding).map_err(refusal)?;
         let future = expected.bundle.future_case;
@@ -422,6 +450,7 @@ impl TransitionBuilder<'_> {
             NativeRowKey::ClaimIndex(plan.index.claim),
             NativeRowKey::Case(plan.case.case),
             NativeRowKey::Funding(plan.case.case),
+            NativeRowKey::JournalHead(plan.case.case),
         ] {
             self.require_absent_assignment_key_v2(key)?;
         }
@@ -429,28 +458,73 @@ impl TransitionBuilder<'_> {
             .read(NativeRowKey::AssignmentFunding(id))
             .map_err(refusal)?
             .ok_or_else(|| refusal("missing original A funding"))?;
-        if let NativeRowBody::AssignmentFunding(a) = a_funding.body {
-            if a.current_outpoint == plan.funding.current_outpoint {
-                return Err(refusal("A and C cannot double-lock one output"));
-            }
-        } else {
+        let NativeRowBody::AssignmentFunding(a_funding) = a_funding.body else {
             return Err(refusal("wrong A funding row kind"));
+        };
+        let output = crate::palw_positive_assignment_funds_v2::qualify_assigned_case_funding_output_v2(
+            expected,
+            &a_funding,
+            &carried.result,
+            &carried.service,
+            &carried.basis,
+            &carried.consent,
+            &plan.funding.payer_key,
+            action.transaction(),
+            action.current_output(),
+            ctx.daa_score,
+        )
+        .map_err(refusal)?;
+        if plan.funding.original_outpoint != output.outpoint()
+            || plan.funding.current_outpoint != Some(output.outpoint())
+            || plan.funding.initial_locked != output.amount()
+            || [plan.funding.fee, plan.funding.capital, plan.funding.surplus] != output.initial_legs()[1..]
+            || plan.funding.liability != plan.case.liability
+            || plan.funding.last_settlement.is_some()
+        {
+            return Err(refusal("initial Case funding differs from the actual funded carrier"));
         }
-        self.require_assignment_output_unlocked_v2(plan.funding.original_outpoint)?;
-        let retention = self.assignment_retention_v2(id)?;
+        self.require_assignment_output_unlocked_v2(output.outpoint())?;
+        let head = self.assignment_head_v2(id)?;
+        let policy = &plan.material.assignment_policy;
+        if head.next_ordinal >= u64::from(policy.max_history_frames) {
+            return Err(refusal("original Assignment history frame budget exhausted"));
+        }
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
+            let payload = self.encode_assignment_control_payload_v2(id, literal, policy.max_frame_bytes)?;
+            let frame = assignment_frame_v2(
+                id,
+                head.next_ordinal,
+                head.last_frame,
+                AssignmentJournalEventKindV2::BindResult,
+                origin,
+                &payload,
+                policy.max_frame_bytes,
+            )
+            .map_err(refusal)?;
+            let case = plan.case.case;
+            let result = plan.result.result.id();
+            let use_row = AssignmentUseRow {
+                assignment: id,
+                case,
+                result,
+                origin,
+                binding: AcceptedMaterial { origin, digest: frame.header.id() },
+            };
+            let scope = plan.result.result.scope;
             let mut row = plan.expected_assignment;
-            row.status = AssignmentStatusV2::Consumed { case: plan.case.case, result: plan.result.result.id() };
-            row.last_event = plan.result.origin;
+            row.status = AssignmentStatusV2::Consumed { case, result };
+            row.last_event = origin;
             self.write_assignment_aux_v2(NativeRowBody::Assignment(row))?;
-            self.write_assignment_aux_v2(NativeRowBody::AssignmentUse(plan.use_row))?;
+            self.write_assignment_aux_v2(NativeRowBody::AssignmentUse(use_row))?;
             self.write_assignment_aux_v2(NativeRowBody::Result(plan.result))?;
             self.write_assignment_aux_v2(NativeRowBody::ClaimIndex(plan.index))?;
             self.write_assignment_aux_v2(NativeRowBody::Case(plan.case))?;
             self.write_assignment_aux_v2(NativeRowBody::Funding(plan.funding))?;
             self.begin_positive_certification_v2(ctx, id, plan.material)?;
-            self.append_assignment_frame_v2(plan.frame, retention)
+            self.append_assignment_frame_v2(frame, head.retention_until_daa)?;
+            self.emit_assignment_material_v2(&frame, &payload, policy.max_frame_bytes)?;
+            self.write_initial_assigned_case_journal_v2(&use_row, scope, &frame.header, &plan.material.positive_policy)
         })();
         if result.is_err() {
             self.restore(checkpoint);
@@ -538,7 +612,7 @@ impl TransitionBuilder<'_> {
                 AssignmentStatusV2::ExpiredUnconsumed
             }
         };
-        let retention = self.assignment_retention_v2(id)?;
+        let retention = self.assignment_head_v2(id)?.retention_until_daa;
         let checkpoint = self.try_checkpoint()?;
         let result = (|| {
             let mut next = expected.clone();
