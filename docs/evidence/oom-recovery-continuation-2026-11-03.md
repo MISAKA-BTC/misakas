@@ -874,3 +874,34 @@ matched at virtual DAA 19,605. B1 and the 113 primary remained unsynced.
 B0 reported 42 producer blocks, zero receipts and zero kernel Finals.
 The earlier exact Qwen comparison remained terminal at preflight;
 the local filesystem was still below its guarded launch floor.
+
+## Guarded Linux venue for the original Qwen #21 comparison — 05:21 UTC
+
+IBM's read-only Qwen artifact has 1,799,359,436 bytes and the same
+SHA-256 as the local artifact previously pinned to the signed job,
+`b73600cfeef3f54fd6e9f6a831c504588aa3b20ea2506ae824799206201e8ac8`.
+Both hashes were bracketed by stable file identities. The host had
+the exact Rust 1.93.0 compiler and the offline crate cache. The
+seat5 cached CLI lacks the exact anchor/DAA arguments and there was
+another build on seat5.
+
+The source from `ec171af9863dd8187259df3a81c473b63ad5e3eb` was streamed
+to a separate IBM directory. The Cargo lock, diagnostic sources and
+A16 inputs were pinned. The offline single-job build was observed
+running in its transient unit with a 4 GiB memory cap, no swap, one
+CPU and a 12.5 GiB filesystem stop floor. The first service launch
+exited before Python loaded because its path was relative; the
+absolute-path retry is the live invocation.
+
+A separate transient unit waits for the build's successful receipt
+and a matching executable. The arithmetic run also checks the
+original signed job's class, anchor, 1,023 input tokens, one output
+token and registered 8,192 context. It is limited to 7 GiB memory,
+one CPU and a 12 GiB filesystem stop floor. Both unit IDs were
+confirmed active. No arithmetic result had been produced at the
+observation. This is the offline comparison of the exact job, with
+live Panel-generated material and an independent Node verdict still
+unverified.
+
+The public REST and WebSocket remained current at virtual DAA
+19,606 with zero receipt blocks on the relay.
