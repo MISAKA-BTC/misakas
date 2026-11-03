@@ -21,8 +21,9 @@ use kaspa_consensus_core::{
     palw_positive_funding_relay_v2::{pending_funding_relay_payer_scratch_v2, pending_funding_relay_row_images_match_v2},
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
     palw_state_v2::{
-        AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignmentRulesV2,
-        PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2, palw_bond_may_take_work_v2,
+        AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignedCaseBackingV2,
+        NativeAssignmentRulesV2, NativeCommittedCaseRecordV2, PalwBondKeyV2, PalwBondStateV2, PalwChainStateV2, PalwDeltaEntryV2,
+        palw_bond_may_take_work_v2,
     },
     tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
@@ -37,7 +38,8 @@ use misaka_palw_positive_contract::{
         open_material::AssignmentOpenLimitsV2,
         rows::AssignmentNonceRow,
     },
-    journal::CaseJournalRecordView,
+    identity::{CaseId, ResultId},
+    journal::{CASE_JOURNAL_AUX_MATERIAL_BYTES, CaseJournalLimits, CaseJournalRecordView},
     native::{KERNEL_AUX_TABLE, NativeRowKey},
     rows::{AcceptedMaterial, AcceptedOrigin, MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES, NativeRowBody, NativeRowValue},
 };
@@ -154,6 +156,96 @@ fn utxo_diff_scans_v2(inputs: u64) -> Result<u64, NativeAssignmentArchiveErrorV2
 }
 
 impl VirtualStateProcessor {
+    /// Attach the actual selected-parent predecessor before entering the
+    /// native writer. Recover one event here; the full Case replay consumes
+    /// its earlier records under the retained Case limits.
+    pub(in crate::pipeline::virtual_processor) fn prepare_committed_case_head_v2(
+        &self,
+        parent: BlockHash,
+        state: &PalwChainStateV2,
+        (case, expected_result): (CaseId, Option<ResultId>),
+    ) -> Result<Option<NativeAssignedCaseBackingV2>, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+
+        let workspace = (8 * size_of::<NativeRowValue>() + 4 * MAX_NATIVE_KEY_BYTES) as u64;
+        let _workspace =
+            reserve_native_requests_v1(workspace).map_err(E::Resource)?.ok_or(E::Unavailable("committed Case head rows"))?;
+        let Some((assignment, pin)) = state
+            .assigned_case_journal_pin_v2(case, expected_result)
+            .map_err(|_| E::Unavailable("committed Case head and Assignment links"))?
+        else {
+            return Ok(None);
+        };
+        let Some((rules, open)) = self.original_assignment_rules_v2(parent, state, assignment, None)? else {
+            return Err(E::Unavailable("committed Case original Assignment material"));
+        };
+        drop(open);
+        let positive = rules.positive_policy();
+        let physical = rules.native_preimages().ok_or(E::Unavailable("original Case physical limits"))?;
+        let maximum_heap =
+            positive.max_case_heap_bytes.min(rules.assignment_policy().max_heap_bytes).min(physical.physical.max_heap_bytes);
+        let maximum_work = positive.max_case_work.min(rules.assignment_policy().max_replay_work);
+        let maximum_record = positive.max_case_journal_bytes;
+        let maximum_aux = maximum_record / (CASE_JOURNAL_AUX_MATERIAL_BYTES as u64 + 5);
+        let limits = CaseJournalLimits {
+            max_record_bytes: maximum_record,
+            max_payload_bytes: maximum_record,
+            max_aux_entries: u32::try_from(maximum_aux).map_err(|_| E::Invalid("Case aux count extent"))?,
+            max_aux_preimage_bytes: maximum_record,
+            max_total_preimage_bytes: maximum_record,
+            max_logical_heap_bytes: maximum_heap,
+        };
+        let available_heap = maximum_heap.checked_sub(workspace).ok_or(E::Unavailable("Case head rows exceed heap cap"))?;
+        let (raw, raw_lease) = self
+            .palw_state_v2_store
+            .read()
+            .with_positive_journal_record_v2(pin.head.head, maximum_record.min(available_heap).min(maximum_work / 4), |bytes| {
+                let lease = reserve_native_requests_v1(bytes.len() as u64)
+                    .map_err(E::Resource)?
+                    .ok_or(E::Unavailable("Case head raw lease"))?;
+                let mut raw = Vec::new();
+                raw.try_reserve_exact(bytes.len()).map_err(|_| E::Unavailable("Case head raw allocation"))?;
+                if raw.capacity() > bytes.len() {
+                    return Err(E::Unavailable("Case head raw allocation exceeds quote"));
+                }
+                raw.extend_from_slice(bytes);
+                Ok((raw, lease))
+            })
+            .map_err(|_| E::Unavailable("committed Case head bytes"))??;
+        // The store guard has been released before carrier and delta lookups.
+        let available_heap = available_heap.checked_sub(raw.len() as u64).ok_or(E::Unavailable("Case head raw heap cap"))?;
+        let mut remaining_work = maximum_work;
+        charge_archive_work_v2(&mut remaining_work, 4 * raw.len() as u64)?;
+        let record = CaseJournalRecordView::decode(&raw, limits).map_err(|_| E::Invalid("committed Case head codec"))?;
+        let header = record.header();
+        if header.case != pin.case
+            || header.result != pin.result
+            || header.scope != pin.scope
+            || header.sequence != pin.head.sequence
+            || header.previous != pin.head.previous
+            || record.head() != pin.head.head
+            || record.history() != pin.head.history
+        {
+            return Err(E::Invalid("committed Case head bytes differ from rooted head"));
+        }
+        let mut boundaries = record.aux().filter_map(|aux| {
+            let value = AssignmentCaseBoundaryV2::decode(aux.preimage()).ok()?;
+            (value.material() == aux.material() && value.case == header.case && value.origin == header.origin).then_some(value)
+        });
+        let boundary = boundaries.next().ok_or(E::Unavailable("committed Case head boundary"))?;
+        if boundaries.next().is_some() {
+            return Err(E::Invalid("committed Case head has duplicate boundaries"));
+        }
+        let carriage = self.load_positive_case_carriage_v2(parent, state, record, boundary, available_heap, remaining_work)?;
+        Ok(Some(NativeAssignedCaseBackingV2::CommittedHead {
+            parent,
+            assignment,
+            pin,
+            record: NativeCommittedCaseRecordV2::from_native_history_v2(raw, carriage),
+            _raw_lease: raw_lease,
+        }))
+    }
+
     /// Re-resolve one original accepted carriage and executed-prefix state.
     /// Limits are the independently authenticated ORIGINAL physical/replay
     /// limits, never counts or caps copied from this journal record.
