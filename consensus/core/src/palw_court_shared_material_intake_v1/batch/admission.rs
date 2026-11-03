@@ -54,10 +54,12 @@ pub(crate) enum BatchDeliveryV1 {
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct BatchAdmissionQuoteV1 {
+    pub claim: Hash64,
     /// Canonical work and retention terms to bind into the payer's scope.
     /// Assigned DAA values are excluded because legal repair may move them.
     pub relative_graph_id: Hash64,
     pub required_daa: u64,
+    pub material_until_daa: u64,
     pub service: ServiceCost,
     pub retained_payload_bytes: u64,
     pub retained_payload_byte_daa: u64,
@@ -525,8 +527,10 @@ impl BatchAdmissionV1<'_> {
                 Ok::<_, ServiceRefusal>(())
             })?;
         let quote = BatchAdmissionQuoteV1 {
+            claim: self.claim,
             relative_graph_id,
             required_daa,
+            material_until_daa: self.window.material_until_daa,
             service,
             retained_payload_bytes,
             retained_payload_byte_daa,

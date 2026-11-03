@@ -292,6 +292,22 @@
                     journal, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
                 ).unwrap();
                 assert!(quote.required_daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
+                // The original payer consent accepted above cannot authorize
+                // this additional native Batch graph.
+                use crate::palw_court_original_escrow_v1::{FundingRefusalV1, OriginalFundingScopeV1, prepare_funding_v1};
+                let funded = pairing.envelope();
+                let t = &funded.funding.terms;
+                let batch_scope = OriginalFundingScopeV1 {
+                    claim, job_identity: t.job_identity, execution_root: t.execution_root, source_id: t.source_id,
+                    relative_graph_id: req.source_graph_v1().unwrap().scope_v3(), fee_profile_id: t.fee_profile_id,
+                    capital_profile_id: t.capital_profile_id, retention_profile_id: t.retention_profile_id,
+                    settlement_policy_id: t.settlement_policy_id, required_amount_sompi: t.funding_amount_sompi,
+                    required_material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa,
+                }.with_native_batch_v1(&quote).unwrap();
+                assert!(matches!(prepare_funding_v1(
+                    funded.inspect_carrier_v1(pairing.carrier()).unwrap(), &funded.funding, &funded.payer_pubkey,
+                    &batch_scope, t.network_domain, ctx.daa_score,
+                ), Err(FundingRefusalV1::Scope)));
                 assert!(expected_edges.iter().all(|(id, parents)| batch.causal.get(id) == Some(parents)));
                 assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
                 assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));

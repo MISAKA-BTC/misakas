@@ -4320,3 +4320,29 @@ are not yet bound to this quote.
 The existing isolated Linux check of `587a1808c` continued under
 invocation `460e5e2f1da647b784dd040aab7462cf`. It was observed
 compiling RocksDB objects in the same cgroup.
+
+## Bind a native Batch reservation to the payer's original scope
+
+The escrow precheck can now derive a joint scope from the original
+duties and the Batch reservation. It requires the same original,
+a valid reserved duration and a priced retention envelope. The
+joint digest binds the two graph identities and the Node-produced
+storage fee. The expected original funding includes that fee once
+and covers the longer material horizon. Provider carrier rent is
+still checked against the corresponding carriers' own funds.
+
+The extracted escrow suite passed six tests. A real payer signature
+and real transaction output covered the combined scope at both
+ends of the acceptance interval. Legacy consent, another graph,
+underfunding and short retention were refused. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-payer-scope.SBV74P/tests.log`.
+The native coordinator fixture now attempts the old signature
+against its actual expanded Batch graph, but has not run. Production
+admission still needs to choose, price and install that complete
+Batch contract atomically.
+
+The existing IBM Linux check of `587a1808c` remained active under
+invocation `460e5e2f1da647b784dd040aab7462cf`. B0 and relay agreed
+at virtual DAA 19,749. Nine additional selected blocks across the
+two contiguous pages had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-payer-scope-live.qcKCA2`.
