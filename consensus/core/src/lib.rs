@@ -165,6 +165,7 @@ pub mod dns_bft_v1;
 /// (StakeScore aggregation, reorg gate) land in PR-10.4
 /// onward once Phases 1–9 stabilise.
 pub mod dns_finality;
+pub use dns_finality as palw_consensus;
 pub mod errors;
 /// kaspa-pq Selected-Parent EVM Lane (ADR-0020): EVM execution-lane consensus
 /// types (block-body payload, executor-output header, EVM-domain newtypes).
@@ -888,6 +889,8 @@ pub mod trusted;
 pub mod tx;
 pub mod utxo;
 pub mod vlt;
+pub use vlt as palw_compute;
+pub mod palw;
 
 /// Integer type for accumulated PoW of blue blocks.
 ///
