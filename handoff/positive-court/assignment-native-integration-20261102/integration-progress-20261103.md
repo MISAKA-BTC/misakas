@@ -1238,7 +1238,15 @@ actual weight/frontier/point journal slots before writing them. The latter
 quote includes the difference between the retained vector capacity and the
 pinned Borsh growth bound. The guarded
 [Core and Consensus Clippy run](funded-native-relay-journal-static-verification-20261103.json.gz)
-passed on this source. The native runtime repeat is still building.
+passed on this source. The optimized macOS native-node run advanced to the
+database-write check at the pre-carrier heartbeat. It refused the transition
+because macOS has no audited enforced quota backend. No registration or
+fee assertion ran. The same binary passed eight legacy G14 certification,
+fraud, restart, reorg/replay and payment cases. The
+[runtime record](funded-native-relay-journal-runtime-verification-20261103.json.gz)
+pins both commands, the binary and unchanged sources. The
+[relay refusal](funded-native-relay-runtime-journal.log.gz) and
+[legacy results](post-journal-legacy-regressions.log.gz) are separate logs.
 
 The next recovery fixture closes the producer's RocksDB connection after the
 first successful registration, opens the existing directory again, and
@@ -1263,8 +1271,8 @@ replay workspace under the prior quote. The fixture's original cap is 128,000
 bytes. Borrowed canonical row comparison and a fixed nonce projection reduce
 the same minimum to 120,574 bytes. A larger real delta still requires its
 actual preflight. Thirteen standalone Contract and streaming cases passed
-and the isolated Consensus test target typechecked. The changes are staged
-as candidates while the current heartbeat runtime pins its source.
+and the isolated Consensus test target typechecked. The changes were staged as candidates while the heartbeat runtime pinned
+its source.
 
 The [empty-heartbeat differential](native-journal-empty-heartbeat-differential.json)
 links the same driver against the old and repaired Core archives. The old
@@ -1276,5 +1284,19 @@ The exact recovery candidate is preserved as commit `7eaf2ba68`. It also
 refuses a new registration before its debit when its heap cap cannot cover
 even the two inserted rows and the mandatory final point. The extracted
 floor matched the actual fixture-shaped native wire preflight at 120,190
-bytes. Integrated validation is pending. The primary worktree retains the
-running heartbeat test's source map.
+bytes. It was integrated as `45927210f` after the macOS run finished.
+Warnings-denied Core and Consensus library Clippy passed on the integrated
+source. The cold reopen, independent replay and competing-branch assertions
+still require the full node test on Linux.
+
+## Enforced XFS quota prerequisite
+
+A disposable Linux container in the existing Colima guest mounted a loop
+device with XFS project-quota enforcement. Project 4197 was capped at 16 MiB.
+An 8 MiB allocation succeeded in that project and an over-limit allocation
+returned ENOSPC. A same-sized control allocation outside the project
+succeeded. The production Rust quota reader also accepted a database after
+a write, close and reopen, observed reduced headroom, and rejected the
+unscoped parent. This probe used system RocksDB and exercised the quota
+reader independently of the consensus node. The [probe archive](native-relay-xfs-prerequisite-probes-20261103.tar.gz)
+contains the executed scripts and their output.
