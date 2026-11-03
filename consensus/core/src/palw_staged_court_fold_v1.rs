@@ -1030,7 +1030,13 @@ impl TransitionBuilder<'_> {
         let mut next = old.clone();
         // G14 lane r6-d1-release: the sweep keeps causal order along the row's recorded edges (none on a legacy row).
         let edges = self.state.court_service_causal_edges_v1();
-        let report = next.repair_missing_supply_ordered_v1(&edges).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let batch_state = self.extras.batch_court_active_v1.then_some(&self.state);
+        let _batch_workspace = match batch_state {
+            Some(state) => crate::palw_court_shared_material_intake_v1::batch::reserve_rooted_batch_repair_v1(state, old)
+                .map_err(PalwStateV2Error::NativeResource)?,
+            None => None,
+        };
+        let report = next.repair_missing_supply_with_v1(&edges, batch_state).map_err(PalwStateV2Error::CarriageInconsistent)?;
         if &next != old {
             self.write_court_service_state_v1(next)?;
         }

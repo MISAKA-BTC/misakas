@@ -3412,3 +3412,25 @@ are still unconnected to original admission.
 B0 and relay agreed at virtual DAA 19,717 on a newer selected tip with
 no new Qwen carrier in the scan. See
 `/private/tmp/misaka-t12-oom-20261102/g14-funded-seam-live.y5Wjsu/page.json`.
+
+## Rooted Batch deadlines constrain service recovery
+
+The canonical recovery sweep now reads accepted Batch demands and draft
+rows from the same branch when the Batch fence applies. It preserves
+the accepted Open, Begin and Part positions and bounds missed response
+opportunities by the signed demand and retained draft deadlines. It
+checks the moved Finish against the resulting Begin and lifetime before
+committing the book. The ordinary path remains available for claims
+without Batch demands. Additional Batch scratch is reserved by the
+largest affected binding before the sweep.
+
+The extracted suite passed 40 checks. The new scheduler fixture, using
+mocked rooted-row reads, moves a missed Part within the signed window and
+refuses a move after the deadline without changing the book. The full
+native fixture now compares ordinary and rooted repair on the same
+missed slots. It was not run. This addresses scheduler recovery and
+does not establish a live reorg or the full funded original path.
+
+B0 and relay agreed at virtual DAA 19,718 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-rooted-repair-live.nMhP9W/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-repair.1tviwt/tests.log`.

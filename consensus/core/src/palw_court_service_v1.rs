@@ -399,4 +399,10 @@ impl ServiceReservations {
     pub fn assigned_daa(&self, id: &[u8; 64]) -> Option<u64> {
         self.assignments.get(id).copied()
     }
+
+    pub(crate) fn has_missed_slot_v1(&self, ids: &BTreeSet<[u8; 64]>) -> bool {
+        self.last_observed_daa.is_some_and(|now| {
+            ids.iter().any(|id| self.assigned_daa(id).is_some_and(|slot| slot < now && !self.supply.contains_key(&slot)))
+        })
+    }
 }

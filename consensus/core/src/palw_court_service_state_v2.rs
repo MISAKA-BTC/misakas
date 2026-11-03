@@ -4,6 +4,7 @@
 use crate::{
     Hash64,
     palw_court_service_v1::{ServiceAssessment, ServiceReservations},
+    palw_state_v2::PalwChainStateV2,
 };
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -458,6 +459,14 @@ impl CourtServiceStateV2 {
         &mut self,
         edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
     ) -> Result<Vec<ClaimServiceRecovery>, String> {
+        self.repair_missing_supply_with_v1(edges, None)
+    }
+
+    pub(crate) fn repair_missing_supply_with_v1(
+        &mut self,
+        edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
+        batch_state: Option<&PalwChainStateV2>,
+    ) -> Result<Vec<ClaimServiceRecovery>, String> {
         self.check_live_v1()?;
         let mut order: Vec<_> =
             self.claims.values().map(|binding| (binding.hard_deadline_daa, binding.original_accepted_daa, binding.claim)).collect();
@@ -467,7 +476,14 @@ impl CourtServiceStateV2 {
             let ids = &self.claims[&claim].packet_ids;
             let own: BTreeMap<[u8; 64], Vec<[u8; 64]>> =
                 edges.iter().filter(|(child, _)| ids.contains(*child)).map(|(c, p)| (*c, p.clone())).collect();
-            let result = self.book.repair_missing_ordered_v1(ids, hard, &own);
+            let result = match batch_state {
+                Some(state) if self.book.has_missed_slot_v1(ids) => {
+                    crate::palw_court_shared_material_intake_v1::batch::repair_rooted_batch_slots_v1(
+                        state, claim, ids, hard, &own, &mut self.book,
+                    )
+                }
+                _ => self.book.repair_missing_ordered_v1(ids, hard, &own),
+            };
             if result != Ok(0) {
                 report.push(ClaimServiceRecovery { claim, result });
             }

@@ -817,6 +817,17 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(b.state.state_root(), before_open);
     let opening = BatchCourtWireV1::Open(open);
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
+    let service = b.state.court_service_state_v1().unwrap();
+    let mut missed = service.book.clone();
+    missed.observe_block(open_at.daa_score, open_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    missed.observe_block(begin_at.daa_score, begin_at.block.as_bytes(), ServiceCost::default()).unwrap();
+    missed.observe_block(response_deadline, [7; 64], ServiceCost::default()).unwrap();
+    let before = missed.clone();
+    let ids = &service.claims[&claim].packet_ids;
+    let mut ordinary = before.clone();
+    assert!(ordinary.repair_missing_ordered_v1(ids, context.hard_daa, &Default::default()).unwrap() > 0);
+    assert!(batch::repair_rooted_batch_slots_v1(&b.state, claim, ids, context.hard_daa, &Default::default(), &mut missed).is_err());
+    assert_eq!(missed, before);
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges).is_err());
     let quote = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
     assert_eq!(quote.request_root, request_root);

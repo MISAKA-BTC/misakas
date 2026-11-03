@@ -631,6 +631,145 @@ pub(crate) fn repair_batch_material_v1(
     repair_batch_material_with_drafts_v1(window, book, graph, &retained, schedule)
 }
 
+/// Bound the canonical service sweep by immutable, accepted Batch windows.
+/// The book may move a missed opportunity inside these windows only.
+pub(crate) fn reserve_rooted_batch_repair_v1(
+    state: &PalwChainStateV2,
+    service: &crate::palw_court_service_state_v2::CourtServiceStateV2,
+) -> Result<Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>, crate::palw_native_resource_v1::NativeCoverageV1> {
+    use crate::palw_native_resource_v1::{TirNativeRequestsV1, btree_node_envelope_bytes_v1, reserve_native_requests_v1};
+    type Id = [u8; 64];
+    let largest = service
+        .claims
+        .values()
+        .filter(|binding| {
+            service.book.has_missed_slot_v1(&binding.packet_ids)
+                && state
+                    .staged_court_range_v1(&Key::CourtBatchDemand(binding.claim, 0), &Key::CourtBatchDemand(binding.claim, u64::MAX))
+                    .next()
+                    .is_some()
+        })
+        .map(|binding| binding.packet_ids.len())
+        .max()
+        .unwrap_or(0) as u64;
+    if largest == 0 {
+        return Ok(None);
+    }
+    let per_slot = btree_node_envelope_bytes_v1::<Id, ()>()
+        + btree_node_envelope_bytes_v1::<Id, u64>()
+        + btree_node_envelope_bytes_v1::<(Hash64, Hash64), &MaterialDraftV1>();
+    let mut q = TirNativeRequestsV1::new();
+    q.add_v1(TirNativeRequestsV1::product_v1(largest, per_slot as u64)?)?;
+    q.vec_v1::<(Id, Id, u64, u64)>(largest)?;
+    reserve_native_requests_v1(q.bytes_v1())
+}
+
+pub(crate) fn repair_rooted_batch_slots_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    ids: &std::collections::BTreeSet<[u8; 64]>,
+    hard: u64,
+    edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
+    book: &mut ServiceReservations,
+) -> Result<usize, ServiceRefusal> {
+    use crate::palw_batch_court_v1::rooted::batch_open_packet_v1;
+    use ServiceRefusal::{DeadlineExhausted, InvalidState};
+    let first_demand = Key::CourtBatchDemand(claim, 0);
+    let last_demand = Key::CourtBatchDemand(claim, u64::MAX);
+    let demands = || state.staged_court_range_v1(&first_demand, &last_demand);
+    if demands().next().is_none() {
+        return book.repair_missing_ordered_v1(ids, hard, edges);
+    }
+    let mut retained = BTreeMap::new();
+    for (key, row) in state.staged_court_range_v1(
+        &Key::CourtMaterialDraft(claim, Hash64::from_bytes([0; 64])),
+        &Key::CourtMaterialDraft(claim, Hash64::from_bytes([255; 64])),
+    ) {
+        let Row::CourtMaterialDraft(draft) = row else { return Err(InvalidState) };
+        if draft.version == MATERIAL_BATCH_VERSION {
+            draft.check(key).map_err(|_| InvalidState)?;
+            let target = draft.target.id_v1(claim).map_err(|_| InvalidState)?;
+            if retained.len() == ids.len() || retained.insert((draft.head, target), draft.as_ref()).is_some() {
+                return Err(InvalidState);
+            }
+        }
+    }
+    let schedule = super::material_intake_schedule_v1().map_err(|_| InvalidState)?;
+    let mut repairable = ids.clone();
+    let mut expires = BTreeMap::new();
+    let mut bound = |id, before| {
+        if !ids.contains(&id) || expires.insert(id, before).is_some() {
+            return Err(InvalidState);
+        }
+        Ok(())
+    };
+    let mut spans = Vec::new();
+    for (key, row) in demands() {
+        let Row::CourtBatchDemand(rooted) = row else { return Err(InvalidState) };
+        rooted.check(key).map_err(|_| InvalidState)?;
+        rooted.check_context(state).map_err(|_| InvalidState)?;
+        let demand = &rooted.demand;
+        let open = batch_open_packet_v1(claim, rooted.scope_id, rooted.ordinal).map_err(|_| InvalidState)?.as_bytes();
+        if !ids.contains(&open) || book.assigned_daa(&open) != Some(demand.opened_daa) {
+            return Err(InvalidState);
+        }
+        repairable.remove(&open);
+        for (index, range) in demand.ranges.iter().enumerate() {
+            let position = BatchResponsePositionV1 { demand_ordinal: rooted.ordinal, range_index: index as u32 };
+            let packet = |stage| position.packet_id(claim, rooted.scope_id, stage).map_err(|_| InvalidState);
+            let begin = packet(Stage::Begin)?;
+            let finish = packet(Stage::Finish)?;
+            let mut before = demand.response_deadline_daa;
+            let draft = retained.remove(&(rooted.request_root, range.id));
+            if let Some(draft) = draft {
+                if draft.scope_id != rooted.scope_id
+                    || draft.total_bytes != u64::from(range.bytes)
+                    || draft.material_until_daa != rooted.material_until()
+                    || book.assigned_daa(&begin) != Some(draft.begun_daa)
+                {
+                    return Err(InvalidState);
+                }
+                before = before.min(draft.expires_daa);
+                repairable.remove(&begin);
+            }
+            for offset in (0..u64::from(range.bytes)).step_by(PART as usize) {
+                let id = packet(Stage::Part(offset))?;
+                if let Some(row) = draft.and_then(|draft| state.staged_court_row_v1(&Key::CourtMaterialPart(draft.draft_id, offset))) {
+                    let Row::CourtMaterialPart(part) = row else { return Err(InvalidState) };
+                    if part.version != MATERIAL_BATCH_VERSION || part.claim != claim || book.assigned_daa(&id) != Some(part.daa) {
+                        return Err(InvalidState);
+                    }
+                    repairable.remove(&id);
+                }
+                bound(id, before)?;
+            }
+            bound(begin, before)?;
+            bound(finish, before)?;
+            spans.push((begin, finish, rooted.material_until(), before));
+        }
+    }
+    if !retained.is_empty() {
+        return Err(InvalidState);
+    }
+    book.repair_missing_ordered_checked_v1(
+        &repairable,
+        hard,
+        edges,
+        |id| expires.get(id).copied(),
+        |candidate| {
+            for (begin, finish, material, deadline) in spans {
+                let begin = candidate.assigned_daa(&begin).ok_or(InvalidState)?;
+                let finish = candidate.assigned_daa(&finish).ok_or(InvalidState)?;
+                let expires = schedule.draft_expires_v1(begin, hard, material).map_err(|_| DeadlineExhausted)?;
+                if finish >= expires.min(deadline) {
+                    return Err(DeadlineExhausted);
+                }
+            }
+            Ok(())
+        },
+    )
+}
+
 fn repair_batch_material_with_drafts_v1(
     window: BatchCourtWindowV1,
     book: &mut ServiceReservations,
