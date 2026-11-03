@@ -134,9 +134,14 @@ pub enum BatchCourtErrorV1 {
     Conflict,
     Window,
     Opening,
+    VerificationUnavailable,
     Checkpoint,
     Clock,
     OverTarget { required_daa: u64 },
+}
+
+fn part_digest(bytes: &[u8]) -> Hash64 {
+    blake2b_512_keyed(b"misaka-palw/batch-court/part/v1", bytes)
 }
 
 impl BatchDemandV1 {
@@ -278,6 +283,61 @@ impl BatchProgressV1 {
             .sum()
     }
 
+    fn range_at(&self, id: Hash64) -> Result<(BatchRangeV1, usize), BatchCourtErrorV1> {
+        let index = self.demand.ranges.binary_search_by_key(&id, |range| range.id).map_err(|_| BatchCourtErrorV1::Identity)?;
+        let first_slot = self.demand.ranges[..index].iter().map(|range| range.bytes.div_ceil(self.demand.part_bytes) as usize).sum();
+        Ok((self.demand.ranges[index], first_slot))
+    }
+
+    fn check_response(&self, daa: u64, case_id: Hash64, request_root: Hash64) -> Result<(), BatchCourtErrorV1> {
+        if case_id != self.demand.case_id || request_root != self.request_root {
+            return Err(BatchCourtErrorV1::Identity);
+        }
+        if daa < self.demand.opened_daa || daa >= self.demand.response_deadline_daa {
+            return Err(BatchCourtErrorV1::Window);
+        }
+        Ok(())
+    }
+
+    /// Use the native full-body verifier for a range whose encoding has no
+    /// independent per-part openings. The caller owns and bounds assembly of
+    /// the bytes. No slot advances until the whole range verifies.
+    pub fn accept_whole_range(
+        &mut self,
+        daa: u64,
+        case_id: Hash64,
+        request_root: Hash64,
+        range_id: Hash64,
+        bytes: &[u8],
+        verify_opening: impl FnOnce(BatchRangeV1, &[u8]) -> Result<(), BatchCourtErrorV1>,
+    ) -> Result<BatchPartOutcomeV1, BatchCourtErrorV1> {
+        use BatchCourtErrorV1::{Conflict, PartShape};
+        self.check_response(daa, case_id, request_root)?;
+        let (range, first) = self.range_at(range_id)?;
+        if bytes.len() != range.bytes as usize {
+            return Err(PartShape);
+        }
+        let chunks = bytes.chunks(self.demand.part_bytes as usize);
+        let slots = &mut self.accepted[first..first + chunks.len()];
+        for (stored, bytes) in slots.iter().zip(chunks.clone()) {
+            if stored.is_some_and(|hash| hash != part_digest(bytes)) {
+                return Err(Conflict);
+            }
+        }
+        // Part-level acceptance may never have executed the full-body
+        // decoder. Run it before returning even an exact duplicate.
+        verify_opening(range, bytes)?;
+        if slots.iter().all(Option::is_some) {
+            return Ok(BatchPartOutcomeV1::Duplicate);
+        }
+        for (slot, bytes) in slots.iter_mut().zip(chunks) {
+            if slot.is_none() {
+                *slot = Some(part_digest(bytes));
+            }
+        }
+        Ok(BatchPartOutcomeV1::Applied)
+    }
+
     /// Parts may arrive in any order. Exact duplicates consume no new slot.
     /// The caller must authenticate the envelope and account bounded ingress
     /// work even for duplicate packets. The verifier authenticates the literal
@@ -288,23 +348,16 @@ impl BatchProgressV1 {
         part: BatchResponsePartV1<'_>,
         verify_opening: impl FnOnce(BatchRangeV1, u32, &[u8]) -> bool,
     ) -> Result<BatchPartOutcomeV1, BatchCourtErrorV1> {
-        use BatchCourtErrorV1::{Conflict, Identity, Opening, PartShape, Window};
-        if part.case_id != self.demand.case_id || part.request_root != self.request_root {
-            return Err(Identity);
-        }
-        let range_index = self.demand.ranges.binary_search_by_key(&part.range_id, |range| range.id).map_err(|_| Identity)?;
-        let range = self.demand.ranges[range_index];
+        use BatchCourtErrorV1::{Conflict, Opening, PartShape};
+        self.check_response(daa, part.case_id, part.request_root)?;
+        let (range, first) = self.range_at(part.range_id)?;
         let size = self.demand.part_bytes;
         let offset = part.part_index.checked_mul(size).filter(|offset| *offset < range.bytes).ok_or(PartShape)?;
         if part.bytes.len() != (range.bytes - offset).min(size) as usize {
             return Err(PartShape);
         }
-        if daa < self.demand.opened_daa || daa >= self.demand.response_deadline_daa {
-            return Err(Window);
-        }
-        let slot = self.demand.ranges[..range_index].iter().map(|range| range.bytes.div_ceil(size) as usize).sum::<usize>()
-            + part.part_index as usize;
-        let content = blake2b_512_keyed(b"misaka-palw/batch-court/part/v1", part.bytes);
+        let slot = first + part.part_index as usize;
+        let content = part_digest(part.bytes);
         match self.accepted[slot] {
             Some(previous) if previous == content => return Ok(BatchPartOutcomeV1::Duplicate),
             Some(_) => return Err(Conflict),
@@ -460,6 +513,36 @@ mod tests {
         let other = BatchResponsePartV1 { bytes: b"pqrs", ..a };
         assert_eq!(progress.accept(11, other, |_, _, _| true), Err(BatchCourtErrorV1::Conflict));
         assert_eq!(progress.remaining_payload_bytes(), 5);
+    }
+
+    #[test]
+    fn native_whole_range_and_independent_parts_have_one_canonical_checkpoint() {
+        let mut mixed = BatchProgressV1::new(demand()).unwrap();
+        let a = part(&mixed, 1, 0, b"abcd");
+        let b = part(&mixed, 1, 1, b"ef");
+        mixed.accept(10, b, |_, _, _| true).unwrap();
+        let before = mixed.checkpoint_root().unwrap();
+        let whole = |state: &mut BatchProgressV1, bytes: &[u8], verdict: Result<(), BatchCourtErrorV1>| {
+            state.accept_whole_range(10, a.case_id, a.request_root, a.range_id, bytes, |range, body| {
+                assert_eq!(range.bytes, body.len() as u32);
+                verdict
+            })
+        };
+        assert_eq!(whole(&mut mixed, b"abcdXY", Ok(())), Err(BatchCourtErrorV1::Conflict));
+        let invalid = Err(BatchCourtErrorV1::Opening);
+        let unavailable = Err(BatchCourtErrorV1::VerificationUnavailable);
+        assert_eq!(whole(&mut mixed, b"abcdef", invalid), Err(BatchCourtErrorV1::Opening));
+        assert_eq!(whole(&mut mixed, b"abcdef", unavailable), Err(BatchCourtErrorV1::VerificationUnavailable));
+        assert_eq!(mixed.checkpoint_root().unwrap(), before);
+        assert_eq!(whole(&mut mixed, b"abcdef", Ok(())), Ok(BatchPartOutcomeV1::Applied));
+        assert_eq!(whole(&mut mixed, b"abcdef", invalid), Err(BatchCourtErrorV1::Opening));
+        assert_eq!(whole(&mut mixed, b"abcdef", Ok(())), Ok(BatchPartOutcomeV1::Duplicate));
+
+        let mut parts = BatchProgressV1::new(demand()).unwrap();
+        parts.accept(10, a, |_, _, _| true).unwrap();
+        parts.accept(10, b, |_, _, _| true).unwrap();
+        assert_eq!(mixed.checkpoint_root(), parts.checkpoint_root());
+        assert_eq!(mixed.remaining_payload_bytes(), 3);
     }
 
     #[test]
