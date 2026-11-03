@@ -2454,9 +2454,16 @@ impl PalwDaClaimFactsV1 {
     }
 }
 
-fn palw_da_provider_attempt_roots_v1(facts: &PalwDaClaimFactsV1) -> Option<PalwClaimRootsV1> {
+fn palw_da_provider_attempt_roots_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+) -> Option<PalwClaimRootsV1> {
+    // Only CoreV1 material verification binds the optional output root.
     let roots = facts.roots_v1(None);
-    (roots.anchor != Hash64::default() && roots.attempt_draw.is_some()).then_some(roots)
+    (backend.attempt_rules_v1() == kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1
+        && roots.anchor != Hash64::default()
+        && roots.attempt_draw.is_some())
+    .then_some(roots)
 }
 
 fn palw_da_verify_provider_attempt_v1(
@@ -2465,7 +2472,7 @@ fn palw_da_verify_provider_attempt_v1(
     output_root: Hash64,
     bytes: &[u8],
 ) -> bool {
-    palw_da_provider_attempt_roots_v1(facts).is_some_and(|mut roots| {
+    palw_da_provider_attempt_roots_v1(backend, facts).is_some_and(|mut roots| {
         roots.output_root = Some(output_root);
         backend.verify_material(&fp_capture_view(bytes, facts.form), roots) == PalwMaterialVerdictV1::Matches
     })
@@ -13394,7 +13401,7 @@ impl PalwPanelService {
         let answer_form = facts.form;
         // The ordinary local answer path can use material without the old
         // carrier header. A third-party copy must reproduce its exact job.
-        let court_carrier = palw_da_provider_attempt_roots_v1(&facts).map(|_| first.accepted_block);
+        let court_carrier = palw_da_provider_attempt_roots_v1(backend.as_ref(), &facts).map(|_| first.accepted_block);
         let provider = court_carrier.and_then(|carrier| {
             let ready = self.pending_provider_http.lock().unwrap().take_if(|ready| ready.matches_court(claim, carrier))?;
             (self.provider_claim_roots(network_domain, claim, Some(carrier)) == Some(ready.roots)

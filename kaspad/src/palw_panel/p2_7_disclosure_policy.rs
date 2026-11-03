@@ -460,7 +460,29 @@ fn an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block() {
     facts.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: None };
     let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec()], &event, false);
     assert!(built.is_err() && kept.is_none(), "no block in this store: nothing to re-make from");
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &facts, run.output_root, &run.material));
+}
 
+#[test]
+fn a_provider_capture_binds_the_core_v1_attempt_output() {
+    use kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1;
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    let backend = super::seat_s_tests::floor_backend().with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+    let anchor = Hash64::from_u64_word(0x00C0_FFEE);
+    let (job, prompt) = backend.job_for_anchor(anchor).expect("job");
+    let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, true);
+    let run = backend.execute(&job, &prompt).expect("the producer's run");
+    let facts = PalwDaClaimFactsV1 {
+        claim_id: Hash64::from_u64_word(0xC2),
+        class_id: backend.profile().shape_profile_id(),
+        executor_bond: PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0)),
+        execution_root: run.execution_root,
+        trace_root: run.trace_root,
+        work_leaves: 0,
+        form: backend.prompt_ids_form(),
+        lane: PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: None },
+        job_pin: None,
+    };
     // A provider's matching manifest is insufficient: the original bytes
     // must also reproduce the current carrier's job and signed output root.
     assert!(!palw_da_verify_provider_attempt_v1(&backend, &facts, Hash64::default(), &run.material));
@@ -472,6 +494,7 @@ fn an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block() {
     no_draw.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: None, job: None };
     assert!(!palw_da_verify_provider_attempt_v1(&backend, &no_draw, run.output_root, &run.material));
     assert!(palw_da_verify_provider_attempt_v1(&backend, &facts, run.output_root, &run.material));
+    let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
     let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec(), run.material], &event, false);
     let built = built.expect("provider material answers even when the local replay cannot run");
     assert!(matches!(built.answers.as_slice(), [Some(Ok(_))]) && !built.remade && kept.is_none());
