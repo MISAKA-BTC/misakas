@@ -13966,6 +13966,7 @@ mod vesting_workspace_v2;
 // G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow rows' one writer.
 mod funded_escrow;
 mod positive_assignment;
+pub use positive_assignment::CheckedUnconsumedAssignmentCloseV2;
 mod positive_assignment_backing;
 mod positive_assignment_case;
 pub use positive_assignment_case::source::{QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2};

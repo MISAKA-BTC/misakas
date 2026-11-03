@@ -37,6 +37,10 @@ fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Digest {
     Digest(writer.0.finalize().as_bytes().try_into().expect("64-byte purpose digest"))
 }
 
+pub(crate) fn assignment_funding_image_v2(row: &AssignmentFundingRow) -> Digest {
+    hash(b"misaka/positive/assignment-funding-image/v2/r1", row)
+}
+
 pub type AssignmentFundingLocksV2 = HashMap<TransactionOutpoint, (AssignmentFundingRow, Option<AssignmentSpendAuthorizationV2>)>;
 
 pub fn assignment_prover_funding_locks_v2(

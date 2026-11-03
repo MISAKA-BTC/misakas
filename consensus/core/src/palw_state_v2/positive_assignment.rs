@@ -27,7 +27,8 @@ use misaka_palw_positive_contract::{
     identity::{Digest, PUBKEY_BYTES, SIGNATURE_BYTES},
     native::{KERNEL_AUX_TABLE, NativeRowKey},
     rows::{
-        AcceptedOrigin, CaseRow, ClaimIndexRow, FundingRow, NativeOutpoint, NativeRowBody, NativeRowValue, ResultRow, validate_bundle,
+        AcceptedMaterial, AcceptedOrigin, CaseRow, ClaimIndexRow, FundingRow, NativeOutpoint, NativeRowBody, NativeRowValue,
+        ResultRow, validate_bundle,
     },
 };
 
@@ -972,6 +973,91 @@ fn check_unconsumed_close_operation_v2(
     }
 }
 
+/// Exact close replay for the original unspent A account. It carries no
+/// authority over Case funds, retained duties, fee or liability capital.
+pub struct CheckedUnconsumedAssignmentCloseV2 {
+    assignment: AssignmentId,
+    original: AcceptedMaterial,
+    status: AssignmentStatusV2,
+    receipt: AcceptedMaterial,
+    journal_tip: Digest,
+    funding_image: Digest,
+    limits: crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
+    max_frame_bytes: u64,
+    max_history_frames: u32,
+    cooperative: bool,
+}
+impl CheckedUnconsumedAssignmentCloseV2 {
+    /// Qualify the first cooperative return of the now-unearnable worker
+    /// consideration and unused surplus. Ordinary UTXO signatures remain
+    /// mandatory. Separate owners must qualify the fee and capital legs.
+    pub fn qualify_refund_candidate_v2(
+        &self,
+        state: &PalwChainStateV2,
+        tx: &crate::tx::Transaction,
+        amounts: &[u64],
+        now: u64,
+    ) -> Result<crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2, PalwStateV2Error> {
+        use crate::palw_positive_assignment_funds_v2::{
+            AssignmentAuthorizedDueV2, AssignmentSpendAuthorizationV2, assignment_funding_image_v2, qualify_assignment_spend_v2,
+        };
+        use crate::palw_positive_court_v2::coordinator::assignment_body::{
+            PositiveAssignmentNativeOperationV2 as O, decode_assignment_body_v2,
+        };
+        use misaka_palw_positive_contract::assignment::rows::AssignmentSettlementLegV2;
+
+        if !self.cooperative || now < self.receipt.origin.accepted_daa || tx.payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 12]) {
+            return Err(refusal("first cooperative unconsumed refund carrier"));
+        }
+        let rooted = PositiveRowsV2::new(state).assignment(self.assignment).map_err(refusal)?;
+        let funding = rooted.funding;
+        if rooted.assignment.admission_material != self.original
+            || rooted.assignment.status != self.status
+            || rooted.assignment.last_event != self.receipt.origin
+            || rooted.journal.last_frame != self.journal_tip
+            || rooted.journal.next_ordinal >= u64::from(self.max_history_frames)
+            || rooted.use_row.is_some()
+            || funding.last_settlement.is_some()
+            || assignment_funding_image_v2(&funding) != self.funding_image
+        {
+            return Err(refusal("unconsumed refund no longer matches the checked original close"));
+        }
+        let limits = crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2 {
+            max_settlement_receipts: 1,
+            ..self.limits
+        };
+        let body = decode_assignment_body_v2(&tx.payload[3..], limits).map_err(refusal)?;
+        let O::SettleAssignment { assignment, case: None, receipts } = body.operation else {
+            return Err(refusal("unconsumed refund must use the native Assignment-only operation"));
+        };
+        if assignment != self.assignment || receipts.as_slice() != [self.receipt] {
+            return Err(refusal("unconsumed refund must name the exact accepted close receipt"));
+        }
+        let dues = [(0, funding.worker.remaining), (3, funding.surplus.remaining)]
+            .into_iter()
+            .filter(|&(_, amount)| amount != 0)
+            .map(|(source_leg, amount)| AssignmentAuthorizedDueV2 {
+                source_leg,
+                kind: AssignmentSettlementLegV2::Refund,
+                party: funding.authorization.payer,
+                recipient: funding.authorization.refund_payload,
+                amount,
+                receipt: self.receipt,
+            })
+            .collect();
+        let authorization = AssignmentSpendAuthorizationV2 {
+            protected_after: [0, funding.earned_service_due, funding.liability_floor, 0],
+            before: funding,
+            dues,
+            daa: now,
+            max_frame_bytes: self.max_frame_bytes,
+            max_history_frames: self.max_history_frames,
+            payload: tx.payload.clone(),
+        };
+        qualify_assignment_spend_v2(&authorization.before, &authorization, tx, amounts, now).map_err(refusal)
+    }
+}
+
 impl PalwChainStateV2 {
     /// Reauthenticate the original Poster-funded output from the native
     /// Open carrier and compare its exact initial allocation to the live row.
@@ -1053,7 +1139,7 @@ impl PalwChainStateV2 {
         rules: &NativeAssignmentRulesV2,
         record: &NativeCommittedAssignmentRecordV2,
         (heap, work): (u64, u64),
-    ) -> Result<(), PalwStateV2Error> {
+    ) -> Result<CheckedUnconsumedAssignmentCloseV2, PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::assignment_body::{decode_assignment_body_v2, scan_assignment_body_v2};
         use misaka_palw_positive_contract::assignment::journal::AssignmentJournalRecordViewV2;
 
@@ -1132,7 +1218,18 @@ impl PalwChainStateV2 {
         if after != current.assignment {
             return Err(refusal("replayed unconsumed closure does not match the rooted Assignment"));
         }
-        Ok(())
+        Ok(CheckedUnconsumedAssignmentCloseV2 {
+            assignment: id,
+            original: current.assignment.admission_material,
+            status,
+            receipt: view.frame().payload,
+            journal_tip: current.journal.last_frame,
+            funding_image: crate::palw_positive_assignment_funds_v2::assignment_funding_image_v2(&current.funding),
+            limits,
+            max_frame_bytes: policy.max_frame_bytes,
+            max_history_frames: policy.max_history_frames,
+            cooperative: !rules.funding_relay_profile().requires_relay(),
+        })
     }
 }
 
