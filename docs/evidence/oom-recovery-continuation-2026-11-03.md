@@ -500,3 +500,31 @@ again. That result does not cover carriers outside the pruning
 point's past or prove storage liveness when pruning stalls. The
 streaming CLI consumes an already staged manifest. Native accepted
 Attempt publication and end-to-end G1 remain open.
+
+## Provider persistence and branch recheck — 04:43 UTC
+
+Commit `9c28a1b14` re-reads the current accepted roots and retention
+deadline after a directory fetch, before ordinary material injection
+or TIR original staging. The same post-fetch check covers the TIR
+HTTP path. Commit `e7eb1140d` gives ordinary provider chunks and
+manifests separate temporary files per writer and syncs the written
+data and containing directory before success. Chunk publication still
+precedes manifest publication.
+
+Twenty-one scoped tests passed, including real Qwen #32 loopback
+publication, four concurrent writers, and a write failure followed by
+successful retry. Node default/EVM test metadata compiled against the
+combined source. The evidence covers normal writes and injected
+rename failure. Power-loss recovery, full linkage and deployment
+remain separate.
+
+The read-only observer now emits provider roots only when two synced
+nodes agree on the selected tip, accepted claim, effective deadline,
+registered key and output root. Its extracted #32 header fields
+matched the independent signed-material check. Fifteen fixture
+checks used actual #32 signed roots with synthetic acceptance state.
+The live probe for #36 returned no exportable roots at DAA 19,595.
+The latest B0 and relay views agreed at that DAA, with zero active
+Panel assignments and zero valid receipts. The observer produces
+publication inputs. It does not write a provider manifest or change
+retention.
