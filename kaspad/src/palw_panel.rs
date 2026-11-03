@@ -4337,6 +4337,8 @@ pub struct PalwPanelConfig {
     /// these — a manifest any provider holds for the claim that agrees with the claim's own roots, every chunk checked against it — in addition
     /// to the producer pull, which is unchanged and stays the fallback. Empty: no provider source, the node behaves as before.
     pub evidence_provider_dirs: Vec<PathBuf>,
+    /// Operator-configured numeric HTTP fallbacks for the same claim evidence.
+    pub evidence_provider_http: Vec<misaka_palw_remote::transport::NumericEvidenceEndpointV1>,
     /// **Lane G14-K: the registered kernel models this node's verifier holds** (`--palw-kernel-model`, one `PALWKM01` file a model;
     /// ADR-0177 D7). A model is used for a kernel class only when it opens to the class's REGISTERED parameter commitments. Empty: the
     /// kernel-route verifier (`palw_kernel_verifier`) does nothing.
@@ -4448,6 +4450,14 @@ enum CaptureSamplesV1 {
     },
 }
 
+struct FetchedProviderMaterialV1 {
+    bytes: Vec<u8>,
+    report: misaka_palw_remote::evidence::FetchReport,
+    // Keep the admission and single-flight slot with the blocking job and
+    // its output, including when the waiting async task is cancelled.
+    http_admission: Option<(kaspa_core::memory_budget::MemoryLease, tokio::sync::OwnedSemaphorePermit)>,
+}
+
 pub struct PalwPanelService {
     worker_running: std::sync::atomic::AtomicBool,
     /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this service's own copy of the node's gossip inbox, fanned out by the daemon when
@@ -4473,6 +4483,8 @@ pub struct PalwPanelService {
     /// When `retention/foreign/` was last swept. The sweep is a full directory walk, so it runs on
     /// a cadence rather than inside every write (audit M2-2).
     foreign_prune_at: std::sync::Mutex<std::time::Instant>,
+    provider_http_fetch: Arc<tokio::sync::Semaphore>,
+    pending_provider_http: std::sync::Mutex<Option<(Hash64, misaka_palw_remote::evidence::ClaimRoots, FetchedProviderMaterialV1)>>,
     /// The claims the panel's last tick held live (its duties, court duties and disputes): their
     /// files in `retention/foreign/` are out of the sweep's reach, age and count alike
     /// ([`prune_foreign_retention_v1`]).
@@ -4995,6 +5007,8 @@ impl PalwPanelService {
             improve_holdings: std::sync::Mutex::new(Vec::new()),
             root_fetch: std::sync::Mutex::new(Default::default()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
+            provider_http_fetch: Arc::new(tokio::sync::Semaphore::new(1)),
+            pending_provider_http: std::sync::Mutex::new(None),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
@@ -9258,9 +9272,23 @@ impl PalwPanelService {
             // Drain the gossip inbox first, so this tick's decisions see this tick's mail.
             self.drain_panel_inbox_v1(&mut inbox, &mut pool_books, &mut first_seen, &mut shard_books.arrivals, &mut receipt_arrivals);
 
+            let pending = self.pending_provider_http.lock().unwrap().take();
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
+            }
+            if let Some((claim, roots, FetchedProviderMaterialV1 { bytes, report, http_admission })) = pending
+                && self.provider_claim_roots(roots.network_domain, claim) == Some(roots)
+            {
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from HTTP evidence provider(s) {:?}; {} failed attempt(s)",
+                    bytes.len(),
+                    report.served_by,
+                    report.failures.len()
+                );
+                pool_books.material.admit(claim, bytes);
+                pool_books.material.evict_after_gossip(claim, first_seen);
+                drop(http_admission);
             }
             let current_daa = session.get_virtual_daa_score();
             let tick_read = tick_inputs::PanelTickReadV1::new(&session, bond_key, network_domain, current_daa);
@@ -14756,97 +14784,125 @@ impl PalwPanelService {
         true
     }
 
-    /// **RFC-0009 stage B: the material from ANY evidence provider, root-checked before it is handed on.**
-    ///
-    /// The claim's roots are the CHAIN's (`trace_root`, `output_root`, `execution_root`, the chunk count and the retention it obliges): a
-    /// provider's manifest that disagrees with them is another execution's evidence, whoever signed for it. Each chunk is checked against the
-    /// manifest; the reassembled bytes are then injected into the same inbox a peer's answer enters, so the seat's own `verify_material` and
-    /// re-execution still judge them. A miss costs nothing: the producer pull that follows is unchanged. Provider silence is never evidence of
-    /// anything (no slash rests on it — see `misaka_palw_remote::evidence::evidence_responsibility_v1`).
-    async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
+    fn has_evidence_providers(&self) -> bool {
+        !self.config.evidence_provider_dirs.is_empty() || !self.config.evidence_provider_http.is_empty()
+    }
+
+    fn provider_claim_roots(&self, network_domain: Hash64, claim: Hash64) -> Option<misaka_palw_remote::evidence::ClaimRoots> {
         let session = self.consensus_manager.consensus().unguarded_session();
-        let Some((state, _, _)) = session.palw_derived_artifacts_v1(claim) else { return };
-        let roots = misaka_palw_remote::evidence::ClaimRoots {
+        let (state, _, _) = session.palw_derived_artifacts_v1(claim)?;
+        Some(misaka_palw_remote::evidence::ClaimRoots {
             network_domain,
             trace_root: state.trace_root,
             output_root: state.output_root,
             execution_root: state.execution_root,
             trace_chunk_count: state.trace_chunk_count,
             retention_deadline: state.trace_retention_daa,
-        };
-        let dirs = self.config.evidence_provider_dirs.clone();
-        let claim_hex = claim.to_string();
-        let fetched = tokio::task::spawn_blocking(move || {
-            misaka_palw_remote::evidence::fs::fetch_claim_material(
-                &dirs,
-                &claim_hex,
-                &roots,
-                &misaka_palw_remote::evidence::ManifestLimits::default(),
-                claim,
-            )
         })
-        .await;
-        match fetched {
-            Ok(Ok((bytes, report))) => {
-                let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &bytes);
+    }
+
+    /// Fetch the existing directory sources first, then one bounded network
+    /// fallback. Both paths use the same manifest and chunk verification.
+    async fn fetch_provider_material(
+        &self,
+        claim: Hash64,
+        roots: misaka_palw_remote::evidence::ClaimRoots,
+    ) -> Result<FetchedProviderMaterialV1, String> {
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        use misaka_palw_remote::evidence::{ManifestLimits, fs};
+        let limits = ManifestLimits::default();
+        let dirs = self.config.evidence_provider_dirs.clone();
+        let endpoints = self.config.evidence_provider_http.clone();
+        if !dirs.is_empty() || endpoints.is_empty() {
+            let local =
+                tokio::task::spawn_blocking(move || fs::fetch_claim_material(&dirs, &claim.to_string(), &roots, &limits, claim))
+                    .await
+                    .map_err(|error| error.to_string())?;
+            match local {
+                Ok((bytes, report)) => return Ok(FetchedProviderMaterialV1 { bytes, report, http_admission: None }),
+                Err(error) if endpoints.is_empty() => return Err(format!("{error:?}")),
+                Err(_) => {}
+            }
+        }
+
+        let permit = self.provider_http_fetch.clone().try_acquire_owned().map_err(|_| "evidence HTTP fetch already in progress")?;
+        // Reassembly temporarily holds both the chunks and the contiguous
+        // output. Leave room for one response, manifest and diagnostics.
+        const MAX_BYTES: u64 = kaspa_p2p_flows::palw_gossip::PALW_MATERIAL_MAX_BYTES as u64;
+        let lease = global_memory_budget()
+            .try_reserve(MemoryClass::Transport, 2 * MAX_BYTES + (8 << 20))
+            .map_err(|error| error.to_string())?;
+        let limits = ManifestLimits { max_chunks: 128, max_total_bytes: MAX_BYTES, ..limits };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut task = tokio::task::spawn_blocking(move || {
+            let (bytes, report) =
+                misaka_palw_remote::transport::fetch_verifier_http_material_v1(&endpoints, claim, &roots, &limits, deadline)
+                    .map_err(|error| error.to_string())?;
+            Ok::<_, String>(FetchedProviderMaterialV1 { bytes, report, http_admission: Some((lease, permit)) })
+        });
+        let material = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut task).await {
+            Ok(result) => result.map_err(|error| error.to_string())??,
+            Err(_) => {
+                task.abort();
+                return Err("evidence HTTP fetch deadline reached".into());
+            }
+        };
+        // An HTTP fetch may span a reorg. A changed accepted deadline needs
+        // a new provider check before the bytes can enter the inbox or cache.
+        if self.provider_claim_roots(roots.network_domain, claim) != Some(roots) {
+            return Err("claim evidence roots or accepted retention changed during HTTP fetch".into());
+        }
+        Ok(material)
+    }
+
+    /// A verified provider copy enters the same inbox and re-execution path
+    /// as a producer's reply. A miss does not establish a claim fault.
+    async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
+        let Some(roots) = self.provider_claim_roots(network_domain, claim) else { return };
+        match self.fetch_provider_material(claim, roots).await {
+            Ok(material) if material.http_admission.is_some() => {
+                // Keep at most one network result until the next inbox
+                // drain moves it into the already byte-bounded seat pool.
+                let mut pending = self.pending_provider_http.lock().unwrap();
+                debug_assert!(pending.is_none(), "the HTTP admission owns the single-flight slot");
+                *pending = Some((claim, roots, material));
+            }
+            Ok(material) => {
+                let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &material.bytes);
                 info!(
                     "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from evidence provider(s) {:?} ({admitted:?}); {} failed attempt(s) on the way",
-                    bytes.len(),
-                    report.served_by,
-                    report.failures.len()
+                    material.bytes.len(),
+                    material.report.served_by,
+                    material.report.failures.len()
                 );
             }
-            // No provider offered an admissible manifest, or a chunk would not verify: say so once per pull, and fall through to the producer.
-            Ok(Err(why)) => info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})"),
-            Err(join) => warn!("[{PALW_PANEL}] claim {claim}: the evidence-provider fetch did not finish ({join})"),
+            Err(why) => info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})"),
         }
     }
 
-    /// **G14 lane FPSEL (coordinator decision 2026-10-26): a TIR frame original from the RFC-0009 stage B evidence providers.** A
-    /// node-less producer's rail publishes the claim's FPC1 capture to a provider (`--evidence-out` + `palw-evidence publish`); a
-    /// custodian that retains no original of the claim (`fp_retained_payload_paths`) fetches it here, root-checked against the CHAIN's
-    /// roots and every chunk against the manifest, and keeps it under `retention/foreign/<claim>.material`, where the frame custodian's
-    /// reader (`retained_original_v1`) finds it and still checks it against the frame. `Ok(false)`: no provider dir, or a copy is
-    /// already retained. A provider's silence is the claimant's DA no-response (a DA default), never a computation fault: nothing here
-    /// files or accuses anything, and no responsibility moves to the provider (no provider court).
+    /// Fetch and stage a TIR frame original for the existing custodian.
     pub(crate) async fn fetch_tir_original_from_evidence_providers_v1(
         &self,
         network_domain: Hash64,
         claim: Hash64,
     ) -> Result<bool, String> {
-        if self.config.evidence_provider_dirs.is_empty() || self.fp_retained_payload_paths(&claim).iter().any(|p| p.is_file()) {
+        if !self.has_evidence_providers() || self.fp_retained_payload_paths(&claim).iter().any(|p| p.is_file()) {
             return Ok(false);
         }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let (state, _, _) = session.palw_derived_artifacts_v1(claim).ok_or("the claim's committed roots are not readable")?;
-        let roots = misaka_palw_remote::evidence::ClaimRoots {
-            network_domain,
-            trace_root: state.trace_root,
-            output_root: state.output_root,
-            execution_root: state.execution_root,
-            trace_chunk_count: state.trace_chunk_count,
-            retention_deadline: state.trace_retention_daa,
-        };
-        let dirs = self.config.evidence_provider_dirs.clone();
+        let roots = self.provider_claim_roots(network_domain, claim).ok_or("the claim's committed roots are not readable")?;
+        let material = self.fetch_provider_material(claim, roots).await?;
         let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
-            let (bytes, report) = misaka_palw_remote::evidence::fs::fetch_claim_material(
-                &dirs,
-                &claim.to_string(),
-                &roots,
-                &misaka_palw_remote::evidence::ManifestLimits::default(),
-                claim,
-            )
-            .map_err(|why| format!("no evidence provider served the frame original ({why:?})"))?;
             let parent = target.parent().ok_or("retention path has no parent")?;
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             let partial = target.with_extension("material.partial");
-            std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &target)).map_err(|e| e.to_string())?;
+            std::fs::write(&partial, &material.bytes).and_then(|()| std::fs::rename(&partial, &target)).map_err(|e| e.to_string())?;
             info!(
                 "[{PALW_PANEL}] claim {claim}: TIR frame original ({} B) from evidence provider(s) {:?}",
-                bytes.len(),
-                report.served_by
+                material.bytes.len(),
+                material.report.served_by
             );
+            drop(material);
             Ok(true)
         })
         .await
@@ -14859,10 +14915,6 @@ impl PalwPanelService {
     /// key, which is a node that files no receipts either.
     pub async fn request_material_signed(&self, network_domain: Hash64, claim: Hash64, requested_daa: u64) {
         self.flow_context.palw_gossip().note_pull_request(claim);
-        // RFC-0009 stage B: a provider may already hold the material — ask the directories too, before and beside the producer pull.
-        if !self.config.evidence_provider_dirs.is_empty() {
-            self.pull_material_from_evidence_providers(network_domain, claim).await;
-        }
         let signed = self.keypair.as_ref().and_then(|kp| {
             crate::palw_fp_seat::palw_fp_sign_opening_request_v1(&kp.signing_key, network_domain, claim, None, requested_daa)
                 .map(|signature| (kp.verification_key.as_ref().to_vec(), signature))
@@ -14870,6 +14922,10 @@ impl PalwPanelService {
         match signed {
             Some((pubkey, signature)) => self.flow_context.request_palw_material_signed(claim, pubkey, signature, requested_daa).await,
             None => self.flow_context.request_palw_material(claim).await,
+        }
+        // Dispatch the producer request before a provider I/O miss can delay it.
+        if self.has_evidence_providers() {
+            self.pull_material_from_evidence_providers(network_domain, claim).await;
         }
     }
 }
