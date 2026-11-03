@@ -6182,18 +6182,7 @@ fn palw_batch_view_ordinal(text: &str) -> RpcResult<u64> {
 }
 
 fn palw_batch_view_target(text: &str) -> RpcResult<kaspa_consensus_core::palw_court_shared_material_intake_v1::MaterialTargetV1> {
-    use kaspa_consensus_core::palw_court_shared_material_intake_v1::MaterialTargetV1 as Target;
-    let index = |text| u32::try_from(palw_batch_view_ordinal(text)?).map_err(|_| RpcError::General("Batch target index exceeds u32".into()));
-    match text {
-        "full-ids" => Ok(Target::FullIds),
-        "prompt-flat" => Ok(Target::PromptFlat),
-        _ => match text.split_once(':') {
-            Some(("parameter", leaf)) => Ok(Target::Parameter { leaf: index(leaf)? }),
-            Some(("prompt-tile", tile)) => Ok(Target::PromptTile { tile: index(tile)? }),
-            Some(("unit", ordinal)) => Ok(Target::Unit { ordinal: palw_batch_view_ordinal(ordinal)? }),
-            _ => Err(RpcError::General("unknown Batch material target".into())),
-        },
-    }
+    text.parse().map_err(|why: &'static str| RpcError::General(why.into()))
 }
 
 /// `(available, found, now_daa, view_json)` of a consensus user-view answer (`None`: no PALW tip).

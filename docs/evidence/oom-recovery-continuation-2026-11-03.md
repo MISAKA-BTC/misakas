@@ -3217,3 +3217,25 @@ B0 and relay agreed on an advanced selected tip at DAA 19,711 with no
 new Qwen carrier in the scanned interval. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-studio-batch-view.mb2kYg/route-tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-studio-batch-view-live.SQMsoH/page.json`.
+
+## Sign and fund a booked Batch response
+
+The `misaka palw batch-respond` command reads one accepted response quote,
+checks its claim, scope, target and draft identity, and signs one Begin,
+Part or Finish with the registered bond key. The bounded local material
+body must match the retained Begin on resume. The command refuses a Part
+already observed or a Finish with missing Parts. The wallet funds a
+literal BCT1 lifecycle carrier and includes the existing storage-rent
+projection in its fee. Preview is the default. Submission requires the
+exact reserved accepting DAA and an unchanged quote from a second read.
+
+The extracted Rust action test passed, including accepted-part resume,
+foreign signer refusal and Finish gating. The whole CLI, funding and
+submission against an isolated armed node have not run. No signed
+transaction was sent during this check. The automatic Panel worker,
+complete funded original profile and public deadline audit remain open.
+
+B0 and relay agreed at DAA 19,712 and the scanned interval contained no
+Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-respond-cli.TfTkm4/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-respond-cli-live.aBTzNv/page.json`.

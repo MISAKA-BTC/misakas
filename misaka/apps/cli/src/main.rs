@@ -46,6 +46,7 @@ mod palw_derived;
 mod palw_economics;
 /// ADR-0108: `palw extension inspect|verify|preflight|submit|receipt-verify`.
 mod palw_extension;
+mod palw_batch;
 mod palw_fp;
 mod palw_gen;
 mod palw_job;
@@ -1727,6 +1728,30 @@ enum PalwCmd {
         /// Refuse the entire batch before broadcast if its actual carrier fees exceed this total.
         #[arg(long)]
         maximum_total_fee_sompi: Option<u64>,
+    },
+    /// Sign and fund one reserved Batch Court response. Preview unless --submit is set.
+    BatchRespond {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        bond: String,
+        #[arg(long)]
+        claim: String,
+        #[arg(long)]
+        ordinal: u64,
+        #[arg(long)]
+        target: String,
+        #[arg(long, value_enum)]
+        step: palw_batch::ResponseStep,
+        #[arg(long)]
+        offset: Option<u64>,
+        /// Exact encoded native material body, before dividing it into parts.
+        #[arg(long)]
+        body: std::path::PathBuf,
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
     },
     /// **File a court close, whole or in the carriage ADR-0080 gave it** (W13).
     ///
@@ -3683,6 +3708,10 @@ async fn run_cli() -> std::process::ExitCode {
                 .await
                 .map(|_| ())
         }),
+        Command::Palw(PalwCmd::BatchRespond { key, bond, claim, ordinal, target, step, offset, body, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::respond(ctx, &key.source(), &bond, &claim, ordinal, &target, step, offset, &body,
+                submit, maximum_fee_sompi).await })
+        }
         Command::Palw(PalwCmd::TirRegistration {
             key,
             artifact,

@@ -411,8 +411,9 @@ fn batch_response_json_v1(
     now: u64,
 ) -> Option<Value> {
     use crate::palw_court_shared_material_intake_v1::{MaterialTargetV1, quote_batch_response_v1};
-    use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
-    state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtBatchDemand(claim, ordinal))?;
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1, PalwStagedCourtRowV1};
+    let PalwStagedCourtRowV1::CourtBatchDemand(demand) =
+        state.staged_court_row_v1(&PalwStagedCourtKeyV1::CourtBatchDemand(claim, ordinal))? else { return None };
     let tip = state.last_point();
     let target_text = match target {
         MaterialTargetV1::FullIds => "full-ids".into(),
@@ -438,6 +439,7 @@ fn batch_response_json_v1(
         "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchResponse", "nowDaa": now,
         "tipDaa": tip.map(|p| p.daa_score), "tipBlock": tip.map(|p| p.block.to_string()),
         "claimId": claim.to_string(), "ordinal": ordinal.to_string(),
+        "scopeId": demand.scope_id.to_string(),
         "target": target_text, "targetId": target.id_v1(claim).ok().map(|id| id.to_string()), "response": response, "error": error,
     }))
 }

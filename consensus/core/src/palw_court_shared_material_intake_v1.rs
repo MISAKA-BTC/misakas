@@ -68,6 +68,28 @@ impl MaterialTargetV1 {
         crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/material-target/v1", &(claim, self))
     }
 }
+
+impl std::str::FromStr for MaterialTargetV1 {
+    type Err = &'static str;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "full-ids" => return Ok(Self::FullIds),
+            "prompt-flat" => return Ok(Self::PromptFlat),
+            _ => {}
+        }
+        let (kind, index) = text.split_once(':').ok_or("unknown Batch material target")?;
+        if index.is_empty() || index.len() > 20 || !index.bytes().all(|b| b.is_ascii_digit()) {
+            return Err("Batch material target index must be decimal text");
+        }
+        match kind {
+            "parameter" => Ok(Self::Parameter { leaf: index.parse().map_err(|_| "Batch target index exceeds u32")? }),
+            "prompt-tile" => Ok(Self::PromptTile { tile: index.parse().map_err(|_| "Batch target index exceeds u32")? }),
+            "unit" => Ok(Self::Unit { ordinal: index.parse().map_err(|_| "Batch target index exceeds u64")? }),
+            _ => Err("unknown Batch material target"),
+        }
+    }
+}
 pub fn material_draft_id_v1(
     claim: Hash64,
     target: MaterialTargetV1,
