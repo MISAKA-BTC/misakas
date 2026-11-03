@@ -1094,6 +1094,34 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
+    /// The demand dispatcher supplies a validated notice and demand here.
+    /// The stored request also needs the original's reserved opening slot.
+    pub(super) fn install_batch_demand_v1(
+        &mut self,
+        at: &PalwBlockContextV2,
+        demand: crate::palw_batch_court_v1::rooted::RootedBatchDemandV1,
+    ) -> Result<(), PalwStateV2Error> {
+        demand.check_adoption(&self.state, at).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let key = demand.key();
+        if let Some(old) = self.state.staged_court_row_v1(&key) {
+            return match old {
+                PalwStagedCourtRowV1::CourtBatchDemand(row) if row.as_ref() == &demand => Ok(()),
+                _ => Err(PalwStateV2Error::CarriageInconsistent("accepted Batch demand is immutable".into())),
+            };
+        }
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("Batch demand row");
+        quote.exact::<crate::palw_batch_court_v1::rooted::RootedBatchDemandV1>(1)?;
+        self.admit_native_write_v1(quote)?;
+        let new = Some(PalwStagedCourtRowV1::CourtBatchDemand(Box::new(demand)));
+        self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "native Batch demand writer")?;
+        self.reserve_staged_indices_v1(&key, &new)?;
+        let row = new.as_ref().expect("new Batch demand");
+        self.state.staged_courts.insert(key, row.clone());
+        update_indices(&mut self.state, key, None, Some(row));
+        self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new });
+        Ok(())
+    }
+
     pub(super) fn write_staged_row_v1(
         &mut self,
         key: PalwStagedCourtKeyV1,
@@ -1106,6 +1134,9 @@ impl TransitionBuilder<'_> {
         }
         self.check_archive_progress_write_v1(&key, new.as_ref())?;
         self.check_material_intake_write_v1(&key, new.as_ref())?;
+        if matches!(&new, Some(PalwStagedCourtRowV1::CourtBatchDemand(_))) {
+            return Err(PalwStateV2Error::CarriageInconsistent("Batch demand requires its native opening writer".into()));
+        }
         if matches!(key, PalwStagedCourtKeyV1::CourtSharedBottom(_))
             || matches!(&new, Some(PalwStagedCourtRowV1::CourtSharedBottom(_)))
         {
@@ -3766,6 +3797,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::CourtMaterial(m) => (m.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::CourtMaterialLedger(l) => (l.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::TirOwnerSchedule(row) => (row.material_until(), Vec::new()),
+        PalwStagedCourtRowV1::CourtBatchDemand(row) => (row.material_until(), Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -4159,6 +4191,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::CourtMaterial(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::CourtMaterialLedger(row) => Some(row.material_until_daa),
             PalwStagedCourtRowV1::TirOwnerSchedule(row) => Some(row.material_until()),
+            PalwStagedCourtRowV1::CourtBatchDemand(row) => Some(row.material_until()),
             _ => None,
         };
         if let Some(until) = tir_until {

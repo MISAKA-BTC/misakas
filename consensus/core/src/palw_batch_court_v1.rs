@@ -9,6 +9,8 @@ use kaspa_hashes::blake2b_512_keyed;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read};
 
+pub(crate) mod rooted;
+
 pub const MAX_BATCH_RANGES_V1: usize = 64;
 pub const MAX_BATCH_PARTS_V1: usize = 256;
 pub const MAX_BATCH_PART_BYTES_V1: u32 = 16_384;

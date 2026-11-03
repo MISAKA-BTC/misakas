@@ -50,9 +50,17 @@ pub(super) fn material_intake_pipelined(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
+    ordinal: u64,
     delivery: &m::batch::MaterialBatchDeliveryV1,
     storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    let key = Key::CourtBatchDemand(s.claim, ordinal);
+    let Some(Row::CourtBatchDemand(demand)) = b.state.staged_court_row_v1(&key) else {
+        return Err(refused("Batch material has no accepted demand"));
+    };
+    if demand.request_root != delivery.request_root_v1() || demand.scope_id != s.scope_id {
+        return Err(refused("Batch material differs from the retained request"));
+    }
     let service = b.state.court_service_state_v1().ok_or_else(|| refused("Batch material has no rooted service book"))?;
     let binding = service.claims.get(&s.claim).ok_or_else(|| refused("Batch material original has no service binding"))?;
     let id = delivery.check_slot_v1(&service.book, ctx.daa_score, s).map_err(refused)?;

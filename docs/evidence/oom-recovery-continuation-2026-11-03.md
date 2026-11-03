@@ -2418,3 +2418,28 @@ was referenced by the selected fold at DAA 19,683. Its signed retention
 is 40,289, and the paired reads found no claim row. The producer
 journal confirms the submission. No exact fold refusal was observed.
 See `/private/tmp/misaka-t12-oom-20261102/g14-batch-repair-live.ELiRuy/page.json`.
+
+## Branch-retained Batch demand and opening slot
+
+The candidate appends a staged demand row and key without renumbering
+old variants. The native opening writer checks the accepted shared
+notice, original scope and clocks, and a prebookable opening packet
+identified by claim, scope and ordinal. One slot can retain one exact
+demand. The material adapter now requires the retained demand root
+before it checks the response slot. Carriage checks the live notice
+binding and the demand's canonical identity, and the staged expiry
+index keeps the row through the original material horizon.
+
+The extracted suite passed 19 checks, including a Borsh round trip,
+request-root and ordinal substitution rejection, a different notice
+block changing the case identity, and an oversized range count refused
+by both the decoder and the actual native shape scanner. The extracted
+harness uses a key shim and leaves the native writer, snapshot and
+enum-tag assertions for the integrated Core build. The accepted wire
+dispatcher, notice authorization and full maximum-branch reservation
+remain open.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-demand.VEvPYM/tests.log`.
+
+B0 and relay agreed at DAA 19,684 with no new Qwen carrier since the
+previous cursor. The previous metadata queue expired before starting a
+compiler at 74% reported memory availability.

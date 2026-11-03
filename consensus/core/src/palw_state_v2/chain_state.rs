@@ -4072,6 +4072,11 @@ impl PalwChainStateV2 {
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::VerifiedTokenizerRegistration(registration) = row {
                 registration.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchDemand(demand) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < demand.material_until()
+            {
+                demand.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(schedule) = row
                 && self.last_point().map_or(0, |point| point.daa_score) < schedule.material_until()
             {
