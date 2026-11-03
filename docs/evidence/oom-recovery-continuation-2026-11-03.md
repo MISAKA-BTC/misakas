@@ -2175,3 +2175,41 @@ peaked at 5,920,145,408 bytes of direct compiler RSS and detached its
 owned RAM disk. This run emitted metadata and did not execute the native
 fixtures. The guarded build receipt is
 `/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-batch-meta.siplgade/result.json`.
+
+## Root-local TIR demand coverage and the control budget
+
+The retained SmolLM2 worker capture has 15,252 leaves. The legacy query
+universe contains 3,871,872 overlapping StepRun requests alone. Using the
+new native bounded partitioner to cover the whole execution with disjoint
+runs yields 119 demands and 15,430 raw parts at the native response
+ceilings. The provisional service profile allocates one control per DAA,
+so even this disjoint whole-source reservation exceeds the 6,879 DAA
+remaining after the latest notice and the exclusive-boundary allowance.
+This comparison covers raw parts for one copy. Authentication, Begin and
+Finish, role multiplicity, unrelated obligations and recovery require
+their own costs. The capacity is provisional and the source cover is a
+specific disjoint partition, rather than a proof of a minimum across
+possible redesigned codecs. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-step-cover-capacity.CFjcnW/run.stdout`.
+
+The integrated candidate `3ef2a2177` selects StepRun intervals from one
+root's input cover. It merges repeated step indices, preserves gaps and
+refuses to exceed the demand budget. The proof-of-geometry harness used a
+257-leaf selection with a duplicate and a gap on the exact source. It
+returned widths 1, 254 and 2. For the original honest cone at leaf 14,511,
+the retained execution yields eight distinct step leaves, with eight
+authenticated requests, eight actual raw parts and 16 upper-bound raw
+parts. The native cone verdict is NoFaultFound. This sample leaves the
+parameter, prompt and terminal costs outside its measured scope. The
+harness links the cached Studio verifier and uses the extracted new
+planner, with mirrored typed scratch arithmetic at the private API seam.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-native-cone-batch.vesgS5/run.stdout`.
+
+The worktree also integrates `dbb715eeb` for latest-notice reservation,
+`bce856c03` for native run partitioning and `07cf09dd1` for rooted tokenizer
+use in claim-specific stop replay. The raw tokenizer quote still needs a
+versioned replacement with the accepted record and funded acquisition
+and replay obligations. The all-root runtime queue for `f5f39b2dc`
+expired before starting a compiler. Its last sample had 66% reported
+memory availability and three other compiler processes. B0 and relay
+agreed at DAA 19,677, with no new Qwen carrier since the prior cursor.
