@@ -143,8 +143,6 @@ fn native_bond(outpoint: NativeOutpoint) -> PalwBondKeyV2 {
 pub(super) struct AssignmentInstallV2<'a> {
     pub open: &'a [u8],
     pub assignment: AssignmentRow,
-    pub funding: AssignmentFundingRow,
-    pub roles: [AssignmentRoleRow; 3],
 }
 
 pub(super) struct AssignedCaseInstallV2<'a> {
@@ -437,11 +435,11 @@ impl TransitionBuilder<'_> {
         Ok(())
     }
 
-    fn check_assignment_open_literal_v2(
+    fn assignment_open_roles_v2(
+        &self,
         action: &PositiveAssignmentRawActionV2,
         row: &AssignmentRow,
-        roles: &[AssignmentRoleRow; 3],
-    ) -> Result<(), PalwStateV2Error> {
+    ) -> Result<[AssignmentRoleRow; 3], PalwStateV2Error> {
         use borsh::BorshDeserialize;
         use misaka_palw_positive_contract::assignment::{
             AssignmentAdmissionBundleV2,
@@ -460,13 +458,40 @@ impl TransitionBuilder<'_> {
         if bundle != row.bundle || source != row.source_consent || prover != row.prover_consent {
             return Err(refusal("Open rows do not match the literal carrier consents"));
         }
-        for role in roles {
-            if fixed.get(..SIGNATURE_BYTES) != Some(role.signature.as_slice()) {
-                return Err(refusal("Open role signature differs from the literal carrier signature"));
-            }
-            fixed = &fixed[SIGNATURE_BYTES..];
-        }
-        Ok(())
+        let mut read_role = |role, point| -> Result<AssignmentRoleRow, PalwStateV2Error> {
+            let (signature, rest) =
+                fixed.split_at_checked(SIGNATURE_BYTES).ok_or_else(|| refusal("Open role signature is truncated"))?;
+            fixed = rest;
+            let bond = self.state.bond(&native_bond(point)).ok_or_else(|| refusal("missing current native role bond"))?;
+            let role = AssignmentRoleRow {
+                assignment: row.id(),
+                role,
+                bond: point,
+                key: bond.pubkey.as_slice().try_into().map_err(refusal)?,
+                signature: signature.try_into().map_err(refusal)?,
+                bundle: row.bundle.id(),
+                authorization: AssignmentRoleAuthorizationV2::Initial,
+                admission: row.admission_material,
+                funding: (role == AssignmentRoleV2::Poster).then_some(row.admission_material),
+                lease: row.reservation,
+                origin: row.origin,
+                retired: false,
+            };
+            role.authenticate(row).map_err(refusal)?;
+            self.current_assignment_role_v2(&role)?;
+            self.require_absent_assignment_key_v2(NativeRowKey::AssignmentRole {
+                assignment: row.id(),
+                role: role.role,
+                bond: point,
+            })?;
+            Ok(role)
+        };
+        let terms = &row.bundle.terms;
+        Ok([
+            read_role(AssignmentRoleV2::Poster, terms.poster)?,
+            read_role(AssignmentRoleV2::Worker, terms.worker)?,
+            read_role(AssignmentRoleV2::Prover, terms.prover)?,
+        ])
     }
 
     /// One admission checkpoint owns the permanent poster counter, all three
@@ -487,7 +512,6 @@ impl TransitionBuilder<'_> {
         {
             return Err(refusal("Open does not belong to the current pre-op8 boundary"));
         }
-        Self::check_assignment_open_literal_v2(&action, row, &plan.roles)?;
         let rules = action.rules();
         let frame_cap = rules.assignment_policy().max_frame_bytes;
         let payload_bytes = (plan.open.len() as u64)
@@ -515,6 +539,7 @@ impl TransitionBuilder<'_> {
         }
         material.check_native_open_record_extent_v2(payload_bytes).map_err(refusal)?;
         material.check_native_open_quote_v2(row, original.open.native_body()).map_err(refusal)?;
+        material.check_registered_class_v2(&self.state).map_err(refusal)?;
         let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
         if anchor.as_bytes() != row.bundle.terms.branch_anchor.0 {
             return Err(refusal("Open uses a different signed ancestor"));
@@ -525,15 +550,8 @@ impl TransitionBuilder<'_> {
             row.bundle.terms.result_before_daa,
             material.custody.replay_work,
         )?;
-        if row.status != AssignmentStatusV2::Open
-            || row.last_event != row.origin
-            || plan.funding.assignment != id
-            || plan.funding.authorization != row.bundle.funding
-            || plan.funding.funding_origin != row.origin
-            || plan.funding.current_outpoint != Some(plan.funding.original_outpoint)
-            || plan.funding.last_settlement.is_some()
-        {
-            return Err(refusal("initial Assignment/funding/journal mismatch"));
+        if row.status != AssignmentStatusV2::Open || row.last_event != row.origin {
+            return Err(refusal("initial Assignment row must be open at the current accepted origin"));
         }
         self.require_absent_assignment_key_v2(NativeRowKey::Assignment(id))?;
         self.require_unowned_assignment_job_v2(Hash64::from_bytes(row.job.0))?;
@@ -542,53 +560,22 @@ impl TransitionBuilder<'_> {
         self.check_assignment_service_capacity_v2(ctx, rules, assignment_service_demand_v2(&row.source_consent, &row.prover_consent))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentFunding(id))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentUse(id))?;
-        plan.funding.validate_shape().map_err(refusal)?;
-        for ((role, outpoint), role_row) in [AssignmentRoleV2::Poster, AssignmentRoleV2::Worker, AssignmentRoleV2::Prover]
-            .into_iter()
-            .zip([row.bundle.terms.poster, row.bundle.terms.worker, row.bundle.terms.prover])
-            .zip(&plan.roles)
-        {
-            if role_row.role != role
-                || role_row.bond != outpoint
-                || role_row.assignment != id
-                || role_row.authorization != AssignmentRoleAuthorizationV2::Initial
-                || role_row.lease != row.reservation
-            {
-                return Err(refusal("initial role set differs from the three signed roles"));
-            }
-            role_row.authenticate(row).map_err(refusal)?;
-            self.current_assignment_role_v2(role_row)?;
-            self.require_absent_assignment_key_v2(NativeRowKey::AssignmentRole { assignment: id, role, bond: outpoint })?;
-        }
-        if plan.funding.payer_key != plan.roles[0].key || plan.funding.payer_signature != plan.roles[0].signature {
-            return Err(refusal("A funding does not use the literal poster-purpose consent"));
-        }
+        let roles = self.assignment_open_roles_v2(&action, row)?;
+        let poster = &roles[0];
         let funding = crate::palw_positive_assignment_funds_v2::qualify_assignment_funding_output_v2(
             &row.bundle,
             action.transaction(),
-            &plan.funding.payer_key,
+            &poster.key,
             action.current_output(),
             material.money.fee,
             material.money.capital,
             ctx.daa_score,
         )
         .map_err(refusal)?;
-        if plan.funding.original_outpoint != funding.outpoint()
-            || plan.funding.initial_locked != funding.amount()
-            || [plan.funding.worker, plan.funding.fee, plan.funding.capital, plan.funding.surplus] != funding.initial_legs()
-            || plan.funding.reservation != row.reservation
-            || plan.funding.liability != row.liability
-        {
-            return Err(refusal("initial Assignment funding differs from the actual funded quote"));
-        }
         self.require_assignment_output_unlocked_v2(funding.outpoint())?;
-        let relay = self.check_initial_assignment_relay_v2(
-            ctx,
-            &action,
-            &row.bundle,
-            (funding.outpoint(), funding.amount()),
-            &plan.funding.payer_key,
-        )?;
+        let account = funding.initial_account_v2(row, poster.key, poster.signature).map_err(refusal)?;
+        let relay =
+            self.check_initial_assignment_relay_v2(ctx, &action, &row.bundle, (funding.outpoint(), funding.amount()), &poster.key)?;
         let nonce_key = NativeRowKey::AssignmentNonce(row.bundle.terms.poster);
         let previous = match PositiveRowsV2::new(&self.state).read(nonce_key).map_err(refusal)? {
             None => AssignmentNonceV2::default(),
@@ -607,8 +594,8 @@ impl TransitionBuilder<'_> {
                 .map_err(refusal)?;
             self.write_assignment_aux_v2(NativeRowBody::AssignmentNonce(AssignmentNonceRow { poster, nonce }))?;
             self.write_assignment_aux_v2(NativeRowBody::Assignment(plan.assignment))?;
-            self.write_assignment_aux_v2(NativeRowBody::AssignmentFunding(plan.funding))?;
-            for role in plan.roles {
+            self.write_assignment_aux_v2(NativeRowBody::AssignmentFunding(account))?;
+            for role in roles {
                 self.write_assignment_aux_v2(NativeRowBody::AssignmentRole(role))?;
             }
             if let Some(CheckedInitialFundingRelayV2 { mut custody, _lease, .. }) = relay {

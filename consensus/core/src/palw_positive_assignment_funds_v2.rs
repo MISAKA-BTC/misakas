@@ -443,6 +443,39 @@ impl AssignmentFundingOutputV2 {
             remaining: amount,
         })
     }
+
+    /// Initial A account from the already qualified actual output. Its
+    /// accepted-prefix writer owns uniqueness, publication and the journal.
+    pub(crate) fn initial_account_v2(
+        &self,
+        row: &misaka_palw_positive_contract::assignment::rows::AssignmentRow,
+        payer_key: [u8; PUBKEY_BYTES],
+        payer_signature: [u8; misaka_palw_positive_contract::identity::SIGNATURE_BYTES],
+    ) -> Result<AssignmentFundingRow, AssignmentFundsErrorV2> {
+        let [worker, fee, capital, surplus] = self.initial_legs();
+        let account = AssignmentFundingRow {
+            assignment: row.id(),
+            authorization: row.bundle.funding,
+            payer_key,
+            payer_signature,
+            funding_origin: row.origin,
+            original_outpoint: self.outpoint,
+            current_outpoint: Some(self.outpoint),
+            initial_locked: self.amount,
+            worker,
+            fee,
+            capital,
+            surplus,
+            worker_reserve: worker.remaining,
+            earned_service_due: 0,
+            liability_floor: capital.remaining,
+            reservation: row.reservation,
+            liability: row.liability,
+            last_settlement: None,
+        };
+        account.validate_shape()?;
+        Ok(account)
+    }
 }
 
 /// Check the signed payer and actual composed output before pricing capacity.

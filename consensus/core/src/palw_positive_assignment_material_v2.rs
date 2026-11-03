@@ -252,6 +252,42 @@ impl AssignmentAdmissionMaterialV2 {
         Ok(())
     }
 
+    /// Compare the retained class descriptor with the actual original registry.
+    /// If the original chain has an aux141 origin, it also pins the accepting
+    /// block and admission digest. The carrier reader owns the transaction proof.
+    pub fn check_registered_class_v2(&self, state: &crate::palw_state_v2::PalwChainStateV2) -> Result<(), ContractError> {
+        use crate::palw_class_registration_origin_v1::{
+            PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1, PalwClassRegistrationDoorV1, palw_class_registration_origin_row_v1,
+        };
+
+        let registered = &self.registered;
+        let class_id = Hash64::from_bytes(registered.class.0);
+        let class = state.class(&class_id).ok_or(ContractError::Identity)?;
+        let tir = state.tir_class_v1(&class_id).ok_or(ContractError::Identity)?;
+        let origin = registered.registration.origin;
+        if tir.facts.class_id != class_id
+            || class.artifact_root.as_bytes() != registered.artifact.0
+            || tir.graph_ir_root.as_bytes() != registered.program.0
+            || tir.layout_digest.as_bytes() != registered.layout.0
+            || tir.tokenizer_id.as_bytes() != registered.registered_tokenizer.0
+            || class.registered_daa != origin.accepted_daa
+            || origin.accepted_daa > self.origin.accepted_daa
+        {
+            return Err(ContractError::Identity);
+        }
+        if let Some(saved) = palw_class_registration_origin_row_v1(state.kernel_route_state_v1(), &class_id)
+            && (saved.version != PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1
+                || saved.door != PalwClassRegistrationDoorV1::Tir
+                || saved.class_id != class_id
+                || saved.daa_score != origin.accepted_daa
+                || saved.block.as_bytes() != origin.accepting_block.0
+                || saved.admission_digest.map(|digest| Digest(digest.as_bytes())) != Some(registered.registration.digest))
+        {
+            return Err(ContractError::Identity);
+        }
+        Ok(())
+    }
+
     pub fn check_row(&self, row: &AssignmentRow) -> Result<(), ContractError> {
         row.validate_shape()?;
         self.assignment_policy.check_terms(&row.bundle.terms, self.origin.accepted_daa)?;

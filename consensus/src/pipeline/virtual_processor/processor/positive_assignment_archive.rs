@@ -738,6 +738,9 @@ impl VirtualStateProcessor {
             view.material.custody.replay_work,
         )?;
         let prefix = accepted.carriage.prefix_state().map_err(|_| E::Unavailable("original Open pre-event state"))?;
+        view.material
+            .check_registered_class_v2(prefix)
+            .map_err(|_| E::Invalid("original registered TIR class differs from the Open descriptor"))?;
         if !matches!(PositiveRowsV2::new(prefix).read(NativeRowKey::Assignment(assignment)), Ok(None)) {
             return Err(E::Invalid("original Open did not start at an absent Assignment"));
         }
