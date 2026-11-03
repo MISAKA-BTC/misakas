@@ -2131,3 +2131,47 @@ At DAA 19,673 B0 and relay agreed on the selected chain. Qwen #82 was
 referenced by the selected mergeset and rejected at 20,607 of 20,608 DAA
 required retention. Both claim reads were absent. Raw evidence is in
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-service-live.zVWFZS`.
+
+## Pipelined native material staging and tokenizer registration
+
+Integration commit `7f104d648` adds a private version-2 material intake
+adapter using the existing native draft, part and canonical material rows.
+The signed version and draft namespace distinguish the new adapter. Each
+draft has at most 256 canonical part offsets. The native adapter journals
+valid parts in arbitrary arrival order, rejects conflicting duplicates,
+checks branch-retained offsets and the received byte total on load, and
+assembles only after all required parts arrive. Finish retains its assembly
+memory reservation through the existing native source authentication and
+atomic material write. The existing public dispatcher accepts version 1.
+The version-2 adapter still needs a funded Batch coordinator, admitted
+service slots and measured costs before use by the public dispatcher.
+
+An isolated one-test harness exercised the exact draft and part geometry,
+codec, orphan rejection, missing-part rejection and canonical reassembly
+over a stand-in map with a bounded scratch stub. It did not exercise the
+signed native fold or real branch carriage. The signed wide-leaf native
+fixture for those paths is in the Core test source. The focused log is
+`/private/tmp/misaka-t12-oom-20261102/tfp1-material-offset-focused.o2yTgA/result.log`.
+
+Integration commit `62f634cad` brings in the tokenizer candidate from
+`92ead1945`. The private writer derives the whole-table result from raw
+bytes and the authenticated EOG opening, checking PALWART3, semantics and
+accepted EOF on the exact parent. A versioned immutable record is installed
+by the native writer and tied to the accepting point. Trusted journal
+replay and carriage load check its branch context and registration digest.
+The seven focused tests used a lightweight wrapper, with the native
+replay and carriage fixture remaining a separate verification item. The
+full generator run stopped at the existing `NumericalManifestV1` review
+pin mismatch. Only the relevant bounded visitor changes were integrated.
+The rooted registration is ready for a future authorized writer and quote
+integration. The public quote still includes the full tokenizer path.
+See `/private/tmp/misaka-t12-oom-20261102/tokenizer-rooted.8KHieL/test-final.log`.
+
+Core test metadata compiled successfully at exact integration
+`62f634cad985f922bb3679b41afe84214d92f59b` with default and pq-only
+features. It covered the new native fixture source, the dynamic input
+streaming change and both integrations. The run took 73.691 seconds,
+peaked at 5,920,145,408 bytes of direct compiler RSS and detached its
+owned RAM disk. This run emitted metadata and did not execute the native
+fixtures. The guarded build receipt is
+`/private/tmp/misaka-t12-oom-20261102/tfp1-rooted-batch-meta.siplgade/result.json`.
