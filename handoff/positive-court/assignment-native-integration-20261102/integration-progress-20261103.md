@@ -1716,3 +1716,21 @@ command was compiling at this checkpoint.
 The guards close additional legacy alias surfaces. The prospective all-branch
 Gate C reservation owner, Positive Case session factory and accepted
 settlement remain open.
+
+### Gate C Result provenance and liability session
+
+The [Gate C provenance candidate](gate-c-result-provenance-candidate-20261103.tar.gz)
+uses the same current, replay-checked Assignment and Case for approval,
+payment and attestor liability release. It checks the original accepted
+Result origin, the Assignment and worker identities, the signed worker
+amount, the exact subject and the Case liability. Saved votes are
+authenticated before liability release. Terminal status still controls
+release separately, including the existing refusal to release a refuted
+Case without its charge owner.
+
+The isolated signed-bundle regression passed, including altered acceptance
+ordinal, Assignment, worker key and subject. The Core library and focused
+funding-relay test metadata compiled. The new common session path has yet
+to run in integrated Consensus. The candidate remains separate from the
+pinned claim/job ingress runtime and does not establish the prospective
+reservation owner or actual native Case admission.
