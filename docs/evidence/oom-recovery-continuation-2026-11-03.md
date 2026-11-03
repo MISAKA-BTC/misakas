@@ -354,5 +354,12 @@ accepted claim are still required for deployment qualification.
 The producer now syncs its capture before publication and passes the
 original buffer through retention and announcement. The focused file
 test exercised atomic visibility, recovery after a failed publish, and
-cleanup of the failed temporary file. A process or host crash during the
-full accepted claim lifecycle remains a separate G7 test.
+cleanup of the failed temporary file. The Unix file mode matched an
+ordinary daemon write under the same umask. A process or host crash
+during the full accepted claim lifecycle remains a separate G7 test.
+
+The engine-only A16 prefill regression ran the exact updated source on
+a temporary RAM disk. The 360 combinations agreed on logits and KV
+state between the ordinary and capture paths. The test used local model
+fixtures and cached dependencies. Rebuilding the full worker and running
+the actual T12 8K comparison are separate checks.
