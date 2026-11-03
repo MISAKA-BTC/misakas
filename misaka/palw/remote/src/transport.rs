@@ -27,7 +27,8 @@ use std::time::Duration;
 use kaspa_hashes::Hash64;
 
 use crate::evidence::{
-    ChunkProvider, ClaimRoots, EvidenceManifestV1, FetchReport, ManifestLimits, ProviderError, fetch_material_any, manifest_id_v1,
+    ChunkProvider, ChunkReadError, ClaimRoots, EvidenceManifestV1, FetchReport, ManifestLimits, ProviderError, fetch_material_any,
+    manifest_id_v1,
 };
 
 /// The word every availability line carries: what THIS machine saw, not something it can prove to anyone.
@@ -110,9 +111,10 @@ fn decode_manifest(bytes: &[u8]) -> Result<EvidenceManifestV1, ProviderError> {
 
 impl EvidenceProvider for crate::evidence::fs::FsProvider {
     fn manifest_for(&self, claim_hex: &str) -> Result<Option<EvidenceManifestV1>, ProviderError> {
-        match std::fs::read(crate::evidence::fs::manifest_path(&self.root, claim_hex)) {
+        use crate::evidence::fs::{BoundedFileError, manifest_path, read_bounded_file};
+        match read_bounded_file(&manifest_path(&self.root, claim_hex), MANIFEST_MAX_BYTES) {
             Ok(bytes) => decode_manifest(&bytes).map(Some),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(BoundedFileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(ProviderError(e.to_string())),
         }
     }
@@ -664,7 +666,9 @@ pub fn publish_to_providers_v1(
                 None => return Err("read-back: the provider serves no manifest after accepting it".into()),
             }
             for entry in &manifest.chunks {
-                let bytes = p.fetch_chunk(manifest_id, entry.index).map_err(|e| format!("read-back chunk {}: {e}", entry.index))?;
+                let bytes = p
+                    .fetch_chunk_expected(manifest_id, entry.index, entry.len)
+                    .map_err(|e| format!("read-back chunk {}: {e}", entry.index))?;
                 manifest.verify_chunk(entry.index, &bytes).map_err(|e| format!("read-back chunk {}: {e}", entry.index))?;
             }
             Ok(())
@@ -911,7 +915,7 @@ pub fn check_availability_v1(
         let mut chunks = Vec::with_capacity(manifest.chunks.len());
         for (i, entry) in manifest.chunks.iter().enumerate() {
             // The chunk bytes are addressed by the manifest id, not by the provider's manifest: a provider may hold chunks without the manifest.
-            let state = match p.fetch_chunk(manifest_id, entry.index) {
+            let state = match p.fetch_chunk_expected(manifest_id, entry.index, entry.len) {
                 Ok(bytes) => match manifest.verify_chunk(entry.index, &bytes) {
                     Ok(()) => {
                         copies[i] += 1;
@@ -919,8 +923,9 @@ pub fn check_availability_v1(
                     }
                     Err(_) => ChunkStateV1::Corrupt,
                 },
-                Err(e) if is_absence(&e.0) => ChunkStateV1::Missing,
-                Err(e) => ChunkStateV1::Unreachable(e.0),
+                Err(ChunkReadError::TooLarge(_)) => ChunkStateV1::Corrupt,
+                Err(ChunkReadError::Provider(e)) if is_absence(&e.0) => ChunkStateV1::Missing,
+                Err(ChunkReadError::Provider(e)) => ChunkStateV1::Unreachable(e.0),
             };
             chunks.push(state);
         }
@@ -980,7 +985,7 @@ pub fn repair_v1(claim_hex: &str, manifest: &EvidenceManifestV1, providers: &[&d
         for pi in missing_on {
             let p = providers[pi];
             let outcome = p.put_chunk(manifest_id, entry.index, &bytes).map_err(|e| e.0).and_then(|()| {
-                let back = p.fetch_chunk(manifest_id, entry.index).map_err(|e| e.0)?;
+                let back = p.fetch_chunk_expected(manifest_id, entry.index, entry.len).map_err(|e| e.to_string())?;
                 manifest.verify_chunk(entry.index, &back).map_err(|e| e.to_string())
             });
             match outcome {
@@ -1431,6 +1436,86 @@ mod tests {
         let handle = server::start("127.0.0.1:0", dir.clone(), server::ServerConfig::default()).unwrap();
         let provider = HttpProvider::new(handle.url());
         (handle, dir, provider)
+    }
+
+    #[test]
+    fn directory_provider_rejects_sparse_overruns_and_repairs_from_another_copy() {
+        use crate::evidence::{EvidenceError, FetchFailureKind, fs};
+
+        let dir = scratch("bounded-files");
+        let good_dir = scratch("bounded-files-good");
+        let local = FsProvider::new(dir.clone());
+        let good = FsProvider::new(good_dir.clone());
+        let claim = claim_hex();
+        let chunks = chunks();
+        let manifest = manifest();
+        let id = manifest_id_v1(&manifest);
+        let sparse_len = 5u64 << 30;
+        fs::publish(&dir, &claim, &manifest, &chunks).unwrap();
+        fs::publish(&good_dir, &claim, &manifest, &chunks).unwrap();
+
+        let path = fs::manifest_path(&dir, &claim);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(sparse_len).unwrap();
+        assert!(local.manifest_for(&claim).is_none());
+        assert!(EvidenceProvider::manifest_for(&local, &claim).unwrap_err().0.contains("above the read limit"));
+        local.put_manifest(&claim, &manifest).unwrap();
+
+        let path = fs::chunk_path(&dir, id, 0);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(sparse_len).unwrap();
+        assert!(local.fetch_chunk(id, 0).unwrap_err().0.contains("larger than the expected length"));
+        let bad_only = [&local as &dyn ChunkProvider];
+        let Err(crate::evidence::FetchFailure::ChunkUnavailable { failures, .. }) =
+            crate::evidence::fetch_chunk_any(&manifest, 0, &bad_only, h(7))
+        else {
+            panic!("oversized file must be refused");
+        };
+        assert!(matches!(failures[0].kind, FetchFailureKind::BadBytes(EvidenceError::ChunkLength { index: 0, expected: 4000, .. })));
+        let repaired = repair_v1(&claim, &manifest, &[&local, &good]);
+        assert_eq!(repaired.copied, vec![(local.id.clone(), 0)]);
+        assert_eq!(std::fs::metadata(path).unwrap().len(), chunks[0].len() as u64);
+
+        let path = crate::public_material::material_manifest_path(&h(7));
+        let file = dir.join(&path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::File::create(&file).unwrap().set_len(sparse_len).unwrap();
+        assert!(crate::public_material::MaterialProvider::get(&local, &path, 2 << 20).is_err());
+
+        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(good_dir).unwrap();
+    }
+
+    #[test]
+    fn directory_provider_preserves_custom_chunk_limits_and_checks_total_before_chunks() {
+        use crate::evidence::fs;
+
+        let dir = scratch("bounded-custom");
+        let claim = claim_hex();
+        let roots = roots();
+        let chunks = [vec![0xa5; (1 << 20) + 1], Vec::new()];
+        let manifest = EvidenceManifestV1::build(
+            roots.network_domain,
+            &TransactionOutpoint::new(h(0xb0), 1),
+            &[5; 32],
+            roots.trace_root,
+            roots.output_root,
+            roots.execution_root,
+            roots.trace_chunk_count,
+            roots.retention_deadline,
+            &chunks,
+        );
+        let limits = ManifestLimits { max_chunk_bytes: 2 << 20, ..ManifestLimits::default() };
+        fs::publish(&dir, &claim, &manifest, &chunks).unwrap();
+        let (bytes, _) = fs::fetch_claim_material(&[dir.clone()], &claim, &roots, &limits, h(7)).unwrap();
+        assert_eq!(bytes, chunks[0]);
+
+        // A missing chunk cannot turn over-cap material into a fetch: the manifest must be refused first.
+        std::fs::remove_file(fs::chunk_path(&dir, manifest_id_v1(&manifest), 0)).unwrap();
+        let limits = ManifestLimits { max_total_bytes: 1 << 20, ..limits };
+        assert!(matches!(
+            fs::fetch_claim_material(&[dir.clone()], &claim, &roots, &limits, h(7)),
+            Err(fs::ClaimFetchError::NoAdmissibleManifest { offered: 1, .. })
+        ));
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

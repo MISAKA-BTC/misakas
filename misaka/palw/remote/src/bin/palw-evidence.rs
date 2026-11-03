@@ -281,10 +281,12 @@ fn main() {
             let local = misaka_palw_remote::evidence::fs::FsProvider::new(from.clone());
             let manifest =
                 local.manifest_for(&claim).unwrap_or_else(|| die(format!("{} holds no manifest for claim {claim}", from.display())));
+            use misaka_palw_remote::evidence::ChunkProvider;
             let id = manifest_id_v1(&manifest);
             let mut chunks = Vec::new();
             for entry in &manifest.chunks {
-                let bytes = std::fs::read(misaka_palw_remote::evidence::fs::chunk_path(&from, id, entry.index))
+                let bytes = local
+                    .fetch_chunk_expected(id, entry.index, entry.len)
                     .unwrap_or_else(|e| die(format!("chunk {}: {e}", entry.index)));
                 manifest
                     .verify_chunk(entry.index, &bytes)

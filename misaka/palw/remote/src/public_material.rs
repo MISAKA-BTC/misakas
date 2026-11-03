@@ -142,10 +142,10 @@ impl MaterialProvider for crate::evidence::fs::FsProvider {
         if !is_material_path(path) {
             return Err(ProviderError(format!("{path:?} is not a material path")));
         }
-        match std::fs::read(self.root.join(path)) {
-            Ok(bytes) if bytes.len() > max => Err(ProviderError(format!("{path}: {} bytes, more than asked for", bytes.len()))),
+        use crate::evidence::fs::{BoundedFileError, read_bounded_file};
+        match read_bounded_file(&self.root.join(path), max) {
             Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(BoundedFileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(ProviderError(e.to_string())),
         }
     }

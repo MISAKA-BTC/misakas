@@ -14806,18 +14806,18 @@ impl PalwPanelService {
         &self,
         claim: Hash64,
         roots: misaka_palw_remote::evidence::ClaimRoots,
+        limits: misaka_palw_remote::evidence::ManifestLimits,
     ) -> Result<FetchedProviderMaterialV1, String> {
-        use misaka_palw_remote::evidence::{ManifestLimits, fs};
+        use misaka_palw_remote::evidence::fs;
         let dirs = self.config.evidence_provider_dirs.clone();
         if dirs.is_empty() {
             return Err("no evidence provider directories configured".into());
         }
-        let (bytes, report) = tokio::task::spawn_blocking(move || {
-            fs::fetch_claim_material(&dirs, &claim.to_string(), &roots, &ManifestLimits::default(), claim)
-        })
-        .await
-        .map_err(|error| error.to_string())?
-        .map_err(|error| format!("{error:?}"))?;
+        let (bytes, report) =
+            tokio::task::spawn_blocking(move || fs::fetch_claim_material(&dirs, &claim.to_string(), &roots, &limits, claim))
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|error| format!("{error:?}"))?;
         Ok(FetchedProviderMaterialV1 { bytes, report, http_admission: None })
     }
 
@@ -14855,7 +14855,12 @@ impl PalwPanelService {
     /// path as a producer's reply. A miss does not establish a claim fault.
     async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
         let Some(roots) = self.provider_claim_roots(network_domain, claim) else { return };
-        match self.fetch_directory_provider_material(claim, roots).await {
+        use misaka_palw_remote::evidence::ManifestLimits;
+        let limits = ManifestLimits {
+            max_total_bytes: kaspa_p2p_flows::palw_gossip::PALW_MATERIAL_MAX_BYTES as u64,
+            ..ManifestLimits::default()
+        };
+        match self.fetch_directory_provider_material(claim, roots, limits).await {
             Ok(material) => {
                 let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &material.bytes);
                 info!(
@@ -14898,7 +14903,8 @@ impl PalwPanelService {
             return Ok(false);
         }
         let roots = self.provider_claim_roots(network_domain, claim).ok_or("the claim's committed roots are not readable")?;
-        let material = match self.fetch_directory_provider_material(claim, roots).await {
+        let limits = misaka_palw_remote::evidence::ManifestLimits::default();
+        let material = match self.fetch_directory_provider_material(claim, roots, limits).await {
             Ok(material) => material,
             Err(why) if self.config.evidence_provider_http.is_empty() => return Err(why),
             Err(_) => {
