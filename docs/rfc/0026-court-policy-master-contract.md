@@ -215,6 +215,14 @@ fixture での `close_cone_acquit` の軽さ(`docs/measurements/2026-10-19-court
 | TIR 局所化 | 演算・tile・reduction の境界を元の source に認証し、行列積の部分和や attention の最大値・総和・重み付き集約などを小さな決定論的検査単位にする。パラメータに加え、動的 operand、親子の数値 fold、選択に必要な比較、opening と終端を計上する。局所反証の費用と正常側の全範囲の費用は別に測る。 |
 | Batch 搬送と復元 | Demand は case、元 source と ruleset に束縛した要求 root、canonical な範囲・長さ・認証方式、part 上限、総 bytes 上限、応答期限、予約を固定する。Node は認証方式を元資料の形式から決定する。Response は case・要求 root・範囲・part index・payload を署名者と opening に結び付ける。受信順に処理しても canonical な範囲・slot で検査結果を確定する。正当な重複で進捗・予約を二重計上せず、競合・改変は拒否する。受理済み・検査済み・未取得の範囲と残り予算は branch が認証する checkpoint から復元する。範囲全体の認証を要する形式では、元資料の全体検査に成功した時点でのみ全 slot を更新し、部分的な検査済み状態の復元を拒否する。送受信キューを件数と bytes の両方で制限し、Node の処理容量に応じた backpressure を Panel の証拠生成まで伝える。 |
 
+#### TIR の局所要求とネイティブ認証
+
+Panel は、元の実行 source に結び付いた争点 root の入力境界から、必要な step leaf を導出する。同じ leaf への要求をまとめ、連続する範囲を既存の `StepRun { first, count }` に写す。離れた範囲は別の要求にする。各区間は元資料の規則が定める最大 leaf 数と、ネイティブ応答サイズの上限を使って求めた最大 part 数の両方に収める。要求数の上限を超える計画は予約に使えない。
+
+各区間の要求 ID は、元の claim、資料の割当、適用規則・profile、source、canonical な要求位置に結び付ける。受理済みの区間を Node が認証した後、裁定側は元の leaf と opening を取り出して既存の局所裁定を実行できる。区間をまたぐ場合も、同じ source に認証された端点を使う。要求 ID を導出した時点では、署名者への応答義務や応答の受理は成立しない。
+
+予約では、選択した区間ごとのネイティブ応答上限、必要な認証と制御枠、step 以外の依存資料、後続手番と回復を計上する。同じ root 内の要求の重複除去は、別 root や別の署名者の義務をまとめる根拠にはならない。局所反証の一例で得た使用量を、全許容分岐や正常側の全範囲の上限として使用しない。
+
 ### 11.4 時計と資源の予算
 
 CPU work、bytes、IO、メモリ、保持 byte-DAA、control 枠を個別に予約する。DAA は手番の因果依存と、予約済み資源で処理・収録できるまでの時間を表す。同時処理を見込むときは、共有する帯域・CPU・IO と並行時の供給を計測して、全許容分岐で成立する予約に限って重複を除く。現候補は重複を見込まず、次の上限を checked arithmetic で検査する。
@@ -239,7 +247,7 @@ CPU work、bytes、IO、メモリ、保持 byte-DAA、control 枠を個別に予
 4. 実ノードで Batch の先行送信、逆順、重複、欠落、再送、上限到達、backpressure、restart・reorg・pruned IBD を測る。予約量と実際の搬送・検査・収録を突き合わせ、T06 の最遅申立てでも hard deadline に収める。
 5. 同じ候補で正常・不正・未提出・収録機会不足の裁定、信用・会計・保持の復元、同時 Court の混雑を §10 に従って確認する。公開検証は同じ claim ID で受理、独立席、Panel 応答、Node 裁定、Gate C、Final、PFS4、報酬を個別に照合する。
 
-作業ブランチの候補には tokenizer 記録の導出、owner の rooted scheduler、TIR の有界な parameter 解析、Batch の受信・検査・checkpoint 部品がある。全 graph の原子的予約と公開経路の接続、実測に基づく期限内の完走は検証対象として残る。[実装と測定の範囲](../evidence/oom-recovery-continuation-2026-11-03.md#batch-court-clock-and-exact-t12-recheck)
+作業ブランチの候補には tokenizer 記録の導出、owner の rooted scheduler、TIR の有界な parameter 解析と認証済み StepRun の取り込み、Batch の受信・検査・checkpoint 部品がある。全 graph の原子的予約と公開経路の接続、実測に基づく期限内の完走は検証対象として残る。[実装と測定の範囲](../evidence/oom-recovery-continuation-2026-11-03.md#batch-court-clock-and-exact-t12-recheck)
 
 ## 2026-10-21 追加隔離checkpoint — original parameter footprint / archive S1
 
