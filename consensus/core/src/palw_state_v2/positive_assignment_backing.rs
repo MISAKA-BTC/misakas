@@ -122,7 +122,8 @@ pub struct NativeCommittedAssignedCaseV2 {
     pin: CaseJournalPinV2,
     records: Vec<NativeCommittedCaseRecordV2>,
     assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
-    _lease: NativeDemandLeaseV1,
+    _records_lease: NativeDemandLeaseV1,
+    _open_lease: NativeDemandLeaseV1,
 }
 impl NativeCommittedAssignedCaseV2 {
     #[allow(clippy::too_many_arguments)]
@@ -136,7 +137,8 @@ impl NativeCommittedAssignedCaseV2 {
         pin: CaseJournalPinV2,
         records: Vec<NativeCommittedCaseRecordV2>,
         assignment_records: Vec<NativeCommittedAssignmentRecordV2>,
-        lease: NativeDemandLeaseV1,
+        records_lease: NativeDemandLeaseV1,
+        open_lease: NativeDemandLeaseV1,
     ) -> Self {
         Self {
             parent,
@@ -148,7 +150,8 @@ impl NativeCommittedAssignedCaseV2 {
             pin,
             records,
             assignment_records,
-            _lease: lease,
+            _records_lease: records_lease,
+            _open_lease: open_lease,
         }
     }
     pub fn parent(&self) -> BlockHash {
@@ -188,15 +191,6 @@ pub enum NativeAssignedCaseBackingV2 {
         parent: BlockHash,
         parent_state_root: Hash64,
     },
-    /// Bounded authenticated predecessor for a committed Case operation.
-    /// Full replay still consumes all earlier records before authorizing a write.
-    CommittedHistory {
-        parent: BlockHash,
-        assignment: misaka_palw_positive_contract::assignment::AssignmentId,
-        pin: CaseJournalPinV2,
-        records: Vec<NativeCommittedCaseRecordV2>,
-        _records_lease: NativeDemandLeaseV1,
-    },
     Committed(NativeCommittedAssignedCaseV2),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,7 +229,8 @@ impl NativeHeapV1 for NativeCommittedAssignedCaseV2 {
             pin: _,
             records,
             assignment_records,
-            _lease: _,
+            _records_lease: _,
+            _open_lease: _,
         } = self;
         assignment
             .native_heap_v1(path)
@@ -250,7 +245,6 @@ impl NativeHeapV1 for NativeAssignedCaseBackingV2 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
         match self {
             Self::AbsentAtParent { case: _, parent: _, parent_state_root: _ } => NativeCoverageV1::zero(),
-            Self::CommittedHistory { records, .. } => records.native_heap_v1(path),
             Self::Committed(value) => value.native_heap_v1(path),
         }
     }

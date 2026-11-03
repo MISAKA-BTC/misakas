@@ -892,7 +892,7 @@ impl PositiveCarrierPhaseTwoV2 {
                 let body = &tx.payload[3..];
                 let Ok(id) = scan_assignment_continuation_id_v2(body) else { continue };
                 if let Some(state) = selected_parent_state {
-                    match processor.original_assignment_rules_v2(carrier.prefix.selected_parent, state, id, Some(body)) {
+                    match processor.original_assignment_rules_v2(carrier.prefix.selected_parent, state, id, body) {
                         Ok(rules) => rules,
                         Err(E::InvalidContinuation) => continue,
                         Err(E::Resource(why)) => return Err(why),

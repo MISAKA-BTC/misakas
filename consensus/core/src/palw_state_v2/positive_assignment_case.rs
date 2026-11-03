@@ -822,24 +822,19 @@ impl TransitionBuilder<'_> {
         body: &crate::palw_positive_court_v2::coordinator::native_body::PositiveNativeBodyV2,
     ) -> Result<(), PalwStateV2Error> {
         let backing = action.case_backing().map_err(|_| missing())?;
-        let (parent, assignment, pin) = match backing {
-            NativeAssignedCaseBackingV2::CommittedHistory { parent, assignment, pin, records, .. } => {
-                let record = records.last().ok_or_else(missing)?;
-                if records.len() as u64 != pin.head.sequence {
-                    return Err(refuse("Case predecessor archive extent differs from rooted journal"));
-                }
-                if record.carriage().origin() != pin.head.history.origin {
-                    return Err(refuse("Case predecessor origin differs from its rooted journal head"));
-                }
-                (*parent, *assignment, *pin)
-            }
-            NativeAssignedCaseBackingV2::Committed(backing) => (backing.parent(), backing.assignment().id(), *backing.pin()),
-            NativeAssignedCaseBackingV2::AbsentAtParent { .. } => return Err(missing()),
+        let NativeAssignedCaseBackingV2::Committed(backing) = backing else {
+            return Err(missing());
         };
+        let assignment = backing.assignment().id();
+        let pin = *backing.pin();
+        let record = backing.records().last().ok_or_else(missing)?;
+        if backing.records().len() as u64 != pin.head.sequence || record.carriage().origin() != pin.head.history.origin {
+            return Err(refuse("Case archive differs from its rooted journal extent or latest origin"));
+        }
         let Some((case, expected_result)) = body.operation.case_target_v2().map_err(refuse)? else {
             return Err(refuse("a Case follow-up requires an explicit subject"));
         };
-        if parent != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
+        if backing.parent() != action.selected_parent() || case != pin.case || expected_result.is_some_and(|id| id != pin.result) {
             return Err(refuse("Case follow-up differs from its selected-parent archive subject"));
         }
         let (_, _, current) = rooted_bundle(&self.state, assignment)?;
