@@ -53,6 +53,54 @@ impl PositiveAssignmentMaterialOutcomeV2 {
     pub(crate) fn empty_retained_v2() -> NativeRetainedV1<Self> {
         NativeRetainedV1::from_owner_reserved_v1(Self { records: Vec::new(), case_records: Vec::new() }, None)
     }
+    /// Compare independent UTXO acceptance with the actual native writes.
+    /// This check only runs after the raw actions have derived and applied
+    /// their own settlements against the executed prefix.
+    pub(super) fn check_utxo_settlements_v2(
+        &self,
+        entries: &[PalwDeltaEntryV2],
+        plans: &[crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2],
+    ) -> Result<(), PalwStateV2Error> {
+        let mismatch = || PalwStateV2Error::DeltaMismatch("accepted Assignment UTXO spend and rooted settlement differ");
+        let mut plans = plans.iter();
+        let mut start = 0;
+        for record in &self.records {
+            let event = entries.get(start..record.delta_end).ok_or_else(mismatch)?;
+            start = record.delta_end;
+            if record.header.kind != AssignmentJournalEventKindV2::Settlement {
+                continue;
+            }
+            let plan = plans.next().ok_or_else(mismatch)?;
+            let view = AssignmentJournalRecordViewV2::decode(&record.raw, record.max_record_bytes).map_err(|_| mismatch())?;
+            let expected = plan.accepted_funding_row_v2(&view.frame(), view.payload()).map_err(|_| mismatch())?;
+            let funding_key = misaka_palw_positive_contract::native::NativeRowKey::AssignmentFunding(plan.old.assignment).encode();
+            let mut found = false;
+            for entry in event {
+                let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new } = entry else { continue };
+                if *table != KERNEL_AUX_TABLE || key != &funding_key {
+                    continue;
+                }
+                let (Some(old), Some(new)) = (old.as_deref(), new.as_deref()) else { return Err(mismatch()) };
+                let old = NativeRowValue::decode(key, old).map_err(|_| mismatch())?.body;
+                let new = NativeRowValue::decode(key, new).map_err(|_| mismatch())?.body;
+                if found
+                    || !matches!(old, NativeRowBody::AssignmentFunding(row) if row == plan.old)
+                    || !matches!(new, NativeRowBody::AssignmentFunding(row) if row == expected)
+                {
+                    return Err(mismatch());
+                }
+                found = true;
+            }
+            if !found {
+                return Err(mismatch());
+            }
+        }
+        if plans.next().is_some() {
+            return Err(mismatch());
+        }
+        Ok(())
+    }
+
     pub(super) fn validate_v2(&self, entries: &[PalwDeltaEntryV2]) -> Result<(), PalwStateV2Error> {
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
         for record in &self.records {
@@ -724,5 +772,76 @@ mod tests {
             PositiveAssignmentMaterialOutcomeV2::default().validate_v2(&[delta]),
             Err(PalwStateV2Error::DeltaMismatch("AssignmentUse must have exactly one atomic initial Case record"))
         ));
+    }
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    use super::*;
+    use crate::palw_positive_assignment_funds_v2::{qualify_assignment_spend_v2, tentative_tests::fixture};
+    use misaka_palw_positive_contract::{
+        assignment::control_material::{ASSIGNMENT_CONTROL_BOUNDARY_BYTES_V2, encode_assignment_control_v2},
+        identity::{Digest, PUBKEY_BYTES},
+        native::NativeRowKey,
+        rows::NativeHash64,
+    };
+
+    #[test]
+    fn assignment_utxo_debit_requires_matching_rooted_settlement() {
+        let (funding, tx, _, auth) = fixture(&[17; PUBKEY_BYTES]);
+        let plan = qualify_assignment_spend_v2(&funding, &auth, &tx, &[175, 10], 20).unwrap();
+        let origin = misaka_palw_positive_contract::rows::AcceptedOrigin {
+            accepting_block: NativeHash64([7; 64]),
+            carrier_block: NativeHash64([8; 64]),
+            carrier_transaction: NativeHash64(tx.id().as_bytes()),
+            accepted_tx_ordinal: 1,
+            event_ordinal: 0,
+            accepted_daa: 20,
+            accepted_blue_score: 20,
+        };
+        let payload =
+            encode_assignment_control_v2(&[9; ASSIGNMENT_CONTROL_BOUNDARY_BYTES_V2], &tx.payload[3..], auth.max_frame_bytes).unwrap();
+        let frame = assignment_frame_v2(
+            funding.assignment,
+            1,
+            Digest([8; 64]),
+            AssignmentJournalEventKindV2::Settlement,
+            origin,
+            &payload,
+            auth.max_frame_bytes,
+        )
+        .unwrap();
+        let new = plan.accepted_funding_row_v2(&frame, &payload).unwrap();
+        let key = NativeRowKey::AssignmentFunding(funding.assignment).encode();
+        let encode = |row| NativeRowValue::new(NativeRowBody::AssignmentFunding(row)).unwrap().encode().unwrap();
+        let mut entries = vec![PalwDeltaEntryV2::KernelRouteRow {
+            table: KERNEL_AUX_TABLE,
+            key,
+            old: Some(encode(funding)),
+            new: Some(encode(new.clone())),
+        }];
+        let max_record_bytes = ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64 + auth.max_frame_bytes;
+        let mut material = PositiveAssignmentMaterialOutcomeV2 {
+            records: vec![PositiveAssignmentAcceptedMaterialV2 {
+                header: frame.header,
+                raw: encode_assignment_journal_record_v2(frame.header, &payload, max_record_bytes).unwrap(),
+                max_record_bytes,
+                delta_end: 1,
+            }],
+            case_records: Vec::new(),
+        };
+        let plans = std::slice::from_ref(&plan);
+        assert!(material.check_utxo_settlements_v2(&entries, plans).is_ok());
+        assert!(material.check_utxo_settlements_v2(&entries, &[]).is_err());
+        assert!(PositiveAssignmentMaterialOutcomeV2::default().check_utxo_settlements_v2(&entries, plans).is_err());
+        entries.push(entries[0].clone());
+        material.records[0].delta_end = 2;
+        assert!(material.check_utxo_settlements_v2(&entries, plans).is_err());
+        material.records[0].delta_end = 1;
+        let PalwDeltaEntryV2::KernelRouteRow { new: encoded, .. } = &mut entries[0] else { unreachable!() };
+        let mut foreign = new;
+        foreign.current_outpoint.as_mut().unwrap().index += 1;
+        *encoded = Some(encode(foreign));
+        assert!(material.check_utxo_settlements_v2(&entries, plans).is_err());
     }
 }

@@ -28,7 +28,7 @@ use misaka_palw_positive_contract::{
     },
     identity::Digest,
     native::{KERNEL_AUX_TABLE, NativeRowKey},
-    rows::{AcceptedMaterial, AcceptedOrigin, NativeRowBody, NativeRowValue},
+    rows::{AcceptedMaterial, NativeRowBody, NativeRowValue},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -184,7 +184,7 @@ impl TransitionBuilder<'_> {
         }
         let amounts: Vec<u64> = action.entries().iter().map(|entry| entry.amount).collect();
         let plan = qualify_rooted_assignment_candidate_v2(&self.state, tx, &amounts, ctx.daa_score, limits).map_err(refused)?;
-        self.commit_authorized_assignment_spend_v2(ctx, origin, tx, &plan)
+        self.commit_authorized_assignment_spend_v2(ctx, action, &plan)
     }
 
     fn next_assignment_settlement_ordinal_v2(
@@ -221,10 +221,11 @@ impl TransitionBuilder<'_> {
     fn commit_authorized_assignment_spend_v2(
         &mut self,
         ctx: &PalwBlockContextV2,
-        origin: AcceptedOrigin,
-        tx: &Transaction,
+        action: &PositiveAssignmentRawActionV2,
         plan: &AssignmentSpendPlanV2,
     ) -> Result<(), PalwStateV2Error> {
+        let origin = action.origin();
+        let tx = action.transaction();
         let id = plan.old.assignment;
         let rooted = PositiveRowsV2::new(&self.state).assignment(id).map_err(refused)?;
         if rooted.funding != plan.old || plan.transaction != tx.id() || plan.daa != ctx.daa_score {
@@ -233,9 +234,23 @@ impl TransitionBuilder<'_> {
         if !self.params.settlement_once_active_at(ctx.daa_score) {
             return Err(refused("actual settlement-once owner is dormant"));
         }
-        if rooted.journal.next_ordinal >= u64::from(plan.authorization.max_history_frames) {
-            return Err(refused("retained original history frame budget exhausted"));
+        let rules = action.rules();
+        let policy = rules.assignment_policy();
+        if rules.original_material() != Some(rooted.assignment.admission_material)
+            || plan.authorization.max_frame_bytes != policy.max_frame_bytes
+            || plan.authorization.max_history_frames != policy.max_history_frames
+        {
+            return Err(refused("settlement differs from the original journal policy"));
         }
+        let storage_limit =
+            rules.original_history_storage_limit_v2().ok_or_else(|| refused("original settlement history budget unavailable"))?;
+        self.check_assignment_next_journal_extent_v2(
+            &rooted.assignment,
+            &rooted.journal,
+            policy,
+            storage_limit,
+            tx.payload[3..].len(),
+        )?;
         let payload = self.encode_assignment_control_payload_v2(id, &tx.payload[3..], plan.authorization.max_frame_bytes)?;
         let frame = assignment_frame_v2(
             id,
@@ -247,7 +262,7 @@ impl TransitionBuilder<'_> {
             plan.authorization.max_frame_bytes,
         )
         .map_err(refused)?;
-        let new = plan.accepted_funding_row_v2(frame.payload).map_err(refused)?;
+        let new = plan.accepted_funding_row_v2(&frame, &payload).map_err(refused)?;
         if let Some(point) = new.current_outpoint {
             self.require_assignment_output_unlocked_v2(point)?;
         }

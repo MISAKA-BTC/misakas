@@ -608,11 +608,47 @@ impl TransitionBuilder<'_> {
         }
         write(self, row)
     }
-    /// The block tick can expire undrawn subjects from rooted state alone.
-    /// Releasing a draw slot needs neither the retained roster nor a draw seed.
-    pub(super) fn expire_undrawn_positive_certifications_v2(&mut self, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
+    /// Apply the actual Case termination and withdraw its exact certification
+    /// in one checkpoint. Collateral and previous accepted votes remain rooted.
+    pub(super) fn write_terminal_assigned_case_and_withdraw_v2(
+        &mut self,
+        key: &[u8],
+        value: &NativeRowValue,
+        case: &CaseRow,
+    ) -> Result<(), PalwStateV2Error> {
+        let _result_workspace = reserve_p_workspace((size_of::<NativeRowValue>() + 2 * MAX_NATIVE_KEY_BYTES) as u64)?;
+        let stored = PositiveRowsV2::new(&self.state).read(NativeRowKey::Result(case.result)).map_err(refuse)?;
+        let Some(NativeRowBody::Result(result)) = stored.map(|row| row.body) else {
+            return Err(unavailable("terminal assigned Case has no original Result"));
+        };
+        let subject = certification_subject(&result.result);
+        let mut owned = read(&self.state, subject, 0)?;
+        let row = &mut owned.row;
+        check_positive_certification_result_links_v2(&row.fixed.header, &result, case).map_err(refuse)?;
+        let at = case.last_event.accepted_daa;
+        if at < row.fixed.header.commit_origin.accepted_daa || row.fixed.outcome.is_some_and(|(_, decided)| at < decided) {
+            return Err(refuse("Case termination precedes rooted P history"));
+        }
+        let checkpoint = self.try_checkpoint()?;
+        let update = (|| {
+            self.write_kernel_row_encoded_v1(misaka_palw_positive_contract::native::KERNEL_AUX_TABLE, key, Some(value))?;
+            if let Some(outcome) = positive_certification_failure_v2(row, at, false) {
+                row.fixed.outcome = Some((outcome, at));
+                write(self, row)?;
+            }
+            Ok(())
+        })();
+        if update.is_err() {
+            self.restore(checkpoint);
+        }
+        update
+    }
+
+    /// Draw expiry, insufficient votes and veto are decided from rooted P
+    /// and Case rows. A k-positive subject still needs its native session.
+    pub(super) fn decide_due_positive_certification_failures_v2(&mut self, ctx: &PalwBlockContextV2) -> Result<(), PalwStateV2Error> {
         while let Some(subject) =
-            self.state.kernel_route.as_ref().and_then(|route| route.expired_positive_draw_subjects_v2(ctx.daa_score).next())
+            self.state.kernel_route.as_ref().and_then(|route| route.due_positive_certification_subjects_v2(ctx.daa_score).next())
         {
             // The canonical P write removes this subject from the index.
             self.fail_positive_certification_v2(ctx, Digest(subject.as_bytes()))?;
@@ -887,4 +923,110 @@ pub(super) fn approve_positive_worker_payment_v2(
         amount: a.bundle.terms.worker_reward,
         subject: row.fixed.header.subject,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1},
+        palw_positive_rows_v2::tests::{empty_route, signed_bundle},
+        palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
+    };
+
+    #[test]
+    fn terminal_assigned_case_withdraws_exact_p_and_rolls_back_together() {
+        const CHILD: &str = "MISAKA_TERMINAL_ASSIGNED_CASE_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let module = module_path!().split_once("::").unwrap().1;
+            let selector = format!("{module}::terminal_assigned_case_withdraws_exact_p_and_rolls_back_together");
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", &selector, "--nocapture"])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success() && String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: 64 << 20, database_bytes: 0 }));
+        let (_, result, mut case, ..) = signed_bundle();
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, ZERO_HASH64, 4, 1000, 100, 1000, 0).unwrap();
+        let extras = PalwTransitionExtrasV1::default();
+        let mut state = PalwChainStateV2::genesis();
+        state.kernel_route = Some(empty_route());
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        builder.write_assignment_aux_v2(NativeRowBody::Case(case.clone())).unwrap();
+        let subject = certification_subject(&result.result);
+        let policy = PalwSecurityCertificationPolicyV1 {
+            m: 1,
+            k: 1,
+            certify_by_daa: 7,
+            attest_window_daa: 5,
+            draws_per_epoch: 4,
+            epoch_daa: 11,
+            ..Default::default()
+        };
+        let p = PositiveCertificationRowV2 {
+            fixed: PositiveCertificationFixedV2 {
+                header: PositiveCertificationHeaderV2 {
+                    version: 2,
+                    revision: 1,
+                    assignment: AssignmentId(result.role_assignment.digest),
+                    subject,
+                    claim: result.result.claim_id(),
+                    result: result.result.id(),
+                    case: case.case,
+                    scope: result.result.scope,
+                    policy,
+                    policy_id: positive_certification_policy_id_v2(&policy),
+                    commit_origin: result.origin,
+                    committed_span: Some(2),
+                    worker: NativeOutpoint { transaction: NativeHash64([82; 64]), index: 0 },
+                    worker_operator: Digest([83; 64]),
+                    worker_key: result.miner_key,
+                    worker_gain: 100,
+                    liability: case.liability,
+                },
+                finality: None,
+                outcome: None,
+                liability_release: None,
+            },
+            draw: None,
+            votes: Vec::new(),
+        };
+        builder.write_assignment_aux_v2(NativeRowBody::Result(result)).unwrap();
+        write(&mut builder, &p).unwrap();
+        let mut before = builder.state.clone();
+        let boundary = builder.entries.len();
+        case.status = ClaimStatus::Revoked;
+        case.last_event.accepted_daa += 1;
+        let mut foreign = case.clone();
+        foreign.liability.digest.0[0] ^= 1;
+        assert!(builder.write_assignment_aux_v2(NativeRowBody::Case(foreign)).is_err());
+        assert_eq!(builder.entries.len(), boundary);
+        assert_eq!(builder.state.state_root(), before.state_root());
+
+        builder.write_assignment_aux_v2(NativeRowBody::Case(case.clone())).unwrap();
+        let withdrawn = read(&builder.state, subject, 0).unwrap().row;
+        assert_eq!(withdrawn.fixed.outcome, Some((PositiveCertificationOutcomeV2::Withdrawn, case.last_event.accepted_daa)));
+        assert_eq!(withdrawn.fixed.liability_release, None);
+        assert_eq!(builder.state.kernel_route_state_v1().unwrap().positive_draw_slots_v2(case.last_event.accepted_daa, 4), 0);
+        let after = builder.state.state_root();
+        let entries = &builder.entries[boundary..];
+        assert_eq!(entries.len(), 2);
+        for entry in entries {
+            apply_delta_entry(&mut before, entry, false).unwrap();
+        }
+        assert_eq!(before.state_root(), after);
+        for entry in entries.iter().rev() {
+            apply_delta_entry(&mut before, entry, true).unwrap();
+        }
+        assert_eq!(read(&before, subject, 0).unwrap().row, p);
+        assert_eq!(before.kernel_route_state_v1().unwrap().positive_draw_slots_v2(case.last_event.accepted_daa, 4), 1);
+    }
 }

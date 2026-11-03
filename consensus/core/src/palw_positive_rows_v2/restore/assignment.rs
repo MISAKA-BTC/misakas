@@ -88,6 +88,7 @@ impl Reader<'_> {
         let (mut frames, mut binds, mut cancels, mut expires) = (0u64, 0u64, 0u64, 0u64);
         let mut terminal = None::<u64>;
         let mut last_join = None::<u64>;
+        let mut found_funding_receipt = funds.last_settlement.is_none();
         let aux = self.aux;
         for ((table, key), value) in aux.range((Included((KERNEL_AUX_TABLE, prefix.clone())), Unbounded)) {
             if *table != KERNEL_AUX_TABLE || !key.starts_with(&prefix) {
@@ -113,6 +114,9 @@ impl Reader<'_> {
                 AssignmentJournalEventKindV2::JoinProver => {
                     last_join = Some(last_join.map_or(frame.header.ordinal, |n| n.max(frame.header.ordinal)))
                 }
+                AssignmentJournalEventKindV2::Settlement if funds.last_settlement == Some(frame.payload) => {
+                    found_funding_receipt = true;
+                }
                 _ => {}
             }
         }
@@ -122,7 +126,10 @@ impl Reader<'_> {
             AssignmentStatusV2::Cancelled => (0, 1, 0),
             AssignmentStatusV2::ExpiredUnconsumed => (0, 0, 1),
         };
-        if frames != head.next_ordinal || (binds, cancels, expires) != expected || terminal.zip(last_join).is_some_and(|(t, j)| j > t)
+        if !found_funding_receipt
+            || frames != head.next_ordinal
+            || (binds, cancels, expires) != expected
+            || terminal.zip(last_join).is_some_and(|(t, j)| j > t)
         {
             return inconsistent();
         }

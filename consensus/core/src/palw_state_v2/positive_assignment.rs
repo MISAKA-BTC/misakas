@@ -186,6 +186,11 @@ impl TransitionBuilder<'_> {
         }
         let key = key.encode();
         let value = NativeRowValue::new(body).map_err(refusal)?;
+        if let NativeRowBody::Case(case) = &value.body
+            && crate::palw_positive_certification_v2::positive_case_ends_certification_v2(case)
+        {
+            return self.write_terminal_assigned_case_and_withdraw_v2(&key, &value, case);
+        }
         self.write_kernel_row_encoded_v1(KERNEL_AUX_TABLE, &key, Some(&value))
     }
     pub(super) fn append_assignment_frame_v2(
@@ -218,7 +223,7 @@ impl TransitionBuilder<'_> {
             None => Err(refusal("missing accepted Assignment journal head")),
         }
     }
-    fn check_assignment_next_journal_extent_v2(
+    pub(super) fn check_assignment_next_journal_extent_v2(
         &self,
         row: &AssignmentRow,
         head: &AssignmentJournalHeadRow,

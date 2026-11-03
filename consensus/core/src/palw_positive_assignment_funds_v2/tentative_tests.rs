@@ -25,7 +25,7 @@ fn origin(transaction: Hash64, daa: u64) -> AcceptedOrigin {
         accepted_blue_score: daa,
     }
 }
-fn fixture(key: &[u8; PUBKEY_BYTES]) -> (AssignmentFundingRow, Transaction, Vec<UtxoEntry>, AssignmentSpendAuthorizationV2) {
+pub(crate) fn fixture(key: &[u8; PUBKEY_BYTES]) -> (AssignmentFundingRow, Transaction, Vec<UtxoEntry>, AssignmentSpendAuthorizationV2) {
     let payer = principal(key);
     let refund = Digest(kaspa_hashes::blake2b_512_address_payload(key).as_bytes());
     let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&refund.0);
@@ -144,13 +144,44 @@ fn payer_signed_partial_op12_projects_without_inventing_acceptance() {
     assert_eq!((plan.paid_now, plan.continued_now, plan.burned_now), (5, 170, 0));
     assert_eq!((plan.new.worker.remaining, plan.new.fee.remaining, plan.new.capital.remaining), (100, 15, 30));
     assert_eq!(row.last_settlement, None, "the tentative plan did not mutate an accepted row");
-    let accepted = AcceptedMaterial { origin: origin(transaction.id(), 20), digest: plan.body_digest };
-    let rooted = plan.accepted_funding_row_v2(accepted).unwrap();
-    assert_eq!(rooted.last_settlement, Some(accepted));
+    use misaka_palw_positive_contract::assignment::{
+        control_material::{ASSIGNMENT_CONTROL_BOUNDARY_BYTES_V2, encode_assignment_control_v2},
+        journal::assignment_frame_v2,
+    };
+    let boundary = [9; ASSIGNMENT_CONTROL_BOUNDARY_BYTES_V2];
+    let inner = &transaction.payload[3..];
+    let cap = auth.max_frame_bytes;
+    let frame_for = |payload: &[u8]| {
+        assignment_frame_v2(
+            row.assignment,
+            1,
+            Digest([8; 64]),
+            AssignmentJournalEventKindV2::Settlement,
+            origin(transaction.id(), 20),
+            payload,
+            cap,
+        )
+        .unwrap()
+    };
+    let payload = encode_assignment_control_v2(&boundary, inner, cap).unwrap();
+    let frame = frame_for(&payload);
+    assert_ne!(frame.payload.digest, plan.body_digest);
+    let rooted = plan.accepted_funding_row_v2(&frame, &payload).unwrap();
+    assert_eq!(rooted.last_settlement, Some(frame.payload));
     assert!(qualify_assignment_spend_v2(&rooted, &auth, &transaction, &[170, 10], 20).is_err(), "stale before row cannot spend twice");
-    let mut wrong = accepted;
-    wrong.origin.carrier_transaction = NativeHash64([9; 64]);
-    assert!(plan.accepted_funding_row_v2(wrong).is_err());
+    let mut wrong = frame;
+    wrong.payload.origin.carrier_transaction = NativeHash64([9; 64]);
+    assert!(plan.accepted_funding_row_v2(&wrong, &payload).is_err());
+    assert!(plan.accepted_funding_row_v2(&frame_for(inner), inner).is_err());
+    let mut wrong_inner = inner.to_vec();
+    wrong_inner[0] ^= 1;
+    let wrong_payload = encode_assignment_control_v2(&boundary, &wrong_inner, cap).unwrap();
+    assert!(plan.accepted_funding_row_v2(&frame_for(&wrong_payload), &wrong_payload).is_err());
+    let mut capped = auth.clone();
+    capped.max_frame_bytes = payload.len() as u64 - 1;
+    assert!(qualify_assignment_spend_v2(&row, &capped, &transaction, &[175, 10], 20).is_err());
+    capped.max_frame_bytes += 1;
+    assert!(qualify_assignment_spend_v2(&row, &capped, &transaction, &[175, 10], 20).is_ok());
 }
 
 #[test]

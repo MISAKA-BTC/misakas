@@ -1204,7 +1204,7 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
                     size_of::<typed::BTreeNodeEnvelopeV1<(kaspa_hashes::Hash64, u8, kaspa_hashes::Hash64), ()>>(),
                 )?
                 .allocation(
-                    u64::from(crate::palw_kernel_route_v1::is_positive_draw_slot_row_v2(table, key)),
+                    u64::from(crate::palw_kernel_route_v1::is_positive_gate_c_schedule_row_v2(table, key)),
                     size_of::<typed::BTreeNodeEnvelopeV1<(u8, u64, crate::Hash64), ()>>(),
                 )?
         }

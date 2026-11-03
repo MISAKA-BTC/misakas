@@ -8,8 +8,12 @@ use crate::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use misaka_palw_positive_contract::{
     ContractError,
-    assignment::rows::AssignmentFundingRow,
     assignment::{AssignmentAdmissionBundleV2, AssignmentTermsV2, policy::AssignmentPolicyV2},
+    assignment::{
+        control_material::{ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2, AssignmentControlViewV2},
+        journal::{AssignmentJournalEventKindV2, assignment_payload_digest_v2},
+        rows::{AssignmentFundingRow, AssignmentJournalFrameRow},
+    },
     identity::{Digest, PUBKEY_BYTES, principal},
     native::KERNEL_AUX_TABLE,
     rows::{AcceptedMaterial, BalanceLeg, NativeHash64, NativeOutpoint},
@@ -830,12 +834,28 @@ pub struct AssignmentSpendPlanV2 {
 impl AssignmentSpendPlanV2 {
     /// Called only after native accepted-prefix provenance has supplied the
     /// actual op12 material. A tentative preview cannot manufacture this row.
-    pub(crate) fn accepted_funding_row_v2(&self, accepted: AcceptedMaterial) -> Result<AssignmentFundingRow, AssignmentFundsErrorV2> {
-        if accepted.origin.carrier_transaction.0 != self.transaction.as_bytes()
+    pub(crate) fn accepted_funding_row_v2(
+        &self,
+        frame: &AssignmentJournalFrameRow,
+        control_payload: &[u8],
+    ) -> Result<AssignmentFundingRow, AssignmentFundsErrorV2> {
+        let header = &frame.header;
+        let accepted = frame.payload;
+        if header.kind != AssignmentJournalEventKindV2::Settlement
+            || header.assignment != self.old.assignment
+            || accepted.origin != header.origin
+            || accepted.digest != header.payload_digest
+            || accepted.origin.carrier_transaction.0 != self.transaction.as_bytes()
             || accepted.origin.accepted_daa != self.daa
-            || accepted.digest != self.body_digest
         {
             return Err(AssignmentFundsErrorV2::Input);
+        }
+        header.check_payload(control_payload, self.authorization.max_frame_bytes)?;
+        let control = AssignmentControlViewV2::decode(control_payload, self.authorization.max_frame_bytes)?;
+        if Some(control.inner()) != self.authorization.payload.get(3..)
+            || assignment_payload_digest_v2(control.inner()) != self.body_digest
+        {
+            return Err(AssignmentFundsErrorV2::Payload);
         }
         let mut new = self.old.clone();
         new.worker = self.new.worker;
@@ -873,7 +893,12 @@ pub fn qualify_assignment_spend_v2(
         || authorization.max_history_frames == 0
         || authorization.max_history_frames == u32::MAX
         || authorization.dues.len() as u64 > u64::from(authorization.max_history_frames)
-        || authorization.payload.len() as u64 > authorization.max_frame_bytes
+        || authorization
+            .payload
+            .len()
+            .checked_sub(3)
+            .and_then(|bytes| bytes.checked_add(ASSIGNMENT_CONTROL_OVERHEAD_BYTES_V2))
+            .is_none_or(|bytes| bytes as u64 > authorization.max_frame_bytes || bytes as u64 > u64::from(u32::MAX))
     {
         return Err(AssignmentFundsErrorV2::Input);
     }
@@ -982,7 +1007,7 @@ pub fn qualify_assignment_spend_v2(
         liability_floor: authorization.protected_after[2],
         current_outpoint,
     };
-    let body_digest = misaka_palw_positive_contract::assignment::journal::assignment_payload_digest_v2(&transaction.payload[3..]);
+    let body_digest = assignment_payload_digest_v2(&transaction.payload[3..]);
     Ok(AssignmentSpendPlanV2 {
         old: row.clone(),
         new: projection,
@@ -999,4 +1024,4 @@ pub fn qualify_assignment_spend_v2(
 
 #[cfg(test)]
 #[path = "palw_positive_assignment_funds_v2/tentative_tests.rs"]
-mod tentative_tests;
+pub(crate) mod tentative_tests;
