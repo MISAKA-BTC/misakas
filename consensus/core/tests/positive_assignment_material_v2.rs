@@ -69,6 +69,32 @@ fn actual_control_boundary_matches_borsh_and_envelope_extent_without_padding() {
         3,
     )
     .unwrap();
+    let entries = [UtxoEntry::new(20, ScriptPublicKey::default(), 1, false)];
+    boundary.check_populated_data(&tx, &entries, 3).unwrap();
+    assert!(boundary.check_populated_data(&tx, &entries, 2).is_err());
+    assert!(boundary.check_populated_data(&tx, &[], 3).is_err());
+    for changed in [
+        UtxoEntry::new(21, ScriptPublicKey::default(), 1, false),
+        UtxoEntry::new(20, ScriptPublicKey::default(), 2, false),
+        UtxoEntry::new(20, ScriptPublicKey::default(), 1, true),
+        UtxoEntry::new(20, ScriptPublicKey::from_vec(0, vec![1]), 1, false),
+    ] {
+        assert!(boundary.check_populated_data(&tx, &[changed], 3).is_err());
+    }
+    let mut stale = tx.clone();
+    stale.outputs[0].value += 1;
+    assert!(boundary.check_populated_data(&stale, &entries, 3).is_err());
+    let inconsistent = AssignmentControlBoundaryV2::from_actual_data_v2(
+        AssignmentId(d(9)),
+        point,
+        Hash64::from_u64_word(10),
+        Hash64::from_u64_word(11),
+        12,
+        &entries,
+        4,
+    )
+    .unwrap();
+    assert!(inconsistent.check_populated_data(&tx, &entries, 4).is_err());
     let canonical = boundary.canonical_bytes().unwrap();
     assert_eq!(canonical.len(), 496);
     assert_eq!(canonical.as_slice(), borsh::to_vec(&boundary).unwrap());
@@ -518,4 +544,70 @@ fn required_relay_profile_is_retained_in_original_material_without_current_polic
     };
     fees.retirement += 1;
     assert!(changed.check_row(&row).is_err());
+}
+
+/// Framing DATA fixtures only: these five-byte bodies are not full signed
+/// operations and are never represented as accepted native transactions.
+#[test]
+fn original_control_carriage_borrows_exact_body_and_rejects_detached_subject_or_origin() {
+    use kaspa_consensus_core::palw_state_v2::AssignmentControlBoundaryV2;
+    use misaka_palw_positive_contract::assignment::{control_material::*, journal::*};
+    let boundary = AssignmentControlBoundaryV2 {
+        version: 2,
+        revision: 1,
+        assignment: AssignmentId(d(9)),
+        origin: origin(),
+        selected_parent: NativeHash64([10; 64]),
+        pre_event_root: d(11),
+        before_delta_end: 12,
+        populated_inputs: d(13),
+        input_count: 1,
+        fee: 3,
+    };
+    let bytes = boundary.canonical_bytes().unwrap();
+    for (kind, op) in [
+        (AssignmentJournalEventKindV2::JoinProver, 13),
+        (AssignmentJournalEventKindV2::Cancel, 10),
+        (AssignmentJournalEventKindV2::Expire, 11),
+        (AssignmentJournalEventKindV2::BindResult, 9),
+        (AssignmentJournalEventKindV2::Settlement, 12),
+    ] {
+        let body = [2, 0, 1, 0, op];
+        let payload = encode_assignment_control_v2(&bytes, &body, 1024).unwrap();
+        for (subject, point, valid) in [
+            (boundary.assignment, boundary.origin, true),
+            (AssignmentId(d(99)), boundary.origin, false),
+            (boundary.assignment, AcceptedOrigin { accepted_tx_ordinal: 19, ..boundary.origin }, false),
+        ] {
+            let frame = assignment_frame_v2(subject, 1, d(8), kind, point, &payload, 2048).unwrap();
+            let raw = encode_assignment_journal_record_v2(frame.header, &payload, 2048).unwrap();
+            let record = AssignmentJournalRecordViewV2::decode(&raw, 2048).unwrap();
+            let actual = AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, 2048);
+            if valid {
+                let (resolved, native) = actual.unwrap();
+                assert_eq!(resolved, boundary);
+                assert_eq!(native, body);
+                assert!(native.as_ptr() >= raw.as_ptr() && native.as_ptr() < raw.as_ptr().wrapping_add(raw.len()));
+            } else {
+                assert!(actual.is_err());
+            }
+        }
+        let frame = assignment_frame_v2(boundary.assignment, 1, d(8), kind, boundary.origin, &body, 2048).unwrap();
+        let legacy = encode_assignment_journal_record_v2(frame.header, &body, 2048).unwrap();
+        let record = AssignmentJournalRecordViewV2::decode(&legacy, 2048).unwrap();
+        assert!(AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, 2048).is_err());
+    }
+    let (row, material, _) = fixture_with_relay(true);
+    let open = payload(&material);
+    let envelope = encode_assignment_control_v2(
+        &AssignmentControlBoundaryV2 { assignment: row.id(), origin: row.origin, ..boundary }.canonical_bytes().unwrap(),
+        &open,
+        16 << 10,
+    )
+    .unwrap();
+    let frame = assignment_frame_v2(row.id(), 0, d(0), AssignmentJournalEventKindV2::Open, row.origin, &envelope, 16 << 10).unwrap();
+    let raw = encode_assignment_journal_record_v2(frame.header, &envelope, 16 << 10).unwrap();
+    let record = AssignmentJournalRecordViewV2::decode(&raw, 16 << 10).unwrap();
+    let (_, native) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, 16 << 10).unwrap();
+    assert_eq!(native, &[2, 0, 1, 0, 8]);
 }

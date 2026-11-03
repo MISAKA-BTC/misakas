@@ -129,3 +129,19 @@ source scope,76 contract +90 Core unique cases, typecheck/strict Clippy, exact
 source differences and remaining owners. The historical190 above belongs to
 phase1 and is not added to166 from the later stage. Native R/A/C acceptance and
 actual payment remain closed.
+
+
+## Original profile and control-carriage followups
+
+Original relay selection is now fixed in retained Assignment material, with no
+later Params reselection. This is committed as `3a2bf5bed`; see
+[the scoped record](original-profile-progress-20261103.md) and source/binary
+audit. All 93 selected Core cases passed on that frozen source. This count is
+not added to earlier stage totals.
+
+The next change adds a concrete Assignment control-history entrypoint to the
+private native archive loader, sharing actual original Full validation and
+executed-prefix reconstruction with Case history. Its borrowed framing/input
+checks have explicit DATA fixtures and do not grant native sessions. See
+[the current carriage record](control-carriage-progress-20261103.md). Native all-test-target typechecking and strict Clippy passed. All six cases
+in the focused Core material target passed. RFC-0045 remains incomplete.

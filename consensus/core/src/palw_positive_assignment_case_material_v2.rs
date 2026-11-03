@@ -101,22 +101,37 @@ impl AssignmentCaseBoundaryV2 {
         entries: &[UtxoEntry],
         fee: u64,
     ) -> Result<(), ContractError> {
-        if !transaction.id_is_current()
-            || crate::hashing::tx::id(transaction).as_bytes() != self.origin.carrier_transaction.0
-            || transaction.inputs.len() != entries.len()
-            || self.input_count as usize != entries.len()
-            || self.fee != fee
-            || self.populated_inputs != assigned_case_inputs_id_v2(transaction.id(), entries)?
-        {
-            return Err(ContractError::Identity);
-        }
-        let inputs = entries.iter().try_fold(0u64, |n, e| n.checked_add(e.amount).ok_or(ContractError::Budget))?;
-        let outputs = transaction.outputs.iter().try_fold(0u64, |n, o| n.checked_add(o.value).ok_or(ContractError::Budget))?;
-        if outputs.checked_add(fee) != Some(inputs) {
-            return Err(ContractError::Budget);
-        }
-        Ok(())
+        check_native_populated_inputs_v2(self.origin, self.input_count, self.populated_inputs, self.fee, transaction, entries, fee)
     }
+}
+
+/// Same canonical input/fee check for genuine Assignment and Case boundaries.
+/// This authenticates DATA equality only; ordinary Full and accepted ancestry
+/// remain the concrete native loader's separate responsibilities.
+pub(crate) fn check_native_populated_inputs_v2(
+    origin: AcceptedOrigin,
+    input_count: u32,
+    populated_inputs: Digest,
+    recorded_fee: u64,
+    transaction: &crate::tx::Transaction,
+    entries: &[UtxoEntry],
+    fee: u64,
+) -> Result<(), ContractError> {
+    if !transaction.id_is_current()
+        || crate::hashing::tx::id(transaction).as_bytes() != origin.carrier_transaction.0
+        || transaction.inputs.len() != entries.len()
+        || input_count as usize != entries.len()
+        || recorded_fee != fee
+        || populated_inputs != assigned_case_inputs_id_v2(transaction.id(), entries)?
+    {
+        return Err(ContractError::Identity);
+    }
+    let inputs = entries.iter().try_fold(0u64, |n, e| n.checked_add(e.amount).ok_or(ContractError::Budget))?;
+    let outputs = transaction.outputs.iter().try_fold(0u64, |n, o| n.checked_add(o.value).ok_or(ContractError::Budget))?;
+    if outputs.checked_add(fee) != Some(inputs) {
+        return Err(ContractError::Budget);
+    }
+    Ok(())
 }
 
 pub const ASSIGNED_RECORD_HEADER_DOMAIN_V2: &[u8] = b"misaka/positive/assigned-record-header/v2/r1";

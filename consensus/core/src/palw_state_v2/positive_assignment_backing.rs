@@ -300,6 +300,65 @@ impl AssignmentControlBoundaryV2 {
         }
         Ok(value)
     }
+    /// Borrow only the literal body from a checked control journal frame.
+    /// This checks framing/subject/origin/op kind, not body semantics, original
+    /// acceptance, signatures, custody, or the original policy's body budgets.
+    /// Native must still retrieve and compare the actual accepted transaction.
+    pub fn native_body_from_record_data_v2<'a>(
+        record: misaka_palw_positive_contract::assignment::journal::AssignmentJournalRecordViewV2<'a>,
+        maximum_payload: u64,
+    ) -> Result<(Self, &'a [u8]), misaka_palw_positive_contract::ContractError> {
+        use misaka_palw_positive_contract::{
+            ContractError,
+            assignment::{
+                control_material::AssignmentControlViewV2,
+                journal::AssignmentJournalEventKindV2 as K,
+                open_material::{AssignmentOpenLimitsV2, AssignmentOpenViewV2},
+            },
+        };
+        let header = record.header();
+        let envelope = AssignmentControlViewV2::decode(record.payload(), maximum_payload)?;
+        let boundary = Self::decode(envelope.boundary())?;
+        if boundary.assignment != header.assignment || boundary.origin != header.origin {
+            return Err(ContractError::Identity);
+        }
+        let (operation, body) = match header.kind {
+            K::Open => {
+                let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(maximum_payload))?;
+                (8, open.native_body())
+            }
+            K::JoinProver => (13, envelope.inner()),
+            K::Cancel => (10, envelope.inner()),
+            K::Expire => (11, envelope.inner()),
+            K::BindResult => (9, envelope.inner()),
+            K::Settlement => (12, envelope.inner()),
+            // MetadataReceipt is a distinct typed payload. Its actual receipt
+            // owner must map it to carriage; it is never treated as an op body.
+            K::MetadataReceipt => return Err(ContractError::Scope),
+        };
+        if body.get(..4) != Some(&[2, 0, 1, 0]) || body.get(4) != Some(&operation) {
+            return Err(ContractError::NonCanonical);
+        }
+        Ok((boundary, body))
+    }
+    /// Exact ordered original inputs and fee, using the shared native DATA
+    /// recipe without manufacturing a Case subject for an unconsumed A.
+    pub fn check_populated_data(
+        &self,
+        transaction: &Transaction,
+        entries: &[UtxoEntry],
+        fee: u64,
+    ) -> Result<(), misaka_palw_positive_contract::ContractError> {
+        crate::palw_positive_assignment_case_material_v2::check_native_populated_inputs_v2(
+            self.origin,
+            self.input_count,
+            self.populated_inputs,
+            self.fee,
+            transaction,
+            entries,
+            fee,
+        )
+    }
     pub fn canonical_bytes(
         &self,
     ) -> Result<

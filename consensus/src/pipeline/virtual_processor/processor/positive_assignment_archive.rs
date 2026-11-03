@@ -13,10 +13,35 @@ use crate::{
 use kaspa_consensus_core::{
     palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1},
     palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2,
-    palw_state_v2::{NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2},
+    palw_state_v2::{AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2},
     tx::{PopulatedTransaction, UtxoEntry},
 };
-use misaka_palw_positive_contract::{journal::CaseJournalRecordView, rows::AcceptedOrigin};
+use misaka_palw_positive_contract::{
+    assignment::journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
+    journal::CaseJournalRecordView,
+    rows::AcceptedOrigin,
+};
+
+/// Private concrete boundary selection. This is not a successful replay or
+/// arbitrary provider interface. Assignment and Case subjects stay distinct.
+enum NativeArchiveBoundaryV2 {
+    Assignment(AssignmentControlBoundaryV2),
+    Case(AssignmentCaseBoundaryV2),
+}
+impl NativeArchiveBoundaryV2 {
+    fn fields(&self) -> (AcceptedOrigin, [u8; 64], [u8; 64], u64, u64) {
+        match self {
+            Self::Assignment(b) => (b.origin, b.selected_parent.0, b.pre_event_root.0, b.before_delta_end, b.fee),
+            Self::Case(b) => (b.origin, b.selected_parent.0, b.pre_event_root.0, b.before_delta_end, b.fee),
+        }
+    }
+    fn check_populated_data(&self, tx: &kaspa_consensus_core::tx::Transaction, entries: &[UtxoEntry], fee: u64) -> bool {
+        match self {
+            Self::Assignment(b) => b.check_populated_data(tx, entries, fee).is_ok(),
+            Self::Case(b) => b.check_populated_data(tx, entries, fee).is_ok(),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub(in crate::pipeline::virtual_processor) enum NativeAssignmentArchiveErrorV2 {
@@ -58,7 +83,60 @@ impl VirtualStateProcessor {
         if boundary_count != 1 {
             return Err(E::Invalid("missing or duplicate actual boundary"));
         }
-        let origin = header.origin;
+        self.load_positive_accepted_carriage_v2(
+            current_selected_parent,
+            NativeArchiveBoundaryV2::Case(boundary),
+            maximum_heap,
+            maximum_work,
+        )
+    }
+
+    /// Reconstruct a genuine Assignment control event from the original native
+    /// stores. The caller still has to choose its record from CURRENT rooted
+    /// history and replay duties/custody. This method issues no admission or
+    /// accounting capability and never reselects a later intake profile.
+    pub(in crate::pipeline::virtual_processor) fn load_positive_assignment_carriage_v2(
+        &self,
+        current_selected_parent: BlockHash,
+        record: AssignmentJournalRecordViewV2<'_>,
+        maximum_payload: u64,
+        maximum_heap: u64,
+        maximum_work: u64,
+    ) -> Result<NativeAcceptedCaseCarriageV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        if record.header().kind == AssignmentJournalEventKindV2::MetadataReceipt {
+            return Err(E::Unavailable("actual metadata receipt carriage owner is not connected"));
+        }
+        let (boundary, native_body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, maximum_payload)
+            .map_err(|_| E::Invalid("invalid original Assignment control carriage framing"))?;
+        let carriage = self.load_positive_accepted_carriage_v2(
+            current_selected_parent,
+            NativeArchiveBoundaryV2::Assignment(boundary),
+            maximum_heap,
+            maximum_work,
+        )?;
+        let tx = carriage.transaction();
+        if tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            || tx.payload.get(..3) != Some(&[1, 0, 176])
+            || tx.payload.get(3..) != Some(native_body)
+        {
+            return Err(E::Invalid("original actual Assignment carrier differs from journal"));
+        }
+        Ok(carriage)
+    }
+
+    fn load_positive_accepted_carriage_v2(
+        &self,
+        current_selected_parent: BlockHash,
+        boundary: NativeArchiveBoundaryV2,
+        maximum_heap: u64,
+        maximum_work: u64,
+    ) -> Result<NativeAcceptedCaseCarriageV2, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        if [maximum_heap, maximum_work].into_iter().any(|n| n == 0 || n == u64::MAX) {
+            return Err(E::Invalid("original archive limits are not finite"));
+        }
+        let (origin, expected_parent, pre_event_root, before_delta_end, expected_fee) = boundary.fields();
         let accepting = BlockHash::from_bytes(origin.accepting_block.0);
         let carrier_block = BlockHash::from_bytes(origin.carrier_block.0);
         if !self
@@ -73,7 +151,7 @@ impl VirtualStateProcessor {
             self.ghostdag_store.get_selected_parent(accepting).map_err(|_| E::Unavailable("original selected parent"))?;
         if actual_header.daa_score != origin.accepted_daa
             || actual_header.blue_score != origin.accepted_blue_score
-            || selected_parent.as_bytes() != boundary.selected_parent.0
+            || selected_parent.as_bytes() != expected_parent
             || origin.event_ordinal != 0
         {
             return Err(E::Invalid("original header/parent/clock differs"));
@@ -156,15 +234,15 @@ impl VirtualStateProcessor {
             };
             entries.push(entry);
         }
-        boundary
-            .check_populated_data(tx, &entries, boundary.fee)
-            .map_err(|_| E::Invalid("actual original populated input/fee identity"))?;
+        if !boundary.check_populated_data(tx, &entries, expected_fee) {
+            return Err(E::Invalid("actual original populated input/fee identity"));
+        }
         let populated = PopulatedTransaction::new(tx, entries);
         let actual_fee = self
             .transaction_validator
             .validate_populated_transaction_and_get_fee(&populated, origin.accepted_daa, TxValidationFlags::Full, None, None)
             .map_err(|_| E::Invalid("original ordinary transaction Full validation"))?;
-        if actual_fee != boundary.fee {
+        if actual_fee != expected_fee {
             return Err(E::Invalid("original actual Full fee differs"));
         }
         let (_, parent) = self.palw_v2_state_at(selected_parent).ok_or(E::Unavailable("original native selected-parent state"))?;
@@ -181,8 +259,8 @@ impl VirtualStateProcessor {
         {
             return Err(E::Invalid("actual native delta clock differs"));
         }
-        let end = usize::try_from(boundary.before_delta_end).map_err(|_| E::Invalid("prefix position address space"))?;
-        let root = Hash64::from_bytes(boundary.pre_event_root.0);
+        let end = usize::try_from(before_delta_end).map_err(|_| E::Invalid("prefix position address space"))?;
+        let root = Hash64::from_bytes(pre_event_root);
         let prefix = parent.try_delta_prefix_v2(&delta, end, root, params).map_err(|e| match e {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(r) => E::Resource(r),
             _ => E::Invalid("original executed native prefix mismatch"),
