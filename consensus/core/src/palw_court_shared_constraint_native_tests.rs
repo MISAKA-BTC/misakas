@@ -425,15 +425,15 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     let retained=store.build_constraint_stop_terminal_retained_v1(&b.state,&params,&rules,&intent,&owner,budget).unwrap();
     assert_eq!(retained.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
     let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,fx.rules.maximum_leaves).unwrap();
-    let view_identity=borsh::to_vec(source.header_v1()).unwrap();
     let direct=|candidate:&crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,actual_ids:&crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1| {
         crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1::new_from_tiled_ids_with_original_stop_context_v1(
-            crate::palw_freeprompt_v3::fp_claim_id_v3(candidate),outsider(),p.terms.accepted_daa,&view,&view_identity,&source,actual_ids,candidate,
+            crate::palw_freeprompt_v3::fp_claim_id_v3(candidate),outsider(),p.terms.accepted_daa,&view,&source,actual_ids,candidate,
             eog.ids.len() as u32,&eog.opening,h(981))
     };
     // Prove that this route reaches the normative terminal-stop predicate,
     // not the deliberately false rendering/grammar arm of this fixture.
     let base=direct(frame.original_v1(),&ids).unwrap();
+    assert_eq!(base.seed_id(),h(981));
     use crate::palw_constraint_stream_court_v1::{PalwConstraintStreamPhaseV1 as Phase,canonical_replay as stop_replay};
     assert_eq!(base.phase(),Phase::Eog);assert!(base.rendering_cursor_v1().is_none());
     assert_eq!(base.selection_for_tests_v1(),(source.decode_count_v1(),None,false));

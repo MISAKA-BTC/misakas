@@ -164,13 +164,16 @@ impl Store<'_> {
         if intent.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
             || !matches!(bond.status, PalwBondStatusV2::Active)
             || bond.collateral < params.min_collateral_sompi()
-            || !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
-                &bond.pubkey,
-                intent.signing_message(rules.network_domain)?.as_byte_slice(),
-                &intent.signature,
-                CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1,
-            )
         {
+            return Err("constraint stop current filer authority/signature invalid".into());
+        }
+        let signed_context = intent.signing_message(rules.network_domain)?;
+        if !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
+            &bond.pubkey,
+            signed_context.as_byte_slice(),
+            &intent.signature,
+            CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1,
+        ) {
             return Err("constraint stop current filer authority/signature invalid".into());
         }
         let record = state.tir_class_v1(&job.class_id).ok_or("constraint stop actual registered class missing")?;
@@ -186,19 +189,17 @@ impl Store<'_> {
             return Err("constraint stop actual material opening mismatch".into());
         }
         let ids = self.ids.ok_or("constraint stop source-authenticated FullIds missing")?;
-        let identity = borsh::to_vec(header).map_err(|e| e.to_string())?;
         let base = Court::new_from_tiled_ids_with_original_stop_context_v1(
             intent.claim,
             intent.filer,
             c.original_accepted_daa,
             &view,
-            &identity,
             &source,
             ids,
             original,
             u32::try_from(material.eog.ids.len()).map_err(|_| "constraint stop EOG count overflow")?,
             &material.eog.opening,
-            intent.signing_message(rules.network_domain)?,
+            signed_context,
         )?;
         let replayed = if material.renderings.is_empty() {
             let eog = rooted_material.as_ref().map_or(material.eog.ids.as_slice(), |rooted| rooted.eog);

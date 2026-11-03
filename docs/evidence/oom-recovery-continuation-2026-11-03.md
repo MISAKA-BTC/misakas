@@ -2813,3 +2813,26 @@ remain unrun. See
 B0 and relay agreed on DAA 19,699 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-eog-stop-work-live.8raIHF/page.json`.
+
+## Signed constrained Stop initialization
+
+The signed Stop adapter now computes the intent digest once and uses
+the same digest for signature verification and the Court seed. The
+constructor still binds the actual native decode view, original
+commitment and source-authenticated FullIds. It skips serializing
+the header and complete ID vector for the unused legacy seed.
+Legacy unsigned seeds keep the existing derivation. Stop has no
+auxiliary witness or beat and now supplies the already authenticated
+ID slice directly to the EOG constructor, saving one temporary copy.
+
+The extracted suite passed 12 checks. The old and new unsigned
+derivations agree on the same fixture, and the signed case succeeds
+with a serializer that would fail if the unused legacy branch ran.
+The native Stop fixture also checks the signed seed explicitly.
+Integrated execution, original-ID scan timing and complete Batch
+service reservation remain open. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-signed-seed.TmhWqY/test.log`.
+
+B0 and relay agreed at DAA 19,699 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-signed-seed-live.AMS1pO/page.json`.
