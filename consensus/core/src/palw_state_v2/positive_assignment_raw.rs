@@ -237,7 +237,7 @@ impl PositiveAssignmentRawActionV2 {
         let invalid = || NativeCoverageV1::unsupported::<Self>("pending relay replay", "wrong operation, selected parent or owner");
         let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
         if data.pending_relay_replay.is_some()
-            || data.body[data.index as usize].payload.get(7) != Some(&14)
+            || !matches!(data.body[data.index as usize].payload.get(7), Some(8 | 14))
             || replay.selected_parent != data.selected_parent
             || replay.reservation.origin.accepting_block.0 == data.origin.accepting_block.0
         {

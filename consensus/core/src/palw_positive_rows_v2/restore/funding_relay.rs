@@ -2,6 +2,7 @@
 //! accepted ancestry, original Params/scope/bond, normal transaction signature,
 //! fee burn, current/rollback custody and account binding history.
 use super::*;
+use crate::palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2;
 use misaka_palw_positive_contract::assignment::{funding_relay::*, funding_relay_rows::*};
 impl Reader<'_> {
     fn no_other_relay_purpose(&mut self, funding: NativeOutpoint, purpose: RelayFundingPurposeV2) -> Result<(), PositiveRowErrorV2> {
@@ -44,6 +45,38 @@ impl Reader<'_> {
             return Err(PositiveRowErrorV2::WrongRowKind);
         };
         row.check_pair(&auth)?;
+        if let Some(binding) = row.binding
+            && matches!(auth.terms.target, RelayTargetV2::InitialAssignment { .. })
+        {
+            self.validate_initial_assignment_relay_binding(&auth, binding)?;
+        }
         self.no_other_relay_purpose(row.funding_outpoint, row.purpose)
+    }
+
+    fn validate_initial_assignment_relay_binding(
+        &mut self,
+        auth: &FundingRelayAuthorizationRowV2,
+        binding: FundingRelayBindingV2,
+    ) -> Result<(), PositiveRowErrorV2> {
+        let id = auth.terms.assignment;
+        let NativeRowBody::Assignment(assignment) = self.required(NativeRowKey::Assignment(id))? else {
+            return Err(PositiveRowErrorV2::WrongRowKind);
+        };
+        let NativeRowBody::AssignmentFunding(account) = self.required(NativeRowKey::AssignmentFunding(id))? else {
+            return Err(PositiveRowErrorV2::WrongRowKind);
+        };
+        check_initial_assignment_relay_target_v2(
+            &auth.terms,
+            &assignment.bundle,
+            account.original_outpoint,
+            account.initial_locked,
+            binding.origin.accepted_daa,
+        )?;
+        // Original F and its initial amount remain stable across partial and
+        // terminal settlement. Its live cursor is validated by its own owner.
+        if assignment.origin != binding.origin || account.funding_origin != binding.origin || account.payer_key != auth.payer_key {
+            return inconsistent();
+        }
+        Ok(())
     }
 }

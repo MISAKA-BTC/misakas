@@ -406,6 +406,41 @@ pub(crate) fn check_assignment_funding_carriage_v2(
     Ok((point(TransactionOutpoint::new(transaction.id(), bundle.funding.funding_output_index)), output.value))
 }
 
+/// Exact initial F/R contract match. Native must derive the funding
+/// outpoint and amount from the actual carrier and current UTXO, authenticate
+/// the pending R archive, and reserve current-slot custody before binding.
+pub fn check_initial_assignment_relay_target_v2(
+    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
+    bundle: &AssignmentAdmissionBundleV2,
+    funding: NativeOutpoint,
+    amount: u64,
+    now: u64,
+) -> Result<(), ContractError> {
+    use misaka_palw_positive_contract::assignment::funding_relay::{RelayFundingPurposeV2, RelayTargetV2};
+    terms.validate_shape()?;
+    bundle.validate_shape()?;
+    if now >= terms.funding_admission_before_daa || now >= bundle.funding.admission_expiry || now >= bundle.terms.accept_before_daa {
+        return Err(ContractError::Range);
+    }
+    let target = RelayTargetV2::InitialAssignment { bundle: bundle.id(), poster_nonce: bundle.terms.poster_nonce };
+    if terms.funding_purpose != RelayFundingPurposeV2::PosterA
+        || terms.target != target
+        || terms.assignment != bundle.terms.id()
+        || terms.contract_network != bundle.terms.network
+        || terms.contract_ruleset != bundle.terms.ruleset
+        || terms.contract_anchor != bundle.terms.branch_anchor
+        || terms.payer_bond != bundle.terms.poster
+        || terms.payer != bundle.terms.payer
+        || terms.refund_payload != bundle.terms.refund_payload
+        || terms.funding_outpoint != funding
+        || funding.index != bundle.funding.funding_output_index
+        || terms.expected_amount != amount
+    {
+        return Err(ContractError::Identity);
+    }
+    Ok(())
+}
+
 /// Reads the carrier's own output and the CURRENT composed UTXO entry for that
 /// same outpoint. A spent output, another transaction's entry, another payer,
 /// an incorrect native refund script, expired consent and cap overflow refuse.

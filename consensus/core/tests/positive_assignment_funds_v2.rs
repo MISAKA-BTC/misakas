@@ -376,3 +376,62 @@ fn case_uses_its_own_signed_bounds_and_full_output_projection() {
         qualify_assigned_case_funding_output_v2(&assignment, &funding, &r, &s, &b, &c, &key, &transaction, Some(&entry), 120).is_err()
     );
 }
+
+#[test]
+fn initial_relay_matches_only_the_signed_assignment_and_exact_funding_output() {
+    use misaka_palw_positive_contract::{
+        ContractError,
+        assignment::funding_relay::{FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2, RelayTemplateV2},
+    };
+    let bundle = support::bundle();
+    let funding = NativeOutpoint { transaction: NativeHash64([90; 64]), index: bundle.funding.funding_output_index };
+    let terms = FundingRelayTermsV2 {
+        version: 2,
+        revision: 1,
+        contract_network: bundle.terms.network,
+        contract_ruleset: bundle.terms.ruleset,
+        assignment: bundle.terms.id(),
+        contract_anchor: bundle.terms.branch_anchor,
+        relay_ruleset: Digest([91; 64]),
+        relay_policy: Digest([92; 64]),
+        payer_bond: bundle.terms.poster,
+        payer: bundle.terms.payer,
+        refund_payload: bundle.terms.refund_payload,
+        funding_purpose: RelayFundingPurposeV2::PosterA,
+        target: RelayTargetV2::InitialAssignment { bundle: bundle.id(), poster_nonce: bundle.terms.poster_nonce },
+        funding_outpoint: funding,
+        expected_amount: 175,
+        template: RelayTemplateV2::NativeOp12NoCaseNoReceiptsV1,
+        register_before_daa: 10,
+        funding_admission_before_daa: 40,
+        custody_until_daa: 80,
+        metadata_fee_schedule: Digest([93; 64]),
+        physical_custody_profile: Digest([94; 64]),
+        max_metadata_fee: 1_000_000,
+    };
+    let check = |r: &FundingRelayTermsV2| check_initial_assignment_relay_target_v2(r, &bundle, funding, 175, 20);
+    assert_eq!(check(&terms), Ok(()));
+    for substituted in [
+        FundingRelayTermsV2 { contract_network: Digest([2; 64]), ..terms },
+        FundingRelayTermsV2 { contract_ruleset: Digest([3; 64]), ..terms },
+        FundingRelayTermsV2 { contract_anchor: NativeHash64([4; 64]), ..terms },
+        FundingRelayTermsV2 { refund_payload: Digest([5; 64]), ..terms },
+        FundingRelayTermsV2 { payer_bond: bundle.terms.worker, ..terms },
+        FundingRelayTermsV2 { assignment: misaka_palw_positive_contract::assignment::AssignmentId(Digest([6; 64])), ..terms },
+        FundingRelayTermsV2 {
+            target: RelayTargetV2::InitialAssignment { bundle: Digest([7; 64]), poster_nonce: bundle.terms.poster_nonce },
+            ..terms
+        },
+        FundingRelayTermsV2 {
+            target: RelayTargetV2::InitialAssignment { bundle: bundle.id(), poster_nonce: bundle.terms.poster_nonce + 1 },
+            ..terms
+        },
+        FundingRelayTermsV2 { funding_outpoint: NativeOutpoint { index: funding.index + 1, ..funding }, ..terms },
+    ] {
+        assert_eq!(check(&substituted), Err(ContractError::Identity));
+    }
+    let other_f = NativeOutpoint { transaction: NativeHash64([95; 64]), ..funding };
+    assert_eq!(check_initial_assignment_relay_target_v2(&terms, &bundle, other_f, 175, 20), Err(ContractError::Identity));
+    assert_eq!(check_initial_assignment_relay_target_v2(&terms, &bundle, funding, 174, 20), Err(ContractError::Identity));
+    assert_eq!(check_initial_assignment_relay_target_v2(&terms, &bundle, funding, 175, 40), Err(ContractError::Range));
+}
