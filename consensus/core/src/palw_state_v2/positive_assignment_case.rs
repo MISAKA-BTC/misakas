@@ -1705,7 +1705,28 @@ fn replay_assigned_court_history_v2(
             machine.remember_source_response_v2(material, response, _body.memory_v1())?;
         }
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
-            machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
+            let event = machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
+            if matches!(event.outcome, crate::palw_positive_common_replay_v2::LocalCourtOutcomeV2::Expired)
+                && let Some(attempt) = event
+                    .before
+                    .last_attempt
+                    .filter(|attempt| attempt.status == misaka_palw_positive_contract::messages::WitnessStatus::Checking)
+            {
+                use misaka_palw_positive_contract::rows::CoverageState;
+                let after = match backing.records().get(index + 1) {
+                    Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                    None => state,
+                };
+                let key = NativeRowKey::Coverage(attempt.witness);
+                let NativeRowBody::Coverage(mut expected) = required(prefix, key)? else {
+                    return Err(refuse("archived expiry lacks pre-event Coverage"));
+                };
+                expected.state = CoverageState::EndedUnverified;
+                expected.last_event = carriage.origin();
+                if required(after, key)? != NativeRowBody::Coverage(expected) {
+                    return Err(refuse("archived expiry did not end the active Coverage"));
+                }
+            }
         }
         machine.source_reserve.check_journal_v2(material, frames, retained)?;
         if machine.source_reserve.work > machine.remaining_work {
