@@ -32,7 +32,7 @@
 | 時計 | 値 | 起点 | 根拠と強さ |
 |---|---|---|---|
 | 通常の申立て受付の締切 | `a + 3,120` | `a` | RFC-0014 2026-10-19 改定(ユーザー採用) |
-| 係争の hard deadline | `a + 10,000` | `a`(申立てからではない。再申立てで reset しない) | 同上 |
+| 係争の hard deadline | `a + 10,000`（期限内に有効な申立てを受理した claim） | `a`（再申立てで reset しない） | 同上 |
 | 各手番の応答期限 | 手番ごと。hard deadline とは別の制約 | 手番の開始 | 同上 D。値は未決 |
 | door ≤ 3,200 | 対象 profile の**性能目標** | `a` | RFC-0024・0025(Draft)。主契約ではない。3,120 → 3,200 は明示承認の対象 |
 | 混雑延長 `E_i` | **hard deadline の内側**での予約調整に限る:`a + 3,200 + E_i ≤ a + 10,000` | `a` | 本書の整理。RFC-0025 §4.3 の `E_max` は `≤ 6,800` に読み替える。それを超える延長は別の将来方針で、採用していない |
@@ -165,6 +165,7 @@ RFC-0024 本文(B)の各 round の数値 fold 検査を、現行の規範とし�
 | 混雑延長 | なし | — | `E_i`(RFC-0025)。本書 §2.1 で hard deadline の内側に限定 |
 | 証拠量 | 現行形式 | — | SC64・32 KiB close(RFC-0025、§7.1 で現行形式は未達) |
 | 局所化 | 各 round の数値 fold | — | hash 中心(RFC-0024 付録 C、§7.2) |
+| TFP1 の一括対話 | 各要求・応答を既存の規則で受理 | §2.1 の二段階期限 | Batch-Pipelined Court（§11、別 ruleset の候補） |
 | 無応答の帰責 | 応答義務のある側が期限超過で負け(既存仕様) | 収録機会に結びつける(RFC-0014 10-19 E) | 判定規則の具体化(§4、未決) |
 
 旧本文は履歴として残し、各 RFC から本書を参照する注記を付ける。正式な採択には、RFC-0021 と凍結規程どおり、対応する ADR と条項の置換節が要る。
@@ -188,6 +189,57 @@ RFC-0024 本文(B)の各 round の数値 fold 検査を、現行の規範とし�
 監査の T01〜T15([0026-assets/audit-report.md](0026-assets/audit-report.md) §7)を、関連 fence の有効化条件とする。主なもの:正直な Miner と誤った challenger(T01)、Miner の永久沈黙(T02)、偽署名・Panel の架空の完了申告(T03)、正常 tx flood・有料 court・不正 codec flood の分離測定(T04)、全 owner 枠の共謀占有下の外部 1 人(T05)、最後の受付時刻での notice と最遅応答(T06)、境界 −1 / 一致 / +1(T07)、Miner の PC 停止後の court(T08)、最短の依存 lease と同じ bond の複数 claim(T09)、内部 fold だけの不正(T10)、1〜10,000 件の最終段だけ不正(T11)、10,000 DAA への集中(T12)、最古 claim の service 失敗と独立 claim(T13)、reorg・restart・pruning・pruned IBD(T14)、新旧 fence 境界(T15)。
 
 fixture での `close_cone_acquit` の軽さ(`docs/measurements/2026-10-19-court-verify-cpu.md`、`release/t12-16000`)や、中央値の小ささは、これらの最悪 case・転送・収録・復旧の代わりにならない。
+
+## 11. TFP1 の一括対話（Batch-Pipelined Court）
+
+**状態** 2026-11-03 の実装候補。§2.1 の採用済み期限を使う。公開 wire、完全な予約、実ノードでの対話、有効化はそれぞれ別の検証項目とする。新しい versioned ruleset で有効化した後に、その ruleset で受理した original claim に適用する。旧 claim は受付時の ruleset で再現する。
+
+### 11.1 申立てと対話の起点
+
+- `a` は original claim の実 accepting-chain DAA。`a + 3,120` は検出した疑いについて適格者が最初の異議を申し立てる期限。RFC-0031 A の候補は終端を含む。申立てには対象の original、認証済みの適格性・署名・原資、後続の開示や検査に進める具体的な根拠が必要。最終裁定は後続対話で行う。[RFC-0031](0031-shared-court-initial-notice-boundary.md)
+- 有効な申立てを受理した claim について、`a + 10,000` を hard deadline として、開示義務、証拠の収録窓、資料保持、Final と報酬の保留、bond の解放条件を原子的に適用する。後続の Demand、再送、再申立て、owner 交代で起点を更新しない。排他的な `collect_until`、各応答の締切、hard deadline は別々に検査する。受付時に署名済みの依存契約が最大係争期間とその後の保持・回復を覆うことを検査する。実効期限に従って Miner／Provider の保存と Node の GC を制御する。
+
+### 11.2 役割と対話
+
+1. Miner は通常の推論を実行し、モデル・入力・出力・実行規則と必要な実行 commitment を固定する。係争時は認証に必要な既存資料を、受理済み要求の範囲で返す。
+2. Panel は再計算して争点と依存関係を特定する。同じ前提から取得できる資料を一括 Demand にし、前段の裁定や応答によって決まる要求は後続の手番に分ける。資料が揃ったら局所反証を構築する。正常側の証拠を提出する profile では、その profile が要求する全範囲を Panel が構築する。
+3. 署名権限のある Miner／Provider は、同じ要求内で独立した part を、前の part の収録を待たず上限内で送る。共有可能な資料は元の source と要求範囲に認証する。資料の受理と、特定署名者の応答義務の履行を別に記録する。[RFC-0029](0029-owner-independent-shared-tir-query-data.md)
+4. Node はモデルの事前コピーや Panel の私有 DB に依存せず、受理した資料を認証して数値関係を独立検査する。局所的な `NoFaultFound` は調べた争点の結果として記録する。正常側の必要範囲が欠けた場合は未検証とし、範囲の検査が完了した場合も Gate C の独立した抽選席による認証条件と所定の Final・決済条件を適用する。計算不一致、資料不足、処理機会の不足、義務違反の帰責を §4 に従って区別する。
+
+### 11.3 実装契約
+
+| 部分 | 要件 |
+|---|---|
+| Tokenizer | PALWART3 binding と登録済み semantics の下で、厳密な parser、EOF、key の一意性、全 token 表、rendering、EOG を Node が有界に検証する。登録時の規則版、raw tokenizer と token 表の root、artifact・binding を含む認証済み記録を受理済み状態へ結び付ける。claim は記録と入力・出力に固有の関係を検査する。初回の検証・署名・保存を登録経路で計上し、restart・reorg・IBD で同じ記録を復元する。記録がない、または文脈が違う場合は再利用しない。この検査の対象は claim の検証に使う tokenizer 資料の同一性と形式である。 |
+| Owner | `material_retention_daa`、`service_quantum_daa`、`response_deadline_daa`、`idle_grace_daa` を分離する。応答待ちの owner は要求・期限・予約を保持して実行枠を解放し、有効な応答で公平な再入場の対象になる。実行枠と応答待ち予約を別に制限し、native の取得行と同じ branch の原子的更新で記録する。待ち時間は実際の scheduler と予約から算出する。外部の適格な申立人が全 owner 枠の共謀占有下でも利用できる共有経路を §5 に従って検証する。 |
+| TIR 局所化 | 演算・tile・reduction の境界を元の source に認証し、行列積の部分和や attention の最大値・総和・重み付き集約などを小さな決定論的検査単位にする。パラメータに加え、動的 operand、親子の数値 fold、選択に必要な比較、opening と終端を計上する。局所反証の費用と正常側の全範囲の費用は別に測る。 |
+| Batch 搬送と復元 | Demand は case、元 source と ruleset に束縛した要求 root、canonical な範囲・長さ、part 上限、総 bytes 上限、応答期限、予約を固定する。Response は case・要求 root・範囲・part index・payload を署名者と opening に結び付ける。受信順に処理しても canonical な範囲・slot で検査結果を確定する。正当な重複で進捗・予約を二重計上せず、競合・改変は拒否する。受理済み・検査済み・未取得の範囲と残り予算は branch が認証する checkpoint から復元し、全範囲の認証を要する形式では part の到着だけで範囲を検査済みにしない。送受信キューを件数と bytes の両方で制限し、Node の処理容量に応じた backpressure を Panel の証拠生成まで伝える。 |
+
+### 11.4 時計と資源の予算
+
+CPU work、bytes、IO、メモリ、保持 byte-DAA、control 枠を個別に予約する。DAA は手番の因果依存と、予約済み資源で処理・収録できるまでの時間を表す。同時処理を見込むときは、共有する帯域・CPU・IO と並行時の供給を計測して、全許容分岐で成立する予約に限って重複を除く。現候補は重複を見込まず、次の上限を checked arithmetic で検査する。
+
+```text
+必要 DAA = 申立てまでの経過 DAA
+         + 準備 + owner 待機 + 直列手番
+         + ceil(搬送 bytes / 保証搬送 bytes per DAA) + Node 検査
+         + 終了収録 + 再送・回復 + 1（T06 の排他的境界余裕）
+必要 DAA <= 10,000
+```
+
+最後の有効な申立て `a + 3,120` では、差の `6,880 DAA` に境界余裕を含めるため、対話・収録・回復に配分できるのは最大 `6,879 DAA`。添付案のサービス配分例（準備 500、owner 800、要求・応答 1,400、搬送 2,400、検査 1,600、終了収録 1,200、再送・回復 1,100）は合計 9,000 DAA。境界余裕を含めると経過 999 DAA までの開始でしか収まらず、最遅の開始では 12,121 DAA を要する。この配分例は早期開始の設計比較に用いる。受付時に最遅開始を含む全合法分岐を予約できない profile は有効化を拒否する。見積もりは必要量と上限を返し、上限値で切り詰めない。
+
+### 11.5 実装・検証の順序
+
+同じ SmolLM2 frame、class、artifact、入力で旧見積もり `8,782,776 DAA` と上限 `3,120 DAA` を再現する。内訳は tokenizer raw/key が `8,418,376`、表の rendering が `16,392`、inventory/semantics opening が `150`。残る `347,858 DAA` には owner 待機 `60,000`、取得 `287,806`、準備 `16`、その他の開始・収録 `36` が含まれる。これらは fixture EOF を使ったオフライン見積もりである。[SmolLM2 計測記録](../evidence/oom-recovery-continuation-2026-11-03.md#smollm2-tokenizer-court-quote-and-rendering-check--0538-utc)
+
+1. Tokenizer の初回費用と claim ごとの費用を分け、同じ登録済み資料の再利用と、旧記録・別 branch・改変の拒否を確認する。
+2. Scheduler と見積もりを対にして、正直な申立人の待ち時間を全枠占有・応答の最遅到着・再入場で測る。
+3. 対応演算と全許容分岐の資料上限を測る。数箇所で約 7.5 KB だったパラメータ証拠に加え、動的 operand、認証情報、全対象 root の最大量を計測する。
+4. 実ノードで Batch の先行送信、逆順、重複、欠落、再送、上限到達、backpressure、restart・reorg・pruned IBD を測る。予約量と実際の搬送・検査・収録を突き合わせ、T06 の最遅申立てでも hard deadline に収める。
+5. 同じ候補で正常・不正・未提出・収録機会不足の裁定、信用・会計・保持の復元、同時 Court の混雑を §10 に従って確認する。公開検証は同じ claim ID で受理、独立席、Panel 応答、Node 裁定、Gate C、Final、PFS4、報酬を個別に照合する。
+
+作業ブランチの候補には tokenizer 記録の導出、owner の rooted scheduler、TIR の有界な parameter 解析、Batch の受信・検査・checkpoint 部品がある。全 graph の原子的予約と公開経路の接続、実測に基づく期限内の完走は検証対象として残る。[実装と測定の範囲](../evidence/oom-recovery-continuation-2026-11-03.md#batch-court-clock-and-exact-t12-recheck)
 
 ## 2026-10-21 追加隔離checkpoint — original parameter footprint / archive S1
 
