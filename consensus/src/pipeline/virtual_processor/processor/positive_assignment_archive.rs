@@ -14,7 +14,9 @@ use kaspa_consensus_core::{
     palw_native_resource_v1::{
         NativeChainStateV1, NativeCoverageV1, NativeDecodeErrorV1, NativeStateDeltaV1, reserve_native_requests_v1,
     },
-    palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, assigned_case_native_carrier_matches_v2},
+    palw_positive_assignment_case_material_v2::{
+        AssignmentCaseBoundaryV2, assigned_case_native_carrier_matches_v2, rooted_initial_assigned_case_bind_v2,
+    },
     palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2},
     palw_positive_funding_relay_v2::{pending_funding_relay_payer_scratch_v2, pending_funding_relay_row_images_match_v2},
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
@@ -178,17 +180,78 @@ impl VirtualStateProcessor {
         if boundary_count != 1 {
             return Err(E::Invalid("missing or duplicate actual boundary"));
         }
-        let (carriage, _) = self.load_positive_accepted_carriage_v2(
+        let mut carrier_heap = maximum_heap;
+        let _bind_workspace = if header.sequence == 1 {
+            let workspace = (4 * size_of::<NativeRowValue>() + 2 * MAX_NATIVE_KEY_BYTES) as u64;
+            carrier_heap =
+                carrier_heap.checked_sub(workspace).ok_or(E::Unavailable("original Case heap cannot cover its bind lookup"))?;
+            Some(reserve_native_requests_v1(workspace).map_err(E::Resource)?.ok_or(E::Unavailable("initial Case bind workspace"))?)
+        } else {
+            None
+        };
+        let (carriage, work) = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
             current_state,
             NativeArchiveBoundaryV2::Case(boundary),
-            maximum_heap,
+            carrier_heap,
             maximum_work,
         )?;
         if !assigned_case_native_carrier_matches_v2(carriage.transaction(), record) {
             return Err(E::Invalid("original actual Case carrier differs from journal"));
         }
+        if header.sequence == 1 {
+            let native_body = &carriage.transaction().payload[3..];
+            self.check_retained_case_bind_result_v2(current_state, record, boundary, native_body, maximum_work - work)?;
+        }
         Ok(carriage)
+    }
+
+    fn check_retained_case_bind_result_v2(
+        &self,
+        state: &PalwChainStateV2,
+        case: CaseJournalRecordView<'_>,
+        boundary: AssignmentCaseBoundaryV2,
+        native_body: &[u8],
+        mut remaining_work: u64,
+    ) -> Result<(), NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_continuation_id_v2;
+
+        let assignment = scan_assignment_continuation_id_v2(native_body).map_err(|_| E::Invalid("initial Case Assignment id"))?;
+        let frame = rooted_initial_assigned_case_bind_v2(state, assignment, case, boundary).map_err(|why| match why {
+            PositiveRowErrorV2::MissingRequiredRow | PositiveRowErrorV2::MissingKernelRoute => {
+                E::Unavailable("rooted initial Case bind")
+            }
+            _ => E::Invalid("rooted initial Case bind differs"),
+        })?;
+        let payload_bytes = u64::from(frame.header.payload_bytes);
+        let record_bytes = payload_bytes + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2 as u64;
+        // Reserve work for the full fixed framing/hash and byte comparison
+        // before the DB returns even a borrowed record.
+        charge_archive_work_v2(&mut remaining_work, 3 * record_bytes)?;
+        self.palw_state_v2_store
+            .read()
+            .with_positive_assignment_journal_record_v2(frame.header.id(), record_bytes, |raw| {
+                let record = AssignmentJournalRecordViewV2::decode(raw, record_bytes)
+                    .map_err(|_| E::Invalid("retained Case BindResult codec"))?;
+                if record.frame() != frame {
+                    return Err(E::Invalid("retained Case BindResult differs from rooted frame"));
+                }
+                let (other, body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, payload_bytes)
+                    .map_err(|_| E::Invalid("retained Case BindResult carrier framing"))?;
+                if body != native_body
+                    || other.selected_parent != boundary.selected_parent
+                    || other.pre_event_root != boundary.pre_event_root
+                    || other.before_delta_end != boundary.before_delta_end
+                    || other.populated_inputs != boundary.populated_inputs
+                    || other.input_count != boundary.input_count
+                    || other.fee != boundary.fee
+                {
+                    return Err(E::Invalid("Case and Assignment journal boundaries differ"));
+                }
+                Ok(())
+            })
+            .map_err(|_| E::Unavailable("retained Case BindResult bytes"))?
     }
 
     /// Read original decode rules for a continuation against the actual walk's

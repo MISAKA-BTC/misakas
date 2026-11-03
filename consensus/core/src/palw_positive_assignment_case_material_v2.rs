@@ -206,6 +206,35 @@ pub(crate) fn initial_assigned_case_bind_header_v2(
     bind.filter(|_| found_boundary).ok_or(ContractError::Identity)
 }
 
+/// Read the exact Use and BindResult frame selected by the current Case.
+/// The native recovery caller also checks the retained BindResult payload and
+/// the original accepted transaction against its actual pre-event prefix.
+pub fn rooted_initial_assigned_case_bind_v2(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    assignment: misaka_palw_positive_contract::assignment::AssignmentId,
+    record: CaseJournalRecordView<'_>,
+    boundary: AssignmentCaseBoundaryV2,
+) -> Result<misaka_palw_positive_contract::assignment::rows::AssignmentJournalFrameRow, crate::palw_positive_rows_v2::PositiveRowErrorV2>
+{
+    use crate::palw_positive_rows_v2::{PositiveRowErrorV2 as E, PositiveRowsV2};
+    use misaka_palw_positive_contract::{native::NativeRowKey, rows::NativeRowBody};
+
+    let rows = PositiveRowsV2::new(state);
+    let use_row = rows.read(NativeRowKey::AssignmentUse(assignment))?.ok_or(E::MissingRequiredRow)?;
+    let NativeRowBody::AssignmentUse(use_row) = use_row.body else {
+        return Err(E::WrongRowKind);
+    };
+    let bind = initial_assigned_case_bind_header_v2(record, boundary, &use_row)?;
+    let frame = rows.read(NativeRowKey::AssignmentJournalFrame { assignment, ordinal: bind.ordinal })?.ok_or(E::MissingRequiredRow)?;
+    let NativeRowBody::AssignmentJournalFrame(frame) = frame.body else {
+        return Err(E::WrongRowKind);
+    };
+    if frame.header != bind {
+        return Err(ContractError::Identity.into());
+    }
+    Ok(frame)
+}
+
 pub const ASSIGNED_RECORD_HEADER_DOMAIN_V2: &[u8] = b"misaka/positive/assigned-record-header/v2/r1";
 pub const ASSIGNED_GENERATED_IDS_DOMAIN_V2: &[u8] = b"misaka/positive/assigned-generated-ids/v2/r1";
 
