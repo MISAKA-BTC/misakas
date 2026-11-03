@@ -729,7 +729,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1;
     use crate::palw_tir_public_source_v1::PalwTirPublicSourceV1;
     use batch::native_ranges::{NumericalBatchEnvelopeV1, numerical_batch_envelope_v1, numerical_batch_root_demand_v1};
-    let cover = PalwTirPublicSourceV1::root_input_cover_native_v1(&source, &fx.record, &fx.layout, storage.cover).unwrap();
+    let cover = PalwTirPublicSourceV1::root_input_cover_native_v1(source.retained_v2(), &fx.record, &fx.layout, storage.cover).unwrap();
     let notice_leaf = cover.roots_v1().iter().find(|root| {
         root.inputs.iter().any(|input| matches!(input, RootInputBoundaryV1::PromptPosition(_)))
     }).unwrap().leaf;

@@ -6,6 +6,12 @@ use crate::{
     palw_tir_public_source_v1::PalwTirPublicSourceV1 as Source,
 };
 #[cfg(test)]
+impl OwnedNativeSourceV2 {
+    pub(super) fn retained_v2(&self) -> &NativeRetainedV1<Source> {
+        &self.source
+    }
+}
+#[cfg(test)]
 thread_local! {static OBSERVED:std::cell::Cell<(u64,u64)>=const{std::cell::Cell::new((0,0))};}
 #[cfg(test)]
 pub(super) fn reset_observed_v2() {
