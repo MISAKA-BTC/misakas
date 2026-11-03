@@ -1,0 +1,11 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running unittests src/lib.rs (/tmp/oom-transport-target/debug/deps/misaka_transport_memory_harness-8c464033c6f84546)
+
+running 1 test
+test protocol_tests::legacy_evm_256mib_and_p2p_320mib_envelopes_remain_usable ... payload_bytes=268435456 gzip=false wire_bytes=268435476 accounted_simultaneous_peak=1073939029 final_reserved=0
+payload_bytes=268435456 gzip=true wire_bytes=260775 accounted_simultaneous_peak=1073939029 final_reserved=0
+payload_bytes=335543296 gzip=false wire_bytes=335543316 accounted_simultaneous_peak=1342370389 final_reserved=0
+payload_bytes=335543296 gzip=true wire_bytes=325966 accounted_simultaneous_peak=1342370389 final_reserved=0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 23.19s

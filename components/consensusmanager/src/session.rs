@@ -1741,6 +1741,12 @@ impl ConsensusSessionOwned {
         self.clone().spawn_blocking(|c| c.get_pruning_point_proof()).await
     }
 
+    pub async fn async_try_get_pruning_point_proof(
+        &self,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<Arc<PruningPointProof>> {
+        self.clone().spawn_blocking(|c| c.try_get_pruning_point_proof()).await
+    }
+
     pub async fn async_create_virtual_selected_chain_block_locator(
         &self,
         low: Option<BlockHash>,

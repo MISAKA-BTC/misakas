@@ -4140,13 +4140,17 @@ dependencies = [
  "kaspa-notify",
  "kaspa-rpc-core",
  "kaspa-utils",
+ "kaspa-utils-tower",
  "log",
  "paste",
+ "proc-macro2",
  "prost",
  "protoc-bin-vendored",
+ "quote",
  "rand 0.8.6",
  "regex",
  "serde_json",
+ "syn 2.0.110",
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",
@@ -4460,10 +4464,13 @@ dependencies = [
  "kaspa-utils-tower",
  "log",
  "parking_lot",
+ "proc-macro2",
  "prost",
+ "quote",
  "rand 0.8.6",
  "seqlock",
  "serde",
+ "syn 2.0.110",
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",
@@ -4915,9 +4922,13 @@ dependencies = [
  "futures",
  "http-body",
  "http-body-util",
+ "kaspa-core",
  "log",
  "pin-project-lite",
+ "prost",
  "tokio",
+ "tonic",
+ "tonic-prost",
  "tower",
  "tower-http",
 ]
@@ -9195,8 +9206,6 @@ dependencies = [
 [[package]]
 name = "tonic"
 version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec7c61a0695dc1887c1b53952990f3ad2e3a31453e1f49f10e75424943a93ec"
 dependencies = [
  "async-trait",
  "axum",

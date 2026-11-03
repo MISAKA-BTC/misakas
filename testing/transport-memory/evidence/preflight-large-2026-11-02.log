@@ -1,0 +1,10 @@
+   Compiling misaka-transport-memory-harness v0.1.0 (<checkout>/testing/transport-memory)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.92s
+     Running unittests src/lib.rs (/tmp/oom-transport-target/debug/deps/misaka_transport_memory_harness-8c464033c6f84546)
+
+running 1 test
+test preflight_tests::largest_legitimate_bytes_field_has_schema_bound_without_fixed_multiplier ... payload_bytes=268435456 schema_retained_bytes=268435456 schema_peak_bytes=268435456 actual_decode_capacity_checked=true
+payload_bytes=335543296 schema_retained_bytes=335543296 schema_peak_bytes=335543296 actual_decode_capacity_checked=true
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 24 filtered out; finished in 4.69s

@@ -57,7 +57,7 @@ use kaspa_p2p_lib::common::ProtocolError;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use kaspa_perf_monitor::{Monitor as PerfMonitor, counters::CountersSnapshot};
 use kaspa_rpc_core::{
-    Notification, RpcError, RpcResult,
+    Notification, RetainedRpcReply, RpcError, RpcResult,
     api::{
         connection::DynRpcConnection,
         ops::{RPC_API_REVISION, RPC_API_VERSION},
@@ -529,6 +529,15 @@ fn parse_evm_tx_hash(s: &str) -> RpcResult<kaspa_hashes::EvmH256> {
     Ok(kaspa_hashes::EvmH256::from_bytes(bytes))
 }
 
+// Preserve shutdown as a local RPC error rather than a verdict on this block.
+fn submit_block_report(result: Result<(), ProtocolError>) -> RpcResult<SubmitBlockResponse> {
+    match result {
+        Ok(()) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Success }),
+        Err(error) if error.is_local_consensus_exiting() => Err(RpcError::General(error.to_string())),
+        Err(_) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) }),
+    }
+}
+
 pub struct RpcCoreService {
     consensus_manager: Arc<ConsensusManager>,
     notifier: Arc<Notifier<Notification, ChannelConnection>>,
@@ -938,18 +947,6 @@ impl RpcCoreService {
         self.core_shutdown_request.listener.clone()
     }
 
-    async fn get_utxo_set_by_script_public_key<'a>(
-        &self,
-        addresses: impl Iterator<Item = &'a RpcAddress>,
-    ) -> UtxoSetByScriptPublicKey {
-        self.utxoindex
-            .clone()
-            .unwrap()
-            .get_utxos_by_script_public_keys(addresses.map(pay_to_address_script).collect())
-            .await
-            .unwrap_or_default()
-    }
-
     async fn get_balance_by_script_public_key<'a>(&self, addresses: impl Iterator<Item = &'a RpcAddress>) -> BalanceByScriptPublicKey {
         self.utxoindex
             .clone()
@@ -1027,26 +1024,29 @@ impl RpcApi for RpcCoreService {
         }
 
         trace!("incoming SubmitBlockRequest for block {}", hash);
-        match self.flow_context.submit_rpc_block(&session, block.clone()).await {
-            Ok(_) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Success }),
+        let result = self.flow_context.submit_rpc_block(&session, block.clone()).await;
+        match &result {
+            Ok(_) => {}
+            Err(error) if error.is_local_consensus_exiting() => {
+                debug!("RPC block {hash} virtual processing stopped locally: {error}");
+            }
             Err(ProtocolError::RuleError(RuleError::BadMerkleRoot(h1, h2))) => {
                 warn!(
                     "The RPC submitted block {} triggered a {} error: {}.
 NOTE: This error usually indicates an RPC conversion error between the node and the miner. This is likely to reflect using a NON-SUPPORTED miner.",
                     hash,
                     stringify!(RuleError::BadMerkleRoot),
-                    RuleError::BadMerkleRoot(h1, h2)
+                    RuleError::BadMerkleRoot(*h1, *h2)
                 );
                 if self.config.net.is_mainnet() {
                     warn!("Printing the full block for debug purposes:\n{:?}", block);
                 }
-                Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
             }
             Err(err) => {
                 warn!("The RPC submitted block triggered an error: {}\nPrinting the full block for debug purposes:\n{:?}", err, block);
-                Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
             }
         }
+        submit_block_report(result)
     }
 
     async fn get_block_template_call(
@@ -1145,6 +1145,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetBlocksRequest,
     ) -> RpcResult<GetBlocksResponse> {
+        self.get_blocks_retained_call(_connection, request).await.map(RetainedRpcReply::into_response)
+    }
+
+    async fn get_blocks_retained_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetBlocksRequest,
+    ) -> RpcResult<RetainedRpcReply<GetBlocksResponse>> {
         // Validate that user didn't set include_transactions without setting include_blocks
         if !request.include_blocks && request.include_transactions {
             return Err(RpcError::InvalidGetBlocksRequest);
@@ -1185,21 +1193,45 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
         // Prepend low hash to make it inclusive and append the filtered sink anticone
         let block_hashes = once(low_hash).chain(block_hashes).chain(filtered_sink_anticone).collect::<Vec<_>>();
-        let blocks = if request.include_blocks {
-            let mut blocks = Vec::with_capacity(block_hashes.len());
-            for hash in block_hashes.iter().copied() {
-                let block = session.async_get_block_even_if_header_only(hash).await?;
-                let rpc_block = self
-                    .consensus_converter
-                    .get_block(&session, &block, request.include_transactions, request.include_transactions)
-                    .await?;
-                blocks.push(rpc_block)
+        // The response owns each projected ID vector before its reservation.
+        // This also keeps both alive through error/cancellation after any block.
+        let mut reply = RetainedRpcReply::untracked(GetBlocksResponse { block_hashes, blocks: Vec::new() });
+        if request.include_blocks {
+            // Aggregate/header/metadata/EVM allocations remain separate open
+            // boundaries. Only source-body avoidance and ID ownership are fixed.
+            reply.response.blocks.reserve_exact(reply.response.block_hashes.len());
+            for hash in reply.response.block_hashes.iter().copied() {
+                if request.include_transactions {
+                    let block = session.async_get_block_even_if_header_only(hash).await?;
+                    let rpc_block = self.consensus_converter.get_block(&session, &block, true, true).await?;
+                    reply.response.blocks.push(rpc_block);
+                } else {
+                    let mut source = session.clone().spawn_blocking(move |c| c.get_block_rpc_projection_v1(hash)).await?;
+                    let ids = std::mem::take(&mut source.transaction_ids.ids);
+                    let block =
+                        self.consensus_converter.get_block_with_ids_v1(&session, &source.block, false, false, Some(ids)).await?;
+                    let mut produced =
+                        RetainedRpcReply { response: block, retained: source.transaction_ids.memory.take(), conversion: None };
+                    if let Some(memory) = produced.retained.take() {
+                        if let Some(retained) = reply.retained.as_mut() {
+                            if let Err(memory) = retained.merge(memory) {
+                                // Failed transfers return their ticket to its data
+                                // owner before unwinding, never before data drop.
+                                produced.retained = Some(memory);
+                                return Err(RpcError::General("incompatible projected transaction ID owners".into()));
+                            }
+                        } else {
+                            reply.retained = Some(memory);
+                        }
+                    }
+                    reply.response.blocks.push(produced.response);
+                }
             }
-            blocks
-        } else {
-            Vec::new()
-        };
-        Ok(GetBlocksResponse { block_hashes, blocks })
+        }
+        // A full response/protobuf quote is deliberately not invented here.
+        // gRPC preserves this partial Rust owner through conversion; legacy
+        // wRPC into_response remains a separately unclosed serializer boundary.
+        Ok(reply)
     }
 
     async fn get_info_call(&self, _connection: Option<&DynRpcConnection>, _request: GetInfoRequest) -> RpcResult<GetInfoResponse> {
@@ -5026,9 +5058,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
     async fn get_utxos_by_addresses_call(
         &self,
-        _connection: Option<&DynRpcConnection>,
+        connection: Option<&DynRpcConnection>,
         request: GetUtxosByAddressesRequest,
     ) -> RpcResult<GetUtxosByAddressesResponse> {
+        self.get_utxos_by_addresses_retained_call(connection, request).await.map(RetainedRpcReply::into_response)
+    }
+
+    async fn get_utxos_by_addresses_retained_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressesRequest,
+    ) -> RpcResult<RetainedRpcReply<GetUtxosByAddressesResponse>> {
         if !self.config.utxoindex {
             return Err(RpcError::NoUtxoIndex);
         }
@@ -5038,39 +5078,83 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Err(RpcError::ConsensusInTransitionalIbdState);
         }
 
-        // TODO: discuss if the entry order is part of the method requirements
-        //       (the current impl does not retain an entry order matching the request addresses order)
-        //
-        // NOTE (large-UTXO availability): this method is unbounded — it loads and serializes *every*
-        // UTXO of the requested addresses (see the pagination TODO in
-        // indexes/utxoindex/src/stores/indexed_utxos.rs). A heavily-fragmented address (e.g. a mining
-        // payout that is never consolidated) can hold hundreds of thousands of UTXOs, producing a
-        // response that exceeds the wRPC frame cap (MAX_WRPC_MESSAGE_SIZE = 128 MiB) or the client's
-        // own message-size / request timeout, which surfaces to the caller as "connection closed".
-        // The measurement below lets operators pinpoint such cases (entry count + scan/convert time +
-        // an estimated serialized size) instead of guessing at the disconnect cause.
+        // The legacy response keeps its existing 250k cap. Enforce it inside
+        // the DB scan, before the complete index map and RPC vector exist.
+        const LARGE_UTXO_HARD_CAP: usize = 250_000;
         let started = Instant::now();
         let num_addresses = request.addresses.len();
-        let entry_map = self.get_utxo_set_by_script_public_key(request.addresses.iter()).await;
-        let entries = self.index_converter.get_utxos_by_addresses_entries(&entry_map);
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        let overflow = || RpcError::General("UTXO response construction byte bound overflow".into());
+        // Admit the generated script set before pay_to_address_script/HashSet
+        // can duplicate a large address request. This is separate from the
+        // already-owned incoming request and from the response entry bytes.
+        let input_bytes = request
+            .addresses
+            .iter()
+            .try_fold(4096u64, |total, address| {
+                (address.payload.len() as u64).checked_mul(8).and_then(|n| n.checked_add(2048)).and_then(|n| total.checked_add(n))
+            })
+            .ok_or_else(overflow)?;
+        let input_memory =
+            global_memory_budget().try_reserve(MemoryClass::Snapshot, input_bytes).map_err(|e| RpcError::General(e.to_string()))?;
+        let scripts = request.addresses.iter().map(pay_to_address_script).collect::<kaspa_consensus_core::tx::ScriptPublicKeys>();
+        let max_payload = request.addresses.iter().map(|a| a.payload.len() as u64).max().unwrap_or(0);
+        let max_script = scripts.iter().map(|script| script.script().len() as u64).max().unwrap_or(0);
+        let dynamic =
+            max_payload.checked_mul(2).and_then(|n| max_script.checked_mul(2).and_then(|m| n.checked_add(m))).ok_or_else(overflow)?;
+        // Raw HashMap growth/reallocation, then an independent Rust Vec and
+        // its address/script clones. All coexist before map conversion ends.
+        let index_per_entry = 4
+            * ((std::mem::size_of::<kaspa_consensus_core::tx::TransactionOutpoint>()
+                + std::mem::size_of::<kaspa_index_core::indexed_utxos::CompactUtxoEntry>()
+                + 1) as u64);
+        let retained_per_entry = (std::mem::size_of::<RpcUtxosByAddressesEntry>() as u64)
+            .checked_mul(3)
+            .and_then(|n| n.checked_add(dynamic))
+            .and_then(|n| n.checked_add(128))
+            .ok_or_else(overflow)?;
+        // Protobuf owns independent address/base32, Hash64 hex and script hex
+        // strings. 512 bytes bounds each entry's inline+nested message layout;
+        // 3x covers Vec growth overlap. A verifies actual retained heap at the
+        // preallocated handoff. The 4KiB base also covers the outer response enum.
+        let conversion_per_entry =
+            kaspa_rpc_core::api::retained::utxo_memory::utxo_proto_per_entry_bytes(max_payload, max_script).ok_or_else(overflow)?;
+        let per_entry =
+            index_per_entry.checked_add(retained_per_entry).and_then(|n| n.checked_add(conversion_per_entry)).ok_or_else(overflow)?;
+        // Tuple fields drop in declaration order: map before its ticket. Keep
+        // them together across every fallible count/split below; unpacking to
+        // locals would return the later-declared ticket first on an error.
+        let mut generation_owner = self
+            .utxoindex
+            .clone()
+            .ok_or(RpcError::NoUtxoIndex)?
+            .get_utxos_by_script_public_keys_reserved(
+                (scripts, input_memory.clone()),
+                LARGE_UTXO_HARD_CAP,
+                per_entry,
+                4096 + 1024 + 1024,
+            )
+            .await
+            .map_err(|why| RpcError::General(why.to_string()))?;
+        input_memory.materialized();
+        let count = generation_owner.0.values().try_fold(0u64, |sum, rows| sum.checked_add(rows.len() as u64)).ok_or_else(overflow)?;
+        let retained_bytes = count.checked_mul(retained_per_entry).and_then(|n| n.checked_add(1024)).ok_or_else(overflow)?;
+        let conversion_bytes =
+            kaspa_rpc_core::api::retained::utxo_memory::utxo_proto_reservation_bytes(count, max_payload, max_script)
+                .ok_or_else(overflow)?;
+        let retained = generation_owner.1.split(retained_bytes).map_err(|why| RpcError::General(why.to_string()))?;
+        let conversion = generation_owner.1.split(conversion_bytes).map_err(|why| RpcError::General(why.to_string()))?;
+        let entries = self.index_converter.get_utxos_by_addresses_entries(&generation_owner.0);
         let num_entries = entries.len();
+        // Rust output now exists. Its ticket lives through protobuf conversion;
+        // the protobuf ticket stays pending until that independent copy exists.
+        retained.materialized();
+        drop(generation_owner);
+        drop(input_memory);
         let elapsed = started.elapsed();
         // ~200 bytes/entry is a conservative borsh estimate (outpoint 36 + compact utxo entry +
         // 64-byte PubKeyHashMlDsa87 script + repeated address); JSON is ~2.5x larger.
         let est_borsh_mib = (num_entries.saturating_mul(200)) as f64 / (1024.0 * 1024.0);
-        // Audit H-02: HARD CAP the legacy unbounded method. Past this the borsh
-        // response (~200 B/entry) approaches/exceeds the 128 MiB wRPC frame cap and
-        // the serialize+write would exhaust node memory/CPU/socket (the remote DoS
-        // the auditor describes). Return an explicit error BEFORE serializing and
-        // steer the caller to the paginated getUtxosByAddressPage or the
-        // balance-only getBalancesByAddresses, instead of silently continuing.
-        const LARGE_UTXO_HARD_CAP: usize = 250_000;
-        if num_entries > LARGE_UTXO_HARD_CAP {
-            return Err(RpcError::General(format!(
-                "getUtxosByAddresses: {num_entries} UTXOs across {num_addresses} address(es) exceeds the {LARGE_UTXO_HARD_CAP} hard cap \
-(~{est_borsh_mib:.0} MiB); use getUtxosByAddressPage (cursor-paginated) or getBalancesByAddresses (balance only)."
-            )));
-        }
         const LARGE_UTXO_RESPONSE_THRESHOLD: usize = 50_000;
         if num_entries >= LARGE_UTXO_RESPONSE_THRESHOLD {
             let msg = format!(
@@ -5106,7 +5190,11 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
                 est_borsh_mib,
             );
         }
-        Ok(GetUtxosByAddressesResponse::new(entries))
+        Ok(RetainedRpcReply {
+            response: GetUtxosByAddressesResponse::new(entries),
+            retained: Some(retained),
+            conversion: Some(conversion),
+        })
     }
 
     async fn get_utxos_by_address_page_call(
@@ -7272,5 +7360,20 @@ mod complete_reward_cursor_tests {
         ] {
             assert!(parse_exec_reward_cursor(&bad).is_err(), "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod submit_block_shutdown_tests {
+    use super::*;
+    #[test]
+    fn local_shutdown_is_not_block_invalid_and_other_reports_are_preserved() {
+        let local = submit_block_report(Err(ProtocolError::RuleError(RuleError::ConsensusExiting)));
+        assert!(matches!(local, Err(RpcError::General(message)) if message.contains("exiting")));
+        assert!(matches!(submit_block_report(Ok(())), Ok(SubmitBlockResponse { report: SubmitBlockReport::Success })));
+        assert!(matches!(
+            submit_block_report(Err(ProtocolError::RuleError(RuleError::NoTransactions))),
+            Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
+        ));
     }
 }

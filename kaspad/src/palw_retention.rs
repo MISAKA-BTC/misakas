@@ -104,15 +104,15 @@ pub(crate) fn retention_prune_plan_v1(
     free: u64,
     reserve: u64,
 ) -> (Vec<usize>, u64) {
-    retention_prune_plan_with_material_v1(claims, chain, |_| false, attempt_horizon, free, reserve)
+    retention_prune_plan_with_material_v1(claims, chain, |_| Ok(false), attempt_horizon, free, reserve)
 }
 
-/// The monetary root oracle also applies to kernel/provider subjects which have
-/// no native claim row. A missing native view cannot discharge an actual queue hold.
+/// The material oracle also covers kernel/provider subjects without native
+/// claim rows. Only a successful read can clear a material obligation.
 fn retention_prune_plan_with_material_v1(
     claims: &[RetainedClaimV1],
     chain: impl Fn(&Hash64) -> Option<RetainedChainViewV1>,
-    material_owed: impl Fn(&Hash64) -> bool,
+    material_owed: impl Fn(&Hash64) -> Result<bool, String>,
     attempt_horizon: Duration,
     free: u64,
     reserve: u64,
@@ -120,7 +120,7 @@ fn retention_prune_plan_with_material_v1(
     let mut doomed: Vec<usize> = Vec::new();
     let mut freed = 0u64;
     for (i, c) in claims.iter().enumerate() {
-        if material_owed(&c.claim) || chain(&c.claim).as_ref().is_some_and(|view| view.da_owed) {
+        if !matches!(material_owed(&c.claim), Ok(false)) || chain(&c.claim).as_ref().is_some_and(|view| view.da_owed) {
             continue;
         }
         let due = match c.kind {
@@ -161,7 +161,7 @@ fn retention_prune_plan_with_material_v1(
                 .filter(|i| {
                     claims[*i].kind == kind
                         && !doomed.contains(i)
-                        && !material_owed(&claims[*i].claim)
+                        && matches!(material_owed(&claims[*i].claim), Ok(false))
                         && !chain(&claims[*i].claim).as_ref().is_some_and(|view| view.da_owed)
                 })
                 .collect();
@@ -176,6 +176,31 @@ fn retention_prune_plan_with_material_v1(
         }
     }
     (doomed, short)
+}
+
+fn prune_retained_claims_v1(
+    claims: &[RetainedClaimV1],
+    doomed: Vec<usize>,
+    material_owed: impl Fn(&Hash64) -> Result<bool, String>,
+) -> (usize, u64) {
+    let mut removed = 0usize;
+    let mut bytes = 0u64;
+    for i in doomed {
+        let c = &claims[i];
+        if !matches!(material_owed(&c.claim), Ok(false)) {
+            continue;
+        }
+        for path in &c.paths {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", path.display()),
+            }
+        }
+        removed += 1;
+        bytes = bytes.saturating_add(c.bytes);
+    }
+    (removed, bytes)
 }
 
 /// **How late the space rule takes a foreign copy** (P2-7; lower goes first): `0`, nothing an R-core
@@ -366,24 +391,25 @@ impl PalwRetentionJanitor {
             })
         };
         let owed = |claim: &Hash64| {
-            session.palw_material_income_hold_until_v1(*claim).is_some_and(|until| until == u64::MAX || now_daa < until)
+            if rcore {
+                session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
+            } else {
+                Ok(session.palw_material_income_hold_until_v1(*claim).is_some_and(|until| until == u64::MAX || now_daa < until))
+            }
         };
-        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, chain, owed, self.attempt_horizon, free, reserve);
-        let mut removed = 0usize;
-        let mut bytes = 0u64;
-        for i in doomed {
-            let c = &claims[i];
-            for path in &c.paths {
-                match std::fs::remove_file(path) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", path.display()),
+        let (doomed, _) = retention_prune_plan_with_material_v1(&claims, chain, owed, self.attempt_horizon, free, reserve);
+        let (removed, bytes) = prune_retained_claims_v1(&claims, doomed, |claim| {
+            // The selected branch or the active consensus can change while planning.
+            // Recheck the resident obligation just before deleting a file group.
+            if let Some(fence) = self.rcore_plus {
+                let current = self.consensus_manager.consensus().unguarded_session();
+                if rcore || fence.is_active(current.get_virtual_daa_score()) {
+                    return current.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim));
                 }
             }
-            removed += 1;
-            bytes = bytes.saturating_add(c.bytes);
-        }
-        (removed + abandoned.len(), bytes, short)
+            Ok(false)
+        });
+        (removed + abandoned.len(), bytes, reserve.saturating_sub(free.saturating_add(bytes)))
     }
 
     async fn worker(self: &Arc<Self>) {
@@ -476,12 +502,42 @@ mod tests {
                 kind: RetainedKindV1::Foreign,
             },
         ];
-        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| true, 60 * MIN, 0, 100);
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| Ok(true), 60 * MIN, 0, 100);
         assert!(doomed.is_empty());
         assert_eq!(short, 100, "owed material cannot satisfy space reclamation");
-        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| false, 60 * MIN, 0, 100);
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| Ok(false), 60 * MIN, 0, 100);
         assert_eq!(doomed, vec![0, 1]);
         assert_eq!(short, 30, "both copies become reclaimable after their exact release");
+    }
+
+    #[test]
+    fn retention_read_failure_pins_files_during_planning_and_immediately_before_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut claims = [
+            claim(1, RetainedKindV1::Attempt, 40, 90),
+            claim(2, RetainedKindV1::FreePrompt, 20, 5000),
+            claim(3, RetainedKindV1::Foreign, 30, 900),
+        ];
+        for claim in &mut claims {
+            let path = dir.path().join(&claim.paths[0]);
+            std::fs::write(&path, vec![0; claim.bytes as usize]).unwrap();
+            claim.paths[0] = path;
+        }
+        let plan = |owed: fn(&Hash64) -> Result<bool, String>| {
+            retention_prune_plan_with_material_v1(&claims, |_| None, owed, 60 * MIN, 0, 100)
+        };
+        let unavailable = |_: &Hash64| Err("accepted snapshot unavailable".into());
+        let unowed = |_: &Hash64| Ok(false);
+        assert_eq!(plan(unavailable), (vec![], 100));
+
+        let (doomed, short) = plan(unowed);
+        assert_eq!((doomed.as_slice(), short), (&[0, 1, 2][..], 10));
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Err("selected branch changed".into())), (0, 0));
+        assert!(claims.iter().all(|claim| claim.paths[0].is_file()));
+
+        let (doomed, _) = plan(unowed);
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, unowed), (3, 90));
+        assert!(claims.iter().all(|claim| !claim.paths[0].exists()));
     }
 
     #[test]

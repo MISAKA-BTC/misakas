@@ -68,6 +68,20 @@ impl ConsensusConverter {
         include_transactions: bool,
         include_transaction_verbose_data: bool,
     ) -> RpcResult<RpcBlock> {
+        self.get_block_with_ids_v1(consensus, block, include_transactions, include_transaction_verbose_data, None).await
+    }
+
+    /// The ID vector comes from the stored-codec projection and is moved into
+    /// verbose data without cloning. Caller retains its source ticket through
+    /// this future and then through the returned Rust response.
+    pub async fn get_block_with_ids_v1(
+        &self,
+        consensus: &ConsensusProxy,
+        block: &Block,
+        include_transactions: bool,
+        include_transaction_verbose_data: bool,
+        ids: Option<Vec<TransactionId>>,
+    ) -> RpcResult<RpcBlock> {
         let hash = block.hash();
         let ghostdag_data = consensus.async_get_ghostdag_data(hash).await?;
         let block_status = consensus.async_get_block_status(hash).await.unwrap();
@@ -86,7 +100,7 @@ impl ConsensusConverter {
             hash,
             difficulty: self.get_difficulty_ratio(block.header.bits),
             selected_parent_hash: ghostdag_data.selected_parent,
-            transaction_ids: block.transactions.iter().map(|x| x.id()).collect(),
+            transaction_ids: ids.unwrap_or_else(|| block.transactions.iter().map(|x| x.id()).collect()),
             is_header_only: block_status.is_header_only(),
             blue_score: ghostdag_data.blue_score,
             children_hashes: children,

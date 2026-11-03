@@ -270,6 +270,16 @@ pub trait RpcApi: Sync + Send + AnySync {
     ) -> RpcResult<GetBlocksResponse> {
         self.get_blocks_call(None, GetBlocksRequest::new(low_hash, include_blocks, include_transactions)).await
     }
+    /// Internal ownership for the no-transactions source-ID projection. This
+    /// does not promise admission of the remaining response or protobuf heap.
+    async fn get_blocks_retained_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetBlocksRequest,
+    ) -> RpcResult<crate::RetainedRpcReply<GetBlocksResponse>> {
+        self.get_blocks_call(connection, request).await.map(crate::RetainedRpcReply::untracked)
+    }
+
     async fn get_blocks_call(&self, connection: Option<&DynRpcConnection>, request: GetBlocksRequest) -> RpcResult<GetBlocksResponse>;
 
     /// Requests the current number of blocks in this node.
@@ -350,6 +360,16 @@ pub trait RpcApi: Sync + Send + AnySync {
     async fn get_utxos_by_addresses(&self, addresses: Vec<RpcAddress>) -> RpcResult<Vec<RpcUtxosByAddressesEntry>> {
         Ok(self.get_utxos_by_addresses_call(None, GetUtxosByAddressesRequest::new(addresses)).await?.entries)
     }
+    /// Internal generation-to-transport ownership. Existing client/mock
+    /// implementations keep their original call semantics by default.
+    async fn get_utxos_by_addresses_retained_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressesRequest,
+    ) -> RpcResult<crate::RetainedRpcReply<GetUtxosByAddressesResponse>> {
+        self.get_utxos_by_addresses_call(connection, request).await.map(crate::RetainedRpcReply::untracked)
+    }
+
     async fn get_utxos_by_addresses_call(
         &self,
         connection: Option<&DynRpcConnection>,

@@ -139,6 +139,10 @@ impl DbEvmStateStore {
     }
 }
 
+#[cfg(test)]
+#[path = "evm/full_state_cache_tests.rs"]
+mod full_state_cache_tests;
+
 // ---------------------------------------------------------------------------
 // EvmExecutionPayload store (prefix 211) — each block's OWN payload, persisted
 // at body validation (v0.4 §3.1). The virtual processor assembles

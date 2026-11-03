@@ -1,0 +1,25 @@
+   Compiling tonic v0.14.5 (<checkout>/vendor/tonic)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.97s
+     Running unittests src/lib.rs (/tmp/oom-transport-target/debug/deps/tonic-2f8b8e8a836b3661)
+
+running 18 tests
+test codec::buffer::tests::encode_buf ... ok
+test codec::compression::tests::convert_none_into_header_value ... ok
+test codec::compression::tests::convert_gzip_into_header_value ... ok
+test codec::buffer::tests::decode_buf ... ok
+test codec::decode::oversized_decode_tests::two_large_unread_frames_are_not_truncated_by_release ... ok
+test codec::decode::oversized_decode_tests::plain_large_then_small_preserves_unread_next_frame_and_shared_output ... ok
+test codec::encode::oversized_encode_tests::oversized_partial_encode_failure_releases_scratch ... ok
+test codec::encode::oversized_encode_tests::oversized_uncompressed_wire_bytes_unchanged_and_output_backing_released ... ok
+test codec::encode::oversized_encode_tests::small_messages_keep_existing_reuse_and_wire_behavior ... ok
+test codec::encode::oversized_encode_tests::slow_reader_owns_large_frame_without_encoder_alias ... ok
+test codec::encode::oversized_encode_tests::budgeted_sub_ceiling_frame_has_no_idle_scratch_alias_after_ticket_return ... ok
+test codec::encode::oversized_encode_tests::large_then_small_gzip_does_not_restore_large_reuse_capacity ... ok
+test codec::encode::oversized_encode_tests::dropping_encoder_does_not_invalidate_inflight_frame ... ok
+test codec::decode::oversized_decode_tests::truncated_gzip_error_returns_large_scratch_and_terminates ... ok
+test codec::decode::oversized_decode_tests::gzip_large_then_small_releases_decompressed_capacity_on_idle ... ok
+test codec::encode::oversized_encode_tests::oversized_gzip_wire_bytes_unchanged_and_raw_backing_released ... ok
+test codec::encode::oversized_encode_tests::highly_compressed_frame_does_not_retain_uncompressed_sized_backing ... ok
+test codec::encode::oversized_encode_tests::multiple_large_frames_do_not_accumulate_encoder_backings ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 73 filtered out; finished in 0.13s
