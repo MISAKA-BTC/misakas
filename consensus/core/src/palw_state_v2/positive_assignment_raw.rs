@@ -10,6 +10,7 @@ use crate::{
     },
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, NativeHeapV1},
     palw_positive_assignment_certification_v2::{AssignmentGateCClockErrorV2, AssignmentGateCClockV2},
+    palw_positive_assignment_material_v2::AssignmentRegisteredDescriptorV2,
     palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
 };
@@ -161,6 +162,7 @@ struct PositiveAssignmentRawDataV2 {
     case_backing: Option<Arc<NativeAssignedCaseBackingV2>>,
     original_open: Option<Arc<NativeAcceptedCaseCarriageV2>>,
     signed_anchor: Option<(BlockHash, u64)>,
+    registered_class: Option<AssignmentRegisteredDescriptorV2>,
     relay_carrier_fees: Option<FundingRelayCarrierFeesV2>,
     pending_relay_replay: Option<NativePendingRelayReplayV2>,
     case_relay_contract_material: Option<AcceptedMaterial>,
@@ -200,6 +202,7 @@ impl PositiveAssignmentRawActionV2 {
             case_backing: None,
             original_open: None,
             signed_anchor: None,
+            registered_class: None,
             relay_carrier_fees: None,
             pending_relay_replay: None,
             case_relay_contract_material: None,
@@ -233,6 +236,26 @@ impl PositiveAssignmentRawActionV2 {
     pub(super) fn signed_anchor_clock_v2(&self) -> Option<(BlockHash, u64)> {
         self.0.signed_anchor
     }
+    /// Carry the selected-parent archive's registration data to the exact
+    /// accepted prefix, where the fold checks the current rooted class again.
+    pub fn with_registered_class_v2(mut self, descriptor: AssignmentRegisteredDescriptorV2) -> Result<Self, NativeCoverageV1> {
+        let invalid = || NativeCoverageV1::unsupported::<Self>("Assignment class carriage", "wrong operation, clock or shared owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
+        if data.registered_class.is_some()
+            || data.body[data.index as usize].payload.get(7) != Some(&8)
+            || descriptor.registration.origin.accepted_daa > data.origin.accepted_daa
+            || descriptor.registration.origin.accepting_block == data.origin.accepting_block
+        {
+            return Err(invalid());
+        }
+        data.registered_class = Some(descriptor);
+        Ok(self)
+    }
+
+    pub(super) fn registered_class_v2(&self) -> Option<AssignmentRegisteredDescriptorV2> {
+        self.0.registered_class
+    }
+
     /// Transport the fee partition observed at the actual UTXO fee sink.
     pub fn with_relay_carrier_fees_v2(mut self, fees: FundingRelayCarrierFeesV2) -> Result<Self, NativeCoverageV1> {
         let invalid = || NativeCoverageV1::unsupported::<Self>("relay carrier fees", "wrong operation, gross fee or shared owner");
@@ -368,6 +391,7 @@ impl PartialEq for PositiveAssignmentRawActionV2 {
             && self.current_output() == other.current_output()
             && self.rules() == other.rules()
             && self.signed_anchor_clock_v2() == other.signed_anchor_clock_v2()
+            && self.registered_class_v2() == other.registered_class_v2()
             && self.relay_carrier_fees_v2() == other.relay_carrier_fees_v2()
             && self.pending_relay_replay_v2() == other.pending_relay_replay_v2()
             && match (&self.0.original_open, &other.0.original_open) {
@@ -475,6 +499,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             case_backing,
             original_open,
             signed_anchor: _,
+            registered_class: _,
             relay_carrier_fees: _,
             pending_relay_replay: _,
             case_relay_contract_material: _,

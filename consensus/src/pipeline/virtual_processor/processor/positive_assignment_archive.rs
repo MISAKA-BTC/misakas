@@ -55,7 +55,9 @@ use misaka_palw_positive_contract::{
     identity::{CaseId, Digest, ResultId},
     journal::{CASE_JOURNAL_AUX_MATERIAL_BYTES, CaseJournalLimits, CaseJournalRecordView},
     native::{KERNEL_AUX_TABLE, NativeRowKey},
-    rows::{AcceptedMaterial, AcceptedOrigin, MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES, NativeRowBody, NativeRowValue},
+    rows::{
+        AcceptedMaterial, AcceptedOrigin, MAX_NATIVE_KEY_BYTES, MAX_NATIVE_ROW_BYTES, NativeHash64, NativeRowBody, NativeRowValue,
+    },
 };
 
 /// Private concrete boundary selection. This is not a successful replay or
@@ -1401,6 +1403,131 @@ impl VirtualStateProcessor {
                 .get_selected_parent(cursor)
                 .map_err(|_| E::Unavailable("relay payer historical selected parent"))?;
         }
+    }
+
+    /// Resolve a signed class id to its literal registration on the selected
+    /// parent. Aux141 pins the admitting block and exact carriage; the native
+    /// acceptance archive supplies the carrier transaction and ordinal.
+    pub(in crate::pipeline::virtual_processor) fn discover_tir_registration_archive_v2(
+        &self,
+        parent: BlockHash,
+        state: &PalwChainStateV2,
+        class: Digest,
+        maximum_heap: u64,
+        mut remaining_work: u64,
+    ) -> Result<Option<AssignmentRegisteredDescriptorV2>, NativeAssignmentArchiveErrorV2> {
+        use NativeAssignmentArchiveErrorV2 as E;
+        let class_id = Hash64::from_bytes(class.0);
+        let Some((row, tir)) = state.class(&class_id).zip(state.tir_class_v1(&class_id)) else { return Ok(None) };
+        let Some(rooted) = palw_class_registration_origin_row_v1(state.kernel_route_state_v1(), &class_id) else {
+            return Ok(None);
+        };
+        let Some(digest) = rooted.admission_digest else { return Ok(None) };
+        if rooted.version != PALW_CLASS_REGISTRATION_ORIGIN_ROW_VERSION_V1
+            || rooted.door != PalwClassRegistrationDoorV1::Tir
+            || rooted.class_id != class_id
+            || rooted.daa_score != row.registered_daa
+            || tir.facts.class_id != class_id
+        {
+            return Ok(None);
+        }
+        let accepting = BlockHash::from_bytes(rooted.block.as_bytes());
+        if !self
+            .reachability_service
+            .try_is_chain_ancestor_of(accepting, parent)
+            .map_err(|_| E::Unavailable("TIR registration selected ancestry"))?
+        {
+            return Err(E::Invalid("rooted TIR registration outside selected ancestry"));
+        }
+        let header = self.headers_store.get_header(accepting).map_err(|_| E::Unavailable("TIR registration header"))?;
+        if header.daa_score != rooted.daa_score {
+            return Err(E::Invalid("rooted TIR registration clock"));
+        }
+        let artifact = Digest(row.artifact_root.as_bytes());
+        let origin = self
+            .acceptance_data_store
+            .try_with_accepted_archive_v2(accepting, remaining_work / 2, |view| {
+                charge_archive_work_v2(&mut remaining_work, view.byte_len_v2() * 2)?;
+                let mut matched = None;
+                let mut fault = None;
+                let mut refused = false;
+                view.visit_origins_v2(|ordinal, (block, entry)| {
+                    if entry.index_within_block == 0 {
+                        return false;
+                    }
+                    let candidate = (|| {
+                        let archive = self
+                            .block_transactions_store
+                            .archive_transaction_with_limits_v2(block, entry.index_within_block, remaining_work / 2, maximum_heap)
+                            .map_err(|why| archive_store_fault_v2(why, "TIR registration archived transaction"))?;
+                        let Ok((archived, extent)) = archive else {
+                            refused = true;
+                            return Ok(None);
+                        };
+                        charge_archive_work_v2(&mut remaining_work, extent * 2)?;
+                        let tx = &archived.transaction;
+                        if tx.id() != entry.transaction_id {
+                            return Err(E::Invalid("TIR registration acceptance transaction differs from archived body"));
+                        }
+                        if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE {
+                            return Ok(None);
+                        }
+                        let Some(admission) = tir_registration_admission_bytes_v2(&tx.payload, class, artifact) else {
+                            return Ok(None);
+                        };
+                        let Some(work) = remaining_work.checked_sub(admission.len() as u64) else {
+                            refused = true;
+                            return Ok(None);
+                        };
+                        remaining_work = work;
+                        if palw_class_admission_bytes_digest_v1(admission) != digest {
+                            return Ok(None);
+                        }
+                        if tx.is_coinbase() || !tx.id_is_current() {
+                            return Err(E::Invalid("TIR registration archived transaction identity"));
+                        }
+                        if matched.is_some() {
+                            refused = true;
+                            return Ok(None);
+                        }
+                        Ok(Some(AcceptedOrigin {
+                            accepting_block: NativeHash64(accepting.as_bytes()),
+                            carrier_block: NativeHash64(block.as_bytes()),
+                            carrier_transaction: NativeHash64(entry.transaction_id.as_bytes()),
+                            accepted_tx_ordinal: u32::try_from(ordinal)
+                                .map_err(|_| E::Invalid("TIR registration ordinal overflow"))?,
+                            event_ordinal: 0,
+                            accepted_daa: header.daa_score,
+                            accepted_blue_score: header.blue_score,
+                        }))
+                    })();
+                    match candidate {
+                        Ok(Some(origin)) => matched = Some(origin),
+                        Ok(None) => (),
+                        Err(error) => {
+                            fault = Some(error);
+                            return true;
+                        }
+                    }
+                    refused
+                })
+                .map_err(|why| archive_store_fault_v2(why, "TIR registration acceptance entries"))?;
+                match fault {
+                    Some(why) => Err(why),
+                    None => Ok(matched.filter(|_| !refused)),
+                }
+            })
+            .map_err(|why| archive_store_fault_v2(why, "TIR registration acceptance archive"))?
+            .transpose()?
+            .flatten();
+        Ok(origin.map(|origin| AssignmentRegisteredDescriptorV2 {
+            class,
+            artifact,
+            program: Digest(tir.graph_ir_root.as_bytes()),
+            layout: Digest(tir.layout_digest.as_bytes()),
+            registered_tokenizer: Digest(tir.tokenizer_id.as_bytes()),
+            registration: AcceptedMaterial { origin, digest: Digest(digest.as_bytes()) },
+        }))
     }
 
     /// Resolve the registration reference against the original selected chain,

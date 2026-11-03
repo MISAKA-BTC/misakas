@@ -540,6 +540,9 @@ impl TransitionBuilder<'_> {
         material.check_native_open_record_extent_v2(payload_bytes).map_err(refusal)?;
         material.check_native_open_quote_v2(row, original.open.native_body()).map_err(refusal)?;
         material.check_registered_class_v2(&self.state).map_err(refusal)?;
+        if action.registered_class_v2() != Some(material.registered) {
+            return Err(refusal("Open registration differs from the native selected-parent archive"));
+        }
         let (anchor, anchor_daa) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
         if anchor.as_bytes() != row.bundle.terms.branch_anchor.0 {
             return Err(refusal("Open uses a different signed ancestor"));
@@ -1747,10 +1750,12 @@ impl TransitionBuilder<'_> {
                     self.require_absent_assignment_key_v2(NativeRowKey::Assignment(bundle.terms.id()))?;
                     self.check_assignment_live_slots_v2(bundle.terms.prover, Some(&bundle.terms), rules)?;
                     self.check_assignment_service_capacity_v2(ctx, rules, assignment_service_demand_v2(source, prover))?;
-                    let class = Hash64::from_bytes(bundle.terms.registered_class.0);
-                    if self.state.class(&class).is_none() || !self.state.tir_classes.contains_key(&class) {
-                        return Err(refusal("actual registered TIR class missing at this accepted prefix"));
+                    let registered =
+                        action.registered_class_v2().ok_or_else(|| refusal("missing actual TIR registration carriage"))?;
+                    if registered.class != bundle.terms.registered_class {
+                        return Err(refusal("registration archive differs from the signed Assignment class"));
                     }
+                    registered.check_rooted_class_v2(&self.state).map_err(refusal)?;
                     let nonce = match PositiveRowsV2::new(&self.state)
                         .read(NativeRowKey::AssignmentNonce(bundle.terms.poster))
                         .map_err(refusal)?

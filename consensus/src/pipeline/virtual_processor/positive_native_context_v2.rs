@@ -965,6 +965,7 @@ impl PositiveCarrierPhaseTwoV2 {
                 .ok_or_else(|| NativeCoverageV1::overflow::<Self>("native Positive raw retained action"))?;
             let decode = require_positive_carrier_lease_v2(reserve_native_requests_v1(bytes)?)?;
             let mut signed_anchor = None;
+            let mut registered_class = None;
             let mut pending_relay = None;
             let mut case_relay_contract = None;
             let mut case_backing = None;
@@ -1035,6 +1036,13 @@ impl PositiveCarrierPhaseTwoV2 {
                 };
                 match &body.operation {
                     A::AcceptCanonicalAssignment { bundle, .. } => {
+                        let policy = rules.assignment_policy();
+                        if bundle.terms.network != rules.network()
+                            || bundle.terms.ruleset.0 != rules.rule_scope().ruleset().as_bytes()
+                            || policy.check_terms(&bundle.terms, point.daa_score).is_err()
+                        {
+                            continue;
+                        }
                         let anchor = BlockHash::from_bytes(bundle.terms.branch_anchor.0);
                         if !processor
                             .reachability_service
@@ -1047,6 +1055,22 @@ impl PositiveCarrierPhaseTwoV2 {
                             NativeCoverageV1::unsupported::<Self>("Assignment signed ancestor", "verified ancestor header unavailable")
                         })?;
                         signed_anchor = Some((anchor, anchor_daa));
+                        if let Some((state, preimages)) = selected_parent_state.zip(rules.native_preimages()) {
+                            let heap = policy.max_heap_bytes.min(preimages.physical.max_heap_bytes).saturating_sub(bytes);
+                            let work = policy.max_replay_work.min(preimages.physical.max_replay_bytes);
+                            registered_class = processor
+                                .discover_tir_registration_archive_v2(
+                                    carrier.prefix.selected_parent,
+                                    state,
+                                    bundle.terms.registered_class,
+                                    heap,
+                                    work,
+                                )
+                                .map_err(|why| match why {
+                                    E::Resource(why) => why,
+                                    why => NativeCoverageV1::unsupported::<Self>("original TIR registration", &format!("{why:?}")),
+                                })?;
+                        }
                         if matches!(rules.funding_relay_profile(), AssignmentFundingRelayProfileV2::RequiresRelayV2 { .. }) {
                             initial_a = Some(*bundle);
                         }
@@ -1174,6 +1198,10 @@ impl PositiveCarrierPhaseTwoV2 {
             };
             let action = match signed_anchor {
                 Some((block, daa)) => action.with_signed_anchor_clock_v2(block, daa)?,
+                None => action,
+            };
+            let action = match registered_class {
+                Some(descriptor) => action.with_registered_class_v2(descriptor)?,
                 None => action,
             };
             let action = match pending_relay {

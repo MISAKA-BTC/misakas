@@ -74,23 +74,36 @@ impl DbBlockTransactionsStore {
         maximum_bytes: u64,
         maximum_heap: u64,
     ) -> Result<(ArchivedTransactionV2, u64), StoreError> {
+        self.archive_transaction_with_limits_v2(block, index, maximum_bytes, maximum_heap)?
+            .map_err(|why| StoreError::LocalResourceUnavailable(why.into()))
+    }
+
+    /// The inner error denotes a deterministic paid limit. A missing archive,
+    /// bad framing or local allocator refusal still uses the outer error.
+    pub(crate) fn archive_transaction_with_limits_v2(
+        &self,
+        block: BlockHash,
+        index: u32,
+        maximum_bytes: u64,
+        maximum_heap: u64,
+    ) -> Result<Result<(ArchivedTransactionV2, u64), &'static str>, StoreError> {
         let prefix = [u8::from(DatabaseStorePrefixes::BlockTransactions)];
         let key = kaspa_database::prelude::DbKey::new(&prefix, block);
         let raw = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
         let bytes = raw.len() as u64;
         if bytes > maximum_bytes {
-            return Err(StoreError::LocalResourceUnavailable("block archive exceeds replay byte limit".into()));
+            return Ok(Err("block archive exceeds replay byte limit"));
         }
         let (wire, heap) = archived_transaction_wire_v2(&raw, index)?
             .ok_or_else(|| StoreError::DataInconsistency("accepted transaction index outside archived block".into()))?;
         if heap > maximum_heap {
-            return Err(StoreError::LocalResourceUnavailable("archived transaction exceeds replay heap limit".into()));
+            return Ok(Err("archived transaction exceeds replay heap limit"));
         }
         let lease = reserve_native_requests_v1(heap)
             .map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))?
             .ok_or_else(|| StoreError::LocalResourceUnavailable("archive transaction allocator is not armed".into()))?;
         let transaction = bincode::deserialize(wire)?;
-        Ok((ArchivedTransactionV2 { transaction, heap, lease }, bytes))
+        Ok(Ok((ArchivedTransactionV2 { transaction, heap, lease }, bytes)))
     }
 
     pub fn insert_batch(

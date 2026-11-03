@@ -77,13 +77,24 @@ impl DbAcceptanceDataStore {
         maximum_bytes: u64,
         visit: impl FnOnce(AcceptanceArchiveViewV2<'_>) -> T,
     ) -> Result<T, StoreError> {
+        self.try_with_accepted_archive_v2(accepting, maximum_bytes, visit)?
+            .ok_or_else(|| StoreError::LocalResourceUnavailable("acceptance archive exceeds replay byte limit".into()))
+    }
+
+    /// A paid extent violation is distinct from an unavailable local record.
+    pub(crate) fn try_with_accepted_archive_v2<T>(
+        &self,
+        accepting: BlockHash,
+        maximum_bytes: u64,
+        visit: impl FnOnce(AcceptanceArchiveViewV2<'_>) -> T,
+    ) -> Result<Option<T>, StoreError> {
         let prefix = [u8::from(DatabaseStorePrefixes::AcceptanceData)];
         let key = kaspa_database::prelude::DbKey::new(&prefix, accepting);
         let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
         if bytes.len() as u64 > maximum_bytes {
-            return Err(StoreError::LocalResourceUnavailable("acceptance archive exceeds replay byte limit".into()));
+            return Ok(None);
         }
-        Ok(visit(AcceptanceArchiveViewV2::new(&bytes)?))
+        Ok(Some(visit(AcceptanceArchiveViewV2::new(&bytes)?)))
     }
 
     pub fn insert_batch(
@@ -133,6 +144,14 @@ impl<'a> AcceptanceArchiveViewV2<'a> {
     fn new(raw: &'a [u8]) -> Result<Self, StoreError> {
         visit_acceptance_bytes_v2(raw, |_, _| false)?;
         Ok(Self(raw))
+    }
+
+    pub(crate) fn visit_origins_v2(&self, visit: impl FnMut(u64, ArchiveOriginV2) -> bool) -> Result<(), StoreError> {
+        visit_acceptance_bytes_v2(self.0, visit)
+    }
+
+    pub(crate) fn byte_len_v2(&self) -> u64 {
+        self.0.len() as u64
     }
 
     /// The archived input may refer to a transaction earlier in the same
