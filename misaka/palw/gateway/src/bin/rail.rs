@@ -388,6 +388,7 @@ fn main() {
             pass_through.extend(["--retention-dir".to_string(), dir.display().to_string()]);
         }
         pass_through.extend(["--anchor-ttl-daa".to_string(), anchor_ttl_daa.to_string()]);
+        pass_through.extend(["--tfp1".into(), tfp1.as_str().into()]);
         // RFC-0009: the one-shot run of a watched job also files the claim's evidence and its V4 redemption authorization (the drill's
         // fence-4 leg, `tools/drills/combined/rfc9-v4-leg.sh`, runs the rail this way with `--once`: one job, one authorization file).
         if let Some(dir) = &evidence_out {
@@ -475,6 +476,9 @@ fn main() {
             })
         );
         return;
+    }
+    if !print_claim {
+        tfp1.check_inputs(public_binding_path.as_deref(), rpc_endpoint.as_deref()).unwrap_or_else(|why| die(why.into()));
     }
     let stem = artifact_stem.unwrap_or_else(|| die("--artifact <outbox/fp-job-XXXX> is required (the path WITHOUT a suffix)".into()));
     let unsigned_path = PathBuf::from(format!("{}.commitment-unsigned.borsh", stem.display()));
@@ -664,9 +668,6 @@ fn main() {
             }
             return None;
         };
-        if tfp1 == Tfp1ModeV1::Require && rpc_endpoint.is_none() {
-            die("--tfp1 require needs --rpc: the frame is the node's quote (op 248)".into());
-        }
         let Some(endpoint) = rpc_endpoint.as_deref() else {
             eprintln!(
                 "[misaka-palw-fp-rail] WARNING: a TIR original without --rpc cannot be quoted for its TFP1 frame; past \
@@ -1741,6 +1742,26 @@ enum Tfp1ModeV1 {
 }
 
 impl Tfp1ModeV1 {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Require => "require",
+            Self::Off => "off",
+        }
+    }
+
+    fn check_inputs(self, binding: Option<&Path>, rpc: Option<&str>) -> Result<(), &'static str> {
+        if self == Self::Require {
+            if binding.is_none() {
+                return Err("--tfp1 require: no TIR public binding was supplied");
+            }
+            if rpc.is_none() {
+                return Err("--tfp1 require needs --rpc: the frame is the node's quote (op 248)");
+            }
+        }
+        Ok(())
+    }
+
     fn parse(s: &str) -> Result<Self, String> {
         match s {
             "auto" => Ok(Self::Auto),
@@ -2584,6 +2605,17 @@ mod watch {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn tfp1_require_rejects_absent_binding_or_node() {
+            let mode = super::super::Tfp1ModeV1::Require;
+            let binding = Path::new("tir-public-binding.hex");
+            assert!(mode.check_inputs(None, Some("rpc")).is_err());
+            assert!(mode.check_inputs(Some(binding), None).is_err());
+            assert!(mode.check_inputs(Some(binding), Some("rpc")).is_ok());
+            assert_eq!(mode.as_str(), "require");
+            assert!(super::super::Tfp1ModeV1::Auto.check_inputs(None, None).is_ok());
+        }
 
         fn scratch(name: &str) -> PathBuf {
             let dir = std::env::temp_dir().join(format!("rail-watch-{name}-{}", std::process::id()));
