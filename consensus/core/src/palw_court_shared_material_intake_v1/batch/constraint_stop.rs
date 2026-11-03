@@ -19,7 +19,42 @@ use std::ops::Range;
 pub(crate) const STOP_INTENT_BYTES_V1: u64 =
     2 + 5 * 64 + 4 + 1 + (64 + 4) + 4 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
 /// One Stop delivery per original. Ordinary source demands use lower ordinals.
-pub(crate) const BATCH_STOP_ORDINAL_V1: u64 = u64::MAX;
+pub const BATCH_STOP_ORDINAL_V1: u64 = u64::MAX;
+
+/// Derive the single canonical response range from the original's generated ID count.
+pub fn batch_stop_full_ids_range_v1(claim: Hash64, count: u32) -> Result<crate::palw_batch_court_v1::BatchRangeV1, String> {
+    use crate::palw_batch_court_v1::{BatchRangeAuthenticationV1, BatchRangeV1};
+    if count == 0 {
+        return Err("Batch Stop FullIds requires a nonempty output".into());
+    }
+    let bytes = u32::try_from(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(count))
+        .map_err(|_| "Batch Stop FullIds exceeds the wire length")?;
+    Ok(BatchRangeV1 {
+        id: super::MaterialTargetV1::FullIds.id_v1(claim)?,
+        bytes,
+        authentication: BatchRangeAuthenticationV1::WholeRange,
+    })
+}
+
+/// Quote the dedicated FullIds demand for an accepted constrained Stop case.
+pub(crate) fn quote_batch_stop_full_ids_open_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    notice: Hash64,
+) -> Result<(u32, crate::palw_batch_court_v1::carriage::SignedBatchDemandV1), String> {
+    use crate::palw_batch_court_v1::carriage::quote_batch_open_v1;
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim)?;
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
+    let registration = crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(state, claim)?
+        .ok_or("Batch Stop has no verified tokenizer registration for the original")?;
+    let original = frame.original_v1();
+    let bounds = registration.opening_bounds_for_generated_ids_v1(original.decode_tokens_executed);
+    let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(context.scope_id, original, bounds)
+        .ok_or("Batch Stop original is outside the constrained Stop profile")?;
+    let range = batch_stop_full_ids_range_v1(claim, plan.generated_ids)?;
+    let open = quote_batch_open_v1(state, claim, notice, BATCH_STOP_ORDINAL_V1, vec![range])?;
+    Ok((plan.generated_ids, open))
+}
 
 /// Template eligibility uses rooted availability and the exact reserved
 /// terminal slot. It borrows the carrier and does not run the EOG verdict.
@@ -260,6 +295,17 @@ mod tests {
     use super::*;
     use crate::palw_batch_court_v1::BatchCourtWindowV1;
     use crate::palw_court_service_v1::ServiceReservations;
+
+    #[test]
+    fn stop_full_ids_open_range_counts_each_native_chunk() {
+        let claim = Hash64::from_u64_word(5);
+        let range = batch_stop_full_ids_range_v1(claim, 1025).unwrap();
+        assert_eq!(range.id, super::super::MaterialTargetV1::FullIds.id_v1(claim).unwrap());
+        assert_eq!(range.bytes, 1025 * 4 + 2 * 69);
+        assert_eq!(range.authentication, crate::palw_batch_court_v1::BatchRangeAuthenticationV1::WholeRange);
+        assert!(batch_stop_full_ids_range_v1(claim, 0).is_err());
+        assert!(batch_stop_full_ids_range_v1(claim, u32::MAX).is_err());
+    }
 
     #[test]
     fn batch_stop_reserves_verified_full_ids_before_the_stop() {

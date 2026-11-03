@@ -92,7 +92,7 @@ pub struct GetPalwCourtStateRequest {
     pub batch_ordinal: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub batch_target: String,
-    /// Numerical Open selector `notice/leaf/target=bytes,target=bytes`.
+    /// Open selector `notice/leaf/target=bytes,target=bytes` or `notice/stop-full-ids`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub batch_open: String,
 }
@@ -254,6 +254,13 @@ mod tests {
         Serializer::serialize(&open, &mut open_wire).unwrap();
         assert_eq!(&open_wire[..2], &3u16.to_le_bytes());
         assert_eq!(round_trip(&open).batch_open, open.batch_open);
+        let stop = GetPalwCourtStateRequest {
+            batch_ordinal: u64::MAX.to_string(),
+            batch_open: format!("{}/stop-full-ids", "cd".repeat(64)),
+            ..open
+        };
+        let restored = round_trip(&stop);
+        assert_eq!((restored.batch_ordinal, restored.batch_open), (stop.batch_ordinal, stop.batch_open));
         let bond = round_trip(&GetPalwBondDetailRequest { bond: "00:1".into() });
         assert_eq!(bond.bond, "00:1");
         let plain = round_trip(&GetPalwFenceScheduleRequest::default());

@@ -363,6 +363,7 @@ pub enum PalwCourtTargetV1 {
     Session(Hash64),
     BatchResponse { claim: Hash64, ordinal: u64, target: MaterialTargetV1 },
     NumericalBatchOpen { claim: Hash64, ordinal: usize, notice: Hash64, leaf: u64, lengths: Vec<(MaterialTargetV1, u64)> },
+    BatchStopFullIdsOpen { claim: Hash64, notice: Hash64 },
 }
 
 /// **`getPalwCourtState` (op 226): the court around one claim, or one session** — every open court session with its ladder turn and
@@ -381,6 +382,23 @@ pub fn palw_court_state_json_v1(
         PalwCourtTargetV1::BatchResponse { claim, ordinal, target } => return batch_response_json_v1(state, claim, ordinal, target, now),
         PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths } => {
             return Some(numerical_batch_open_json_v1(state, claim, ordinal, notice, leaf, &lengths, now));
+        }
+        PalwCourtTargetV1::BatchStopFullIdsOpen { claim, notice } => {
+            use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::{
+                BATCH_STOP_ORDINAL_V1, quote_batch_stop_full_ids_open_v1,
+            };
+            let result = quote_batch_stop_full_ids_open_v1(state, claim, notice)
+                .and_then(|(count, open)| batch_open_body_json_v1(&open).map(|body| (count, body)));
+            let (count, open, error) = match result {
+                Ok((count, open)) => (Some(count), open, None),
+                Err(error) => (None, Value::Null, Some(error)),
+            };
+            return Some(json!({
+                "version": PALW_USER_VIEW_VERSION_V1, "kind": "palwBatchStopFullIdsOpen", "nowDaa": now,
+                "tipBlock": state.last_point().map(|point| point.block.to_string()),
+                "claimId": claim.to_string(), "noticeId": notice.to_string(),
+                "ordinal": BATCH_STOP_ORDINAL_V1.to_string(), "fullIdsCount": count, "open": open, "error": error,
+            }));
         }
     };
     let sessions: Vec<Value> = state
@@ -422,23 +440,7 @@ fn numerical_batch_open_json_v1(
     // authenticates and accounts for the final signed carrier independently.
     const MAX_QUOTE_RANGES: usize = 4_096;
     let result = quote_numerical_batch_open_v1(state, claim, notice, leaf, ordinal, MAX_QUOTE_RANGES, lengths)
-        .map_err(|error| error.to_string()).and_then(|open| {
-            let demand = &open.demand;
-            let window = demand.case_window;
-            let request_root = demand.checked_request_root_v1().map_err(|error| format!("Batch demand: {error:?}"))?;
-            Ok(json!({
-                "wireVersion": open.version, "scopeId": open.scope_id.to_string(),
-                "signer": palw_bond_key_text_v1(&open.signer), "requestRoot": request_root.to_string(),
-                "caseId": demand.case_id.to_string(), "originalAcceptedDaa": window.claim_accepted_daa.to_string(),
-                "noticeDaa": window.challenge_opened_daa.to_string(), "collectUntilDaa": window.collect_until_daa.to_string(),
-                "materialUntilDaa": window.material_until_daa.to_string(), "openedDaa": demand.opened_daa.to_string(),
-                "responseDeadlineDaa": demand.response_deadline_daa.to_string(),
-                "partBytes": demand.part_bytes, "maximumBytes": demand.maximum_bytes,
-                "ranges": demand.ranges.iter().map(|range| json!({
-                    "id": range.id.to_string(), "bytes": range.bytes, "authentication": "whole-range",
-                })).collect::<Vec<_>>(),
-            }))
-        });
+        .map_err(|error| error.to_string()).and_then(|open| batch_open_body_json_v1(&open));
     let (open, error) = match result {
         Ok(open) => (open, None),
         Err(error) => (Value::Null, Some(error)),
@@ -449,6 +451,24 @@ fn numerical_batch_open_json_v1(
         "claimId": claim.to_string(), "noticeId": notice.to_string(),
         "ordinal": ordinal.to_string(), "leaf": leaf.to_string(), "open": open, "error": error,
     })
+}
+
+fn batch_open_body_json_v1(open: &crate::palw_batch_court_v1::carriage::SignedBatchDemandV1) -> Result<Value, String> {
+    let demand = &open.demand;
+    let window = demand.case_window;
+    let request_root = demand.checked_request_root_v1().map_err(|error| format!("Batch demand: {error:?}"))?;
+    Ok(json!({
+        "wireVersion": open.version, "scopeId": open.scope_id.to_string(),
+        "signer": palw_bond_key_text_v1(&open.signer), "requestRoot": request_root.to_string(),
+        "caseId": demand.case_id.to_string(), "originalAcceptedDaa": window.claim_accepted_daa.to_string(),
+        "noticeDaa": window.challenge_opened_daa.to_string(), "collectUntilDaa": window.collect_until_daa.to_string(),
+        "materialUntilDaa": window.material_until_daa.to_string(), "openedDaa": demand.opened_daa.to_string(),
+        "responseDeadlineDaa": demand.response_deadline_daa.to_string(),
+        "partBytes": demand.part_bytes, "maximumBytes": demand.maximum_bytes,
+        "ranges": demand.ranges.iter().map(|range| json!({
+            "id": range.id.to_string(), "bytes": range.bytes, "authentication": "whole-range",
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 fn batch_response_json_v1(

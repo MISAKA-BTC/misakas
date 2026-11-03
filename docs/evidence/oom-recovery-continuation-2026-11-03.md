@@ -3513,3 +3513,24 @@ B0 and relay agreed at virtual DAA 19,719. The selected chain advanced
 by one block in the scanned page and contained no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-stop-template-live.sHoAz8/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-template.ue9GpH/tests.log`.
+
+## Operator path for the booked Stop FullIds Open
+
+`misaka palw batch-open --stop-full-ids` now uses the operator Court
+RPC to quote the dedicated `u64::MAX` request for an accepted notice.
+The node derives the single WholeRange target and its exact encoded
+length from the original constrained claim and its accepted tokenizer
+record, then checks the original's booked Open and response slots.
+The CLI reconstructs the range and request root before signing. The
+existing fee, selected-tip recheck and exact-DAA submit path applies.
+
+Five extracted tests passed for chunk length and overflow, RPC selector
+and request compatibility, and CLI flag exclusivity. The sizing fixture
+uses a stand-in for the target-ID lookup. The complete Node/RPC/CLI build,
+wallet-funded submission, Panel automation and same-claim terminal
+flow remain unverified.
+
+B0 and relay agreed at virtual DAA 19,721, with no new Qwen carrier
+in the scanned page. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-fullids-live.PzdOSG/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-fullids-open.BhowUP/tests.log`.

@@ -1729,7 +1729,7 @@ enum PalwCmd {
         #[arg(long)]
         maximum_total_fee_sompi: Option<u64>,
     },
-    /// Sign and fund a reserved numerical Batch Open using the accepted notice's bond.
+    /// Sign and fund a reserved Batch Open using the accepted notice's bond.
     BatchOpen {
         #[command(flatten)]
         key: KeyArgs,
@@ -1739,12 +1739,15 @@ enum PalwCmd {
         claim: String,
         #[arg(long)]
         notice: String,
-        #[arg(long)]
-        leaf: u64,
-        #[arg(long)]
-        ordinal: u64,
+        /// Open the dedicated FullIds request for a constrained EOG dispute.
+        #[arg(long, conflicts_with_all = ["leaf", "ordinal", "ranges"])]
+        stop_full_ids: bool,
+        #[arg(long, required_unless_present = "stop_full_ids")]
+        leaf: Option<u64>,
+        #[arg(long, required_unless_present = "stop_full_ids")]
+        ordinal: Option<u64>,
         /// Exact encoded size of a material target as target=bytes. Repeat for each target.
-        #[arg(long = "range", required = true)]
+        #[arg(long = "range", required_unless_present = "stop_full_ids")]
         ranges: Vec<String>,
         /// Broadcast at the reserved DAA. Otherwise preview.
         #[arg(long)]
@@ -3735,7 +3738,7 @@ async fn run_cli() -> std::process::ExitCode {
             Box::pin(async move { palw_batch::respond(ctx, &key.source(), &bond, &claim, ordinal, &target, step, offset, &body,
                 submit, maximum_fee_sompi).await })
         }
-        Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi }) => {
+        Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi, .. }) => {
             Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
                 submit, maximum_fee_sompi).await })
         }

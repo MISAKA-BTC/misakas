@@ -8,8 +8,8 @@ use kaspa_consensus_core::{
         carriage::{BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1},
     },
     palw_court_shared_material_intake_v1::{
-        MATERIAL_BATCH_CONTEXT_V1, MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1, SignedMaterialIntakeV1,
-        material_batch_carrier_fee_v1, material_batch_draft_id_v1,
+        BATCH_STOP_ORDINAL_V1, MATERIAL_BATCH_CONTEXT_V1, MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1,
+        SignedMaterialIntakeV1, batch_stop_full_ids_range_v1, material_batch_carrier_fee_v1, material_batch_draft_id_v1,
     },
     palw_state_v2::PalwBondKeyV2,
 };
@@ -147,8 +147,8 @@ pub(crate) async fn open(
     bond: &str,
     claim: &str,
     notice: &str,
-    leaf: u64,
-    ordinal: u64,
+    leaf: Option<u64>,
+    ordinal: Option<u64>,
     entries: &[String],
     submit: bool,
     maximum_fee: Option<u64>,
@@ -156,7 +156,12 @@ pub(crate) async fn open(
     use crate::palw_user::parse_hash;
     let claim = parse_hash("claim", claim)?;
     let notice = parse_hash("notice", notice)?;
-    if !(1..=MAX_BATCH_RANGES_V1).contains(&entries.len()) {
+    let (ordinal, kind) = match (leaf, ordinal) {
+        (None, None) if entries.is_empty() => (BATCH_STOP_ORDINAL_V1, "palwBatchStopFullIdsOpen"),
+        (Some(_), Some(ordinal)) if ordinal != BATCH_STOP_ORDINAL_V1 => (ordinal, "palwNumericalBatchOpen"),
+        _ => return Err(refused("use --stop-full-ids or a numerical leaf, ordinal and ranges")),
+    };
+    if leaf.is_some() && !(1..=MAX_BATCH_RANGES_V1).contains(&entries.len()) {
         return Err(refused("provide between 1 and 64 --range values"));
     }
     let mut material = Vec::with_capacity(entries.len());
@@ -176,29 +181,38 @@ pub(crate) async fn open(
     if material.windows(2).any(|pair| pair[0].0.id == pair[1].0.id) {
         return Err(refused("duplicate --range target"));
     }
-    let (ranges, lengths): (Vec<_>, Vec<_>) = material.into_iter().unzip();
+    let (mut ranges, lengths): (Vec<_>, Vec<_>) = material.into_iter().unzip();
+    let batch_open = match leaf {
+        Some(leaf) => format!("{notice}/{leaf}/{}", lengths.join(",")),
+        None => format!("{notice}/stop-full-ids"),
+    };
     let request = GetPalwCourtStateRequest {
         claim_hex: claim.to_string(),
         batch_ordinal: ordinal.to_string(),
-        batch_open: format!("{notice}/{leaf}/{}", lengths.join(",")),
+        batch_open,
         ..Default::default()
     };
     let (nv, key, signer) = crate::palw_user::bond_signer_v1(ctx, key_source, bond).await?;
     let (now, raw) = read_quote(&nv, request.clone()).await?;
     let doc: serde_json::Value = serde_json::from_str(&raw).map_err(|e| refused(e.to_string()))?;
     if doc["version"] != 1
-        || doc["kind"] != "palwNumericalBatchOpen"
+        || doc["kind"] != kind
         || doc["claimId"] != request.claim_hex
         || doc["noticeId"] != notice.to_string()
         || doc["ordinal"] != request.batch_ordinal
-        || doc["leaf"] != leaf.to_string()
+        || leaf.is_some_and(|leaf| doc["leaf"] != leaf.to_string())
         || doc["nowDaa"] != now
         || doc["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
     {
-        return Err(refused("the node returned a different numerical Batch case"));
+        return Err(refused("the node returned a different Batch Open case"));
     }
     if let Some(error) = doc["error"].as_str() {
         return Err(refused(error));
+    }
+    if leaf.is_none() {
+        let count = doc["fullIdsCount"].as_u64().and_then(|count| u32::try_from(count).ok())
+            .ok_or_else(|| refused("the Batch Stop quote omitted its generated ID count"))?;
+        ranges.push(batch_stop_full_ids_range_v1(claim, count).map_err(refused)?);
     }
     let quote: OpenQuote = serde_json::from_value(doc["open"].clone()).map_err(|e| refused(e.to_string()))?;
     let mut open = quote.checked_open(claim, notice, ordinal, signer, ranges)?;
