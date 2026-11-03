@@ -2242,3 +2242,29 @@ shows submission. No rejecting fold reason or accepting claim row was
 observed. See
 `/private/tmp/misaka-t12-oom-20261102/g14-run-builder-live.rLm3LS/page.json`
 and its sibling `journal.txt`.
+
+## Bounded native intake ledger computation
+
+The first material Begin for a submitter computed its existing ledger
+limit by visiting every source ordinal, even when submitting one
+root-local StepRun. The candidate groups requests with identical native
+byte ceilings. It accounts for the ragged last frontier separately at
+each tree level and adds the same complete sequence of ID chunk bytes.
+The existing parameter and prompt allowances are unchanged. This is a
+CPU-path improvement, independent of the funded Batch service budget.
+
+The retained SmolLM2 execution had 15,252 step leaves and 3,902,405
+source ordinals. The exact grouped result from 294 representative bounds
+and the legacy per-ordinal result were both 8,180,678,236,677 bytes.
+The timings in one local sample were 12.2 microseconds and 1.91 seconds
+for those two loops. The harness uses the candidate aggregation and
+cached Studio Core native bounds. It does not time parameter cover,
+ledger persistence, or the deployed fold.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-exact-intake-budget.zzSidY/run.stdout`.
+
+B0 and relay agreed at DAA 19,679. Both returned no claim row for the
+Qwen carrier at DAA 19,677, referenced by the selected fold at DAA 19,678.
+The producer journal confirms the submission. The exact fold refusal
+was not observed. See
+`/private/tmp/misaka-t12-oom-20261102/g14-intake-budget-live.pHse47/page.json`
+and the sibling `journal.txt`.
