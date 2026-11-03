@@ -272,3 +272,31 @@ generation and public indexing, and a real dialogue through the normal
 gateway. A local publication candidate excludes the private operational
 history. It passed all six fast CI gates. Full CI and the live release
 gates remain open.
+
+## Public follow-through and isolated dialogue — 03:03 UTC
+
+Two public samples reported DAA 19,563 and 19,564 on the same synced
+relay, with HTTP 200 and the current index cursor. At 19,563, B0 and
+the relay reported the same selected sink. B1 remained unsynced at
+19,389. The 113 primary answered RPC at 19,224, still unsynced, while
+the separate Explorer tunnel reported the relay's current sink.
+
+The relay retained 1,314 three-second samples from its current
+invocation. It had zero restarts, zero swap, zero OOM events, and
+zero memory-pressure stall time. The cgroup peak was 2,719,289,344
+bytes under its 8 GiB limit. Both log rings were below their first
+rotation threshold. The pressure receipt SHA256 is
+`d215b025294c614ee7b0574edb394e15bea3fe7c3dd62c5dab4a9167321298b0`.
+
+The exported Linux ELF also passed a network-disabled amd64 loader
+check. Its in-container digest matched the build, all shared libraries
+resolved, and the version command exited 0. This was a loader check.
+
+The existing Studio gateway handled two loopback HTTP requests with
+the exact T12 8K artifact and its committed tokenizer. It answered
+`4` and then `7` when the second request included the previous turn.
+Both requests returned HTTP 200. The isolated process had no signer or
+node RPC, reported `committed: false`, and wrote no commitment files.
+The smoke receipt SHA256 is
+`24e4199ca1ba96c7e2ef50f4cdb81dee442977ed9e0b633206503a7cb566290b`.
+Live framed G14 dialogue admission and settlement remain unverified.
