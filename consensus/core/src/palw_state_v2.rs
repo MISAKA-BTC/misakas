@@ -22811,7 +22811,21 @@ pub(crate) fn replay_delta_owned_v1(
     // insertion. Its prerequisite rows must already exist on the exact parent,
     // including when unrelated writes occur before it in this journal.
     let mut tokenizer_registration_changed = false;
+    let mut batch_numerical_receipt_changed = false;
     for entry in &delta.entries {
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
+            && (matches!(key, CourtKey::CourtBatchNumericalReceipt(_))
+                || matches!(old, Some(CourtRow::CourtBatchNumericalReceipt(_)))
+                || matches!(new, Some(CourtRow::CourtBatchNumericalReceipt(_))))
+        {
+            let row = match (old, new) {
+                (None, Some(CourtRow::CourtBatchNumericalReceipt(row))) if row.at == delta.point => row,
+                (Some(CourtRow::CourtBatchNumericalReceipt(row)), None) if delta.point.daa_score >= row.material_until_daa => row,
+                _ => return Err(PalwStateV2Error::DeltaMismatch("numerical Batch receipt changes its accepting point or retention")),
+            };
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            batch_numerical_receipt_changed = true;
+        }
         if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
             && (matches!(key, CourtKey::CourtBatchStopReceipt(_))
                 || matches!(old, Some(CourtRow::CourtBatchStopReceipt(_)))
@@ -22871,6 +22885,17 @@ pub(crate) fn replay_delta_owned_v1(
             if let PalwDeltaEntryV2::StagedCourtSeed { new: Some(CourtRow::VerifiedTokenizerRegistration(row)), .. } = entry {
                 if revert { row.check_adoption(&state, &delta.point) } else { row.check_child(&state, &delta.point) }
                     .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+    }
+    if batch_numerical_receipt_changed {
+        let point = state.last_point().ok_or(PalwStateV2Error::DeltaMismatch("numerical Batch receipt has no snapshot point"))?;
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::StagedCourtSeed { key: key @ CourtKey::CourtBatchNumericalReceipt(_), .. } = entry
+                && let Some(CourtRow::CourtBatchNumericalReceipt(row)) = state.staged_court_row_v1(key)
+                && point.daa_score < row.material_until_daa
+            {
+                row.check_context(&state, point).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
         }
     }

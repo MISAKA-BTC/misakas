@@ -4061,3 +4061,31 @@ Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-signed-numerical-live.IbSgtC/page.json`
 and
 `/private/tmp/misaka-t12-oom-20261102/g14-signed-verification-pair.P80gmo/page.json`.
+
+## Journal the authenticated numerical Batch result
+
+The native writer now verifies the signed intent before storing one
+immutable numerical finding per original. The row binds the source,
+notice, selected leaf, signed intent digest, accepting point and original
+material horizon. A reproduced fault records its existing evidence ID.
+The row does not apply claim credit, slash, settlement or Final. Identical
+replay at the same accepting point is idempotent.
+
+The staged row appends key 34 and row 41. Native byte and heap visitors,
+retention indexing, snapshot checks and delta replay cover the new row.
+A journal insertion must match its accepting point. Removal requires the
+material horizon, and reversing either transition uses the exact prior
+value. A retained row must still point to the original's accepted
+numerical notice on the restored branch.
+
+The extracted wire test passed the original-key, tag, bounded scan,
+round trip, truncation and unsupported version checks. Rust files parsed
+with rustfmt and the diff passed whitespace checks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-receipt.zTst91/tests.log`.
+The integrated journal and native acceptance fixture have not run.
+The BCT1 dispatcher still needs an admitted replay budget from the
+native profile and a separate terminal operation using the receipt.
+
+B0 and relay agreed at virtual DAA 19,740. The additional selected block
+had DAA 19,739 and no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-receipt-live.s4EXlY/page.json`.

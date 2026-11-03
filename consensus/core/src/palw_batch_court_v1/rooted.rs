@@ -9,6 +9,75 @@ use crate::{BlockHash, Hash64};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io;
 
+/// Numerical result of one reserved verification slot. The terminal operation
+/// consumes this finding separately from claim credit and accounting.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct RootedBatchNumericalReceiptV1 {
+    pub version: u16,
+    pub claim: Hash64,
+    pub scope: Hash64,
+    pub source: Hash64,
+    pub notice: Hash64,
+    pub leaf: u64,
+    pub intent_digest: Hash64,
+    pub at: PalwBlockContextV2,
+    pub material_until_daa: u64,
+    pub fault_evidence: Option<Hash64>,
+}
+
+impl RootedBatchNumericalReceiptV1 {
+    pub(crate) fn check(&self, key: &Key) -> Result<(), String> {
+        if self.version != 1
+            || *key != Key::CourtBatchNumericalReceipt(self.claim)
+            || [self.claim, self.scope, self.source, self.notice, self.intent_digest, self.at.block].contains(&Hash64::default())
+            || self.at.daa_score >= self.material_until_daa
+            || self.fault_evidence == Some(Hash64::default())
+        {
+            return Err("invalid rooted numerical Batch receipt".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_context(&self, state: &PalwChainStateV2, point: &PalwBlockContextV2) -> Result<(), String> {
+        let context = shared::context(state, self.claim)?;
+        let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(self.notice)) else {
+            return Err("numerical Batch receipt has no accepted notice".into());
+        };
+        if (context.scope_id, context.source_id, context.material_until_daa)
+            != (self.scope, self.source, self.material_until_daa)
+            || (notice.claim, notice.scope_id) != (self.claim, self.scope)
+            || checked_initial_notice_target_v1(state, context, notice, self.notice)?
+                != Some(shared::BatchNoticeTargetV1::Numerical { leaf: self.leaf })
+            || self.at.daa_score <= notice.opened_daa
+            || self.at.daa_score >= context.hard_daa
+            || self.at.daa_score > point.daa_score
+            || self.at.blue_score > point.blue_score
+            || (self.at.blue_score == point.blue_score && self.at != *point)
+        {
+            return Err("numerical Batch receipt differs from its original or accepting point".into());
+        }
+        Ok(())
+    }
+}
+
+impl NativeWireScanV1 for RootedBatchNumericalReceiptV1 {
+    fn scan_native_wire_v1<R: io::Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        if reader.short()? != 1 {
+            return Err(wire_bad("unknown numerical Batch receipt version"));
+        }
+        let mut shape = NativeWireShapeV1::default();
+        for _ in 0..4 {
+            shape = shape.merge(Hash64::scan_native_wire_v1(reader)?)?;
+        }
+        shape = shape.merge(u64::scan_native_wire_v1(reader)?)?;
+        shape = shape.merge(Hash64::scan_native_wire_v1(reader)?)?;
+        shape = shape.merge(PalwBlockContextV2::scan_native_wire_v1(reader)?)?;
+        shape = shape.merge(u64::scan_native_wire_v1(reader)?)?;
+        shape.merge(Option::<Hash64>::scan_native_wire_v1(reader)?)
+    }
+}
+
 /// One immutable constrained Stop finding on the accepting branch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RootedBatchStopReceiptV1 {
@@ -405,6 +474,35 @@ impl crate::palw_native_resource_v1::NativeHeapV1 for RootedBatchDemandV1 {
 mod tests {
     use super::*;
     use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchRangeAuthenticationV1};
+
+    #[test]
+    fn numerical_receipt_wire_checks_original_key_and_version() {
+        let h = Hash64::from_u64_word;
+        let receipt = RootedBatchNumericalReceiptV1 {
+            version: 1, claim: h(1), scope: h(2), source: h(3), notice: h(4),
+            leaf: 7, intent_digest: h(5),
+            at: PalwBlockContextV2 { block: h(6), daa_score: 4_000, blue_score: 5_000, subsidy: 0 },
+            material_until_daa: 12_000, fault_evidence: Some(h(8)),
+        };
+        let key = Key::CourtBatchNumericalReceipt(receipt.claim);
+        assert_eq!(borsh::to_vec(&key).unwrap()[0], 34);
+        let row = Row::CourtBatchNumericalReceipt(Box::new(receipt.clone()));
+        let bytes = borsh::to_vec(&row).unwrap();
+        assert_eq!(bytes[0], 41);
+        assert_eq!(borsh::from_slice::<Row>(&bytes).unwrap(), row);
+        assert!(receipt.check(&key).is_ok());
+        assert!(receipt.check(&Key::CourtBatchNumericalReceipt(h(9))).is_err());
+        let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+        let shape = Row::scan_native_wire_v1(&mut reader).unwrap();
+        assert_eq!(reader.remaining(), 0);
+        assert_eq!(shape.collection_entries, 0);
+        let mut unsupported = bytes.clone();
+        unsupported[1] = 2;
+        for malformed in [&unsupported[..], &bytes[..bytes.len() - 1]] {
+            let mut reader = NativeWireReaderV1::new(malformed, malformed.len() as u64);
+            assert!(Row::scan_native_wire_v1(&mut reader).is_err());
+        }
+    }
 
     #[test]
     fn batch_stop_receipt_has_a_fixed_bounded_row_and_original_key() {

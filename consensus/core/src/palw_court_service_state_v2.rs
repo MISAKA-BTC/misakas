@@ -384,7 +384,7 @@ impl crate::palw_state_v2::PalwChainStateV2 {
             // RFC-0032 A canonical material is held like other shared original data;
             // incomplete drafts/parts are not (they leave at their own TTL).
             Key::CourtMaterial(claim, _) | Key::CourtMaterialLedger(claim, _) | Key::CourtBatchDemand(claim, _)
-            | Key::CourtBatchStopReceipt(claim) => Some(*claim),
+            | Key::CourtBatchStopReceipt(claim) | Key::CourtBatchNumericalReceipt(claim) => Some(*claim),
             Key::CourtSharedStream(_) | Key::CourtSharedChunk(..) => match self.staged_court_row_v1(key) {
                 Some(Row::CourtSharedStream(s)) => Some(s.claim),
                 Some(Row::CourtSharedChunk(c)) => Some(c.claim),

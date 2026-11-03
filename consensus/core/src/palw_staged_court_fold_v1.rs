@@ -1149,6 +1149,65 @@ impl TransitionBuilder<'_> {
         }
     }
 
+    /// Native verification writer. The caller supplies the selected profile's
+    /// admitted budget. The result is retained independently of settlement.
+    pub(super) fn install_batch_numerical_receipt_v1(
+        &mut self,
+        at: &PalwBlockContextV2,
+        signed: &crate::palw_court_shared_material_intake_v1::batch::numerical_verification::SignedNumericalBatchVerificationV1,
+        budget: crate::palw_court_shared_material_intake_v1::batch::native_ranges::NumericalBatchReplayBudgetV1,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1;
+        use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::verify_rooted_numerical_batch_v1;
+        let refused = |why: &str| PalwStateV2Error::CarriageInconsistent(why.into());
+        let rules = self.extras.native_court_rules_v1.filter(|rules| {
+            self.extras.batch_court_active_v1 && &rules.at == at
+                && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
+        }).ok_or_else(|| refused("numerical Batch receipt requires active native rules at the accepting point"))?;
+        let key = PalwStagedCourtKeyV1::CourtBatchNumericalReceipt(signed.claim);
+        let digest = crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-numerical-receipt/v1", signed)
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        if let Some(old) = self.state.staged_court_row_v1(&key) {
+            return match old {
+                PalwStagedCourtRowV1::CourtBatchNumericalReceipt(row) if row.at == *at && row.intent_digest == digest => Ok(()),
+                _ => Err(refused("accepted numerical Batch receipt is immutable")),
+            };
+        }
+        let finding = verify_rooted_numerical_batch_v1(&self.state, self.params, &rules, signed, budget)
+            .map_err(super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2)?;
+        if (finding.claim, finding.scope, finding.notice, finding.leaf, finding.at)
+            != (signed.claim, signed.scope, signed.notice, signed.leaf, *at)
+        {
+            return Err(refused("numerical Batch finding changes its signed verification scope"));
+        }
+        let context = crate::palw_court_shared_tir_state_v1::context(&self.state, signed.claim)
+            .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let receipt = RootedBatchNumericalReceiptV1 {
+            version: 1,
+            claim: finding.claim,
+            scope: finding.scope,
+            source: context.source_id,
+            notice: finding.notice,
+            leaf: finding.leaf,
+            intent_digest: digest,
+            at: finding.at,
+            material_until_daa: context.material_until_daa,
+            fault_evidence: finding.fault.map(|fault| fault.evidence_id),
+        };
+        receipt.check(&key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let mut quote = super::native_writers::NativeWriteQuoteV1::new("numerical Batch receipt row");
+        quote.exact::<RootedBatchNumericalReceiptV1>(1)?;
+        self.admit_native_write_v1(quote)?;
+        let new = Some(PalwStagedCourtRowV1::CourtBatchNumericalReceipt(Box::new(receipt)));
+        self.reserve_map_row_v1(&key, &new, |state| &state.staged_courts, false, "native numerical Batch receipt writer")?;
+        self.reserve_staged_indices_v1(&key, &new)?;
+        let row = new.as_ref().expect("new numerical Batch receipt");
+        self.state.staged_courts.insert(key, row.clone());
+        update_indices(&mut self.state, key, None, Some(row));
+        self.entries.push(PalwDeltaEntryV2::StagedCourtSeed { key, old: None, new });
+        Ok(())
+    }
+
     fn install_batch_stop_receipt_v1(
         &mut self,
         at: &PalwBlockContextV2,
@@ -1339,6 +1398,9 @@ impl TransitionBuilder<'_> {
         }
         if matches!(&new, Some(PalwStagedCourtRowV1::CourtBatchStopReceipt(_))) {
             return Err(PalwStateV2Error::CarriageInconsistent("Batch Stop receipt requires native adjudication".into()));
+        }
+        if matches!(&new, Some(PalwStagedCourtRowV1::CourtBatchNumericalReceipt(_))) {
+            return Err(PalwStateV2Error::CarriageInconsistent("numerical Batch receipt requires native adjudication".into()));
         }
         if matches!(key, PalwStagedCourtKeyV1::CourtSharedBottom(_))
             || matches!(&new, Some(PalwStagedCourtRowV1::CourtSharedBottom(_)))
@@ -4006,6 +4068,7 @@ pub(super) fn index_rows(
         PalwStagedCourtRowV1::TirOwnerSchedule(row) => (row.material_until(), Vec::new()),
         PalwStagedCourtRowV1::CourtBatchDemand(row) => (row.material_until(), Vec::new()),
         PalwStagedCourtRowV1::CourtBatchStopReceipt(row) => (row.material_until_daa, Vec::new()),
+        PalwStagedCourtRowV1::CourtBatchNumericalReceipt(row) => (row.material_until_daa, Vec::new()),
         PalwStagedCourtRowV1::TirPrefix(c) => (c.terms.material_until_daa, vec![(c.reserver, c.terms.material_until_daa, key)]),
         PalwStagedCourtRowV1::TirAcquisition(row) => {
             let c = row.owned.contract_v1();
@@ -4401,6 +4464,7 @@ pub(super) fn sweep(b: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) -> 
             PalwStagedCourtRowV1::TirOwnerSchedule(row) => Some(row.material_until()),
             PalwStagedCourtRowV1::CourtBatchDemand(row) => Some(row.material_until()),
             PalwStagedCourtRowV1::CourtBatchStopReceipt(row) => Some(row.material_until_daa),
+            PalwStagedCourtRowV1::CourtBatchNumericalReceipt(row) => Some(row.material_until_daa),
             _ => None,
         };
         if let Some(until) = tir_until {

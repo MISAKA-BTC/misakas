@@ -4089,6 +4089,12 @@ impl PalwChainStateV2 {
             {
                 receipt.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
             }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchNumericalReceipt(receipt) = row {
+                let point = self.last_point().ok_or(PalwStateV2Error::DeltaMismatch("numerical Batch receipt has no snapshot point"))?;
+                if point.daa_score < receipt.material_until_daa {
+                    receipt.check_context(self, point).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                }
+            }
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(schedule) = row
                 && self.last_point().map_or(0, |point| point.daa_score) < schedule.material_until()
             {
