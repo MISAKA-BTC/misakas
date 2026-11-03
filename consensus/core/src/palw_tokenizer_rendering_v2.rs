@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 /// The caller supplies the immutable tokenizer identity and registered table
 /// context, independently of the submitted raw bytes and EOG opening.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwTokenizerRenderingStatementV2 {
     pub tokenizer_id: Hash64,
     pub exact_raw_bytes: u64,
@@ -49,7 +49,7 @@ pub struct PalwTokenizerRenderingBudgetV2 {
     pub total_rendering_bytes: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 #[non_exhaustive]
 pub struct PalwDerivedTokenizerRenderingV2 {
     pub statement: PalwTokenizerRenderingStatementV2,
@@ -198,7 +198,7 @@ impl PreparedTokenizerIdentityV2 {
 
 /// Operator pins for the exact native registrations being prepared. The
 /// inventory id is the signed offer's id, read back after native EOF acceptance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwTfp1TokenizerIntakePinsV2 {
     pub class_id: Hash64,
     pub container_root: Hash64,
@@ -289,9 +289,7 @@ impl PalwVerifiedTokenizerRegistrationV1 {
     /// The expected digest of a persisted value can be checked after a cold
     /// re-derivation. There is intentionally no deserialize-as-verified API.
     pub fn commitment_v1(&self) -> Hash64 {
-        let bytes = borsh::to_vec(self).expect("fixed tokenizer registration encodes");
-        let digest = blake2b_simd::Params::new().hash_length(64).key(VERIFIED_TOKENIZER_REGISTRATION_DOMAIN_V1).hash(&bytes);
-        Hash64::from_bytes(digest.as_bytes().try_into().expect("64-byte registration digest"))
+        verified_tokenizer_commitment_v1(self)
     }
 
     /// Use only in-process verified values on a current parent. Exact
@@ -313,6 +311,12 @@ impl PalwVerifiedTokenizerRegistrationV1 {
     pub fn facts_v1(&self) -> &PalwDerivedTokenizerRenderingV2 {
         &self.facts
     }
+}
+
+fn verified_tokenizer_commitment_v1(value: &impl borsh::BorshSerialize) -> Hash64 {
+    let mut digest = blake2b_simd::Params::new().hash_length(64).key(VERIFIED_TOKENIZER_REGISTRATION_DOMAIN_V1).to_state();
+    value.serialize(&mut digest).expect("fixed tokenizer registration encodes into hash state");
+    Hash64::from_bytes(digest.finalize().as_bytes().try_into().expect("64-byte registration digest"))
 }
 
 fn derive_with_native_scratch(
@@ -772,6 +776,257 @@ mod tests {
             record.commitment_v1().to_string(),
             "f20fc0ff7018849e3eeff3932bb3b6db91e2b617396e1908615621a22affcbcb09a6ddf3b2a125b1cb1a2013715166f5e381d934225588325f600e5b5b3669a3"
         );
+        let semantics = PalwClassSemanticsV1 {
+            version: crate::palw_class_semantics_v1::PALW_CLASS_SEMANTICS_VERSION_V1,
+            class_id: record.pins.class_id,
+            artifact_root: record.identity.artifact_root,
+            bound_from_daa: 1,
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            tokenizer_id: statement.tokenizer_id,
+            cu_ruleset_id: Hash64::default(),
+            token_table_root: Some(statement.table_root),
+            rendering_rule: Some(statement.rule),
+            raw_tokenizer_bytes: Some(statement.exact_raw_bytes),
+            tokenizer_key_events: Some(BUDGET.key_events),
+            prefix_state_relation: None,
+        };
+        let parent = crate::palw_state_v2::PalwBlockContextV2 {
+            block: crate::BlockHash::from_u64_word(1),
+            daa_score: 2,
+            blue_score: 2,
+            subsidy: 0,
+        };
+        let mut persisted = PalwRootedTokenizerRegistrationRowV1 {
+            version: VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1,
+            pins: PalwTfp1TokenizerIntakePinsV2 { semantics_id: semantics.commitment(), ..record.pins },
+            semantics,
+            parent,
+            point: crate::palw_state_v2::PalwBlockContextV2 {
+                block: crate::BlockHash::from_u64_word(2),
+                daa_score: 3,
+                blue_score: 3,
+                subsidy: 0,
+            },
+            record_id: record.commitment_v1(),
+            facts: record.facts.clone(),
+        };
+        // Structural decoding cannot manufacture native installation provenance.
+        let encoded = borsh::to_vec(&persisted).unwrap();
+        assert!(encoded.len() < 1536);
+        let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<PalwRootedTokenizerRegistrationRowV1>(
+            encoded.as_slice(),
+            encoded.len() as u64,
+        )
+        .unwrap();
+        assert_eq!(shape.canonical_bytes_v1(), encoded.len() as u64);
+        assert_eq!(borsh::from_slice::<PalwRootedTokenizerRegistrationRowV1>(&encoded).unwrap(), persisted);
+        assert!(persisted.check(&persisted.key()).is_ok());
+        assert!(persisted.check_context(&PalwChainStateV2::genesis()).is_err());
+        assert!(borsh::from_slice::<PalwRootedTokenizerRegistrationRowV1>(&encoded[..encoded.len() - 1]).is_err());
+        persisted.facts.eog_count = ROOTED_TOKENIZER_LIMITS_V1.eog_ids + 1;
+        assert!(persisted.check(&persisted.key()).is_err());
         assert_eq!(adequate.snapshot().reserved_bytes, 0);
     }
 }
+
+// Fixed limits for the private native adapter. They are part of the record
+// identity and may only change under a new registration ruleset/version.
+pub(crate) const ROOTED_TOKENIZER_LIMITS_V1: PalwTokenizerRenderingBudgetV2 = PalwTokenizerRenderingBudgetV2 {
+    raw_bytes: 8 * 1024 * 1024,
+    vocab: 262_144,
+    key_events: 4 * 1024 * 1024,
+    eog_ids: 4096,
+    total_rendering_bytes: 8 * 1024 * 1024,
+};
+
+/// Persisted compact native row. Decoding it is structural only. The sole
+/// fold writer starts from raw operands, and replay/load must start from a
+/// validated journal or an authenticated chain-state root.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwRootedTokenizerRegistrationRowV1 {
+    version: u16,
+    pins: PalwTfp1TokenizerIntakePinsV2,
+    semantics: PalwClassSemanticsV1,
+    parent: crate::palw_state_v2::PalwBlockContextV2,
+    point: crate::palw_state_v2::PalwBlockContextV2,
+    record_id: Hash64,
+    facts: PalwDerivedTokenizerRenderingV2,
+}
+
+impl PalwRootedTokenizerRegistrationRowV1 {
+    pub(crate) fn derive(
+        parent: &PalwChainStateV2,
+        extras: &PalwTransitionExtrasV1,
+        point: crate::palw_state_v2::PalwBlockContextV2,
+        pins: PalwTfp1TokenizerIntakePinsV2,
+        raw: &[u8],
+        eog: &PalwTokenTableEogOpeningV1,
+    ) -> Result<Self, PalwVerifiedTokenizerRegistrationErrorV1> {
+        use PalwVerifiedTokenizerRegistrationErrorV1::Parent;
+        let prior = *parent.last_point().ok_or(Parent("tokenizer registration lacks an accepted parent"))?;
+        if prior.block == point.block || prior.blue_score >= point.blue_score || prior.daa_score > point.daa_score {
+            return Err(Parent("tokenizer registration point does not follow its parent"));
+        }
+        let record = PalwVerifiedTokenizerRegistrationV1::derive_v1(
+            parent,
+            extras,
+            point.daa_score,
+            pins,
+            raw,
+            eog,
+            ROOTED_TOKENIZER_LIMITS_V1,
+        )?
+        .ok_or(Parent("tokenizer registration prerequisites are dormant"))?;
+        let semantics = parent.class_semantics_v1(&pins.class_id).ok_or(Parent("tokenizer registration lost its semantics"))?;
+        Ok(Self {
+            version: VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1,
+            pins,
+            semantics: semantics.clone(),
+            parent: prior,
+            point,
+            record_id: record.commitment_v1(),
+            facts: record.facts,
+        })
+    }
+
+    pub(crate) fn key(&self) -> PalwStagedCourtKeyV1 {
+        PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(self.pins.class_id, self.pins.semantics_id)
+    }
+
+    pub fn record_id_v1(&self) -> Hash64 {
+        self.record_id
+    }
+
+    pub fn facts_v1(&self) -> &PalwDerivedTokenizerRenderingV2 {
+        &self.facts
+    }
+
+    pub(crate) fn check(&self, key: &PalwStagedCourtKeyV1) -> Result<(), String> {
+        let f = &self.facts;
+        let s = &f.statement;
+        let cap = ROOTED_TOKENIZER_LIMITS_V1;
+        if self.version != VERIFIED_TOKENIZER_REGISTRATION_VERSION_V1
+            || self.key() != *key
+            || !self.semantics.well_formed_for(&self.pins.class_id, &self.semantics.artifact_root)
+            || self.semantics.commitment() != self.pins.semantics_id
+            || self.parent.block == self.point.block
+            || self.parent.blue_score >= self.point.blue_score
+            || self.parent.daa_score > self.point.daa_score
+            || self.semantics.bound_from_daa > self.parent.daa_score
+            || s.tokenizer_id != self.semantics.tokenizer_id
+            || Some(s.table_root) != self.semantics.token_table_root
+            || Some(s.rule) != self.semantics.rendering_rule
+            || Some(s.exact_raw_bytes) != self.semantics.raw_tokenizer_bytes
+            || s.exact_raw_bytes == 0
+            || s.exact_raw_bytes > cap.raw_bytes
+            || s.vocab == 0
+            || s.vocab > cap.vocab
+            || self.semantics.tokenizer_key_events.is_none_or(|n| f.key_events > n)
+            || f.key_events > cap.key_events
+            || f.maximum_rendering_bytes > f.total_rendering_bytes
+            || f.total_rendering_bytes > cap.total_rendering_bytes
+            || f.eog_count == 0
+            || f.eog_count > cap.eog_ids
+            || f.eog_count > s.vocab
+            || f.lowest_eog_id >= s.vocab
+            || f.eog_leaf == Hash64::default()
+            || self.record_id == Hash64::default()
+        {
+            return Err("invalid fixed verified tokenizer registration row".into());
+        }
+        Ok(())
+    }
+
+    fn check_registration(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        self.check(&self.key())?;
+        let class = state.class(&self.pins.class_id).ok_or("verified tokenizer class absent")?;
+        let current = state.class_semantics_v1(&self.pins.class_id).ok_or("verified tokenizer semantics absent")?;
+        let mut compatible = self.semantics.clone();
+        // Native semantics may fill the previously empty, unrelated prefix
+        // relation. Old rows remain historical and the current lookup below
+        // uses only the exact current semantics key.
+        if compatible.prefix_state_relation.is_none() {
+            compatible.prefix_state_relation = current.prefix_state_relation;
+        }
+        if &compatible != current {
+            return Err("verified tokenizer semantics changed on this branch".into());
+        }
+        let identity = PreparedTokenizerIdentityV2::resolve(
+            state,
+            &self.pins.class_id,
+            &class.artifact_root,
+            &self.semantics,
+            self.point.daa_score,
+        )
+        .ok_or("verified tokenizer class or EOF context absent")?;
+        let container = palw_tir_bound_container_v1(state, self.pins.class_id).ok_or("verified tokenizer PALWART3 absent")?;
+        if identity.eof.completed_daa > self.parent.daa_score
+            || identity.eof.inventory_id != self.pins.inventory_id
+            || container.bound_daa > self.parent.daa_score
+            || container.container_root != self.pins.container_root
+            || identity.statement != self.facts.statement
+        {
+            return Err("verified tokenizer signed EOF, table or PALWART3 changed on this branch".into());
+        }
+        // This checks persisted commitment consistency, not parser provenance.
+        let encoded_fields = (self.version, self.pins, identity, container, ROOTED_TOKENIZER_LIMITS_V1, &self.facts);
+        if verified_tokenizer_commitment_v1(&encoded_fields) != self.record_id {
+            return Err("verified tokenizer registration commitment mismatch".into());
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_adoption(
+        &self,
+        state: &PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), String> {
+        if &self.point != point
+            || state.last_point() != Some(&self.parent)
+            || state.class_semantics_v1(&self.pins.class_id) != Some(&self.semantics)
+        {
+            return Err("verified tokenizer journal changes the exact accepting block or parent".into());
+        }
+        self.check_registration(state)
+    }
+
+    pub(crate) fn check_child(
+        &self,
+        state: &PalwChainStateV2,
+        point: &crate::palw_state_v2::PalwBlockContextV2,
+    ) -> Result<(), String> {
+        if &self.point != point || state.last_point() != Some(point) {
+            return Err("verified tokenizer journal does not leave its exact accepting block".into());
+        }
+        self.check_registration(state)
+    }
+
+    pub(crate) fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        let now = state.last_point().ok_or("verified tokenizer registration has no accepted point")?;
+        if self.point.daa_score > now.daa_score || self.point.blue_score > now.blue_score {
+            return Err("verified tokenizer registration lies after the snapshot".into());
+        }
+        self.check_registration(state)
+    }
+}
+
+/// Read from an authenticated accepted native parent. A standalone decoded
+/// row or an untrusted state snapshot cannot authorize reuse or a lower quote.
+pub(crate) fn palw_rooted_tokenizer_registration_v1<'a>(
+    state: &'a PalwChainStateV2,
+    extras: &PalwTransitionExtrasV1,
+    class_id: Hash64,
+    candidate_daa: u64,
+) -> Option<&'a PalwRootedTokenizerRegistrationRowV1> {
+    if !tfp1_tokenizer_intake_active(extras) || state.last_point()?.daa_score > candidate_daa {
+        return None;
+    }
+    let semantics = state.class_semantics_v1(&class_id)?;
+    let key = PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(class_id, semantics.commitment());
+    let PalwStagedCourtRowV1::VerifiedTokenizerRegistration(row) = state.staged_court_row_v1(&key)? else { return None };
+    (row.point.daa_score < candidate_daa && row.key() == key && row.check_context(state).is_ok()).then_some(row.as_ref())
+}
+
+include!("palw_native_resource_v1/private/palw_tokenizer_rendering_v2.rs");

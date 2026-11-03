@@ -384,3 +384,99 @@ fn tfp1_tokenizer_intake_pins_native_container_and_signed_eof_without_changing_q
     assert!(derive(&state, &raw, &eog).is_err());
     assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
 }
+
+#[test]
+fn verified_tokenizer_registration_root_replay_and_carriage_require_native_context() {
+    use crate::palw_native_resource_v1::{NativeHeapV1, NativeWireReaderV1, NativeWireScanV1};
+    use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2};
+    use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
+    use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, palw_rooted_tokenizer_registration_v1};
+
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut base, params, mut extras) = world(&fx, &fx.frame);
+    let class = semantics.class_id;
+    let binding = test_binding_v1(&fx.record, semantics.artifact_root, b"rooted-tokenizer");
+    let container = check_tir_container_binding_v1(&binding, &class, &semantics.artifact_root, &fx.record, 1).unwrap();
+    let pins = PalwTfp1TokenizerIntakePinsV2 {
+        class_id: class,
+        container_root: container.container_root,
+        semantics_id: semantics.commitment(),
+        inventory_id: eof.inventory_id,
+    };
+    let prior = at(&fx.frame, 0);
+    let point = at(&fx.frame, 1);
+    base.last_point = Some(prior);
+    base.class_semantics.insert(class, semantics);
+    let eof_key = Key::Inventory(eof.artifact_hash);
+    let mut prerequisites = TransitionBuilder::new(&base, &params, false, false, false, false, &extras);
+    prerequisites.write_staged_row_v1(eof_key, Some(Row::ArtifactInventory(eof))).unwrap();
+    prerequisites.write_staged_row_v1(Key::TirContainer(class), Some(Row::TirContainer(Box::new(container)))).unwrap();
+    let parent = prerequisites.state;
+    let eog = table.eog_opening().unwrap();
+    let mut dormant = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+    assert!(dormant.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &eog).is_err());
+    assert!(dormant.entries.is_empty());
+
+    extras.class_semantics_active = true;
+    extras.tir_container_identity_active = true;
+    extras.tir_public_conviction_active = true;
+    extras.staged_public_court = Some(fx.rules.config);
+    let mut b = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+    let mut bad_eog = eog.clone();
+    bad_eog.ids[0] = 0;
+    assert!(b.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &bad_eog).is_err());
+    assert!(b.entries.is_empty());
+    b.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &eog).unwrap();
+    let key = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
+    assert!(b.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &eog).is_err());
+    let row = b.state.staged_court_row_v1(&key).unwrap();
+    let bytes = borsh::to_vec(row).unwrap();
+    assert_eq!(bytes[0], 38);
+    assert_eq!(borsh::to_vec(&key).unwrap()[0], 31);
+    assert!(bytes.len() < 1536);
+    let mut scan = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    assert_eq!(Row::scan_native_wire_v1(&mut scan).unwrap().heap, row.native_heap_v1("verified tokenizer fixture").bytes().unwrap());
+    assert_eq!(scan.remaining(), 0);
+    assert!(borsh::from_slice::<Row>(&bytes[..bytes.len() - 1]).is_err());
+    let decoded = borsh::from_slice::<Row>(&bytes).unwrap();
+    let mut bypass = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+    assert!(bypass.write_staged_row_v1(key, Some(decoded.clone())).is_err());
+    assert!(bypass.entries.is_empty());
+
+    b.state.last_point = Some(point);
+    b.entries.push(PalwDeltaEntryV2::LastPoint { old: Some(prior), new: Some(point) });
+    let delta = PalwStateDeltaV2 { point, entries: b.entries };
+    let next = apply_delta_v2(&parent, &delta, &params).unwrap();
+    assert_eq!(next.state_root(), b.state.state_root());
+    assert_eq!(revert_delta_v2(&next, &delta, &params).unwrap().state_root(), parent.state_root());
+    assert!(palw_rooted_tokenizer_registration_v1(&parent, &extras, class, point.daa_score + 1).is_none());
+    assert!(palw_rooted_tokenizer_registration_v1(&next, &extras, class, point.daa_score).is_none());
+    let record = palw_rooted_tokenizer_registration_v1(&next, &extras, class, point.daa_score + 1).unwrap();
+    assert_eq!(record.facts_v1().eog_count, 1);
+    assert_eq!(record.facts_v1().lowest_eog_id, 7);
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&PalwStateCarriageV2::from_state(&next)).unwrap())
+        .unwrap()
+        .into_state(&params, Some(next.state_root()))
+        .unwrap();
+    assert_eq!(palw_rooted_tokenizer_registration_v1(&restored, &extras, class, point.daa_score + 1), Some(record));
+
+    let mut prefix_filled = restored.clone();
+    prefix_filled.class_semantics.get_mut(&class).unwrap().prefix_state_relation =
+        Some(crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::DenseInt32KvV1);
+    let Row::VerifiedTokenizerRegistration(historical) = prefix_filled.staged_court_row_v1(&key).unwrap() else { unreachable!() };
+    historical.check_context(&prefix_filled).unwrap();
+    assert!(palw_rooted_tokenizer_registration_v1(&prefix_filled, &extras, class, point.daa_score + 1).is_none());
+
+    let mut foreign_parent = parent.clone();
+    foreign_parent.last_point.as_mut().unwrap().block = crate::BlockHash::from_u64_word(8808);
+    assert!(apply_delta_v2(&foreign_parent, &delta, &params).is_err());
+    let mut foreign_point = delta.clone();
+    foreign_point.point.block = crate::BlockHash::from_u64_word(8809);
+    assert!(apply_delta_v2(&parent, &foreign_point, &params).is_err());
+    let mut deleted = delta.clone();
+    deleted.entries[0] = PalwDeltaEntryV2::StagedCourtSeed { key, old: Some(decoded), new: None };
+    assert!(apply_delta_v2(&next, &deleted, &params).is_err());
+    let mut orphan = PalwStateCarriageV2::from_state(&next);
+    orphan.staged_courts.remove(&eof_key);
+    assert!(orphan.into_state(&params, None).is_err());
+}
