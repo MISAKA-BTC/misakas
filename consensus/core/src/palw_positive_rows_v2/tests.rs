@@ -418,6 +418,35 @@ fn empty_route() -> crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     )
 }
 #[test]
+fn positive_job_projection_tracks_result_install_remove_and_cold_decode() {
+    use crate::Hash64;
+    use misaka_palw_positive_contract::native::KERNEL_AUX_TABLE;
+    let (_, result, ..) = signed_bundle();
+    let job = Hash64::from_bytes(result.result.job.0);
+    let value = NativeRowValue::new(NativeRowBody::Result(result)).unwrap();
+    let key = (KERNEL_AUX_TABLE, value.body.key().encode());
+    let bytes = value.encode().unwrap();
+    let mut route = empty_route();
+    let original = borsh::to_vec(&route).unwrap();
+    assert!(!route.contains_positive_job_v2(job));
+    assert!(route.update_positive_job_index_v2(&key, Some(&[0])).is_err());
+    assert!(!route.contains_positive_job_v2(job));
+
+    route.update_positive_job_index_v2(&key, Some(&bytes)).unwrap();
+    route.aux.insert(key.clone(), bytes.clone());
+    assert!(route.contains_positive_job_v2(job));
+    assert!(!route.contains_positive_job_v2(Hash64::from_bytes([u8::MAX; 64])));
+    let committed = borsh::to_vec(&route).unwrap();
+    let mut restored: crate::palw_kernel_route_v1::PalwKernelRouteStateV1 = borsh::from_slice(&committed).unwrap();
+    assert!(restored.contains_positive_job_v2(job));
+    assert_eq!(restored.aux_root(), route.aux_root());
+    restored.update_positive_job_index_v2(&key, None).unwrap();
+    restored.aux.remove(&key);
+    assert!(!restored.contains_positive_job_v2(job));
+    assert_eq!(borsh::to_vec(&restored).unwrap(), original);
+}
+
+#[test]
 fn fixed_enum_memory_is_charged_per_short_row_and_exact_limits_are_enforced() {
     use crate::palw_native_resource_v1::{
         NativeDemandCheckerV1, NativeHeapV1, NativeSnapshotResourceLimitsV1, preflight_native_value_v1,

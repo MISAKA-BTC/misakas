@@ -24,6 +24,7 @@ use kaspa_consensus_core::{
     },
     tx::{PopulatedTransaction, TransactionOutpoint, UtxoEntry},
 };
+use kaspa_database::prelude::StoreError;
 use misaka_palw_positive_contract::{
     assignment::{
         AssignmentId,
@@ -68,6 +69,18 @@ pub(in crate::pipeline::virtual_processor) enum NativeAssignmentArchiveErrorV2 {
     Invalid(&'static str),
     Resource(NativeCoverageV1),
 }
+
+fn archive_store_fault_v2(error: StoreError, component: &'static str) -> NativeAssignmentArchiveErrorV2 {
+    use NativeAssignmentArchiveErrorV2 as E;
+    match error {
+        StoreError::DataInconsistency(_) | StoreError::DeserializationError(_) => E::Invalid(component),
+        StoreError::LocalResourceUnavailable(why) => {
+            E::Resource(NativeCoverageV1::unsupported::<VirtualStateProcessor>(component, &why))
+        }
+        _ => E::Unavailable(component),
+    }
+}
+
 /// The original relay registration pays for its bounded historical reads.
 pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
     pub origin: AcceptedOrigin,
@@ -88,8 +101,10 @@ pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
 impl RelayCarrierReplayV2<'_> {
     fn charge(&mut self, reads: u64, work: u64) -> Result<(), NativeAssignmentArchiveErrorV2> {
         use NativeAssignmentArchiveErrorV2 as E;
-        self.remaining_reads = self.remaining_reads.checked_sub(reads).ok_or(E::Invalid("relay replay read cap"))?;
-        self.remaining_work = self.remaining_work.checked_sub(work).ok_or(E::Invalid("relay replay work cap"))?;
+        let remaining_reads = self.remaining_reads.checked_sub(reads).ok_or(E::Unavailable("relay replay read cap"))?;
+        let remaining_work = self.remaining_work.checked_sub(work).ok_or(E::Unavailable("relay replay work cap"))?;
+        self.remaining_reads = remaining_reads;
+        self.remaining_work = remaining_work;
         Ok(())
     }
 }
@@ -251,7 +266,7 @@ impl VirtualStateProcessor {
                 copy.extend_from_slice(raw);
                 Ok(copy)
             })
-            .map_err(|_| E::Unavailable("rooted original Open bytes"))??;
+            .map_err(|error| archive_store_fault_v2(error, "rooted original Open bytes"))??;
         let record =
             AssignmentJournalRecordViewV2::decode(&raw, record_bytes).map_err(|_| E::Invalid("original Open journal codec"))?;
         if record.frame() != frame {
@@ -393,7 +408,7 @@ impl VirtualStateProcessor {
                     .map_err(|_| E::Invalid("Case relay original Open extent"))?;
                 Ok(material.funding_relay.requires_relay().then_some((row.admission_material, work)))
             })
-            .map_err(|_| E::Unavailable("Case relay original Open bytes"))?
+            .map_err(|error| archive_store_fault_v2(error, "Case relay original Open bytes"))?
     }
 
     /// Reconstruct a genuine Assignment control event from the original native
@@ -468,7 +483,7 @@ impl VirtualStateProcessor {
         let (accepted_carrier, accepted, acceptance_bytes) = self
             .acceptance_data_store
             .accepted_origin_at_bounded_v2(accepting, origin.accepted_tx_ordinal, remaining_work / 2)
-            .map_err(|_| E::Unavailable("bounded original acceptance data"))?
+            .map_err(|error| archive_store_fault_v2(error, "bounded original acceptance data"))?
             .ok_or(E::Invalid("accepted ordinal outside original acceptance"))?;
         if accepted_carrier != carrier_block
             || accepted.index_within_block == 0
@@ -505,9 +520,9 @@ impl VirtualStateProcessor {
                             |creator, index, heap| self.read_archive_transaction_v2(creator, index, heap, &mut remaining_work),
                         )
                     })
-                    .map_err(|_| E::Unavailable("bounded original acceptance archive"))?
+                    .map_err(|error| archive_store_fault_v2(error, "bounded original acceptance archive"))?
             })
-            .map_err(|_| E::Unavailable("bounded original UTXO archive"))??;
+            .map_err(|error| archive_store_fault_v2(error, "bounded original UTXO archive"))??;
         if !boundary.check_populated_data(tx, &entries, expected_fee) {
             return Err(E::Invalid("actual original populated input/fee identity"));
         }
@@ -615,7 +630,7 @@ impl VirtualStateProcessor {
             .palw_state_v2_store
             .read()
             .delta_of_retained_bounded_v2(block, *remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, heap)
-            .map_err(|_| NativeAssignmentArchiveErrorV2::Unavailable("bounded original native delta"))?;
+            .map_err(|error| archive_store_fault_v2(error, "bounded original native delta"))?;
         charge_archive_work_v2(remaining_work, bytes * ARCHIVE_WORK_PER_DELTA_BYTE_V2)?;
         Ok(delta)
     }
@@ -669,9 +684,9 @@ impl VirtualStateProcessor {
                             },
                         )
                     })
-                    .map_err(|_| E::Unavailable("bounded original relay acceptance archive"))?
+                    .map_err(|error| archive_store_fault_v2(error, "bounded original relay acceptance archive"))?
             })
-            .map_err(|_| E::Unavailable("bounded original relay UTXO archive"))??;
+            .map_err(|error| archive_store_fault_v2(error, "bounded original relay UTXO archive"))??;
         let populated = PopulatedTransaction::new(tx, entries);
         let actual_fee = self
             .transaction_validator
@@ -751,7 +766,7 @@ impl VirtualStateProcessor {
                 .palw_state_v2_store
                 .read()
                 .delta_of_retained_bounded_v2(cursor, replay.remaining_work / ARCHIVE_WORK_PER_DELTA_BYTE_V2, delta_heap)
-                .map_err(|_| E::Unavailable("bounded original relay payer delta"))?;
+                .map_err(|error| archive_store_fault_v2(error, "bounded original relay payer delta"))?;
             replay.charge(0, bytes * ARCHIVE_WORK_PER_DELTA_BYTE_V2)?;
             if delta.point.block != cursor {
                 return Err(E::Invalid("relay payer history delta block differs"));
@@ -848,16 +863,12 @@ impl VirtualStateProcessor {
         maximum_heap: u64,
         remaining_work: &mut u64,
     ) -> Result<ArchivedTransactionV2, NativeAssignmentArchiveErrorV2> {
-        use NativeAssignmentArchiveErrorV2 as E;
         // Charge both the block framing scan and the selected decode before
         // allocating the selected transaction.
         let (transaction, extent) = self
             .block_transactions_store
             .archive_transaction_v2(block, index, *remaining_work / 2, maximum_heap)
-            .map_err(|error| match error {
-                kaspa_database::prelude::StoreError::DataInconsistency(_) => E::Invalid("archived transaction framing"),
-                _ => E::Unavailable("bounded archived transaction"),
-            })?;
+            .map_err(|error| archive_store_fault_v2(error, "bounded archived transaction"))?;
         charge_archive_work_v2(remaining_work, extent * 2)?;
         Ok(transaction)
     }
@@ -961,5 +972,30 @@ impl VirtualStateProcessor {
             .get(outpoint.index as usize)
             .map(|output| Some(visit(output, tx.is_coinbase())))
             .ok_or(E::Invalid("earlier creator output index"))
+    }
+}
+
+#[cfg(test)]
+mod archive_fault_tests {
+    use super::*;
+
+    #[test]
+    fn archive_store_faults_distinguish_corruption_capacity_and_missing_record() {
+        const COMPONENT: &str = "fixture history";
+        use NativeAssignmentArchiveErrorV2 as E;
+        assert!(matches!(
+            archive_store_fault_v2(StoreError::DataInconsistency("bad framing".into()), COMPONENT),
+            E::Invalid(COMPONENT)
+        ));
+        assert!(matches!(
+            archive_store_fault_v2(
+                StoreError::DeserializationError(Box::new(bincode::ErrorKind::Custom("bad wire".into()))),
+                COMPONENT
+            ),
+            E::Invalid(COMPONENT)
+        ));
+        assert!(matches!(archive_store_fault_v2(StoreError::LocalResourceUnavailable("heap cap".into()), COMPONENT), E::Resource(_)));
+        let key = kaspa_database::prelude::DbKey::new(&[0], BlockHash::from_bytes([0; 64]));
+        assert!(matches!(archive_store_fault_v2(StoreError::KeyNotFound(key), COMPONENT), E::Unavailable(COMPONENT)));
     }
 }

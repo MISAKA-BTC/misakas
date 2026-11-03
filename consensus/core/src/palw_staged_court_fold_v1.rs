@@ -1,6 +1,41 @@
 //! Prospective claim contract/continuation writers. All failures precede claim acceptance writes.
 use super::*;
 use crate::palw_staged_court_state_v1::*;
+/// Subject-bearing keys in the legacy alias scan. Layout, container,
+/// service, and draft-part keys use other identity namespaces.
+pub(super) fn staged_legacy_alias_subject_v2(key: PalwStagedCourtKeyV1) -> Option<Hash64> {
+    use PalwStagedCourtKeyV1::*;
+    match key {
+        Claim(id)
+        | Owner(id, _)
+        | InventoryOpen(id, _)
+        | Inventory(id)
+        | TirAcquisition(id, _, _)
+        | TirRawChunk(id)
+        | TirAcceptedBody(id)
+        | TirPreparation(id, _)
+        | TirClaim(id)
+        | TirWitness(id, _)
+        | CourtDutyClock(id)
+        | CourtSharedContext(id)
+        | CourtSharedQuery(id)
+        | CourtSharedIds(id)
+        | CourtSharedStream(id)
+        | CourtSharedChunk(id, _)
+        | CourtSharedResponse(id, _)
+        | CourtEndArchive(id)
+        | CourtCloseReceipt(id, _)
+        | CourtSharedRoot(id, _)
+        | CourtSharedRound(id)
+        | CourtSharedBottom(id)
+        | CourtArchiveProgress(id, _)
+        | CourtMaterialDraft(id, _)
+        | CourtMaterial(id, _)
+        | CourtMaterialLedger(id, _) => Some(id),
+        TirLayout(_) | TirContainer(_) | CourtService | CourtMaterialPart(..) => None,
+    }
+}
+
 impl PalwChainStateV2 {
     /// Native verified-state import only. No rooted row or dynamic material is
     /// cloned, and this iterator is not an anonymous request-facing reader.
@@ -1059,6 +1094,12 @@ impl TransitionBuilder<'_> {
         key: PalwStagedCourtKeyV1,
         new: Option<PalwStagedCourtRowV1>,
     ) -> Result<(), PalwStateV2Error> {
+        if new.is_some()
+            && let Some(subject) = staged_legacy_alias_subject_v2(key)
+        {
+            self.reject_positive_claim_alias_v2(subject)?;
+            self.reject_positive_job_alias_v2(subject)?;
+        }
         self.check_archive_progress_write_v1(&key, new.as_ref())?;
         self.check_material_intake_write_v1(&key, new.as_ref())?;
         if matches!(key, PalwStagedCourtKeyV1::CourtSharedBottom(_))

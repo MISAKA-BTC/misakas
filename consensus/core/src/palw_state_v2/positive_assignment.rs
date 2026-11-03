@@ -561,6 +561,11 @@ impl TransitionBuilder<'_> {
         }
         plan.binding.check_result(&plan.result.result).map_err(refusal)?;
         validate_bundle(&plan.index, &plan.result, &plan.case, &plan.funding).map_err(refusal)?;
+        super::positive_assignment_case::reject_legacy_aliases(&self.state, expected, &plan.result.result)?;
+        let job = Hash64::from_bytes(plan.result.result.job.0);
+        if self.state.kernel_route.as_ref().is_some_and(|route| route.contains_positive_job_v2(job)) {
+            return Err(refusal("Positive job already owns a Result at this prefix"));
+        }
         let future = expected.bundle.future_case;
         if plan.funding.consent.payer != future.payer
             || plan.funding.consent.refund_payload != future.refund_payload

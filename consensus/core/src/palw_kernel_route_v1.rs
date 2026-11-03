@@ -411,6 +411,10 @@ pub struct PalwKernelRouteStateV1 {
     pub header: PalwKernelRouteHeaderV1,
     pub rows: LedgerRowsV1,
     pub aux: BTreeMap<(u8, Vec<u8>), Vec<u8>>,
+    /// Derived from canonical Result rows on write and restore. The canonical
+    /// aux rows alone are serialized and hashed.
+    #[borsh(skip)]
+    pub(crate) positive_job_results_v2: std::collections::BTreeSet<(Hash64, Hash64)>,
     /// **GAP 8: the ledger the rows describe, cached** — never state: not hashed, not encoded, not in a delta, equal for every
     /// comparison. Set by the fold's flush to exactly what [`KernelLedgerV1::from_rows`] would rebuild
     /// ([`KernelLedgerV1::as_rebuilt_from_v1`]); cleared by every other write of a ledger row or of the header (a delta applied or
@@ -442,6 +446,60 @@ fn positive_p_restore_key_v2<R: std::io::Read>(reader: &mut R) -> std::io::Resul
     Ok((key, positive))
 }
 
+/// Result is the first key kind in the frozen aux151 wire namespace.
+pub(crate) fn is_positive_result_row_v2(table: u8, key: &[u8]) -> bool {
+    table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE && key.get(4) == Some(&0)
+}
+
+fn positive_job_result_v2(result: &misaka_palw_positive_contract::rows::ResultRow) -> (Hash64, Hash64) {
+    (Hash64::from_bytes(result.result.job.0), Hash64::from_bytes(result.result.id().0.0))
+}
+
+impl PalwKernelRouteStateV1 {
+    pub(crate) fn contains_positive_job_v2(&self, job: Hash64) -> bool {
+        self.positive_job_results_v2
+            .range((job, Hash64::default())..=(job, Hash64::from_bytes([u8::MAX; 64])))
+            .next()
+            .is_some()
+    }
+
+    pub(crate) fn update_positive_job_index_v2(
+        &mut self,
+        key: &(u8, Vec<u8>),
+        next: Option<&[u8]>,
+    ) -> Result<(), misaka_palw_positive_contract::ContractError> {
+        use misaka_palw_positive_contract::{
+            ContractError,
+            rows::{NativeRowBody, NativeRowValue},
+        };
+
+        if !is_positive_result_row_v2(key.0, &key.1) {
+            return Ok(());
+        }
+        let previous = self.aux.get(key).map(Vec::as_slice);
+        if previous == next {
+            return Ok(());
+        }
+        let decode = |bytes: &[u8]| {
+            let NativeRowBody::Result(row) = NativeRowValue::decode(&key.1, bytes)?.body else {
+                return Err(ContractError::Identity);
+            };
+            Ok(positive_job_result_v2(&row))
+        };
+        let previous = previous.map(decode).transpose()?;
+        let next = next.map(decode).transpose()?;
+        if previous != next {
+            if let Some(previous) = previous {
+                self.positive_job_results_v2.remove(&previous);
+            }
+            if let Some(next) = next {
+                self.positive_job_results_v2.insert(next);
+            }
+        }
+        Ok(())
+    }
+}
+
 impl BorshDeserialize for PalwKernelRouteStateV1 {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         fn positive_blob<R: std::io::Read>(reader: &mut R, cap: usize) -> std::io::Result<Vec<u8>> {
@@ -461,6 +519,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
         let rows = LedgerRowsV1::deserialize_reader(reader)?;
         let count = u32::deserialize_reader(reader)?;
         let mut aux = BTreeMap::new();
+        let mut positive_job_results_v2 = std::collections::BTreeSet::new();
         // Positive keys must be canonical BEFORE BTreeMap can sort/collapse
         // them. Other aux tables retain their legacy ordering semantics.
         let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
@@ -475,8 +534,11 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 previous_positive[..key.len()].copy_from_slice(&key);
                 previous_positive_len = key.len();
                 let value = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_ROW_BYTES)?;
-                misaka_palw_positive_contract::rows::NativeRowValue::decode(&key, &value)
+                let row = misaka_palw_positive_contract::rows::NativeRowValue::decode(&key, &value)
                     .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux key/value mismatch"))?;
+                if let misaka_palw_positive_contract::rows::NativeRowBody::Result(result) = row.body {
+                    positive_job_results_v2.insert(positive_job_result_v2(&result));
+                }
                 (key, value)
             } else if table == crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2 {
                 // Preserve every old136 key/value byte. Only reserved prefix P
@@ -505,7 +567,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "duplicate kernel aux key"));
             }
         }
-        Ok(Self { header, rows, aux, ledger_cache: KernelLedgerCacheV1::default() })
+        Ok(Self { header, rows, aux, positive_job_results_v2, ledger_cache: KernelLedgerCacheV1::default() })
     }
 }
 
@@ -515,7 +577,78 @@ pub static PALW_KERNEL_LEDGER_CACHE_HITS_V1: std::sync::atomic::AtomicU64 = std:
 
 /// The cached ledger of a [`PalwKernelRouteStateV1`] (see its `ledger_cache`). Clones share the immutable ledger; a load clones it.
 #[derive(Clone, Default)]
-pub struct KernelLedgerCacheV1(Option<std::sync::Arc<crate::palw_native_resource_v1::ReservedKernelLedgerV1>>, bool);
+pub struct KernelLedgerCacheV1(
+    Option<std::sync::Arc<crate::palw_native_resource_v1::ReservedKernelLedgerV1>>,
+    bool,
+    std::sync::OnceLock<std::sync::Arc<KernelCaseAliasesV2>>,
+);
+
+/// Exact subject membership derived from the same authenticated ledger
+/// projection used by Case closure. Never serialized or used as evidence.
+struct KernelCaseAliasesV2 {
+    claims: std::collections::BTreeSet<[u8; 64]>,
+    jobs: std::collections::BTreeSet<[u8; 64]>,
+    lease: crate::palw_native_resource_v1::NativeDemandLeaseV1,
+}
+
+impl KernelCaseAliasesV2 {
+    fn build(ledger: &KernelLedgerV1) -> Result<Self, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{
+            NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1, typed::BTreeNodeEnvelopeV1,
+        };
+        let context = "kernel Case alias index";
+        let members = [
+            ledger.claims.len(),
+            ledger.claims.len(),
+            ledger.jobs.len(),
+            ledger.pipeline_jobs.len(),
+            ledger.job_claims.len(),
+            ledger.job_claims.len(),
+            ledger.job_escrows.len(),
+            ledger.seals.len(),
+            ledger.proof_seals.len(),
+            ledger.opv.claims.len(),
+        ]
+        .into_iter()
+        .try_fold(0u64, |n, len| n.checked_add(len as u64))
+        .ok_or_else(|| NativeCoverageV1::overflow::<Self>(context))?;
+        let mut requests = TirNativeRequestsV1::new();
+        requests.exact_v1::<BTreeNodeEnvelopeV1<[u8; 64], ()>>(members)?;
+        requests.exact_v1::<Self>(1)?;
+        requests.exact_v1::<usize>(2)?; // shared owner
+        let lease = reserve_native_requests_v1(requests.bytes_v1())?
+            .ok_or_else(|| NativeCoverageV1::unsupported::<Self>(context, "actual checker is not armed"))?;
+
+        let mut claims = std::collections::BTreeSet::new();
+        let mut jobs = std::collections::BTreeSet::new();
+        // Extend one member at a time so the admitted tree bound also covers
+        // construction without a temporary sorted collection.
+        for (&claim, row) in &ledger.claims {
+            claims.insert(claim);
+            jobs.insert(row.job_id);
+        }
+        for (&job, &claim) in &ledger.job_claims {
+            jobs.insert(job);
+            claims.insert(claim);
+        }
+        for &claim in ledger.opv.claims.keys().chain(ledger.proof_seals.keys().map(|(claim, _)| claim)) {
+            claims.insert(claim);
+        }
+        for &job in ledger
+            .jobs
+            .keys()
+            .chain(ledger.pipeline_jobs.keys())
+            .chain(ledger.job_escrows.keys())
+            .chain(ledger.seals.keys().map(|(job, _)| job))
+        {
+            jobs.insert(job);
+        }
+        Ok(Self { claims, jobs, lease })
+    }
+    fn contains(&self, claim: &[u8; 64], job: &[u8; 64]) -> bool {
+        self.claims.contains(claim) || self.jobs.contains(job)
+    }
+}
 
 impl KernelLedgerCacheV1 {
     /// Cache clones share both immutable payload and its reservation ticket.
@@ -534,12 +667,17 @@ impl KernelLedgerCacheV1 {
         self.0.as_ref().map(|ledger| ledger.try_clone_v1()).transpose()
     }
     pub fn set(&mut self, ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
+        self.2 = std::sync::OnceLock::new();
         self.0 = Some(std::sync::Arc::new(ledger));
         self.1 = false;
     }
     pub fn clear(&mut self) {
         self.0 = None;
         self.1 = false;
+        self.2 = std::sync::OnceLock::new();
+    }
+    pub(crate) fn case_alias_heap_v2(&self) -> u64 {
+        self.2.get().map_or(0, |index| index.lease.memory_v1())
     }
     pub(crate) fn native_projection(
         &self,
@@ -551,6 +689,7 @@ impl KernelLedgerCacheV1 {
     }
     pub(crate) fn set_native_projection(&mut self, mut ledger: crate::palw_native_resource_v1::ReservedKernelLedgerV1) {
         ledger.clear_flat_conformance_classes_v9();
+        self.2 = std::sync::OnceLock::new();
         self.0 = Some(std::sync::Arc::new(ledger));
         self.1 = true;
     }
@@ -581,7 +720,13 @@ impl PalwKernelRouteStateV1 {
 
     /// A route state with nothing in it but its header (a delta that creates it).
     pub fn with_header(header: PalwKernelRouteHeaderV1) -> Self {
-        Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() }
+        Self {
+            header,
+            rows: LedgerRowsV1::new(),
+            aux: BTreeMap::new(),
+            positive_job_results_v2: Default::default(),
+            ledger_cache: KernelLedgerCacheV1::default(),
+        }
     }
 
     /// [`Self::new`] under the typed-roots fence's activation (RFC-0004 Part II).
@@ -592,6 +737,7 @@ impl PalwKernelRouteStateV1 {
             header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv, typed_roots },
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
+            positive_job_results_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
@@ -1227,12 +1373,20 @@ impl PalwKernelRouteStateV1 {
     ) -> Result<Self, String> {
         let header: PalwKernelRouteHeaderV1 =
             borsh::from_slice(header).map_err(|e| format!("the route header does not decode: {e}"))?;
-        let mut route = Self { header, rows: LedgerRowsV1::new(), aux: BTreeMap::new(), ledger_cache: KernelLedgerCacheV1::default() };
+        let mut route = Self {
+            header,
+            rows: LedgerRowsV1::new(),
+            aux: BTreeMap::new(),
+            positive_job_results_v2: Default::default(),
+            ledger_cache: KernelLedgerCacheV1::default(),
+        };
         for (table, key, row) in rows {
             let twice = if table < PALW_KERNEL_ROUTE_FIRST_AUX_TABLE_V1 {
                 route.rows.insert((table, key), row).is_some()
             } else {
-                route.aux.insert((table, key), row).is_some()
+                let key = (table, key);
+                route.update_positive_job_index_v2(&key, Some(&row)).map_err(|error| format!("invalid Positive Result row: {error:?}"))?;
+                route.aux.insert(key, row).is_some()
             };
             if twice {
                 return Err(format!("a row of table {table} is served twice"));
@@ -1762,6 +1916,23 @@ impl PalwKernelRouteStateV1 {
         self.ledger_native_projection_checked_v9().map_err(|e| e.to_string())
     }
 
+    pub(crate) fn has_legacy_case_alias_v2(
+        &self,
+        claim: &[u8; 64],
+        job: &[u8; 64],
+    ) -> Result<bool, PalwKernelLedgerProjectionErrorV1> {
+        if let Some(index) = self.ledger_cache.2.get() {
+            return Ok(index.contains(claim, job));
+        }
+        let ledger = self.ledger_native_projection_checked_v9()?;
+        let index = KernelCaseAliasesV2::build(&ledger).map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource)?;
+        let aliased = index.contains(claim, job);
+        // A concurrent initializer sees the same immutable rows. In the race
+        // the duplicate reservation is returned by dropping the losing Arc.
+        let _ = self.ledger_cache.2.set(std::sync::Arc::new(index));
+        Ok(aliased)
+    }
+
     pub(crate) fn ledger_native_projection_checked_v9(
         &self,
     ) -> Result<crate::palw_native_resource_v1::ReservedKernelLedgerV1, PalwKernelLedgerProjectionErrorV1> {
@@ -2285,5 +2456,32 @@ mod positive_p_restore_caps_v2 {
         u32::MAX.serialize(&mut bytes).unwrap();
         let error = borsh::from_slice::<PalwKernelRouteStateV1>(&bytes).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+}
+
+#[cfg(test)]
+mod case_alias_cache_tests {
+    use super::*;
+    use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1};
+
+    #[test]
+    fn kernel_case_alias_lease_follows_only_the_unchanged_route_copies() {
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 4096, database_bytes: 0 });
+        let claim = [2; 64];
+        let mut cache = KernelLedgerCacheV1::default();
+        let index = KernelCaseAliasesV2 {
+            claims: [claim].into_iter().collect(),
+            jobs: Default::default(),
+            lease: checker.reserve_requests_v1(4096, 0).unwrap(),
+        };
+        assert!(cache.2.set(std::sync::Arc::new(index)).is_ok());
+        let old_route_cache = cache.clone();
+        assert!(old_route_cache.2.get().unwrap().contains(&claim, &[0; 64]));
+        cache.clear();
+        assert!(cache.2.get().is_none());
+        assert_eq!(cache.case_alias_heap_v2(), 0);
+        assert_eq!(checker.outstanding(), (4096, 0));
+        drop(old_route_cache);
+        assert_eq!(checker.outstanding(), (0, 0));
     }
 }

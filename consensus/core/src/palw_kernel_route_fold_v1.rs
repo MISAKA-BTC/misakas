@@ -216,6 +216,32 @@ impl PalwChainStateV2 {
     }
 }
 
+fn legacy_kernel_claim_alias_v2(table: u8, key: &[u8], value: &[u8]) -> Option<Hash64> {
+    use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1};
+    let subject = match table {
+        TABLE_CLAIMS_V1 | TABLE_OPV_CLAIMS_V1 => key,
+        TABLE_JOB_CLAIMS_V1 => value,
+        TABLE_PROOF_SEALS_V1 => key.get(..64)?,
+        _ => return None,
+    };
+    subject.try_into().ok().map(Hash64::from_bytes)
+}
+
+fn legacy_kernel_job_alias_v2(table: u8, key: &[u8], value: &[u8]) -> Option<Hash64> {
+    use misaka_palw_kernel::rows::{
+        TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_JOB_ESCROWS_V1, TABLE_JOBS_V1, TABLE_PIPELINE_JOBS_V1, TABLE_SEALS_V1,
+    };
+    let subject = match table {
+        TABLE_JOBS_V1 | TABLE_PIPELINE_JOBS_V1 | TABLE_JOB_CLAIMS_V1 | TABLE_JOB_ESCROWS_V1 => key,
+        TABLE_SEALS_V1 => key.get(..64)?,
+        // ClaimRowV1 begins with producer, class_binding_id and job_id,
+        // three fixed 64-byte digests preceding the variable-sized body.
+        TABLE_CLAIMS_V1 => value.get(128..192)?,
+        _ => return None,
+    };
+    subject.try_into().ok().map(Hash64::from_bytes)
+}
+
 impl TransitionBuilder<'_> {
     /// **The one writer of the kernel route's rows**, journaled `KernelRouteRow` (the ledger's tables below 32, the consensus tables
     /// from 32). The route's header must exist.
@@ -225,8 +251,7 @@ impl TransitionBuilder<'_> {
     /// retryable) and leaves the rows and the journal unchanged.
     pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
         self.reserve_kernel_row_write_v1(table, &key, &new, true)?;
-        self.apply_kernel_row_v1(table, key, new);
-        Ok(())
+        self.apply_kernel_row_v1(table, key, new)
     }
 
     /// [`Self::write_kernel_row`] for a key/row whose buffers the caller already admitted before encoding
@@ -238,12 +263,23 @@ impl TransitionBuilder<'_> {
         new: Option<Vec<u8>>,
     ) -> Result<(), PalwStateV2Error> {
         self.reserve_kernel_row_write_v1(table, &key, &new, false)?;
-        self.apply_kernel_row_v1(table, key, new);
-        Ok(())
+        self.apply_kernel_row_v1(table, key, new)
     }
 
-    fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
-        let Some(kernel) = self.state.kernel_route.as_mut() else { return };
+    fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
+        if let Some(value) = new.as_deref() {
+            if let Some(claim) = legacy_kernel_claim_alias_v2(table, &key, value) {
+                self.reject_positive_claim_alias_v2(claim)?;
+            }
+            if let Some(job) = legacy_kernel_job_alias_v2(table, &key, value) {
+                self.reject_positive_job_alias_v2(job)?;
+            }
+        }
+        let Some(kernel) = self.state.kernel_route.as_mut() else { return Ok(()) };
+        let map_key = (table, key);
+        kernel
+            .update_positive_job_index_v2(&map_key, new.as_deref())
+            .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid Positive Result row: {error:?}")))?;
         let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
         if ledger_table {
             // A ledger row changes: the cached ledger is no longer the rows' (the flush sets it again once it has written them).
@@ -251,12 +287,13 @@ impl TransitionBuilder<'_> {
         }
         let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
         let old = match &new {
-            Some(bytes) => map.insert((table, key.clone()), bytes.clone()),
-            None => map.remove(&(table, key.clone())),
+            Some(bytes) => map.insert(map_key.clone(), bytes.clone()),
+            None => map.remove(&map_key),
         };
         if old != new {
-            self.entries.push(PalwDeltaEntryV2::KernelRouteRow { table, key, old, new });
+            self.entries.push(PalwDeltaEntryV2::KernelRouteRow { table, key: map_key.1, old, new });
         }
+        Ok(())
     }
 
     /// **The one writer of the kernel route's header**, journaled `KernelRouteHeader`.

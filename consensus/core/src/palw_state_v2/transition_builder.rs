@@ -792,6 +792,10 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_claim(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Result<(), PalwStateV2Error> {
+        if let Some(claim) = &new {
+            self.reject_positive_claim_alias_v2(key)?;
+            self.reject_positive_job_alias_v2(claim.job_identity)?;
+        }
         if !self.state.claims.contains_key(&key) {
             if let Some(claim) = &new {
                 self.stamp_reader_router_claim_v2(key, claim)?;
@@ -804,6 +808,10 @@ impl<'a> TransitionBuilder<'a> {
             if self.native_reservation.is_tracking_v1() { self.claim_cascade_requests_v1(key, &new)? } else { (0, 0) };
         self.reserve_mutation_sequence_v1(requests, slots)?;
         self.reserve_map_journal_v1(&key, &new, !self.state.claims.contains_key(&key), "native claims writer")?;
+        let new_job_membership = new.as_ref().is_some_and(|claim| {
+            claim.job_identity != ZERO_HASH64 && self.state.claims.get(&key).is_none_or(|old| old.job_identity != claim.job_identity)
+        });
+        self.reserve_index_members_v1::<(Hash64, Hash64), ()>(u64::from(new_job_membership), "native claim job index")?;
         // **X3 × retention (REQ-X3-6; Lead default 2026-10-15 round 3; `palw_claim_hard_deadline_v1`)**: a claim CREATED past the
         // fence owes its material — trace, DA units, every hold that reads the record — through its hard deadline, fixed at
         // acceptance, so a pursuit X3 admits can start from public material any time before `hard − B_remaining`. Raised once, here,
@@ -920,10 +928,7 @@ impl<'a> TransitionBuilder<'a> {
         {
             self.write_tir_shard_claim(key, None)?;
         }
-        let old = match &new {
-            Some(record) => self.state.claims.insert(key, record.clone()),
-            None => self.state.claims.remove(&key),
-        };
+        let old = self.state.replace_claim_row_v2(key, new.clone());
         // ADR-0160 F-W: the bond's staged weight, held reservation and capped term follow the record.
         self.weight_cap_on_write(old.as_ref(), new.as_ref());
         // Audit #13b: the registry's in-flight index, where this fold has built it, moves with

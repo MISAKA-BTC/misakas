@@ -258,13 +258,53 @@ fn has_legacy_staged_alias_v2<V>(
     .any(|(first, last)| rows.range(first..=last).next().is_some())
 }
 
+impl TransitionBuilder<'_> {
+    pub(super) fn reject_positive_job_alias_v2(&self, job: Hash64) -> Result<(), PalwStateV2Error> {
+        if self.state.kernel_route.as_ref().is_some_and(|route| route.contains_positive_job_v2(job)) {
+            return Err(refuse("legacy ingress overlaps a rooted Positive job"));
+        }
+        Ok(())
+    }
+
+    /// A rooted Positive claim index owns this claim identity. Check at the
+    /// legacy writer before it allocates or publishes a new row.
+    pub(super) fn reject_positive_claim_alias_v2(&self, claim: Hash64) -> Result<(), PalwStateV2Error> {
+        use crate::palw_native_resource_v1::reserve_native_requests_v1;
+        use misaka_palw_positive_contract::{CONTRACT_REVISION, CONTRACT_VERSION, identity::ClaimId, native::KERNEL_AUX_TABLE};
+
+        let Some(route) = self.state.kernel_route.as_ref() else { return Ok(()) };
+        if route.aux.range((KERNEL_AUX_TABLE, Vec::new())..(KERNEL_AUX_TABLE + 1, Vec::new())).next().is_none() {
+            return Ok(());
+        }
+        let key = (CONTRACT_VERSION, CONTRACT_REVISION, NativeRowKey::ClaimIndex(ClaimId(Digest(claim.as_bytes()))));
+        let len = borsh::object_length(&key).map_err(refuse)?;
+        let _lease = reserve_native_requests_v1(len as u64).map_err(PalwStateV2Error::NativeResource)?;
+        let mut encoded = Vec::new();
+        encoded.try_reserve_exact(len).map_err(|_| {
+            PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<NativeRowKey>(
+                "legacy claim alias key",
+                "allocator refused the fixed key",
+            ))
+        })?;
+        borsh::to_writer(&mut encoded, &key).map_err(refuse)?;
+        if route.aux.contains_key(&(KERNEL_AUX_TABLE, encoded)) {
+            return Err(refuse("legacy ingress overlaps a rooted Positive claim"));
+        }
+        Ok(())
+    }
+}
+
 /// Exact native aliases must be absent in EVERY old entry surface. A zero
 /// unresolved counter alone is deliberately not accepted as evidence of this.
-fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &MinerResultCommit) -> Result<(), PalwStateV2Error> {
+pub(super) fn reject_legacy_aliases(
+    state: &PalwChainStateV2,
+    a: &AssignmentRow,
+    result: &MinerResultCommit,
+) -> Result<(), PalwStateV2Error> {
     let claim = Hash64::from_bytes(result.claim_id().0.0);
     let job = Hash64::from_bytes(result.job.0);
     if state.claims.contains_key(&claim)
-        || state.claims.values().any(|row| row.job_identity == job)
+        || state.has_claim_for_job_v2(job)
         || state.panels.contains_key(&claim)
         || state.court_sessions.contains_key(&claim)
         || state.legacy_disputes.contains_key(&claim)
@@ -280,23 +320,9 @@ fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &M
         return Err(refuse("actual staged native alias"));
     }
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
-    // Real typed projection owns its native allocation/decoder; unsupported or
-    // missing projection is an error, never an empty kernel ledger.
-    let ledger = route
-        .ledger_native_projection_checked_v9()
-        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing()))?;
-    let claim = result.claim_id().0.0;
-    let job = result.job.0;
-    if ledger.claims.contains_key(&claim)
-        || ledger.claims.values().any(|row| row.job_id == job)
-        || ledger.jobs.contains_key(&job)
-        || ledger.pipeline_jobs.contains_key(&job)
-        || ledger.job_claims.contains_key(&job)
-        || ledger.job_claims.values().any(|id| *id == claim)
-        || ledger.job_escrows.contains_key(&job)
-        || ledger.seals.range((job, [0; 64])..=(job, [u8::MAX; 64])).next().is_some()
-        || ledger.proof_seals.range((claim, [0; 64])..=(claim, [u8::MAX; 64])).next().is_some()
-        || ledger.opv.claims.contains_key(&claim)
+    if route
+        .has_legacy_case_alias_v2(&claim.as_bytes(), &job.as_bytes())
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing()))?
     {
         return Err(refuse("kernel job/claim/OPV alias"));
     }
@@ -813,6 +839,78 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
+    fn native_claim_job_lookup_tracks_repeated_jobs_and_delta_undo() {
+        let job = Hash64::from_bytes([3; 64]);
+        let other = Hash64::from_bytes([4; 64]);
+        let first = ZERO_HASH64;
+        let last = Hash64::from_bytes([u8::MAX; 64]);
+        let mut state = PalwChainStateV2::genesis();
+        let initial_root = state.state_root();
+        let unset = <PalwClaimStateV2 as borsh::BorshDeserialize>::deserialize(&mut &[0u8; 8192][..]).unwrap();
+        assert_eq!(unset.job_identity, ZERO_HASH64);
+        let mut named = unset.clone();
+        named.job_identity = job;
+
+        let one = PalwDeltaEntryV2::Claim { key: first, old: None, new: Some(unset.clone()) };
+        let two = PalwDeltaEntryV2::Claim { key: last, old: None, new: Some(named.clone()) };
+        let rename = PalwDeltaEntryV2::Claim { key: first, old: Some(unset), new: Some(named.clone()) };
+        let remove = PalwDeltaEntryV2::Claim { key: last, old: Some(named), new: None };
+        apply_delta_entry(&mut state, &one, false).unwrap();
+        assert!(state.has_claim_for_job_v2(ZERO_HASH64));
+        apply_delta_entry(&mut state, &two, false).unwrap();
+        apply_delta_entry(&mut state, &rename, false).unwrap();
+        apply_delta_entry(&mut state, &remove, false).unwrap();
+        assert!(state.has_claim_for_job_v2(job));
+        assert!(!state.has_claim_for_job_v2(ZERO_HASH64));
+        assert!(!state.has_claim_for_job_v2(other));
+
+        apply_delta_entry(&mut state, &remove, true).unwrap();
+        apply_delta_entry(&mut state, &rename, true).unwrap();
+        assert!(state.has_claim_for_job_v2(ZERO_HASH64));
+        assert!(state.has_claim_for_job_v2(job));
+        apply_delta_entry(&mut state, &two, true).unwrap();
+        assert!(!state.has_claim_for_job_v2(job));
+        apply_delta_entry(&mut state, &one, true).unwrap();
+        assert!(!state.has_claim_for_job_v2(ZERO_HASH64));
+        assert_eq!(state.state_root(), initial_root);
+    }
+
+    #[test]
+    fn rooted_positive_claim_refuses_legacy_primary_and_kernel_holder_writes() {
+        use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1};
+        use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1};
+        use misaka_palw_positive_contract::{identity::ClaimId, native::KERNEL_AUX_TABLE};
+
+        let claim = Hash64::from_bytes([13; 64]);
+        let other = Hash64::from_bytes([17; 64]);
+        let mut state = PalwChainStateV2::genesis();
+        state.kernel_route = Some(PalwKernelRouteStateV1::new(
+            palw_kernel_route_policy_v1(claim, other),
+            None,
+            misaka_palw_kernel::rows::LedgerScalarsV1::default(),
+        ));
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, other, 4, 1000, 100, 1000, 0).unwrap();
+        let extras = PalwTransitionExtrasV1::default();
+        let key = NativeRowKey::ClaimIndex(ClaimId(Digest(claim.as_bytes()))).encode();
+        state.kernel_route.as_mut().unwrap().aux.insert((KERNEL_AUX_TABLE, key), vec![1]);
+        let root = state.state_root();
+        let mut builder = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        assert!(builder.reject_positive_claim_alias_v2(other).is_ok());
+        let row = <PalwClaimStateV2 as borsh::BorshDeserialize>::deserialize(&mut &[0u8; 8192][..]).unwrap();
+        assert!(matches!(builder.write_claim(claim, Some(row)), Err(PalwStateV2Error::KernelRouteRefused(_))));
+        for (table, key, value) in [
+            (TABLE_CLAIMS_V1, claim.as_bytes().to_vec(), vec![1]),
+            (TABLE_OPV_CLAIMS_V1, claim.as_bytes().to_vec(), vec![1]),
+            (TABLE_JOB_CLAIMS_V1, other.as_bytes().to_vec(), claim.as_bytes().to_vec()),
+            (TABLE_PROOF_SEALS_V1, [claim.as_bytes(), other.as_bytes()].concat(), vec![1]),
+        ] {
+            assert!(matches!(builder.write_kernel_row(table, key, Some(value)), Err(PalwStateV2Error::KernelRouteRefused(_))));
+        }
+        assert!(builder.entries.is_empty());
+        assert_eq!(builder.state.state_root(), root);
+    }
+
+    #[test]
     fn staged_alias_probes_cover_subject_namespaces_and_boundaries() {
         let subject = Hash64::from_bytes([2; 64]);
         let other = Hash64::from_bytes([3; 64]);
@@ -847,7 +945,9 @@ mod tests {
             K::CourtMaterial(subject, high),
             K::CourtMaterialLedger(subject, bond),
         ];
+        use super::super::palw_staged_court_fold_v1::staged_legacy_alias_subject_v2;
         for key in aliases {
+            assert_eq!(staged_legacy_alias_subject_v2(key), Some(subject));
             let rows = BTreeMap::from([(key, ())]);
             assert!(has_legacy_staged_alias_v2(&rows, subject), "{key:?}");
             assert!(!has_legacy_staged_alias_v2(&rows, other), "{key:?}");
@@ -859,5 +959,6 @@ mod tests {
             (K::CourtMaterialPart(subject, 0), ()),
         ]);
         assert!(!has_legacy_staged_alias_v2(&rows, subject));
+        assert!(rows.keys().all(|&key| staged_legacy_alias_subject_v2(key).is_none()));
     }
 }

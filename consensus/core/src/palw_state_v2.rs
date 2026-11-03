@@ -10780,6 +10780,8 @@ pub struct PalwChainStateV2 {
     receipt_targets: BTreeMap<Hash64, PalwClassTargetV2>,
     capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     claims: BTreeMap<Hash64, PalwClaimStateV2>,
+    // Derived nonzero job identities, including claims retained after termination.
+    claims_by_job: BTreeSet<(Hash64, Hash64)>,
     panels: BTreeMap<Hash64, PalwPanelStateV2>,
     court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
@@ -22941,11 +22943,15 @@ fn apply_kernel_route_row_v1(
         // GAP 8: a ledger row applied or reverted outside the fold — the cached ledger is no longer the rows'.
         kernel.ledger_cache.clear();
     }
-    let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
     let k = (table, key.to_vec());
-    if map.get(&k) != expected.as_ref() {
+    let actual = if ledger_table { kernel.rows.get(&k) } else { kernel.aux.get(&k) };
+    if actual != expected.as_ref() {
         return Err(PalwStateV2Error::DeltaMismatch("a kernel route row does not match the delta's expectation"));
     }
+    kernel
+        .update_positive_job_index_v2(&k, install.as_deref())
+        .map_err(|_| PalwStateV2Error::DeltaMismatch("a Positive Result row does not match its canonical key"))?;
+    let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
     match install {
         Some(bytes) => {
             map.insert(k, bytes.clone());
@@ -23090,7 +23096,13 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         }
         PalwDeltaEntryV2::ReceiptTarget { key, old, new } => swap_write!(state.receipt_targets, key, old, new),
         PalwDeltaEntryV2::Capability { key, old, new } => swap_write!(state.capabilities, key, old, new),
-        PalwDeltaEntryV2::Claim { key, old, new } => swap_write!(state.claims, key, old, new),
+        PalwDeltaEntryV2::Claim { key, old, new } => {
+            let (expected, install) = if revert { (new, old) } else { (old, new) };
+            if state.claims.get(key) != expected.as_ref() {
+                return Err(PalwStateV2Error::DeltaMismatch("an entry's old value is not this state's value"));
+            }
+            state.replace_claim_row_v2(*key, install.clone());
+        }
         PalwDeltaEntryV2::Payout { key, old, new } => swap_write!(state.pending_payouts, key, old, new),
         PalwDeltaEntryV2::Panel { key, old, new } => swap_write!(state.panels, key, old, new),
         PalwDeltaEntryV2::Court { key, old, new } => {
@@ -25532,6 +25544,7 @@ impl PalwStateCarriageV2 {
                         .filter(|((table, _), _)| *table != crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1)
                         .map(|(key, row)| (key.clone(), row.clone()))
                         .collect(),
+                    positive_job_results_v2: route.positive_job_results_v2.clone(),
                     ledger_cache: Default::default(),
                 }
             }),
@@ -25685,6 +25698,16 @@ impl PalwStateCarriageV2 {
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
         palw_improve_eval_fold_v1::palw_improve_eval_carriage_consistent_v1(&self.improvement_eval_jobs, &self.improvement_epochs)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;
+        let mut claims_by_job = BTreeSet::new();
+        for (id, claim) in &self.claims {
+            if claim.job_identity != ZERO_HASH64 {
+                claims_by_job.insert((claim.job_identity, *id));
+            }
+        }
+        let mut funded_escrows_by_claim = BTreeSet::new();
+        for (id, row) in &self.funded_escrows {
+            funded_escrows_by_claim.insert((row.claim, *id));
+        }
         let mut state = PalwChainStateV2 {
             bonds: self.bonds,
             reserved_exposure: self.reserved_exposure,
@@ -25696,6 +25719,7 @@ impl PalwStateCarriageV2 {
             epoch_budgets: self.epoch_budgets,
             receipt_targets: self.receipt_targets,
             capabilities: self.capabilities,
+            claims_by_job,
             claims: self.claims,
             pending_payouts: self.pending_payouts,
             certified_families: self.certified_families,
@@ -25822,7 +25846,7 @@ impl PalwStateCarriageV2 {
             panel_v3: self.panel_v3,
             legacy_disputes: self.legacy_disputes,
             tir_designated: self.tir_designated,
-            funded_escrows_by_claim: self.funded_escrows.iter().map(|(id, row)| (row.claim, *id)).collect(),
+            funded_escrows_by_claim,
             funded_escrows: self.funded_escrows,
             d2_readiness: self.d2_readiness,
             fp_public_jobs: self.fp_public_jobs,

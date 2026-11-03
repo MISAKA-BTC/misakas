@@ -251,6 +251,7 @@ impl<'a> TransitionBuilder<'a> {
         let mut q = NativeWriteQuoteV1::new(path);
         // `(table, key.clone())` for the map, `bytes.clone()` for the map value, both exact-capacity clones.
         q.exact::<u8>(key_len)?.exact::<u8>(value_len)?.member_if::<(u8, Vec<u8>), Vec<u8>>(absent)?.slots(1)?;
+        q.member_if::<(Hash64, Hash64), ()>(new.is_some() && crate::palw_kernel_route_v1::is_positive_result_row_v2(table, key))?;
         if retained_caller_buffers {
             q.exact::<u8>(key_len)?.exact::<u8>(value_len)?;
         }

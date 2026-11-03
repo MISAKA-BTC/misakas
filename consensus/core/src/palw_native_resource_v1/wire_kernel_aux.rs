@@ -1195,7 +1195,13 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         }
         149 => return Err(wire::wire_bad("unallocated paid bootstrap source V6 row namespace")),
         150 => crate::palw_kernel_court_admission_v1::KernelCourtCapitalRowV1::scan_native_wire_v1(frame)?,
-        misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => super::positive_rows::scan_positive_aux_row_v1(key, frame)?,
+        misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => {
+            let shape = super::positive_rows::scan_positive_aux_row_v1(key, frame)?;
+            shape.allocation(
+                u64::from(crate::palw_kernel_route_v1::is_positive_result_row_v2(table, key)),
+                size_of::<typed::BTreeNodeEnvelopeV1<(kaspa_hashes::Hash64, kaspa_hashes::Hash64), ()>>(),
+            )?
+        }
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),
         _ => {
             return Err(std::io::Error::new(

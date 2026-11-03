@@ -64,6 +64,7 @@ impl TransitionBuilder<'_> {
     /// **Install a fresh row** for a fully admitted funded original (the coordinator only). One row per contract and per
     /// outpoint: an outpoint is never escrowed twice.
     pub(super) fn install_funded_escrow_v1(&mut self, row: PalwFundedEscrowRowV1) -> Result<(), PalwStateV2Error> {
+        self.reject_positive_claim_alias_v2(row.claim)?;
         if self.state.funded_escrows.contains_key(&row.contract_id)
             || self.state.funded_escrows.values().any(|other| other.funding_outpoint == row.funding_outpoint)
         {
