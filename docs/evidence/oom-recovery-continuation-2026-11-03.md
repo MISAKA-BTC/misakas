@@ -1449,3 +1449,47 @@ Qwen #57 had signed retention DAA 40,236 and was referenced
 by the selected fold at DAA 19,630. B0 rejected the claim
 with 20,606 DAA remaining against 20,608 required. Both nodes
 returned no claim row for the exact ID.
+
+## Exact Qwen material custody and Positive Court entry — 06:51 UTC
+
+B0, the relay, and the public index agreed at DAA 19,632.
+The new Qwen #58 carrier was merged blue. Both node reads
+returned no claim row, and B0 logged 20,606 DAA remaining
+against the required 20,608. Its producer still held
+2,409,135 bytes of material and 4,172 bytes of answer.
+A bounded read recovered both files and matched their hashes
+to the earlier custody observation. The paired raw header
+and registered-key reads agreed. Both nodes reported the
+DAA 20,000 retention activation as scheduled and unarmed,
+with zero receipt blocks in those process views.
+
+The older #21 raw signed header, key, anchor, and roots
+were rechecked on B0 and the relay. The exact material leaf
+was absent at its recorded B0 path and the relay did not
+have a retention directory. No cause or deletion time
+was inferred, and no later capture was used as #21 material.
+
+The existing Qwen A16 packet uses the legacy shard Court
+format. The current Positive Court Panel admission expects
+a rooted TIR class, PositiveResultV2, and a matching program
+and job selector. The legacy CoreV1 draw is a prefill with
+one selected output and has no such rooted result. The typed
+mirror reproduces the computation without issuing that
+result. The native assigned Case handler on the separate
+A0 branch also still returns history unavailable at its
+WitnessCommit, ExactFrame and Finish entry. The raw ingress
+and pure frame checker are present. The private preflight
+compared source and saved artifacts and did not exercise
+a live Positive Court or change the A0 worktree.
+
+For #58, an independent check reconstructed the 1,023
+anchor-derived input IDs and matched their commitment. It
+reconstructed the signed output root from the recovered
+answer's token 220. A separate process denied access to
+the model, original material, answer and network then
+verified an exact legacy query projection packet. The
+30,713-byte packet contained 12 authenticated activation
+tiles and two registered artifact openings. All eight output
+lanes matched. Missing operands deferred the verdict, and
+altered input or source data was refused. This covers one
+relation from the original signed claim.
