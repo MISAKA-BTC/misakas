@@ -1,4 +1,4 @@
-//! Local diagnostic for one original, parameter-dependent T12 A16 embedding tile.
+//! Local diagnostic for one original T12 A16 embedding or query projection tile.
 //! The Panel command opens the mapped artifact. The verifier has no artifact argument.
 use kaspa_consensus_core::{
     Hash64,
@@ -21,11 +21,18 @@ use kaspa_consensus_core::{
         palw_job_anchor_v1, palw_network_domain_v2_for, palw_nonce_bucket_v1,
     },
     palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1},
+    palw_base0_a16::A16QuantParams,
     palw_native_resource_v1::preflight_native_value_v1,
     palw_prompt_ids_v1::{PalwPromptIdsFormV1, palw_prompt_ids_form_of_class_v1},
     palw_shard_court_v1::{PalwLeafEvidenceV1, PalwOneMoveClaimV2, PalwShardCourtError, PalwShardCourtVerdictV1},
-    palw_step::{PalwStepOutLenV1, canonical_step_coordinates, kernel_semantics_id_v1, step_leaf_count_capped_v1},
-    palw_step_refute::{KDESC_A16_EMBED, PalwStepRefuteError, palw_refutation_prompt_carriage_v1},
+    palw_step::{
+        PalwStepCoordinateV1, PalwStepOutLenV1, canonical_step_coordinates, canonical_step_leaf_index, kernel_semantics_id_v1,
+        step_leaf_count_capped_v1,
+    },
+    palw_step_leg::PalwStepLegError,
+    palw_step_refute::{
+        KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, PalwStepRefuteError, canonical_input_leaves_v1, palw_refutation_prompt_carriage_v1,
+    },
     palw_v2::PalwJobContextV2,
     pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
 };
@@ -62,7 +69,30 @@ const MAX_EVIDENCE_HEAP: u64 = 2 << 20;
 const MAX_ARTIFACT: u64 = 4 << 30;
 const MAX_INVENTORY_LEAVES: u32 = 4_000_000;
 const MAX_STEP_LEAVES: u64 = 1 << 28;
-const LEAF: u64 = 0;
+const EMBEDDING_LEAF: u64 = 0;
+const QUERY_WEIGHTS: &str = "blk.{layer}.attn_q.weight";
+const QUERY_QUANT: &str = "blk.{layer}.attn_q.weight.a16";
+
+#[derive(Clone, Copy)]
+enum Relation {
+    Embedding,
+    QueryProjection,
+}
+
+struct OperandKey<'a> {
+    name: &'a str,
+    layer: Option<u16>,
+    offset: u32,
+    width: u32,
+}
+
+struct Target<'a> {
+    relation: Relation,
+    leaf: u64,
+    inputs: usize,
+    output_lanes: u32,
+    operands: Vec<OperandKey<'a>>,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -208,37 +238,113 @@ fn rooted_claim(input: &Path, expected_sha: &str) -> Result<RootedClaim, String>
     })
 }
 
-fn operand_key(claim: &RootedClaim) -> Result<(&str, Option<u16>, u32, u32), String> {
-    let coord = canonical_step_coordinates(&claim.class.profile, &claim.job, LEAF).ok_or("first leaf has no coordinates")?;
-    let (node, layer) = claim.class.profile.resolve_node_slot(coord.node_slot).ok_or("first leaf has no node")?;
+fn target(claim: &RootedClaim, relation: Relation) -> Result<Target<'_>, String> {
+    let profile = &claim.class.profile;
+    let (leaf, coord, kernel) = match relation {
+        Relation::Embedding => (
+            EMBEDDING_LEAF,
+            canonical_step_coordinates(profile, &claim.job, EMBEDDING_LEAF).ok_or("first leaf has no coordinates")?,
+            KDESC_A16_EMBED,
+        ),
+        Relation::QueryProjection => {
+            let coord = PalwStepCoordinateV1 {
+                call_index: 0,
+                position: 0,
+                tile_index: 0,
+                node_slot: u32::try_from(profile.pre_nodes.len()).map_err(|e| e.to_string())? + 2,
+            };
+            let leaf = canonical_step_leaf_index(profile, &claim.job, &coord).ok_or("first projection leaf is absent")?;
+            (leaf, coord, KDESC_A16_MATMUL_REQUANT)
+        }
+    };
+    let (node, layer) = profile.resolve_node_slot(coord.node_slot).ok_or("target leaf has no node")?;
+    let PalwStepOutLenV1::Fixed { elements } = node.out_len else {
+        return Err("target row width is not fixed".into());
+    };
     require(
         coord.position == 0
             && coord.call_index == 0
             && coord.tile_index == 0
-            && node.input_refs.is_empty()
-            && node.kernel_semantics_id == kernel_semantics_id_v1(KDESC_A16_EMBED),
-        "the original first leaf is not an input-only A16 embedding tile",
+            && node.kernel_semantics_id == kernel_semantics_id_v1(kernel)
+            && elements > 0
+            && elements <= 4096,
+        "target differs from the fixed A16 diagnostic relation",
     )?;
-    let PalwStepOutLenV1::Fixed { elements } = node.out_len else {
-        return Err("embedding row width is not fixed".into());
+    let output_lanes = node.tile_len.min(elements);
+    let (inputs, operands) = match relation {
+        Relation::Embedding => {
+            require(node.input_refs.is_empty(), "embedding must have no committed input row")?;
+            let offset = claim.prompt[0].checked_mul(elements).ok_or("embedding byte offset overflow")?;
+            (0, vec![OperandKey { name: &node.weight_name, layer, offset, width: elements }])
+        }
+        Relation::QueryProjection => {
+            require(
+                layer == Some(0)
+                    && node.weight_name == QUERY_WEIGHTS
+                    && elements == profile.hidden_dim
+                    && output_lanes > 0
+                    && output_lanes <= 128,
+                "target differs from the first query tile",
+            )?;
+            let rows = canonical_input_leaves_v1(profile, &claim.job, &coord).ok_or("projection has no canonical input set")?;
+            let [row] = rows.as_slice() else { return Err("projection must read one committed activation row".into()) };
+            require(
+                leaf < 1 << PALW_BASE0_SPARSE_RETAIN_LEVEL_V1
+                    && !row.is_empty()
+                    && row.len() <= 32
+                    && row.iter().all(|(input, coord)| *input < leaf && coord.position == 0 && coord.call_index == 0),
+                "projection inputs are outside the first bounded replay block",
+            )?;
+            let code_bytes = output_lanes.checked_mul(profile.hidden_dim).ok_or("query weight tile width overflow")?;
+            require(code_bytes as usize <= 192 << 10, "query weight tile exceeds diagnostic cap")?;
+            let quant_bytes = output_lanes * A16QuantParams::WIRE_BYTES as u32;
+            (
+                row.len(),
+                vec![
+                    OperandKey { name: QUERY_WEIGHTS, layer, offset: 0, width: code_bytes },
+                    OperandKey { name: QUERY_QUANT, layer, offset: 0, width: quant_bytes },
+                ],
+            )
+        }
     };
-    require(elements > 0 && elements <= 4096, "embedding row width exceeds diagnostic cap")?;
-    let offset = claim.prompt[0].checked_mul(elements).ok_or("embedding byte offset overflow")?;
-    Ok((&node.weight_name, layer, offset, elements))
+    Ok(Target { relation, leaf, inputs, output_lanes, operands })
 }
 
-fn open_operand(claim: &RootedClaim, artifact: &Base0ArtifactV1) -> Result<PalwArtifactOpeningV1, String> {
-    let (name, layer, offset, width) = operand_key(claim)?;
-    let end = offset.checked_add(width).ok_or("embedding row end overflow")?;
-    let row = artifact.embed.get(offset as usize..end as usize).ok_or("embedding row outside mapped artifact")?;
-    let row: Vec<u8> = row.iter().map(|byte| *byte as u8).collect();
-    let digest = artifact_leaf_parts_v1(name, layer, offset, &row);
-    let mut index = None;
+fn operand_digests(target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Vec<Hash64>, String> {
+    let bytes: Vec<Vec<u8>> = match target.relation {
+        Relation::Embedding => {
+            let key = &target.operands[0];
+            let end = key.offset.checked_add(key.width).ok_or("embedding row end overflow")?;
+            let row = artifact.embed.get(key.offset as usize..end as usize).ok_or("embedding row outside mapped artifact")?;
+            vec![row.iter().map(|byte| *byte as u8).collect()]
+        }
+        Relation::QueryProjection => {
+            let layer = artifact.layers.first().ok_or("first artifact layer is missing")?;
+            let codes = layer.wq.as_slice().get(..target.operands[0].width as usize).ok_or("first query weight tile is missing")?;
+            let quant = artifact.a16_param(QUERY_QUANT, Some(0)).ok_or("first query quantization table is missing")?;
+            let quant_width = target.operands[1].width as usize;
+            // The inventory expands a shared 17-byte triple into a per-lane table.
+            let quant = if quant.len() == A16QuantParams::WIRE_BYTES {
+                quant.repeat(target.output_lanes as usize)
+            } else {
+                quant.get(..quant_width).ok_or("first query quantization tile is missing")?.to_vec()
+            };
+            vec![codes.iter().map(|byte| *byte as u8).collect(), quant]
+        }
+    };
+    Ok(target.operands.iter().zip(bytes).map(|(key, row)| artifact_leaf_parts_v1(key.name, key.layer, key.offset, &row)).collect())
+}
+
+fn open_operands(claim: &RootedClaim, target: &Target<'_>, artifact: &Base0ArtifactV1) -> Result<Vec<PalwArtifactOpeningV1>, String> {
+    let digests = operand_digests(target, artifact)?;
+    let mut indices = vec![None; digests.len()];
     let mut duplicate = false;
     let mut visited = 0u64;
     let (root, count, _) = a16_readiness_leaves_streamed_v1(artifact, &claim.class.profile, &[], &mut |hash| {
-        if hash == digest {
-            duplicate |= index.replace(visited).is_some();
+        for (digest, index) in digests.iter().zip(&mut indices) {
+            if hash == *digest {
+                duplicate |= index.replace(visited).is_some();
+            }
         }
         visited += 1;
     })
@@ -247,24 +353,37 @@ fn open_operand(claim: &RootedClaim, artifact: &Base0ArtifactV1) -> Result<PalwA
         root == claim.expected.artifact_root && count <= MAX_INVENTORY_LEAVES && visited == u64::from(count) && !duplicate,
         "mapped artifact inventory root or leaf cap differs",
     )?;
-    let index = u32::try_from(index.ok_or("embedding row is absent from the registered inventory")?).map_err(|e| e.to_string())?;
-    let mut proof = PalwArtifactMultiproofStreamV1::new(count, &[index]).ok_or("invalid embedding inventory index")?;
-    let (root, _, opened) = a16_readiness_leaves_streamed_v1(artifact, &claim.class.profile, &[index], &mut |hash| proof.push(hash))
-        .map_err(|e| format!("{e:?}"))?;
+    let indices = indices
+        .into_iter()
+        .map(|index| u32::try_from(index.ok_or("required row is absent from registered inventory")?).map_err(|e| e.to_string()))
+        .collect::<Result<Vec<_>, String>>()?;
+    let mut proofs = indices
+        .iter()
+        .map(|&index| PalwArtifactMultiproofStreamV1::new(count, &[index]).ok_or("invalid artifact inventory index"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let (root, _, opened) = a16_readiness_leaves_streamed_v1(artifact, &claim.class.profile, &indices, &mut |hash| {
+        proofs.iter_mut().for_each(|proof| proof.push(hash));
+    })
+    .map_err(|e| format!("{e:?}"))?;
     require(root == claim.expected.artifact_root, "mapped inventory changed during the opening pass")?;
-    let proof = proof.finish(&opened).ok_or("incomplete embedding opening")?;
-    one_opening(proof, claim.expected.artifact_root)
+    proofs
+        .into_iter()
+        .zip(opened)
+        .map(|(proof, operand)| {
+            one_opening(proof.finish(&[operand]).ok_or("incomplete artifact opening")?, claim.expected.artifact_root)
+        })
+        .collect()
 }
 
 fn one_opening(mut proof: PalwArtifactMultiproofV1, registered_root: Hash64) -> Result<PalwArtifactOpeningV1, String> {
-    require(proof.opened.len() == 1, "expected one opened embedding row")?;
-    let (leaf_index, operand) = proof.opened.pop().ok_or("missing embedding opening")?;
+    require(proof.opened.len() == 1, "expected one opened artifact row")?;
+    let (leaf_index, operand) = proof.opened.pop().ok_or("missing artifact opening")?;
     let opening = PalwArtifactOpeningV1 { leaf_index, leaf_count: proof.leaf_count, operand, path: proof.siblings };
     verify_artifact_opening_v1(&opening, registered_root).map_err(|e| format!("{e:?}"))?;
     Ok(opening)
 }
 
-fn build(claim: &RootedClaim, capture: &Path, path: &Path) -> Result<PalwLeafEvidenceV1, String> {
+fn build(claim: &RootedClaim, target: &Target<'_>, capture: &Path, path: &Path) -> Result<PalwLeafEvidenceV1, String> {
     let bytes = read_bounded(capture, MAX_CAPTURE)?;
     require(
         bytes.len() == claim.observation.material_bytes && sha256(&bytes) == claim.observation.material_sha256,
@@ -302,7 +421,7 @@ fn build(claim: &RootedClaim, capture: &Path, path: &Path) -> Result<PalwLeafEvi
         artifact.shape == claim.class.artifact_shape && artifact.artifact_digest() == artifact_digest_of(QWEN25_A16_8K_MANIFEST_V1),
         "original T12 8K artifact digest or shape differs",
     )?;
-    let opening = open_operand(claim, &artifact)?;
+    let artifact_openings = open_operands(claim, target, &artifact)?;
     let backend = Qwen25A16Backend::from_registered_profile_in_lane_v1(
         artifact,
         claim.job.network_id.clone(),
@@ -314,81 +433,120 @@ fn build(claim: &RootedClaim, capture: &Path, path: &Path) -> Result<PalwLeafEvi
     .with_attempt_rules(PalwAttemptRulesV1::CoreV1)
     .with_step_ladder_cap(MAX_STEP_LEAVES);
     // Use only the bounded folded replay. The generic evidence helper can fall back to dense replay.
-    let refutation = backend.fp_leaf_refutation_v1(&bytes, &claim.prompt, claim.roots, claim.step_leaves, LEAF)?;
+    let refutation = backend.fp_leaf_refutation_v1(&bytes, &claim.prompt, claim.roots, claim.step_leaves, target.leaf)?;
     let (refutation, prompt_ids_opening) = palw_refutation_prompt_carriage_v1(claim.form, refutation).map_err(|e| format!("{e:?}"))?;
-    Ok(PalwLeafEvidenceV1 { refutation, artifact_openings: vec![opening], prompt_ids_opening })
+    Ok(PalwLeafEvidenceV1 { refutation, artifact_openings, prompt_ids_opening })
 }
 
-fn verdict(claim: &RootedClaim, evidence: &PalwLeafEvidenceV1) -> Result<PalwShardCourtVerdictV1, String> {
+fn verdict(claim: &RootedClaim, target: &Target<'_>, evidence: &PalwLeafEvidenceV1) -> Result<PalwShardCourtVerdictV1, String> {
     let binding = &evidence.refutation.binding;
     require(
-        evidence.leaf_index() == LEAF
+        evidence.leaf_index() == target.leaf
             && binding.job_context == claim.job
             && binding.shape_profile == claim.class.profile
             && binding.step_leaf_count == claim.step_leaves
             && binding.full_logits_trace_root == claim.roots.trace_root
-            && evidence.artifact_openings.len() == 1,
+            && evidence.artifact_openings.len() == target.operands.len(),
         "evidence changes the independently pinned leaf, class, original job or trace",
     )?;
-    let (name, layer, offset, width) = operand_key(claim)?;
-    let operand = &evidence.artifact_openings[0].operand;
+    for (key, opening) in target.operands.iter().zip(&evidence.artifact_openings) {
+        let operand = &opening.operand;
+        require(
+            operand.tensor_name == key.name
+                && operand.layer == key.layer
+                && operand.row_start == key.offset
+                && operand.bytes.len() == key.width as usize,
+            "evidence substitutes an artifact operand coordinate",
+        )?;
+    }
+    let inputs = &evidence.refutation.inputs;
     require(
-        operand.tensor_name == name && operand.layer == layer && operand.row_start == offset && operand.bytes.len() == width as usize,
-        "evidence substitutes the embedding operand coordinate",
+        match target.relation {
+            Relation::Embedding => inputs.is_empty(),
+            Relation::QueryProjection => inputs.len() == 1 && inputs[0].preimages.len() == target.inputs,
+        },
+        "evidence exceeds the bounded canonical input row",
     )?;
     evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true).map_err(|e| format!("{e:?}"))
 }
 
-fn verify(claim: &RootedClaim, path: &Path) -> Result<(), String> {
+fn verify(claim: &RootedClaim, target: &Target<'_>, path: &Path) -> Result<(), String> {
     let bytes = read_bounded(path, MAX_EVIDENCE)?;
     let quote = preflight_native_value_v1::<PalwLeafEvidenceV1>(bytes.as_slice(), bytes.len() as u64).map_err(|e| format!("{e:?}"))?;
     require(quote.logical_requests_v1() <= MAX_EVIDENCE_HEAP, "evidence allocation quote exceeds cap")?;
     let mut evidence: PalwLeafEvidenceV1 = borsh::from_slice(&bytes).map_err(|e| e.to_string())?;
-    require(verdict(claim, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation, "the named original tile did not recompute")?;
+    require(
+        verdict(claim, target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation,
+        "the named original tile did not recompute",
+    )?;
 
-    let mut opening = evidence.artifact_openings.pop().ok_or("missing checked opening")?;
-    require(
-        matches!(
-            evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true),
-            Err(PalwShardCourtError::Refutation(PalwStepRefuteError::Unadjudicable))
-        ),
-        "native checker did not defer the withheld operand",
-    )?;
-    opening.operand.bytes[0] ^= 1;
-    evidence.artifact_openings.push(opening);
-    require(
-        matches!(evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true), Err(PalwShardCourtError::ArtifactOpenings(_))),
-        "native checker did not refuse the altered artifact operand",
-    )?;
-    println!(
-        "{}",
-        json!({
-            "scope": "one-original-t12-a16-embedding-tile",
-            "claimId": claim.observation.claim_id,
-            "blockHash": claim.observation.block_hash,
-            "anchor": claim.roots.anchor,
-            "daa": claim.daa,
-            "leaf": LEAF,
-            "evidenceBytes": bytes.len(),
-            "evidenceSha256": sha256(&bytes),
-            "matched": true,
-            "missingSourceDeferred": true,
-            "wrongSourceRejected": true,
-            "fullExecutionVerified": false,
-            "chainAcceptanceInferred": false,
-            "gateCInferred": false,
-        })
-    );
+    for index in 0..evidence.artifact_openings.len() {
+        let mut opening = evidence.artifact_openings.remove(index);
+        require(
+            matches!(
+                evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true),
+                Err(PalwShardCourtError::Refutation(PalwStepRefuteError::Unadjudicable | PalwStepRefuteError::WeightUnavailable))
+            ),
+            "native checker did not defer the withheld operand",
+        )?;
+        opening.operand.bytes[0] ^= 1;
+        evidence.artifact_openings.insert(index, opening);
+        require(
+            matches!(evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true), Err(PalwShardCourtError::ArtifactOpenings(_))),
+            "native checker did not refuse the altered artifact operand",
+        )?;
+        evidence.artifact_openings[index].operand.bytes[0] ^= 1;
+    }
+    if matches!(target.relation, Relation::QueryProjection) {
+        let input = &mut evidence.refutation.inputs[0].preimages[0].values_le;
+        *input.first_mut().ok_or("verified projection input is empty")? ^= 1;
+        require(
+            matches!(
+                evidence.verdict_at_v2(&claim.expected, MAX_STEP_LEAVES, true),
+                Err(PalwShardCourtError::Refutation(PalwStepRefuteError::Leg(PalwStepLegError::CommittedRootMismatch)))
+            ),
+            "native checker did not refuse the altered committed input tile",
+        )?;
+    }
+    let scope = match target.relation {
+        Relation::Embedding => "one-original-t12-a16-embedding-tile",
+        Relation::QueryProjection => "one-original-t12-a16-query-projection-tile",
+    };
+    let mut report = json!({
+        "scope": scope,
+        "claimId": claim.observation.claim_id,
+        "blockHash": claim.observation.block_hash,
+        "anchor": claim.roots.anchor,
+        "daa": claim.daa,
+        "leaf": target.leaf,
+        "evidenceBytes": bytes.len(),
+        "evidenceSha256": sha256(&bytes),
+        "matched": true,
+        "missingSourceDeferred": true,
+        "wrongSourceRejected": true,
+        "fullExecutionVerified": false,
+        "chainAcceptanceInferred": false,
+        "gateCInferred": false,
+    });
+    if matches!(target.relation, Relation::QueryProjection) {
+        report["artifactOpenings"] = json!(target.operands.len());
+        report["authenticatedInputTiles"] = json!(target.inputs);
+        report["outputLanes"] = json!(target.output_lanes);
+        report["tamperedInputRejected"] = json!(true);
+    }
+    println!("{report}");
     Ok(())
 }
 
 fn run() -> Result<(), String> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     match args.as_slice() {
-        [mode, input, sha, capture, artifact, output] if mode == "build" => {
+        [mode, input, sha, capture, artifact, output] if mode == "build" || mode == "build-projection" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
-            let evidence = build(&claim, Path::new(capture), Path::new(artifact))?;
-            require(verdict(&claim, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation, "built tile did not recompute")?;
+            let relation = if mode == "build" { Relation::Embedding } else { Relation::QueryProjection };
+            let target = target(&claim, relation)?;
+            let evidence = build(&claim, &target, Path::new(capture), Path::new(artifact))?;
+            require(verdict(&claim, &target, &evidence)? == PalwShardCourtVerdictV1::FalseAccusation, "built tile did not recompute")?;
             let size = borsh::object_length(&evidence).map_err(|e| e.to_string())?;
             require(size <= MAX_EVIDENCE, "encoded evidence exceeds cap")?;
             let mut options = OpenOptions::new();
@@ -399,11 +557,12 @@ fn run() -> Result<(), String> {
             borsh::to_writer(&mut file, &evidence).map_err(|e| e.to_string())?;
             file.flush().and_then(|()| file.sync_all()).map_err(|e| e.to_string())
         }
-        [mode, input, sha, evidence] if mode == "verify" => {
+        [mode, input, sha, evidence] if mode == "verify" || mode == "verify-projection" => {
             let claim = rooted_claim(Path::new(input), sha.to_str().ok_or("expected SHA-256 text")?)?;
-            verify(&claim, Path::new(evidence))
+            let relation = if mode == "verify" { Relation::Embedding } else { Relation::QueryProjection };
+            verify(&claim, &target(&claim, relation)?, Path::new(evidence))
         }
-        _ => Err("usage: check-t12-a16-source build OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify OBSERVATION OBS_SHA256 EVIDENCE".into()),
+        _ => Err("usage: check-t12-a16-source build|build-projection OBSERVATION OBS_SHA256 CAPTURE ARTIFACT NEW_EVIDENCE | verify|verify-projection OBSERVATION OBS_SHA256 EVIDENCE".into()),
     }
 }
 
