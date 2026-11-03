@@ -763,7 +763,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         packet: ServicePacket { id, release_daa: open_at.daa_score, service_before: context.hard_daa - 1, cost: cost(1) },
         predecessors: vec![],
     }).collect();
-    let (quote, service) = plan.reserve_for_original_v1(service, graph, storage, |bytes| Ok(cost(bytes))).unwrap();
+    let (quote, service) = plan.reserve_for_original_v1(service, graph, storage, |_, bytes| Ok(cost(bytes))).unwrap();
     assert!(quote.required_daa <= 10_000);
     assert_eq!(quote.carrier_storage_rent_sompi, PART as u64 * storage.sompi_per_byte);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));

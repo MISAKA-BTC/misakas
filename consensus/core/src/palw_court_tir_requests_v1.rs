@@ -353,6 +353,23 @@ impl<'a> TirSharedRequestSetV1<'a> {
         Ok(bytes)
     }
 
+    /// Exact legacy frontier cost. Round each coordinate before multiplying
+    /// by the number of coordinates with that same bound.
+    pub(crate) fn shared_frontier_packets_v1(&self) -> Result<u64, String> {
+        let mut packets = 0;
+        let mut queries = 0;
+        self.visit_source_bounds(true, |count, _, bound| {
+            let per_query = crate::palw_court_shared_frontier_budget_v1::packets_for_bytes_v1(bound.maximum_response_bytes);
+            packets = add(packets, mul(count, per_query)?)?;
+            queries = add(queries, count)?;
+            Ok(())
+        })?;
+        if queries != self.len() {
+            return Err("shared frontier accounting omitted a legal family".into());
+        }
+        Ok(packets)
+    }
+
     /// Group source choices by their response bound. The conservative mode
     /// retains the original first-node maximum for all nodes at a level.
     fn visit_source_bounds(
@@ -1065,6 +1082,10 @@ mod tests {
         let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
         let set = TirSharedRequestSetV1::new(&fx.frame, &source, Hash64::from_u64_word(1)).unwrap();
         let bound = set.source_data_upper().unwrap();
+        assert_eq!(
+            set.shared_frontier_packets_v1().unwrap(),
+            crate::palw_court_shared_tir_state_v1::shared_universe_packets_v1(&source, &set).unwrap(),
+        );
         let mut actual = TirSharedSourceDataUpperV1::default();
         for i in 0..set.len() {
             actual.add(1, source.unit_bound_v1(&set.request_at(i).unwrap()).unwrap()).unwrap();

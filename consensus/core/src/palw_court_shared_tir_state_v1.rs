@@ -300,7 +300,7 @@ pub fn shared_frontier_universe_packets_v1(state: &PalwChainStateV2, c: &SharedT
     let source = c.source(state)?;
     let frame =
         crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, c.claim).ok_or("shared frontier: original frame absent")?;
-    shared_universe_packets_v1(&source, &TirSharedRequestSetV1::new(frame, &source, c.profile_id)?)
+    TirSharedRequestSetV1::new(frame, &source, c.profile_id)?.shared_frontier_packets_v1()
 }
 pub(crate) fn context(state: &PalwChainStateV2, claim: Hash64) -> Result<&SharedTirContextV1, String> {
     match state.staged_court_row_v1(&Key::CourtSharedContext(claim)) {

@@ -3668,3 +3668,36 @@ B0 and relay agreed at virtual DAA 19,726 with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-smol-cover-live.JOlv0E/page.json`
 and the baseline, edge-cap and wire receipts under
 `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-all-root-extracted.G1ixPg`.
+
+## Measure the legacy frontier and the numerical delivery reservation
+
+The original install still checks the legacy shared frontier against
+its whole-universe service budget. For the pinned SmolLM2 source,
+3,902,405 legal coordinates already exceed the 10,000-packet estimate.
+Counting each native response bound with the legacy per-coordinate
+rounding gives 242,570,073 packets. The candidate now rejects the
+obvious over-capacity case from the coordinate count and otherwise
+groups equal native bounds for the exact packet count. The grouped
+and per-coordinate counts matched in the extracted run. This
+preserves the legacy capacity rule.
+
+The measured numerical envelope of ten 265,397-byte ranges was also
+booked through the candidate scheduler. One selected root requires
+170 raw parts and 193 total packets in this scenario. With one
+control per DAA, placeholder verification and terminal costs, an empty
+book and one DAA of recovery, the schedule used 3,315 DAA from original
+acceptance, including the latest notice. Carrier bytes were 3,595,856.
+The extracted suite passed 49 checks. The native fixture's cost
+callback was updated to the stage-aware API, but the fixture has not
+run. This scenario excludes the full adjudication graph, concurrent
+claims and role obligations.
+
+Batch originals still need an independently funded admission path
+that binds their complete native graph to the original. The existing
+full-universe frontier check cannot qualify that path, and its legacy
+requests require their own reservation contract.
+
+B0 and relay agreed at virtual DAA 19,727 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-frontier-count.t1Oqgm/result.json`,
+`/private/tmp/misaka-t12-oom-20261102/tfp1-smol-reservation.GFHELe/scenario.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-smol-frontier-live.eR22Ff/page.json`.

@@ -92,13 +92,15 @@ pub(super) fn install_shared_frontier_context_v1(
         .map_err(|e| refused(format!("shared frontier install refused: {e}")))?;
     // F03b2 (provisional): Q (in packets, every coordinate at its maximum size) <= c * W, so the schedule serves every coordinate
     // before hard. Over capacity is a production error at original acceptance: the admission is refused (checkpoint restores).
-    let universe_packets = crate::palw_court_shared_tir_state_v1::shared_frontier_universe_packets_v1(&b.state, &derived)
-        .map_err(|e| refused(format!("shared frontier packets: {e}")))?;
-    if !crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
-        universe_packets,
-        crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
+    let fits = |packets| crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
+        packets, crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
         derived.hard_daa.saturating_sub(derived.original_accepted_daa),
-    ) {
+    );
+    // Every legal coordinate requires at least one packet.
+    if !fits(derived.queries)
+        || !fits(crate::palw_court_shared_tir_state_v1::shared_frontier_universe_packets_v1(&b.state, &derived)
+            .map_err(|e| refused(format!("shared frontier packets: {e}")))?)
+    {
         return Err(refused("shared frontier universe exceeds the reserved service capacity of the hard window"));
     }
     if derived.original_accepted_daa != ctx.daa_score {
