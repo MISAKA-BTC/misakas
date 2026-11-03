@@ -806,9 +806,28 @@ impl VirtualStateProcessor {
         let anchor_daa = self.headers_store.get_daa_score(anchor).map_err(|_| E::Unavailable("original signed ancestor header"))?;
         let remaining_work =
             view.material.custody.replay_work.checked_sub(accepted.work).ok_or(E::Invalid("original replay work cap"))?;
+        let funding_heap = view
+            .material
+            .custody
+            .heap_bytes
+            .min(view.material.native_preimages.physical.max_heap_bytes)
+            .checked_sub(accepted.heap)
+            .and_then(|heap| heap.checked_sub(workspace))
+            .and_then(|heap| heap.checked_sub(raw.capacity() as u64))
+            .ok_or(E::Unavailable("original Assignment funding workspace"))?;
+        let funding_remaining = state
+            .check_original_assignment_funding_v2(assignment, &view.material, &accepted.carriage, (funding_heap, remaining_work))
+            .map_err(|why| match why {
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(why) => E::Resource(why),
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(_) => {
+                    E::Unavailable("original Assignment funding prefix unavailable")
+                }
+                _ => E::Invalid("original Assignment funded output or allocation differs"),
+            })?;
         prefix
-            .check_original_assignment_verifier_candidates_v2(&view, anchor_daa, row.bundle.terms.result_before_daa, remaining_work)
+            .check_original_assignment_verifier_candidates_v2(&view, anchor_daa, row.bundle.terms.result_before_daa, funding_remaining)
             .map_err(|_| E::Invalid("original verifier candidates differ or exceed replay budget"))?;
+        let work = view.material.custody.replay_work - funding_remaining;
         Ok(Some(OriginalAssignmentOpenArchiveV2 {
             assignment: row,
             frame,
@@ -818,7 +837,7 @@ impl VirtualStateProcessor {
             carriage: accepted.carriage,
             lease,
             heap: accepted.heap,
-            work: accepted.work,
+            work,
         }))
     }
 

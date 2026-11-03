@@ -25,7 +25,9 @@ fn origin(transaction: Hash64, daa: u64) -> AcceptedOrigin {
         accepted_blue_score: daa,
     }
 }
-pub(crate) fn fixture(key: &[u8; PUBKEY_BYTES]) -> (AssignmentFundingRow, Transaction, Vec<UtxoEntry>, AssignmentSpendAuthorizationV2) {
+pub(crate) fn fixture(
+    key: &[u8; PUBKEY_BYTES],
+) -> (AssignmentFundingRow, Transaction, Vec<UtxoEntry>, AssignmentSpendAuthorizationV2) {
     let payer = principal(key);
     let refund = Digest(kaspa_hashes::blake2b_512_address_payload(key).as_bytes());
     let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&refund.0);
@@ -202,4 +204,63 @@ fn tentative_plan_rejects_changed_payload_duplicate_dues_and_unsafe_debit() {
     );
     assert!(qualify_assignment_spend_v2(&row, &auth, &transaction, &[174, 10], 20).is_err());
     assert!(qualify_assignment_spend_v2(&row, &auth, &transaction, &[175, 10], 21).is_err());
+}
+
+#[path = "../../../../misaka/palw/positive-contract/tests/support/assignment.rs"]
+mod assignment_fixture;
+
+#[test]
+fn archived_assignment_coin_rejects_a_conserving_but_different_initial_split() {
+    let (mut funding, _, entries, _) = fixture(&[17; PUBKEY_BYTES]);
+    let money = AssignmentMoneyQuoteV2 {
+        fee: 20,
+        capital: 30,
+        usage: AssignmentPhysicalUsageV2 {
+            admission_bytes: 1,
+            retained_bytes: 1,
+            replay_bytes: 2,
+            heap_bytes: 1,
+            utxo_writes: 1,
+            signatures: 3,
+        },
+        retention_daa: 100,
+        fee_schedule: assignment_fixture::d(71),
+        reserve_schedule: assignment_fixture::d(72),
+        physical_profile: assignment_fixture::d(73),
+    };
+    let mut bundle = assignment_fixture::bundle();
+    bundle.terms.payer = funding.authorization.payer;
+    bundle.terms.refund_payload = funding.authorization.refund_payload;
+    bundle.quote = money.id();
+    bundle.funding.assignment = bundle.terms.id();
+    bundle.funding.quote = bundle.quote;
+    bundle.funding.payer = bundle.terms.payer;
+    bundle.funding.refund_payload = bundle.terms.refund_payload;
+    bundle.future_case.assignment = bundle.terms.id();
+    bundle.future_case.payer = bundle.terms.payer;
+    bundle.future_case.refund_payload = bundle.terms.refund_payload;
+    let tx = Transaction::new(
+        0,
+        vec![TransactionInput::new(TransactionOutpoint::new(Hash64::from_u64_word(90), 0), vec![], 0, 1)],
+        vec![TransactionOutput::new(funding.initial_locked, entries[0].script_public_key.clone())],
+        0,
+        crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        vec![1, 0, 176, 2, 0, 1, 0, 8],
+    );
+    funding.assignment = bundle.terms.id();
+    funding.authorization = bundle.funding;
+    funding.funding_origin = origin(tx.id(), 10);
+    funding.reservation.origin = funding.funding_origin;
+    funding.liability.origin = funding.funding_origin;
+    funding.original_outpoint = point(TransactionOutpoint::new(tx.id(), 0));
+    funding.current_outpoint = Some(funding.original_outpoint);
+    assert_eq!(check_archived_assignment_funding_v2(&bundle, &funding, &tx, &money), Ok(()));
+
+    funding.fee.initial -= 1;
+    funding.fee.remaining -= 1;
+    funding.surplus.initial += 1;
+    funding.surplus.remaining += 1;
+    assert!(funding.validate_shape().is_ok());
+    assert_eq!(check_archived_assignment_funding_v2(&bundle, &funding, &tx, &money), Err(AssignmentFundsErrorV2::Conservation));
 }

@@ -973,6 +973,77 @@ fn check_unconsumed_close_operation_v2(
 }
 
 impl PalwChainStateV2 {
+    /// Reauthenticate the original Poster-funded output from the native
+    /// Open carrier and compare its exact initial allocation to the live row.
+    pub fn check_original_assignment_funding_v2(
+        &self,
+        id: AssignmentId,
+        material: &AssignmentAdmissionMaterialV2,
+        carriage: &NativeAcceptedCaseCarriageV2,
+        (heap, work): (u64, u64),
+    ) -> Result<u64, PalwStateV2Error> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1};
+        use borsh::BorshDeserialize;
+        use misaka_palw_positive_contract::assignment::{
+            AssignmentAdmissionBundleV2,
+            consents::{AssignmentProverConsentV2, AssignmentSourceConsentV2},
+        };
+        let scratch =
+            (6 * std::mem::size_of::<NativeRowValue>() + 4 * misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES) as u64;
+        let exhausted = || {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Self>(
+                "archived Assignment funding",
+                "original funding replay resource budget exhausted",
+            ))
+        };
+        let fixed_body = (std::mem::size_of::<AssignmentAdmissionBundleV2>()
+            + std::mem::size_of::<AssignmentSourceConsentV2>()
+            + std::mem::size_of::<AssignmentProverConsentV2>()
+            + SIGNATURE_BYTES) as u64;
+        let schedule = &material.native_preimages.source_policy.work;
+        let decode_work = schedule.court_body_work(fixed_body).map_err(refusal)?;
+        let control_work = schedule.court_operation_work(1, 8, 0, 0).map_err(refusal)?;
+        let remaining = work.checked_sub(decode_work).and_then(|left| left.checked_sub(control_work)).ok_or_else(exhausted)?;
+        if scratch > heap {
+            return Err(exhausted());
+        }
+        let _lease = reserve_native_requests_v1(scratch).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(exhausted)?;
+        let rooted = PositiveRowsV2::new(self).assignment(id).map_err(refusal)?;
+        let row = &rooted.assignment;
+        let funding = &rooted.funding;
+        let tx = carriage.transaction();
+        if row.origin != carriage.origin()
+            || funding.funding_origin != row.origin
+            || funding.reservation != row.reservation
+            || funding.liability != row.liability
+            || tx.payload.get(..8) != Some(&[1, 0, 176, 2, 0, 1, 0, 8])
+        {
+            return Err(refusal("original Assignment funding is outside the literal Open origin"));
+        }
+        // Decode the fixed signed preimages, leaving the potentially large
+        // already bounded layout borrowed in the original carrier.
+        let mut fixed = &tx.payload[8..];
+        let bundle = AssignmentAdmissionBundleV2::deserialize(&mut fixed).map_err(refusal)?;
+        let source = AssignmentSourceConsentV2::deserialize(&mut fixed).map_err(refusal)?;
+        let prover = AssignmentProverConsentV2::deserialize(&mut fixed).map_err(refusal)?;
+        if bundle != row.bundle
+            || source != row.source_consent
+            || prover != row.prover_consent
+            || fixed.get(..SIGNATURE_BYTES) != Some(funding.payer_signature.as_slice())
+        {
+            return Err(refusal("original Open does not carry the funding row's exact consent"));
+        }
+        let prefix = carriage.prefix_state().map_err(|_| missing_assignment_history())?;
+        let payer = prefix.bond(&native_bond(bundle.terms.poster)).ok_or_else(missing_assignment_history)?;
+        if payer.pubkey.as_slice() != funding.payer_key {
+            return Err(refusal("original Open payer differs from the accepted prefix"));
+        }
+        bundle.authenticate_role(AssignmentRoleV2::Poster, &funding.payer_key, &funding.payer_signature).map_err(refusal)?;
+        crate::palw_positive_assignment_funds_v2::check_archived_assignment_funding_v2(&bundle, funding, tx, &material.money)
+            .map_err(refusal)?;
+        Ok(remaining)
+    }
+
     /// Confirm a first unconsumed closure against the actual original
     /// carrier and its pre-event state. This resolves the closed lifecycle,
     /// leaving owed amounts and live liability to the settlement owner.

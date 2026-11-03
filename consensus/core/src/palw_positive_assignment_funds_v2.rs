@@ -384,6 +384,21 @@ pub(crate) fn check_assignment_funding_carriage_v2(
     current_entry: Option<&UtxoEntry>,
     now: u64,
 ) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
+    let (outpoint, amount) = check_assignment_funding_literal_v2(bundle, transaction, payer_key, now)?;
+    let output = &transaction.outputs[outpoint.index as usize];
+    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
+    if entry.amount != output.value || entry.script_public_key != output.script_public_key || entry.is_coinbase {
+        return Err(AssignmentFundsErrorV2::CurrentUtxo);
+    }
+    Ok((outpoint, amount))
+}
+
+fn check_assignment_funding_literal_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    transaction: &Transaction,
+    payer_key: &[u8; PUBKEY_BYTES],
+    now: u64,
+) -> Result<(NativeOutpoint, u64), AssignmentFundsErrorV2> {
     bundle.validate_shape()?;
     if principal(payer_key) != bundle.terms.payer
         || Digest(kaspa_hashes::blake2b_512_address_payload(payer_key).as_bytes()) != bundle.terms.refund_payload
@@ -396,10 +411,6 @@ pub(crate) fn check_assignment_funding_carriage_v2(
     let output = transaction.outputs.get(bundle.funding.funding_output_index as usize).ok_or(AssignmentFundsErrorV2::Output)?;
     if payload(output) != Some(bundle.terms.refund_payload) {
         return Err(AssignmentFundsErrorV2::Output);
-    }
-    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
-    if entry.amount != output.value || entry.script_public_key != output.script_public_key || entry.is_coinbase {
-        return Err(AssignmentFundsErrorV2::CurrentUtxo);
     }
     if output.value < bundle.terms.worker_reward
         || output.value > bundle.funding.max_locked
@@ -630,6 +641,47 @@ pub fn qualify_assignment_funding_output_v2(
     now: u64,
 ) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
     let (outpoint, amount) = check_assignment_funding_carriage_v2(bundle, transaction, payer_key, current_entry, now)?;
+    split_assignment_funding_v2(bundle, outpoint, amount, required_fee, required_capital)
+}
+
+/// Compare the original accepted output to the immutable origin and A legs.
+/// The archive owner must have independently validated the original carrier.
+/// The original coin can have been spent since, so do not synthesize a
+/// current UTXO entry or use this check as current spend authority.
+pub(crate) fn check_archived_assignment_funding_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    funding: &AssignmentFundingRow,
+    transaction: &Transaction,
+    money: &AssignmentMoneyQuoteV2,
+) -> Result<(), AssignmentFundsErrorV2> {
+    funding.validate_shape()?;
+    if !transaction.id_is_current()
+        || transaction.is_coinbase()
+        || funding.authorization != bundle.funding
+        || money.id() != bundle.quote
+    {
+        return Err(AssignmentFundsErrorV2::Input);
+    }
+    let (outpoint, amount) =
+        check_assignment_funding_literal_v2(bundle, transaction, &funding.payer_key, funding.funding_origin.accepted_daa)?;
+    let split = split_assignment_funding_v2(bundle, outpoint, amount, money.fee, money.capital)?;
+    if split.outpoint() != funding.original_outpoint
+        || split.amount() != funding.initial_locked
+        || split.initial_legs().map(|leg| leg.initial)
+            != [funding.worker.initial, funding.fee.initial, funding.capital.initial, funding.surplus.initial]
+    {
+        return Err(AssignmentFundsErrorV2::Conservation);
+    }
+    Ok(())
+}
+
+fn split_assignment_funding_v2(
+    bundle: &AssignmentAdmissionBundleV2,
+    outpoint: NativeOutpoint,
+    amount: u64,
+    required_fee: u64,
+    required_capital: u64,
+) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
     bundle.check_quoted_amounts(required_fee, required_capital, amount)?;
     let allocated = add([bundle.terms.worker_reward, required_fee, required_capital])?;
     let surplus = amount.checked_sub(allocated).ok_or(AssignmentFundsErrorV2::Conservation)?;
