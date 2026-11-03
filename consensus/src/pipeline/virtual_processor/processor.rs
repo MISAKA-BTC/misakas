@@ -305,9 +305,17 @@ impl std::fmt::Display for PalwLocalTransitionFaultV1 {
     }
 }
 impl PalwLocalTransitionFaultV1 {
+    fn exiting_resource_v1() -> kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1 {
+        kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<Self>(
+            "PALW local transition",
+            "local consensus is exiting",
+        )
+    }
+
     pub(crate) fn into_state_error_v1(self) -> kaspa_consensus_core::palw_state_v2::PalwStateV2Error {
         use kaspa_consensus_core::palw_state_v2::PalwStateV2Error as E;
         match self {
+            Self::Shutdown => E::NativeResource(Self::exiting_resource_v1()),
             Self::Resource(why) => E::NativeResource(why),
             Self::Context(why) => E::NativeContextUnavailable(why),
         }
@@ -315,6 +323,7 @@ impl PalwLocalTransitionFaultV1 {
     pub(crate) fn into_tx_rule_error_v1(self) -> kaspa_consensus_core::errors::tx::TxRuleError {
         use kaspa_consensus_core::errors::tx::TxRuleError as E;
         match self {
+            Self::Shutdown => E::LocalNativeCapacityUnavailable(Self::exiting_resource_v1()),
             Self::Resource(why) => E::LocalNativeCapacityUnavailable(why),
             Self::Context(why) => E::LocalNativeStateContextUnavailable(why),
         }
@@ -3378,14 +3387,14 @@ impl VirtualStateProcessor {
                         // member and does not identify the accepting block.
                         let attempt_admissions = palw_v2_staged
                             .as_ref()
-                            .filter(|(_, delta, _)| {
+                            .filter(|(_, delta, _, _, _)| {
                                 delta.point.block == current
                                     && self
                                         .palw_state_params_v2
                                         .as_ref()
                                         .is_some_and(|params| params.model_panel_one_retention_active_at(delta.point.daa_score))
                             })
-                            .map(|(_, delta, _)| {
+                            .map(|(_, delta, _, _, _)| {
                                 use kaspa_consensus_core::palw_state_v2::{PalwClaimSourceV2, PalwDeltaEntryV2};
                                 let mut created = delta.entries.iter().filter_map(|entry| match entry {
                                     PalwDeltaEntryV2::Claim { key, old: None, new: Some(row) }

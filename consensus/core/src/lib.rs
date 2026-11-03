@@ -1028,6 +1028,7 @@ pub mod palw_json_key_set_v1;
 pub mod palw_prefix_state_stream_v1;
 
 pub mod palw_artifact_identity_v1;
+pub mod palw_batch_court_v1;
 pub mod palw_decode_view_v1;
 pub mod palw_flat_constraint_stream_v1;
 pub mod palw_float_constraint_source_v1;
@@ -1048,7 +1049,6 @@ pub mod palw_staged_route_forms_v1;
 pub mod palw_tir_adjudication_slot_v1;
 pub mod palw_tir_container_v1;
 pub mod palw_tir_designated_answers_v1;
-pub mod palw_batch_court_v1;
 pub mod palw_tir_frame_cost_v1;
 pub mod palw_tir_history_bisection_v1;
 /// Prospective per-frame owner scheduling, unconnected to live Court rules.

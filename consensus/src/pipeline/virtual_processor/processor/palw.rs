@@ -1811,7 +1811,6 @@ impl VirtualStateProcessor {
             point.daa_score,
             &original,
             &header,
-            diagnostics,
         )
         .map_err(|e| e.to_string())?
         .ok_or_else(|| "native original allocation is unavailable at the prospective point".into())

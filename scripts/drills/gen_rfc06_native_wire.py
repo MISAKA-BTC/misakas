@@ -30,6 +30,7 @@ manual.update({
     'crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3',
 })
 manual.add('crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1')
+manual.add('crate::palw_tir_owner_schedule_rooted_v2::TirOwnerScheduleRowV2')
 # These process-local fold inputs are heap-visited but have no wire codec.
 manual.update({
     'crate::palw_state_v2::PalwTransitionExtrasV1',
@@ -68,6 +69,7 @@ def qualify(t,item):
     def token(m):
         x=m.group();name=x.split('::')[-1]
         if name=='EVM_ADDRESS_SIZE':return 'crate::evm::EVM_ADDRESS_SIZE'
+        if name=='TirOwnerScheduleRowV2':return 'crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2'
         if name=='PalwSharedCourtV1':return 'crate::palw_staged_court_state_v1::PalwSharedCourtV1'
         if x==name and re.fullmatch(r'[A-Z][A-Z0-9_]*',name) and len(PUB_CONSTS.get(name,()))==1:
             path=next(iter(PUB_CONSTS[name]))

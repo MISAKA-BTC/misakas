@@ -49,7 +49,8 @@ async fn g14_kernel_capacity_measure() {
     assert!(params.validate_palw_v2().is_err());
     let setup = Instant::now();
     let mut w = World::on(Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)).await;
-    let artifact_tensor_wire_bytes: usize = w.fx.params.tensors.values().map(|tensor| borsh::to_vec(&TensorWireV1::of(tensor)).unwrap().len()).sum();
+    let artifact_tensor_wire_bytes: usize =
+        w.fx.params.tensors.values().map(|tensor| borsh::to_vec(&TensorWireV1::of(tensor)).unwrap().len()).sum();
     let program_bytes = w.fx.program.encode().len();
     let mut claims = Vec::new();
     let mut first_seats = Vec::new();
@@ -130,7 +131,11 @@ async fn g14_kernel_capacity_measure() {
                 .zip(&claims)
                 .map(|(card, claim)| {
                     let accuser = w.net.kid(*card);
-                    (*card, w.net.route(*card, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &junk) }))
+                    (
+                        *card,
+                        w.net
+                            .route(*card, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &junk) }),
+                    )
                 })
                 .collect();
             let seal_cost = measured_send(&mut w.net, seals).await;
@@ -158,7 +163,8 @@ async fn g14_kernel_capacity_measure() {
         let check_ns = start.elapsed().as_nanos();
         let OutsiderFindingV1::Prosecute(proof) = finding else { panic!("public material exposes the lie") };
         let accuser = w.net.kid(outsider);
-        let object = w.net.route(outsider, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &proof) });
+        let object =
+            w.net.route(outsider, &K::SealProof { accuser, claim: claim.id, seal: proof_seal_v1(&claim.id, &accuser, &proof) });
         let seal = measured_send(&mut w.net, vec![(outsider, object)]).await;
         let object = w.net.route(outsider, &K::FileProof { accuser, claim: claim.id, proof });
         let filing = measured_send(&mut w.net, vec![(outsider, object)]).await;

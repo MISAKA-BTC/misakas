@@ -6,9 +6,25 @@ fn cached_and_streamed_reference_logits_have_identical_scores() {
         let model = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf").join(name);
         let run = |cache: &str| {
             let out = Command::new(env!("CARGO_BIN_EXE_palw-tir-fidelity"))
-                .arg(&model).args(["--positions", "8", "--calib-seqs", "2", "--eval-seqs", "2", "--exec", "--json",
-                    "--attention-weight-bits", "16", "--mlp-down-weight-bits", "16", "--reference-cache-mib", cache])
-                .output().unwrap();
+                .arg(&model)
+                .args([
+                    "--positions",
+                    "8",
+                    "--calib-seqs",
+                    "2",
+                    "--eval-seqs",
+                    "2",
+                    "--exec",
+                    "--json",
+                    "--attention-weight-bits",
+                    "16",
+                    "--mlp-down-weight-bits",
+                    "16",
+                    "--reference-cache-mib",
+                    cache,
+                ])
+                .output()
+                .unwrap();
             assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
             serde_json::from_slice::<serde_json::Value>(&out.stdout).unwrap()
         };

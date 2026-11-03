@@ -29,9 +29,12 @@ impl T12Chain {
     /// Uses ordinary producer facts, the shared producer/remote assembler and
     /// full block admission. Only the harness's existing network PoW skip applies.
     pub(in crate::pipeline::virtual_processor::tests) async fn real_attempt(&mut self, card: usize, step_ms: u64) -> RealAttemptV1 {
-        let artifact = self.ctx.consensus
+        let artifact = self
+            .ctx
+            .consensus
             .palw_producer_facts_v2(self.bundle.base_class_id, Some(self.bonds[card].0))
-            .expect("floor producer facts").artifact_root;
+            .expect("floor producer facts")
+            .artifact_root;
         let backend = backend(self, artifact);
         self.real_attempt_with_backend(card, step_ms, self.bundle.base_class_id, &backend).await
     }

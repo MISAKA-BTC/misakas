@@ -232,6 +232,7 @@ fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &M
         | K::TirRawChunk(id)
         | K::TirAcceptedBody(id)
         | K::TirClaim(id)
+        | K::TirOwnerSchedule(id)
         | K::CourtDutyClock(id)
         | K::CourtSharedContext(id)
         | K::CourtSharedQuery(id)

@@ -92,8 +92,7 @@ pub(crate) fn require_tir_service_custody_window_v1(
         return Err("service hard deadline exceeds signed TIR custody".into());
     }
     if plan.semantic.is_some() {
-        let bundle = state.staged_bundle_contract_v1(plan.original_claim)
-            .ok_or("service semantic dependency contract is missing")?;
+        let bundle = state.staged_bundle_contract_v1(plan.original_claim).ok_or("service semantic dependency contract is missing")?;
         let pledge = &bundle.history_custody.pledge;
         if pledge.claim != plan.original_claim
             || Some(pledge.resource_plan_id) != plan.semantic_resource_plan_id
@@ -133,51 +132,6 @@ impl CourtServiceState {
         Ok(())
     }
 }
-impl crate::palw_state_v2::PalwChainStateV2 {
-    pub fn court_service_state_v1(&self) -> Option<&CourtServiceState> {
-        match self.staged_court_row_v1(&crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::CourtService) {
-            Some(crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtService(row)) => Some(row.as_ref()),
-            _ => None,
-        }
-    }
-    /// All bindings remain unresolved in this candidate. Quota alone cannot
-    /// discharge a duty, and no unadopted release flag or wall-clock expiry can.
-    pub fn court_service_holds_claim_v1(&self, claim: &Hash64) -> bool {
-        self.court_service_state_v1().is_some_and(|service| service.claims.contains_key(claim))
-    }
-    pub fn court_service_holds_bond_v1(&self, bond: &crate::palw_state_v2::PalwBondKeyV2) -> bool {
-        self.court_service_state_v1().is_some_and(|service| {
-            service.claims.keys().any(|claim| {
-                // Missing frames are invalid on write/load; fail closed if queried
-                // on a not-yet-validated candidate rather than releasing collateral.
-                crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(self, *claim)
-                    .is_none_or(|frame| frame.custody_v1().liable_signers_v1().contains(bond))
-            })
-        })
-    }
-    pub fn court_service_holds_material_v1(&self, key: &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1) -> bool {
-        use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
-        let claim = match key {
-            Key::TirClaim(claim) | Key::TirAcquisition(claim, ..) | Key::TirPreparation(claim, ..) | Key::TirWitness(claim, ..) => {
-                Some(*claim)
-            }
-            Key::TirRawChunk(_) | Key::TirAcceptedBody(_) => {
-                let acquisition = match self.staged_court_row_v1(key) {
-                    Some(Row::TirRawChunk(row)) => Some(row.acquisition),
-                    Some(Row::TirAcceptedBody(row)) => Some(row.acquisition),
-                    _ => None,
-                };
-                match acquisition {
-                    Some(Key::TirAcquisition(claim, ..)) => Some(claim),
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        claim.is_some_and(|claim| self.court_service_holds_claim_v1(&claim))
-    }
-}
-
 /// Recovery report only; not a wire permission, terminal effect or default verdict.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimServiceRecovery {

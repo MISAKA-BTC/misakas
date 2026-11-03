@@ -562,13 +562,6 @@ pub(crate) struct SnapshotSender {
     next: u32,
 }
 
-#[derive(Debug)]
-pub(crate) enum SnapshotChunkReadError {
-    RequestMismatch,
-    Expired,
-    Storage(io::Error),
-}
-
 impl SnapshotSender {
     /// Called on the blocking pool AFTER acquiring the global session lease and before
     /// materializing the native snapshot. Writes Borsh directly; no whole encoded Vec.
@@ -735,7 +728,10 @@ impl SnapshotSender {
     }
     fn check_chunk_request_v1(&self, point: Hash64, root: Option<Hash64>, index: u32) -> Result<(), NativeSnapshotDecodeErrorV1> {
         if self.expired() {
-            return Err(io::Error::new(io::ErrorKind::TimedOut, "snapshot sender lease expired").into());
+            return Err(NativeSnapshotDecodeErrorV1::LocalStorage(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "snapshot sender lease expired",
+            )));
         }
         if point != self.point
             || index != self.next
@@ -1813,14 +1809,16 @@ mod tests {
         let budget = Arc::new(Semaphore::new(1));
         let spill = SnapshotSpill::with_budget(budget.clone()).unwrap();
         let mut sender = SnapshotSender::encode(spill, h(1), &vec![1u8; 10]).unwrap();
-        assert!(matches!(sender.chunk(h(2), None, 0), Err(SnapshotChunkReadError::RequestMismatch)));
+        assert!(matches!(sender.chunk(h(2), None, 0), Err(NativeSnapshotDecodeErrorV1::Encoding(_))));
         // This is a local storage failure after an otherwise valid request.
         sender.spill.file.set_len(0).unwrap();
-        assert!(matches!(sender.chunk(h(1), None, 0), Err(SnapshotChunkReadError::Storage(ref error))
+        assert!(matches!(sender.chunk(h(1), None, 0), Err(NativeSnapshotDecodeErrorV1::LocalStorage(ref error))
             if error.kind() == io::ErrorKind::UnexpectedEof));
         assert_eq!(sender.next_index(), 0);
         sender.spill.created = Instant::now() - SESSION_TTL - Duration::from_secs(1);
-        assert!(matches!(sender.chunk(h(1), None, 0), Err(SnapshotChunkReadError::Expired)));
+        assert!(
+            matches!(sender.chunk(h(1), None, 0), Err(NativeSnapshotDecodeErrorV1::LocalStorage(ref error)) if error.kind() == io::ErrorKind::TimedOut)
+        );
         drop(sender);
         assert_eq!(budget.available_permits(), 1);
     }

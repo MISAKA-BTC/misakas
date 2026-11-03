@@ -12,6 +12,6 @@ pub mod compute {
 }
 
 pub mod types {
-    pub use crate::dns_finality::*;
     pub use crate::dns_finality::DnsParams as PalwParams;
+    pub use crate::dns_finality::*;
 }

@@ -77,8 +77,9 @@ async fn g14_legacy_kernel_honest_shadow_measure() {
     let artifact_dir = std::env::temp_dir().join(format!("g14-legacy-shadow-{}", std::process::id()));
     std::fs::create_dir(&artifact_dir).expect("fresh process artifact directory");
     let artifact_path = artifact_dir.join("wide128-7.palwtir");
-    let mut tensors =
-        |j, layer| common.params.tensors.get(&(j, layer)).map(|tensor| tensor.to_le_bytes()).ok_or_else(|| "missing tensor".to_string());
+    let mut tensors = |j, layer| {
+        common.params.tensors.get(&(j, layer)).map(|tensor| tensor.to_le_bytes()).ok_or_else(|| "missing tensor".to_string())
+    };
     misaka_palw_tir_artifact::write_container_v1(
         &artifact_path,
         &common.program,
@@ -148,7 +149,8 @@ async fn g14_legacy_kernel_honest_shadow_measure() {
         VerificationModeV1::PanelLicensed,
     );
     assert!(net.ledger().classes.contains_key(&kernel_class));
-    let fx = Fixture { program: common.program.clone(), params: common.params.clone(), plan: common.plan.clone(), pc: common.pc.clone() };
+    let fx =
+        Fixture { program: common.program.clone(), params: common.params.clone(), plan: common.plan.clone(), pc: common.pc.clone() };
     let mut w = World { net, fx, class: kernel_class, jobs: 0 };
     let job = KernelJobV1 {
         class_binding_id: kernel_class,
@@ -179,7 +181,9 @@ async fn g14_legacy_kernel_honest_shadow_measure() {
     stage("kernel_same_work_admission_and_receipt", begin, &w.net);
     let floor = final_floor(&w, Mode::Panel, &claim.id);
     w.net.beat_to(floor).await;
-    let ClaimStateV1::Final { final_daa: kernel_final } = w.net.claim_state(&claim.id) else { panic!("kernel honest claim not Final") };
+    let ClaimStateV1::Final { final_daa: kernel_final } = w.net.claim_state(&claim.id) else {
+        panic!("kernel honest claim not Final")
+    };
     let mut legacy_final = None;
     for _ in 0..10_000 {
         let state = w.net.chain.tip_state().1;

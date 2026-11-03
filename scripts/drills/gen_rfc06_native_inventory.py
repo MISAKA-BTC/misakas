@@ -243,7 +243,8 @@ while queue:
     for _,typ,_ in fields(item):references(typ,item)
     continue
  # These process-local Assignment owners already visit their nested values.
- if path in {'crate::palw_state_v2::positive_assignment_raw::PositiveAssignmentScheduledActionV2',
+ if path in {'crate::palw_tir_owner_schedule_rooted_v2::TirOwnerScheduleRowV2',
+             'crate::palw_state_v2::positive_assignment_raw::PositiveAssignmentScheduledActionV2',
              'crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2'}:continue
  # Funded-original pairing (holds a whole carrier Transaction) and its test-only schedule: hand-written visitors in typed.rs.
  if path in FUNDED_MANUAL:unresolved.append(path);continue

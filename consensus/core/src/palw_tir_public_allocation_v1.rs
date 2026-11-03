@@ -743,7 +743,17 @@ pub(crate) fn derive_tir_public_allocation_native_with_diagnostics_v2(
     diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
 ) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     derive_tir_public_allocation_native_mode_v3(
-        geometry, original, header, record, layout, semantics, inventory, rules, None, false, diagnostics,
+        geometry,
+        original,
+        header,
+        record,
+        layout,
+        semantics,
+        inventory,
+        rules,
+        None,
+        false,
+        diagnostics,
     )
 }
 
@@ -759,7 +769,9 @@ pub fn derive_tir_public_allocation_family_native_v2(
     rules: PalwTirPublicAllocationRulesV1,
     table: Option<&crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
 ) -> Result<PalwTirPublicAllocationQuoteV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-    derive_tir_public_allocation_native_mode_v3(geometry, original, header, record, layout, semantics, inventory, rules, table, true, None)
+    derive_tir_public_allocation_native_mode_v3(
+        geometry, original, header, record, layout, semantics, inventory, rules, table, true, None,
+    )
 }
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn derive_tir_public_allocation_native_mode_v3(
@@ -828,8 +840,20 @@ pub(crate) fn derive_tir_public_allocation_native_mode_v3(
     )?;
     #[cfg(test)]
     note_allocation_source_v2(1);
-    let result = finish_allocation_source_v2(geometry, original, header, record, layout, semantics, inventory, rules, &source, table, diagnostics)
-        .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode);
+    let result = finish_allocation_source_v2(
+        geometry,
+        original,
+        header,
+        record,
+        layout,
+        semantics,
+        inventory,
+        rules,
+        &source,
+        table,
+        diagnostics,
+    )
+    .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode);
     // source remains borrowed by the complete native derivation, including
     // its last source-ID field; this owner does not cover other geometry.
     #[cfg(test)]

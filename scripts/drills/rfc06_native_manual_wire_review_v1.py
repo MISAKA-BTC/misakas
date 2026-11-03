@@ -5,6 +5,9 @@ may enforce stricter bounded/semantic subsets. Allocation proof never supplies
 semantic authority. Adapters spell codecs with version tails/variable lanes.
 """
 PINNED = {
+# Rooted v2 writes version, frame hashes and clocks, then the bounded roster.
+# The owner scanner restricts acquisition keys and quotes the complete roster.
+'crate::palw_tir_owner_schedule_rooted_v2::TirOwnerScheduleRowV2': ('adapter', 'd64b982f7b119a607b7c298bd09c89d7518bc720b7f1c2f6bf344a549922f55e'),
 # 2026-10-31 explicit owner review: u8 enum tags0..3 match derived serialize;
 # Part byteVec uses existing bounded decoder; BeginReserved appends literal V2quote.
 # Select the existing owner visitor, including its nested/predecode resource rules.

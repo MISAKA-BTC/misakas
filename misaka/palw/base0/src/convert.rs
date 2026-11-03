@@ -1069,23 +1069,34 @@ mod tests {
         shape.n_layers = 1;
         let blob = tiny_checkpoint(&shape);
         let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
-        let cfg = RefConfigV1 { n_layers: shape.n_layers, n_heads: shape.n_heads,
-            n_kv_heads: shape.n_kv_heads, d_head: shape.d_head, d_ff: shape.d_ff,
-            vocab: shape.vocab, rms_eps: 1e-6, rope_theta: 1e6 };
+        let cfg = RefConfigV1 {
+            n_layers: shape.n_layers,
+            n_heads: shape.n_heads,
+            n_kv_heads: shape.n_kv_heads,
+            d_head: shape.d_head,
+            d_ff: shape.d_ff,
+            vocab: shape.vocab,
+            rms_eps: 1e-6,
+            rope_theta: 1e6,
+        };
         let (_, _, stats) = reference_forward_full(&blob, &cfg, &[1, 5, 9]).unwrap();
         let legacy = convert_qwen25_a16(&blob, &plan, &stats).unwrap();
         let explicit_legacy = convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, false).unwrap();
         assert_eq!(legacy.artifact_digest(), explicit_legacy.artifact_digest());
         let precise = convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, true).unwrap();
         assert_ne!(legacy.artifact_digest(), precise.artifact_digest());
-        assert_eq!(precise.artifact_digest(),
-            convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, true).unwrap().artifact_digest());
+        assert_eq!(
+            precise.artifact_digest(),
+            convert_qwen25_a16_precise_embedding(&blob, &plan, &stats, true).unwrap().artifact_digest()
+        );
         assert_eq!(precise.embed, precise.unembed, "the tied table remains one set of codes");
         // With a non-power-of-two weight scale, changing only one seam silently
         // rescales the model. Verify the committed lift and tied head both move.
         for name in ["embed_lift.a16", "token_embd.weight.a16"] {
-            assert_ne!(legacy.a16_params.as_ref().unwrap().iter().find(|(n, _)| n == name),
-                precise.a16_params.as_ref().unwrap().iter().find(|(n, _)| n == name));
+            assert_ne!(
+                legacy.a16_params.as_ref().unwrap().iter().find(|(n, _)| n == name),
+                precise.a16_params.as_ref().unwrap().iter().find(|(n, _)| n == name)
+            );
         }
         let engine = crate::engine_a16::A16Engine::new(&precise).unwrap();
         let mut cache = crate::engine_a16::A16Cache::new(shape.n_layers);

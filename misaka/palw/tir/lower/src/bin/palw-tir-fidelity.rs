@@ -475,7 +475,10 @@ fn run(a: &Args) -> Result<serde_json::Value, String> {
     // to the post block's inputs and the post block (stateless) is evaluated per position.
     let cache_float_logits = a.exec && rows_bytes / 3 <= a.reference_cache_mib.saturating_mul(1 << 20);
     if cache_float_logits {
-        log(format!("caching {} MiB of reference logits to release the float head before integer execution", rows_bytes / 3 / (1 << 20)));
+        log(format!(
+            "caching {} MiB of reference logits to release the float head before integer execution",
+            rows_bytes / 3 / (1 << 20)
+        ));
     }
     let (fl, post_in) = if a.exec && !cache_float_logits {
         let post_in = misaka_palw_tir_lower::float_ref::stream::run_to_post(&prep.hl, &loader, &eval, &progress("float"))

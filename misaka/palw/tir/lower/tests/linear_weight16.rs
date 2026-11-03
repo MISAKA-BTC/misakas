@@ -105,8 +105,14 @@ fn attention_only_precision_keeps_mlp_compact_and_streams_the_same_program() {
     let mut mlp = 0;
     for (name, row) in &prep.lowered.row_params {
         if let RowKind::SplitMain { bits, .. } = row.kind {
-            if name.contains("attn") { assert_eq!(bits, 16, "{name}"); attention += 1; }
-            if name.contains("mlp") { assert_eq!(bits, 8, "{name}"); mlp += 1; }
+            if name.contains("attn") {
+                assert_eq!(bits, 16, "{name}");
+                attention += 1;
+            }
+            if name.contains("mlp") {
+                assert_eq!(bits, 8, "{name}");
+                mlp += 1;
+            }
         }
     }
     assert!(attention > 0 && mlp > 0, "both precision rails must be exercised");
@@ -117,9 +123,18 @@ fn attention_only_precision_keeps_mlp_compact_and_streams_the_same_program() {
     let policy = QuantPolicy::default();
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &policy, &|_, _| {}).unwrap();
     let mut sink = Sink::default();
-    materialise_stream(&prep.lowered, &prep.hl, &loader, &stats, &policy,
-        &StreamOpts { defer_min_elems: 0, block_elems: 100 }, &mut sink, &|_, _| {}).unwrap();
-    let expected: BTreeMap<_, _> = mat.params.tensors.iter().map(|(k,t)| (*k,t.le_bytes())).collect();
+    materialise_stream(
+        &prep.lowered,
+        &prep.hl,
+        &loader,
+        &stats,
+        &policy,
+        &StreamOpts { defer_min_elems: 0, block_elems: 100 },
+        &mut sink,
+        &|_, _| {},
+    )
+    .unwrap();
+    let expected: BTreeMap<_, _> = mat.params.tensors.iter().map(|(k, t)| (*k, t.le_bytes())).collect();
     assert_eq!(sink.tensors, expected, "fit and streamed conversion must use identical weight codes");
     for bits in [0, 7, 15, 32] {
         assert!(fidelity::prepare(&cfg, &LowerOpts { attention_weight_bits: bits, ..LowerOpts::default() }).is_err());
@@ -130,17 +145,18 @@ fn attention_only_precision_keeps_mlp_compact_and_streams_the_same_program() {
 fn mlp_down_can_be_widened_without_widening_gate_and_up() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hf/llama");
     let cfg = std::fs::read_to_string(dir.join("config.json")).unwrap();
-    let prep = fidelity::prepare(&cfg, &LowerOpts {
-        attention_weight_bits: 16, mlp_down_weight_bits: 16, ..LowerOpts::default()
-    }).unwrap();
+    let prep =
+        fidelity::prepare(&cfg, &LowerOpts { attention_weight_bits: 16, mlp_down_weight_bits: 16, ..LowerOpts::default() }).unwrap();
     let mut down = 0;
     let mut compact = 0;
     for (name, _) in &prep.lowered.row_params {
         let d = prep.lowered.program.params.iter().find(|p| &p.name == name).unwrap();
         if name.contains("mlp.down") {
-            assert_eq!(d.dtype, misaka_palw_tir::DType::I16, "{name}"); down += 1;
+            assert_eq!(d.dtype, misaka_palw_tir::DType::I16, "{name}");
+            down += 1;
         } else if name.contains("mlp.gate") || name.contains("mlp.up") {
-            assert_eq!(d.dtype, misaka_palw_tir::DType::I8, "{name}"); compact += 1;
+            assert_eq!(d.dtype, misaka_palw_tir::DType::I8, "{name}");
+            compact += 1;
         }
     }
     assert!(down > 0 && compact > 0);
@@ -152,7 +168,16 @@ fn mlp_down_can_be_widened_without_widening_gate_and_up() {
     let policy = QuantPolicy::default();
     let mat = materialise(&prep.lowered, &prep.hl, &loader, &stats, &policy, &|_, _| {}).unwrap();
     let mut sink = Sink::default();
-    materialise_stream(&prep.lowered, &prep.hl, &loader, &stats, &policy,
-        &StreamOpts { defer_min_elems: 0, block_elems: 100 }, &mut sink, &|_, _| {}).unwrap();
-    assert_eq!(sink.tensors, mat.params.tensors.iter().map(|(k,t)| (*k,t.le_bytes())).collect());
+    materialise_stream(
+        &prep.lowered,
+        &prep.hl,
+        &loader,
+        &stats,
+        &policy,
+        &StreamOpts { defer_min_elems: 0, block_elems: 100 },
+        &mut sink,
+        &|_, _| {},
+    )
+    .unwrap();
+    assert_eq!(sink.tensors, mat.params.tensors.iter().map(|(k, t)| (*k, t.le_bytes())).collect());
 }

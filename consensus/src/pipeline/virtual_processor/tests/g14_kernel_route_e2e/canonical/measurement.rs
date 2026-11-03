@@ -149,7 +149,8 @@ async fn g14_native_panel_measure() {
                 assert!(matches!(finding, OutsiderFindingV1::Clean), "honest public check: {finding:?}");
                 if case == "duplicate" {
                     let K::CommitClaim { claim: original, evidence, commitments } = produced.object else { unreachable!() };
-                    let copied = K::CommitClaim { claim: KernelClaimV1 { producer_bond: w.net.kid(4), ..original }, evidence, commitments };
+                    let copied =
+                        K::CommitClaim { claim: KernelClaimV1 { producer_bond: w.net.kid(4), ..original }, evidence, commitments };
                     let before = w.net.daa();
                     let start = Instant::now();
                     let (_, accepted) = reveal(&mut w, 4, &copied).await;

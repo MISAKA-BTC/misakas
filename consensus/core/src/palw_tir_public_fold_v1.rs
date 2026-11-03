@@ -482,7 +482,6 @@ fn original_plan_v1(
     now_daa: u64,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
-    diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
 ) -> Result<
     (
         crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
@@ -569,7 +568,17 @@ fn original_plan_mode_v4(
         )
     } else {
         derive_tir_public_allocation_native_mode_v3(
-            &geometry, original, header, record, layout, semantics, inventory, native, None, false, diagnostics,
+            &geometry,
+            original,
+            header,
+            record,
+            layout,
+            semantics,
+            inventory,
+            native,
+            None,
+            false,
+            diagnostics,
         )
     };
     let plan = match quoted.map_err(|why| match why {

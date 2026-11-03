@@ -279,8 +279,8 @@ pub use palw_tir_public_fold_v1::{
     PalwOriginalArchivePayerBudgetV1, PalwOriginalArchiveStatusV1, palw_family_original_native_quote_v2,
     palw_family_original_native_quote_v3, palw_funded_original_answer_candidate_v1, palw_funded_original_candidate_v1,
     palw_original_archive_native_quote_v1, palw_original_archive_native_quote_v2, palw_original_archive_status_v1,
-    palw_tir_public_conviction_preflight_v1, palw_tir_public_original_quote_v1, palw_tir_public_preclaim_quote_v1,
-    palw_tir_public_original_quote_with_diagnostics_v1, palw_tir_public_staged_conviction_preflight_v2,
+    palw_tir_public_conviction_preflight_v1, palw_tir_public_original_quote_v1, palw_tir_public_original_quote_with_diagnostics_v1,
+    palw_tir_public_preclaim_quote_v1, palw_tir_public_staged_conviction_preflight_v2,
 };
 #[path = "palw_terminal_carriage_fold_v1.rs"]
 mod palw_terminal_carriage_fold_v1;

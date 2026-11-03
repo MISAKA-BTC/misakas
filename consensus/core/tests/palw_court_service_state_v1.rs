@@ -1,6 +1,4 @@
-//! Rooted candidate codec/resource checks, not production service or node capacity.
-use kaspa_consensus_core::palw_native_resource_v1::{NativeHeapV1, NativeWireReaderV1, NativeWireScanV1};
-use kaspa_consensus_core::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+//! Codec and accounting checks for the original service prototype.
 use kaspa_consensus_core::{Hash64, palw_court_service_state_v1::*, palw_court_service_v1::*};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,19 +27,12 @@ fn candidate() -> CourtServiceState {
     }
 }
 #[test]
-fn rooted_service_codec_is_bounded_and_appends_its_tags() {
-    let row = Row::CourtService(Box::new(candidate()).into());
-    row.check(&Key::CourtService).unwrap();
-    let bytes = borsh::to_vec(&row).unwrap();
-    assert_eq!(bytes[0], 17, "new row does not reuse an old tag");
-    assert_eq!(borsh::to_vec(&Key::CourtService).unwrap(), vec![11]);
-    let mut reader = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
-    let shape = Row::scan_native_wire_v1(&mut reader).unwrap();
-    assert_eq!(reader.remaining(), 0, "scanner includes the complete nested ledger");
-    assert!(shape.heap >= row.native_heap_v1("service").bytes().expect("typed native heap coverage"));
-    assert_eq!(borsh::from_slice::<Row>(&bytes).unwrap(), row);
-    let mut truncated = NativeWireReaderV1::new(&bytes[..bytes.len() - 1], (bytes.len() - 1) as u64);
-    assert!(Row::scan_native_wire_v1(&mut truncated).is_err());
+fn service_prototype_codec_round_trips() {
+    let state = candidate();
+    state.check().unwrap();
+    let bytes = borsh::to_vec(&state).unwrap();
+    assert_eq!(borsh::from_slice::<CourtServiceState>(&bytes).unwrap(), state);
+    assert!(borsh::from_slice::<CourtServiceState>(&bytes[..bytes.len() - 1]).is_err());
 }
 #[test]
 fn persisted_bindings_cannot_alias_packets_or_rebase_hard_deadline() {
