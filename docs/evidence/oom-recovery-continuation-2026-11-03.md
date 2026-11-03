@@ -610,3 +610,21 @@ estimate plus reserve required more than 22,678,691,840 bytes of
 free space at launch. The new IBM measurement was about 6.67 GB
 short of that earlier figure. This leaves the live Explorer relay in
 service and the old signer data preserved.
+
+## Retained evidence reclaim accounting — 04:54 UTC
+
+The janitor previously credited the scanned size of a whole capture
+group even if some paths were missing or unlink failed. Commit
+`a09effabc` credits only regular files removed by that pass and
+counts a group only when at least one file was removed. The previous
+routine reported 400 bytes against 14 bytes actually removed in the
+new regression. The updated routine passed eight scoped tests,
+including a repeated prune that credited zero bytes on the second
+pass. The harness used the exact production prune function and
+stubbed the consensus session. Log SHA256 is `cba98399dfe60473c5a4ec1bf8b6c3768f4aa50f3c93806439d02b48de0ec134`.
+A full Node build and live deployment remain separate.
+
+The paired B0 and relay reads at DAA 19,597 still showed zero Panel
+assignments and receipts. The public REST and WebSocket matched the
+configured ready relay. The arithmetic comparison queue remained
+live below its local 12 GiB start floor.
