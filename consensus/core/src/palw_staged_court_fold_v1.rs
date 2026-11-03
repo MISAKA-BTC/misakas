@@ -1154,7 +1154,7 @@ impl TransitionBuilder<'_> {
         let rules = self.extras.native_court_rules_v1.filter(|rules| {
             &rules.at == at && self.extras.tir_public_network_domain_v1 == Some(rules.network_domain)
         }).ok_or_else(|| refused("Batch Stop requires native rules at the accepting point and network"))?;
-        let claim = batch_payload::batch_stop_claim_v1(operands).map_err(|why| refused(&why.to_string()))?;
+        let (claim, _) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| refused(&why.to_string()))?;
         let key = PalwStagedCourtKeyV1::CourtBatchStopReceipt(claim);
         let digest = crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-stop-receipt/v1", &operands)
             .map_err(PalwStateV2Error::CarriageInconsistent)?;

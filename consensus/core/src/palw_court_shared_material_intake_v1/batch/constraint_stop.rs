@@ -120,8 +120,14 @@ impl ConstraintStopBatchOperandsV1 {
     }
 
     /// Check the retained original, actual FullIds acceptance and the exact
-    /// Stop reservation. The scheduled verifier slot is a capacity promise.
-    pub(crate) fn check_rooted_slot_v1(&self, state: &PalwChainStateV2, at: u64, carrier_bytes: u64) -> Result<(), String> {
+    /// Stop reservation, returning the accepted notice signer. The scheduled
+    /// verifier slot is a capacity promise.
+    pub(crate) fn check_rooted_slot_v1(
+        &self,
+        state: &PalwChainStateV2,
+        at: u64,
+        carrier_bytes: u64,
+    ) -> Result<crate::palw_state_v2::PalwBondKeyV2, String> {
         use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
         let ordinal = BATCH_STOP_ORDINAL_V1;
         let key = Key::CourtBatchDemand(self.claim, ordinal);
@@ -130,6 +136,9 @@ impl ConstraintStopBatchOperandsV1 {
         };
         demand.check(&key)?;
         demand.check_context(state)?;
+        let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(demand.notice_id)) else {
+            return Err("Batch Stop has no accepted notice".into());
+        };
         let [range] = demand.demand.ranges.as_slice() else {
             return Err("Batch Stop requires its single FullIds range".into());
         };
@@ -159,7 +168,8 @@ impl ConstraintStopBatchOperandsV1 {
             return Err("Batch Stop or its FullIds fall outside the original clock".into());
         }
         let binding = service.state.claims.get(&self.claim).ok_or("Batch Stop has no live original binding")?;
-        self.check_slots_v1(ordinal, ids.accepted_daa, at, carrier_bytes, &service.state.book, &binding.packet_ids, &service.causal)
+        self.check_slots_v1(ordinal, ids.accepted_daa, at, carrier_bytes, &service.state.book, &binding.packet_ids, &service.causal)?;
+        Ok(notice.opened_by)
     }
 
     #[allow(clippy::too_many_arguments)]

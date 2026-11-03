@@ -2983,3 +2983,27 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-receipt.6afeYq/tests.log`.
 B0 and relay agreed at DAA 19,704 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-receipt-live.AbQR12/page.json`.
+
+## Batch Stop filing authority
+
+The reserved Stop now resolves its opener from the same-branch notice
+already bound to its accepted FullIds demand. The signed Stop must use
+that notice bond. A producer or a seat holding an original custody
+grant or credit cannot consume the terminal slot. The native replay
+continues to check the live bond floor and the signature. The old
+private Stop adapter and the BCT1 wire format are unchanged.
+
+The extracted suite passed 38 checks, including fixed-prefix claim and
+filer extraction and malformed operands. The native fixture now checks
+producer refusal before FullIds intake, but the full native fixture
+has not been executed. An economic transition and its archive evidence
+still need to be connected to the authenticated finding. The local
+worktree had 453 MiB free at the start and a separate checkout was
+running Cargo, so this pass used the focused harness.
+
+The read-only paired scan agreed at DAA 19,705 and found no Qwen
+carrier in the newly scanned selected interval. The production
+retention threshold at 20,000 was still ahead.
+Evidence is in
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-filer.uGanGJ/tests.log` and
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-filer-live.et1i0S/page.json`.

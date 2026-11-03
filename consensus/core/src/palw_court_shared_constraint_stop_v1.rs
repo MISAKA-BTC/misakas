@@ -25,7 +25,7 @@ pub(crate) fn verify_rooted_batch_stop_v1(
     use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::ConstraintStopBatchOperandsV1;
     use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
-    let claim = batch_payload::batch_stop_claim_v1(operands).map_err(|why| E::Decode(why.to_string()))?;
+    let (claim, filer) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| E::Decode(why.to_string()))?;
     let bytes = operands.len() as u64 + crate::palw_batch_court_v1::carriage::BATCH_STOP_WIRE_OVERHEAD_V1;
     if bytes > rules.court.max_close_bytes() {
         return Err(E::Decode("Batch Stop exceeds the native close byte limit".into()));
@@ -33,6 +33,12 @@ pub(crate) fn verify_rooted_batch_stop_v1(
     let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(E::Decode)?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
         .ok_or_else(|| E::Decode("Batch Stop original frame absent".into()))?;
+    if filer == frame.custody_v1().pledge_v1().producer
+        || frame.original_custody_v1().credit_v1(&filer).is_some()
+        || frame.original_custody_v1().grant_v1(&filer).is_some()
+    {
+        return Err(E::Decode("Batch Stop filer is liable on this claim".into()));
+    }
     let key = Key::CourtSharedIds(claim);
     let Some(Row::CourtSharedIds(shared_ids)) = state.staged_court_row_v1(&key) else {
         return Err(E::Decode("Batch Stop has no accepted FullIds".into()));
@@ -51,7 +57,10 @@ pub(crate) fn verify_rooted_batch_stop_v1(
     let bounds = tokenizer.opening_bounds_v1();
     let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(context.scope_id, frame.original_v1(), bounds)
         .ok_or_else(|| E::Decode("Batch Stop original is outside the constrained Stop profile".into()))?;
-    plan.check_rooted_slot_v1(state, rules.at.daa_score, bytes).map_err(E::Decode)?;
+    let notice_filer = plan.check_rooted_slot_v1(state, rules.at.daa_score, bytes).map_err(E::Decode)?;
+    if filer != notice_filer {
+        return Err(E::Decode("Batch Stop filer differs from the signer of the accepted notice".into()));
+    }
     let payload = batch_payload::BatchStopPayloadV1::decode_v1(operands, bounds.eog_opening_bytes)?;
     let store = Store {
         source,

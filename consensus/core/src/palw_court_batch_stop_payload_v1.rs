@@ -7,6 +7,7 @@ use crate::{
     palw_native_resource_v1::{
         NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, NativeRetainedV1, reserve_native_pending_requests_v1,
     },
+    palw_state_v2::PalwBondKeyV2,
     palw_step_leg::{PalwStepOpeningV1, step_leg_max_opening_siblings_v1},
     palw_tokenizer_rendering_v2::ROOTED_TOKENIZER_LIMITS_V1,
 };
@@ -47,10 +48,11 @@ pub(crate) fn check_batch_stop_operands_v1(bytes: &[u8]) -> io::Result<(usize, u
     Ok((eog_count, siblings))
 }
 
-pub(crate) fn batch_stop_claim_v1(bytes: &[u8]) -> io::Result<Hash64> {
+pub(crate) fn batch_stop_identity_v1(bytes: &[u8]) -> io::Result<(Hash64, PalwBondKeyV2)> {
     check_batch_stop_operands_v1(bytes)?;
-    let mut intent = &bytes[2..];
-    Hash64::deserialize_reader(&mut intent)
+    let claim = Hash64::deserialize_reader(&mut &bytes[2..])?;
+    let filer = PalwBondKeyV2::deserialize_reader(&mut &bytes[STOP_REASON_OFFSET + 1..])?;
+    Ok((claim, filer))
 }
 
 pub(crate) struct BatchStopPayloadV1 {
@@ -130,7 +132,7 @@ fn read_vec<T: BorshDeserialize>(bytes: &mut &[u8], count: usize) -> io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{palw_freeprompt_v3::PalwFpStopReasonV3, palw_state_v2::PalwBondKeyV2, tx::TransactionOutpoint};
+    use crate::{palw_freeprompt_v3::PalwFpStopReasonV3, tx::TransactionOutpoint};
 
     #[test]
     fn stop_payload_preflights_geometry_and_classifies_capacity() {
@@ -159,7 +161,7 @@ mod tests {
         let eog_bytes = borsh::object_length(&eog).unwrap() as u64;
         assert_eq!(borsh::object_length(&intent).unwrap() as u64, STOP_INTENT_BYTES_V1);
         let bytes = borsh::to_vec(&(&intent, &eog, Vec::<u8>::new())).unwrap();
-        assert_eq!(batch_stop_claim_v1(&bytes).unwrap(), intent.claim);
+        assert_eq!(batch_stop_identity_v1(&bytes).unwrap(), (intent.claim, intent.filer));
         let stop = BatchCourtWireV1::Stop(BatchStopControlV1 { operands: bytes.clone() });
         let mut carrier = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
         carrier.extend(borsh::to_vec(&stop).unwrap());
@@ -188,6 +190,7 @@ mod tests {
         for offset in [0, STOP_REASON_OFFSET, intent_bytes - sig - 4, intent_bytes, intent_bytes + 4 + 8 + 8 + 64, bytes.len() - 4] {
             let mut malformed = bytes.clone();
             malformed[offset] = u8::MAX;
+            assert!(batch_stop_identity_v1(&malformed).is_err());
             assert!(matches!(
                 BatchStopPayloadV1::decode_with_v1(&malformed, eog_bytes, |_| panic!("invalid shape reached reservation")),
                 Err(NativeDecodeErrorV1::Decode(_))
