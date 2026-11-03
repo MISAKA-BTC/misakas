@@ -190,15 +190,25 @@ fn prune_retained_claims_v1(
         if !matches!(material_owed(&c.claim), Ok(false)) {
             continue;
         }
+        let mut removed_file = false;
         for path in &c.paths {
-            match std::fs::remove_file(path) {
-                Ok(()) => {}
+            // Planning uses an inventory estimate. Credit the reclaimer only
+            // for files this pass actually removed, including partial groups.
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.is_file() => match std::fs::remove_file(path) {
+                    Ok(()) => {
+                        removed_file = true;
+                        bytes = bytes.saturating_add(meta.len());
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", path.display()),
+                },
+                Ok(_) => trace!("[{PALW_RETENTION}] no longer a regular file: {}", path.display()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", path.display()),
+                Err(e) => trace!("[{PALW_RETENTION}] cannot inspect {} before pruning: {e}", path.display()),
             }
         }
-        removed += 1;
-        bytes = bytes.saturating_add(c.bytes);
+        removed += usize::from(removed_file);
     }
     (removed, bytes)
 }
@@ -538,6 +548,22 @@ mod tests {
         let (doomed, _) = plan(unowed);
         assert_eq!(prune_retained_claims_v1(&claims, doomed, unowed), (3, 90));
         assert!(claims.iter().all(|claim| !claim.paths[0].exists()));
+    }
+
+    #[test]
+    fn retention_reclaim_reports_only_files_it_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut row = claim(1, RetainedKindV1::Attempt, 400, 90);
+        let material = dir.path().join("claim.material");
+        let replaced = dir.path().join("claim.answer");
+        let missing = dir.path().join("gone.material");
+        std::fs::write(&material, b"retained bytes").unwrap();
+        std::fs::create_dir(&replaced).unwrap();
+        row.paths = vec![material.clone(), replaced.clone(), missing];
+        assert_eq!(prune_retained_claims_v1(&[row.clone()], vec![0], |_| Ok(false)), (1, 14));
+        assert!(!material.exists());
+        assert!(replaced.is_dir());
+        assert_eq!(prune_retained_claims_v1(&[row], vec![0], |_| Ok(false)), (0, 0));
     }
 
     #[test]
