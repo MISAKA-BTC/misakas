@@ -1446,3 +1446,22 @@ record both results. This integrates the bound restore crosslinks and exact
 slot quote. The guarded commands typechecked the regressions. The isolated
 crosslink and literal-byte checks described above are the runtime evidence
 for this change.
+
+### Integrated alias lookups and atomic relay custody
+
+Commit `89c636618` applies the bounded staged/seal lookups and the funded
+escrow claim index. Commit `288e9b01d` applies the pending Case relay custody
+transfer inside the Case bind checkpoint. Restore requires that the custody
+binding name the Case reservation. Actual op9 still refuses without a
+native all-branch reservation owner, so the transfer has no accepted-chain
+runtime coverage yet.
+
+A guarded run on the combined source queues strict library Clippy, all Core
+test-target checks, and the optimized funded escrow runtime regressions.
+At the checkpoint the run was waiting for the shared target build lock.
+The separate Linux/XFS node runner was still building RocksDB.
+
+The remaining kernel alias lookups cannot use the existing job holder as a
+substitute for the reverse relation. The legacy Panel path can retain an
+uncovered claim without any holder entry. A bounded closure proof must
+account for these rows and the independent native claim job identities.
