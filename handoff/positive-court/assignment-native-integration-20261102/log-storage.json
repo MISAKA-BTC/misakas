@@ -886,5 +886,45 @@
     "stored_sha256": "4e0f90b4b376613363a634648f90cdbec28e00c7136c854ec165d0bffb3e5c17",
     "raw_bytes": 314736,
     "stored_bytes": 21893
+  },
+  {
+    "raw_name": "relay-storage-fee-contract-first.log",
+    "stored_name": "relay-storage-fee-contract-first.log.gz",
+    "raw_sha256": "70bca57306959da867b223bbdfe711319bea4031abaa498e72d41ee7f1abe283",
+    "stored_sha256": "84c41fabef93ec75469f77fbaa5abba3a9f9306ca0e3b08cf3c238fe8faaac1d",
+    "raw_bytes": 53084,
+    "stored_bytes": 4189
+  },
+  {
+    "raw_name": "relay-storage-fee-contract-second.log",
+    "stored_name": "relay-storage-fee-contract-second.log.gz",
+    "raw_sha256": "0d15c05ef28e2c1400f7be787f79636fb8317788552beb9b5a850f607ef9d2f0",
+    "stored_sha256": "ba1a4b5125f8cbf9c943c1084d89af70f438d282aca87b32ddf31946480baff1",
+    "raw_bytes": 53084,
+    "stored_bytes": 4186
+  },
+  {
+    "raw_name": "relay-storage-fee-core-first.log",
+    "stored_name": "relay-storage-fee-core-first.log.gz",
+    "raw_sha256": "a23175e9901d920cef864264a3cd01fd7f29e936d1d3d5f78c98c54f64cb40dd",
+    "stored_sha256": "00e970e8c752db07b09b7c4fc847d0c30a462b86850c268c7f1d236d7ec8db98",
+    "raw_bytes": 287415,
+    "stored_bytes": 20044
+  },
+  {
+    "raw_name": "relay-storage-fee-core-second.log",
+    "stored_name": "relay-storage-fee-core-second.log.gz",
+    "raw_sha256": "275f3bddb95bc0b1f2f2715c1cc995ed67452fac7fe915f60867ad158057736d",
+    "stored_sha256": "157bf274bd6de38b95465402438186353e906b0d7f71b4e8468325bd7e81d881",
+    "raw_bytes": 282607,
+    "stored_bytes": 19544
+  },
+  {
+    "raw_name": "relay-storage-fee-core-third.log",
+    "stored_name": "relay-storage-fee-core-third.log.gz",
+    "raw_sha256": "99e5560605255020baa23805b757d64caee978eaf8e782cbb0b7b839894c0dac",
+    "stored_sha256": "e67a672065df0cb1db55dae485b404cc6c076ec5381e945fd39fce927a8b3bb7",
+    "raw_bytes": 287415,
+    "stored_bytes": 20025
   }
 ]

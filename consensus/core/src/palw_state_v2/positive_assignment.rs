@@ -1075,6 +1075,14 @@ impl TransitionBuilder<'_> {
             })?;
             self.require_unused_relay_outpoint_v2(body)?;
             policy.check_terms(terms, ctx.daa_score).map_err(refusal)?;
+            // Include the actual package's required retained images. The
+            // storage and fee owners still determine the final charge.
+            let minimum_fee = fees.minimum_registration_fee(policy, physical, terms).map_err(refusal)?;
+            let available = action.relay_available_fee_v2().ok_or_else(missing_assignment_history)?;
+            if minimum_fee > terms.max_metadata_fee || minimum_fee > available {
+                return Err(refusal("initial relay cannot fund the minimum metadata fee after mandatory burns"));
+            }
+
             self.check_initial_relay_slots_v2(terms, poster_nonce, policy)?;
         }
         let native_key = native_bond(terms.payer_bond);
@@ -1095,20 +1103,6 @@ impl TransitionBuilder<'_> {
             },
         };
         nonce.after_accepting(poster_nonce).map_err(refusal)?;
-
-        // Only the unavoidable portion can be priced before the custody
-        // owner quotes its writes, retention and replay. This is no charge.
-        let minimum_fee = fees
-            .per_signature
-            .checked_mul(u64::from(reserved.quote().signatures))
-            .and_then(|n| n.checked_add(fees.per_frame_byte.checked_mul(reserved.quote().encoded_bytes)?))
-            .and_then(|n| n.checked_add(fees.admission))
-            .and_then(|n| n.checked_add(fees.retirement))
-            .ok_or_else(|| refusal("initial relay minimum metadata fee overflow"))?;
-        let available = action.relay_available_fee_v2().ok_or_else(missing_assignment_history)?;
-        if minimum_fee > terms.max_metadata_fee || minimum_fee > available {
-            return Err(refusal("initial relay cannot fund the minimum metadata fee after mandatory burns"));
-        }
 
         let mut requests = TirNativeRequestsV1::new();
         requests.exact_v1::<FundingRelaySignatureTemplateV2>(1).map_err(PalwStateV2Error::NativeResource)?;

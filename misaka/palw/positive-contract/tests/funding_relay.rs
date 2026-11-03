@@ -266,8 +266,8 @@ fn relay_pair(mut terms: FundingRelayTermsV2) -> (FundingRelayAuthorizationRowV2
         frame_bytes: 10_346,
         decoded_bytes: 16_000,
         heap_bytes: 32_000,
-        retained_bytes: 16_000,
-        database_bytes: 16_000,
+        retained_bytes: 32_000,
+        database_bytes: 32_000,
         batch_bytes: 32_000,
         replay_reads: 10,
         replay_work: 100,
@@ -421,4 +421,74 @@ fn pending_and_current_row_shapes_preserve_original_exclusive_clocks() {
         NativeRowKey::FundingRelayCustody { funding: auth.terms.funding_outpoint, purpose: RelayFundingPurposeV2::CaseC }.encode();
     let raw = NativeRowValue::new(NativeRowBody::FundingRelayCustody(custody)).unwrap().encode().unwrap();
     assert!(NativeRowValue::decode(&key, &raw).is_err());
+}
+
+#[test]
+fn registration_fee_floor_matches_literal_payload_and_pending_row_images() {
+    let base = terms();
+    let targets = [
+        (RelayFundingPurposeV2::PosterA, base.target),
+        (
+            RelayFundingPurposeV2::CaseC,
+            RelayTargetV2::InitialCase {
+                result: ResultId(d(20)),
+                funding_scope: FundingScopeId(d(21)),
+                consent: FundingConsentId(d(22)),
+            },
+        ),
+        (RelayFundingPurposeV2::ProverJoin, RelayTargetV2::InitialProver { prover: base.payer_bond, join: d(23) }),
+        (
+            RelayFundingPurposeV2::PosterA,
+            RelayTargetV2::Continuation {
+                original_funding: point(24),
+                predecessor: point(25),
+                parent_spend: base.funding_outpoint.transaction,
+                original_contract: d(26),
+            },
+        ),
+    ];
+    for (funding_purpose, target) in targets {
+        let (auth, custody) = relay_pair(FundingRelayTermsV2 { funding_purpose, target, ..base });
+        let FundingRelayAuthorizationRowV2 { terms, policy, fees, physical, .. } = auth;
+        let mut literal = body(terms);
+        literal.purpose_signature = auth.purpose_signature;
+        literal.relay_signature = custody.relay_signature;
+        let frame_bytes = borsh::object_length(&literal).unwrap() as u64;
+        let mut retained_bytes = frame_bytes + 3;
+        for row in [NativeRowBody::FundingRelayAuthorization(auth), NativeRowBody::FundingRelayCustody(custody)] {
+            retained_bytes += row.key().encode().len() as u64;
+            retained_bytes += NativeRowValue::new(row).unwrap().encode().unwrap().len() as u64;
+        }
+        let database_bytes = retained_bytes + 66;
+        let usage = FundingRelayUsageV2 {
+            frame_bytes,
+            decoded_bytes: size_of::<FundingRelayRegistrationBodyV2>() as u64,
+            heap_bytes: 32_000,
+            retained_bytes,
+            database_bytes,
+            batch_bytes: database_bytes,
+            replay_reads: 1,
+            replay_work: 1,
+            signatures: 2,
+        };
+        let complete = fees.quote(&policy, &physical, &terms, usage, 50).unwrap();
+        let floor = fees.minimum_registration_fee(&policy, &physical, &terms).unwrap();
+        assert_eq!(floor + fees.per_replay_read + fees.per_replay_work, complete.fee);
+
+        for undersized in [
+            FundingRelayUsageV2 { frame_bytes: frame_bytes - 1, ..usage },
+            FundingRelayUsageV2 { retained_bytes: retained_bytes - 1, ..usage },
+            FundingRelayUsageV2 { database_bytes: database_bytes - 1, ..usage },
+            FundingRelayUsageV2 { batch_bytes: database_bytes - 1, ..usage },
+        ] {
+            assert!(fees.quote(&policy, &physical, &terms, undersized, 50).is_err());
+        }
+
+        // A signed physical profile with room for everything except one
+        // retained byte still cannot admit the package.
+        let physical = FundingRelayPhysicalProfileV2 { max_retained_bytes: retained_bytes - 1, ..physical };
+        let policy = FundingRelayPolicyV2 { physical_custody_profile: physical.id(), ..policy };
+        let terms = FundingRelayTermsV2 { relay_policy: policy.id(), physical_custody_profile: physical.id(), ..terms };
+        assert!(fees.minimum_registration_fee(&policy, &physical, &terms).is_err());
+    }
 }

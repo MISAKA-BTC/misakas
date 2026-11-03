@@ -215,6 +215,51 @@ impl FundingRelayFeeScheduleV2 {
         }
         Ok(())
     }
+    fn storage_price(
+        &self,
+        signatures: u32,
+        frame_bytes: u64,
+        retained_bytes: u64,
+        database_bytes: u64,
+        retention_daa: u64,
+    ) -> Result<u64, ContractError> {
+        sum([
+            self.admission,
+            mul(u64::from(signatures), self.per_signature)?,
+            mul(frame_bytes, self.per_frame_byte)?,
+            mul(mul(retained_bytes, retention_daa)?, self.per_retained_byte_daa)?,
+            mul(database_bytes, self.per_database_byte)?,
+            self.retirement,
+        ])
+    }
+
+    /// Cost already implied by an op14 and its two pending rows. This covers
+    /// the exact literal lifecycle payload and canonical aux key/value images.
+    /// It leaves framing overhead, additional accepted history, batch
+    /// overhead and replay work to the actual storage and allocation owners.
+    pub fn minimum_registration_fee(
+        &self,
+        policy: &FundingRelayPolicyV2,
+        physical: &FundingRelayPhysicalProfileV2,
+        terms: &FundingRelayTermsV2,
+    ) -> Result<u64, ContractError> {
+        self.validate()?;
+        physical.validate()?;
+        if self.id() != policy.metadata_fee_schedule || physical.id() != policy.physical_custody_profile {
+            return Err(ContractError::Identity);
+        }
+        let retention_daa = policy.retention_quote(terms)?;
+        let RegistrationStorageFloor { body_bytes, retained_bytes, database_bytes } = RegistrationStorageFloor::derive(terms)?;
+        if body_bytes > physical.max_frame_bytes
+            || retained_bytes > physical.max_retained_bytes
+            || database_bytes > physical.max_database_bytes
+            || database_bytes > physical.max_batch_bytes
+        {
+            return Err(ContractError::Budget);
+        }
+        self.storage_price(2, body_bytes, retained_bytes, database_bytes, retention_daa)
+    }
+
     pub fn quote(
         &self,
         policy: &FundingRelayPolicyV2,
@@ -229,16 +274,19 @@ impl FundingRelayFeeScheduleV2 {
         if self.id() != policy.metadata_fee_schedule || physical.id() != policy.physical_custody_profile {
             return Err(ContractError::Identity);
         }
+        let floor = RegistrationStorageFloor::derive(terms)?;
+        if usage.frame_bytes < floor.body_bytes
+            || usage.retained_bytes < floor.retained_bytes
+            || usage.database_bytes < floor.database_bytes
+            || usage.batch_bytes < floor.database_bytes
+        {
+            return Err(ContractError::Budget);
+        }
         let retention_daa = policy.retention_quote(terms)?;
         let fee = sum([
-            self.admission,
-            mul(u64::from(usage.signatures), self.per_signature)?,
-            mul(usage.frame_bytes, self.per_frame_byte)?,
-            mul(mul(usage.retained_bytes, retention_daa)?, self.per_retained_byte_daa)?,
-            mul(usage.database_bytes, self.per_database_byte)?,
+            self.storage_price(usage.signatures, usage.frame_bytes, usage.retained_bytes, usage.database_bytes, retention_daa)?,
             mul(usage.replay_reads, self.per_replay_read)?,
             mul(usage.replay_work, self.per_replay_work)?,
-            self.retirement,
         ])?;
         if fee > terms.max_metadata_fee {
             return Err(ContractError::Budget);
@@ -254,6 +302,36 @@ impl FundingRelayFeeScheduleV2 {
         })
     }
 }
+struct RegistrationStorageFloor {
+    body_bytes: u64,
+    retained_bytes: u64,
+    database_bytes: u64,
+}
+impl RegistrationStorageFloor {
+    fn derive(terms: &FundingRelayTermsV2) -> Result<Self, ContractError> {
+        const LIFECYCLE_PREFIX_BYTES: u64 = 3;
+        const NATIVE_AUX_KEY_BYTES: u64 = 74;
+        const AUTHORIZATION_BYTES_WITHOUT_TERMS: u64 = 8956;
+        const UNBOUND_CUSTODY_BYTES: u64 = 5334;
+        const MATERIAL_DB_KEY_BYTES: u64 = 66;
+        const SIGNATURES: u32 = 2;
+
+        let terms_bytes = borsh::object_length(terms).map_err(|_| ContractError::NonCanonical)? as u64;
+        let body_bytes = sum([5, terms_bytes, mul(u64::from(SIGNATURES), crate::identity::SIGNATURE_BYTES as u64)?])?;
+        let retained_bytes = sum([
+            LIFECYCLE_PREFIX_BYTES,
+            body_bytes,
+            NATIVE_AUX_KEY_BYTES,
+            AUTHORIZATION_BYTES_WITHOUT_TERMS,
+            terms_bytes,
+            NATIVE_AUX_KEY_BYTES,
+            UNBOUND_CUSTODY_BYTES,
+        ])?;
+        let database_bytes = sum([retained_bytes, MATERIAL_DB_KEY_BYTES])?;
+        Ok(Self { body_bytes, retained_bytes, database_bytes })
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct FundingRelayMoneyQuoteV2 {
     pub terms: Digest,

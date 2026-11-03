@@ -547,3 +547,35 @@ was exercised. The two combined Core/Consensus Clippy attempts were
 stopped when the dependency rebuild reached RocksDB on the low-space
 volume. Scoped Core verification completed independently. The
 documentation check reported zero new issues against the existing 43.
+
+## Initial relay storage floor and fee qualification
+
+New op14 pricing checks the minimum retained images of the literal
+lifecycle payload and the exact pending authorization and custody keys
+and values. The database/batch floor includes the 66-byte material
+key. It checks the signed frame, retention, DB and batch capacities and
+applies the original fee schedule and immutable retention interval.
+For an initial A registration the prefix checks this minimum against
+both the signed fee ceiling and the actual carrier residual before
+scanning registration occupancy. A valid existing package still takes
+the original-custody replay boundary before new-registration pricing.
+
+Full metadata quotes and restored authorization rows must also cover
+the same extents. Actual writer overhead and replay work can raise the
+quote. The contract cases serialize all four targets and both pending
+rows, check that the fee matches their exact sizes, and refuse a quote
+that falls one byte short in any of the four dimensions.
+
+One body digest can occur in different histories after reorg. The
+literal payload under that digest has stable bytes, while its exact
+accepted origin is scoped to the canonical registration rows. The
+actual retained framing and reader still need to authenticate that
+association against accepted carrier and branch history. This stage
+does not allocate or burn a fee, write RocksDB material, or admit R.
+
+Final-source Core library Clippy passed with warnings denied and all
+eight contract cases passed. The Core integration-test target was
+stopped when it began rebuilding RocksDB on the low-space volume; those
+fixtures were not run. The verification archive records both source
+candidates, all five results and their raw log digests. Documentation
+checking found zero new issues against the existing 43.
