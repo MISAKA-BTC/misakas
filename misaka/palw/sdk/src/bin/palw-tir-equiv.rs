@@ -48,13 +48,16 @@ use misaka_palw_base0::mmap::ReadOnlyMap;
 use misaka_palw_base0::qwen25_a16_backend::A16_PREFILL_RUN_POSITIONS;
 use misaka_palw_base0::rope::RopeTableV1;
 use misaka_palw_base0::tir_a16::{A16MirrorRowsV1, a16_mirror_program_with_rows, a16_tir_tensor_bytes};
-use misaka_palw_sdk::tir_equiv::{EquivJobV1, EquivReportV1, equiv_jobs_v1, run_core_v1_prefill_equiv, run_equiv_v1};
+use misaka_palw_sdk::tir_equiv::{
+    EquivJobV1, EquivReportV1, equiv_jobs_v1, run_core_v1_prefill_equiv_with_position_progress, run_equiv_v1,
+};
 use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, StateKind, TirProgramV1};
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-const USAGE: &str = "usage: palw-tir-equiv --network <id> [--model-id <row>] (--artifact <file.palwart> [--respan] | --derive [--derive-seed N]) [--tir <file.palwtir>] [--prompts N] [--seed N] [--max-prefill N] [--core-v1-anchor <hash> --core-v1-daa <score>] [--json]";
+const USAGE: &str = "usage: palw-tir-equiv --network <id> [--model-id <row>] (--artifact <file.palwart> [--respan] | --derive [--derive-seed N]) [--tir <file.palwtir>] [--prompts N] [--seed N] [--max-prefill N] [--core-v1-anchor <hash> --core-v1-daa <score> [--position-progress <N>]] [--json]";
 
 fn die(message: String) -> ! {
     eprintln!("palw-tir-equiv: {message}");
@@ -123,6 +126,14 @@ fn main() {
     let seed: u64 = number(&args, "--seed", 0x5EED);
     let json = has("--json");
     let exact = has("--core-v1-anchor") || has("--core-v1-daa");
+    let position_progress = has("--position-progress").then(|| {
+        if !exact {
+            die("--position-progress requires the exact CoreV1 comparison".into());
+        }
+        flag(&args, "--position-progress")
+            .and_then(|value| value.parse::<NonZeroU64>().ok())
+            .unwrap_or_else(|| die("--position-progress requires a positive interval".into()))
+    });
     if exact
         && (network != "testnet-12"
             || model_id != A16_GRAPH_V7_8K_MODEL_ID
@@ -159,6 +170,7 @@ fn main() {
         (daa, ctx, job)
     });
 
+    let observed_start = position_progress.map(|_| std::time::Instant::now());
     // The legacy artifact.
     let artifact: Base0ArtifactV1 = if has("--derive") {
         let s = row.artifact_shape;
@@ -190,6 +202,9 @@ fn main() {
     let exact_artifact_digest = exact.then(|| artifact.artifact_digest());
     if exact && (registered != Some(root) || exact_artifact_digest != Some(artifact_digest_of(QWEN25_A16_8K_MANIFEST_V1))) {
         die("the original T12 8K artifact digest or registered inventory root differs".into());
+    }
+    if let Some(start) = observed_start {
+        eprintln!("[{:.1}s] original artifact and registered inventory verified", start.elapsed().as_secs_f64());
     }
     let pairing = match registered {
         Some(r) if r == root => format!("PAIRS with the root {network_id} registered for the row at genesis ({root})"),
@@ -247,6 +262,9 @@ fn main() {
         positions
     );
     let started = std::time::Instant::now();
+    if let Some(start) = observed_start {
+        eprintln!("[{:.1}s] mirror program and tensor bytes prepared", start.elapsed().as_secs_f64());
+    }
     let mut progress = |ji: usize, r: &EquivReportV1| {
         eprintln!(
             "[{:7.1}s] job {}/{} {}: {} positions so far, logits {}/{}, rows {}/{}; legacy {:.1} ms/pos, IR {:.1} ms/pos",
@@ -264,7 +282,31 @@ fn main() {
         );
     };
     let report = if let Some((_, _, job)) = &exact_job {
-        run_core_v1_prefill_equiv(&artifact, &row.profile, &program, &rows, &tensors, job, A16_PREFILL_RUN_POSITIONS, &mut progress)
+        let mut observe_position = |r: &EquivReportV1| {
+            eprintln!(
+                "[{:.1}s] exact positions {}/{}; native {:.1}s, IR {:.1}s; rows {}/{}, logits {}/{}",
+                observed_start.unwrap_or(started).elapsed().as_secs_f64(),
+                r.positions,
+                positions,
+                r.legacy_seconds,
+                r.ir_seconds,
+                r.node_rows_equal,
+                r.node_rows,
+                r.logit_rows_equal,
+                r.logit_rows,
+            );
+        };
+        run_core_v1_prefill_equiv_with_position_progress(
+            &artifact,
+            &row.profile,
+            &program,
+            &rows,
+            &tensors,
+            job,
+            A16_PREFILL_RUN_POSITIONS,
+            &mut progress,
+            position_progress.map(|every| (every, &mut observe_position as &mut dyn FnMut(&EquivReportV1))),
+        )
     } else {
         run_equiv_v1(&artifact, &row.profile, &program, &rows, &tensors, &jobs, &mut progress)
     }

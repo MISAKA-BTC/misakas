@@ -25,6 +25,7 @@ use misaka_palw_tir::TirProgramV1;
 use misaka_palw_tir_exec::{NodeValue, ParamData, Slice, StepSink, TirExecutor, TirParams, TirPlan};
 use rand::{Rng, SeedableRng};
 use std::collections::BTreeMap;
+use std::num::NonZeroU64;
 use std::time::Instant;
 
 /// One job: a prompt, then `decode` generated tokens.
@@ -85,6 +86,8 @@ impl EquivReportV1 {
 }
 
 const KEEP_MISMATCHES: usize = 8;
+
+type PositionProgress<'a> = Option<(NonZeroU64, &'a mut dyn FnMut(&EquivReportV1))>;
 
 /// The first index where an IR value and a legacy row differ (or their lengths do).
 fn first_diff(ir: &Slice<'_>, row: &[i32]) -> Option<(usize, String, i32)> {
@@ -164,7 +167,7 @@ pub fn run_equiv_v1(
     jobs: &[EquivJobV1],
     progress: &mut dyn FnMut(usize, &EquivReportV1),
 ) -> Result<EquivReportV1, String> {
-    run_equiv_jobs_v1(artifact, profile, program, rows, tensors, jobs, None, progress)
+    run_equiv_jobs_v1(artifact, profile, program, rows, tensors, jobs, None, progress, None)
 }
 
 /// Compare the exact one-token attempt, using the production batched prefill
@@ -180,10 +183,37 @@ pub fn run_core_v1_prefill_equiv(
     run_positions: usize,
     progress: &mut dyn FnMut(usize, &EquivReportV1),
 ) -> Result<EquivReportV1, String> {
+    run_core_v1_prefill_equiv_with_position_progress(artifact, profile, program, rows, tensors, job, run_positions, progress, None)
+}
+
+/// Opt-in observation after executor setup, position one, every requested
+/// interval, and the final position. These snapshots are not completed jobs.
+#[allow(clippy::too_many_arguments)]
+pub fn run_core_v1_prefill_equiv_with_position_progress(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    program: &TirProgramV1,
+    rows: &A16MirrorRowsV1,
+    tensors: &BTreeMap<(u16, Option<u16>), Vec<u8>>,
+    job: &EquivJobV1,
+    run_positions: usize,
+    progress: &mut dyn FnMut(usize, &EquivReportV1),
+    position_progress: PositionProgress<'_>,
+) -> Result<EquivReportV1, String> {
     if job.decode != 1 || run_positions == 0 {
         return Err("the CoreV1 draw comparison requires one selected token and a positive prefill run width".into());
     }
-    run_equiv_jobs_v1(artifact, profile, program, rows, tensors, std::slice::from_ref(job), Some(run_positions), progress)
+    run_equiv_jobs_v1(
+        artifact,
+        profile,
+        program,
+        rows,
+        tensors,
+        std::slice::from_ref(job),
+        Some(run_positions),
+        progress,
+        position_progress,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -196,6 +226,7 @@ fn run_equiv_jobs_v1(
     jobs: &[EquivJobV1],
     prefill_run_positions: Option<usize>,
     progress: &mut dyn FnMut(usize, &EquivReportV1),
+    mut position_progress: PositionProgress<'_>,
 ) -> Result<EquivReportV1, String> {
     let engine = A16Engine::new(artifact).map_err(|e| format!("the legacy engine: {e:?}"))?;
     let plan = engine.plan_from_profile(profile).map_err(|e| format!("the row's profile is not servable here: {e:?}"))?;
@@ -225,6 +256,9 @@ fn run_equiv_jobs_v1(
         let mut token = *job.prompt.first().ok_or("an empty prompt")?;
         let mut prefill_traces = Vec::new().into_iter();
         let mut prefill_logits = Vec::new();
+        if let Some((_, observe)) = &mut position_progress {
+            observe(&report);
+        }
         for pos in 0..total {
             let t = Instant::now();
             let run_post = prefill_run_positions.is_none() || pos + 1 == total;
@@ -293,6 +327,11 @@ fn run_equiv_jobs_v1(
                 if report.first_mismatches.len() < KEEP_MISMATCHES {
                     report.first_mismatches.push(format!("{} position {pos}: {b}", job.label));
                 }
+            }
+            if let Some((every, observe)) = &mut position_progress
+                && (pos == 0 || pos + 1 == total || report.positions.is_multiple_of(every.get()))
+            {
+                observe(&report);
             }
             // The next token: the prompt's, then the consensus decode token of this row.
             if let Some(next) = job.prompt.get(pos + 1) {
@@ -381,6 +420,33 @@ mod tests {
         let [native, mirror] = exact.core_v1_selected_tokens.unwrap();
         assert_eq!(native, mirror);
         assert_eq!(historical.core_v1_selected_tokens, None);
+    }
+
+    #[test]
+    fn exact_position_progress_preserves_completion_and_counters() {
+        let (artifact, profile) = small();
+        let (program, rows) = a16_mirror_program_with_rows(&artifact.shape, HISTORY_BOUND_V1_SMALL).unwrap();
+        let tensors = a16_tir_tensor_bytes(&artifact, &program).unwrap();
+        let job = EquivJobV1 { label: "observed draw".into(), prompt: vec![1, 7, 12, 4, 8], decode: 1 };
+        let plain = run_core_v1_prefill_equiv(&artifact, &profile, &program, &rows, &tensors, &job, 2, &mut |_, _| {}).unwrap();
+        let mut positions = Vec::new();
+        let mut completed = Vec::new();
+        let observed = run_core_v1_prefill_equiv_with_position_progress(
+            &artifact,
+            &profile,
+            &program,
+            &rows,
+            &tensors,
+            &job,
+            2,
+            &mut |job_index, report| completed.push((job_index, report.jobs, report.positions)),
+            Some((NonZeroU64::new(2).unwrap(), &mut |r| positions.push((r.positions, r.jobs, r.logit_rows)))),
+        )
+        .unwrap();
+        assert_eq!(positions, [(0, 0, 0), (1, 0, 0), (2, 0, 0), (4, 0, 0), (5, 0, 1)]);
+        assert_eq!(completed, [(0, 1, 5)]);
+        let without_timers = |r| EquivReportV1 { legacy_seconds: 0.0, ir_seconds: 0.0, ..r };
+        assert_eq!(without_timers(plain), without_timers(observed));
     }
 
     #[test]
