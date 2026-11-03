@@ -165,3 +165,76 @@ completion; its full identity differs only by the unfired retention fence,
 so the recovery summary refusal does not establish that ordinary
 pre-fence sync must reject this connection. No fork-choice override or
 model certification waiver was applied.
+
+## Recovery beyond the Explorer index — 02:02 UTC
+
+The prior public relay had a 32 MiB log stop condition. Its observed log
+growth at 01:45–01:47 UTC was about 1.6 kB/s, principally from gRPC connection
+lifecycle messages. The replacement supervisor rotates owned log files and
+monitors the serving B0 generation. B1 does not supply this relay's data.
+Removing that runtime dependency allows future B1 maintenance without
+stopping the Explorer relay. The package passed 22 local tests.
+
+The old relay stopped after a single SIGINT and returned exit 0. The
+closed APP inventory recorded 1,284 entries, no process owners and all four
+private ports released. The closure receipt SHA256 is
+`fafb130f936ecb4349f4034ca6049c975007e1bc32430edfb7f5ea759b58b308`.
+The successor reopened the same APP and bound the same private ports under
+the same 8 GiB limit. Its canary matched B0 at DAA 19,542, with SHA256
+`09bf87f2dfef73ad1e9d8997b6697b11661fa087e09f67716f8eeb498ff92586`.
+The filler restarted once during the planned disconnect. A brief 503
+cleared as the new RPC connection became ready. Both public WebSocket
+routes and HTTP 200 were verified, and both SQL cursors advanced to the
+new virtual DAA 19,543 on the successor UUID. Independent verification
+SHA256 is `4fe6579be4f9e6a37deb9fb2e644309a86e241c62f0d948ac99200a1b8ed339a`.
+
+The old 113 primary rejected the actual level-0 header `6d70329a…f31c`.
+That header and its sole parent `3ca853a7…443a1` are zero-chain-weight lane
+headers at DAA 316 with blue score 1,242 and identical blue work. The
+sealed `ad9016` candidate handles this case and still checks genesis-rooted
+GHOSTDAG work and score. A separate unsigned process on host 5 started
+from an empty APP and connected to B0 through an isolated, loopback
+forward. It passed the 19,003-header level-0 proof and set the staging
+pruning point. At 02:02 UTC it was still importing ordinary headers,
+with 107,145 processed, at 59% by the node's progress display. Full
+IBD and PALW snapshot import had not completed. The 113 primary was
+stopped by a separate operation while this work ran. Its signal-9 exit
+is not clean closure evidence.
+
+On the B0 branch the only currently ready seat matched the producer's
+bond, which the G14 draw excludes for its own claim. The old seat5 bond
+is visible on the B0 branch and independent of the producer. It has 38
+live capital locks and two nonterminal claims. Its old APP is closed and
+its signed state and evidence remain preserved. Any signer handoff
+requires proof of evidence access, sufficient storage, and a compatible
+current chain. The fork comparison continued to report the same economic
+keys on B0 and B1 below the DAA 20,000 acceptance fence.
+
+## Fresh IBD outcome and historic Court material — 02:42 UTC
+
+The separate unsigned trial on host 5 processed all 230,284 ordinary
+headers after validating the 19,003-header level-0 proof. B0 refused
+the requested chunked PALW snapshot for the unchanged pruning point
+`4dc9cebd…1ab9e`. The trial remained unqualified. It stopped normally
+after its own time limit, with one SIGINT and exit 0. The previously
+reported proof validation defect and this serving failure therefore
+have different observable boundaries. The public relay's safe-mode
+RPC rejected an attempted administrative peer attachment for a
+first-chunk diagnostic, so no diagnostic peer was attached to it.
+
+Both missing historic seat5 BASE0 captures were regenerated offline.
+The replay checked each exact accepted-block input, claim ID, registered
+executor key, public signature, and all signed execution, output, trace
+and manifest roots and the chunk count. Each material file is 1,599,245
+bytes. Their SHA256 values are
+`3bd529c12cac7b81e8fa234aca590c000bdaaa4f17937ef1816ca207fd774537`
+and `14e38416832987b0999f719626ee4771a57541d7c498448f99f15e093b4deb36`.
+The one focused signed fixture test passed, including changed input and
+root rejection. The captures are locally staged and do not yet establish
+provider delivery or any Gate C decision.
+
+At 02:40 UTC public REST was HTTP 200 and the public WebSocket reported
+the successor UUID at DAA 19,557. The 113 primary remained inactive while
+its separate build proceeded. B1's original APP and service had not been
+changed. The newer Linux build was still running under its isolated
+8 GiB container limit.
