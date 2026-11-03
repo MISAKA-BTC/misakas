@@ -2968,7 +2968,21 @@ pub(crate) fn palw_da_claim_answers_v1(
 fn palw_da_keep_remade_v1(dir: &std::path::Path, claim: &Hash64, bytes: &[u8]) {
     let _publication = crate::palw_retention::pin_attempt_publication(*claim);
     let path = dir.join(format!("{claim}.material"));
-    if let Err(e) = publish_retained_file(&path, bytes, RetainedPublication::Replace) {
+    let result = crate::palw_retention::ensure_retained_replay(&path, bytes, || {
+        let bytes = bytes.len() as u64;
+        let storage = kaspa_utils::storage_budget::reserve_global(kaspa_utils::storage_budget::StorageCategory::PalwRetained, bytes)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if storage.is_none() {
+            let (free, total) = crate::palw_retention::volume_space_v1(dir)
+                .ok_or_else(|| std::io::Error::other("cannot measure the retention volume"))?;
+            let reserve = crate::palw_retention::retention_reserve_bytes_v1(total);
+            if reserve.checked_add(bytes).is_none_or(|required| free < required) {
+                return Err(std::io::Error::other("the capture would consume the retention volume reserve"));
+            }
+        }
+        Ok(storage)
+    });
+    if let Err(e) = result {
         warn!("[{PALW_PANEL}] claim {claim}: cannot keep the re-made capture ({e}); the next data-availability session re-makes it");
     }
 }
@@ -13341,7 +13355,7 @@ impl PalwPanelService {
         if built.remade {
             info!(
                 "[{PALW_PANEL}] claim {claim}: no kept copy reproduces its roots — its capture was re-made by replaying the claim's job \
-                 and kept, to answer a data-availability session ({:?})",
+                 to answer a data-availability session ({:?})",
                 first.role
             );
         }
