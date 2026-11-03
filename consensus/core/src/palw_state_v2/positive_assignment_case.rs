@@ -2444,6 +2444,44 @@ impl TransitionBuilder<'_> {
         // complete proposed usage before the checkpoint can publish it.
         Err(missing())
     }
+    pub(super) fn advance_due_positive_cases_v2(
+        &mut self,
+        parent: &PalwChainStateV2,
+        ctx: &PalwBlockContextV2,
+        input: PositiveCaseReplayInputV2<'_>,
+    ) -> Result<(), PalwStateV2Error> {
+        let due = parent.kernel_route_state_v1().into_iter().flat_map(|route| route.due_positive_quorum_subjects_v2(ctx.daa_score));
+        if due.take(input.live_case_cap.saturating_add(1)).count() > input.live_case_cap {
+            return Err(refuse("due Positive Cases exceed native live capacity"));
+        }
+        for candidate in parent.due_positive_case_replays_v2(ctx.daa_score, input.live_case_cap) {
+            let (case, result) = candidate?;
+            let Some((_, before)) = parent.assigned_case_journal_pin_v2(case, Some(result))? else {
+                return Err(missing());
+            };
+            let Some((_, current)) = self.state.assigned_case_journal_pin_v2(case, Some(result))? else {
+                return Err(missing());
+            };
+            // Same-block source or other Case activity has its own atomic
+            // journal checkpoint. Its new archive is eligible next block.
+            if current != before
+                || !super::positive_assignment_certification::case_still_waits_for_positive_quorum_v2(&self.state, case, result)?
+            {
+                continue;
+            }
+            let NativeAssignedCaseBackingV2::Committed(backing) = (input.load)(case, result)? else {
+                return Err(missing());
+            };
+            if backing.parent_state_root() != parent.state_root() {
+                return Err(refuse("due Case replay is not rooted at selected parent"));
+            }
+            let (machine, _) = recover_case_subject_v2(&self.state, &backing, input.selected_parent, case, Some(result))?;
+            let session = machine.session(&self.state, ctx, &backing)?;
+            self.advance_positive_certification_session_v2(ctx, &session)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn apply_positive_assignment_attestation_raw_v2(
         &mut self,
         ctx: &PalwBlockContextV2,

@@ -14955,12 +14955,23 @@ pub fn apply_palw_transition_retained_v7(
             uncertified_weightless,
             da_court,
             extras,
+            None,
         )
     })?;
     if !materials.is_empty() {
         return Err(PalwStateV2Error::DeltaMismatch("v7 must not drop nonempty Assignment material"));
     }
     Ok((state, delta, skips))
+}
+
+/// The Node supplies original Case history from the selected parent on demand.
+pub struct PositiveCaseReplayInputV2<'a> {
+    pub selected_parent: BlockHash,
+    pub live_case_cap: usize,
+    pub load: &'a mut dyn FnMut(
+        misaka_palw_positive_contract::identity::CaseId,
+        misaka_palw_positive_contract::identity::ResultId,
+    ) -> Result<NativeAssignedCaseBackingV2, PalwStateV2Error>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -14983,6 +14994,7 @@ pub fn apply_palw_transition_retained_v8(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
+    positive_replays: PositiveCaseReplayInputV2<'_>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -14992,24 +15004,6 @@ pub fn apply_palw_transition_retained_v8(
     ),
     PalwStateV2Error,
 > {
-    if extras.positive_assignment_actions.is_empty() {
-        let (state, delta, skips) = apply_palw_transition_retained_v7(
-            parent,
-            params,
-            admission,
-            ctx,
-            accepted_objects,
-            block_work,
-            merged_work,
-            own_execution_key,
-            unavailable_abstains,
-            capability_bound,
-            uncertified_weightless,
-            da_court,
-            extras,
-        )?;
-        return Ok((state, delta, skips, PositiveAssignmentMaterialOutcomeV2::empty_retained_v2()));
-    }
     crate::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(ctx.block, || {
         apply_palw_transition_v7_inner(
             parent,
@@ -15025,6 +15019,7 @@ pub fn apply_palw_transition_retained_v8(
             uncertified_weightless,
             da_court,
             extras,
+            Some(positive_replays),
         )
     })
 }
@@ -15049,6 +15044,7 @@ fn apply_palw_transition_v7_inner(
     uncertified_weightless: bool,
     da_court: bool,
     extras: &PalwTransitionExtrasV1,
+    positive_replays: Option<PositiveCaseReplayInputV2<'_>>,
 ) -> Result<
     (
         crate::palw_native_resource_v1::NativeChainStateV1,
@@ -15257,6 +15253,10 @@ fn apply_palw_transition_v7_inner(
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
     builder.decide_due_positive_certification_failures_v2(ctx)?;
+    if let Some(input) = positive_replays {
+        builder.advance_due_positive_cases_v2(parent, ctx, input)?;
+    }
+
     source_bootstrap_v1::settle(&mut builder, ctx)?;
     #[cfg(test)]
     for (table, key, row) in &extras.exec_v2_test_kernel_rows {

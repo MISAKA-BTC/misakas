@@ -3047,6 +3047,26 @@ impl VirtualStateProcessor {
                                         self.palw_audit_1004_draw_seed_source(ctx.ghostdag_data.selected_parent, point.daa_score);
                                     extras
                                 })?;
+                                let selected_parent = ctx.ghostdag_data.selected_parent;
+                                let live_case_cap = self
+                                    .palw_positive_assignment_params_v2
+                                    .as_ref()
+                                    .and_then(|params| params.palw_positive_assignment_v2_at(point.daa_score))
+                                    .map_or(0, |fence| fence.policy.live.global as usize);
+                                let mut load_positive_case = |case, result| {
+                                    use kaspa_consensus_core::{
+                                        palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+                                        palw_state_v2::PalwStateV2Error,
+                                    };
+                                    self.prepare_committed_case_history_v2(selected_parent, state, (case, Some(result)))
+                                        .map_err(|error| match error {
+                                            positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => {
+                                                PalwStateV2Error::NativeResource(why)
+                                            }
+                                            _ => PalwStateV2Error::NativeContextUnavailable(HistoryUnavailable),
+                                        })?
+                                        .ok_or(PalwStateV2Error::NativeContextUnavailable(HistoryUnavailable))
+                                };
                                 match kaspa_consensus_core::palw_state_v2::apply_palw_transition_retained_v8(
                                     state,
                                     state_params,
@@ -3065,6 +3085,11 @@ impl VirtualStateProcessor {
                                     // ADR-0088 Decision 11 and ADR-0089 Decision 6, at this BLOCK's
                                     // DAA: the fences, and the actions this block's EVM step queued.
                                     &transition_extras,
+                                    kaspa_consensus_core::palw_state_v2::PositiveCaseReplayInputV2 {
+                                        selected_parent,
+                                        live_case_cap,
+                                        load: &mut load_positive_case,
+                                    },
                                 ) {
                                     Ok((next, delta, merged_skips, assignment_materials)) => {
                                         // A skipped merged work is the block standing while a
