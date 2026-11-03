@@ -473,6 +473,13 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     let mut end_only=intent.clone();end_only.material_id=eog_only.identity(budget).unwrap();sign(&mut end_only);
     assert_eq!(borsh::object_length(&end_only).unwrap() as u64,
         crate::palw_court_shared_material_intake_v1::batch::constraint_stop::STOP_INTENT_BYTES_V1);
+    use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::BatchStopPayloadV1;
+    let wire=borsh::to_vec(&(&end_only,&eog,eog_only.renderings)).unwrap();
+    let eog_bytes=borsh::object_length(&eog).unwrap() as u64;
+    let decoded=BatchStopPayloadV1::decode_v1(&wire,eog_bytes).unwrap();
+    assert_eq!(decoded.eog,eog);
+    assert_eq!(decoded.intent.signature,end_only.signature);
+    let from_wire=store.verify_batch_stop_payload_v1(&b.state,&params,&rules,&decoded,budget).unwrap();
     let projected_end=store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&duty).unwrap();
     assert!(store.build_constraint_stop_material_with_duty_v1(&b.state,&params,&rules,&end_only,eog_only,budget,&token_duty).is_err());
     // Seed = signed intent message (binds material_id): exact equality is against
@@ -481,6 +488,7 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
     let end_seed=end_only.signing_message(rules.network_domain).unwrap();
     let end_only=store.build_constraint_stop_terminal_v1(&b.state,&params,&rules,&end_only,eog_only,budget).unwrap();
     let end_found=end_only.recheck(&store,&b.state,&params,&rules,budget).unwrap();
+    assert_eq!(from_wire,end_found);
     assert_eq!(projected_end.recheck(&store,&b.state,&params,&rules,budget).unwrap(),end_found);
     assert_eq!(end_found.is_some(),fault);
     let full_found=evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap();

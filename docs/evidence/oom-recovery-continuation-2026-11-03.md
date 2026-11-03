@@ -2862,3 +2862,28 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-branch-reservation.PfGHDE/te
 B0 and relay agreed at DAA 19,700 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-branch-reservation-live.HtdMFF/page.json`.
+
+## Bounded EOG-only Stop payload
+
+The prospective Batch Stop payload now decodes the signed intent,
+EOG opening and empty rendering list against the registered EOG
+byte allowance. It checks exact body length, intent version,
+signature length, EOG count, opening depth and the empty list before
+reserving the decoded vectors. The allocation lease stays with the
+decoded payload. Capacity refusal is typed separately from bad
+encoding. The native verifier runs the existing signed Stop predicate
+once against authenticated FullIds. Applying the finding in the
+terminal fold remains a separate integration step.
+
+The extracted suite passed 37 checks. The codec fixture checks
+canonical Borsh byte parity, exact vector reservation, capacity
+refusal and malformed or truncated input before allocation. It uses
+prebuilt dependencies and a reservation shim. The native constraint
+fixture now decodes a signed filing and compares the one-pass finding
+with the existing path. That integrated test and the public carrier
+remain unverified. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-payload.p0xYRw/tests.log`.
+
+B0 and relay agreed at DAA 19,700 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-payload-live.Uv6A1k/page.json`.

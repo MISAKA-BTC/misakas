@@ -11,6 +11,9 @@ use crate::{
     Hash64,
     palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwStateParamsV2},
 };
+#[path = "palw_court_batch_stop_payload_v1.rs"]
+pub(crate) mod batch_payload;
+
 pub(crate) const CONSTRAINT_STOP_SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/shared-constraint-stop/v1/mldsa87";
 #[derive(Clone, borsh::BorshSerialize)]
 pub(crate) struct SignedConstraintStopIntentV1 {
@@ -97,6 +100,21 @@ impl replay::Material for RootedStopMaterialV1<'_> {
 }
 
 impl Store<'_> {
+    /// Verify one decoded Batch filing against this branch's authenticated
+    /// FullIds. The resulting finding still needs the native terminal fold.
+    pub(crate) fn verify_batch_stop_payload_v1(
+        &self,
+        state: &PalwChainStateV2,
+        params: &PalwStateParamsV2,
+        rules: &NativeCourtRulesV1,
+        payload: &batch_payload::BatchStopPayloadV1,
+        budget: replay::WorkBudget,
+    ) -> Result<Option<Fault>, String> {
+        let material = Material { eog: &payload.eog, renderings: &[] };
+        let result = self.replay_constraint_stop_v1(state, params, rules, &payload.intent, material, budget)?;
+        Ok(result.finding().cloned())
+    }
+
     /// Native caller resolves actual rules and separately admits source, parser,
     /// body proof/hash, actor signature, Court clone and evidence ownership.
     pub(crate) fn build_constraint_stop_terminal_v1<'a>(
