@@ -2332,13 +2332,14 @@ impl PalwProducerService {
             .map_err(|e| format!("ML-DSA-87 sign: {e:?}"))?
             .as_ref()
             .to_vec();
+            let retention_pin = crate::palw_retention::pin_attempt_publication(message);
             self.retain_execution(message, &run.material)?;
             let announced = palw_attempt_announcement_v1(run.material, None);
             palw_until_exit_v1(&self.shutdown.listener, self.flow_context.broadcast_palw_material(message, announced)).await;
             riders_out
                 .as_mut()
                 .ok_or("rider destination absent")?
-                .push(PalwAttemptEnvelopeV2 { attempt, signature }, routing_work_v2.clone(), Some(&job))
+                .push(PalwAttemptEnvelopeV2 { attempt, signature }, routing_work_v2.clone(), Some(&job), retention_pin)
                 .map_err(|why| why.to_string())?;
             return Ok(None);
         }

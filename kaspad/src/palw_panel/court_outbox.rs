@@ -685,7 +685,10 @@ mod rider_handoff_tests {
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: memory, database_bytes: 0 }));
         let lead = Hash64::from_u64_word(701);
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(rider_fixture_v2(lead, 0), None, None).unwrap();
+        use crate::palw_retention::attempt_publication_is_pinned;
+        let envelope = rider_fixture_v2(lead, 0);
+        let claim = kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&envelope.attempt);
+        batch.push_fixture(envelope, None, None).unwrap();
         // Fill exactly the remaining demand budget without assuming fixture sizes.
         let (mut lo, mut hi) = (0, memory);
         while lo < hi {
@@ -704,6 +707,7 @@ mod rider_handoff_tests {
         };
         assert!(outbox.pending().is_empty());
         assert_eq!(batch.len(), 1);
+        assert!(attempt_publication_is_pinned(claim));
         drop(blocker);
         assert!(outbox.try_push_rider_batch(batch, 1).is_ok());
         assert!(!outbox.rider_guards.is_empty());
@@ -711,18 +715,21 @@ mod rider_handoff_tests {
         let mut retry = outbox.try_retry_buffer().unwrap();
         let flight = outbox.try_take_priority().unwrap();
         outbox.retain_pending(|_| false);
+        assert!(attempt_publication_is_pinned(claim));
         assert!(!outbox.rider_guards.is_empty(), "async flight keeps original owner/ticket");
         for item in flight {
             retry.push(item);
         }
         outbox.finish_flush(retry);
         assert_eq!(outbox.pending().len(), 1);
+        assert!(attempt_publication_is_pinned(claim));
         assert!(!outbox.rider_guards.is_empty(), "refused carrier retains batch owner");
         let retry = outbox.try_retry_buffer().unwrap();
         drop(outbox.try_take_priority().unwrap());
         assert!(!outbox.rider_guards.is_empty(), "cancellation conservatively retains owner");
         outbox.finish_flush(retry);
         assert!(outbox.rider_guards.is_empty());
+        assert!(!attempt_publication_is_pinned(claim));
         assert!(reserve_native_requests_v1(memory).is_err(), "due map capacity remains owned after batch retirement");
         drop(outbox);
         assert!(reserve_native_requests_v1(memory).is_ok(), "last payload/guard/map/frame ticket released");
@@ -739,7 +746,7 @@ mod rider_native_owner_tests {
         let (original, envelope, job, lead) = crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
         let weak = std::sync::Arc::downgrade(&original);
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(envelope, Some(original), Some(&job)).unwrap();
+        batch.push_fixture(envelope, Some(original), Some(&job)).unwrap();
         palw_rider_outbox_push_v2(batch);
         assert!(weak.upgrade().is_some(), "actual original native owner retained in source queue");
         let mut outbox = CourtOutboxV1::default();
@@ -809,7 +816,7 @@ mod rider_disposition_tests {
         let (original, envelope, job, lead) = crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
         let weak = std::sync::Arc::downgrade(&original);
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(envelope, Some(original), Some(&job)).unwrap();
+        batch.push_fixture(envelope, Some(original), Some(&job)).unwrap();
         let mut outbox = CourtOutboxV1::default();
         assert!(outbox.try_push_rider_batch(batch, 11).is_ok());
         let key = (lead, crate::palw_rider_outbox::PALW_RIDER_QUEUE_ROUND_V1, false);
@@ -847,7 +854,7 @@ mod rider_disposition_tests {
     fn rider_guard_original_none_cannot_invent_routing_owner_or_wait_forever() {
         let (owner, envelope, job, lead) = crate::palw_rider_outbox::native_owner_tests::native_rider_fixture();
         let mut batch = RiderBatchV2::new(lead, 1).unwrap();
-        batch.push(envelope, None, Some(&job)).unwrap();
+        batch.push_fixture(envelope, None, Some(&job)).unwrap();
         let object = batch.take_object();
         let mut guards = CourtRoutingV2::default();
         guards.insert(batch);

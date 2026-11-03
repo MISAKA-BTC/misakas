@@ -50,8 +50,8 @@ const PALW_RETENTION_PERIOD: Duration = Duration::from_secs(60);
 /// The free-prompt capture's envelope magic (`palw_fp_capture_encode_v1`).
 const FP_CAPTURE_MAGIC: &[u8; 4] = b"FPC1";
 
-// Only in-flight lead publications are registered here. The guard lives
-// across the asynchronous submission without holding the mutex.
+// Lead and rider publications stay registered through their in-process handoff.
+// The guard can cross asynchronous submission without holding the mutex.
 static ACTIVE_ATTEMPT_PUBLICATIONS: Mutex<std::collections::BTreeMap<Hash64, usize>> = Mutex::new(std::collections::BTreeMap::new());
 
 pub(crate) struct AttemptPublicationGuard(Hash64);
@@ -59,6 +59,17 @@ pub(crate) struct AttemptPublicationGuard(Hash64);
 pub(crate) fn pin_attempt_publication(claim: Hash64) -> AttemptPublicationGuard {
     *ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().entry(claim).or_default() += 1;
     AttemptPublicationGuard(claim)
+}
+
+impl AttemptPublicationGuard {
+    pub(crate) fn claim(&self) -> Hash64 {
+        self.0
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn attempt_publication_is_pinned(claim: Hash64) -> bool {
+    ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(&claim)
 }
 
 impl Drop for AttemptPublicationGuard {
