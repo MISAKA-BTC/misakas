@@ -765,3 +765,36 @@ arithmetic result was produced. The existing Linux ELF still
 matches the recorded digest for `707a95b88`, which predates the
 current fixes. The stopped unsigned seat5 trial had 21,206,155,264
 bytes free at 05:07 UTC, below its separate 21 GiB launch floor.
+
+## Panel file publication and abandoned stages — 05:10 UTC
+
+Commit `bd5ea1179` registers the Panel's normal retained material,
+answer and provider-copy writers with the in-process publication lock.
+The Panel's age and count sweeps compare file identity before unlink.
+The count sweep credits successful unlinks only. The old count sweep
+deleted a same-sized replacement during a reproducible callback race.
+Three scoped tests passed on the new source, including replacement,
+active publication and release. Log SHA256 is
+`998005653a9a1baa372babe670c9e8cc83c4a7099a046e02288c308fc87999b9`.
+Node default/EVM test metadata compiled. An independent review found
+no lock-order cycle.
+
+Commit `aa339851f` applies the same identity check to abandoned
+stages, including the active claim check for a named stage. It also
+looks up the current consensus instance at each Panel GC obligation
+read, including the count sweep's final read. Sixteen scoped retention
+tests passed. Log SHA256 is
+`13522c35534653dc2773e08b7bc15a1e25c5b01d2614c37d2600e92c8387bc1b`.
+Concurrent writers sharing a fixed staging name, cross-process
+writers and durable post-submit ownership remain outside these tests.
+
+The public WebSocket returned Qwen #41 as an original REAL carrier.
+B0 and the relay had the same attempt ID and matched the public
+selected tip at virtual DAA 19,603. The first exact read had no
+claim and no rejection entry for this carrier. The later exact read
+matched the block to a refusal at 20,605 remaining DAA against 20,608
+required, still with no claim. B0 reported zero receipts. There was no
+additional load cohort.
+The later paired class inventory still showed zero ready independent
+seats and zero assignments. Node default/EVM test metadata compiled on
+`aa339851f`. Neither patch has been deployed.

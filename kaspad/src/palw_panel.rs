@@ -2220,9 +2220,8 @@ fn prune_foreign_retention_v1(
     };
     // Cached duties assist the chain read. A missing/changed snapshot cannot
     // discharge an obligation, and a later healthy read can still release it.
-    let reclaimable = |claim: Option<Hash64>| {
-        claim.is_none_or(|claim| !pinned.contains(&claim) && matches!(chain_owed(&claim), Ok(false)))
-    };
+    let reclaimable =
+        |claim: Option<Hash64>| claim.is_none_or(|claim| !pinned.contains(&claim) && matches!(chain_owed(&claim), Ok(false)));
     let mut kept = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
