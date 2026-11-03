@@ -26,6 +26,13 @@ impl CaseSourceFeesV2 {
         self.earned.checked_add(due).filter(|earned| *earned <= budget)?;
         self.earned.checked_sub(self.paid)?.checked_add(due).filter(|pending| *pending <= locked)
     }
+
+    /// Before a partial payment the Case coin must cover both accrued fees
+    /// and deliveries that have been promised but have no first receipt yet.
+    /// Only the accrued, unpaid portion can appear as a payout.
+    fn settlement_limit(&self, reserved: u64, locked: u64, budget: u64) -> Option<u64> {
+        self.pending_with(reserved, locked, budget)?.checked_sub(reserved)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -95,6 +102,7 @@ pub(super) struct CheckedAssignedSourceResponseV2 {
     fee: SourceFeeDeltaIntent,
     duty: AcceptedMaterial,
     data_bytes: u64,
+    additional_work: u64,
     reserved_fee: u64,
     reserved_delivery: SourceDeliveryReserveV2,
 }
@@ -348,7 +356,7 @@ impl NativeAssignedCourtV2 {
                     response: response.fee.accepted_response,
                     provider: response.fee.provider,
                     bytes: response.data_bytes,
-                    additional_work: cost.work,
+                    additional_work: response.additional_work,
                     settlement: None,
                 };
                 self.remember_source_response_v2(material, response, body_heap)?;
@@ -500,6 +508,8 @@ impl NativeAssignedCourtV2 {
         let _owner = reserve_native_requests_v1(heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
         let (unit, opening) = self.source.geometry.decode_g14_response_v2(&duty.request, response).map_err(refuse)?;
         let (data_bytes, opening_bytes) = opening.sizes().map_err(refuse)?;
+        let additional_work =
+            source.work.court_body_work(bytes.checked_add(SOURCE_RESPONSE_BODY_OVERHEAD_V2).ok_or_else(capacity)?).map_err(refuse)?;
         let key = NativeRowKey::ServiceReceipt { case: *case, kind: duty.request.kind, source: duty.request.source, unit };
         let provider = principal(&assignment.worker_key);
         if let Some(value) = PositiveRowsV2::new(state).read(key).map_err(refuse)? {
@@ -552,6 +562,7 @@ impl NativeAssignedCourtV2 {
             },
             duty: duty.material,
             data_bytes,
+            additional_work,
             reserved_fee,
             reserved_delivery,
         }))
@@ -611,10 +622,10 @@ impl NativeAssignedCourtV2 {
             return Err(refuse("missing Case funding for settlement"));
         };
         self.check_source_fee_projection_v2(prior)?;
-        let pending = self
+        let payable = self
             .source_fees
-            .pending_with(0, funding.fee.remaining, prior.service.budget.fee)
-            .ok_or_else(|| refuse("unpaid source fees exceed Case funding"))?;
+            .settlement_limit(self.source_unions.pending_fee, funding.fee.remaining, prior.service.budget.fee)
+            .ok_or_else(|| refuse("unpaid and reserved source fees exceed Case funding"))?;
         let debit = funding.current_outpoint.ok_or_else(missing)?;
         let point = native_assignment_outpoint_v2(debit);
         let controls = (receipts.len() as u64)
@@ -684,6 +695,7 @@ impl NativeAssignedCourtV2 {
                 || rooted.provider != provider
                 || rooted.duty != checked.duty
                 || rooted.bytes != checked.data_bytes
+                || rooted.additional_work != checked.additional_work
                 || route.aux.contains_key(&(PALW_SETTLEMENT_ONCE_TABLE_V1, obligation.id_v1().to_vec()))
                 || tx
                     .outputs
@@ -694,7 +706,7 @@ impl NativeAssignedCourtV2 {
             }
             total = total
                 .checked_add(fee.amount)
-                .filter(|n| *n <= pending)
+                .filter(|n| *n <= payable)
                 .ok_or_else(|| refuse("source settlement exceeds the unpaid first-response total"))?;
         }
 
@@ -977,6 +989,17 @@ mod source_fee_tests {
         assert_eq!((remaining.units, remaining.body, remaining.work, remaining.journal), (1, 20, 95, 1125));
         let oversized = SourceDeliveryReserveV2 { journal: 1126, ..second };
         assert!(remaining.combine(oversized, u64::checked_sub).is_none());
+    }
+
+    #[test]
+    fn partial_settlement_keeps_the_future_delivery_reserve() {
+        let fees = CaseSourceFeesV2 { earned: 90, paid: 40 };
+        assert_eq!(fees.settlement_limit(10, 60, 100), Some(50));
+        assert_eq!(fees.settlement_limit(10, 59, 100), None);
+        assert_eq!(fees.settlement_limit(10, 60, 99), None);
+        let after = CaseSourceFeesV2 { paid: 90, ..fees };
+        assert_eq!(after.settlement_limit(10, 10, 100), Some(0));
+        assert_eq!(after.settlement_limit(10, 9, 100), None);
     }
 
     #[test]
