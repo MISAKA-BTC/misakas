@@ -71,9 +71,10 @@ reservation, empty dependency fallback or saved pass bit is completion evidence.
   `PositivePassed`, `WitnessRejected`, `ClaimRefuted`, `EndedUnverified` and
   independently qualified service/default outcomes, including their authors.
 
-## Source-confirmed native connection gaps
+## Initial source-confirmed native connection gaps
 
-These are executable-path observations, not conclusions based only on handoffs:
+These observations describe the initial integration checkpoint. The current
+owner and runtime status is recorded in the checkpoints below.
 
 1. `processor.rs` retains `PositiveCarrierPhaseTwoV2` in
    `_positive_native_phase_two` and has no native Court consumer. Its own comment
@@ -404,7 +405,7 @@ This corrects the earlier policy increment; it supplies no accepted native
 Assignment or funds/Case/P/credit/activation. All remaining stages persist.
 
 
-## Assignment codec/funds/rows/DB and native boundary checkpoint — 2026-11-03
+## Assignment codec/funds/rows/DB and native boundary checkpoint — before relay adoption
 
 The shared contract (68), focused Core targets (62), and actual Consensus
 legacy/storage/filter targets (11) pass: 141 executed cases, with exact source
@@ -437,3 +438,34 @@ UNADOPTED until an explicit paired decision under PRINCIPLES§11. Public
 activation and old-account migration are separate decisions. Work on already
 adopted Case/P/source/funding/recovery integration continues; the full goal and
 RFC45 remain incomplete.
+
+## Native relay adoption and verification checkpoint — 2026-11-03
+
+The user adopted [RFC-0046](../../docs/rfc/0046-positive-native-funded-relay.md)
+and [ADR-0214](../../docs/adr/0214-positive-native-funded-relay.md) for the
+limited native relay implementation. Public activation and old-funds migration
+remain separate decisions. The native interleave now transports raw Assignment
+actions into the accepted-prefix fold and stages material in the UTXO batch.
+The previous inactive transport is no longer the current boundary.
+
+The accepted-prefix code can check and stage pending initial A relay
+registration. Commit `45927210f` also checks A's original archive, actual
+funding output and required custody cutoff before any binding. It passed strict
+library Clippy, all Consensus test-target checks, focused Core test-target
+checks and eleven relay Contract tests. The preceding macOS binary passed eight
+old G14 history tests and refused new relay processing at the first database
+write requiring an audited enforced quota. A real Linux XFS quota and the
+production quota reader were verified independently with a reopened RocksDB.
+The exact-source Linux node trial covers registration, fee and retry, cold
+reopen, independent replay and competing-branch rollback. See the
+[integration progress and run evidence](assignment-native-integration-20261102/integration-progress-20261103.md#enforced-xfs-quota-prerequisite).
+
+A still rejects without the complete prospective Gate C and all-branch
+capacity owner. C and joined prover intake still reject without their
+reservation/funds/material owners. The exact Case replay checks current
+aliases before P liability can close. Admission still needs to establish
+that future accepted aliases and pending fraud remain bounded for the entire
+reserved lifetime. The terminal replay result by itself cannot establish
+that prospective guarantee. Initial Case and prover relay registration,
+continuations, actual payments and all required role and credit readers
+remain open. The seven-stage goal remains incomplete.
