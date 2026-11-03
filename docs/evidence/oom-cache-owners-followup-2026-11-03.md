@@ -10,7 +10,7 @@ The correction updates the cache-owned Arc through the existing `Cache::update_i
 
 Two real Cache/DB regression tests cover append, insert and replace: sufficient reserved Vec capacity preserves its buffer address with no reader; a held reader keeps the old ordered contents while the cache advances. They also check persisted membership and tracked eviction without dropping DB members. These tests are added for central Cargo execution and have **not** been executed locally.
 
-A lightweight rustc harness extracts the three actual production mutation methods verbatim, substituting u64 for BlockHash, a small mutex-backed Arc cache and no-op DB writes. Both after-change ownership tests pass; the before-change code fails the cache-only no-copy assertion. This establishes the Arc/Vec ownership correction, not RocksDB behavior or production cache eviction. Artifacts are `/tmp/misaka-t12-oom-20261102/reachability_cow_harness.py`, `reachability-cow-{before,after}.rs` and corresponding logs. rustfmt and `git diff --check` also pass.
+A lightweight rustc harness extracts the three actual production mutation methods verbatim, substituting u64 for BlockHash, a small mutex-backed Arc cache and no-op DB writes. Both after-change ownership tests pass; the before-change code fails the cache-only no-copy assertion. This establishes the Arc/Vec ownership correction, not RocksDB behavior or production cache eviction. The operator retained `reachability_cow_harness.py`, `reachability-cow-{before,after}.rs` and the corresponding raw logs. rustfmt and `git diff --check` also pass.
 
 ## EVM full-state cache: concrete remaining byte-unbounded retention
 

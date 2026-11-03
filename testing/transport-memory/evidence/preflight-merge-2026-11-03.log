@@ -1,4 +1,4 @@
-   Compiling misaka-transport-memory-harness v0.1.0 (/Users/wata/.codex/worktrees/oom-transport/MISAKA-testnet/testing/transport-memory)
+   Compiling misaka-transport-memory-harness v0.1.0 (<checkout>/testing/transport-memory)
 warning: function `capacity_from` is never used
    --> src/../../../core/src/memory_budget.rs:251:4
     |
