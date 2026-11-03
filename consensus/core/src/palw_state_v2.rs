@@ -22961,8 +22961,8 @@ fn apply_kernel_route_row_v1(
         return Err(PalwStateV2Error::DeltaMismatch("a kernel route row does not match the delta's expectation"));
     }
     kernel
-        .update_positive_job_index_v2(&k, install.as_deref())
-        .map_err(|_| PalwStateV2Error::DeltaMismatch("a Positive Result row does not match its canonical key"))?;
+        .update_positive_aux_indexes_v2(&k, install.as_deref())
+        .map_err(|_| PalwStateV2Error::DeltaMismatch("a Positive indexed row does not match its canonical key"))?;
     let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
     match install {
         Some(bytes) => {
@@ -25557,6 +25557,7 @@ impl PalwStateCarriageV2 {
                         .map(|(key, row)| (key.clone(), row.clone()))
                         .collect(),
                     positive_job_owners_v2: route.positive_job_owners_v2.clone(),
+                    positive_draw_reservations_v2: route.positive_draw_reservations_v2.clone(),
                     ledger_cache: Default::default(),
                 }
             }),

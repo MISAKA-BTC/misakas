@@ -94,6 +94,38 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         worker_gain: 100,
         liability: case.liability,
     };
+    {
+        use crate::palw_positive_certification_v2::{
+            POSITIVE_CERTIFICATION_TABLE_V2, PositiveCertificationFixedV2, PositiveCertificationOutcomeV2, PositiveCertificationRowV2,
+        };
+        let mut key = vec![b'P'];
+        key.extend_from_slice(&header.subject.0);
+        let key = (POSITIVE_CERTIFICATION_TABLE_V2, key);
+        let mut p = PositiveCertificationRowV2 {
+            fixed: PositiveCertificationFixedV2 { header: header.clone(), finality: None, outcome: None, liability_release: None },
+            draw: None,
+            votes: Vec::new(),
+        };
+        let pending = borsh::to_vec(&p).unwrap();
+        let last = header.commit_origin.accepted_daa + header.policy.certify_by_daa;
+        let mut route = empty_route();
+        route.update_positive_aux_indexes_v2(&key, Some(&pending)).unwrap();
+        route.aux.insert(key.clone(), pending.clone());
+        assert_eq!(route.positive_draw_slots_v2(last, 4), 1);
+        assert_eq!(route.positive_draw_slots_v2(last + 1, 4), 0);
+        let bytes = borsh::to_vec(&route).unwrap();
+        let mut restored: crate::palw_kernel_route_v1::PalwKernelRouteStateV1 = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(restored.positive_draw_slots_v2(last, 4), 1);
+        p.fixed.outcome = Some((PositiveCertificationOutcomeV2::Expired, last + 1));
+        let expired = borsh::to_vec(&p).unwrap();
+        restored.update_positive_aux_indexes_v2(&key, Some(&expired)).unwrap();
+        restored.aux.insert(key.clone(), expired);
+        assert_eq!(restored.positive_draw_slots_v2(last, 4), 0);
+        restored.update_positive_aux_indexes_v2(&key, Some(&pending)).unwrap();
+        restored.aux.insert(key, pending);
+        assert_eq!(borsh::to_vec(&restored).unwrap(), bytes);
+        assert_eq!(restored.positive_draw_slots_v2(last, 4), 1);
+    }
     assert_eq!(positive_certification_case_live_v2(&header, &case), Ok(true));
     assert_eq!(check_positive_certification_result_links_v2(&header, &result, &case), Ok(()));
     let mut foreign = header.clone();
@@ -444,10 +476,10 @@ fn positive_job_projection_tracks_result_install_remove_and_cold_decode() {
     let mut route = empty_route();
     let original = borsh::to_vec(&route).unwrap();
     assert!(!route.contains_positive_job_v2(job));
-    assert!(route.update_positive_job_index_v2(&key, Some(&[0])).is_err());
+    assert!(route.update_positive_aux_indexes_v2(&key, Some(&[0])).is_err());
     assert!(!route.contains_positive_job_v2(job));
 
-    route.update_positive_job_index_v2(&key, Some(&bytes)).unwrap();
+    route.update_positive_aux_indexes_v2(&key, Some(&bytes)).unwrap();
     route.aux.insert(key.clone(), bytes.clone());
     assert!(route.contains_positive_job_v2(job));
     assert!(!route.contains_positive_job_v2(Hash64::from_bytes([u8::MAX; 64])));
@@ -455,7 +487,7 @@ fn positive_job_projection_tracks_result_install_remove_and_cold_decode() {
     let mut restored: crate::palw_kernel_route_v1::PalwKernelRouteStateV1 = borsh::from_slice(&committed).unwrap();
     assert!(restored.contains_positive_job_v2(job));
     assert_eq!(restored.aux_root(), route.aux_root());
-    restored.update_positive_job_index_v2(&key, None).unwrap();
+    restored.update_positive_aux_indexes_v2(&key, None).unwrap();
     restored.aux.remove(&key);
     assert!(!restored.contains_positive_job_v2(job));
     assert_eq!(borsh::to_vec(&restored).unwrap(), original);

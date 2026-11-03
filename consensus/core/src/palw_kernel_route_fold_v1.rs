@@ -278,8 +278,8 @@ impl TransitionBuilder<'_> {
         let Some(kernel) = self.state.kernel_route.as_mut() else { return Ok(()) };
         let map_key = (table, key);
         kernel
-            .update_positive_job_index_v2(&map_key, new.as_deref())
-            .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid Positive Result row: {error:?}")))?;
+            .update_positive_aux_indexes_v2(&map_key, new.as_deref())
+            .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid Positive indexed row: {error:?}")))?;
         let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
         if ledger_table {
             // A ledger row changes: the cached ledger is no longer the rows' (the flush sets it again once it has written them).

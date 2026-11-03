@@ -840,6 +840,8 @@ pub(super) fn sweep_security_certification_v1(
     }
     let policy = mirror.certification;
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(()) };
+    let reserved = route.positive_draw_slots_v2(now, policy.draws_per_epoch);
+    let legacy_draw_limit = u64::from(policy.draws_per_epoch).saturating_sub(reserved) as u32;
     let table = PALW_SECURITY_CERTIFICATION_TABLE_V1;
     let rows: Vec<(Vec<u8>, Vec<u8>)> =
         route.aux.range((table, Vec::new())..(table + 1, Vec::new())).map(|((_, key), bytes)| (key.clone(), bytes.clone())).collect();
@@ -860,7 +862,17 @@ pub(super) fn sweep_security_certification_v1(
         }
         let mut row: PalwClaimCertificationRowV1 = borsh::from_slice(&bytes).map_err(|e| refuse(e.to_string()))?;
         if kernel {
-            sweep_kernel_claim_certification_v1(builder, now, &policy, anchor.as_ref(), &mut network, key, row, &mut kernel_ledger)?;
+            sweep_kernel_claim_certification_v1(
+                builder,
+                now,
+                &policy,
+                anchor.as_ref(),
+                &mut network,
+                legacy_draw_limit,
+                key,
+                row,
+                &mut kernel_ledger,
+            )?;
             continue;
         }
         let claim_id = Hash64::from_bytes(row.claim);
@@ -909,7 +921,7 @@ pub(super) fn sweep_security_certification_v1(
         // tier's claim is drawn and certified alike.)
         if row.anchor.is_none()
             && !palw_certification_public_check_v1(&row.class_id)
-            && network.draws < policy.draws_per_epoch
+            && network.draws < legacy_draw_limit
             && let Some(a) = anchor.as_ref()
             && a.span >= row.committed_span.saturating_add(policy.anchor_delay_spans.max(1))
         {
@@ -1014,6 +1026,7 @@ fn sweep_kernel_claim_certification_v1(
     policy: &PalwSecurityCertificationPolicyV1,
     anchor: Option<&crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>,
     network: &mut PalwCertificationNetworkRowV1,
+    legacy_draw_limit: u32,
     key: Vec<u8>,
     mut row: PalwClaimCertificationRowV1,
     kernel_ledger: &mut Option<crate::palw_native_resource_v1::ReservedKernelLedgerV1>,
@@ -1045,7 +1058,7 @@ fn sweep_kernel_claim_certification_v1(
     let mut changed = false;
     if row.anchor.is_none()
         && !palw_certification_public_check_v1(&row.class_id)
-        && network.draws < policy.draws_per_epoch
+        && network.draws < legacy_draw_limit
         && let Some(a) = anchor
         && a.span >= row.committed_span.saturating_add(policy.anchor_delay_spans.max(1))
     {
