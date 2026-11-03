@@ -3630,3 +3630,41 @@ B0 and relay agreed at virtual DAA 19,725, with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-streamed-open-live.glDhTO/page.json`,
 `/private/tmp/misaka-t12-oom-20261102/tfp1-streamed-open.mVpk2D/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-smol-cached-cover.CGbHR7/build.log`.
+
+## Measure every numerical root of the retained SmolLM2 execution
+
+The pinned SmolLM2-135M fixture was walked through all 15,252 leaves,
+including all 810 numerical roots. The offline harness compiles the
+candidate's per-root dependency walker and coordinate resolver, and
+links the cached Studio Core binding verifier. It avoids rebuilding
+all of Core while the full build's memory and disk entry guards are
+unmet. It runs with a 1.5 GiB native limit and a separate scratch
+reservation for the extracted walk.
+
+| Quantity | Whole traversal | Maximum per root |
+|---|---:|---:|
+| Explored edges | 16,092,270 | 26,326 |
+| Explored coordinates | 3,427,110 | 5,491 |
+| Parameter memberships | 3,240 | 4 |
+
+The 26,326-edge per-root limit reproduces the result. The 26,325-edge
+limit refuses at leaf 10,143 without a completion result. The first run
+took 4.225 seconds for the walk. A second pass with native response
+byte ceilings found at most 10 numerical ranges, 265,397 bytes in any
+one range and 38 raw parts for any one root. Bounding each of the 10
+reservation positions by the global maximum yields a conservative 170
+raw parts regardless of target order. This calculation includes the
+three-token prompt with its larger Merkle allowance and complete IDs
+when required. It excludes alternate actors, terminal replay, fees,
+retention, recovery and concurrent obligations. It provides input to
+profile measurement, without qualifying a T12 service schedule.
+
+The streaming numerical quote now accepts explicit cumulative and
+per-root bounds from its caller. Its live quote still uses the
+existing estimate. The native funded fixture compares the retained
+and streamed demand under distinct per-root limits, but has not run.
+
+B0 and relay agreed at virtual DAA 19,726 with no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-smol-cover-live.JOlv0E/page.json`
+and the baseline, edge-cap and wire receipts under
+`/private/tmp/misaka-t12-oom-20261102/tfp1-smol-all-root-extracted.G1ixPg`.

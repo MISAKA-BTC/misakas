@@ -206,10 +206,18 @@
                     req.frame_v1(), req.geometry.source_v1(), req.inputs_v1(), &program, profile, &envelope, first_root, 0,
                 ).unwrap();
                 let selected = selected.ranges_v1();
+                let input_roots = &req.inputs_v1().parameters_v1().roots;
+                let streaming = crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1 {
+                    total: budgets.1,
+                    per_root_edges: input_roots.iter().map(|root| root.explored_edges).max().unwrap(),
+                    per_root_coordinates: input_roots.iter().map(|root| root.explored_coordinates).max().unwrap(),
+                    per_root_memberships: input_roots.iter().map(|root| root.parameters.len() as u64).max().unwrap(),
+                    max_workspace_bytes: 128 << 20,
+                };
                 let streamed = numerical_batch_streaming_demand_v1(
                     req.frame_v1(), req.geometry.source_v1(), b.state.tir_class_v1(&class).unwrap(),
                     crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, class).unwrap(),
-                    &program, profile, budgets.1, 4_096, first_root, 0,
+                    &program, profile, streaming, 4_096, first_root, 0,
                 ).unwrap();
                 assert_eq!(streamed.ranges_v1(), selected);
                 assert!(!selected.is_empty());

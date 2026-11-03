@@ -19,7 +19,7 @@ use crate::{
     palw_tir_public_claim_v1::PalwTirPublicClaimV1,
     palw_tir_public_source_v1::{
         PalwTirPublicRequestV1, PalwTirPublicSourceV1,
-        parameter_cover_v1::{OriginalParameterCoverBudgetV1, OriginalRootInputCoverV1, StreamingParameterCoverBudgetV1},
+        parameter_cover_v1::{OriginalRootInputCoverV1, StreamingParameterCoverBudgetV1},
     },
 };
 use misaka_palw_tir::program::TirProgramV1;
@@ -155,13 +155,23 @@ pub fn quote_numerical_batch_open_v1(
     let budget = super::super::material_intake_schedule_v1()
         .map_err(|_| E::Decode("numerical Batch material schedule is absent".into()))?
         .cover;
+    // This estimate still supplies only aggregate limits. The funded
+    // candidate can supply independently qualified per-root limits below.
+    let streaming = StreamingParameterCoverBudgetV1 {
+        total: budget,
+        per_root_edges: budget.max_total_edges,
+        per_root_coordinates: budget.max_total_coordinates,
+        per_root_memberships: budget.max_root_memberships,
+        // The walker reserves its quoted workspace in the native budget.
+        max_workspace_bytes: u64::MAX,
+    };
     let program =
         crate::palw_native_resource_v1::decode_native_tir_program_v1(record.program.as_slice()).map_err(|err| match err {
             NativeDecodeErrorV1::Decode(why) => E::Decode(why.to_string()),
             NativeDecodeErrorV1::Resource(why) => E::Resource(why),
         })?;
     let demand = numerical_batch_streaming_demand_v1(
-        frame, &source, record, layout, &program, context.profile_id, budget, maximum_ranges, leaf, demand_index,
+        frame, &source, record, layout, &program, context.profile_id, streaming, maximum_ranges, leaf, demand_index,
     )?;
     demand.quote_open_v1(state, notice, lengths)
 }
@@ -176,7 +186,7 @@ pub(crate) fn numerical_batch_streaming_demand_v1(
     layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
     program: &TirProgramV1,
     profile: Hash64,
-    budget: OriginalParameterCoverBudgetV1,
+    streaming: StreamingParameterCoverBudgetV1,
     maximum_ranges: usize,
     leaf: u64,
     demand_index: usize,
@@ -189,15 +199,6 @@ pub(crate) fn numerical_batch_streaming_demand_v1(
     let mut selected = None;
     let mut callback_error = None;
     let mut ids_bytes = None;
-    let streaming = StreamingParameterCoverBudgetV1 {
-        total: budget,
-        per_root_edges: budget.max_total_edges,
-        per_root_coordinates: budget.max_total_coordinates,
-        per_root_memberships: budget.max_root_memberships,
-        // The walker quotes one root's bounded scratch and reserves it
-        // against the native process budget before exploring any root.
-        max_workspace_bytes: u64::MAX,
-    };
     let summary = PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(
         source, record, layout, streaming, |root, params, inputs| {
             let ranges = root_ranges_v1(
