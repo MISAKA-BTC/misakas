@@ -25,7 +25,7 @@ fn origin(transaction: Hash64, daa: u64) -> AcceptedOrigin {
         accepted_blue_score: daa,
     }
 }
-fn fixture(key: &[u8; PUBKEY_BYTES]) -> (AssignmentFundingRow, Transaction, Vec<UtxoEntry>, AssignmentSpendAuthorizationV2) {
+pub(crate) fn fixture(key: &[u8; PUBKEY_BYTES]) -> (AssignmentFundingRow, Transaction, Vec<UtxoEntry>, AssignmentSpendAuthorizationV2) {
     let payer = principal(key);
     let refund = Digest(kaspa_hashes::blake2b_512_address_payload(key).as_bytes());
     let spk = crate::mldsa87_primitives::p2pkh_mldsa87_spk(&refund.0);

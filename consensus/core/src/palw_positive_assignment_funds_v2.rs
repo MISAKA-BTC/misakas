@@ -995,4 +995,4 @@ pub fn qualify_assignment_spend_v2(
 
 #[cfg(test)]
 #[path = "palw_positive_assignment_funds_v2/tentative_tests.rs"]
-mod tentative_tests;
+pub(crate) mod tentative_tests;
