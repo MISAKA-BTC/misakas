@@ -1058,6 +1058,12 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     // material above never produces a verification receipt.
     let mut verified = b.state.clone();
     verified.staged_courts.insert(Key::CourtBatchNumericalReceipt(claim), Row::CourtBatchNumericalReceipt(Box::new(receipt.clone())));
+    let view = palw_court_state_json_v1(&verified, &params, PalwCourtTargetV1::Claim(claim), &PalwUserViewClockV1::default()).unwrap();
+    let finding = &view["batchNumericalFinding"];
+    assert_eq!(finding["receiptDigest"], digest.to_string());
+    assert_eq!(finding["verificationDaa"], point.daa_score);
+    assert_eq!(finding["terminalDaa"], terminal_daa);
+    assert!(finding["faultEvidenceId"].is_null());
     assert_eq!(reserved_numerical_terminal_v1(&verified, claim, digest, &terminal_at).unwrap(), &receipt);
     let terminal_rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 { at: terminal_at, ..rules };
     assert!(batch::native_ranges::recheck_numerical_terminal_v1(&verified, claim, digest, &terminal_rules, replay_budget)

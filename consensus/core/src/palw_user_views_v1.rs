@@ -412,7 +412,7 @@ pub fn palw_court_state_json_v1(
     if claim.is_none() && sessions.is_empty() {
         return None;
     }
-    Some(json!({
+    let mut view = json!({
         "version": PALW_USER_VIEW_VERSION_V1,
         "kind": "palwCourtState",
         "nowDaa": now,
@@ -425,6 +425,37 @@ pub fn palw_court_state_json_v1(
         "daSessions": da_sessions_json(state, &claim_id, now),
         "dispute": dispute_json(state, &claim_id),
         "courtClocks": claim.map(|c| court_clocks_json(state, params, &claim_id, c)).unwrap_or(Value::Null),
+    });
+    if let Some(finding) = batch_numerical_finding_json_v1(state, claim_id) {
+        view["batchNumericalFinding"] = finding;
+    }
+    Some(view)
+}
+
+fn batch_numerical_finding_json_v1(state: &PalwChainStateV2, claim: Hash64) -> Option<Value> {
+    use crate::palw_court_shared_material_intake_v1::batch::admission::batch_numerical_service_ids_v1;
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let key = Key::CourtBatchNumericalReceipt(claim);
+    let Row::CourtBatchNumericalReceipt(receipt) = state.staged_court_row_v1(&key)? else { return None };
+    receipt.check(&key).ok()?;
+    let (_, terminal) = batch_numerical_service_ids_v1(claim, receipt.scope).ok()?;
+    let terminal_daa = state.court_service_state_v1().and_then(|service| {
+        service.claims.get(&claim).filter(|binding| binding.packet_ids.contains(&terminal))?;
+        service.book.assigned_daa(&terminal)
+    });
+    Some(json!({
+        "tipBlock": state.last_point().map(|point| point.block.to_string()),
+        "scopeId": receipt.scope.to_string(),
+        "sourceId": receipt.source.to_string(),
+        "noticeId": receipt.notice.to_string(),
+        "leaf": receipt.leaf.to_string(),
+        "verificationBlock": receipt.at.block.to_string(),
+        "verificationDaa": receipt.at.daa_score,
+        "terminalDaa": terminal_daa,
+        "materialUntilDaa": receipt.material_until_daa,
+        "receiptDigest": receipt.digest_v1().ok()?.to_string(),
+        "faultEvidenceId": receipt.fault_evidence.map(|id| id.to_string()),
+        "faultMaterialAvailable": receipt.fault_bytes.is_some(),
     }))
 }
 

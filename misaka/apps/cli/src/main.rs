@@ -1755,6 +1755,18 @@ enum PalwCmd {
         #[arg(long)]
         maximum_fee_sompi: Option<u64>,
     },
+    /// Fund the booked numerical fault terminal for an accepted finding.
+    BatchConvict {
+        #[command(flatten)]
+        key: KeyArgs,
+        #[arg(long)]
+        claim: String,
+        /// Broadcast at the reserved DAA. Otherwise preview.
+        #[arg(long)]
+        submit: bool,
+        #[arg(long)]
+        maximum_fee_sompi: Option<u64>,
+    },
     /// Sign and fund the booked Batch Stop with a local tokenizer or EOG opening.
     BatchStop {
         #[command(flatten)]
@@ -3763,6 +3775,9 @@ async fn run_cli() -> std::process::ExitCode {
         Command::Palw(PalwCmd::BatchOpen { key, bond, claim, notice, leaf, ordinal, ranges, submit, maximum_fee_sompi, .. }) => {
             Box::pin(async move { palw_batch::open(ctx, &key.source(), &bond, &claim, &notice, leaf, ordinal, &ranges,
                 submit, maximum_fee_sompi).await })
+        }
+        Command::Palw(PalwCmd::BatchConvict { key, claim, submit, maximum_fee_sompi }) => {
+            Box::pin(async move { palw_batch::convict_numerical(ctx, &key.source(), &claim, submit, maximum_fee_sompi).await })
         }
         Command::Palw(PalwCmd::BatchStop { key, bond, claim, eog_opening, tokenizer_json, eog_ids, submit, maximum_fee_sompi }) => {
             Box::pin(async move {

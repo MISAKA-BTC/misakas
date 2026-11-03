@@ -7,6 +7,7 @@ use kaspa_consensus_core::{
         MAX_BATCH_RANGES_V1,
         carriage::{
             BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1,
+            BatchNumericalTerminalV1,
             BatchStopSigningV1, MAX_BATCH_STOP_EOG_OPENING_BYTES_V1, SignedBatchDemandV1,
         },
     },
@@ -401,6 +402,68 @@ pub(crate) async fn respond(
     Ok(())
 }
 
+pub(crate) async fn convict_numerical(
+    ctx: &Ctx,
+    key_source: &KeySource,
+    claim: &str,
+    submit: bool,
+    maximum_fee: Option<u64>,
+) -> CliResult {
+    use crate::palw_user::parse_hash;
+    let claim = parse_hash("claim", claim)?;
+    let request = GetPalwCourtStateRequest { claim_hex: claim.to_string(), ..Default::default() };
+    let nv = crate::wallet::connect(ctx).await?;
+    let (now, raw) = read_quote(&nv, request.clone()).await?;
+    let view: serde_json::Value = serde_json::from_str(&raw).map_err(|err| refused(err.to_string()))?;
+    let (control, fault, slot) = checked_numerical_terminal_quote(&view, claim, now, submit)?;
+    let key = key_source.load_key()?;
+    let wire = BatchCourtWireV1::ConvictNumerical(control);
+    let (tx, fee, _) = fund_control(&nv, &key, &wire, maximum_fee).await?;
+    if submit {
+        if read_quote(&nv, request).await? != (now, raw) {
+            return Err(refused("the numerical finding or selected tip changed before submission"));
+        }
+        nv.client.submit_transaction(tx.as_ref().into(), false).await.map_err(|err| refused(err.to_string()))?;
+    }
+    println!("{}", serde_json::json!({
+        "submitted": submit, "txid": tx.id().to_string(), "claimId": claim.to_string(), "assignedDaa": slot,
+        "observedDaa": now, "feeSompi": fee, "receiptDigest": control.receipt_digest.to_string(), "faultEvidenceId": fault.to_string(),
+    }));
+    Ok(())
+}
+
+fn checked_numerical_terminal_quote(
+    view: &serde_json::Value,
+    claim: Hash64,
+    now: u64,
+    submit: bool,
+) -> Result<(BatchNumericalTerminalV1, Hash64, u64), CliError> {
+    use crate::palw_user::parse_hash;
+    let finding = &view["batchNumericalFinding"];
+    if view["version"] != 1 || view["kind"] != "palwCourtState" || view["claimId"] != claim.to_string()
+        || view["nowDaa"] != now || finding["tipBlock"].as_str().and_then(|tip| tip.parse::<Hash64>().ok()).is_none()
+    {
+        return Err(refused("the node did not return a selected-branch numerical finding for this claim"));
+    }
+    let fault = parse_hash("fault evidence", finding["faultEvidenceId"].as_str()
+        .ok_or_else(|| refused("this numerical finding contains no fault"))?)?;
+    let receipt_digest = parse_hash("receipt", finding["receiptDigest"].as_str()
+        .ok_or_else(|| refused("the node omitted the numerical receipt digest"))?)?;
+    let slot = finding["terminalDaa"].as_u64()
+        .ok_or_else(|| refused("the claim has no booked numerical terminal"))?;
+    if fault == Hash64::default() || receipt_digest == Hash64::default()
+        || finding["faultMaterialAvailable"] != true
+        || finding["verificationDaa"].as_u64().is_none_or(|daa| daa >= slot)
+        || finding["materialUntilDaa"].as_u64().is_none_or(|daa| daa <= slot)
+    {
+        return Err(refused("the numerical finding or terminal slot is invalid"));
+    }
+    if now > slot || (submit && now != slot) {
+        return Err(refused(format!("numerical terminal is booked at DAA {slot}, current fold DAA is {now}")));
+    }
+    Ok((BatchNumericalTerminalV1 { claim, receipt_digest }, fault, slot))
+}
+
 async fn fund_control(
     nv: &NodeView,
     key: &kaspa_pq_validator_core::ValidatorKey,
@@ -577,6 +640,29 @@ fn bond_text(bond: PalwBondKeyV2) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numerical_terminal_quote_requires_the_exact_claim_fault_and_slot() {
+        let h = Hash64::from_u64_word;
+        let mut view = serde_json::json!({
+            "version": 1, "kind": "palwCourtState", "claimId": h(1).to_string(), "nowDaa": 20,
+            "batchNumericalFinding": {
+                "tipBlock": h(2).to_string(), "faultEvidenceId": h(3).to_string(), "receiptDigest": h(4).to_string(),
+                "verificationDaa": 15, "terminalDaa": 21, "materialUntilDaa": 22, "faultMaterialAvailable": true,
+            }
+        });
+        let expected = (BatchNumericalTerminalV1 { claim: h(1), receipt_digest: h(4) }, h(3), 21);
+        assert_eq!(checked_numerical_terminal_quote(&view, h(1), 20, false).unwrap(), expected);
+        assert!(checked_numerical_terminal_quote(&view, h(1), 20, true).is_err());
+        view["nowDaa"] = 21.into();
+        assert_eq!(checked_numerical_terminal_quote(&view, h(1), 21, true).unwrap(), expected);
+        assert!(checked_numerical_terminal_quote(&view, h(5), 21, true).is_err());
+        view["batchNumericalFinding"]["faultMaterialAvailable"] = false.into();
+        assert!(checked_numerical_terminal_quote(&view, h(1), 21, true).is_err());
+        view["batchNumericalFinding"]["faultMaterialAvailable"] = true.into();
+        view["batchNumericalFinding"]["faultEvidenceId"] = serde_json::Value::Null;
+        assert!(checked_numerical_terminal_quote(&view, h(1), 21, true).is_err());
+    }
 
     #[test]
     fn numerical_open_recomputes_the_root_and_checks_the_signing_bond() {

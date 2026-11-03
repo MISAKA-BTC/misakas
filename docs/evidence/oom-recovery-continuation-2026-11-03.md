@@ -4255,3 +4255,26 @@ activation.
 B0 and relay agreed at virtual DAA 19,744 on the new selected block.
 There was no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-numerical-terminal-carrier-live.yZrlxj/page.json`.
+
+## Expose and relay the rooted numerical terminal finding
+
+The existing claim Court view now includes the selected branch's
+numerical finding digest, verification block and DAA, retained fault
+availability, and currently booked terminal DAA. The new
+`misaka palw batch-convict` command funds a terminal carrier from
+that view. It previews by default. Submission requires the booked
+DAA and a second, identical view after funding. The carrier uses a
+funding key and leaves the original notice issuer as the filer.
+
+The extracted CLI quote test passed for matching claims and the exact
+submission DAA, and rejected another claim, missing material, a
+local match and early submission. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-cli-quote.cWyuhT/tests.log`.
+Rust parsing and whitespace checks passed. The RPC fixture was added
+but has not run. No transaction was submitted.
+
+The isolated Linux check of `587a1808c` is still active on IBM under
+`t12-batch-native-587a1808c-check.service`, invocation
+`460e5e2f1da647b784dd040aab7462cf`. It is compiling dependencies
+with 6 GiB MemoryMax and one job. The newer RPC and CLI changes are
+outside that source snapshot.
