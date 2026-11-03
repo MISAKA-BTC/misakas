@@ -1236,5 +1236,16 @@ preserves the failed execution and the backtrace.
 Commit `00c7f4195` reserves the fixed output owners before the fold and the
 actual weight/frontier/point journal slots before writing them. The latter
 quote includes the difference between the retained vector capacity and the
-pinned Borsh growth bound. The guarded Clippy and runtime repeat started on
-this source. No relay carrier outcome is recorded yet.
+pinned Borsh growth bound. The guarded
+[Core and Consensus Clippy run](funded-native-relay-journal-static-verification-20261103.json.gz)
+passed on this source. The native runtime repeat is still building.
+
+The next recovery fixture closes the producer's RocksDB connection after the
+first successful registration, opens the existing directory again, and
+compares the accepted state root, both R rows, the archived fee partition and
+the real spent/change UTXOs. It then submits the exact registration again
+on a different carrier. Its isolated test target typechecked. The candidate
+also subtracts the original R rollback margin before qualifying the minimum
+F retention horizon and propagates a local ledger projection resource
+failure through assigned Court replay. Neither change supplies the
+prospective all-branch or bound-account owner.
