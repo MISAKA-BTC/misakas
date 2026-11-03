@@ -1233,6 +1233,41 @@ mod source_material_tests {
         (PositiveCaseAcceptedMaterialV2 { header, raw, limits, delta_end: delta.len() }, delta)
     }
     #[test]
+    fn later_case_record_cannot_reuse_an_earlier_case_mutation() {
+        let (source, delta) = fixture(3);
+        let make_record = |header, delta_end| {
+            let raw = CaseJournalRecord { header, payload: vec![2, 0, 1, 0, 6], aux: vec![] }.encode(source.limits).unwrap();
+            PositiveCaseAcceptedMaterialV2 { header, raw, limits: source.limits, delta_end }
+        };
+        let make_head = |record: &PositiveCaseAcceptedMaterialV2| {
+            let view = CaseJournalRecordView::decode(&record.raw, record.limits).unwrap();
+            NativeRowBody::JournalHead(JournalHeadRow {
+                case: record.header.case,
+                sequence: record.header.sequence,
+                previous: record.header.previous,
+                head: view.head(),
+                history: view.history(),
+            })
+        };
+        let head_delta = |body: NativeRowBody| PalwDeltaEntryV2::KernelRouteRow {
+            table: KERNEL_AUX_TABLE,
+            key: body.key().encode(),
+            old: None,
+            new: Some(NativeRowValue::new(body).unwrap().encode().unwrap()),
+        };
+        let first = make_record(source.header, 2);
+        let first_head = make_head(&first);
+        let NativeRowBody::JournalHead(head) = first_head else { unreachable!() };
+        let second = make_record(CaseJournalHeader { sequence: 3, previous: head.head, ..source.header }, 3);
+        let entries = [delta[0].clone(), head_delta(NativeRowBody::JournalHead(head)), head_delta(make_head(&second))];
+        assert_eq!(validate_case_materials_v2(&[first], &[], &entries[..2]), Ok(()));
+        assert_eq!(
+            validate_case_materials_v2(&[make_record(source.header, 2), second], &[], &entries),
+            Err(PalwStateV2Error::DeltaMismatch("Case material missing atomic Case/head mutation"))
+        );
+    }
+
+    #[test]
     fn request_and_first_receipt_require_their_atomic_case_mutations() {
         for operation in [3, 4] {
             let (record, delta) = fixture(operation);
