@@ -1576,3 +1576,21 @@ B0, the relay and the public index matched at virtual DAA
 19,637. Qwen #60 was referenced by the selected fold at
 DAA 19,636. B0 rejected it with 20,606 of the required
 20,608 DAA remaining. Both nodes lacked the exact claim.
+
+For a strictly higher retention deadline with identical chunk
+layout, the FS and reference HTTP provider can reuse verified
+chunks by linking them at the new manifest ID's paths. The
+old ID remains readable. The publisher checks read-back, and
+the manifest writer rechecks the predecessor before replacement.
+The existing logical byte quota still charges the new paths.
+A late race or interrupted extension can leave staged aliases;
+no archive deletion or quota relaxation was added.
+
+The guarded transport harness used the actual 2,409,135-byte
+Qwen #32 capture and a fixture effective deadline. Both FS
+and loopback HTTP served identical bytes and used the same
+device/inode for every old/new chunk pair. The HTTP server
+was restarted against the same store. All 24 tests in the
+bounded run passed. Two unchanged tests that create multi-GiB
+sparse files returned ENOSPC in the initial HFS+ RAM-volume
+run and were filtered in this run.
