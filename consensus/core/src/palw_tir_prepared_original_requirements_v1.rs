@@ -110,7 +110,7 @@ impl PreparedOriginalRequirementsV1 {
         let envelope = crate::palw_court_shared_material_intake_v1::batch::native_ranges::numerical_batch_envelope_v1(
             self.frame_v1(), self.geometry.source_v1(), &self.inputs, &program, *namespace, maximum_ranges,
         ).map_err(PreparedRequirementsErrorV1::Native)?;
-        if envelope.scope != graph.absolute_scope_v3() {
+        if envelope.scope_v1() != graph.absolute_scope_v3() {
             return Err(PreparedRequirementsErrorV1::Geometry(PreparedGeometryErrorV1::State(refused("prepared Batch graph scope differs"))));
         }
         Ok(envelope)

@@ -3779,3 +3779,32 @@ B0 and relay agreed at virtual DAA 19,730. The two selected blocks
 contained no new Qwen carrier reference.
 See `/private/tmp/misaka-t12-oom-20261102/tfp1-streamed-preclaim.ekAdNq/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-streamed-preclaim-live.GbbvxY/page.json`.
+
+## Book numerical verification and Stop on the same original service row
+
+The delivery join matches the prepared frame and numerical envelope
+to the candidate service row's claim, allocation, source, acceptance
+point and profile. Verification and terminal packet identities are
+derived from the original and scope. All numerical Finish packets
+precede verification. For a constrained frame the same candidate
+requires the matching Stop operands and books its FullIds delivery,
+verification and signed filing. The common terminal follows both
+paths. Retention and carrier storage rent include the Stop operands.
+An absent or foreign Stop and an underpriced Stop carrier are refused.
+
+The extracted scheduler suite passed 50 tests. The added scenario
+used the retained SmolLM2 numerical bounds of ten 265,397-byte ranges
+plus a synthetic constrained Stop with 2,050 IDs. On an empty
+book with placeholder verification and terminal costs and one DAA
+of recovery, it booked 199 packets and 3,629,249 wire bytes in
+3,321 DAA from original acceptance. Frame and rooted row reads were
+stubbed. The funded native fixture now calls the delivery join and
+checks that an unrelated profile is refused. The native fixture has
+not run. Binding the measured response opportunities, complete
+adjudication, role consent and payer funds to original admission
+remains necessary. The join does not record execution or a verdict.
+
+B0 and relay still agreed at virtual DAA 19,730 and the scan returned
+no additional selected blocks. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-native-delivery.YYKOiB/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-native-delivery-live.JEbQ9S/page.json`.

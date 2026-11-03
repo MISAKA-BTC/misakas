@@ -181,6 +181,10 @@ pub(crate) struct ConstraintStopBatchOperandsV1 {
 }
 
 impl ConstraintStopBatchOperandsV1 {
+    pub(super) fn matches_original_v1(&self, claim: Hash64, scope: Hash64) -> bool {
+        (self.claim, self.scope) == (claim, scope)
+    }
+
     fn packet_ids_v1(&self, ordinal: u64) -> Result<([u8; 64], [u8; 64]), String> {
         let id = |stage| {
             crate::palw_court_shared_tir_stream_v1::stream_digest(

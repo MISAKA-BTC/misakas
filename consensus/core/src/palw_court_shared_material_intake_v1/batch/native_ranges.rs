@@ -32,11 +32,17 @@ type RootRanges = NativeRetainedV1<BTreeMap<Hash64, (MaterialTargetV1, u64)>>;
 /// This covers one selected root's inputs, including the root leaf. It does
 /// not price later turns, native verdicts, or simultaneous independent roots.
 pub(crate) struct NumericalBatchEnvelopeV1 {
-    pub scope: Hash64,
+    pub(super) claim: Hash64,
+    pub(super) profile: Hash64,
+    scope: Hash64,
     maximums: Vec<u64>,
 }
 
 impl NumericalBatchEnvelopeV1 {
+    pub(crate) fn scope_v1(&self) -> Hash64 {
+        self.scope
+    }
+
     pub(crate) fn maximums_v1(&self) -> &[u64] {
         &self.maximums
     }
@@ -266,7 +272,9 @@ fn project_numerical_batch_streaming_v1(
         return Err(E::Decode("streamed Batch cover differs from the original".into()));
     }
     let scope = set.scope_id().map_err(E::Decode)?;
-    Ok((NativeRetainedV1::from_owner_reserved_v1(NumericalBatchEnvelopeV1 { scope, maximums }, lease), selected))
+    let claim = frame.plan_v1().original_claim;
+    let envelope = NumericalBatchEnvelopeV1 { claim, profile, scope, maximums };
+    Ok((NativeRetainedV1::from_owner_reserved_v1(envelope, lease), selected))
 }
 
 fn partition_maximums_v1(mut remaining: &[u64]) -> impl Iterator<Item = &[u64]> {
@@ -345,7 +353,8 @@ pub(crate) fn numerical_batch_envelope_v1(
     }
 
     let scope = set.scope_id().map_err(E::Decode)?;
-    Ok(NativeRetainedV1::from_owner_reserved_v1(NumericalBatchEnvelopeV1 { scope, maximums }, lease))
+    let claim = frame.plan_v1().original_claim;
+    Ok(NativeRetainedV1::from_owner_reserved_v1(NumericalBatchEnvelopeV1 { claim, profile, scope, maximums }, lease))
 }
 
 /// Recover the canonical ranges for one selected root using the same

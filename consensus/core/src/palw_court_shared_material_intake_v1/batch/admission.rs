@@ -1,5 +1,6 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
 use super::{BatchResponsePositionV1, MaterialIntakeScheduleV1, PART, Stage};
+use super::{constraint_stop::ConstraintStopBatchOperandsV1, native_ranges::NumericalBatchEnvelopeV1};
 use crate::{
     Hash64,
     palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1, MAX_BATCH_PARTS_V1, MAX_BATCH_RANGES_V1},
@@ -57,6 +58,118 @@ pub(crate) struct BatchAdmissionQuoteV1 {
     pub retained_payload_byte_daa: u64,
     /// Maximum sum of carrier storage charges, independent of escrow funding.
     pub carrier_storage_rent_sompi: u64,
+}
+
+/// Costs supplied by the versioned native profile. A reservation covers
+/// delivery and these service stages, without recording a verdict or credit.
+pub(crate) struct NativeBatchDeliveryCostsV1 {
+    pub numerical_verification: ServiceCost,
+    pub terminal: ServiceCost,
+    pub recovery_daa: u64,
+    pub maximum_packets: usize,
+}
+
+pub(crate) fn batch_numerical_service_ids_v1(claim: Hash64, scope: Hash64) -> Result<([u8; 64], [u8; 64]), BatchCourtErrorV1> {
+    let id = |stage: u8| {
+        crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-original-service/v1", &(claim, scope, stage))
+            .map(|id| id.as_bytes())
+            .map_err(|_| BatchCourtErrorV1::CaseGraph)
+    };
+    Ok((id(0)?, id(1)?))
+}
+
+/// Prepare the numerical delivery and optional constrained Stop in a private
+/// original service row. Node verification follows every numerical Finish;
+/// the common terminal follows verification and any Stop filing. Role,
+/// payer, and complete adjudication policy remain the coordinator's checks.
+pub(crate) fn reserve_native_batch_delivery_v1(
+    candidate: crate::palw_court_service_release_v1::CourtServiceRowV3,
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    envelope: &NumericalBatchEnvelopeV1,
+    stop: Option<(&ConstraintStopBatchOperandsV1, ServiceCost, ServiceCost)>,
+    costs: NativeBatchDeliveryCostsV1,
+    storage: MaterialIntakeScheduleV1,
+    cost: impl FnMut(BatchDeliveryV1, u64) -> Result<ServiceCost, String>,
+) -> Result<(BatchAdmissionQuoteV1, crate::palw_court_service_release_v1::CourtServiceRowV3), BatchCourtErrorV1> {
+    use BatchCourtErrorV1::{CaseGraph, Clock, DeliveryCost, LocalResource, Window};
+    let original = frame.plan_v1();
+    let claim = original.original_claim;
+    let scope = envelope.scope_v1();
+    let binding = candidate.state.claims.get(&claim).ok_or(CaseGraph)?;
+    if envelope.claim != claim
+        || envelope.profile != crate::palw_court_shared_tir_state_v1::shared_native_profile_id_v1(candidate.state.profile_id)
+        || (binding.allocation_id, binding.source_id, binding.original_accepted_daa)
+            != (original.allocation_id, original.source_id, original.terms.accepted_daa)
+        || stop.is_some() != frame.original_v1().job.is_constraint()
+        || stop.is_some_and(|(operands, _, _)| !operands.matches_original_v1(claim, scope))
+    {
+        return Err(CaseGraph);
+    }
+    let valid_cost = |cost: ServiceCost| cost.work > 0 && cost.controls == 1;
+    if !valid_cost(costs.numerical_verification)
+        || !valid_cost(costs.terminal)
+        || stop.is_some_and(|(_, verify, file)| !valid_cost(verify) || !valid_cost(file))
+    {
+        return Err(DeliveryCost);
+    }
+    let a = binding.original_accepted_daa;
+    let hard = a.checked_add(DISPUTE_WINDOW_DAA).ok_or(Clock)?;
+    if hard != binding.hard_deadline_daa {
+        return Err(Window);
+    }
+    let notice = a.checked_add(NOTICE_WINDOW_DAA).ok_or(Clock)?;
+    let first = notice.checked_add(1).ok_or(Clock)?;
+    let before = hard.checked_sub(costs.recovery_daa).ok_or(Window)?;
+    if costs.recovery_daa == 0 || first >= before {
+        return Err(Window);
+    }
+    let (verification, terminal) = batch_numerical_service_ids_v1(claim, scope)?;
+    let packet = |id, cost| ServicePacket { id, release_daa: first, service_before: before, cost };
+    let demand_count = envelope.demand_ranges_v1().count();
+    let demand_capacity = demand_count.checked_add(usize::from(stop.is_some())).ok_or(CaseGraph)?;
+    if demand_count == 0 || demand_capacity > costs.maximum_packets {
+        return Err(CaseGraph);
+    }
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<MaximumBatchDemandV1>(demand_capacity as u64).map_err(LocalResource)?;
+    q.vec_v1::<CausalServicePacketV1>(if stop.is_some() { 4 } else { 2 }).map_err(LocalResource)?;
+    q.vec_v1::<[u8; 64]>(2).map_err(LocalResource)?;
+    let _workspace = reserve_native_requests_v1(q.bytes_v1()).map_err(LocalResource)?;
+    let mut demands = Vec::with_capacity(demand_capacity);
+    demands.extend(envelope.demand_ranges_v1().enumerate().map(|(ordinal, range_maximums)| {
+        MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification }
+    }));
+    let mut graph = Vec::with_capacity(if stop.is_some() { 4 } else { 2 });
+    graph.push(CausalServicePacketV1 { packet: packet(verification, costs.numerical_verification), predecessors: vec![] });
+    graph.push(CausalServicePacketV1 {
+        packet: packet(terminal, costs.terminal),
+        predecessors: Vec::with_capacity(usize::from(stop.is_some())),
+    });
+    let retained = if let Some((operands, verify, file)) = stop {
+        let (demand, nodes, retained) = operands.graph_v1(first..before, verify, file).map_err(|_| DeliveryCost)?;
+        demands.push(demand);
+        graph[1].predecessors.push(retained.packet);
+        graph.extend(nodes);
+        Some(retained)
+    } else {
+        None
+    };
+    let plan = BatchAdmissionV1 {
+        claim,
+        scope,
+        window: BatchCourtWindowV1 {
+            claim_accepted_daa: a,
+            challenge_opened_daa: notice,
+            collect_until_daa: hard,
+            material_until_daa: original.terms.material_until_daa,
+        },
+        demands: &demands,
+        retained_controls: retained.as_slice(),
+        terminal,
+        recovery_daa: costs.recovery_daa,
+        maximum_packets: costs.maximum_packets,
+    };
+    plan.reserve_for_original_v1(candidate, graph, storage, cost)
 }
 
 impl BatchAdmissionV1<'_> {

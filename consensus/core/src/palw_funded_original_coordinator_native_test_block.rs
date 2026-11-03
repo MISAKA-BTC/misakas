@@ -199,8 +199,8 @@
                 let envelope = req.numerical_batch_envelope_v1(&b, &ctx, 4_096).unwrap();
                 assert!(req.constraint_stop_batch_operands_v1(&b, &ctx).unwrap().is_none(),
                     "this numerical fixture has no verified tokenizer registration");
-                assert_eq!(envelope.scope, req.source_graph_v1().unwrap().absolute_scope_v3());
-                assert_eq!(streamed_envelope.scope, envelope.scope);
+                assert_eq!(envelope.scope_v1(), req.source_graph_v1().unwrap().absolute_scope_v3());
+                assert_eq!(streamed_envelope.scope_v1(), envelope.scope_v1());
                 assert_eq!(streamed_envelope.maximums_v1(), envelope.maximums_v1());
                 assert!(!envelope.maximums_v1().is_empty());
                 assert_eq!(envelope.demand_ranges_v1().flatten().copied().collect::<Vec<_>>(), envelope.maximums_v1());
@@ -251,27 +251,14 @@
                 // scheduler while the original still has no Claim row.
                 use crate::palw_court_shared_material_intake_v1::{
                     MaterialIntakeScheduleV1,
-                    batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1},
+                    batch::admission::{NativeBatchDeliveryCostsV1, batch_numerical_service_ids_v1, reserve_native_batch_delivery_v1},
                 };
-                use crate::palw_court_service_v1::{ServiceCost, ServicePacket, causal::CausalServicePacketV1};
-                let verification = h(0xB47D).as_bytes();
-                let demands = streamed_envelope.demand_ranges_v1().enumerate()
-                    .map(|(ordinal, range_maximums)| MaximumBatchDemandV1 { ordinal: ordinal as u64, range_maximums, predecessors: &[], verification })
-                    .collect::<Vec<_>>();
-                let notice = bound.original_accepted_daa + crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
-                let terminal = h(0xB47C).as_bytes();
-                let plan = BatchAdmissionV1 {
-                    claim, scope: streamed_envelope.scope, demands: &demands, retained_controls: &[], terminal, recovery_daa: 1, maximum_packets: 32_768,
-                    window: crate::palw_batch_court_v1::BatchCourtWindowV1 {
-                        claim_accepted_daa: bound.original_accepted_daa, challenge_opened_daa: notice,
-                        collect_until_daa: bound.hard_deadline_daa, material_until_daa: req.frame_v1().plan_v1().terms.material_until_daa,
-                    },
-                };
+                use crate::palw_court_service_v1::ServiceCost;
+                let (verification, terminal) = batch_numerical_service_ids_v1(claim, streamed_envelope.scope_v1()).unwrap();
                 let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
-                let graph = [verification, terminal].into_iter().map(|id| CausalServicePacketV1 {
-                    packet: ServicePacket { id, release_daa: notice + 1, service_before: bound.hard_deadline_daa - 1, cost: cost(1) },
-                    predecessors: vec![],
-                }).collect();
+                let costs = NativeBatchDeliveryCostsV1 {
+                    numerical_verification: cost(1), terminal: cost(1), recovery_daa: 1, maximum_packets: 32_768,
+                };
                 let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 0, draft_ttl_daa: 100, cover: budgets.1 };
                 let journal = funded_journal_row_candidate_v1(&b, &req, &derivation, full.clone()).unwrap();
                 let expected_edges = crate::palw_funded_original_admission_v1::funded_admission_causal_edges_v1(
@@ -283,13 +270,26 @@
                     _ => unreachable!("funded book journal row"),
                 };
                 assert_eq!(journal.causal, expected_edges);
-                let (quote, batch) = plan.reserve_for_original_v1(
-                    journal, graph, storage, |_, bytes| Ok(cost(bytes)),
+                let mut foreign = journal.clone();
+                foreign.state.profile_id = h(0xB47C);
+                assert!(matches!(
+                    reserve_native_batch_delivery_v1(
+                        foreign, req.frame_v1(), &streamed_envelope, None,
+                        NativeBatchDeliveryCostsV1 { ..costs }, storage, |_, bytes| Ok(cost(bytes)),
+                    ),
+                    Err(crate::palw_batch_court_v1::BatchCourtErrorV1::CaseGraph),
+                ));
+                let (quote, batch) = reserve_native_batch_delivery_v1(
+                    journal, req.frame_v1(), &streamed_envelope, None, costs, storage, |_, bytes| Ok(cost(bytes)),
                 ).unwrap();
                 assert!(quote.required_daa <= 10_000 && bound.packet_ids.is_subset(&batch.state.claims[&claim].packet_ids));
                 assert!(expected_edges.iter().all(|(id, parents)| batch.causal.get(id) == Some(parents)));
                 assert_eq!(quote.retained_payload_bytes, envelope.maximums_v1().iter().sum::<u64>());
                 assert!(batch.state.claims[&claim].packet_ids.contains(&terminal));
+                assert_eq!(batch.causal[&terminal], [verification]);
+                assert_eq!(batch.causal[&verification].len(), envelope.maximums_v1().len());
+                let book = &batch.state.book;
+                assert!(book.assigned_daa(&terminal).unwrap() > book.assigned_daa(&verification).unwrap());
                 // The served book itself is untouched by the dry run.
                 assert!(b.state.court_service_state_v1().unwrap().claims.is_empty());
             }
