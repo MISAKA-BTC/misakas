@@ -4206,3 +4206,26 @@ checks passed. Public activation and terminal accounting remain open.
 B0 and relay agreed at virtual DAA 19,744. The additional selected
 block had no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-numerical-retention-live.DavLY4/page.json`.
+
+## Recheck retained fault material in the numerical terminal slot
+
+The terminal adapter reads the same accepted receipt and original
+booking, checks the verification quote and independently reserved
+terminal work and IO, and bounds the retained wire shape before
+decoding. It restores the original registered program only after
+comparing the program-free binding and selected leaf. The native
+checker must reproduce the receipt's evidence ID within the replay
+ceiling. The returned proof is program-free and retains its memory
+ticket. A local match carries no claim-level credit.
+
+The extracted TIR fixture reproduced the stored fault and refused a
+different execution, leaf or evidence ID. The extracted service suite
+passed 56 tests, including short work and IO reservations. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-terminal-replay.xk0UY6/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-terminal-price.dxCOy6/tests.log`.
+Native fold and terminal settlement integration remain unexecuted.
+The adapter is not yet called by a terminal carrier.
+
+B0 and relay remained at virtual DAA 19,744 with the same selected
+tip. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-terminal-replay-live.FJUqfc/page.json`.

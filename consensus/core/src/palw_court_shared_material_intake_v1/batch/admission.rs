@@ -157,7 +157,7 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     }
     let valid_cost = |cost: ServiceCost| cost.work > 0 && cost.controls == 1;
     let numerical_verification = costs.numerical_verification.service_cost_v1().ok_or(DeliveryCost)?;
-    if !valid_cost(costs.terminal)
+    if !costs.numerical_verification.covers_terminal_recheck_v1(costs.terminal)
         || stop.is_some_and(|(_, verify, file)| !valid_cost(verify) || !valid_cost(file))
     {
         return Err(DeliveryCost);

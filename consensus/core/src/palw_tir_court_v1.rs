@@ -1601,6 +1601,18 @@ pub(crate) fn replay_tir_cone_from_store_v1(
     if bytes >= close_bytes {
         return Err("numerical replay exceeds the native close byte limit".into());
     }
+    match check_tir_cone_with_replay_budget_v1(&carriage, rules, work) {
+        Ok(fault) => Ok(Some((fault, carriage))),
+        Err(PalwStepRefuteError::NoFaultFound) => Ok(None),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn check_tir_cone_with_replay_budget_v1(
+    carriage: &PalwTirConeRefutationV1,
+    rules: &PalwTirCourtRulesV1,
+    work: PalwTirBuilderWorkLimitsV1,
+) -> Result<PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let checked_rules = PalwTirCourtRulesV1 {
         limits: DemandLimits {
             max_elements: rules.limits.max_elements.min(work.evaluation.max_elements),
@@ -1608,11 +1620,29 @@ pub(crate) fn replay_tir_cone_from_store_v1(
         },
         ..*rules
     };
-    match check_tir_cone_refutation_v1(&carriage, &checked_rules) {
-        Ok(fault) => Ok(Some((fault, carriage))),
-        Err(PalwStepRefuteError::NoFaultFound) => Ok(None),
-        Err(err) => Err(err.to_string()),
+    check_tir_cone_refutation_v1(carriage, &checked_rules)
+}
+
+/// Recheck a stored, program-free cone using the exact original binding.
+pub(crate) fn recheck_retained_tir_cone_v1(
+    mut cone: PalwTirConeRefutationV1,
+    mut original: PalwTirStepBindingV1,
+    leaf: u64,
+    expected_evidence_id: Hash64,
+    rules: &PalwTirCourtRulesV1,
+    work: PalwTirBuilderWorkLimitsV1,
+) -> Result<PalwTirConeRefutationV1, String> {
+    let program = std::mem::take(&mut original.class.program);
+    if cone.binding != original || cone.output_opening.leaf_index != leaf {
+        return Err("retained numerical fault changes the original binding or leaf".into());
     }
+    cone.binding.class.program = program;
+    let actual = check_tir_cone_with_replay_budget_v1(&cone, rules, work).map_err(|err| err.to_string())?;
+    if actual.evidence_id != expected_evidence_id {
+        return Err("retained numerical fault changes the verified evidence ID".into());
+    }
+    crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut cone.binding);
+    Ok(cone)
 }
 
 fn build_tir_cone_refutation_with_budget(
@@ -4139,6 +4169,17 @@ pub(crate) mod test_support {
         let (fault, replayed) = got.unwrap();
         assert_eq!(fault, expected);
         assert_eq!(replayed, old);
+        let mut retained = replayed;
+        crate::palw_tir_admission_v1::palw_tir_binding_strip_program_v1(&mut retained.binding);
+        let bytes_retained = borsh::to_vec(&retained).unwrap();
+        let decoded = borsh::from_slice(&bytes_retained).unwrap();
+        assert_eq!(
+            recheck_retained_tir_cone_v1(decoded, forged.binding.clone(), leaf, fault.evidence_id, &rules, work).unwrap(),
+            retained,
+        );
+        assert!(recheck_retained_tir_cone_v1(retained.clone(), honest.binding.clone(), leaf, fault.evidence_id, &rules, work).is_err());
+        assert!(recheck_retained_tir_cone_v1(retained.clone(), forged.binding.clone(), leaf + 1, fault.evidence_id, &rules, work).is_err());
+        assert!(recheck_retained_tir_cone_v1(retained, forged.binding.clone(), leaf, Hash64::default(), &rules, work).is_err());
         let blocked = PalwTirBuilderWorkLimitsV1 { max_target_requests: 0, ..work };
         assert!(replay_tir_cone_from_store_v1(&honest.binding, leaf, &honest, &rules, blocked, bytes + 1).is_err());
     }

@@ -54,6 +54,14 @@ impl NumericalBatchReplayBudgetV1 {
         Some(ServiceCost { bytes, work, io: self.io, controls: 1 })
     }
 
+    /// Terminal replay must have its own work and IO capacity. The profile
+    /// can reserve additional service for its native accounting operation.
+    pub(crate) fn covers_terminal_recheck_v1(self, terminal: ServiceCost) -> bool {
+        self.service_cost_v1().is_some_and(|replay| {
+            terminal.work >= replay.work && terminal.io >= replay.io && terminal.controls == 1
+        })
+    }
+
     #[cfg(test)]
     pub(crate) fn test_only_v1() -> Self {
         Self {
@@ -281,6 +289,9 @@ mod tests {
         assert_eq!(cost, ServiceCost {
             bytes: VERIFICATION_CARRIER_BYTES + budget.max_fault_bytes, work: 18, io: 6, controls: 1,
         });
+        assert!(budget.covers_terminal_recheck_v1(cost));
+        assert!(!budget.covers_terminal_recheck_v1(ServiceCost { work: cost.work - 1, ..cost }));
+        assert!(!budget.covers_terminal_recheck_v1(ServiceCost { io: cost.io - 1, ..cost }));
         assert!(NumericalBatchReplayBudgetV1 { workspace_bytes: 0, ..budget }.service_cost_v1().is_none());
         assert!(NumericalBatchReplayBudgetV1 { base_work: 0, ..budget }.service_cost_v1().is_none());
         assert!(NumericalBatchReplayBudgetV1 { io: 0, ..budget }.service_cost_v1().is_none());

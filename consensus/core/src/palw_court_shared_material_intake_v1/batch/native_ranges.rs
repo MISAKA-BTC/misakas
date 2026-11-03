@@ -361,6 +361,68 @@ pub(crate) fn replay_numerical_batch_v1(
     Ok(NumericalBatchFindingV1 { claim, leaf: prepared.leaf, scope: prepared.scope, notice: prepared.notice, at: rules.at, fault })
 }
 
+/// Authenticate the archived operands at the reserved terminal point. A
+/// matching leaf has no fault capability and grants no claim-level credit.
+pub(crate) fn recheck_numerical_terminal_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    receipt_digest: Hash64,
+    rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
+    budget: super::numerical_verification::NumericalBatchReplayBudgetV1,
+) -> Result<Option<NativeRetainedV1<crate::palw_tir_court_v1::PalwTirConeRefutationV1>>, E> {
+    use crate::palw_tir_court_v1::{PalwTirConeRefutationV1, PalwTirCourtRulesV1, recheck_retained_tir_cone_v1};
+    let invalid = |why: &str| E::Decode(why.into());
+    rules.check().map_err(E::Decode)?;
+    let verification_cost = budget.service_cost_v1().filter(|_| rules.tir_active)
+        .ok_or_else(|| invalid("numerical terminal has no active TIR rules or admitted budget"))?;
+    let receipt = crate::palw_batch_court_v1::rooted::reserved_numerical_terminal_v1(state, claim, receipt_digest, &rules.at)
+        .map_err(E::Decode)?;
+    let (verification, terminal) = super::admission::batch_numerical_service_ids_v1(claim, receipt.scope)
+        .map_err(|_| invalid("numerical terminal packet identities are invalid"))?;
+    let book = &state.court_service_state_v1().ok_or_else(|| invalid("numerical terminal has no service book"))?.book;
+    if !book.packet(&verification).is_some_and(|packet| packet.cost == verification_cost)
+        || !book.packet(&terminal).is_some_and(|packet| budget.covers_terminal_recheck_v1(packet.cost))
+    {
+        return Err(invalid("numerical terminal lacks booked work or IO"));
+    }
+    let Some(expected) = receipt.fault_evidence else { return Ok(None) };
+    let bytes = receipt.fault_bytes.as_ref().ok_or_else(|| invalid("numerical terminal is missing retained fault material"))?;
+    if bytes.len() as u64 > budget.max_fault_bytes || bytes.len() as u64 >= rules.court.max_close_bytes() {
+        return Err(invalid("numerical terminal fault exceeds its admitted bytes"));
+    }
+    let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<PalwTirConeRefutationV1>(
+        bytes.as_slice(), bytes.len() as u64,
+    ).map_err(|why| E::Decode(why.to_string()))?;
+    if shape.logical_requests_v1() > budget.workspace_bytes {
+        return Err(invalid("numerical terminal fault exceeds its admitted workspace"));
+    }
+    let frame = super::super::frame_of(state, claim).map_err(E::Decode)?;
+    let class = frame.original_v1().job.class_id;
+    let record = state.tir_class_v1(&class).ok_or_else(|| invalid("numerical terminal has no registered class"))?;
+    let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(state, class)
+        .ok_or_else(|| invalid("numerical terminal has no registered layout"))?;
+    let prompt_form = if rules.prompt_ids_merkle { PalwPromptIdsFormV1::MerkleV1 } else { PalwPromptIdsFormV1::Flat };
+    if prompt_form != frame.plan_v1().owner_work.rules.prompt_form {
+        return Err(invalid("numerical terminal prompt form differs from the original"));
+    }
+    let mut quote = TirNativeRequestsV1::new();
+    quote.add_v1(PalwTirPublicSourceV1::native_construction_requests_v1(record, layout, frame.header_v1())?).map_err(E::Resource)?;
+    quote.add_v1(shape.logical_requests_v1()).map_err(E::Resource)?;
+    quote.add_v1(budget.workspace_bytes).map_err(E::Resource)?;
+    let lease = reserve_native_requests_v1(quote.bytes_v1()).map_err(E::Resource)?;
+    let original = frame.header_v1().resolve_registered_layout_v1(
+        record, layout, frame.original_v1().execution_root, frame.descriptor_v1().maximum_leaves.min(rules.step_ladder),
+    ).map_err(E::Decode)?;
+    let cone: PalwTirConeRefutationV1 = borsh::from_slice(bytes.as_slice()).map_err(|why| E::Decode(why.to_string()))?;
+    let court = PalwTirCourtRulesV1 {
+        max_step_leaf_count: rules.step_ladder,
+        prompt_form,
+        limits: crate::palw_court_v2::palw_tir_court_limits_v1(&rules.court),
+    };
+    let cone = recheck_retained_tir_cone_v1(cone, original, receipt.leaf, expected, &court, budget.work).map_err(E::Decode)?;
+    Ok(Some(NativeRetainedV1::from_owner_reserved_v1(cone, lease)))
+}
+
 pub(crate) fn prepare_numerical_batch_material_v1(
     state: &PalwChainStateV2,
     claim: Hash64,

@@ -771,7 +771,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let envelope = NumericalBatchEnvelopeV1::test_only_v1(claim, context.profile_id, scope_id, vec![PART as u64; range_count]);
     let costs = NativeBatchDeliveryCostsV1 {
         numerical_verification: NumericalBatchReplayBudgetV1::test_only_v1(),
-        terminal: cost(1), recovery_daa: 1, maximum_packets: 3 + 3 * range_count,
+        terminal: NumericalBatchReplayBudgetV1::test_only_v1().service_cost_v1().unwrap(), recovery_daa: 1, maximum_packets: 3 + 3 * range_count,
         timing: NativeBatchDeliveryTimingV1 {
             open_daa: 2, provider_wait_daa: 2, begin_daa: 2, parts_daa: 2,
             finish_daa: 3, verification_daa: 2, stop_daa: 1, terminal_daa: 1,
@@ -1059,6 +1059,9 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let mut verified = b.state.clone();
     verified.staged_courts.insert(Key::CourtBatchNumericalReceipt(claim), Row::CourtBatchNumericalReceipt(Box::new(receipt.clone())));
     assert_eq!(reserved_numerical_terminal_v1(&verified, claim, digest, &terminal_at).unwrap(), &receipt);
+    let terminal_rules = crate::palw_court_close_receipt_v1::NativeCourtRulesV1 { at: terminal_at, ..rules };
+    assert!(batch::native_ranges::recheck_numerical_terminal_v1(&verified, claim, digest, &terminal_rules, replay_budget)
+        .unwrap().is_none());
     assert!(reserved_numerical_terminal_v1(&verified, claim, digest, &point).is_err());
     assert!(reserved_numerical_terminal_v1(&verified, claim, Hash64::from_u64_word(999), &terminal_at).is_err());
     let old_fault = RootedBatchNumericalReceiptV1 { fault_evidence: Some(Hash64::from_u64_word(9)), ..receipt };
