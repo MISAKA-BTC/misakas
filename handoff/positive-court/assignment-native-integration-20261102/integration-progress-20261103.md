@@ -1600,3 +1600,22 @@ exact classifier and counter update with actual StoreError values and
 a small native coverage harness. The combined Consensus check is still
 waiting for the shared build lock, so this follow-up is staged separately
 from its source map.
+
+### Native claim job index
+
+The [native claim index candidate](native-claim-job-index-candidate-20261103.tar.gz)
+uses ordered lookups for the legacy native claim job identity. Ordinary
+claim writes, native delta replay and reversal share one update, and
+carriage restore derives the index from the primary rows. Unset job
+identities use the primary/index cardinality difference. The new heap
+is accounted for before writes and carriage restore. This also builds
+the funded escrow index directly during restore, avoiding a temporary
+collection of pairs.
+
+Core library and focused Assignment funds metadata passed. An isolated
+regression with the real Hash64 and exact update and delta dispatch
+logic passed for duplicate jobs, zero identity, a neighboring identity
+and rollback. The repository's Core unit regression has not run. The
+candidate is separate from the source pinned by the archive/custody
+checks. Kernel ledger reverse relationships and prospective ingress
+closure remain separate work.
