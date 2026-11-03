@@ -20,6 +20,7 @@ use misaka_palw_positive_contract::{
 /// Match the exact accepted native carrier to a Case journal event. The
 /// first event carries the complete op9 transaction. Later settlement events
 /// retain op12 transactions, and ordinary Court events retain literal bodies.
+/// Matching a carrier grants no Case authority.
 pub fn assigned_case_native_carrier_matches_v2(tx: &Transaction, record: CaseJournalRecordView<'_>) -> bool {
     if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE || tx.payload.get(..3) != Some(&[1, 0, 176]) {
         return false;

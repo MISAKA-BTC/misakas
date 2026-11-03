@@ -416,3 +416,30 @@ mod tests {
         assert_eq!(assignment_refund_start_v2(&clock, u64::MAX, 140, 132, u64::MAX, 144), Err(AssignmentHorizonErrorV2::Overflow));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refund_window_starts_after_the_signed_retention_and_last_gate_c_verdict() {
+        let policy = PalwSecurityCertificationPolicyV1 {
+            m: 3,
+            k: 2,
+            attest_window_daa: 5,
+            certify_by_daa: 7,
+            prosecution_window_daa: 20,
+            draws_per_epoch: 4,
+            epoch_daa: 11,
+            ..Default::default()
+        };
+        let clock = AssignmentGateCClockV2::from_existing_policy(&policy, 100).unwrap();
+        let latest = clock.prosecution_not_before_daa(130).unwrap();
+        assert_eq!(latest, 150);
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 150, 144), Err(AssignmentHorizonErrorV2::Window));
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 151, 144), Ok(151));
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 180, 144), Ok(180));
+        assert_eq!(assignment_refund_start_v2(&clock, latest, 140, 132, 180, 181), Err(AssignmentHorizonErrorV2::Window));
+        assert_eq!(assignment_refund_start_v2(&clock, u64::MAX, 140, 132, u64::MAX, 144), Err(AssignmentHorizonErrorV2::Overflow));
+    }
+}

@@ -1769,6 +1769,32 @@ impl PalwChainStateV2 {
         }
     }
 
+    pub(super) fn has_claim_for_job_v2(&self, job: Hash64) -> bool {
+        if job == ZERO_HASH64 {
+            return self.claims.len() > self.claims_by_job.len();
+        }
+        let last = Hash64::from_bytes([u8::MAX; 64]);
+        self.claims_by_job.range((job, ZERO_HASH64)..=(job, last)).next().is_some()
+    }
+
+    pub(super) fn replace_claim_row_v2(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Option<PalwClaimStateV2> {
+        let new_job = new.as_ref().map(|row| row.job_identity).filter(|job| *job != ZERO_HASH64);
+        let old = match new {
+            Some(row) => self.claims.insert(key, row),
+            None => self.claims.remove(&key),
+        };
+        let old_job = old.as_ref().map(|row| row.job_identity).filter(|job| *job != ZERO_HASH64);
+        if old_job != new_job {
+            if let Some(job) = old_job {
+                self.claims_by_job.remove(&(job, key));
+            }
+            if let Some(job) = new_job {
+                self.claims_by_job.insert((job, key));
+            }
+        }
+        old
+    }
+
     pub fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2> {
         self.claims.get(id)
     }

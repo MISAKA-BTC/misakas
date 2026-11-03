@@ -710,19 +710,11 @@ pub fn authorize_assigned_p_source_request_v2(
         return Err(PositivePSourceErrorV2::Binding);
     }
     let subject = certification_subject(result);
-    let mut rowkey = [0u8; 65];
-    rowkey[0] = b'P';
-    rowkey[1..].copy_from_slice(&subject.0);
-    let route = state.kernel_route_state_v1().ok_or(PositivePSourceErrorV2::Unavailable)?;
-    let bytes = route
-        .aux
-        .range((136, Vec::new())..(137, Vec::new()))
-        .find(|((_, key), _)| key.as_slice() == rowkey)
-        .map(|(_, bytes)| bytes)
+    let bytes = positive_certification_row_bytes_v2(state, subject)
+        .map_err(PositivePSourceErrorV2::Native)?
         .ok_or(PositivePSourceErrorV2::Unavailable)?;
-    let shape =
-        crate::palw_native_resource_v1::preflight_native_value_v1::<PositiveCertificationRowV2>(bytes.as_slice(), bytes.len() as u64)
-            .map_err(|_| PositivePSourceErrorV2::Binding)?;
+    let shape = crate::palw_native_resource_v1::preflight_native_value_v1::<PositiveCertificationRowV2>(bytes, bytes.len() as u64)
+        .map_err(|_| PositivePSourceErrorV2::Binding)?;
     let scratch = (8 * std::mem::size_of::<NativeRowValue>() + 8 * MAX_NATIVE_KEY_BYTES * 2) as u64;
     let requests = shape
         .logical_requests_v1()

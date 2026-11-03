@@ -853,6 +853,10 @@ impl<'a> TransitionBuilder<'a> {
             if self.native_reservation.is_tracking_v1() { self.claim_cascade_requests_v1(key, &new)? } else { (0, 0) };
         self.reserve_mutation_sequence_v1(requests, slots)?;
         self.reserve_map_journal_v1(&key, &new, !self.state.claims.contains_key(&key), "native claims writer")?;
+        let new_job_membership = new.as_ref().is_some_and(|claim| {
+            claim.job_identity != ZERO_HASH64 && self.state.claims.get(&key).is_none_or(|old| old.job_identity != claim.job_identity)
+        });
+        self.reserve_index_members_v1::<(Hash64, Hash64), ()>(u64::from(new_job_membership), "native claim job index")?;
         if new.is_none() {
             super::palw_claim_local_execution_cohort_archive_v15::release_current_before_removal_v15(self, key, slots)?;
         }
@@ -1857,6 +1861,9 @@ impl<'a> TransitionBuilder<'a> {
         key: Hash64,
         new: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
     ) -> Result<(), PalwStateV2Error> {
+        if new.is_some() {
+            self.reject_positive_claim_alias_v2(key)?;
+        }
         let requests = if self.native_reservation.is_tracking_v1() { self.panel_liability_copy_requests_v1(&key)? } else { 0 };
         self.reserve_mutation_sequence_v1(requests, 2)?;
         self.reserve_map_journal_v1(&key, &new, !self.state.panel_liabilities.contains_key(&key), "native panel_liabilities writer")?;
@@ -9179,6 +9186,9 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_panel(&mut self, key: Hash64, new: Option<PalwPanelStateV2>) -> Result<(), PalwStateV2Error> {
+        if new.is_some() {
+            self.reject_positive_claim_alias_v2(key)?;
+        }
         self.reserve_map_row_v1(&key, &new, |s| &s.panels, false, "native panels writer")?;
         if let Some(panel) = &new {
             self.record_staged_panel_v1(key, panel)?;
@@ -9192,8 +9202,14 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     pub(super) fn write_court(&mut self, key: Hash64, new: Option<PalwCourtSessionStateV2>) -> Result<(), PalwStateV2Error> {
-        if new.is_some() && self.state.court_end_archive_v1(key).is_some() {
-            return Err(PalwStateV2Error::DuplicateSession(key));
+        if let Some(record) = &new {
+            self.reject_positive_claim_alias_v2(key)?;
+            if record.claim != key {
+                self.reject_positive_claim_alias_v2(record.claim)?;
+            }
+            if self.state.court_end_archive_v1(key).is_some() {
+                return Err(PalwStateV2Error::DuplicateSession(key));
+            }
         }
         let archive = new.is_none()
             && self

@@ -275,3 +275,47 @@ mod capacity_weight_tests;
 #[cfg(test)]
 #[path = "block_transactions/tx_id_projection_tests.rs"]
 mod tx_id_projection_tests;
+
+#[cfg(test)]
+mod archive_tests {
+    use super::*;
+    use kaspa_consensus_core::{
+        subnets::SUBNETWORK_ID_NATIVE,
+        tx::{ScriptPublicKey, TransactionOutpoint},
+    };
+
+    #[test]
+    fn archive_selects_literal_transaction_and_validates_block_tail() {
+        let tx = |n: u8| {
+            let tx = Transaction::new(
+                u16::from(n),
+                vec![TransactionInput::new(TransactionOutpoint::new(BlockHash::from_bytes([n; 64]), 7), vec![n; 131], 17, 1)],
+                vec![TransactionOutput::new(23, ScriptPublicKey::new(3, [n; 200].as_slice().into()))],
+                27,
+                SUBNETWORK_ID_NATIVE,
+                0,
+                vec![n; 55],
+            );
+            tx.set_mass(13);
+            tx
+        };
+        let first = tx(1);
+        let selected = tx(2);
+        let last = tx(3);
+        let body = BlockBody(vec![first, selected.clone(), last].into());
+        let raw = bincode::serialize(&body).unwrap();
+        let (wire, heap) = archived_transaction_wire_v2(&raw, 1).unwrap().unwrap();
+        assert_eq!(wire, bincode::serialize(&selected).unwrap());
+        assert_eq!(bincode::deserialize::<Transaction>(wire).unwrap(), selected);
+        assert!(heap > 131 + 200 + 55);
+        assert!(archived_transaction_wire_v2(&raw, 3).unwrap().is_none());
+        assert!(archived_transaction_wire_v2(&raw[..raw.len() - 1], 0).is_err());
+        let mut extra = raw.clone();
+        extra.push(0);
+        assert!(archived_transaction_wire_v2(&extra, 0).is_err());
+
+        let mut bad = raw;
+        bad[..8].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert!(archived_transaction_wire_v2(&bad, 0).is_err());
+    }
+}

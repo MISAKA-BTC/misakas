@@ -1109,6 +1109,8 @@ impl PalwKernelRouteStateV1 {
             header,
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
+            positive_job_owners_v2: Default::default(),
+            positive_gate_c_schedule_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
             positive_job_owners_v2: Default::default(),
             positive_gate_c_schedule_v2: Default::default(),
@@ -2673,6 +2675,23 @@ impl PalwKernelRouteStateV1 {
         let ledger = self.ledger_native_projection_checked_v9()?;
         let index = KernelCaseAliasesV2::build(&ledger)
             .map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource)?;
+        let aliased = index.contains(claim, job);
+        // A concurrent initializer sees the same immutable rows. In the race
+        // the duplicate reservation is returned by dropping the losing Arc.
+        let _ = self.ledger_cache.2.set(std::sync::Arc::new(index));
+        Ok(aliased)
+    }
+
+    pub(crate) fn has_legacy_case_alias_v2(
+        &self,
+        claim: Option<&[u8; 64]>,
+        job: &[u8; 64],
+    ) -> Result<bool, PalwKernelLedgerProjectionErrorV1> {
+        if let Some(index) = self.ledger_cache.2.get() {
+            return Ok(index.contains(claim, job));
+        }
+        let ledger = self.ledger_native_projection_checked_v9()?;
+        let index = KernelCaseAliasesV2::build(&ledger).map_err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource)?;
         let aliased = index.contains(claim, job);
         // A concurrent initializer sees the same immutable rows. In the race
         // the duplicate reservation is returned by dropping the losing Arc.

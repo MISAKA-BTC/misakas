@@ -1238,7 +1238,15 @@ actual weight/frontier/point journal slots before writing them. The latter
 quote includes the difference between the retained vector capacity and the
 pinned Borsh growth bound. The guarded
 [Core and Consensus Clippy run](funded-native-relay-journal-static-verification-20261103.json.gz)
-passed on this source. The native runtime repeat is still building.
+passed on this source. The optimized macOS native-node run advanced to the
+database-write check at the pre-carrier heartbeat. It refused the transition
+because macOS has no audited enforced quota backend. No registration or
+fee assertion ran. The same binary passed eight legacy G14 certification,
+fraud, restart, reorg/replay and payment cases. The
+[runtime record](funded-native-relay-journal-runtime-verification-20261103.json.gz)
+pins both commands, the binary and unchanged sources. The
+[relay refusal](funded-native-relay-runtime-journal.log.gz) and
+[legacy results](post-journal-legacy-regressions.log.gz) are separate logs.
 
 The next recovery fixture closes the producer's RocksDB connection after the
 first successful registration, opens the existing directory again, and
@@ -1263,8 +1271,8 @@ replay workspace under the prior quote. The fixture's original cap is 128,000
 bytes. Borrowed canonical row comparison and a fixed nonce projection reduce
 the same minimum to 120,574 bytes. A larger real delta still requires its
 actual preflight. Thirteen standalone Contract and streaming cases passed
-and the isolated Consensus test target typechecked. The changes are staged
-as candidates while the current heartbeat runtime pins its source.
+and the isolated Consensus test target typechecked. The changes were staged as candidates while the heartbeat runtime pinned
+its source.
 
 The [empty-heartbeat differential](native-journal-empty-heartbeat-differential.json)
 links the same driver against the old and repaired Core archives. The old
@@ -1276,5 +1284,577 @@ The exact recovery candidate is preserved as commit `7eaf2ba68`. It also
 refuses a new registration before its debit when its heap cap cannot cover
 even the two inserted rows and the mandatory final point. The extracted
 floor matched the actual fixture-shaped native wire preflight at 120,190
-bytes. Integrated validation is pending. The primary worktree retains the
-running heartbeat test's source map.
+bytes. It was integrated as `45927210f` after the macOS run finished.
+On the integrated source, warnings-denied Core and Consensus library Clippy,
+all Consensus test targets, and the two focused Core test targets passed
+their static checks. Eleven relay Contract tests passed. All four commands
+share one unchanged source map. The
+[run records](initial-f-integrated-verification-20261103.json.gz)
+and [raw logs](initial-f-integrated-logs-20261103.tar.gz) preserve the
+commands, results and resource observations. The cold reopen, independent
+replay and competing-branch assertions still require the full node test
+on Linux.
+
+## Enforced XFS quota prerequisite
+
+A disposable Linux container in the existing Colima guest mounted a loop
+device with XFS project-quota enforcement. Project 4197 was capped at 16 MiB.
+An 8 MiB allocation succeeded in that project and an over-limit allocation
+returned ENOSPC. A same-sized control allocation outside the project
+succeeded. The production Rust quota reader also accepted a database after
+a write, close and reopen, observed reduced headroom, and rejected the
+unscoped parent. This probe used system RocksDB and exercised the quota
+reader independently of the consensus node. The [probe archive](native-relay-xfs-prerequisite-probes-20261103.tar.gz)
+contains the executed scripts and their output.
+
+The [Linux node runner](native-relay-linux-xfs-runner-20261103.tar.gz)
+starts an isolated container with a 128 MiB XFS project for node test databases.
+It builds commit `45927210f` from a Git archive, uses the existing optimized
+test profile with debug symbols disabled and EVM off, and monitors host
+free space. At this checkpoint Cargo was compiling the node test dependencies.
+The runner has no native registration, fee or recovery result yet.
+
+## Initial Case relay preflight candidate
+
+The [staged candidate](initial-case-relay-preflight-candidate-20261103.tar.gz)
+extends the actual-output and selected-parent pending relay checks to C.
+It compares the exact ResultId, funding-scope and signed consent IDs, the
+original Assignment's payer/anchor/cap and the actual output index/amount.
+The extracted matcher passed a substitution, expiry and over-cap regression.
+The candidate Core library and focused Core test target passed isolated
+metadata checks. The Consensus transport has not been validated.
+
+The candidate remains outside the native branch source. A C registration
+uses the already accepted Assignment's original contract scope, while its R
+registration fee and physical policy use the rules at R's own acceptance.
+The current historical R reader handles initial A and requires its two scopes
+to come from the same intake. Before C can be integrated, its historical
+reader needs a bounded projection of the original accepted Assignment
+and payer at the exact R event. A preflight alone creates neither C custody
+nor a Case, and the replay cannot substitute a later Assignment rule scope.
+
+### Case relay historical contract scope
+
+The [follow-up candidate](initial-case-relay-historical-scope-candidate-20261103.tar.gz)
+projects the exact original Assignment row from the real R event. It compares
+each newer row image before reversing it, keeps one codec-bounded buffer
+and meters the original row decode. A uses its existing nonce projection.
+R's policy, fee and custody stay tied to R's actual rules. C checks the
+contract identity, original payer and caps against the restored Open
+Assignment, including its chronology relative to R. Substituting R's
+ruleset for A's contract ruleset or using a closed Assignment fails.
+
+Eight isolated funds cases passed with the extracted matchers. Candidate
+Core and test metadata passed. The Consensus test target passed metadata
+against the prior compiled Core with exact copies of the new pure functions.
+This does not establish native replay or registration. The candidate stays
+staged while the initial A runtime is pinned. C op14 still needs the actual
+original Assignment material/profile owner at registration and an end-to-end
+test covering a ruleset change, actual fees, custody, retry and recovery.
+
+### Integrated Core runtime
+
+The unchanged `45927210f` source passed seven actual Core Assignment funds
+and four relay tests. The guarded optimized test command exited zero, with
+equal source maps and no remaining process-group members. The
+[execution record](initial-f-core-runtime-20261103.json.gz) and
+[raw log](initial-f-core-runtime-20261103.log.gz) preserve this result.
+The Linux Consensus node test is a separate run.
+
+### Native Case relay registration
+
+Commit `9b607f689` uses the rooted original Open record or an earlier accepted
+Open event in the same block to qualify the original relay profile. It keeps
+R's actual fee policy separate from the accepted Assignment contract, and
+charges pending Case registration against the poster and original account
+caps. Admission checks the minimum future Open and carrier replay resources.
+Core and Consensus library Clippy and all Consensus test-target checks passed
+on one unchanged source map. The focused Core typecheck was stopped while
+waiting for the shared build lock. The
+[verification record](case-relay-registration-verification-20261103.json.gz)
+and [logs](case-relay-registration-logs-20261103.tar.gz) preserve that distinction.
+
+Bound Case restore now has a candidate that requires the canonical
+AssignmentUse, Result, original funding output and signed funding consent.
+Its isolated orphan regression passes. The additional Case capital quote
+covers the full initial bound pair and the bounded successor history,
+including both original archive key/value records. An isolated encoding
+check matched the initial and successor quote to the complete literal bytes.
+These follow-ups are applied for integrated checks. Actual F binding still
+requires the live native storage owner and atomic native account writer.
+
+### Case relay custody transfer candidate
+
+The [checkpoint candidate](case-relay-atomic-binding-candidate-20261103.tar.gz)
+keeps the authenticated pending package under its native workspace ticket
+through the Case writer. It rechecks the actual C carrier, original capital
+and custody horizon and stages the bound custody update with Case, funding,
+AssignmentUse and journal rows. Restore additionally matches the binding to
+the Case reservation. An error restores the enclosing canonical checkpoint.
+
+The isolated Contract and Core metadata and focused Core relay test target
+typechecked. The candidate remains separate from the worktree undergoing
+integrated checks. It still requires a real all-branch Case reservation
+factory and real C binding, DB recovery and settlement runtime coverage.
+
+### Bounded staged alias lookup
+
+The [ordered lookup candidate](case-ordered-legacy-alias-candidate-20261103.tar.gz)
+replaces the staged-court key walk in the actual Case closure check with
+point and inclusive subject-prefix lookups. Kernel seal checks use tuple
+prefixes. The order-only isolated test exercises all 26 previously checked
+staged namespaces, their upper tail values, neighboring subjects and the
+four previously excluded namespaces. Candidate Core metadata passed.
+
+The candidate is separate from the source pinned by the bound-slot checks.
+The general claim/job and funded-escrow reverse lookups, plus proof of the
+future closed ingress and all-branch native reservation, remain open. The
+lookup result cannot authorize a Gate C decision by itself.
+
+### Funded escrow lookup by claim
+
+The [funded escrow index candidate](case-funded-escrow-claim-index-candidate-20261103.tar.gz)
+changes the actual Case closure check to an ordered lookup by claim. The
+derived index has one member per retained contract, including settled
+contracts awaiting retirement. The native row writer and forward/reverse
+delta apply share the index update. Carriage restore derives it from the
+existing rows. The candidate includes native write and restore heap charges
+for the new index. Its patch leaves the rooted escrow map and carriage
+encoding in place.
+
+Core library and focused test-target metadata passed against a copy with
+the bound-slot follow-ups. A standalone regression using the extracted
+lookup and update methods passed for two contracts on one claim, settlement,
+removal, re-insertion and a neighboring claim. The existing Core escrow
+regressions now also assert lookup results after replay, undo and carriage
+restore, including the original serialized bytes. Those Core regressions
+have yet to execute. The candidate remains outside the source pinned by the
+bound-slot verification.
+
+The full Core unit-test source typechecked with the candidate applied to
+the committed base and its matching cached dependencies. The first unit
+typecheck caught an extra field in a carriage-only test pattern, which
+was removed. The archive records both outcomes. Runtime coverage remains
+limited to the standalone lookup regression.
+
+### Integrated bound Case restore and retention quote
+
+Warnings-denied Contract, Core and Consensus library Clippy and the two
+focused Core test-target checks passed on one unchanged native source map.
+The [guarded logs and source maps](case-relay-bound-slot-integrated-20261103.tar.gz)
+record both results. This integrates the bound restore crosslinks and exact
+slot quote. The guarded commands typechecked the regressions. The isolated
+crosslink and literal-byte checks described above are the runtime evidence
+for this change.
+
+### Integrated alias lookups and atomic relay custody
+
+Commit `89c636618` applies the bounded staged/seal lookups and the funded
+escrow claim index. Commit `288e9b01d` applies the pending Case relay custody
+transfer inside the Case bind checkpoint. Restore requires that the custody
+binding name the Case reservation. Actual op9 still refuses without a
+native all-branch reservation owner, so the transfer has no accepted-chain
+runtime coverage yet.
+
+A guarded run on the combined source queues strict library Clippy, all Core
+test-target checks, and the optimized funded escrow runtime regressions.
+At the checkpoint the run was waiting for the shared target build lock.
+The separate Linux/XFS node runner was still building RocksDB.
+
+The remaining kernel alias lookups cannot use the existing job holder as a
+substitute for the reverse relation. The legacy Panel path can retain an
+uncovered claim without any holder entry. A bounded closure proof must
+account for these rows and the independent native claim job identities.
+
+### Gate C Case links and row lookup
+
+The [Gate C candidate](gate-c-case-links-candidate-20261103.tar.gz) checks
+CaseId, ResultId, coverage scope and liability together before treating a
+terminal Case as a withdrawal. The same check applies before closing new
+source requests. A CaseId intentionally stays the same when only the
+worker's output changes. A foreign Result or branch is now an identity
+error in the candidate. The Gate C point readers also use an exact key
+lookup with a reserved temporary key in the shared S/K/V/N/P table.
+
+The Core library and focused Assignment funds test-target metadata passed
+on the formatted candidate. The isolated runtime used the extracted
+candidate guard and the existing signed bundle fixture with the linked
+Contract crate. It accepted the exact live Case, recognized each of the
+three terminal statuses, and refused substituted Result, scope and
+liability for each status. It did not exercise native sweep or source
+authorization end to end. The candidate remains separate from the A0
+source pinned by the active custody/index checks.
+
+The independent Case archive branch's initial op9 journal store change
+(`b44ed654b`) applies cleanly to A0. Its two preceding archive replay
+changes (`3d65fa756` and `9c61c087b`) need reconciliation with A0's
+native resource and historical Case relay readers. A0 has not applied
+that series at this checkpoint.
+
+### Assigned Case archive reconciliation
+
+The [reconciled archive candidate](assigned-case-archive-a0-candidate-20261103.tar.gz)
+brings the three Case archive branch changes onto the exact A0 source. It
+persists sequence-one op9 transactions in the existing Case journal,
+checks the complete literal carrier and revalidates original populated
+inputs. It reconstructs the original selected parent by undoing actual
+ancestor deltas, then replays the accepted prefix to its pinned root.
+The A0 adaptation uses its typed retained-size computation for the new
+history bound even when the global checker is dormant. It preserves
+A0's original Case relay profile reader and receipt replay.
+
+The merged Core library and focused Assignment funds target typechecked
+in isolation. The candidate includes the journal DB reopen/append
+regression and the one-byte-under heap-cap checks, but they have yet to
+run on A0. Full Consensus verification, cold archive I/O accounting and
+connection of the Case reader to accepted op9 remain open. The candidate
+is separate from the source pinned by the custody/index run.
+
+### Pinned acceptance archive reads
+
+The [combined candidate](assigned-case-pinned-acceptance-candidate-20261103.tar.gz)
+adds a pinned acceptance-data view to the reconciled Case archive patch.
+It validates the exact persisted bincode record before finding a creator
+strictly earlier than the current accepted transaction. Original Assignment,
+Case and relay input reconstruction borrow that view rather than decoding
+the full mergeset vectors into the ordinary cache. The work bound charges
+both per-input traversals by the accepted record's byte extent, including
+mergeset blocks with zero accepted transactions.
+
+The isolated parser regression passed with the repository's Hash64 and
+bincode. The same store source and test also passed with actual RocksDB
+and an empty cache after DB reopen. The direct test harness uses the
+repository's acceptance structs and block hasher with linked DB and
+serialization dependencies. It does not exercise the full Consensus
+archive caller. The combined patch applies cleanly to A0 and is staged
+outside the active source map. Cold block-body and UTXO-diff decode
+ownership, plus full Consensus typechecking and native replay, remain open.
+
+### Pinned original UTXO inputs
+
+The [combined UTXO archive candidate](assigned-case-pinned-utxo-candidate-20261103.tar.gz)
+adds an allocation-free view of the persisted bincode add/remove maps.
+Assignment, Case and relay replay use only the removal matching the
+original outpoint, with the existing earlier accepted creator lookup
+as the fallback. The code charges one structural validation and two
+bounded map scans per input. It admits the owned input slots and script
+copies before allocating them.
+
+The exact UTXO store module's isolated test used real RocksDB, actual
+Hash64 and a harness mirroring the production compact UTXO serde fields.
+The DB was closed and reopened with an empty cache. The test checks
+removal reconstruction, added-only refusal, one-byte-under replay cap,
+truncation, invalid coinbase byte and duplicate queried outpoint. Full
+Consensus caller verification, bounded cold block-body reads and the
+native op9-to-settlement run remain open. This patch is kept outside the
+source pinned by the custody/index run.
+
+### Bounded archived carrier and creator transactions
+
+The [combined block archive candidate](assigned-case-bounded-block-candidate-20261103.tar.gz)
+reads the exact persisted block body with a wire limit, validates its
+framing and decodes only the requested transaction under a typed
+allocation reservation. The original carrier's lease travels with its
+retained Case carriage. Historical creator transactions use the heap
+remaining after both the carrier and, during the second pass, the owned
+input slots and scripts. Work is bounded by the persisted body extent
+for each scan and decode. The code still revalidates the transaction ID
+and runs ordinary Full validation against the reconstructed inputs.
+
+Core and the focused Assignment funds target passed isolated typechecking.
+The isolated block parser regression used the exact scanner with matching
+compact bincode wire fixtures. It covered the middle transaction, a
+nonzero stored mass, absent index, malformed tail and impossible count.
+The store and full Consensus archive caller were not run. The combined
+candidate includes the earlier accepted-data and UTXO pinned readers and
+applies cleanly to A0. It is separate from the running custody/index
+verification. The earlier Linux relay test moved past the RocksDB build
+to later Rust dependencies and has not reported a test verdict.
+
+### Integrated archive and Gate C source
+
+Commit `b21559f59` integrates the original Case parent reconstruction,
+sequence-one op9 journaling, and bounded acceptance, UTXO and carrier
+readers on A0. Commit `fab2a91af` integrates the exact Gate C Case link
+and point lookup. The prior custody/index guard was still waiting on
+the shared Cargo lock and had compiled no source. Its own process
+group was stopped after verifying its membership, exit and unchanged
+source map. The unrelated lock holder and separate Linux test were
+left running.
+
+The replacement guard includes the custody/index changes and both
+new commits. It queues warnings-denied library Clippy, Core and
+Consensus test-target checks, native store regressions and the focused
+escrow and Gate C runtime regressions. Its first command is still
+waiting for the shared build lock. The isolated component results above
+apply to the relevant source files. No integrated build or test result
+is claimed by this checkpoint.
+
+### Archive failure classification and replay budgets
+
+The [archive fault candidate](native-archive-faults-candidate-20261103.tar.gz)
+preserves distinct corruption, unavailable history and local resource
+outcomes across the Case and relay readers. A failed relay read/work
+charge leaves both counters unchanged. Two isolated tests ran the
+exact classifier and counter update with actual StoreError values and
+a small native coverage harness. The combined Consensus check is still
+waiting for the shared build lock, so this follow-up is staged separately
+from its source map.
+
+### Native claim job index
+
+The [native claim index candidate](native-claim-job-index-candidate-20261103.tar.gz)
+uses ordered lookups for the legacy native claim job identity. Ordinary
+claim writes, native delta replay and reversal share one update, and
+carriage restore derives the index from the primary rows. Unset job
+identities use the primary/index cardinality difference. The new heap
+is accounted for before writes and carriage restore. This also builds
+the funded escrow index directly during restore, avoiding a temporary
+collection of pairs.
+
+Core library and focused Assignment funds metadata passed. An isolated
+regression with the real Hash64 and exact update and delta dispatch
+logic passed for duplicate jobs, zero identity, a neighboring identity
+and rollback. The repository's Core unit regression has not run. The
+candidate is separate from the source pinned by the archive/custody
+checks. Kernel ledger reverse relationships and prospective ingress
+closure remain separate work.
+
+### Kernel Case alias cache
+
+The [Kernel alias candidate](kernel-case-alias-index-candidate-20261103.tar.gz)
+builds two ordered subject sets once from the existing checked native
+ledger projection. They cover all previous checks, including claims
+with no job holder and the reverse job-holder relationship. The shared
+cache owns a typed lease and is invalidated by the existing ledger
+write and delta replay/undo cache lifecycle. It is not persisted.
+A cold lookup still requires the authenticated ledger projection.
+
+The candidate Core library and focused Assignment funds metadata passed.
+The isolated membership regression matched all 289 old-predicate outcomes,
+including separate job and claim roles and seal key components. A Core
+cache lease/invalidation regression is included but has not run. The
+candidate is outside the guarded A0 source. Future ingress closure and
+the all-branch admission reservation are still required.
+
+### Prospective legacy claim ingress
+
+The [claim ingress candidate](legacy-claim-ingress-candidate-20261103.tar.gz)
+checks existing legacy aliases before assignment consumption and refuses an
+exact rooted Positive ClaimIndex at the ordinary native claim and legacy
+escrow writers and the four Kernel holder tables. The guarded A0 integration
+run still pins its source. The change is staged separately.
+
+The exact-helper probe passed with the production hash, contract and Borsh
+types. It covered the canonical key, a neighboring table, an unrelated
+claim and all four Kernel key/value projections. Core library and focused
+funding-relay test metadata compiled in isolation. The added full Core
+regression has yet to run. Independent job aliases and staged legacy writers
+still need prospective protection. This candidate supplies no op9 acceptance
+or terminal settlement result.
+
+### Staged legacy ingress and integrated Clippy
+
+The [reconciled candidate](reconciled-legacy-ingress-candidate-20261103.tar.gz)
+adds the same pre-write claim ownership check at the central staged court
+writer. The exact extracted mapper and existing ordered reader agreed on all
+26 subject namespaces and the four unrelated namespaces in the isolated
+probe. The scratch Core and focused test metadata compiled. The complete
+guard, both alias index candidates and the typed archive errors reconcile in
+one patch against A0. The reconciled Core library and focused funding-relay
+test metadata compiled in isolation. Runtime remains outstanding.
+
+The [integrated Clippy result](archive-custody-clippy-20261103.json.gz) exits
+zero on the existing A0 source map with unchanged inputs and warnings denied
+for Contract, Core and Consensus. The test-target and runtime stages use the
+same source pin and have not reported a verdict at this checkpoint.
+
+### Prospective Positive job ownership
+
+The [Positive job ownership candidate](positive-job-ownership-candidate-20261103.tar.gz)
+adds a derived, nonserialized index over canonical Result aux rows. Native
+writer, delta replay and revert, canonical decode and served-row restore
+maintain it. Prospective Case intake rejects a job already occupied by a
+Positive Result. Legacy native claims, the staged subject writer and six
+Kernel job-bearing tables check ownership before writing. The native writer,
+wire preflight and resident-state census price the index.
+
+The two isolated exact-function regressions passed using production contract
+and hash types. They cover a mismatched Result/key, partial revert where
+another Result keeps the same job occupied, and the six Kernel subjects.
+The reconciled Core library and focused funding-relay test targets typechecked.
+The added native cold decode regression and the job ingress changes still
+need integrated execution. The candidate is separate from the pinned A0 build.
+
+The [integrated test-target check](archive-custody-check-20261103.json.gz)
+exited zero with identical source maps. The native store execution stage has
+started compiling. The EVM-off Linux relay run was still compiling Consensus
+at this checkpoint. Neither has reported a runtime verdict.
+
+### Integrated prospective ingress and optimized rebuild
+
+Commits `f6ab6a1f2` and `6323c1e17` integrate the reconciled archive
+classification, job and claim indexes, and prospective collision guards in
+A0. The additional legacy dispute, panel, liability and session writers
+check the Positive claim identity before writing. The staged writer also
+checks the underlying claim of a duty/query when the row's key represents
+the duty or query. The focused native regression covers a separate session
+ID and a separate duty ID targeting the same rooted Positive claim.
+
+The preceding optimized archive run stopped during compilation. Its
+[execution manifest](archive-custody-runtime-first-20261103.json.gz) and
+[log](archive-custody-runtime-first-20261103.log.gz) show Cargo reusing a
+shared-cache Contract artifact whose metadata did not expose the Case relay
+retention function present in the pinned source. No store test executed.
+Updating the local dependency source timestamp triggered a real Contract
+rebuild on the integrated source. The
+[replacement runner](integrated-ingress-verification-runner-20261103.py)
+starts with the focused claim/job runtime, then runs the staged, legacy
+index, Gate C, strict Clippy, typecheck and native store checks. Its first
+command was compiling at this checkpoint.
+
+The guards close additional legacy alias surfaces. The prospective all-branch
+Gate C reservation owner, Positive Case session factory and accepted
+settlement remain open.
+
+### Gate C Result provenance and liability session
+
+The [Gate C provenance candidate](gate-c-result-provenance-candidate-20261103.tar.gz)
+uses the same current, replay-checked Assignment and Case for approval,
+payment and attestor liability release. It checks the original accepted
+Result origin, the Assignment and worker identities, the signed worker
+amount, the exact subject and the Case liability. Saved votes are
+authenticated before liability release. Terminal status still controls
+release separately, including the existing refusal to release a refuted
+Case without its charge owner.
+
+The isolated signed-bundle regression passed, including altered acceptance
+ordinal, Assignment, worker key and subject. The Core library and focused
+funding-relay test metadata compiled. The new common session path has yet
+to run in integrated Consensus. The candidate remains separate from the
+pinned claim/job ingress runtime and does not establish the prospective
+reservation owner or actual native Case admission.
+
+### Actual expiry and native Linux capacity refusal
+
+The [expiry and capacity candidate](assigned-case-expiry-capacity-candidate-20261103.tar.gz)
+requires a pending Case to cross its actual deadline before op6 can
+produce an Expired journal event. Native dispatch and cold replay call
+the same method. The isolated exact-method regression passed for early
+and out-of-order attempts, the exact deadline, duplicate expiry and
+already terminal Passed/Refuted/Revoked Cases. It also checked disposal
+of the incomplete candidate's progress and packet receipts. The Core
+library and focused test metadata compiled on the candidate.
+
+The [first Linux runtime log](native-relay-linux-xfs-first-runtime-20261103.log.gz)
+shows the EVM-off build of `45927210f` completed and ran against enforced
+XFS project quota. The node refused a heartbeat because its actual
+output exceeded the pre-construction reservation. The registration,
+fee, recovery and branch assertions did not run. The candidate adds the
+required and available byte counts and distinguishes pre-object,
+single-object, Assignment rehearsal and relay preview failures from
+the final transition. It does not enlarge a quote or approve an
+under-reserved output. A second Linux trial pins the recorded A0 base
+and exact patch and is compiling. The running macOS ingress suite
+still uses its separate source pin.
+
+The [second Linux trial log](native-relay-linux-xfs-capacity-retry-20261103.log.gz)
+records a host free-space guard stop during environment preparation,
+before compilation or test execution. Temporary metadata from seven
+completed scratch checks was released. The remaining headroom was
+insufficient for another guarded Linux build at that point. The first
+runtime failure and the second environment stop are separate outcomes.
+
+### Scoped prover lookup and heartbeat isolation
+
+The [scoped role candidate](scoped-prover-role-range-candidate-20261103.tar.gz)
+uses the canonical aux151 Assignment/prover key prefix to bound role
+resolution to the current Case's Assignment. The writer admits the fixed
+range buffers, caps the number of visited rows before decoding them and
+preserves role authentication and funding checks. The isolated test using
+production key encoding covered neighboring tables, Assignments and roles,
+and exposed malformed keys under the exact prefix to the decoder. Core
+and focused test metadata passed, including with the Gate C provenance
+and expiry candidates applied together.
+
+A separate Core heartbeat driver exercises testnet-12 pre-object
+preparation and folding before and after metering, with warm and decoded
+state. Its metadata typechecked. The linked run could not start because
+the older Core archives' transitive crate metadata no longer matched the
+shared build cache. It has not localized the Linux allocation mismatch.
+The earlier optimized macOS ingress run remains live on its source pin.
+
+### Literal Case service floor
+
+The [Case source floor candidate](case-source-floor-candidate-20261103.tar.gz)
+adds the missing lower bounds when op9 compares the literal miner service
+with the original Assignment envelope. It checks retained bytes, the
+original minimum retention horizon and the full reserved attempt count.
+Its exclusive source cutoff covers both Court checking and the last
+legal Gate C attestation from the actual Result acceptance clock. The
+installer also refuses a maturity outside the Case's accepted-to-reserved
+interval. Existing source-consent maxima and funding checks still apply.
+
+The exact-method probe passed at early and last-legal Result clocks and
+rejected short source cutoffs, insufficient storage/retention, reduced
+attempts and checked-arithmetic underflow. Core library and focused
+funding-relay test metadata passed. The patch reconciles with the prior
+provenance, expiry and scoped-prover patches. The A0 runtime build still
+pins the earlier source. An all-branch capacity owner, actual Case
+acceptance and the Linux heartbeat refusal remain unresolved.
+
+### Rooted Case journal retrieval
+
+The [Case journal reader candidate](rooted-case-journal-reader-candidate-20261103.tar.gz)
+connects the shared bounded link verifier to the native RocksDB store.
+It walks back from the rooted head, rechecks the same sequence oldest
+first, and retains exact bytes in execution order. The original caps
+cover both reads, both identity domains on both passes, the raw copy
+and the retained index and record buffers. The store lock leaves scope
+before native carriage reconstruction. Missing history, malformed links
+and local capacity errors are kept separate.
+
+Seven isolated journal/quote cases passed, including cycle refusal,
+limits before reads, altered reread refusal, a native first carrier
+and checked work arithmetic. The Consensus test target typechecked.
+The reader supplies raw history data for the native Case factory. It
+still needs connection to that factory, authentic original carriage
+replay and a real integrated RocksDB run. The preceding macOS build
+continued on its separate source pin.
+
+### Accepted native Case carriages and pinned ingress checks
+
+The integrated changes at `558b79e9c` cover scoped prover lookup, literal
+Case source limits, expiration of an incomplete Case and binding Gate C
+to the actual accepted Result. The same change includes diagnostics
+that report both sides of a refused state allocation. The diagnostic
+does not change the amount reserved before construction.
+
+At `f2cff7b27`, the native archive reads rooted Case journal records
+from RocksDB in verified execution order. Each record must have a
+unique boundary preimage for its Case and origin. The reader then
+reconstructs the real accepted transaction, populated inputs, fee and
+pre-event state, and compares the original carrier with the journal.
+Each event draws from the remaining archive work and heap allowance.
+The temporary decoded delta is counted alongside the state being
+rewound or replayed. The returned records supply data to the future
+Case factory connection.
+
+[Carriage validation](case-carriage-validation-20261103.tar.gz) includes
+a passing isolated check of the exact boundary selector against the
+production boundary codec and journal wire code. It checks the accepted
+case, altered preimage, wrong Case and two competing boundaries. The
+Consensus test target typechecked with the candidate files and existing
+dependency metadata. These checks did not execute the integrated
+RocksDB replay or attach the recovered data to the native Case writer.
+
+The [pinned ingress runtime](ingress-pinned-runtime-20261103.tar.gz)
+records five passing Core tests on the same binary built from
+`6323c1e17` Rust sources. These cover legacy primary and kernel
+ingress guards, installed/removed/cold-decoded Result job lookup,
+staged aliases, legacy job lookup and undo, and the exact Result and
+liability required for Gate C. The Cargo sweep stopped after the first
+case at the next command's initial host free-space check. The other
+four test cases ran directly from the already built, hash-pinned binary
+under a no-build disk guard. Neither the newer combined commits nor
+the unrun Clippy and archive suites are credited with a runtime pass.

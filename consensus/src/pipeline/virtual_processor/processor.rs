@@ -3735,7 +3735,8 @@ impl VirtualStateProcessor {
                                     // G14 lane escrow-rfc08: the qualified escrow spends UTXO acceptance admitted, settled by the fold
                                     // in this block's rooted delta (committed with the UTXO diff in one WriteBatch).
                                     extras.funded_escrow_settlements = ctx.palw_escrow_settlements.clone();
-                                    // Reconcile the independent UTXO debit with the rooted raw settlement.
+                                    // Raw op12 still derives settlement at the executed prefix.
+                                    // Compare that outcome with what UTXO acceptance debited.
                                     extras.assignment_settlements = std::mem::take(&mut ctx.palw_assignment_settlements);
                                     extras.positive_assignment_actions = assignment_raw_schedule;
                                     extras.positive_decision_histories = histories;

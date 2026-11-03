@@ -1177,7 +1177,8 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         105 => return Err(wire::wire_bad("unallocated aux table 105 row namespace")),
         106 => return Err(wire::wire_bad("unallocated aux table 106 row namespace")),
         112 => return Err(wire::wire_bad("unallocated aux table 112 row namespace")),
-        136 if key_bytes == 65 && prefix == b'P' => super::positive_certification::scan_positive_certification_row_v2(k, frame)?,
+        136 if key_bytes == 65 && prefix == b'P' => super::positive_certification::scan_positive_certification_row_v2(k, frame)?
+            .allocation(1, size_of::<typed::BTreeNodeEnvelopeV1<(u8, u64, crate::Hash64), ()>>())?,
         115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136 => {
             return Err(wire::wire_bad("unallocated aux row namespace"));
         }
@@ -1339,7 +1340,18 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         191 if key_bytes == 132 => crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2::scan_native_wire_v1(frame)?,
         191 => return Err(wire::wire_bad("unallocated finite provider fee V2 row namespace")),
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),
-        misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => super::positive_rows::scan_positive_aux_row_v1(key, frame)?,
+        misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => {
+            let shape = super::positive_rows::scan_positive_aux_row_v1(key, frame)?;
+            shape
+                .allocation(
+                    u64::from(crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table, key)),
+                    size_of::<typed::BTreeNodeEnvelopeV1<(kaspa_hashes::Hash64, u8, kaspa_hashes::Hash64), ()>>(),
+                )?
+                .allocation(
+                    u64::from(crate::palw_kernel_route_v1::is_positive_gate_c_schedule_row_v2(table, key)),
+                    size_of::<typed::BTreeNodeEnvelopeV1<(u8, u64, crate::Hash64), ()>>(),
+                )?
+        }
         _ => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,

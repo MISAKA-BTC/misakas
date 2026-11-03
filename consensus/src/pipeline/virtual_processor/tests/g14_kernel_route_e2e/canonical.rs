@@ -445,6 +445,8 @@ impl Rpc {
         let aux_root: Hash64 = aux_root.parse().expect("an aux Hash64");
         let state = PalwKernelRouteStateV1::from_served_rows_v1(&header, rows, &ledger_root, &aux_root)
             .expect("every served row reconstructs the two roots");
+        assert_eq!(state.ledger_root(), ledger_root);
+        assert_eq!(state.aux_root(), aux_root);
         (state, ledger_root)
     }
 

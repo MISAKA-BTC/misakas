@@ -226,3 +226,35 @@ fn a_bond_budget_op_with_tracking_off_is_the_historical_op_byte_for_byte() {
     assert_eq!(builder.state.bond_budget.as_ref(), Some(&expected));
     assert_eq!(builder.entries.len(), journal.len());
 }
+
+#[test]
+fn positive_aux_writer_reserves_retained_workspace_only_on_insert() {
+    use crate::palw_native_resource_v1::positive_rows::positive_aux_row_memory_bytes_v1;
+    use misaka_palw_positive_contract::native::KERNEL_AUX_TABLE;
+
+    let params = params();
+    let extras = PalwTransitionExtrasV1::default();
+    let key = vec![1];
+    let value = Some(vec![2]);
+    let quote_bytes = |table, present| {
+        let mut parent = PalwChainStateV2::genesis();
+        let mut route = crate::palw_kernel_route_v1::PalwKernelRouteStateV1::new(
+            crate::palw_kernel_route_v1::palw_kernel_route_policy_v1(h64(1), h64(2)),
+            None,
+            misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 1, burned: 0 },
+        );
+        if present {
+            route.aux.insert((table, key.clone()), vec![2]);
+        }
+        parent.kernel_route = Some(route);
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: u64::MAX, database_bytes: 0 });
+        let mut builder = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+        builder.native_reservation = NativeTransitionReservationV1::for_checker_v1(&checker);
+        builder.reserve_kernel_row_write_v1(table, &key, &value, false).unwrap();
+        checker.outstanding().0
+    };
+
+    let ordinary_aux_table = 40;
+    assert_eq!(quote_bytes(KERNEL_AUX_TABLE, false), quote_bytes(ordinary_aux_table, false) + positive_aux_row_memory_bytes_v1());
+    assert_eq!(quote_bytes(KERNEL_AUX_TABLE, true), quote_bytes(ordinary_aux_table, true));
+}

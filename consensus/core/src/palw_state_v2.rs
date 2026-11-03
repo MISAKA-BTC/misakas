@@ -11013,6 +11013,7 @@ pub struct PalwChainStateV2 {
     receipt_targets: BTreeMap<Hash64, PalwClassTargetV2>,
     capabilities: BTreeMap<Hash64, PalwCapabilityStateV2>,
     claims: BTreeMap<Hash64, PalwClaimStateV2>,
+    // Derived nonzero job identities, including claims retained after termination.
     claims_by_job: BTreeSet<(Hash64, Hash64)>,
     panels: BTreeMap<Hash64, PalwPanelStateV2>,
     court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
@@ -14791,7 +14792,7 @@ pub fn palw_v2_pre_object_base_retained_v1(
     source_bootstrap_v1::prepare(&mut builder, ctx)?;
     palw_claim_local_execution_cohort_census_v15::invalidate_partial_view_v15(&mut builder);
     palw_claim_local_context_gc_v3::settle_builder_v3(&mut builder).map_err(palw_claim_local_paid_archive_v2::state_error)?;
-    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
+    builder.native_reservation.finish_state_v1(builder.state, "native pre-object state").map_err(PalwStateV2Error::NativeResource)
 }
 
 /// Companion to [`palw_v2_pre_object_base_v1`]: apply exactly one accepted object to a base, as the
@@ -15009,7 +15010,7 @@ fn rehearse_palw_object_retained_v1(
     builder.rearm_material_retirements_v1(ctx.daa_score)?;
     palw_claim_local_execution_cohort_census_v15::invalidate_partial_view_v15(&mut builder);
     palw_claim_local_context_gc_v3::settle_builder_v3(&mut builder).map_err(palw_claim_local_paid_archive_v2::state_error)?;
-    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
+    builder.native_reservation.finish_state_v1(builder.state, "native single-object state").map_err(PalwStateV2Error::NativeResource)
 }
 
 /// Raw native action rehearsal. A fresh builder resolves every expected field
@@ -15040,7 +15041,10 @@ pub fn palw_v2_apply_one_assignment_retained_v2(
     rehearsal_materials.validate_v2(&builder.entries)?;
     drop(rehearsal_materials); // Final replay must produce its own actual bytes.
 
-    builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)
+    builder
+        .native_reservation
+        .finish_state_v1(builder.state, "native single-Assignment rehearsal state")
+        .map_err(PalwStateV2Error::NativeResource)
 }
 
 /// Preview one op14 against the supplied accepted prefix using the same
@@ -15074,7 +15078,10 @@ pub fn palw_v2_preview_initial_relay_fee_v2(
         return Err(PalwStateV2Error::KernelRouteRefused("relay fee preview requires op14".into()));
     }
     let fees = builder.install_initial_assignment_relay_v2(ctx, action, positive_assignment::InitialRelayFeeStageV2::Preview)?;
-    let state = builder.native_reservation.finish_state_v1(builder.state).map_err(PalwStateV2Error::NativeResource)?;
+    let state = builder
+        .native_reservation
+        .finish_state_v1(builder.state, "native relay fee-preview state")
+        .map_err(PalwStateV2Error::NativeResource)?;
     Ok((state, fees))
 }
 
@@ -26467,6 +26474,7 @@ impl PalwStateCarriageV2 {
             epoch_budgets: self.epoch_budgets,
             receipt_targets: self.receipt_targets,
             capabilities: self.capabilities,
+            claims_by_job,
             claims: self.claims,
             claims_by_job,
             pending_payouts: self.pending_payouts,

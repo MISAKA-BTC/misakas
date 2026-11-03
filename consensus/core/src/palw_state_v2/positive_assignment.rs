@@ -2368,6 +2368,52 @@ impl TransitionBuilder<'_> {
                 }
                 _ => unreachable!("checked initial relay target"),
             }
+            match terms.target {
+                RelayTargetV2::InitialAssignment { .. } => {
+                    if terms.contract_ruleset.0 != rules.rule_scope().ruleset().as_bytes() {
+                        return Err(refusal("initial Assignment relay differs from the current Assignment scope"));
+                    }
+                }
+                RelayTargetV2::InitialCase { .. } => {
+                    let Some(NativeRowBody::Assignment(assignment)) =
+                        self.read_relay_occupancy_row_v2(NativeRowKey::Assignment(terms.assignment), &mut budget)?
+                    else {
+                        return Err(refusal("initial Case relay requires an accepted Assignment"));
+                    };
+                    let Some(NativeRowBody::AssignmentJournalFrame(open)) = self.read_relay_occupancy_row_v2(
+                        NativeRowKey::AssignmentJournalFrame { assignment: terms.assignment, ordinal: 0 },
+                        &mut budget,
+                    )?
+                    else {
+                        return Err(missing_assignment_history());
+                    };
+                    if open.header.kind != AssignmentJournalEventKindV2::Open || open.header.origin != assignment.origin {
+                        return Err(missing_assignment_history());
+                    }
+                    crate::palw_positive_funding_relay_v2::check_case_relay_minimum_replay_v2(
+                        terms,
+                        physical,
+                        open.header.payload_bytes,
+                    )
+                    .map_err(refusal)?;
+                    let material = if assignment.origin.accepting_block == action.origin().accepting_block {
+                        let remaining_heap = decode_profile.max_heap_bytes - workspace - reserved.quote().logical_decode_requests;
+                        self.same_block_case_relay_material_v2(&assignment, &mut budget, remaining_heap)?
+                    } else {
+                        action.case_relay_contract_material_v2()
+                    };
+                    if material != Some(assignment.admission_material) {
+                        return Err(refusal("initial Case relay requires the original relay-enabled Assignment material"));
+                    }
+                    crate::palw_positive_assignment_funds_v2::check_case_relay_registration_assignment_v2(
+                        terms,
+                        &assignment,
+                        action.origin(),
+                    )
+                    .map_err(refusal)?;
+                }
+                _ => unreachable!("checked initial relay target"),
+            }
             let minimum_replay =
                 crate::palw_positive_funding_relay_v2::minimum_pending_funding_relay_replay_heap_v2(terms).map_err(refusal)?;
             if physical.max_heap_bytes < minimum_replay {

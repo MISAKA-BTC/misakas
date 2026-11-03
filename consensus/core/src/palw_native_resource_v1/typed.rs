@@ -376,14 +376,16 @@ impl NativeHeapV1 for misaka_palw_panel::PermissionlessPanelStateV1 {
 }
 impl NativeHeapV1 for crate::palw_kernel_route_v1::KernelLedgerCacheV1 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        self.native_ledger_ref_v1().map_or_else(NativeCoverageV1::zero, |ledger| {
-            ledger.native_heap_v1(path).add::<Self>(
-                NativeCoverageV1::Bounded {
-                    bytes: (size_of::<crate::palw_native_resource_v1::ReservedKernelLedgerV1>() + size_of::<[usize; 3]>()) as u64,
-                },
-                path,
-            )
-        })
+        self.native_ledger_ref_v1()
+            .map_or_else(NativeCoverageV1::zero, |ledger| {
+                ledger.native_heap_v1(path).add::<Self>(
+                    NativeCoverageV1::Bounded {
+                        bytes: (size_of::<crate::palw_native_resource_v1::ReservedKernelLedgerV1>() + size_of::<[usize; 3]>()) as u64,
+                    },
+                    path,
+                )
+            })
+            .add::<Self>(NativeCoverageV1::Bounded { bytes: self.case_alias_heap_v2() }, path)
     }
 }
 

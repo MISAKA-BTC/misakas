@@ -990,6 +990,17 @@ impl PositiveCarrierPhaseTwoV2 {
                     continue;
                 }
                 if pending_relay.is_none() {
+                    if matches!(body.terms.target, RelayTargetV2::InitialCase { .. })
+                        && let Some(state) = selected_parent_state
+                    {
+                        let original = processor.case_relay_original_contract_v2(
+                            carrier.prefix.selected_parent, state, &body.terms, &physical, bytes,
+                        ).map_err(|why| match why {
+                            crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2::Resource(why) => why,
+                            why => NativeCoverageV1::unsupported::<Self>("Case relay original contract", &format!("{why:?}")),
+                        })?;
+                        case_relay_contract = original.map(|(material, _)| material);
+                    }
                     let anchor = BlockHash::from_bytes(body.terms.contract_anchor.0);
                     if !processor
                         .reachability_service

@@ -367,7 +367,7 @@ for _t in AUX.TABLES:
     if _t not in AUX.RESERVED and _t not in _total:AUX_SPEC_ARMS+=f'{_t}=>return Err(wire::wire_bad("unallocated aux table {_t} row namespace")),\n'
 # The RFC07/RFC08 tables above dispatch on guarded key shapes only; a shape none of their folds writes is malformed too.
 # The new P prefix in table 136 has its own bounded, identity-checking codec.
-AUX_SPEC_ARMS+="136 if key_bytes==65 && prefix==b'P'=>super::positive_certification::scan_positive_certification_row_v2(k,frame)?,\n"
+AUX_SPEC_ARMS+="136 if key_bytes==65 && prefix==b'P'=>super::positive_certification::scan_positive_certification_row_v2(k,frame)?.allocation(1,size_of::<typed::BTreeNodeEnvelopeV1<(u8,u64,crate::Hash64),()>>())?,\n"
 AUX_SPEC_ARMS+='115 | 123 | 125 | 126 | 127 | 130 | 131 | 132 | 133 | 134 | 135 | 136=>return Err(wire::wire_bad("unallocated aux row namespace")),\n'
 # RFC-0006 RFC06-8 (2026-10-15): class registration origins (aux 141, keyed by the 64-byte class id; dormant fence).
 AUX_SPEC_ARMS+='141 if key_bytes==64=>crate::palw_class_registration_origin_v1::PalwClassRegistrationOriginRowV1::scan_native_wire_v1(&mut frame)?,\n141=>return Err(wire::wire_bad("unallocated class registration origin row namespace")),\n'
@@ -520,7 +520,7 @@ def positive_aux_wire_v1(code):
                      '     return Err(wire::wire_bad("duplicate or noncanonical Positive aux key"));\n    }\n'
                      '    previous_positive[..n].copy_from_slice(&key[..n]);previous_positive_len=n;\n   }\n')
     fallback = ' _=>return Err(std::io::Error::new(std::io::ErrorKind::Unsupported,NativeCoverageV1::unsupported::<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>'
-    typed = (' misaka_palw_positive_contract::native::KERNEL_AUX_TABLE=>super::positive_rows::scan_positive_aux_row_v1(key,frame)?,\n' + fallback)
+    typed = (' misaka_palw_positive_contract::native::KERNEL_AUX_TABLE=>super::positive_rows::scan_positive_aux_row_v1(key,frame)?.allocation(u64::from(crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table,key)),size_of::<typed::BTreeNodeEnvelopeV1<(crate::Hash64,u8,crate::Hash64),()>>())?.allocation(u64::from(crate::palw_kernel_route_v1::is_positive_gate_c_schedule_row_v2(table,key)),size_of::<typed::BTreeNodeEnvelopeV1<(u8,u64,crate::Hash64),()>>())?,\n' + fallback)
     for before, after in [(count, ordered), (key, checked), (fallback, typed)]:
         if code.count(before) != 1:
             raise ValueError('Positive aux151 manual scanner template changed: ' + before[:70])
