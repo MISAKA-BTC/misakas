@@ -47,9 +47,9 @@ use misaka_palw_base0::engine_a16::derived_a16_store;
 use misaka_palw_base0::mmap::ReadOnlyMap;
 use misaka_palw_base0::qwen25_a16_backend::A16_PREFILL_RUN_POSITIONS;
 use misaka_palw_base0::rope::RopeTableV1;
-use misaka_palw_base0::tir_a16::{a16_mirror_program_with_rows, a16_tir_tensor_bytes};
+use misaka_palw_base0::tir_a16::{A16MirrorRowsV1, a16_mirror_program_with_rows, a16_tir_tensor_bytes};
 use misaka_palw_sdk::tir_equiv::{EquivJobV1, EquivReportV1, equiv_jobs_v1, run_core_v1_prefill_equiv, run_equiv_v1};
-use misaka_palw_tir::program::HISTORY_BOUND_V1_SMALL;
+use misaka_palw_tir::program::{HISTORY_BOUND_V1_SMALL, StateKind, TirProgramV1};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -89,6 +89,29 @@ fn core_v1_draw(params: &Params, row: &CanonicalClassV1, anchor: Hash64, daa: u6
     }
     let equiv = EquivJobV1 { label: format!("CoreV1 draw at DAA {daa}, anchor {anchor}"), prompt, decode: 1 };
     Some((job, equiv))
+}
+
+fn core_v1_mirror_program(row: &CanonicalClassV1, ctx: &PalwJobContextV2) -> Result<(TirProgramV1, A16MirrorRowsV1), String> {
+    let context = ctx.max_context_tokens;
+    let native_history = kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(&row.profile);
+    if context == 0
+        || context != row.profile.n_ctx
+        || context as usize != row.artifact_shape.max_position
+        || context as usize > native_history
+        || context > HISTORY_BOUND_V1_SMALL
+    {
+        return Err("the diagnostic history cannot cover the exact CoreV1 context".into());
+    }
+    // The native held cap is shared with much longer profiles. On this 8K profile
+    // no execution reaches that cap. Both backends see the entire prefix at each position.
+    let (mut program, rows) = a16_mirror_program_with_rows(&row.artifact_shape, HISTORY_BOUND_V1_SMALL)?;
+    for state in &mut program.states {
+        if let StateKind::Hist { window } = &mut state.kind {
+            *window = context;
+        }
+    }
+    misaka_palw_tir::validate::validate(&program).map_err(|error| format!("the CoreV1 mirror program: {error}"))?;
+    Ok((program, rows))
 }
 
 fn main() {
@@ -175,12 +198,12 @@ fn main() {
     };
 
     // The IR program and its params.
-    let history_bound = if exact {
-        kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(&row.profile) as u32
+    let mirror = if let Some((_, ctx, _)) = &exact_job {
+        core_v1_mirror_program(&row, ctx)
     } else {
-        HISTORY_BOUND_V1_SMALL
+        a16_mirror_program_with_rows(&artifact.shape, HISTORY_BOUND_V1_SMALL)
     };
-    let (program, rows) = a16_mirror_program_with_rows(&artifact.shape, history_bound).unwrap_or_else(|e| die(e));
+    let (program, rows) = mirror.unwrap_or_else(|e| die(e));
     let tensors: BTreeMap<(u16, Option<u16>), Vec<u8>> = match flag(&args, "--tir") {
         Some(p) => {
             let c = misaka_palw_tir_artifact::PalwTirContainerV1::open(std::path::Path::new(p))
@@ -259,7 +282,8 @@ fn main() {
             "artifact_digest": exact_artifact_digest.map(|h| h.to_string()),
             "artifact_tokenizer": artifact.tokenizer_commitment.to_string(), "job_tokenizer": ctx.tokenizer_id.to_string(),
             "mirror_program_root": kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&program.encode()).to_string(),
-            "max_context": ctx.max_context_tokens, "prefill_run_positions": A16_PREFILL_RUN_POSITIONS,
+            "max_context": ctx.max_context_tokens, "mirror_history_window": ctx.max_context_tokens,
+            "prefill_run_positions": A16_PREFILL_RUN_POSITIONS,
             "selected_tokens": {"native": native, "mirror": mirror},
             "native_output_root": palw_attempt_output_root_v1(ctx, &[native]).to_string(),
             "mirror_ids_under_native_output_rule": palw_attempt_output_root_v1(ctx, &[mirror]).to_string(),
@@ -336,5 +360,20 @@ mod tests {
         let old = equiv_jobs_v1(1023, 2, row.artifact_shape.vocab, anchor, 0, 0);
         assert_ne!(job.prompt, old[0].prompt);
         assert_eq!((job.prompt.len(), job.decode), (1023, 1));
+        let native_history = kaspa_consensus_core::palw_state_chunk_map::palw_attn_history_bound_v1(&row.profile);
+        assert!(a16_mirror_program_with_rows(&row.artifact_shape, native_history as u32).unwrap_err().contains("worst-case H"));
+        let (program, _) = core_v1_mirror_program(&row, &ctx).unwrap();
+        let windows: Vec<_> = program
+            .states
+            .iter()
+            .filter_map(|state| match state.kind {
+                StateKind::Hist { window } => Some(window),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(windows, [8192, 8192]);
+        let mut wrong_context = ctx;
+        wrong_context.max_context_tokens -= 1;
+        assert!(core_v1_mirror_program(&row, &wrong_context).is_err());
     }
 }
