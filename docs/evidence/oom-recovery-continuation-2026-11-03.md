@@ -1773,3 +1773,30 @@ while the committed checkpoint lacks both the canonical semantics
 and native registration-origin rows. The release's current strict
 rules refuse that checkpoint. The old checkpoint and archives were
 preserved.
+
+## Qwen #67 custody and measured held replay — 07:42 UTC
+
+B0, relay and the public index agreed at DAA 19,648. Qwen #67's
+carrier at 19,646 was referenced at 19,648 and its claim was absent
+on both nodes. The exact B0 journal again recorded 20,606 DAA
+against 20,608. A stable read pinned 2,409,135 bytes of capture and
+4,172 bytes of answer on B0. This confirms custody at the observation
+point. The next paired scan reached 19,649 with no new Qwen fold.
+
+The original #58 position-16 diagnostic first failed compilation
+with a local closure lifetime error. The corrected compile passed.
+Its Panel builder ran into the 175-second bound. A second source
+revision removed the repeated query replay and timed the remaining
+operations. It reproduced the original 17-position checkpoint root
+at 93.815 seconds, then stopped at the wall limit in fused-output
+replay, before any model-free verdict. Each failed attempt released
+its owned RAM volume. The next private revision uses small planned
+prefill batches without unused output projection, while preserving
+the native original-checkpoint root check. Its compiled process was
+observed running under the same runtime limits.
+
+The same Seat5 worker check, invocation
+`5afe92616cd94d49875bf55d6a51f34c`, was still checking Consensus
+Core at 661 seconds. Peak cgroup memory was 5,385,728,000 bytes,
+with 141,576 memory.high events and zero OOM or OOM kills at the
+sample. This is a build-resource observation, without a test verdict.
