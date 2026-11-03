@@ -2539,6 +2539,7 @@ impl PalwChainStateV2 {
                     | Key::TirPreparation(..)
                     | Key::TirClaim(_)
                     | Key::TirWitness(..)
+                    | Key::TirOwnerSchedule(_)
             ) {
                 let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
                 due.insert((at, *key));
@@ -2588,6 +2589,7 @@ impl PalwChainStateV2 {
                         | Key::TirPreparation(..)
                         | Key::TirClaim(_)
                         | Key::TirWitness(..)
+                        | Key::TirOwnerSchedule(_)
                 )
             })
             .copied()
@@ -4054,6 +4056,11 @@ impl PalwChainStateV2 {
         self.assert_terminal_evidence_v1()?;
         for (key, row) in &self.staged_courts {
             row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(schedule) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < schedule.material_until()
+            {
+                schedule.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
         }
         let responders: BTreeSet<_> = self.staged_courts.values().flat_map(palw_staged_court_fold_v1::response_index_rows).collect();
         if responders != self.staged_prefix_responders {

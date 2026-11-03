@@ -2,9 +2,10 @@
 //! authenticated owner keys and demand transitions from the current frame.
 //! This component changes scheduling metadata only. Court state retains the
 //! demand, accepted answers, turn balance, deposit and evidence horizon.
-//! No existing admission, quote, state root or wire format reads this module.
+//! No existing admission or quote uses this candidate.
 
-use std::collections::VecDeque;
+use borsh::{BorshDeserialize, BorshSerialize};
+use std::{collections::VecDeque, io};
 
 /// Implementation ceiling for the candidate roster, including parked and closed rows.
 pub const MAX_ROSTER_V2: usize = 64;
@@ -22,7 +23,7 @@ pub enum OwnerScheduleErrorV2 {
     InvalidWindow,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum OwnerPhaseV2<D = u64> {
     Ready,
     Active { until: u64 },
@@ -30,7 +31,7 @@ pub enum OwnerPhaseV2<D = u64> {
     Closed,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 struct OwnerRow<K, D> {
     key: K,
     phase: OwnerPhaseV2<D>,
@@ -39,7 +40,7 @@ struct OwnerRow<K, D> {
 
 /// Ready owners and re-entrants are appended to the same FIFO. A key is
 /// reserved for the frame's lifetime, including after execution closes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub struct OwnerScheduleV2<K, D = u64> {
     roster_limit: usize,
     active_limit: usize,
@@ -205,6 +206,53 @@ impl<K: Copy + Eq, D: Copy + Eq> OwnerScheduleV2<K, D> {
     }
 }
 
+fn invalid_snapshot(reason: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, reason)
+}
+
+impl<K: BorshDeserialize + Copy + Eq, D: BorshDeserialize + Copy + Eq> BorshDeserialize for OwnerScheduleV2<K, D> {
+    fn deserialize_reader<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+        let roster_limit = usize::deserialize_reader(reader)?;
+        let active_limit = usize::deserialize_reader(reader)?;
+        let response_limit = usize::deserialize_reader(reader)?;
+        let lease_daa = u64::deserialize_reader(reader)?;
+        let now = u64::deserialize_reader(reader)?;
+        let count = u32::deserialize_reader(reader)? as usize;
+        if count > roster_limit || roster_limit > MAX_ROSTER_V2 {
+            return Err(invalid_snapshot("TIR owner snapshot exceeds the roster ceiling"));
+        }
+        let mut result = Self::new(roster_limit, active_limit, response_limit, lease_daa, now)
+            .map_err(|_| invalid_snapshot("invalid TIR owner snapshot limits or clock"))?;
+        let mut active = 0;
+        let mut ready = 0;
+        let mut waiting = 0;
+        for _ in 0..count {
+            let row = OwnerRow::deserialize_reader(reader)?;
+            if result.phase(row.key).is_some() {
+                return Err(invalid_snapshot("duplicate TIR owner snapshot key"));
+            }
+            match row.phase {
+                OwnerPhaseV2::Active { until } if now < until && until <= now + lease_daa => active += 1,
+                OwnerPhaseV2::Ready => ready += 1,
+                OwnerPhaseV2::Waiting { turn, respond_until, collect_until, .. }
+                    if row.last_demand == Some(turn) && respond_until < collect_until && now < collect_until =>
+                {
+                    waiting += 1;
+                }
+                OwnerPhaseV2::Closed => {}
+                _ => return Err(invalid_snapshot("TIR owner snapshot has an invalid phase or deadline")),
+            }
+            result.rows.push_back(row);
+        }
+        if active > active_limit || waiting > response_limit || (ready > 0 && active < active_limit) {
+            return Err(invalid_snapshot("TIR owner snapshot exceeds its phase capacities"));
+        }
+        Ok(result)
+    }
+}
+
+include!("palw_tir_owner_schedule_rooted_v2.rs");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +335,21 @@ mod tests {
         alternate.resume(1, 4, 104u64, true).unwrap();
         assert_ne!(alternate, schedule);
         assert_eq!(alternate.phase(1), Some(Ready));
+    }
+
+    #[test]
+    fn checkpoint_preserves_response_identity_and_bounds_the_roster_before_reading_rows() {
+        let mut schedule = OwnerScheduleV2::new(3, 1, 2, 4, 20).unwrap();
+        schedule.admit(7u64).unwrap();
+        schedule.admit(9).unwrap();
+        schedule.wait_for_response(7, 1, 151u64, 25, 30).unwrap();
+        let mut bytes = borsh::to_vec(&schedule).unwrap();
+        let restored: OwnerScheduleV2<u64> = borsh::from_slice(&bytes).unwrap();
+        assert_eq!(restored, schedule);
+
+        // Exactly five u64 header fields precede the Borsh count.
+        bytes[40..44].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(borsh::from_slice::<OwnerScheduleV2<u64>>(&bytes).unwrap_err().to_string().contains("roster ceiling"));
     }
 
     #[test]
