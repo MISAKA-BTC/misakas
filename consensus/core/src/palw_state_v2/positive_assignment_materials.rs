@@ -323,9 +323,14 @@ fn validate_case_materials_v2(
         let event = &entries[start..record.delta_end];
         previous_end = record.delta_end;
         let assigned_initial = record.header.kind == CaseJournalEventKind::NativeTransaction && record.header.sequence == 1;
-        let source_op = if record.header.kind == CaseJournalEventKind::NativeBody { view.payload().get(4).copied() } else { None };
-        let mut received = None;
-        let mut source_union = None;
+        if record.header.kind == CaseJournalEventKind::NativeBody
+            && let Some(operation @ (3 | 4)) = view.payload().get(4).copied()
+        {
+            validate_source_case_material_v2(view, operation, event, record.raw.len() as u64)?;
+            source_union_count += 1;
+            source_receipt_count += usize::from(operation == 4);
+            continue;
+        }
         let mut consumed = None;
         let mut case = false;
         let mut head = false;
@@ -354,25 +359,6 @@ fn validate_case_materials_v2(
                 {
                     head = true
                 }
-                NativeRowBody::ServiceReceipt(receipt) if old.is_none() => {
-                    if source_op != Some(4)
-                        || receipt.case != record.header.case
-                        || receipt.result != record.header.result
-                        || receipt.response.origin != record.header.origin
-                        || receipt.response.digest.0 != record.header.origin.carrier_transaction.0
-                        || receipt.settlement.is_some()
-                        || received.replace(receipt).is_some()
-                    {
-                        return Err(failure("first source receipt differs from its atomic response"));
-                    }
-                    source_receipt_count += 1;
-                }
-                NativeRowBody::SourceUnion(union) => {
-                    if !matches!(source_op, Some(3 | 4)) || union.case != record.header.case || source_union.replace(union).is_some() {
-                        return Err(failure("source union differs from its atomic request or response"));
-                    }
-                    source_union_count += 1;
-                }
                 NativeRowBody::AssignmentUse(row)
                     if assigned_initial
                         && row.case == record.header.case
@@ -385,20 +371,6 @@ fn validate_case_materials_v2(
                 }
                 _ => {}
             }
-        }
-        if received.is_some() != (source_op == Some(4)) || source_union.is_some() != matches!(source_op, Some(3 | 4)) {
-            return Err(failure("source journal lacks its exact receipt or union"));
-        }
-        if let (Some(receipt), Some(union)) = (received, source_union)
-            && (receipt.kind != union.kind || receipt.source != union.source)
-        {
-            return Err(failure("source receipt and union name different source data"));
-        }
-        if let Some(union) = source_union
-            && source_op == Some(3)
-            && (union.union.origin != record.header.origin || union.union.digest.0 != record.header.origin.carrier_transaction.0)
-        {
-            return Err(failure("source request journal differs from its recorded union origin"));
         }
         if !case || !head {
             return Err(failure("Case material missing atomic Case/head mutation"));
@@ -462,6 +434,141 @@ fn validate_case_materials_v2(
     }
     Ok(())
 }
+/// A source operation must carry the exact Case boundary and own every
+/// corresponding state mutation, including the first receipt on an op4.
+fn validate_source_case_material_v2(
+    record: misaka_palw_positive_contract::journal::CaseJournalRecordView<'_>,
+    operation: u8,
+    changes: &[PalwDeltaEntryV2],
+    encoded_bytes: u64,
+) -> Result<(), PalwStateV2Error> {
+    use crate::{
+        palw_positive_court_v2::coordinator::native_body::SOURCE_REQUEST_BODY_BYTES_V2,
+        palw_positive_source_v2::history::response_body_data,
+    };
+    use misaka_palw_positive_contract::{messages::SourceRequest, rows::AcceptedMaterial};
+
+    let failure = |why| PalwStateV2Error::DeltaMismatch(why);
+    let header = record.header();
+    if record.aux().count() != 1 || header.origin.event_ordinal != 0 {
+        return Err(failure("source event requires exactly one native boundary"));
+    }
+    let mut case = None;
+    let mut union = None;
+    let mut receipt = None;
+    let mut head = None;
+    for entry in changes {
+        let PalwDeltaEntryV2::KernelRouteRow { table, key, old, new: Some(bytes) } = entry else {
+            return Err(failure("unexpected source event mutation"));
+        };
+        if *table != KERNEL_AUX_TABLE {
+            return Err(failure("unexpected source event namespace"));
+        }
+        let decode =
+            |raw: &[u8]| NativeRowValue::decode(key, raw).map(|value| value.body).map_err(|_| failure("source delta row codec"));
+        let before = old.as_deref().map(decode).transpose()?;
+        match (before, decode(bytes)?) {
+            (Some(NativeRowBody::Case(before)), NativeRowBody::Case(after)) if case.is_none() => case = Some((before, after)),
+            (None, NativeRowBody::SourceUnion(after)) if union.is_none() => union = Some((None, after)),
+            (Some(NativeRowBody::SourceUnion(before)), NativeRowBody::SourceUnion(after)) if union.is_none() => {
+                union = Some((Some(before), after))
+            }
+            (None, NativeRowBody::ServiceReceipt(value)) if receipt.is_none() => receipt = Some(value),
+            (Some(NativeRowBody::JournalHead(before)), NativeRowBody::JournalHead(after)) if head.is_none() => {
+                head = Some((before, after))
+            }
+            _ => return Err(failure("duplicate or foreign source event mutation")),
+        }
+    }
+    let (before, after) = case.ok_or_else(|| failure("source event is missing its Case mutation"))?;
+    let (previous_union, next_union) = union.ok_or_else(|| failure("source event is missing its union mutation"))?;
+    let (previous_head, next_head) = head.ok_or_else(|| failure("source event is missing its journal head"))?;
+    let normalized = misaka_palw_positive_contract::rows::CaseRow {
+        usage: before.usage,
+        miner_data: before.miner_data,
+        last_event: before.last_event,
+        ..after
+    };
+    if normalized != before
+        || after.case != header.case
+        || after.result != header.result
+        || after.coverage.scope != header.scope
+        || after.last_event != header.origin
+        || after.usage.witness_attempts != before.usage.witness_attempts
+        || before.usage.transmitted_bytes.checked_add(record.payload().len() as u64) != Some(after.usage.transmitted_bytes)
+        || before.usage.retained_bytes.checked_add(encoded_bytes) != Some(after.usage.retained_bytes)
+        || next_union.case != header.case
+        || previous_head.case != header.case
+        || previous_head.head != header.previous
+        || previous_head.sequence.checked_add(1) != Some(header.sequence)
+        || next_head.case != header.case
+        || next_head.sequence != header.sequence
+        || next_head.previous != header.previous
+        || next_head.head != record.head()
+        || next_head.history != record.history()
+    {
+        return Err(failure("source event does not advance its own Case and journal"));
+    }
+    let work = after
+        .usage
+        .additional_work
+        .checked_sub(before.usage.additional_work)
+        .filter(|n| *n != 0)
+        .ok_or_else(|| failure("source event work was not charged"))?;
+    let material = AcceptedMaterial {
+        origin: header.origin,
+        digest: misaka_palw_positive_contract::identity::Digest(header.origin.carrier_transaction.0),
+    };
+    let raw = record.payload();
+    if operation == 3 {
+        const REQUEST_BYTES: usize = 4 + 3 * 64 + 1 + 16;
+        if raw.get(..5) != Some(&[2, 0, 1, 0, 3]) || raw.len() as u64 != SOURCE_REQUEST_BODY_BYTES_V2 {
+            return Err(failure("source request journal literal extent"));
+        }
+        let request: SourceRequest =
+            borsh::from_slice(&raw[5..5 + REQUEST_BYTES]).map_err(|_| failure("source request journal codec"))?;
+        let old_requested = previous_union.map_or(0, |row| row.requested_units);
+        let fresh = next_union.requested_units.checked_sub(old_requested).ok_or_else(|| failure("source request removed units"))?;
+        request.validate(next_union.source_units).map_err(|_| failure("source request journal range"))?;
+        if receipt.is_some()
+            || request.case != header.case
+            || request.contract != before.service.id()
+            || request.kind != next_union.kind
+            || request.source != next_union.source
+            || next_union.union != material
+            || next_union.completed_units != previous_union.map_or(0, |row| row.completed_units)
+            || fresh > request.end - request.first
+            || before.usage.rounds.checked_add(u64::from(fresh != 0)) != Some(after.usage.rounds)
+            || after.usage.unique_source_bytes < before.usage.unique_source_bytes
+            || (fresh == 0 && after.usage.unique_source_bytes != before.usage.unique_source_bytes)
+            || after.usage.fee != before.usage.fee
+        {
+            return Err(failure("source request delta differs from its literal request"));
+        }
+    } else {
+        response_body_data(header.case, raw).map_err(|_| failure("source response journal codec"))?;
+        let first = receipt.ok_or_else(|| failure("source response is missing its first receipt"))?;
+        let mut expected_union = previous_union.ok_or_else(|| failure("source response has no requested union"))?;
+        expected_union.completed_units =
+            expected_union.completed_units.checked_add(1).ok_or_else(|| failure("source response unit overflow"))?;
+        if next_union != expected_union
+            || first.case != header.case
+            || first.result != header.result
+            || first.kind != next_union.kind
+            || first.source != next_union.source
+            || first.response != material
+            || first.settlement.is_some()
+            || first.additional_work != work
+            || after.usage.rounds != before.usage.rounds
+            || after.usage.unique_source_bytes != before.usage.unique_source_bytes
+            || after.usage.fee < before.usage.fee
+        {
+            return Err(failure("source response does not add one unpaid receipt to the requested union"));
+        }
+    }
+    Ok(())
+}
+
 /// The Case record carries the same BindResult frame the Assignment journal
 /// committed at this event. Check that cross-link while both native outcomes
 /// and their exact pre-commit delta are still owned by the writer.
@@ -994,5 +1101,202 @@ mod settlement_tests {
         foreign.current_outpoint.as_mut().unwrap().index += 1;
         *encoded = Some(encode(foreign));
         assert!(material.check_utxo_settlements_v2(&entries, plans).is_err());
+    }
+}
+
+#[cfg(test)]
+mod source_material_tests {
+    use super::*;
+    use crate::palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2;
+    use misaka_palw_positive_contract::{
+        identity::{Digest, PrincipalId, SIGNATURE_BYTES},
+        journal::{
+            CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord, CaseJournalRecordView,
+        },
+        messages::{SourceKind, SourceRequest},
+        rows::{
+            AcceptedMaterial, AcceptedOrigin, AggregateUsage, CaseRow, JournalHeadRow, NativeHash64, ServiceReceiptRow, SourceUnionRow,
+        },
+    };
+
+    fn d(n: u8) -> Digest {
+        Digest([n; 64])
+    }
+    fn fixture(operation: u8) -> (PositiveCaseAcceptedMaterialV2, Vec<PalwDeltaEntryV2>) {
+        let (_, _, mut before, _, _, _) = crate::palw_positive_rows_v2::tests::signed_bundle();
+        before.service.budget.transmitted_bytes = 10_000;
+        before.service.budget.retained_bytes = 10_000;
+        before.usage = AggregateUsage {
+            rounds: 1,
+            unique_source_bytes: 4,
+            transmitted_bytes: 100,
+            additional_work: 4,
+            retained_bytes: 100,
+            fee: 0,
+            witness_attempts: 0,
+        };
+        let case = before.case;
+        let result = before.result;
+        let scope = before.coverage.scope;
+        let prior_material = AcceptedMaterial { origin: before.last_event, digest: d(19) };
+        let origin = AcceptedOrigin {
+            accepting_block: NativeHash64([21; 64]),
+            carrier_transaction: NativeHash64([23; 64]),
+            event_ordinal: 0,
+            accepted_daa: 21,
+            accepted_blue_score: 21,
+            ..before.last_event
+        };
+        let current = AcceptedMaterial { origin, digest: d(23) };
+        let request = SourceRequest {
+            version: 2,
+            revision: 1,
+            case,
+            contract: before.service.id(),
+            source: d(31),
+            kind: SourceKind::Input,
+            first: 0,
+            end: 2,
+        };
+        let previous_union = SourceUnionRow {
+            case,
+            kind: request.kind,
+            source: request.source,
+            source_units: 3,
+            requested_units: 1,
+            completed_units: 0,
+            union: prior_material,
+        };
+        let (after_usage, next_union, payload, receipt) = if operation == 3 {
+            let mut payload = vec![2, 0, 1, 0, 3];
+            payload.extend(borsh::to_vec(&(request, PrincipalId(d(33)), [0u8; SIGNATURE_BYTES])).unwrap());
+            (
+                AggregateUsage {
+                    rounds: 2,
+                    unique_source_bytes: 8,
+                    transmitted_bytes: 100 + payload.len() as u64,
+                    retained_bytes: 100 + payload.len() as u64,
+                    additional_work: 6,
+                    ..before.usage
+                },
+                SourceUnionRow { requested_units: 2, union: current, ..previous_union },
+                payload,
+                None,
+            )
+        } else {
+            let mut payload = vec![2, 0, 1, 0, 4];
+            payload.extend(case.0.0);
+            payload.extend(request.id().0.0);
+            payload.extend(1u32.to_le_bytes());
+            payload.push(42);
+            (
+                AggregateUsage {
+                    transmitted_bytes: 100 + payload.len() as u64,
+                    retained_bytes: 100 + payload.len() as u64,
+                    additional_work: 6,
+                    fee: 1,
+                    ..before.usage
+                },
+                SourceUnionRow { completed_units: 1, ..previous_union },
+                payload,
+                Some(ServiceReceiptRow {
+                    case,
+                    kind: request.kind,
+                    source: request.source,
+                    unit: 0,
+                    result,
+                    duty: prior_material,
+                    response: current,
+                    provider: PrincipalId(d(33)),
+                    bytes: 4,
+                    additional_work: 2,
+                    settlement: None,
+                }),
+            )
+        };
+        let mut after = CaseRow { usage: after_usage, last_event: origin, ..before };
+        let previous_head = JournalHeadRow { case, sequence: 1, previous: d(0), head: d(40), history: prior_material };
+        let boundary = AssignmentCaseBoundaryV2 {
+            version: 2,
+            revision: 1,
+            case,
+            origin,
+            selected_parent: NativeHash64([20; 64]),
+            pre_event_root: d(41),
+            before_delta_end: 0,
+            populated_inputs: d(42),
+            input_count: 1,
+            fee: 1,
+        };
+        let header = CaseJournalHeader {
+            version: 2,
+            revision: 1,
+            scope,
+            case,
+            result,
+            sequence: 2,
+            previous: previous_head.head,
+            origin,
+            kind: CaseJournalEventKind::NativeBody,
+        };
+        let limits = CaseJournalLimits {
+            max_record_bytes: 10000,
+            max_payload_bytes: 8000,
+            max_aux_entries: 1,
+            max_aux_preimage_bytes: 500,
+            max_total_preimage_bytes: 10000,
+            max_logical_heap_bytes: 20000,
+        };
+        let record = CaseJournalRecord {
+            header,
+            payload,
+            aux: vec![CaseJournalAux { material: boundary.material(), preimage: borsh::to_vec(&boundary).unwrap() }],
+        };
+        let raw = record.encode(limits).unwrap();
+        after.usage.retained_bytes = before.usage.retained_bytes + raw.len() as u64;
+        let view = CaseJournalRecordView::decode(&raw, limits).unwrap();
+        let next_head = JournalHeadRow { case, sequence: 2, previous: previous_head.head, head: view.head(), history: view.history() };
+        let entry = |old: Option<NativeRowBody>, new: NativeRowBody| {
+            let key = new.key().encode();
+            let encode = |body| NativeRowValue::new(body).unwrap().encode().unwrap();
+            PalwDeltaEntryV2::KernelRouteRow { table: KERNEL_AUX_TABLE, key, old: old.map(encode), new: Some(encode(new)) }
+        };
+        let mut delta = vec![
+            entry(Some(NativeRowBody::Case(before)), NativeRowBody::Case(after)),
+            entry(Some(NativeRowBody::SourceUnion(previous_union)), NativeRowBody::SourceUnion(next_union)),
+        ];
+        if let Some(receipt) = receipt {
+            delta.push(entry(None, NativeRowBody::ServiceReceipt(receipt)));
+        }
+        delta.push(entry(Some(NativeRowBody::JournalHead(previous_head)), NativeRowBody::JournalHead(next_head)));
+        (PositiveCaseAcceptedMaterialV2 { header, raw, limits, delta_end: delta.len() }, delta)
+    }
+    #[test]
+    fn request_and_first_receipt_require_their_atomic_case_mutations() {
+        for operation in [3, 4] {
+            let (record, delta) = fixture(operation);
+            let records = [record];
+            assert_eq!(validate_case_materials_v2(&records, &[], &delta), Ok(()), "op {operation}");
+            let mut absent = delta.clone();
+            absent.remove(if operation == 3 { 1 } else { 2 });
+            let mut absent_record = fixture(operation).0;
+            absent_record.delta_end = absent.len();
+            assert!(validate_case_materials_v2(&[absent_record], &[], &absent).is_err());
+            let mut orphan = delta.clone();
+            orphan.push(delta[1].clone());
+            assert!(validate_case_materials_v2(&records, &[], &orphan).is_err());
+            assert!(validate_case_materials_v2(&[], &[], &[delta[1].clone()]).is_err());
+            let view = CaseJournalRecordView::decode(&records[0].raw, records[0].limits).unwrap();
+            assert!(validate_source_case_material_v2(view, operation, &delta, records[0].raw.len() as u64 + 1).is_err());
+            let mut wrong_case = delta.clone();
+            let PalwDeltaEntryV2::KernelRouteRow { key, new: Some(raw), .. } = &mut wrong_case[0] else {
+                panic!("fixture begins with a Case row");
+            };
+            let mut value = NativeRowValue::decode(key, raw).unwrap();
+            let NativeRowBody::Case(case) = &mut value.body else { panic!("fixture Case row") };
+            case.usage.transmitted_bytes -= 1;
+            *raw = value.encode().unwrap();
+            assert!(validate_case_materials_v2(&records, &[], &wrong_case).is_err());
+        }
     }
 }
