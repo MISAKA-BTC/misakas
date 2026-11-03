@@ -6,6 +6,31 @@ use super::{block::RuleError, tx::TxRuleError};
 use kaspa_hashes::Hash64;
 use thiserror::Error;
 
+/// Local read failure while serving an already captured pruning snapshot.
+/// Carries no store message, row bytes or other payload into peer-facing diagnostics.
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PruningSnapshotReadErrorV1 {
+    #[error("resource_unavailable")]
+    ResourceUnavailable,
+    #[error("storage_unavailable")]
+    StorageUnavailable,
+    #[error("corrupt")]
+    Corrupt,
+    #[error("unsupported")]
+    Unsupported,
+}
+
+impl PruningSnapshotReadErrorV1 {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::ResourceUnavailable => "resource_unavailable",
+            Self::StorageUnavailable => "storage_unavailable",
+            Self::Corrupt => "corrupt",
+            Self::Unsupported => "unsupported",
+        }
+    }
+}
+
 #[derive(Error, Debug, Clone)]
 pub enum PruningImportError {
     #[error("pruning proof doesn't have {0} levels")]

@@ -437,7 +437,10 @@ impl HandleRelayInvsFlow {
             let ctx = self.ctx.clone();
             let peer = self.router.key();
             tokio::spawn(async move {
-                ctx.on_new_block(&session, ancestor_batch, block, virtual_state_task).await;
+                if let Err(local_stop) = ctx.on_new_block(&session, ancestor_batch, block, virtual_state_task).await {
+                    debug!("relay post-processing stopped locally: {local_stop}");
+                    return;
+                }
                 ctx.log_block_event(BlockLogEvent::Relay(inv.hash));
                 // LIVE-R1 N2: after virtual processing, so the sink the relation is read against is current.
                 ctx.observe_relay_for_partition(&session, peer, inv.hash).await;

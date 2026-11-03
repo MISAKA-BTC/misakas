@@ -191,6 +191,42 @@ impl VirtualStateProcessor {
         )
     }
 
+    /// A cached mining template is not a fresh context observation. Reuse the
+    /// strict parent reader and bootstrap preflight before starting new work;
+    /// no legacy fallback or missing-history substitution authorizes inference.
+    pub(crate) fn palw_producer_context_v1(
+        &self,
+        parent: BlockHash,
+        daa: u64,
+        root: kaspa_consensus_core::Hash64,
+    ) -> Result<u64, String> {
+        let before = self.virtual_stores.read().state.get().map_err(|e| e.to_string())?;
+        if before.ghostdag_data.selected_parent != parent || before.daa_score != daa {
+            return Err("producer template/facts no longer match the selected parent and clock".into());
+        }
+        let key = self.template_parent_key_v1(parent).map_err(|why| format!("producer import context unavailable: {why:?}"))?;
+        let state =
+            self.palw_template_parent_checked_v1(parent).map_err(|why| format!("producer parent state unavailable: {why:?}"))?;
+        let prepared = PreparedTemplateParentV1 { key: Some(key), state: Some((parent, state)), checked: Ok(()) };
+        if !key.stable || key.active.is_some() {
+            return Err("producer import is incomplete".into());
+        }
+        let (at, state) = prepared.state.as_ref().ok_or("producer native state is unavailable")?;
+        if *at != parent || self.palw_committed_root_v1(state) != root {
+            return Err("producer template commits a different native state".into());
+        }
+        self.palw_source_bootstrap_template_preflight_v1(&before, &prepared).map_err(|why| why.to_string())?;
+        // Only fixed metadata checks remain under this final virtual guard;
+        // all state/history preparation above ran without blocking its writer.
+        let current = self.virtual_stores.read();
+        let after = current.state.get().map_err(|e| e.to_string())?;
+        if !Arc::ptr_eq(&before, &after) {
+            return Err("producer selected view changed while checking history".into());
+        }
+        self.check_prepared_template_parent_v1(&prepared).map_err(|why| format!("producer import/state changed: {why:?}"))?;
+        Ok(key.epoch)
+    }
+
     /// Run every cold walk before the caller takes a virtual UTXO read guard.
     pub(in crate::pipeline::virtual_processor) fn prepare_template_parent_v1(
         &self,

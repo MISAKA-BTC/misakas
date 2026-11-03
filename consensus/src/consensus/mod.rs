@@ -279,6 +279,7 @@ impl Consensus {
 
         let virtual_processor = Arc::new(VirtualStateProcessor::new(
             virtual_receiver,
+            is_consensus_exiting.clone(),
             pruning_sender,
             pruning_receiver.clone(),
             virtual_pool,
@@ -1338,6 +1339,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_producer_facts_v2_impl(class_id, bond)
     }
 
+    fn palw_producer_context_v1(&self, parent: BlockHash, daa: u64, root: kaspa_hashes::Hash64) -> Result<u64, String> {
+        self.virtual_processor.palw_producer_context_v1(parent, daa, root)
+    }
+
     fn palw_fp_commitment_price_v1(
         &self,
         class_id: kaspa_hashes::Hash64,
@@ -1404,6 +1409,34 @@ impl ConsensusApi for Consensus {
         // re-rooting of the PALW state per unauthenticated call.
         let (_chain_point, state) = self.virtual_processor.palw_v2_reader_state(state_params).ok().flatten()?;
         palw_derived_claim_view_v1(&state, claim_id)
+    }
+
+    fn palw_material_retention_owed_v1(&self, claim: kaspa_hashes::Hash64) -> Result<bool, String> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.config.params.palw_consensus_mode
+        else {
+            return Ok(false);
+        };
+        let before = self.lkg_virtual_state.load();
+        let complete = || {
+            self.virtual_processor
+                .pruning_import_status()
+                .map_err(|error| error.to_string())
+                .map(|(session, stable)| (stable && session.active.is_none()).then_some(session.epoch))
+        };
+        let import_before = complete()?;
+        let snapshot = self.virtual_processor.palw_v2_gc_reader_state_v1();
+        let after = self.lkg_virtual_state.load();
+        let stable = import_before.is_some()
+            && import_before == complete()?
+            && before.ghostdag_data.selected_parent == after.ghostdag_data.selected_parent
+            && before.daa_score == after.daa_score;
+        let now = after.daa_score;
+        palw_material_hold::material_owed_from_snapshot_v1(stable, after.ghostdag_data.selected_parent, snapshot, |state| {
+            (self.config.params.palw_rcore_plus_active_at(now)
+                && state.claim(&claim).is_some_and(|row| kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1(row, now)))
+                || (self.config.params.palw_material_income_active_at(now)
+                    && state.material_income_hold_until_v1(&bundle.state, claim).is_some_and(|until| until == u64::MAX || now < until))
+        })
     }
 
     fn palw_material_income_hold_until_v1(&self, claim: kaspa_hashes::Hash64) -> Option<u64> {
@@ -4674,12 +4707,31 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.pruning_point_palw_state_shared_v1_impl(point)
     }
 
+    fn try_pruning_point_palw_state_shared_v1(
+        &self,
+        point: BlockHash,
+    ) -> Result<
+        Option<std::sync::Arc<kaspa_consensus_core::palw_native_resource_v1::NativeStateCarriageV1>>,
+        kaspa_consensus_core::errors::pruning::PruningSnapshotReadErrorV1,
+    > {
+        self.virtual_processor.try_pruning_point_palw_state_shared_v1_impl(point)
+    }
+
     fn palw_class_carriages_for_snapshot_v1(
         &self,
         snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
         complete: bool,
     ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
         self.virtual_processor.palw_class_carriages_for_snapshot_v1_impl(snapshot, complete)
+    }
+
+    fn palw_class_carriages_for_snapshot_bounded_v1(
+        &self,
+        snapshot: &kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        complete: bool,
+        max_declaration_bytes: u64,
+    ) -> Result<Vec<(kaspa_hashes::Hash64, Vec<u8>)>, String> {
+        self.virtual_processor.palw_class_carriages_for_snapshot_bounded_v1_impl(snapshot, complete, max_declaration_bytes)
     }
 
     fn palw_validate_snapshot_declarations_v1(
@@ -4889,6 +4941,16 @@ impl ConsensusApi for Consensus {
             .map_err(|e| ConsensusError::GeneralOwned(format!("past pruning points do not form a valid chain: {}", e)))
     }
 
+    fn pruning_proof_chain_contains_checkpoint(
+        &self,
+        point: BlockHash,
+        checkpoint: BlockHash,
+        daa_score: u64,
+    ) -> PruningImportResult<bool> {
+        let _guard = self.pruning_lock.blocking_read();
+        self.services.pruning_proof_manager.chain_contains_checkpoint(point, checkpoint, daa_score)
+    }
+
     fn is_chain_ancestor_of(&self, low: BlockHash, high: BlockHash) -> ConsensusResult<bool> {
         let _guard = self.pruning_lock.blocking_read();
         self.validate_block_exists(low)?;
@@ -4984,6 +5046,10 @@ impl ConsensusApi for Consensus {
         // PRUNE SAFETY: proof is cached before the prune op begins and the
         // pruning point cannot move during the prune so the cache remains valid
         self.services.pruning_proof_manager.get_pruning_point_proof()
+    }
+
+    fn try_get_pruning_point_proof(&self) -> PruningImportResult<Arc<PruningPointProof>> {
+        self.services.pruning_proof_manager.try_get_pruning_point_proof()
     }
 
     fn create_virtual_selected_chain_block_locator(
@@ -5717,6 +5783,30 @@ impl ConsensusApi for Consensus {
         // producer carried no EVM data.
         use crate::model::stores::evm::EvmPayloadStoreReader;
         Ok(self.storage.evm_payload_store.get(hash).optional().unwrap().unwrap_or_default())
+    }
+
+    fn get_block_rpc_projection_v1(&self, hash: BlockHash) -> ConsensusResult<kaspa_consensus_core::block::RpcBlockProjectionV1> {
+        use kaspa_consensus_core::block::{RetainedTransactionIdsV1, RpcBlockProjectionV1};
+        let _guard = self.pruning_lock.blocking_read();
+        let unavailable = |error| ConsensusError::GeneralOwned(format!("RPC block source: {error}"));
+        let status = self
+            .statuses_store
+            .read()
+            .get(hash)
+            .optional()
+            .map_err(unavailable)?
+            .filter(|status| status.has_block_header())
+            .ok_or(ConsensusError::HeaderNotFound(hash))?;
+        let ids = if status.is_header_only() {
+            RetainedTransactionIdsV1::default()
+        } else {
+            self.block_transactions_store.rpc_transaction_ids_v1(hash).optional().map_err(unavailable)?.unwrap_or_default()
+        };
+        let header =
+            self.headers_store.get_header(hash).optional().map_err(unavailable)?.ok_or(ConsensusError::HeaderNotFound(hash))?;
+        // Keep the IDs' owner intact across fallible/uncovered source reads.
+        let block = Block { header, transactions: Default::default(), evm_payload: Arc::new(self.get_block_evm_payload(hash)?) };
+        Ok(RpcBlockProjectionV1 { block, transaction_ids: ids })
     }
 
     fn get_block_even_if_header_only(&self, hash: BlockHash) -> ConsensusResult<Block> {

@@ -165,7 +165,7 @@ impl PalwTirPublicSourceV1 {
             budget,
         )?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(additional).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
         }
         let prepared = PreparedParameterCoverV1::new(Box::new(verified), binding.job_context).map_err(E::Decode)?;
         let cover = source.parameter_cover_prepared_typed_v1(prepared, budget).map_err(CoverErrorV1::native)?;
@@ -242,7 +242,7 @@ impl PalwTirPublicSourceV1 {
                 ))
             })?;
         if let Some(ticket) = lease.as_mut() {
-            ticket.grow_memory_v1(additional).map_err(E::Resource)?;
+            ticket.grow_pending_memory_v1(additional).map_err(E::Resource)?;
         }
         let prepared = PreparedParameterCoverV1::new(Box::new(verified), binding.job_context).map_err(E::Decode)?;
         let mut roots = Vec::new();

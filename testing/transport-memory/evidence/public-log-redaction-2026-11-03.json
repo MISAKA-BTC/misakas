@@ -1,0 +1,55 @@
+{
+  "files": {
+    "preflight-fixtures-2026-11-02.log": {
+      "checkoutPrefixesRedacted": 1,
+      "originalBytes": 3403,
+      "originalSha256": "c711f9f24a8e132ce36973359bea171639b73ae398927e7a42a7415b16ad5a7a",
+      "publicBytes": 3356,
+      "publicSha256": "fe31a61bb851fcfb6dbc6059cca0dcd2cc73da90118aed21f70a88a80c1cce6a"
+    },
+    "preflight-large-2026-11-02.log": {
+      "checkoutPrefixesRedacted": 1,
+      "originalBytes": 786,
+      "originalSha256": "911c12c4f7c7ca895b52248d851cafbb00a04ae7973096af2fa1b5eadfb5c473",
+      "publicBytes": 739,
+      "publicSha256": "c5fc6188258929c063fab3ce02a7550482a2f14175188e717a46bdb5517a7935"
+    },
+    "preflight-merge-2026-11-03.log": {
+      "checkoutPrefixesRedacted": 1,
+      "originalBytes": 5513,
+      "originalSha256": "4f50b6c1f668f240bdc11d834d956986bbf8df4100285c9b91c333566a28d108",
+      "publicBytes": 5466,
+      "publicSha256": "30cee7539e7ab6d14babeaba58f2204fc2b6d823ec0b05dd7a3417171f296c38"
+    },
+    "rpc-conversion-2026-11-02.log": {
+      "checkoutPrefixesRedacted": 1,
+      "originalBytes": 3882,
+      "originalSha256": "6ef616242fee6b2903c53a173e4f10c5cb36d055e53684deedb2f926568374fb",
+      "publicBytes": 3835,
+      "publicSha256": "507f4fe606719d6e19be22a2cd83ea078b3620fcf06d0b86995d6c4f3953b25a"
+    },
+    "small-fixtures-2026-11-02.log": {
+      "checkoutPrefixesRedacted": 1,
+      "originalBytes": 2411,
+      "originalSha256": "d25458994dfe0c2416f360a518a2005c14b2cc093ecc9e67111aacc67d5cdf1b",
+      "publicBytes": 2364,
+      "publicSha256": "70d9d42d3db9182dc5405734dbf458eb6b723a0126740f9414826d1b957affc5"
+    },
+    "snapshot-helpers-2026-11-02.log": {
+      "checkoutPrefixesRedacted": 1,
+      "originalBytes": 5053,
+      "originalSha256": "43a198868a9dfb30c59ad5c686b03328ab65c75ddc27ed5648113f7a9e2f2bc0",
+      "publicBytes": 5006,
+      "publicSha256": "286cb1f039e3a1069f100a7460fd3687b64e00b0354bf57031e96110d9bd4f19"
+    },
+    "tonic-budgeted-scratch-2026-11-02.log": {
+      "checkoutPrefixesRedacted": 1,
+      "originalBytes": 2165,
+      "originalSha256": "5c1e5ae8ce10b9f060b98e49b04557849b925dbd57058457f36aa99f3a126ca9",
+      "publicBytes": 2118,
+      "publicSha256": "75cf996637638ad717927487563846ff9aad1f31870e40dfa3211d03a101c9aa"
+    }
+  },
+  "schemaVersion": 1,
+  "scope": "Public presentation logs with operator checkout paths replaced by <checkout>. Test output and conclusions are otherwise unchanged. Raw records remain in the private incident evidence."
+}

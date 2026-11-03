@@ -1900,7 +1900,7 @@ impl FlowContext {
             self.hub.broadcast(make_message!(Payload::InvRelayBlock, InvRelayBlockMessage { hash: Some(hash.into()) }), None).await;
         }
 
-        self.on_new_block(consensus, Default::default(), block, virtual_state_task).await;
+        self.on_new_block(consensus, Default::default(), block, virtual_state_task).await?;
         self.log_block_event(BlockLogEvent::Submit(hash));
 
         Ok(())
@@ -1931,7 +1931,7 @@ impl FlowContext {
         ancestor_batch: BlockProcessingBatch,
         block: Block,
         virtual_state_task: BlockValidationFuture,
-    ) {
+    ) -> Result<(), ProtocolError> {
         let hash = block.hash();
         let mut blocks = self.unorphan_blocks(consensus, hash).await;
 
@@ -1951,6 +1951,10 @@ impl FlowContext {
             // finish virtual resolution. Keep the mempool intact on that
             // retryable local refusal; it is not peer or block invalidity.
             match virtual_state_task.await {
+                Err(RuleError::ConsensusExiting) => {
+                    debug!("block {} virtual work stopped locally; mempool post-processing deferred", block.hash());
+                    return Err(RuleError::ConsensusExiting.into());
+                }
                 Err(RuleError::LocalNativeCapacityUnavailable(unavailable)) => {
                     warn!("block {} awaits local native capacity; mempool post-processing deferred: {unavailable}", block.hash());
                     continue;
@@ -1978,7 +1982,7 @@ impl FlowContext {
 
         // Transaction relay is disabled if the node is out of sync
         if !self.is_nearly_synced(consensus).await {
-            return;
+            return Ok(());
         }
 
         // TODO: Throttle these transactions as well if needed
@@ -2022,6 +2026,7 @@ impl FlowContext {
                 debug!("<> Mempool scanning task is done");
             });
         }
+        Ok(())
     }
 
     pub async fn is_nearly_synced(&self, session: &ConsensusSessionOwned) -> bool {

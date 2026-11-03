@@ -2203,8 +2203,15 @@ fn pool_sweep_material_v1(
 /// evidence, was deleted while the claim was still `PanelBound` and the seat still serving pulls
 /// for it. A file named for a claim in `pinned` — the panel's live claims, its duties, court duties
 /// and disputes — is kept whatever its age, and does not count toward `max_files`; the live set is
-/// bounded by this seat's own duties, so the pin does not reopen the directory to a stranger.
-fn prune_foreign_retention_v1(dir: &std::path::Path, pinned: &HashSet<Hash64>, now: std::time::SystemTime, max_files: usize) {
+/// bounded by this seat's own duties. `chain_owed` also protects each file's
+/// accepted DA/payment obligation when that finite duty cache is absent.
+fn prune_foreign_retention_v1(
+    dir: &std::path::Path,
+    pinned: &HashSet<Hash64>,
+    now: std::time::SystemTime,
+    max_files: usize,
+    chain_owed: impl Fn(&Hash64) -> Result<bool, String>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let cutoff = now - std::time::Duration::from_secs(72 * 3600);
     let claim_of = |path: &std::path::Path| -> Option<Hash64> {
@@ -2214,8 +2221,18 @@ fn prune_foreign_retention_v1(dir: &std::path::Path, pinned: &HashSet<Hash64>, n
     let mut kept: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if claim_of(&path).is_some_and(|claim| pinned.contains(&claim)) {
-            continue;
+        // Cached duties are only an assist: a restart, cache eviction or a
+        // reorg may leave them empty while the stored acceptance still owes DA.
+        if let Some(claim) = claim_of(&path) {
+            if pinned.contains(&claim) {
+                continue;
+            }
+            match chain_owed(&claim) {
+                Ok(false) => {}
+                // A cold/failed/changed read cannot discharge an obligation.
+                // Re-read next pass; no permanent unknown-claim pin is created.
+                Ok(true) | Err(_) => continue,
+            }
         }
         let Ok(meta) = entry.metadata() else { continue };
         let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
@@ -2324,8 +2341,8 @@ pub(crate) fn palw_seat_note_duty_liability_v1(
 /// — duties, court duties, disputes — and past SEAT-R every claim this seat held a duty on whose
 /// retention horizon ([`palw_seat_retention_horizon_v1`]) has not passed: a licence ends the duty, and
 /// the court window, the Valid lock and a DA accusation still ask about the claim after it. Bounded by
-/// the liabilities it reads ([`palw_seat_note_liability_v1`]), and the retention janitor's space rule
-/// still frees the volume under its floor.
+/// the liabilities it reads ([`palw_seat_note_liability_v1`]). Both GC paths also read
+/// accepted chain obligations; storage pressure cannot discharge material still owed.
 pub(crate) fn palw_seat_retention_pins_v1(
     live: &HashSet<Hash64>,
     liabilities: &HashMap<Hash64, u64>,
@@ -7812,26 +7829,13 @@ impl PalwPanelService {
             }
             *last = now;
         }
-        let mut pinned = self.foreign_pinned.lock().unwrap().clone();
+        let pinned = self.foreign_pinned.lock().unwrap().clone();
         let session = self.consensus_manager.consensus().unguarded_session();
-        let now_daa = session.get_virtual_daa_score();
-        if self.consensus_config.params.palw_material_income_active_at(now_daa) {
-            // Re-read each retained file's rooted physical-payment obligation. The
-            // seat's old finite duty cache cannot discharge a later queue + W hold.
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    if let Some(name) = name.to_str()
-                        && let Some(stem) = name.split('.').next()
-                        && let Ok(claim) = stem.parse::<Hash64>()
-                        && session.palw_material_income_hold_until_v1(claim).is_some_and(|until| until == u64::MAX || now_daa < until)
-                    {
-                        pinned.insert(claim);
-                    }
-                }
-            }
-        }
-        prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES);
+        prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES, |claim| {
+            // One fallible, generation-checked borrowed read. Option getters
+            // merge absent claims with pressure/DB errors and cannot authorize GC.
+            session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
+        });
     }
 
     /// **A free-prompt claim's job, and the user's prompt, off its job material** (ADR-0073

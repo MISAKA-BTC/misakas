@@ -1786,17 +1786,22 @@ fn cgroup_headroom_bytes_v1() -> Option<u64> {
 /// ([`PALW_LAZYFREE_CREDIT_PERMILLE_V1`]) are what that error is spent against.
 #[cfg(target_os = "linux")]
 fn process_lazyfree_bytes_v1() -> u64 {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static SAMPLED: OnceLock<std::sync::Arc<AtomicU64>> = OnceLock::new();
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    static SAMPLED: OnceLock<Arc<Mutex<lazyfree_sample::LazyFreeSample>>> = OnceLock::new();
     let cell = SAMPLED.get_or_init(|| {
-        let cell = std::sync::Arc::new(AtomicU64::new(0));
-        let writer = std::sync::Arc::clone(&cell);
+        let cell = Arc::new(Mutex::new(lazyfree_sample::LazyFreeSample::default()));
+        let writer = Arc::clone(&cell);
         let spawned = std::thread::Builder::new().name("palw-lazyfree".into()).spawn(move || {
             loop {
-                if let Ok(text) = std::fs::read_to_string("/proc/self/smaps_rollup") {
-                    writer.store(lazyfree_from_smaps_rollup_v1(&text), Ordering::Relaxed);
+                // Date at the beginning: a slow smaps walk cannot make old
+                // page-table observations appear newly sampled on completion.
+                let started = Instant::now();
+                let result = std::fs::read_to_string("/proc/self/smaps_rollup").ok().map(|text| lazyfree_from_smaps_rollup_v1(&text));
+                if let Ok(mut sample) = writer.lock() {
+                    sample.complete(started, result);
                 }
-                std::thread::sleep(std::time::Duration::from_secs(PALW_LAZYFREE_SAMPLE_SECS_V1));
+                std::thread::sleep(Duration::from_secs(PALW_LAZYFREE_SAMPLE_SECS_V1));
             }
         });
         if let Err(e) = spawned {
@@ -1804,11 +1809,16 @@ fn process_lazyfree_bytes_v1() -> u64 {
         }
         cell
     });
-    cell.load(Ordering::Relaxed)
+    cell.lock().map(|sample| sample.credit(Instant::now(), Duration::from_secs(PALW_LAZYFREE_EXPIRY_SECS_V1))).unwrap_or(0)
 }
 
 /// How often the lazily-freed-memory sampler reads `/proc/self/smaps_rollup`.
 pub const PALW_LAZYFREE_SAMPLE_SECS_V1: u64 = 15;
+/// Missed/failed sampling must not leave a reclaimability credit behind.
+pub const PALW_LAZYFREE_EXPIRY_SECS_V1: u64 = 30;
+#[cfg(any(target_os = "linux", test))]
+#[path = "palw_lazyfree_sample.rs"]
+mod lazyfree_sample;
 
 /// **The share of a cgroup's `memory.max` the lazily-freed credit may lift the headroom by**, in
 /// permille: a stale sample can overstate what is reclaimable (above), so the credit is capped at
@@ -1843,13 +1853,13 @@ fn cgroup_headroom_from_v1(proc_self_cgroup: &str, lazy_free: u64, read: impl Fn
         let root = Path::new("/sys/fs/cgroup");
         let mut dir = root.join(rel.trim().trim_start_matches('/'));
         let mut least: Option<u64> = None;
-        while dir.starts_with(root) && dir != root {
+        while dir.starts_with(root) {
             if let (Some(max), Some(current)) = (number(dir.join("memory.max")), number(dir.join("memory.current"))) {
                 let credit = lazy_free.min(current).min(max / 1_000 * PALW_LAZYFREE_CREDIT_PERMILLE_V1);
                 let headroom = max.saturating_sub(current.saturating_sub(credit));
                 least = Some(least.map_or(headroom, |l| l.min(headroom)));
             }
-            if !dir.pop() {
+            if dir == root || !dir.pop() {
                 break;
             }
         }
@@ -1956,11 +1966,24 @@ pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
     // The pinned artifacts (int-10.2 A1): in `file` above for every process that maps them, resident
     // once on the host, outside the ledger, and in the memory cgroup of whoever faulted them in first.
     let pinned = crate::palw_artifact_pin::pinned_memory_note_v1();
+    let budget = kaspa_core::memory_budget::global_memory_budget().snapshot();
+    let budget_note = format!(
+        "memory_budget_limit_bytes={} memory_reserved_bytes={} memory_retained_bytes={} memory_pending_bytes={} \
+         memory_transport_bytes={} memory_snapshot_bytes={} memory_native_bytes={} memory_cache_bytes={}",
+        budget.limit_bytes,
+        budget.reserved_bytes,
+        budget.reserved_bytes.saturating_sub(budget.pending_bytes),
+        budget.pending_bytes,
+        budget.class_bytes[0],
+        budget.class_bytes[1],
+        budget.class_bytes[2],
+        budget.class_bytes[3],
+    );
     match process_memory_v1() {
         Some(m) => {
             let unaccounted = m.pss_anon_bytes.saturating_sub(caches);
             info!(
-                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation); of the anon, {:.2} GiB is freed memory the kernel has not taken back yet (reclaimable) and {:.2} GiB is live; {pinned}",
+                "[{role}] memory at {phase}: rss {:.2} / pss {:.2} GiB = anon {:.2} + file {:.2} (shared per sharer);                  swap {:.2}; consensus caches declared {:.2} at --ram-scale {ram_scale:.3}; unaccounted anon {:.2} GiB                  (a class's KV/context, an operand inventory walk, allocator fragmentation); of the anon, {:.2} GiB is freed memory the kernel has not taken back yet (reclaimable) and {:.2} GiB is live; {pinned}; {budget_note}",
                 gib(m.rss_bytes),
                 gib(m.pss_bytes),
                 gib(m.pss_anon_bytes),
@@ -1973,7 +1996,7 @@ pub fn log_memory_phase_v1(role: &str, phase: &str, ram_scale: f64) {
             );
         }
         None => info!(
-            "[{role}] memory at {phase}: per-process accounting is Linux-only here; consensus caches declared {:.2} GiB at              --ram-scale {ram_scale:.3}; {pinned}",
+            "[{role}] memory at {phase}: per-process accounting is Linux-only here; consensus caches declared {:.2} GiB at              --ram-scale {ram_scale:.3}; {pinned}; {budget_note}",
             gib(caches)
         ),
     }

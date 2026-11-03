@@ -1,0 +1,37 @@
+warning: function `capacity_from` is never used
+   --> src/../../../core/src/memory_budget.rs:251:4
+    |
+251 | fn capacity_from(meminfo: &str, membership: &str, read: impl Fn(&std::path::Path) -> Option<String>) -> Option<u64> {
+    |    ^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `misaka-transport-memory-harness` (lib) generated 1 warning
+   Compiling misaka-transport-memory-harness v0.1.0 (<checkout>/testing/transport-memory)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.83s
+     Running unittests src/lib.rs (/tmp/oom-transport-target/debug/deps/misaka_transport_memory_harness-6381f4603ac4a3ae)
+
+running 15 tests
+test protocol_tests::legacy_evm_256mib_and_p2p_320mib_envelopes_remain_usable ... ignored, real 256/320 MiB frames; run alone with --ignored --test-threads=1
+test memory_budget::tests::transfer_growth_failure_and_progress ... ok
+test memory_budget::tests::classes_compete_and_last_owner_releases ... ok
+test memory_budget::tests::live_headroom_counts_only_pending_promises_and_materialization_makes_progress ... ok
+test memory_budget::tests::shared_lease_cannot_split_or_grow ... ok
+test memory_budget::tests::host_hook_is_atomic_and_transfer_does_not_duplicate_bytes ... ok
+test transport::tests::counts_unused_capacity_and_nested_empty_values ... ok
+test memory_budget::tests::root_and_ancestor_limits_are_effective ... ok
+test transport_budget_tests::many_connections_share_one_process_bank_and_return_all_leases ... ok
+test memory_budget::tests::concurrent_admission_is_atomic_and_returns_capacity ... ok
+test transport_budget_tests::codec_peak_is_admitted_before_queue_acceptance_without_waiting ... ok
+test transport_budget_tests::cancelled_queue_returns_session_and_unused_capacity_tickets ... ok
+test transport_budget_tests::slow_transport_slices_hold_snapshot_session_after_dequeue_and_codec_drop ... ok
+test transport_budget_tests::all_accepted_large_items_encode_without_needing_more_admission ... ok
+test protocol_tests::snapshot_ticket_keeps_its_class_without_reviving_pending_bytes ... ok
+
+test result: ok. 14 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+   Doc-tests misaka_transport_memory_harness
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

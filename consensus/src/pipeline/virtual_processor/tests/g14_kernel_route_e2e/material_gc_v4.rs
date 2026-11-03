@@ -61,6 +61,84 @@ pub(super) fn config() -> (Config, PalwConsensusParamsV2, Premine, Premine) {
     let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { unreachable!() };
     (Config::new(p.clone()), b.clone(), premine, floats)
 }
+/// Exercise the complete GC read (virtual generation + import authority + resident
+/// native state), rather than only its snapshot predicate. An unknown claim is
+/// deletable once healthy; temporary inability to establish that fact must recover.
+#[tokio::test]
+async fn material_retention_api_cold_import_and_parent_mismatch_recover_to_healthy_absence() {
+    use crate::model::stores::virtual_state::{VirtualStateStore, VirtualStateStoreReader};
+    use kaspa_consensus_core::pruning::PruningImportSessionV1;
+    use kaspa_database::prelude::CachePolicy;
+    use std::sync::Arc;
+
+    let mut net = Net::over_cfg(config(), TestConsensus::new);
+    net.beat_to(MATERIAL_FROM + 2).await;
+    let consensus = &net.chain.ctx.consensus;
+    let vp = consensus.virtual_processor().clone();
+    let now = consensus.get_virtual_daa_score();
+    assert!(net.config.params.palw_rcore_plus_active_at(now));
+    assert!(net.config.params.palw_material_income_active_at(now));
+    let unknown = Hash64::from_bytes([0xF9; 64]);
+    let read = || consensus.palw_material_retention_owed_v1(unknown);
+    let original_import = vp.pruning_meta_stores.read().import_session().unwrap();
+    assert!(original_import.active.is_none());
+    assert!(vp.pruning_meta_stores.read().try_pruning_utxoset_stable_flag().unwrap());
+
+    // Discard BOTH resident sources. The persisted tip still exists, so cold
+    // cannot be confused with an absent claim, and GC must not decode it itself.
+    vp.palw_reader_snapshot.lock().take();
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        *store = store.clone_with_new_cache(CachePolicy::Count(16));
+    }
+    assert!(read().is_err(), "cold native state is unknown, not absent");
+    {
+        let (_, state) = vp.palw_state_v2_store.read().load_tip_cached(&net.bundle.state).unwrap().unwrap();
+        assert!(state.claim(&unknown).is_none());
+        assert!(state.material_income_hold_until_v1(&net.bundle.state, unknown).is_none());
+    }
+    assert_eq!(read(), Ok(false), "warming the durable tip restores the real API");
+
+    // Also use the ordinary processor reader's snapshot, the other resident
+    // source used by production calls. It must agree with the durable cache.
+    assert!(vp.palw_v2_reader_state(&net.bundle.state).unwrap().is_some());
+    assert_eq!(read(), Ok(false));
+    consensus.set_pruning_utxoset_stable_flag(false).unwrap();
+    assert!(read().is_err(), "an incomplete import cannot authorize GC");
+    consensus.set_pruning_utxoset_stable_flag(true).unwrap();
+    assert_eq!(read(), Ok(false), "stable recovery must not leave the API permanently held");
+
+    let virtual_stores = consensus.virtual_stores();
+    let original_virtual = virtual_stores.read().state.get().unwrap();
+    let mut importing = original_import.clone();
+    importing.epoch = importing.epoch.checked_add(1).unwrap();
+    importing.active = Some(PruningImportSessionV1 { point: original_virtual.ghostdag_data.selected_parent, epoch: importing.epoch });
+    {
+        let mut batch = rocksdb::WriteBatch::default();
+        vp.pruning_meta_stores.write().set_import_session(&mut batch, &importing).unwrap();
+        vp.db.write(batch).unwrap();
+    }
+    assert!(read().is_err(), "an active import remains unknown even with a stable flag");
+    importing.active = None;
+    {
+        let mut batch = rocksdb::WriteBatch::default();
+        vp.pruning_meta_stores.write().set_import_session(&mut batch, &importing).unwrap();
+        vp.db.write(batch).unwrap();
+    }
+    assert_eq!(read(), Ok(false), "a completed newer import epoch recovers");
+
+    // Move the actual LKG selected parent through the existing virtual-store
+    // API. Neither resident source belongs to this parent. Restore the same
+    // virtual generation afterwards, without a new production test seam.
+    let mut other_virtual = (*original_virtual).clone();
+    other_virtual.ghostdag_data.selected_parent = Hash64::from_bytes([0xFA; 64]);
+    assert_ne!(other_virtual.ghostdag_data.selected_parent, original_virtual.ghostdag_data.selected_parent);
+    virtual_stores.write().state.set(Arc::new(other_virtual)).unwrap();
+    assert!(read().is_err(), "a resident state from a different selected parent is unknown");
+    virtual_stores.write().state.set(original_virtual).unwrap();
+    assert_eq!(read(), Ok(false), "restoring a healthy resident generation re-enables GC");
+}
+
 fn sign(net: &Net, bond: &PalwBondKeyV2, message: &[u8], domain: &[u8]) -> Option<Vec<u8>> {
     let card = net.chain.bonds.iter().position(|b| b == bond)?;
     let key = TestConsensus::palw_v2_registry_keypair(card as u64);

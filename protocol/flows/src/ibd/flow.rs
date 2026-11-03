@@ -377,6 +377,13 @@ impl IbdFlow {
                         // the server returns as a matter of course — it holds one snapshot, keyed
                         // to its own pruning point, so any peer whose pruning point advanced during
                         // a multi-minute header sync answers `found: false` to an honest request.
+                        if e.is_local_consensus_exiting() {
+                            // Keep any incomplete adopted import held, using the
+                            // existing local-failure ownership rules. Never retry
+                            // or condemn this peer/chain during node shutdown.
+                            self.ctx.finish_ibd_after_local_resource_failure();
+                            return Err(e);
+                        }
                         if e.is_local_native_resource_unavailable() {
                             if self.ctx.finish_ibd_after_local_resource_failure() {
                                 return Err(e);
@@ -656,6 +663,10 @@ impl IbdFlow {
                 //
                 // Transport failures leave the candidate where it was, so the ordinary retry and
                 // source-rotation machinery gets its turn. The lease bounds how long that can go on.
+                if e.is_local_consensus_exiting() {
+                    self.ctx.chain_participation().end_decision();
+                    return;
+                }
                 let local_resource = e.is_local_native_resource_unavailable();
                 let proof_was_judged = !local_resource
                     && !matches!(
@@ -2290,7 +2301,7 @@ impl IbdFlow {
                     c.import_pruning_points(pruning_points)?;
 
                     info!("Building the proof which was just applied (sanity test)");
-                    let built_proof = c.get_pruning_point_proof();
+                    let built_proof = c.try_get_pruning_point_proof()?;
                     let mut mismatch_detected = false;
                     for (i, (ref_level, built_level)) in ref_proof.iter().zip(built_proof.iter()).enumerate() {
                         if ref_level.iter().map(|h| h.hash).collect::<BlockHashSet>()
@@ -2324,9 +2335,9 @@ impl IbdFlow {
                 .await?;
         }
 
-        // The proof is applied, so staging has reachability for it: every checkpoint the proof covers
+        // The proof is applied, so staging has level-0 GHOSTDAG data: every checkpoint the proof covers
         // (contained, per the pre-check) must be on the pruning point's selected chain.
-        self.check_chain_checkpoints(staging, proof_pruning_point, 0, "pruning-point proof").await?;
+        self.check_proof_chain_checkpoints(staging, proof_pruning_point).await?;
 
         // TODO (relaxed): add logs to staging commit process
 
@@ -2483,6 +2494,38 @@ impl IbdFlow {
         Ok(())
     }
 
+    /// Applied proof rows have no ordinary block statuses yet. Read their
+    /// authoritative level-0 GHOSTDAG chain, not the all-level reachability tree.
+    /// Typed local context failures leave before the peer-violation/ban path.
+    async fn check_proof_chain_checkpoints(&self, consensus: &ConsensusProxy, point: BlockHash) -> Result<(), ProtocolError> {
+        let checkpoints = &self.ctx.config.ibd_checkpoints;
+        if checkpoints.is_empty() {
+            return Ok(());
+        }
+        let top_daa_score = consensus
+            .async_get_header(point)
+            .await
+            .map_err(|error| {
+                kaspa_consensus_core::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+                    point,
+                    format!("checkpoint proof tip header: {error}"),
+                )
+            })?
+            .daa_score;
+        for checkpoint in ibd_checkpoint::covered_checkpoints(checkpoints, 0, top_daa_score) {
+            let on_chain = consensus
+                .clone()
+                .spawn_blocking(move |c| c.pruning_proof_chain_contains_checkpoint(point, checkpoint.block_hash, checkpoint.daa_score))
+                .await?;
+            if !on_chain {
+                return Err(self
+                    .refuse_checkpoint_violation("pruning-point proof", IbdCheckpointViolation { checkpoint, top_daa_score })
+                    .await);
+            }
+        }
+        Ok(())
+    }
+
     /// The checkpoints between `floor_daa_score` and `top`'s DAA score must each be a chain ancestor
     /// of `top` sitting at its own DAA score; otherwise the peer is banned and refused.
     async fn check_chain_checkpoints(
@@ -2496,11 +2539,24 @@ impl IbdFlow {
         if checkpoints.is_empty() {
             return Ok(());
         }
-        let top_daa_score = consensus.async_get_header(top).await?.daa_score;
+        let unavailable = |error| {
+            kaspa_consensus_core::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+                top,
+                format!("checkpoint chain context: {error}"),
+            )
+        };
+        let top_daa_score = consensus.async_get_header(top).await.map_err(unavailable)?.daa_score;
         let mut on_chain = Vec::new();
         for cp in ibd_checkpoint::covered_checkpoints(checkpoints, floor_daa_score, top_daa_score) {
-            let at_its_score = consensus.async_get_header(cp.block_hash).await.is_ok_and(|h| h.daa_score == cp.daa_score);
-            if at_its_score && consensus.async_is_chain_ancestor_of(cp.block_hash, top).await.unwrap_or(false) {
+            let header = consensus.async_get_header(cp.block_hash).await.map_err(unavailable)?;
+            if header.daa_score != cp.daa_score {
+                return Err(kaspa_consensus_core::errors::pruning::PruningImportError::PruningPointImportContextUnavailable(
+                    top,
+                    "checkpoint header differs from its expected DAA score".into(),
+                )
+                .into());
+            }
+            if consensus.async_is_chain_ancestor_of(cp.block_hash, top).await.map_err(unavailable)? {
                 on_chain.push(cp);
             }
         }
@@ -2763,8 +2819,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         // decompressed payload that borsh expands into a huge nested allocation.
         // These are generous ceilings for the real pruning-point state (the current
         // nets are far smaller); a chunked/streamed manifest is the deeper follow-up.
-        const MAX_EVM_HEADER_BYTES: usize = 1 << 20; // 1 MiB (the header is tiny)
-        const MAX_EVM_STATE_SNAPSHOT_BYTES: usize = 256 << 20; // 256 MiB
+        use crate::snapshot_memory::{MAX_EVM_HEADER_BYTES, MAX_EVM_STATE_SNAPSHOT_BYTES};
         if msg.evm_header.len() > MAX_EVM_HEADER_BYTES {
             return Err(ProtocolError::Other("PruningPointEvmState header exceeds the accepted size cap"));
         }
@@ -2810,7 +2865,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
         // Audit H-03: bound the accepted overlay snapshot bytes before deserializing
         // (bonds + reward windows are far smaller than the EVM state).
-        const MAX_OVERLAY_SNAPSHOT_BYTES: usize = 64 << 20; // 64 MiB
+        use crate::snapshot_memory::MAX_OVERLAY_SNAPSHOT_BYTES;
         if msg.overlay_snapshot.len() > MAX_OVERLAY_SNAPSHOT_BYTES {
             return Err(ProtocolError::Other("PruningPointOverlaySnapshot exceeds the accepted size cap"));
         }

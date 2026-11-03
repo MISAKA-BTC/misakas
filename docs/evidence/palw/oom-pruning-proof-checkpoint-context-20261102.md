@@ -1,0 +1,13 @@
+# Pruning proof checkpoint context (2026-11-02)
+
+The fresh unsigned REV12 trial passed proof validation/import and local proof reconstruction, then rejected the source at the post-apply checkpoint check. This rejection is not evidence that the source history violates the checkpoint.
+
+The post-apply check used `Consensus::is_chain_ancestor_of`. That ordinary block API requires valid statuses for both endpoints. Proof import writes headers, level-0 GHOSTDAG, and reachability, but no ordinary block statuses. The check runs before trusted block processing. `HeaderNotFound` was flattened with `unwrap_or(false)` into a checkpoint violation and a peer ban.
+
+Proof import also constructs a reachability spanning tree from the union of parent relations at every level, selecting its tree parent by work/hash. That tree is useful for DAG ancestry, but is not an authoritative level-0 GHOSTDAG selected-parent chain. A synthetic actual-store fixture exercises their difference; it is not evidence that the real B0 proof takes this path.
+
+The proof-specific API reads level-0 GHOSTDAG selected parents directly, without inventing statuses. It binds the target to the current pruning point and descriptor, requires a genesis-rooted level 0 (a truncated-subset GHOSTDAG cannot establish the historical selected chain), verifies the checkpoint DAA score and available window, and traverses the entire chain to its declared root. A visited set and the level-0 descriptor count bound traversal. Missing headers/GHOSTDAG, a wrong target, a cycle, premature origin, or an incomplete root return the existing typed local import-context error. They never become `false` or enter the peer checkpoint-violation branch. An available complete chain that does not contain the named checkpoint still returns false and is refused by the existing checkpoint policy.
+
+The ordinary synced-header path also propagates chain-read errors instead of flattening them to false. Existing checkpoint values, wire types, consensus validity, fork choice, model arithmetic, and block statuses are unchanged.
+
+Added actual DB fixtures under `apply_parent_order_tests`: apply + history import with statuses absent; multiple selected-chain blocks at the same DAA; a DAG ancestor outside the selected chain; all-level spanning-tree/level-0 chain divergence; and missing/corrupt/target/cycle/count/DAA failures. Heavy Cargo execution is delegated to the integration checkout. This change does not claim that every historical checkpoint is guaranteed to be in an arbitrary pruned proof: old checkpoints below the proof window still require sufficient history and fail closed when context is unavailable. The pre-import containment check remains unchanged.

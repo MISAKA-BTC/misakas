@@ -4,7 +4,7 @@ use super::NativeCoverageV1;
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NativeHardMemoryQuotaV1 {
     limit_bytes: u64,
-    used_bytes: u64,
+    headroom_bytes: u64,
     evidence_path: String,
 }
 impl NativeHardMemoryQuotaV1 {
@@ -12,7 +12,7 @@ impl NativeHardMemoryQuotaV1 {
         self.limit_bytes
     }
     pub fn headroom_bytes(&self) -> u64 {
-        self.limit_bytes.saturating_sub(self.used_bytes)
+        self.headroom_bytes
     }
     pub fn evidence_path(&self) -> &str {
         &self.evidence_path
@@ -60,20 +60,39 @@ pub fn actual_hard_memory_quota_v1() -> Result<NativeHardMemoryQuotaV1, NativeCo
     if !actual.starts_with(&root) {
         return Err(refuse("kernel cgroup membership escapes its mount"));
     }
-    let max = read(&actual.join("memory.max"))?;
-    let limit_bytes = max
-        .trim()
-        .parse::<u64>()
-        .ok()
-        .filter(|n| *n > 0 && *n < u64::MAX)
-        .ok_or_else(|| refuse("memory.max is unlimited or has no finite hard limit"))?;
-    let used_bytes =
-        read(&actual.join("memory.current"))?.trim().parse::<u64>().map_err(|_| refuse("memory.current has no kernel usage value"))?;
+    // A service can inherit its only finite limit from a parent. Every
+    // ancestor's current charge constrains this process, including siblings.
+    let mut dir = actual.clone();
+    let mut limit_bytes: Option<u64> = None;
+    let mut headroom_bytes: Option<u64> = None;
+    loop {
+        let max = read(&dir.join("memory.max"))?;
+        if max.trim() != "max" {
+            let max = max
+                .trim()
+                .parse::<u64>()
+                .ok()
+                .filter(|n| *n > 0 && *n < u64::MAX)
+                .ok_or_else(|| refuse("ancestor memory.max has no valid hard limit"))?;
+            let used = read(&dir.join("memory.current"))?
+                .trim()
+                .parse::<u64>()
+                .map_err(|_| refuse("ancestor memory.current has no kernel usage value"))?;
+            limit_bytes = Some(limit_bytes.map_or(max, |old| old.min(max)));
+            let available = max.saturating_sub(used);
+            headroom_bytes = Some(headroom_bytes.map_or(available, |old| old.min(available)));
+        }
+        if dir == root || !dir.pop() {
+            break;
+        }
+    }
+    let limit_bytes = limit_bytes.ok_or_else(|| refuse("no finite hard limit in the process's cgroup ancestry"))?;
+    let headroom_bytes = headroom_bytes.unwrap_or(0).min(limit_bytes);
     // Membership is read again, so a migration cannot lend another group's cap.
     if read(Path::new("/proc/self/cgroup"))? != membership {
         return Err(refuse("current process changed cgroup while quota evidence was read"));
     }
-    Ok(NativeHardMemoryQuotaV1 { limit_bytes, used_bytes, evidence_path: actual.to_string_lossy().into_owned() })
+    Ok(NativeHardMemoryQuotaV1 { limit_bytes, headroom_bytes, evidence_path: actual.to_string_lossy().into_owned() })
 }
 #[cfg(not(target_os = "linux"))]
 pub fn actual_hard_memory_quota_v1() -> Result<NativeHardMemoryQuotaV1, NativeCoverageV1> {

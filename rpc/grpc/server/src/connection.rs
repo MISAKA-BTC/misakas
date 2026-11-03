@@ -10,6 +10,7 @@ use crate::{
 };
 use async_channel::{Receiver as MpmcReceiver, Sender as MpmcSender, TrySendError as MpmcTrySendError, bounded};
 use itertools::Itertools;
+use kaspa_core::memory_budget::MemoryBudget;
 use kaspa_core::{debug, info, trace, warn};
 use kaspa_grpc_core::{
     ops::KaspadPayloadOps,
@@ -22,6 +23,7 @@ use kaspa_notify::{
     notifier::Notifier,
 };
 use kaspa_rpc_core::Notification;
+use kaspa_utils_tower::transport::{Outbound, connection_budget};
 use parking_lot::Mutex;
 use std::{
     collections::{HashMap, hash_map::Entry},
@@ -41,7 +43,7 @@ use uuid::Uuid;
 
 pub type IncomingRoute = MpmcReceiver<KaspadRequest>;
 pub type GrpcNotifier = Notifier<Notification, Connection>;
-pub type GrpcSender = MpscSender<KaspadResponse>;
+pub type GrpcSender = MpscSender<Outbound<KaspadResponse>>;
 pub type StatusResult<T> = Result<T, tonic::Status>;
 pub type ConnectionId = Uuid;
 
@@ -71,6 +73,7 @@ struct Inner {
 
     /// The outgoing route for sending messages to this client
     outgoing_route: GrpcSender,
+    outgoing_budget: Arc<MemoryBudget>,
 
     /// A channel sender for internal event management.
     /// Used to send information from each router to a central manager object
@@ -228,6 +231,7 @@ impl Connection {
                 connection_id: Uuid::new_v4(),
                 net_address,
                 outgoing_route,
+                outgoing_budget: connection_budget(),
                 manager_sender,
                 server_context,
                 mutable_state: Mutex::new(InnerMutableState::new(Some(shutdown_sender))),
@@ -345,6 +349,27 @@ impl Connection {
     /// Enqueues a response to be sent to the client
     pub async fn enqueue(&self, response: KaspadResponse) -> GrpcServerResult<()> {
         assert!(response.payload.is_some(), "Kaspad gRPC message should always have a value");
+        let response = Outbound::try_new(response, &self.inner.outgoing_budget).map_err(|_| {
+            self.close();
+            GrpcServerError::OutgoingRouteCapacityReached(self.to_string())
+        })?;
+        self.enqueue_admitted(response)
+    }
+
+    pub(crate) async fn enqueue_preallocated(
+        &self,
+        response: KaspadResponse,
+        lease: kaspa_core::memory_budget::MemoryLease,
+    ) -> GrpcServerResult<()> {
+        assert!(response.payload.is_some(), "Kaspad gRPC message should always have a value");
+        let response = Outbound::with_preallocated(response, &self.inner.outgoing_budget, lease, Vec::new()).map_err(|_| {
+            self.close();
+            GrpcServerError::OutgoingRouteCapacityReached(self.to_string())
+        })?;
+        self.enqueue_admitted(response)
+    }
+
+    fn enqueue_admitted(&self, response: Outbound<KaspadResponse>) -> GrpcServerResult<()> {
         match self.inner.outgoing_route.try_send(response) {
             Ok(_) => Ok(()),
             Err(TrySendError::Closed(_)) => Err(GrpcServerError::ConnectionClosed),
