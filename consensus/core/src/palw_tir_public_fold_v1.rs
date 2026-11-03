@@ -3,6 +3,7 @@
 //! Quotes, local Ready files and signature validation alone never buy standing.
 use super::*;
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+use crate::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1;
 use crate::palw_tir_public_claim_v1::{PalwTirPublicClaimV1 as Frame, palw_tir_public_claim_v1};
 use crate::palw_tir_public_owned_v1::{
     PalwTirPublicContractV1, PalwTirPublicOwnedActionV1 as Action, PalwTirPublicOwnedEffectV1 as Effect, PalwTirPublicOwnedV1,
@@ -403,6 +404,7 @@ fn original_plan_v1(
     now_daa: u64,
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
 ) -> Result<
     (
         crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,
@@ -412,7 +414,9 @@ fn original_plan_v1(
     ),
     PalwStateV2Error,
 > {
-    use crate::palw_tir_public_allocation_v1::{PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_native_v2};
+    use crate::palw_tir_public_allocation_v1::{
+        PalwTirPublicAllocationQuoteV1, derive_tir_public_allocation_native_with_diagnostics_v2,
+    };
     let mut native = rules(b)?;
     native.maximum_leaves = b.state.class_step_ladder_v1(&original.job.class_id, native.maximum_leaves);
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
@@ -441,11 +445,21 @@ fn original_plan_v1(
         .ok_or_else(|| refused("TIR original layout is not registered"))?;
     let semantics = b.state.class_semantics.get(&geometry.class_id);
     let inventory = semantics.and_then(|s| b.state.staged_tokenizer_inventory_v1(s.tokenizer_id));
-    let plan = match derive_tir_public_allocation_native_v2(&geometry, original, header, record, layout, semantics, inventory, native)
-        .map_err(|why| match why {
-            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
-            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
-        })? {
+    let plan = match derive_tir_public_allocation_native_with_diagnostics_v2(
+        &geometry,
+        original,
+        header,
+        record,
+        layout,
+        semantics,
+        inventory,
+        native,
+        diagnostics,
+    )
+    .map_err(|why| match why {
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
+        crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),
+    })? {
         PalwTirPublicAllocationQuoteV1::Complete(plan) => *plan,
         PalwTirPublicAllocationQuoteV1::Incomplete { missing, .. } => {
             return Err(refused(format!("TIR original full allocation remains incomplete: {missing:?}")));
@@ -468,11 +482,26 @@ pub fn palw_tir_public_original_quote_v1(
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
 ) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
+    palw_tir_public_original_quote_with_diagnostics_v1(base, params, extras, now_daa, original, header, None)
+}
+
+pub fn palw_tir_public_original_quote_with_diagnostics_v1(
+    base: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &PalwTransitionExtrasV1,
+    now_daa: u64,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+    mut diagnostics: Option<&mut Option<Box<PalwTirDoorDiagnosticsV1>>>,
+) -> Result<Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1>, PalwStateV2Error> {
+    if let Some(out) = diagnostics.as_mut() {
+        **out = None;
+    }
     if original.job.tail.is_some() {
         return Ok(None);
     }
     let builder = TransitionBuilder::try_new(base, params, false, false, false, false, extras)?;
-    let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header)?;
+    let (plan, _, _, geometry) = original_plan_v1(&builder, now_daa, original, header, diagnostics)?;
     let tiled = builder.state.tir_class_v1(&geometry.class_id).is_some_and(|record| record.facts.tiled);
     let judged = crate::palw_tir_court_v1::PalwTirSelectionRuleV1::of_job_v1(&original.job).is_some() || plan.semantic.is_some();
     // Mirrors `prepare_original_v1`: a semantic stage is framed only where its staged court can open (G-18).
@@ -627,7 +656,7 @@ pub(super) fn prepare_original_v1(
     header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
     pledge: &crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,
 ) -> Result<Frame, PalwStateV2Error> {
-    let (plan, native, upper, geometry) = original_plan_v1(b, ctx.daa_score, original, header)?;
+    let (plan, native, upper, geometry) = original_plan_v1(b, ctx.daa_score, original, header, None)?;
     let claim = crate::palw_freeprompt_v3::fp_claim_id_v3(original);
     let record = b.state.tir_class_v1(&geometry.class_id).ok_or_else(|| refused("TIR original class is not registered"))?;
     let layout = crate::palw_staged_court_state_v1::palw_staged_tir_layout_v1(&b.state, geometry.class_id)

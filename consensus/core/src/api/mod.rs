@@ -1737,6 +1737,17 @@ pub trait ConsensusApi: Send + Sync {
         Err("TIR public original quote unavailable".into())
     }
 
+    /// Same accepted-state quote with optional horizon-only diagnostics.
+    fn palw_tir_public_original_quote_with_diagnostics_v1(
+        &self,
+        original: crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+        header: crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,
+        diagnostics: &mut Option<Box<crate::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1>>,
+    ) -> Result<Option<(u64, crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1)>, String> {
+        *diagnostics = None;
+        self.palw_tir_public_original_quote_v1(original, header)
+    }
+
     fn palw_staged_tir_prefix_leaf_index_v1(
         &self,
         _key: (crate::Hash64, crate::palw_state_v2::PalwBondKeyV2),
