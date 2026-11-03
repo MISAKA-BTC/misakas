@@ -15609,7 +15609,8 @@ fn apply_palw_transition_v7_inner(
     //     they decide — after every object of the block. A no-op for a route with no claim and no demand (and on every network).
     palw_kernel_route_fold_v1::tick_kernel_route_v1(&mut builder, ctx)?;
     builder.decide_due_positive_certification_failures_v2(ctx)?;
-    if let Some(input) = positive_replays {
+    if let Some(mut input) = positive_replays {
+        builder.draw_due_positive_cases_v2(parent, ctx, &mut input)?;
         builder.advance_due_positive_cases_v2(parent, ctx, input)?;
     }
 
