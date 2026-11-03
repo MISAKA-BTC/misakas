@@ -724,8 +724,11 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     };
     let source = frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
     let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame, &source, context.profile_id).unwrap();
-    let notice_id = set.request_id(0).unwrap();
-    let mut notice = SignedSharedRequestV1 { version: 1, scope: scope_id, ordinal: 0, request_id: notice_id, signer: who, signature: vec![] };
+    let notice_ordinal = set.step_leaf_ordinal_v1(0).unwrap();
+    let notice_id = set.request_id(notice_ordinal).unwrap();
+    let mut notice = SignedSharedRequestV1 {
+        version: 1, scope: scope_id, ordinal: notice_ordinal, request_id: notice_id, signer: who, signature: vec![],
+    };
     notice.signature = sign(notice.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
     let notice_at = at(frame, NOTICE_WINDOW_DAA);
     let open_at = at(frame, NOTICE_WINDOW_DAA + 1);
@@ -778,6 +781,13 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     use super::super::palw_court_shared_tir_fold_v1::request;
     use crate::palw_court_shared_tir_frontier_v1::SharedRequestEffectV1;
     let before = b.state.state_root();
+    assert_ne!(notice_ordinal, 0);
+    let mut node_notice = notice.clone();
+    node_notice.ordinal = 0;
+    node_notice.request_id = set.request_id(0).unwrap();
+    node_notice.signature = sign(node_notice.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
+    assert!(request(&mut b, &notice_at, claim, &node_notice).is_err(), "a StepNode is not a Batch opening coordinate");
+    assert_eq!(b.state.state_root(), before);
     assert!(request(&mut b, &open_at, claim, &notice).is_err(), "a first notice one DAA late");
     assert_eq!(b.state.state_root(), before);
     assert!(matches!(request(&mut b, &notice_at, claim, &notice), Ok(SharedRequestEffectV1::Opened)));
@@ -786,9 +796,15 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         panic!("Batch initial notice was not retained");
     };
     assert!(accepted.service.is_none() && accepted.body.is_none());
+    assert_eq!(
+        quote_batch_open_v1(&b.state, claim, notice_id, BATCH_STOP_ORDINAL_V1, ranges.clone()).unwrap_err(),
+        "Batch Open route differs from its initial notice",
+    );
+    assert!(matches!(quote_numerical_batch_open_v1(&b.state, claim, notice_id, 1, 0, 64, &[(target, body.len() as u64)]),
+        Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) if why == "numerical Batch leaf differs from its initial notice"));
     let mut follow_up = notice.clone();
-    follow_up.ordinal = 1;
-    follow_up.request_id = set.request_id(1).unwrap();
+    follow_up.ordinal = set.step_leaf_ordinal_v1(1).unwrap();
+    follow_up.request_id = set.request_id(follow_up.ordinal).unwrap();
     follow_up.signature = sign(follow_up.signing_message(network).unwrap(), SHARED_REQUEST_CONTEXT_V1);
     let after_notice = b.state.state_root();
     assert!(request(&mut b, &open_at, claim, &follow_up).is_err());

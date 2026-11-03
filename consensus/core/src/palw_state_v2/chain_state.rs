@@ -2496,11 +2496,18 @@ impl PalwChainStateV2 {
     /// (`CourtSharedQuery`) recorded for it, if any. Rooted: the rows come and go with the staged-court delta on reorg.
     /// G14 lane r5-f02-wire: the index's first kind-0 entry is the earliest notice (entries sort by `(kind, daa, key)`).
     pub fn court_shared_initial_notice_daa_v1(&self, claim: Hash64) -> Option<u64> {
+        self.court_shared_initial_notice_v1(claim).map(|(daa, _)| daa)
+    }
+
+    pub(crate) fn court_shared_initial_notice_v1(
+        &self,
+        claim: Hash64,
+    ) -> Option<(u64, &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)> {
         self.staged_court_service_by_claim
             .get(&claim)?
             .iter()
             .find(|(kind, _, _)| *kind == crate::palw_staged_court_state_v1::COURT_INDEX_SHARED_NOTICE_V1)
-            .map(|(_, daa, _)| *daa)
+            .map(|(_, daa, key)| (*daa, key))
     }
 
     /// Ordered read of staged rows in `[from, to]` (RFC-0032 A material intake).

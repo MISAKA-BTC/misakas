@@ -116,18 +116,24 @@ pub fn quote_numerical_batch_open_v1(
     maximum_ranges: usize,
     lengths: &[(MaterialTargetV1, u64)],
 ) -> Result<NativeRetainedV1<SignedBatchDemandV1>, NativeDecodeErrorV1<String>> {
-    use crate::palw_batch_court_v1::{carriage::batch_open_wire_bytes_v1, rooted::reserved_open_slot_v1};
+    use crate::palw_batch_court_v1::{
+        carriage::batch_open_wire_bytes_v1,
+        rooted::{checked_initial_notice_target_v1, reserved_open_slot_v1},
+    };
+    use crate::palw_court_shared_tir_state_v1::BatchNoticeTargetV1;
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
     let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(E::Decode)?;
     let notice_key = Key::CourtSharedQuery(notice);
     let Some(Row::CourtSharedQuery(notice_row)) = state.staged_court_row_v1(&notice_key) else {
         return Err(E::Decode("numerical Batch has no accepted notice".into()));
     };
-    notice_row.check(&notice_key).map_err(E::Decode)?;
+    let target = checked_initial_notice_target_v1(state, context, notice_row, notice).map_err(E::Decode)?;
+    if target.is_some_and(|target| target != (BatchNoticeTargetV1::Numerical { leaf })) {
+        return Err(E::Decode("numerical Batch leaf differs from its initial notice".into()));
+    }
     if notice_row.claim != claim
         || notice_row.scope_id != context.scope_id
         || notice_row.material_until_daa != context.material_until_daa
-        || state.court_shared_initial_notice_daa_v1(claim) != Some(notice_row.opened_daa)
         || state.staged_court_row_v1(&Key::CourtBatchDemand(claim, demand_index as u64)).is_some()
     {
         return Err(E::Decode("numerical Batch notice or opening differs from the accepted case".into()));

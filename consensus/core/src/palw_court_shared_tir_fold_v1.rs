@@ -115,7 +115,8 @@ fn request_inner(
     // DAA, so earliest-deadline-first is arrival order (in-block: object order); the slot starts after the claim's last slot.
     // Size never refuses; only a slot that cannot end before hard (no reserved capacity left) is refused, with no state change.
     let service = if batch_notice {
-        check_batch_notice_open_slot_v1(&b.state, c, ctx.daa_score).map_err(refused)?;
+        let target = shared::BatchNoticeTargetV1::from_request(set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
+        check_batch_notice_open_slot_v1(&b.state, c, ctx.daa_score, target.first_open_ordinal()).map_err(refused)?;
         None
     } else {
         let packets = shared::shared_coordinate_packets_v1(&source, &set.request_at(intent.ordinal).map_err(refused)?).map_err(refused)?;
@@ -146,16 +147,18 @@ fn request_inner(
     Ok(SharedRequestEffectV1::Opened)
 }
 
-fn check_batch_notice_open_slot_v1(state: &PalwChainStateV2, c: &shared::SharedTirContextV1, at: u64) -> Result<(), String> {
+fn check_batch_notice_open_slot_v1(
+    state: &PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    at: u64,
+    ordinal: u64,
+) -> Result<(), String> {
     use crate::palw_batch_court_v1::{carriage::batch_open_wire_bytes_v1, rooted::reserved_open_slot_v1};
-    use crate::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1;
     let first = c.original_accepted_daa.checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
         .ok_or("Batch initial notice clock overflows")?;
     let bytes = batch_open_wire_bytes_v1(1)?;
-    if ![0, BATCH_STOP_ORDINAL_V1].into_iter().any(|ordinal| {
-        reserved_open_slot_v1(state, c.claim, c.scope_id, ordinal, bytes)
-            .is_ok_and(|(_, _, slot)| at < slot && (first..c.hard_daa).contains(&slot))
-    }) {
+    let (_, _, slot) = reserved_open_slot_v1(state, c.claim, c.scope_id, ordinal, bytes)?;
+    if slot <= at || !(first..c.hard_daa).contains(&slot) {
         return Err("Batch initial notice has no booked original Open".into());
     }
     Ok(())

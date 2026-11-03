@@ -3726,3 +3726,30 @@ complete, funded Batch admission graph and its rule profile.
 B0 and relay agreed at virtual DAA 19,728 with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-batch-notice-live.Zm2tIg/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-notice-slot.gxG348/tests.log`.
+
+## Bind the initial Batch notice to its opening route
+
+A Batch-only initial notice names a StepLeaf for numerical delivery
+or Ids at offset zero for Stop FullIds. Admission looks up only the
+corresponding opening slot in the original's rooted service book.
+Open quotes and rooted demand validation resolve the exact initial
+notice key. A Stop opening requires the canonical single FullIds
+range. The numerical operator quote checks the chosen leaf against
+the notice before building the demand. The legacy shared context
+keeps its existing interpretation.
+
+Three extracted tests passed with stubbed service-book and frame
+reads. They cover route derivation, cross-route and invalid bookings,
+and the canonical Stop range. The extended native fixture has not
+run. It now covers a signed unsupported coordinate and mismatched
+Stop and numerical Open quotes before proceeding through the signed
+native Open and Finish. The complete numerical graph and its rooted
+admission contract still require native validation, measured costs,
+role consent and real funds. No production installer or activation
+was exercised.
+
+The paired read-only scan resumed after one RPC timeout. B0 and relay
+agreed at virtual DAA 19,729. The page contained three selected
+blocks and zero Qwen carrier references.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-notice-route.gEX0Z2/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-notice-route-recheck.MasuqY/page.json`.

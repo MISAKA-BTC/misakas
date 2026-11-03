@@ -315,6 +315,31 @@ pub(crate) fn context(state: &PalwChainStateV2, claim: Hash64) -> Result<&Shared
         _ => Err("no installed native shared context".into()),
     }
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BatchNoticeTargetV1 {
+    Numerical { leaf: u64 },
+    StopFullIds,
+}
+
+impl BatchNoticeTargetV1 {
+    pub(crate) fn from_request(request: crate::palw_tir_public_source_v1::PalwTirPublicRequestV1) -> Result<Self, String> {
+        use crate::palw_tir_public_source_v1::PalwTirPublicRequestV1 as Request;
+        match request {
+            Request::StepLeaf { index } => Ok(Self::Numerical { leaf: index }),
+            Request::Ids { offset: 0 } => Ok(Self::StopFullIds),
+            _ => Err("Batch initial notice must name a numerical leaf or Stop FullIds".into()),
+        }
+    }
+
+    pub(crate) fn first_open_ordinal(self) -> u64 {
+        match self {
+            Self::Numerical { .. } => 0,
+            Self::StopFullIds => crate::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1,
+        }
+    }
+}
+
 impl SharedTirQueryV1 {
     pub fn check(&self, key: &Key) -> Result<(), String> {
         let service_ok = match (self.version, &self.service) {
@@ -361,6 +386,10 @@ impl SharedTirQueryV1 {
         )
     }
     pub fn check_context(&self, state: &PalwChainStateV2) -> Result<(), String> {
+        self.check_context_and_batch_target(state).map(|_| ())
+    }
+
+    pub(crate) fn check_context_and_batch_target(&self, state: &PalwChainStateV2) -> Result<Option<BatchNoticeTargetV1>, String> {
         self.check(&Key::CourtSharedQuery(self.request_id))?;
         let c = context(state, self.claim)?;
         if c.batch_notice_only_v1()
@@ -394,7 +423,10 @@ impl SharedTirQueryV1 {
         }
         // Historical requester identity was checked at acceptance. A requester
         // exiting later must not invalidate public data or transfer it to an owner.
-        Ok(())
+        if c.batch_notice_only_v1() {
+            return BatchNoticeTargetV1::from_request(set.request_at(self.ordinal)?).map(Some);
+        }
+        Ok(None)
     }
 }
 impl SharedTirIdsV1 {

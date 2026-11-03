@@ -173,7 +173,7 @@ impl RootedBatchDemandV1 {
         let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(self.notice_id)) else {
             return Err("Batch demand lost its accepted notice".into());
         };
-        notice.check(&Key::CourtSharedQuery(self.notice_id))?;
+        let target = checked_initial_notice_target_v1(state, context, notice, self.notice_id)?;
         if notice.claim != self.claim
             || notice.scope_id != self.scope_id
             || notice.material_until_daa != self.material_until()
@@ -181,13 +181,13 @@ impl RootedBatchDemandV1 {
             || context.original_accepted_daa != self.demand.case_window.claim_accepted_daa
             || context.material_until_daa != self.material_until()
             || self.demand.response_deadline_daa > context.hard_daa
-            || state.court_shared_initial_notice_daa_v1(self.claim) != Some(notice.opened_daa)
             || notice.opened_daa != self.demand.case_window.challenge_opened_daa
             || batch_case_id_v1(self.claim, self.scope_id, self.notice_id, notice.opened_block, notice.opened_daa, self.ordinal)?
                 != self.demand.case_id
         {
             return Err("Batch demand substitutes its original or accepted notice".into());
         }
+        check_notice_route_v1(state, self.claim, target, self.ordinal, &self.demand.ranges)?;
         Ok(())
     }
 
@@ -204,6 +204,48 @@ impl RootedBatchDemandV1 {
         use crate::palw_court_shared_material_intake_v1 as material;
         let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
         material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule)
+    }
+}
+
+pub(crate) fn checked_initial_notice_target_v1(
+    state: &PalwChainStateV2,
+    context: &shared::SharedTirContextV1,
+    notice: &shared::SharedTirQueryV1,
+    notice_id: Hash64,
+) -> Result<Option<shared::BatchNoticeTargetV1>, String> {
+    let key = Key::CourtSharedQuery(notice_id);
+    notice.check(&key)?;
+    let (daa, initial_key) = state.court_shared_initial_notice_v1(context.claim).ok_or("Batch original has no accepted initial notice")?;
+    if daa != notice.opened_daa || (context.batch_notice_only_v1() && *initial_key != key) {
+        return Err("Batch demand must use the original's accepted initial notice".into());
+    }
+    if context.batch_notice_only_v1() {
+        return notice.check_context_and_batch_target(state);
+    }
+    Ok(None)
+}
+
+fn check_notice_route_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    target: Option<shared::BatchNoticeTargetV1>,
+    ordinal: u64,
+    ranges: &[BatchRangeV1],
+) -> Result<(), String> {
+    use crate::palw_court_shared_material_intake_v1::{BATCH_STOP_ORDINAL_V1, batch_stop_full_ids_range_v1};
+    use shared::BatchNoticeTargetV1::{Numerical, StopFullIds};
+    match target {
+        None => Ok(()),
+        Some(Numerical { .. }) if ordinal != BATCH_STOP_ORDINAL_V1 => Ok(()),
+        Some(StopFullIds) if ordinal == BATCH_STOP_ORDINAL_V1 => {
+            let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
+            let range = batch_stop_full_ids_range_v1(claim, frame.original_v1().decode_tokens_executed)?;
+            if ranges != [range] {
+                return Err("Batch Stop notice requires its canonical FullIds range".into());
+            }
+            Ok(())
+        }
+        _ => Err("Batch Open route differs from its initial notice".into()),
     }
 }
 
@@ -239,15 +281,15 @@ pub(super) fn quote_open_v1(
     let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&notice_key) else {
         return Err("Batch quote has no accepted notice".into());
     };
-    notice.check(&notice_key)?;
+    let target = checked_initial_notice_target_v1(state, context, notice, notice_id)?;
     if notice.claim != claim
         || notice.scope_id != context.scope_id
         || notice.material_until_daa != context.material_until_daa
-        || state.court_shared_initial_notice_daa_v1(claim) != Some(notice.opened_daa)
         || state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)).is_some()
     {
         return Err("Batch quote does not name an unused opening of the accepted notice".into());
     }
+    check_notice_route_v1(state, claim, target, ordinal, &ranges)?;
     let signed_bytes = super::carriage::batch_open_wire_bytes_v1(ranges.len())?;
     let scope = context.scope_id;
     let (book, binding, opened_daa) = reserved_open_slot_v1(state, claim, scope, ordinal, signed_bytes)?;
