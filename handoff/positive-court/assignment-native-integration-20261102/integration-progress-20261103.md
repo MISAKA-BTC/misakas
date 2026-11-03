@@ -1465,3 +1465,28 @@ The remaining kernel alias lookups cannot use the existing job holder as a
 substitute for the reverse relation. The legacy Panel path can retain an
 uncovered claim without any holder entry. A bounded closure proof must
 account for these rows and the independent native claim job identities.
+
+### Gate C Case links and row lookup
+
+The [Gate C candidate](gate-c-case-links-candidate-20261103.tar.gz) checks
+CaseId, ResultId, coverage scope and liability together before treating a
+terminal Case as a withdrawal. The same check applies before closing new
+source requests. A CaseId intentionally stays the same when only the
+worker's output changes. A foreign Result or branch is now an identity
+error in the candidate. The Gate C point readers also use an exact key
+lookup with a reserved temporary key in the shared S/K/V/N/P table.
+
+The Core library and focused Assignment funds test-target metadata passed
+on the formatted candidate. The isolated runtime used the extracted
+candidate guard and the existing signed bundle fixture with the linked
+Contract crate. It accepted the exact live Case, recognized each of the
+three terminal statuses, and refused substituted Result, scope and
+liability for each status. It did not exercise native sweep or source
+authorization end to end. The candidate remains separate from the A0
+source pinned by the active custody/index checks.
+
+The independent Case archive branch's initial op9 journal store change
+(`b44ed654b`) applies cleanly to A0. Its two preceding archive replay
+changes (`3d65fa756` and `9c61c087b`) need reconciliation with A0's
+native resource and historical Case relay readers. A0 has not applied
+that series at this checkpoint.
