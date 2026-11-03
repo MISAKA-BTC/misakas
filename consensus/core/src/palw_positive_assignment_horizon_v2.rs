@@ -85,6 +85,7 @@ pub struct AssignmentHorizonSpecV2 {
 #[derive(Clone, Copy)]
 pub(crate) struct AssignmentSourceLedgerFloorV2 {
     body_bytes: u64,
+    journal_bytes: u64,
     first_receipt_fees: u64,
 }
 impl AssignmentSourceLedgerFloorV2 {
@@ -95,6 +96,7 @@ impl AssignmentSourceLedgerFloorV2 {
         limits: SourceLimitsV2,
         case_fees: &AssignmentCaseFeeScheduleV2,
         max_case_journal_bytes: u64,
+        max_case_history_frames: u32,
     ) -> Result<Self, AssignmentHorizonErrorV2> {
         let max_body = limits.max_native_body_bytes.min(max_case_journal_bytes).min(MAX_BODY_BYTES_V2);
         let largest_response = add(SOURCE_RESPONSE_BODY_OVERHEAD_V2, catalog.max_unit_bytes)?;
@@ -102,17 +104,36 @@ impl AssignmentSourceLedgerFloorV2 {
             mul(SOURCE_REQUEST_BODY_BYTES_V2, ranges)?,
             add(catalog.opening_bytes, mul(SOURCE_RESPONSE_BODY_OVERHEAD_V2, catalog.units)?)?,
         )?;
+        let events = add(ranges, catalog.units)?;
+        let record_overhead = crate::palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2(0)
+            .ok_or(AssignmentHorizonErrorV2::Overflow)?;
+        let journal_bytes = add(body_bytes, mul(events, record_overhead)?)?;
         if ranges > limits.max_requests
             || catalog.units > limits.max_responses
             || source_kinds > limits.max_intervals
-            || add(ranges, catalog.units)? > limits.max_history_events
+            || events > limits.max_history_events
+            || add(events, 1)? > u64::from(max_case_history_frames)
             || body_bytes > limits.max_history_bytes
+            || journal_bytes > max_case_journal_bytes
             || SOURCE_REQUEST_BODY_BYTES_V2 > max_body
             || largest_response > max_body
         {
             return Err(AssignmentHorizonErrorV2::Budget);
         }
-        Ok(Self { body_bytes, first_receipt_fees: case_fees.source_catalog_due(catalog)? })
+        Ok(Self { body_bytes, journal_bytes, first_receipt_fees: case_fees.source_catalog_due(catalog)? })
+    }
+
+    /// The quoted source events and the actual op9 must fit the same Case
+    /// journal. The per-source body cap remains a separate constraint.
+    pub(crate) fn check_initial_journal_v2(
+        self,
+        initial_transaction: &crate::tx::Transaction,
+        max_case_journal_bytes: u64,
+    ) -> Result<(), AssignmentHorizonErrorV2> {
+        let payload = borsh::object_length(initial_transaction).map_err(|_| AssignmentHorizonErrorV2::Budget)? as u64;
+        let initial = crate::palw_positive_assignment_case_material_v2::assigned_case_initial_journal_extent_v2(payload)
+            .ok_or(AssignmentHorizonErrorV2::Overflow)?;
+        check_case_source_journal_space_v2(initial, self.journal_bytes, max_case_journal_bytes)
     }
 
     fn check_budget(self, budget: &AggregateBudget) -> Result<(), AssignmentHorizonErrorV2> {
@@ -121,6 +142,13 @@ impl AssignmentSourceLedgerFloorV2 {
         }
         Ok(())
     }
+}
+
+fn check_case_source_journal_space_v2(initial: u64, source: u64, cap: u64) -> Result<(), AssignmentHorizonErrorV2> {
+    if add(initial, source)? > cap {
+        return Err(AssignmentHorizonErrorV2::Budget);
+    }
+    Ok(())
 }
 
 fn add(a: u64, b: u64) -> Result<u64, AssignmentHorizonErrorV2> {
@@ -291,6 +319,7 @@ impl AssignmentHorizonSpecV2 {
             source_policy.limits(),
             case_fees,
             positive.max_case_journal_bytes,
+            assignment.max_history_frames,
         )?;
         source_ledger.check_budget(&source.budget)?;
         let minimum_source_rounds = mul(ranges, readers)?;
@@ -359,6 +388,13 @@ impl AssignmentHorizonSpecV2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_case_and_source_records_share_the_journal_limit() {
+        assert_eq!(check_case_source_journal_space_v2(40, 60, 100), Ok(()));
+        assert_eq!(check_case_source_journal_space_v2(41, 60, 100), Err(AssignmentHorizonErrorV2::Budget));
+        assert_eq!(check_case_source_journal_space_v2(u64::MAX, 1, u64::MAX), Err(AssignmentHorizonErrorV2::Overflow));
+    }
 
     #[test]
     fn refund_window_starts_after_the_signed_retention_and_last_gate_c_verdict() {

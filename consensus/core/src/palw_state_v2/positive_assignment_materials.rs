@@ -445,35 +445,45 @@ pub(super) fn quote_assigned_case_payment_journal_v2(
     backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
     transaction: &crate::tx::Transaction,
 ) -> Result<(u64, usize), PalwStateV2Error> {
-    use crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
-    use misaka_palw_positive_contract::journal::{CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES, CaseJournalAux};
+    let tx_bytes =
+        borsh::object_length(transaction).map_err(|_| PalwStateV2Error::DeltaMismatch("Case settlement transaction extent"))?;
+    let sequence = quote_assigned_case_followup_journal_v2(backing, tx_bytes)?;
+    Ok((sequence, tx_bytes))
+}
+
+pub(super) fn quote_assigned_case_followup_journal_v2(
+    backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
+    payload_bytes: usize,
+) -> Result<u64, PalwStateV2Error> {
+    use crate::palw_positive_assignment_case_material_v2::{
+        ASSIGNED_CASE_BOUNDARY_BYTES_V2, assigned_case_followup_journal_extent_v2,
+    };
+    use misaka_palw_positive_contract::journal::CaseJournalAux;
     let failure = |why| PalwStateV2Error::DeltaMismatch(why);
     let pin = backing.pin();
     let policy = &backing.material().positive_policy;
-    let sequence = pin.head.sequence.checked_add(1).ok_or_else(|| failure("Case settlement sequence"))?;
+    let sequence = pin.head.sequence.checked_add(1).ok_or_else(|| failure("Case follow-up sequence"))?;
     if sequence > u64::from(backing.material().assignment_policy.max_history_frames) {
-        return Err(failure("Case settlement journal exceeds original event count"));
+        return Err(failure("Case follow-up journal exceeds original event count"));
     }
-    let tx_bytes = borsh::object_length(transaction).map_err(|_| failure("Case settlement transaction extent"))?;
-    let extent = tx_bytes
-        .checked_add(CASE_JOURNAL_MIN_RECORD_BYTES + CASE_JOURNAL_AUX_MATERIAL_BYTES + 4 + ASSIGNED_CASE_BOUNDARY_BYTES_V2)
-        .ok_or_else(|| failure("Case settlement record extent"))?;
-    let logical_heap = tx_bytes
+    let extent =
+        assigned_case_followup_journal_extent_v2(payload_bytes as u64).ok_or_else(|| failure("Case follow-up record extent"))?;
+    let logical_heap = payload_bytes
         .checked_add(ASSIGNED_CASE_BOUNDARY_BYTES_V2 + std::mem::size_of::<CaseJournalAux>())
         .ok_or_else(|| failure("Case settlement journal logical heap"))?;
     if logical_heap as u64 > policy.max_case_heap_bytes {
-        return Err(failure("Case settlement exceeds original journal heap"));
+        return Err(failure("Case follow-up exceeds original journal heap"));
     }
     let retained = backing
         .records()
         .iter()
         .map(|record| record.raw().len() as u64)
-        .try_fold(extent as u64, u64::checked_add)
+        .try_fold(extent, u64::checked_add)
         .ok_or_else(|| failure("Case journal cumulative extent"))?;
     if retained > policy.max_case_journal_bytes {
-        return Err(failure("Case settlement exceeds original journal storage"));
+        return Err(failure("Case follow-up exceeds original journal storage"));
     }
-    Ok((sequence, tx_bytes))
+    Ok(sequence)
 }
 
 impl TransitionBuilder<'_> {
@@ -490,10 +500,11 @@ impl TransitionBuilder<'_> {
         bind: &AssignmentJournalHeaderV2,
         policy: &crate::config::params::PositiveCourtPolicyV2,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
+        use crate::palw_positive_assignment_case_material_v2::{
+            ASSIGNED_CASE_BOUNDARY_BYTES_V2, assigned_case_initial_journal_extent_v2,
+        };
         use misaka_palw_positive_contract::journal::{
-            CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES, CaseJournalAux, CaseJournalEventKind, CaseJournalHeader,
-            CaseJournalLimits, CaseJournalRecord,
+            CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord,
         };
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
         let action = self.assignment_active_raw.clone().ok_or_else(|| failure("initial Case journal has no actual carrier"))?;
@@ -501,13 +512,12 @@ impl TransitionBuilder<'_> {
         let tx = action.transaction();
         let tx_bytes = borsh::object_length(tx).map_err(|_| failure("initial Case native transaction extent"))?;
         let aux_bytes = ASSIGNED_CASE_BOUNDARY_BYTES_V2 + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2;
-        let record_bytes = tx_bytes
-            .checked_add(aux_bytes + CASE_JOURNAL_MIN_RECORD_BYTES + 2 * (CASE_JOURNAL_AUX_MATERIAL_BYTES + 4))
-            .ok_or_else(|| failure("initial Case record extent"))?;
+        let record_bytes =
+            assigned_case_initial_journal_extent_v2(tx_bytes as u64).ok_or_else(|| failure("initial Case record extent"))?;
         let logical = tx_bytes
             .checked_add(aux_bytes + 2 * std::mem::size_of::<CaseJournalAux>())
             .ok_or_else(|| failure("initial Case material extent"))?;
-        if record_bytes as u64 > policy.max_case_journal_bytes || logical as u64 > policy.max_case_heap_bytes {
+        if record_bytes > policy.max_case_journal_bytes || logical as u64 > policy.max_case_heap_bytes {
             return Err(PalwStateV2Error::KernelRouteRefused("initial assigned Case journal exceeds original policy".into()));
         }
         let mut quote = native_writers::NativeWriteQuoteV1::new("initial Case journal literal bytes");

@@ -1824,6 +1824,9 @@ impl TransitionBuilder<'_> {
             return Err(refusal("Case relation count differs from the original registered program"));
         }
         let (horizon, source_ledger) = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
+        source_ledger
+            .check_initial_journal_v2(action.transaction(), rules.positive_policy().max_case_journal_bytes)
+            .map_err(refusal)?;
         let gate_c = rules.gate_c_clock(ctx.daa_score).map_err(refusal)?;
         horizon
             .check_case_source_floor_v2(

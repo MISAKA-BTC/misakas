@@ -1120,6 +1120,7 @@ fn prepare_initial_case_checker_v2(
     }
     let (horizon, source_ledger) =
         super::positive_assignment::assignment_horizon_v2(&rules, signed, source, prover, resources, row.origin.accepted_daa)?;
+    source_ledger.check_initial_journal_v2(first.transaction(), positive.max_case_journal_bytes).map_err(refuse)?;
     let accepted_daa = first.origin().accepted_daa;
     let gate_c = rules.gate_c_clock(accepted_daa).map_err(refuse)?;
     horizon
@@ -1584,6 +1585,7 @@ impl TransitionBuilder<'_> {
         }
         let material = backing.material();
         let raw = action.transaction().payload.get(3..).ok_or_else(missing)?;
+        super::positive_assignment_materials::quote_assigned_case_followup_journal_v2(backing, raw.len())?;
         let _body = machine.reserve_operation_v2(raw, material)?;
         if !canonical_equal(body, raw) {
             return Err(refuse("current Court operation differs from literal carrier"));

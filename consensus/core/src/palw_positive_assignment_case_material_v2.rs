@@ -39,6 +39,23 @@ pub fn assigned_case_native_carrier_matches_v2(tx: &Transaction, record: CaseJou
 pub const ASSIGNED_CASE_BOUNDARY_DOMAIN_V2: &[u8] = b"misaka/positive/assigned-case-native-boundary/v2/r1";
 pub const ASSIGNED_CASE_INPUTS_DOMAIN_V2: &[u8] = b"misaka/positive/assigned-case-populated-inputs/v2/r1";
 pub const ASSIGNED_CASE_BOUNDARY_BYTES_V2: usize = 496;
+/// The exact r1 sizes retained by the assigned Case owner. The initial
+/// transaction binds an additional Assignment frame; follow-ups have one
+/// native boundary and carry either literal body bytes or the full op12.
+pub(crate) fn assigned_case_initial_journal_extent_v2(payload_bytes: u64) -> Option<u64> {
+    use misaka_palw_positive_contract::{
+        assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2, journal::CASE_JOURNAL_AUX_MATERIAL_BYTES,
+    };
+    assigned_case_followup_journal_extent_v2(payload_bytes)?
+        .checked_add((CASE_JOURNAL_AUX_MATERIAL_BYTES + 4 + ASSIGNMENT_JOURNAL_HEADER_BYTES_V2) as u64)
+}
+
+pub(crate) fn assigned_case_followup_journal_extent_v2(payload_bytes: u64) -> Option<u64> {
+    use misaka_palw_positive_contract::journal::{CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES};
+    payload_bytes
+        .checked_add((CASE_JOURNAL_MIN_RECORD_BYTES + CASE_JOURNAL_AUX_MATERIAL_BYTES + 4 + ASSIGNED_CASE_BOUNDARY_BYTES_V2) as u64)
+}
+
 fn hash<T: BorshSerialize>(domain: &[u8], value: &T) -> Digest {
     struct Writer(blake2b_simd::State);
     impl std::io::Write for Writer {
@@ -277,6 +294,55 @@ mod tests {
             accepted_blue_score: 11,
         }
     }
+    #[test]
+    fn assigned_case_journal_extent_matches_literal_codec() {
+        use misaka_palw_positive_contract::{
+            assignment::journal::ASSIGNMENT_JOURNAL_HEADER_BYTES_V2,
+            identity::{ChainScope, ResultId},
+            journal::{CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord},
+        };
+        let origin = origin();
+        let aux = |byte, len| CaseJournalAux {
+            material: AcceptedMaterial { origin, digest: Digest([byte; 64]) },
+            preimage: vec![byte; len],
+        };
+        let mut record = CaseJournalRecord {
+            header: CaseJournalHeader {
+                version: 2,
+                revision: 1,
+                scope: ChainScope { network: Digest([1; 64]), ruleset: Digest([2; 64]), branch: Digest([5; 64]) },
+                case: CaseId(Digest([3; 64])),
+                result: ResultId(Digest([4; 64])),
+                sequence: 1,
+                previous: Digest([0; 64]),
+                origin,
+                kind: CaseJournalEventKind::NativeTransaction,
+            },
+            payload: vec![9; 32],
+            aux: vec![aux(1, ASSIGNED_CASE_BOUNDARY_BYTES_V2), aux(2, ASSIGNMENT_JOURNAL_HEADER_BYTES_V2)],
+        };
+        let mut limits = CaseJournalLimits {
+            max_record_bytes: assigned_case_initial_journal_extent_v2(record.payload.len() as u64).unwrap(),
+            max_payload_bytes: 64,
+            max_aux_entries: 2,
+            max_aux_preimage_bytes: 1024,
+            max_total_preimage_bytes: 4096,
+            max_logical_heap_bytes: 4096,
+        };
+        assert_eq!(record.encode(limits).unwrap().len() as u64, limits.max_record_bytes);
+        limits.max_record_bytes -= 1;
+        assert!(record.encode(limits).is_err());
+
+        record.header.sequence = 2;
+        record.header.kind = CaseJournalEventKind::NativeBody;
+        record.payload = vec![2, 0, 1, 0, 4, 7];
+        record.aux.pop();
+        limits.max_record_bytes = assigned_case_followup_journal_extent_v2(record.payload.len() as u64).unwrap();
+        assert_eq!(record.encode(limits).unwrap().len() as u64, limits.max_record_bytes);
+        limits.max_record_bytes -= 1;
+        assert!(record.encode(limits).is_err());
+    }
+
     #[test]
     fn witness_material_requires_independent_count_and_result_and_exact_raw_generated_bytes() {
         use misaka_palw_positive_contract::{identity::ResultId, record::RecordHeader};
