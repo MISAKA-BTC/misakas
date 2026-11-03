@@ -435,3 +435,75 @@ fn initial_relay_matches_only_the_signed_assignment_and_exact_funding_output() {
     assert_eq!(check_initial_assignment_relay_target_v2(&terms, &bundle, funding, 174, 20), Err(ContractError::Identity));
     assert_eq!(check_initial_assignment_relay_target_v2(&terms, &bundle, funding, 175, 40), Err(ContractError::Range));
 }
+
+#[test]
+fn initial_case_relay_binds_the_exact_result_consent_and_case_coin() {
+    use misaka_palw_positive_contract::{
+        ContractError,
+        assignment::funding_relay::{FundingRelayTermsV2, RelayFundingPurposeV2, RelayTargetV2, RelayTemplateV2},
+    };
+    let (assignment, _, _, _, _) = assigned();
+    let bundle = &assignment.bundle;
+    let (result, _, _, consent) = case_bundle(&assignment);
+    let funding = NativeOutpoint { transaction: NativeHash64([90; 64]), index: consent.funding_output_index };
+    let terms = FundingRelayTermsV2 {
+        version: 2,
+        revision: 1,
+        contract_network: bundle.terms.network,
+        contract_ruleset: bundle.terms.ruleset,
+        assignment: assignment.id(),
+        contract_anchor: bundle.terms.branch_anchor,
+        relay_ruleset: Digest([91; 64]),
+        relay_policy: Digest([92; 64]),
+        payer_bond: bundle.terms.poster,
+        payer: consent.payer,
+        refund_payload: consent.refund_payload,
+        funding_purpose: RelayFundingPurposeV2::CaseC,
+        target: RelayTargetV2::InitialCase { result: result.id(), funding_scope: consent.scope, consent: consent.id() },
+        funding_outpoint: funding,
+        expected_amount: 90,
+        template: RelayTemplateV2::NativeOp12NoCaseNoReceiptsV1,
+        register_before_daa: 100,
+        funding_admission_before_daa: 150,
+        custody_until_daa: 800,
+        metadata_fee_schedule: Digest([93; 64]),
+        physical_custody_profile: Digest([94; 64]),
+        max_metadata_fee: 1_000_000,
+    };
+    let registration =
+        AcceptedOrigin { accepting_block: NativeHash64([97; 64]), accepted_daa: 90, accepted_blue_score: 90, ..assignment.origin };
+    assert_eq!(check_case_relay_registration_assignment_v2(&terms, &assignment, registration), Ok(()));
+    let substituted_scope = FundingRelayTermsV2 { contract_ruleset: terms.relay_ruleset, ..terms };
+    assert_eq!(
+        check_case_relay_registration_assignment_v2(&substituted_scope, &assignment, registration),
+        Err(ContractError::Identity)
+    );
+    let mut closed = assignment.clone();
+    closed.status = AssignmentStatusV2::Cancelled;
+    assert_eq!(check_case_relay_registration_assignment_v2(&terms, &closed, registration), Err(ContractError::Range));
+    assert_eq!(check_case_relay_registration_assignment_v2(&terms, &assignment, assignment.origin), Err(ContractError::Range));
+    let late_bound = FundingRelayTermsV2 { funding_admission_before_daa: 201, ..terms };
+    assert_eq!(check_case_relay_registration_assignment_v2(&late_bound, &assignment, registration), Err(ContractError::Range));
+    let check = |terms, result, consent, funding, amount, now| {
+        check_initial_case_relay_target_v2(terms, bundle, result, consent, funding, amount, now)
+    };
+    assert_eq!(check(&terms, result.id(), &consent, funding, 90, 120), Ok(()));
+    let wrong_result = ResultId(Digest([95; 64]));
+    let mut wrong_scope = consent.clone();
+    wrong_scope.scope = FundingScopeId(Digest([96; 64]));
+    let mut wrong_consent = consent.clone();
+    wrong_consent.max_fees -= 1;
+    let wrong_funding = NativeOutpoint { index: funding.index + 1, ..funding };
+    for outcome in [
+        check(&terms, wrong_result, &consent, funding, 90, 120),
+        check(&terms, result.id(), &wrong_scope, funding, 90, 120),
+        check(&terms, result.id(), &wrong_consent, funding, 90, 120),
+        check(&terms, result.id(), &consent, wrong_funding, 90, 120),
+        check(&terms, result.id(), &consent, funding, 89, 120),
+    ] {
+        assert_eq!(outcome, Err(ContractError::Identity));
+    }
+    assert_eq!(check(&terms, result.id(), &consent, funding, 90, 150), Err(ContractError::Range));
+    let over_cap = FundingRelayTermsV2 { expected_amount: consent.max_locked + 1, ..terms };
+    assert_eq!(check(&over_cap, result.id(), &consent, funding, over_cap.expected_amount, 120), Err(ContractError::Budget));
+}

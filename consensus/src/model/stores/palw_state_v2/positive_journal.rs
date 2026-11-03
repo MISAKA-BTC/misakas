@@ -4,9 +4,11 @@
 //! a court result, transaction qualification, UTXOs, payment, or credit.
 use super::{DbPalwStateV2Store, NativeStoreWriteTicketV1, native_writer_is_strict_v1};
 use kaspa_consensus_core::{
-    palw_native_resource_v1::{actual_hard_database_quota_v1, reserve_native_requests_v1},
+    palw_native_resource_v1::{actual_hard_database_quota_v1, preflight_native_value_v1, reserve_native_requests_v1},
+    palw_positive_court_v2::coordinator::assignment_body::PositiveAssignmentNativeBodyV2,
     palw_positive_journal_chain_v2::CaseJournalSourceV2,
     palw_state_v2::{PalwDeltaEntryV2, PalwStateDeltaV2},
+    subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_SIZE},
 };
 use kaspa_database::{
     prelude::{DbKey, StoreError, StoreResult},
@@ -119,6 +121,7 @@ struct RecordSlot<'a> {
     header: CaseJournalHeader,
     head: Digest,
     history: AcceptedMaterial,
+    valid_initial: bool,
 }
 const FIXED_ROW_WORKSPACE: usize =
     MAX_NATIVE_ROW_BYTES + MAX_NATIVE_KEY_BYTES + 8 * size_of::<NativeRowValue>() + 2 * size_of::<NativeRowKey>();
@@ -131,6 +134,61 @@ fn decode_row(key: &[u8], bytes: &[u8]) -> StoreResult<Option<RowState>> {
         _ => None,
     })
 }
+
+/// Borrow the canonical Borsh Transaction's payload and cached identity without
+/// allocating any inputs, outputs, or scripts from a stored journal record.
+fn initial_assignment_transaction(raw: &[u8]) -> Option<(&[u8], &[u8; 64])> {
+    fn read_count(raw: &mut &[u8]) -> Option<usize> {
+        let (count, remaining) = raw.split_first_chunk::<4>()?;
+        *raw = remaining;
+        usize::try_from(u32::from_le_bytes(*count)).ok()
+    }
+    fn read_vec<'a>(raw: &mut &'a [u8]) -> Option<&'a [u8]> {
+        let count = read_count(raw)?;
+        let (value, remaining) = raw.split_at_checked(count)?;
+        *raw = remaining;
+        Some(value)
+    }
+
+    let mut rest = raw.get(2..)?; // version
+    let inputs = read_count(&mut rest)?;
+    if inputs == 0 {
+        return None;
+    }
+    for _ in 0..inputs {
+        rest = rest.get(64 + 4..)?; // previous outpoint
+        read_vec(&mut rest)?; // signature script
+        rest = rest.get(8 + 1..)?; // sequence and sigop count
+    }
+    let outputs = read_count(&mut rest)?;
+    for _ in 0..outputs {
+        rest = rest.get(8 + 2..)?; // amount and script version
+        read_vec(&mut rest)?;
+    }
+    let (subnetwork, tail) = rest.get(8..)?.split_at_checked(SUBNETWORK_ID_SIZE)?; // lock time and subnetwork
+    let lifecycle: &[u8] = SUBNETWORK_ID_PALW_LIFECYCLE.as_ref();
+    if subnetwork != lifecycle {
+        return None;
+    }
+    rest = tail.get(8..)?; // gas
+    let payload = read_vec(&mut rest)?;
+    Some((payload, rest.get(8..)?.try_into().ok()?)) // mass and exact cached txid
+}
+
+fn valid_initial_case_record(record: CaseJournalRecordView<'_>) -> bool {
+    let header = record.header();
+    match header.kind {
+        CaseJournalEventKind::NativeBody => record.payload().get(4) == Some(&0),
+        CaseJournalEventKind::NativeTransaction => {
+            let Some((payload, id)) = initial_assignment_transaction(record.payload()) else { return false };
+            header.origin.event_ordinal == 0
+                && id == &header.origin.carrier_transaction.0
+                && payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 9])
+                && preflight_native_value_v1::<PositiveAssignmentNativeBodyV2>(&payload[3..], (payload.len() - 3) as u64).is_ok()
+        }
+    }
+}
+
 fn varint_bytes(mut n: u64) -> u64 {
     let mut width = 1;
     while n >= 128 {
@@ -367,7 +425,9 @@ impl DbPalwStateV2Store {
             if head == history.digest {
                 return Err(corrupt("head/history domains were aliased"));
             }
-            record_slots.push(RecordSlot { raw, header: view.header(), head, history });
+            let header = view.header();
+            let valid_initial = header.sequence == 1 && valid_initial_case_record(view);
+            record_slots.push(RecordSlot { raw, header, head, history, valid_initial });
         }
         row_slots.sort_unstable_by_key(|row| (row.case, row.kind, row.order));
         record_slots.sort_unstable_by_key(|record| (record.header.case, record.header.sequence));
@@ -448,7 +508,7 @@ impl DbPalwStateV2Store {
                 {
                     return Err(corrupt("selected predecessor differs from old native JournalHead/Case"));
                 }
-                if header.sequence == 1 && (header.kind != CaseJournalEventKind::NativeBody || view.payload().get(4) != Some(&0)) {
+                if header.sequence == 1 && !valid_initial_case_record(view) {
                     return Err(corrupt("selected predecessor initial event is invalid"));
                 }
             }
@@ -564,8 +624,8 @@ fn validate_case(cases: &[RowSlot], heads: &[RowSlot], records: &[RecordSlot<'_>
             {
                 return Err(corrupt("raw record sequence/scope/result/previous mismatch"));
             }
-            if sequence == 1 && (record.header.kind != CaseJournalEventKind::NativeBody || record.raw.get(617 + 4) != Some(&0)) {
-                return Err(corrupt("initial journal event must be NativeBody ResultAdmission"));
+            if sequence == 1 && !record.valid_initial {
+                return Err(corrupt("invalid initial Case journal event"));
             }
             previous = record.head;
             offset += 1;

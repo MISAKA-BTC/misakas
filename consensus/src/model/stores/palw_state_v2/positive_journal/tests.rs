@@ -97,11 +97,14 @@ fn row(body: NativeRowBody) -> Vec<u8> {
     NativeRowValue::new(body).unwrap().encode().unwrap()
 }
 fn case_entry(old: Option<u64>, new: u64) -> PalwDeltaEntryV2 {
+    case_row_entry(old.map(case), case(new))
+}
+fn case_row_entry(old: Option<CaseRow>, new: CaseRow) -> PalwDeltaEntryV2 {
     PalwDeltaEntryV2::KernelRouteRow {
         table: KERNEL_AUX_TABLE,
-        key: NativeRowKey::Case(CaseId(d(4))).encode(),
-        old: old.map(|s| row(NativeRowBody::Case(case(s)))),
-        new: Some(row(NativeRowBody::Case(case(new)))),
+        key: NativeRowKey::Case(new.case).encode(),
+        old: old.map(|old| row(NativeRowBody::Case(old))),
+        new: Some(row(NativeRowBody::Case(new))),
     }
 }
 fn head_entry(old: Option<JournalHeadRow>, new: JournalHeadRow) -> PalwDeltaEntryV2 {
@@ -159,6 +162,183 @@ fn chain_limits() -> CaseJournalChainLimitsV2 {
         max_hash_bytes: 131_072,
         max_index_bytes: 1024,
     }
+}
+
+#[test]
+fn assigned_op9_journal_survives_reopen_and_allows_append() {
+    use kaspa_consensus_core::{
+        palw_positive_court_v2::coordinator::assignment_body::{AssignedResultPayloadV2, PositiveAssignmentNativeOperationV2},
+        tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput},
+    };
+    use misaka_palw_positive_contract::{
+        assignment::AssignmentId,
+        funding::{FundingConsent, FundingPlanBasis},
+        identity::{FundingScopeId, PrincipalId, SIGNATURE_BYTES},
+        messages::MinerResultCommit,
+    };
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let path = db.path().to_path_buf();
+    let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    let mut policy = limits();
+    policy.record_limits.max_record_bytes = 32_768;
+    policy.record_limits.max_payload_bytes = 32_768;
+    policy.record_limits.max_total_preimage_bytes = 32_768;
+    policy.record_limits.max_logical_heap_bytes = 65_536;
+    policy.max_total_raw_bytes = 131_072;
+
+    let mut first_case = case(1);
+    let body = PositiveAssignmentNativeBodyV2 {
+        version: 2,
+        revision: 1,
+        operation: PositiveAssignmentNativeOperationV2::AdmitAssignedResult {
+            assignment: AssignmentId(d(20)),
+            payload: AssignedResultPayloadV2 {
+                result: MinerResultCommit {
+                    version: 2,
+                    revision: 1,
+                    scope: scope(),
+                    job: d(21),
+                    execution: d(22),
+                    miner: PrincipalId(d(23)),
+                    registered_class: d(24),
+                    artifact: d(25),
+                    program: d(26),
+                    input: d(27),
+                    tokenizer: d(28),
+                    execution_rules: d(29),
+                    selector: d(30),
+                    generation_seed: [31; 32],
+                    temperature_q24: 0,
+                    prefill: 1,
+                    decode: 1,
+                    max_context: 2,
+                    output: d(32),
+                    dependencies: d(33),
+                    service_contract: first_case.service.id(),
+                },
+                miner_signature: [0; SIGNATURE_BYTES],
+                service: first_case.service,
+                basis: FundingPlanBasis {
+                    profile: CheckProfile::ExactStreamV1,
+                    derivation: d(34),
+                    mandatory_relations: 1,
+                    source_catalog: first_case.service.source_catalog,
+                    resource_quote: d(35),
+                    policy: d(36),
+                    schedule: d(37),
+                    required_fee: 1,
+                    required_capital: 1,
+                },
+                consent: FundingConsent {
+                    version: 2,
+                    revision: 1,
+                    case: first_case.case,
+                    scope: FundingScopeId(d(38)),
+                    payer: PrincipalId(d(39)),
+                    max_fees: 1,
+                    max_locked: 10,
+                    funding_output_index: 0,
+                    refund_payload: d(40),
+                    admission_expiry: 10,
+                },
+                payer_signature: [0; SIGNATURE_BYTES],
+            },
+        },
+    };
+    let mut payload = vec![1, 0, 176];
+    payload.extend(borsh::to_vec(&body).unwrap());
+    let tx = Transaction::new(
+        0,
+        vec![TransactionInput::new(TransactionOutpoint::new(BlockHash::from_u64_word(50), 0), vec![1, 2], 0, 1)],
+        vec![TransactionOutput::new(10, ScriptPublicKey::from_vec(0, vec![3, 4, 5]))],
+        0,
+        SUBNETWORK_ID_PALW_LIFECYCLE,
+        0,
+        payload,
+    );
+    first_case.last_event.carrier_transaction = NativeHash64(tx.id().as_bytes());
+    first_case.last_event.event_ordinal = 0;
+    let first = CaseJournalRecord {
+        header: CaseJournalHeader {
+            version: 2,
+            revision: 1,
+            scope: scope(),
+            case: first_case.case,
+            result: first_case.result,
+            sequence: 1,
+            previous: d(0),
+            origin: first_case.last_event,
+            kind: CaseJournalEventKind::NativeTransaction,
+        },
+        payload: borsh::to_vec(&tx).unwrap(),
+        aux: vec![],
+    };
+    let record_head = |record: &CaseJournalRecord| {
+        let raw = record.encode(policy.record_limits).unwrap();
+        let view = CaseJournalRecordView::decode(&raw, policy.record_limits).unwrap();
+        let header = record.header;
+        let head = JournalHeadRow {
+            case: header.case,
+            sequence: header.sequence,
+            previous: header.previous,
+            head: view.head(),
+            history: view.history(),
+        };
+        (raw, head)
+    };
+    let mut corrupt = first.clone();
+    corrupt.payload.push(0);
+    let (corrupt_raw, corrupt_head) = record_head(&corrupt);
+    let mut batch = WriteBatch::default();
+    assert!(
+        store
+            .stage_positive_case_journal_batch_v2(
+                &mut batch,
+                &delta(vec![case_row_entry(None, first_case), head_entry(None, corrupt_head)]),
+                &[&corrupt_raw],
+                policy,
+            )
+            .is_err()
+    );
+    assert_eq!(batch.len(), 0);
+
+    let (first_raw, first_head) = record_head(&first);
+    let initial = delta(vec![case_row_entry(None, first_case), head_entry(None, first_head)]);
+    let (_, ticket) = store.stage_positive_case_journal_batch_v2(&mut batch, &initial, &[&first_raw], policy).unwrap();
+    db.write(batch).unwrap();
+    drop(ticket);
+    drop(store);
+    drop(db);
+
+    let db = ConnBuilder::default().with_db_path(path).with_files_limit(10).build().unwrap();
+    let mut reopened = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+    let next = CaseJournalRecord {
+        header: CaseJournalHeader {
+            sequence: 2,
+            previous: first_head.head,
+            origin: origin(2),
+            kind: CaseJournalEventKind::NativeBody,
+            ..first.header
+        },
+        payload: vec![2, 0, 1, 0, 5],
+        aux: vec![],
+    };
+    let (next_raw, next_head) = record_head(&next);
+    let append = delta(vec![case_row_entry(Some(first_case), case(2)), head_entry(Some(first_head), next_head)]);
+    let mut batch = WriteBatch::default();
+    let (_, ticket) = reopened.stage_positive_case_journal_batch_v2(&mut batch, &append, &[&next_raw], policy).unwrap();
+    db.write(batch).unwrap();
+    drop(ticket);
+    let chain_limits = CaseJournalChainLimitsV2 { record_limits: policy.record_limits, ..chain_limits() };
+    let linked = check_case_journal_links_v2(&reopened, pin(next_head), chain_limits).unwrap();
+    let mut records = [first_raw, next_raw].into_iter();
+    linked
+        .visit_forward(&reopened, |record| {
+            assert_eq!(record.raw_bytes(), records.next().unwrap());
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert!(records.next().is_none());
 }
 
 #[test]
