@@ -1299,3 +1299,55 @@ reopens. With a bounded read-local cache it reached the 8,192-edge
 limit before the exact DAA 508 endpoint. Partial output was removed
 by the archive reader. The successful first hop and verified
 registration remain separate pieces of evidence.
+
+## Claim fold coordinates and original Qwen projection — 06:28 UTC
+
+The paired selected-chain scan identified Qwen #54 in the fold at
+DAA 19,625. Its carrier header was at DAA 19,623 and signed
+retention at 40,231. B0 recorded the exact refusal at 20,606 DAA
+remaining against the required 20,608, and both nodes lacked its
+claim row. The extended scanner reached matching virtual DAA
+19,627 without another Qwen candidate in that page.
+
+Claim detail now reads the fold's accepted blue score and the
+state's exact tip hash alongside the existing carrier hash and DAA.
+This lets a reader match a fold when several selected blocks share
+one DAA. The updated view was compiled against cached native types
+and reproduced all three identities and effective retention for 32
+rows from the authenticated cold T12 snapshot. Observer fixtures
+covered same-DAA ambiguity, a different state tip and older replies.
+The change is source-only.
+
+The separate offline Qwen #45 diagnostic also verified original
+query projection leaf 48. A verifier denied access to both model
+and original capture authenticated 12 input tiles and two artifact
+openings, then recomputed eight output lanes with 12,288 integer
+products. Its 30,713-byte packet yielded the same result on recheck.
+Withheld weights or coefficients deferred the verdict, and
+altered weights, coefficients or input were refused. The existing
+embedding diagnostic produced its original byte-identical result.
+The scope is one projection tile from the original signed carrier.
+Live assignment, whole-job adjudication, credit and payment remain
+unverified.
+
+Local submission can return before a carrier has folded. The
+in-memory publication pin then drops and current-state absence can
+allow pressure reclamation before a delayed fold or after reorg.
+An exact retirement delta supplies positive evidence on one branch.
+Pruning catch-up can still replace that branch above the previous
+pruning point. A destructive release therefore needs an irreversible
+branch-relative condition, or a verified serving archive while the
+hot copy is absent. The scoped investigation produced no GC rule
+change.
+
+The archive walk reached the exact DAA 508 acceptance block in
+10,609 edges from DAA 2,844. In the private read-only archive
+namespace, the native verifier rehashed all 10,610 headers and
+checked every level-zero direct-parent link. It consumed
+64,965,699 bytes from a bounded pipe and retained a 1,442,960-byte
+compact link manifest. The raw stream SHA-256 was
+`6114b509d185d25bd9e309d83a0d4b9689c84f21ade2d4e102c935cfff294158`.
+The archive and protected node generations were preserved.
+The chosen path comes from the archived GHOSTDAG index. Independent
+selected-parent recomputation, strict snapshot integration, and
+live unsigned IBD remain open.
