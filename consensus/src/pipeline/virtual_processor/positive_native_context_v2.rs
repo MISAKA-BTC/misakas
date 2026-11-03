@@ -15,6 +15,7 @@ use kaspa_consensus_core::{
     acceptance_data::AcceptanceData,
     block::BlockTransactionsV3,
     palw_native_resource_v1::{NativeCoverageV1, NativeDemandLeaseV1, reserve_native_requests_v1},
+    palw_positive_funding_relay_v2::pending_funding_relay_archive_workspace_v2,
     palw_state_v2::PalwBlockContextV2,
     tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry, ValidatedTransaction},
     utxo::utxo_view::UtxoView,
@@ -468,11 +469,6 @@ pub(in crate::pipeline::virtual_processor) enum AssignmentIngressPrerequisiteV2 
     PendingFraudReservationOwner,
     NativeAssignmentCheckpointOwner,
 }
-fn pending_relay_archive_workspace_v2() -> u64 {
-    use misaka_palw_positive_contract::{assignment::funding_relay::FundingRelayRegistrationBodyV2, rows::NativeRowValue};
-    (4 * size_of::<NativeRowValue>() + 2 * size_of::<FundingRelayRegistrationBodyV2>() + 2 * 1024 + 2 * 74) as u64
-}
-
 impl VirtualStateProcessor {
     /// Check the archived registration behind an exact repeat against the
     /// actual selected-parent state and its persisted acceptance index.
@@ -489,7 +485,7 @@ impl VirtualStateProcessor {
         use misaka_palw_positive_contract::{native::NativeRowKey, rows::NativeRowBody};
 
         let fault = |why| NativeCoverageV1::unsupported::<Self>("rooted relay archive", why);
-        let workspace = pending_relay_archive_workspace_v2();
+        let workspace = pending_funding_relay_archive_workspace_v2();
         let _lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(workspace)?)?;
         let funding = body.terms.funding_outpoint;
         let purpose = body.terms.funding_purpose;
@@ -544,7 +540,7 @@ impl VirtualStateProcessor {
             rows::NativeRowBody,
         };
         let fault = |why| NativeCoverageV1::unsupported::<Self>("initial Assignment relay archive", why);
-        let workspace = pending_relay_archive_workspace_v2();
+        let workspace = pending_funding_relay_archive_workspace_v2();
         let _lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(workspace)?)?;
         let purpose = RelayFundingPurposeV2::PosterA;
         let rows = PositiveRowsV2::new(state);

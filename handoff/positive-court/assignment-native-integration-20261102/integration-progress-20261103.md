@@ -1249,3 +1249,32 @@ also subtracts the original R rollback margin before qualifying the minimum
 F retention horizon and propagates a local ledger projection resource
 failure through assigned Court replay. Neither change supplies the
 prospective all-branch or bound-account owner.
+
+The follow-up recovery fixture builds a competing native branch with real
+conflicting spends of the three relay carrier inputs. Its assertions compare
+the reorged node against the independently built branch, require the old
+relay rows and change outputs to disappear, and allow the old content-addressed
+archive to remain available for rollback. The isolated Consensus test target
+typechecked. The branch has not yet been exercised at runtime.
+
+An exact native-wire preflight of a fixture-shaped delta with only the two
+pending relay records and a final point measured 160,630 bytes of combined
+replay workspace under the prior quote. The fixture's original cap is 128,000
+bytes. Borrowed canonical row comparison and a fixed nonce projection reduce
+the same minimum to 120,574 bytes. A larger real delta still requires its
+actual preflight. Thirteen standalone Contract and streaming cases passed
+and the isolated Consensus test target typechecked. The changes are staged
+as candidates while the current heartbeat runtime pins its source.
+
+The [empty-heartbeat differential](native-journal-empty-heartbeat-differential.json)
+links the same driver against the old and repaired Core archives. The old
+archive refuses the first metered transition. The repaired archive matches
+eight unmetered roots and deltas under a 1 MiB logical cap, and applying and
+reverting each of those deltas reproduces its child and parent roots.
+
+The exact recovery candidate is preserved as commit `7eaf2ba68`. It also
+refuses a new registration before its debit when its heap cap cannot cover
+even the two inserted rows and the mandatory final point. The extracted
+floor matched the actual fixture-shaped native wire preflight at 120,190
+bytes. Integrated validation is pending. The primary worktree retains the
+running heartbeat test's source map.

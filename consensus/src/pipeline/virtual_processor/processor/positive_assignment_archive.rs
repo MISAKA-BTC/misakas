@@ -14,6 +14,7 @@ use kaspa_consensus_core::{
     palw_native_resource_v1::{NativeCoverageV1, reserve_native_requests_v1},
     palw_positive_assignment_case_material_v2::AssignmentCaseBoundaryV2,
     palw_positive_assignment_material_v2::{AssignmentAdmissionMaterialV2, AssignmentAdmissionMaterialViewV2},
+    palw_positive_funding_relay_v2::{pending_funding_relay_payer_scratch_v2, pending_funding_relay_row_images_match_v2},
     palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
     palw_state_v2::{
         AssignmentControlBoundaryV2, NativeAcceptedCaseCarriageV2, NativeAssignedCaseBackingErrorV2, NativeAssignmentRulesV2,
@@ -29,6 +30,7 @@ use misaka_palw_positive_contract::{
         funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2},
         journal::{ASSIGNMENT_JOURNAL_HEADER_BYTES_V2, AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
         open_material::AssignmentOpenLimitsV2,
+        rows::AssignmentNonceRow,
     },
     journal::CaseJournalRecordView,
     native::{KERNEL_AUX_TABLE, NativeRowKey},
@@ -86,15 +88,6 @@ impl RelayCarrierReplayV2<'_> {
         self.remaining_work = self.remaining_work.checked_sub(work).ok_or(E::Invalid("relay replay work cap"))?;
         Ok(())
     }
-}
-
-fn decode_relay_history_row_v2(key: &[u8], bytes: &[u8]) -> Option<NativeRowBody> {
-    // All three expected variants have fixed fields. Reject another variant
-    // before its decoder can allocate a variable-size payload.
-    if bytes.get(..5)? != key.get(..5)? {
-        return None;
-    }
-    NativeRowValue::decode(key, bytes).ok().map(|row| row.body)
 }
 
 impl VirtualStateProcessor {
@@ -471,7 +464,10 @@ impl VirtualStateProcessor {
         let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
             return Err(E::Unavailable("original relay payer contract owner"));
         };
-        let scratch = (4 * size_of::<NativeRowValue>() + 4 * MAX_NATIVE_KEY_BYTES) as u64;
+        // The rooted R rows remain under the outer lease. Compare them
+        // directly with the delta's borrowed encodings. Only keys and the
+        // small nonce projection need additional scratch.
+        let scratch = pending_funding_relay_payer_scratch_v2();
         let delta_heap = replay.maximum_heap.checked_sub(scratch).ok_or(E::Invalid("relay payer replay heap cap"))?;
         let _lease =
             reserve_native_requests_v1(scratch).map_err(E::Resource)?.ok_or(E::Unavailable("relay payer replay workspace owner"))?;
@@ -490,9 +486,15 @@ impl VirtualStateProcessor {
         };
         let read_nonce = |bytes: Option<&[u8]>| {
             bytes
-                .map(|bytes| match decode_relay_history_row_v2(&nonce_key.1, bytes) {
-                    Some(NativeRowBody::AssignmentNonce(row)) => Ok(row.nonce),
-                    _ => Err(E::Invalid("malformed original relay nonce")),
+                .map(|bytes| {
+                    let malformed = E::Invalid("malformed original relay nonce");
+                    let literal = bytes.strip_prefix(&[2, 0, 1, 0, 11]).ok_or(malformed)?;
+                    let row: AssignmentNonceRow =
+                        borsh::from_slice(literal).map_err(|_| E::Invalid("malformed original relay nonce"))?;
+                    if row.poster != terms.payer_bond || (row.nonce.exhausted && row.nonce.next != u64::MAX) {
+                        return Err(E::Invalid("original relay nonce key or range differs"));
+                    }
+                    Ok(row.nonce)
                 })
                 .transpose()
         };
@@ -539,29 +541,17 @@ impl VirtualStateProcessor {
                     PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(bytes) }
                         if cursor == accepting && *table == KERNEL_AUX_TABLE && *key == auth_key =>
                     {
-                        let Some(NativeRowBody::FundingRelayAuthorization(original)) = decode_relay_history_row_v2(key, bytes) else {
-                            return Err(E::Invalid("malformed original relay authorization"));
-                        };
-                        if original != *authorization {
-                            return Err(E::Invalid("original relay authorization differs"));
-                        }
-                        let Some(PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(bytes) }) =
+                        let Some(PalwDeltaEntryV2::KernelRouteRow { table, key, old: None, new: Some(custody_bytes) }) =
                             delta.entries.get(index + 1)
                         else {
                             return Err(E::Invalid("original relay registration lacks adjacent custody"));
                         };
-                        if *table != KERNEL_AUX_TABLE || *key != custody_key {
-                            return Err(E::Invalid("original relay custody key differs"));
-                        }
-                        let Some(NativeRowBody::FundingRelayCustody(mut custody)) = decode_relay_history_row_v2(key, bytes) else {
-                            return Err(E::Invalid("malformed original relay custody"));
-                        };
-                        if custody.binding.is_some() {
-                            return Err(E::Invalid("original relay custody was already bound"));
-                        }
-                        custody.binding = current_custody.binding;
-                        if custody != *current_custody || !matches!(bond, Some((_, true, true))) {
-                            return Err(E::Invalid("original relay custody or payer bond differs"));
+                        if *table != KERNEL_AUX_TABLE
+                            || *key != custody_key
+                            || !pending_funding_relay_row_images_match_v2(authorization, current_custody, bytes, custody_bytes)
+                            || !matches!(bond, Some((_, true, true)))
+                        {
+                            return Err(E::Invalid("original relay row images or payer bond differ"));
                         }
                         nonce
                             .unwrap_or_default()

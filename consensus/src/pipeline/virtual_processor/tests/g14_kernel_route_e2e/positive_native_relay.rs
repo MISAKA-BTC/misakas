@@ -6,7 +6,7 @@ use kaspa_consensus_core::{
     palw_native_resource_v1::{NativeSnapshotResourceLimitsV1, arm_native_logical_limits_v1},
     palw_positive_relay_signature_v2::FundingRelaySignatureTemplateV2,
     palw_positive_rows_v2::PositiveRowsV2,
-    subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
+    subnets::{SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_LIFECYCLE},
 };
 use kaspa_database::prelude::{ConnBuilder, DB};
 use misaka_palw_positive_contract::{
@@ -115,16 +115,16 @@ fn signed_relay(net: &Net) -> FundingRelayRegistrationBodyV2 {
     }
 }
 
-fn carrier(net: &Net, card: usize, payload: &[u8], fee: u64) -> Transaction {
+fn signed_fee_spend(net: &Net, card: usize, relay: Option<&[u8]>, fee: u64) -> Transaction {
     let (outpoint, entry) = net.funding[card].clone();
     let mut tx = Transaction::new(
         crate::constants::TX_VERSION,
         vec![TransactionInput::new(outpoint, vec![], 0, 1)],
         vec![TransactionOutput::new(entry.amount - fee, card_payout_spk(card))],
         0,
-        SUBNETWORK_ID_PALW_LIFECYCLE,
+        if relay.is_some() { SUBNETWORK_ID_PALW_LIFECYCLE } else { SUBNETWORK_ID_NATIVE },
         0,
-        payload.to_vec(),
+        relay.unwrap_or_default().to_vec(),
     );
     sign_spend(&mut tx, entry, card, net.config.params.storage_mass_parameter);
     tx
@@ -182,6 +182,59 @@ fn reopen_relay_net(
     net
 }
 
+#[inline(never)]
+fn check_relay_rollback<'a>(
+    mut fork: Box<Net>,
+    follower: &'a Net,
+    prefix: Vec<Block>,
+    auth: &'a FundingRelayAuthorizationRowV2,
+    payload: &'a [u8],
+    original_relay_spends: [TransactionOutpoint; 3],
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>> {
+    Box::pin(async move {
+        let timestamp = prefix.last().unwrap().header.timestamp;
+        for block in prefix {
+            arrive(&fork.chain, block, "relay rollback fork prefix").await;
+        }
+        fork.chain.ctx.simulated_time = timestamp;
+        fork.chain.set_nonce_for_fork(1 << 32);
+        let step = fork.ttpb();
+        // The alternate branch spends the same fee inputs before its work
+        // overtakes the relay branch. Virtual merges cannot replay the old
+        // R carriers through their now-conflicting inputs.
+        let conflicts: Vec<_> = [3, 0, 2].into_iter().map(|card| signed_fee_spend(&fork, card, None, GROSS_FEE)).collect();
+        let carrying = fork.chain.heartbeat(step, conflicts.clone()).await;
+        arrive(&follower.chain, carrying, "alternate relay fee spends").await;
+        for _ in 0..9 {
+            let block = fork.chain.heartbeat(step, Vec::new()).await;
+            arrive(&follower.chain, block, "alternate relay branch work").await;
+        }
+        let tip = fork.chain.sink();
+        assert_eq!(follower.chain.sink(), tip, "the competing branch is selected");
+        assert_eq!(root_at(&follower.chain, tip), root_at(&fork.chain, tip));
+        let vp = follower.chain.vp();
+        let store = vp.palw_state_v2_store.read();
+        let (selected, state) = store.load_tip_retained_v1(&follower.bundle.state).unwrap().unwrap();
+        assert_eq!(selected, tip);
+        let rows = PositiveRowsV2::new(&state);
+        let funding = auth.terms.funding_outpoint;
+        let purpose = auth.terms.funding_purpose;
+        assert!(rows.read(NativeRowKey::FundingRelayAuthorization { funding, purpose }).unwrap().is_none());
+        assert!(rows.read(NativeRowKey::FundingRelayCustody { funding, purpose }).unwrap().is_none());
+        // Old content can remain for rollback. The actual selected state,
+        // above, is the authority for admission and fee disposition.
+        assert_eq!(store.check_funding_relay_archive_v2(auth, |raw| raw == payload).unwrap().relay_charge(), auth.quote.fee);
+        drop(store);
+        let node = &follower.chain.ctx.consensus;
+        for (conflict, orphan) in conflicts.iter().zip(original_relay_spends) {
+            assert!(node.get_virtual_utxo_entry(orphan).is_none());
+            let change = TransactionOutpoint::new(conflict.id(), 0);
+            let expected = fork.chain.ctx.consensus.get_virtual_utxo_entry(change).expect("fork change is accepted");
+            assert_eq!(node.get_virtual_utxo_entry(change), Some(expected));
+        }
+    })
+}
+
 #[tokio::test]
 async fn native_relay_worker() {
     if std::env::var(RELAY_CHILD).as_deref() == Ok("1") {
@@ -203,19 +256,22 @@ fn run_relay() -> TestFuture<()> {
         let World { mut net, .. } = World::on(initial).await;
         assert!(net.daa() < RELAY_ACTIVATION_DAA);
         let follower = Box::new(relay_network(TestConsensus::new));
+        let fork = Box::new(relay_network(TestConsensus::new));
         let limit = 16 << 30;
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: limit }));
         net.beat_to(RELAY_ACTIVATION_DAA + 2).await;
         let step = net.ttpb();
+        let prefix = chain_blocks(&net.chain, net.chain.sink());
         let body = signed_relay(&net);
         let mut payload = vec![1, 0, 176];
         payload.extend(borsh::to_vec(&body).unwrap());
         let fence = net.config.params.palw_positive_funding_relay_v2_at(net.daa()).unwrap();
         let metadata_fee = fence.fees.registration_quote(&fence.policy, &fence.physical, &body.terms, net.daa()).unwrap().fee;
-        let short = carrier(&net, 3, &payload, metadata_fee - 1);
-        let first = carrier(&net, 0, &payload, GROSS_FEE);
-        let retry = carrier(&net, 2, &payload, GROSS_FEE);
+        let short = signed_fee_spend(&net, 3, Some(&payload), metadata_fee - 1);
+        let first = signed_fee_spend(&net, 0, Some(&payload), GROSS_FEE);
+        let retry = signed_fee_spend(&net, 2, Some(&payload), GROSS_FEE);
         assert_ne!(first.id(), retry.id());
+        let relay_spends = [&short, &first, &retry].map(|tx| TransactionOutpoint::new(tx.id(), 0));
         let outpoint = body.terms.funding_outpoint;
         let purpose = body.terms.funding_purpose;
         let mut rooted = None;
@@ -280,6 +336,7 @@ fn run_relay() -> TestFuture<()> {
         let follower_fees =
             follower.chain.vp().palw_state_v2_store.read().check_funding_relay_archive_v2(&auth, |raw| raw == payload).unwrap();
         assert_eq!(follower_fees.relay_charge(), auth.quote.fee);
+        check_relay_rollback(fork, &follower, prefix, &auth, &payload, relay_spends).await;
         drop(net);
         assert!(previous.upgrade().is_none(), "the last relay connection is also closed");
     })

@@ -1236,6 +1236,11 @@ impl TransitionBuilder<'_> {
             {
                 return Err(refusal("initial relay differs from the current contract or native relay scope"));
             }
+            let minimum_replay =
+                crate::palw_positive_funding_relay_v2::minimum_pending_funding_relay_replay_heap_v2(terms).map_err(refusal)?;
+            if physical.max_heap_bytes < minimum_replay {
+                return Err(refusal("initial relay profile cannot replay its own registration delta"));
+            }
             let registration = fees.registration_quote(policy, physical, terms, ctx.daa_score).map_err(refusal)?;
             if registration.usage.frame_bytes != reserved.quote().encoded_bytes {
                 return Err(refusal("initial relay frame differs from the registration quote"));

@@ -154,6 +154,58 @@ pub fn funding_relay_carrier_matches_v2(body: &FundingRelayRegistrationBodyV2, p
     payload.strip_prefix(&[1, 0, 176]).is_some_and(|encoded| canonical_equal(body, encoded))
 }
 
+/// Workspace held across selected-parent archive and payer replay.
+pub fn pending_funding_relay_archive_workspace_v2() -> u64 {
+    use misaka_palw_positive_contract::rows::NativeRowValue;
+    (4 * size_of::<NativeRowValue>() + 2 * size_of::<FundingRelayRegistrationBodyV2>() + 2 * 1024 + 2 * 74) as u64
+}
+
+/// Scratch for the bounded payer projection's keys and nonce records.
+pub fn pending_funding_relay_payer_scratch_v2() -> u64 {
+    use misaka_palw_positive_contract::{assignment::rows::AssignmentNonceRow, rows::MAX_NATIVE_KEY_BYTES};
+    (4 * MAX_NATIVE_KEY_BYTES + 3 * size_of::<AssignmentNonceRow>()) as u64
+}
+
+/// Minimum for the two new R rows and mandatory final point. Every actual
+/// delta, which may contain other entries, still requires its own preflight.
+pub(crate) fn minimum_pending_funding_relay_replay_heap_v2(
+    terms: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayTermsV2,
+) -> Result<u64, ContractError> {
+    use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateDeltaV2};
+    use misaka_palw_positive_contract::assignment::{
+        funding_relay_policy::FundingRelayStorageExtentV2, funding_relay_rows::FUNDING_RELAY_CHARGE_BYTES_V2,
+    };
+    let extent = FundingRelayStorageExtentV2::for_terms(terms)?;
+    let aux = extent
+        .retained_bytes
+        .checked_sub(extent.body_bytes)
+        .and_then(|n| n.checked_sub((3 + FUNDING_RELAY_CHARGE_BYTES_V2) as u64))
+        .ok_or(ContractError::Budget)?;
+    // Native wire preflight charges twice the count for both the encoded
+    // row/key Vecs and the three PalwDeltaEntryV2 entries.
+    let delta = aux
+        .checked_mul(2)
+        .and_then(|n| n.checked_add((size_of::<PalwStateDeltaV2>() + 6 * size_of::<PalwDeltaEntryV2>()) as u64))
+        .ok_or(ContractError::Budget)?;
+    pending_funding_relay_archive_workspace_v2()
+        .checked_add(pending_funding_relay_payer_scratch_v2())
+        .and_then(|n| n.checked_add(delta))
+        .ok_or(ContractError::Budget)
+}
+
+/// Match the registered row bodies against a historical pending pair without
+/// allocating or decoding another copy of either fixed-size signature row.
+pub fn pending_funding_relay_row_images_match_v2(
+    authorization: &misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayAuthorizationRowV2,
+    custody: &misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCustodyRowV2,
+    authorization_bytes: &[u8],
+    custody_bytes: &[u8],
+) -> bool {
+    custody.binding.is_none()
+        && authorization_bytes.strip_prefix(&[2, 0, 1, 0, 19]).is_some_and(|raw| canonical_equal(authorization, raw))
+        && custody_bytes.strip_prefix(&[2, 0, 1, 0, 20]).is_some_and(|raw| canonical_equal(custody, raw))
+}
+
 /// Full canonical byte comparison without an additional body/transaction Vec.
 pub(crate) fn canonical_equal<T: borsh::BorshSerialize>(value: &T, expected: &[u8]) -> bool {
     struct Compare<'a> {
