@@ -302,16 +302,37 @@ fn rider_signs_exact_accepted_lead_obligation_and_gets_its_own_full_guarantee() 
 fn actual_20000_boundary_keeps_signed_identity_after_long_merge_delay() {
     let p = policy(Some(20_000));
     let s = setup(&p);
-    let env = signed_attempt(&s, &p, 19_990);
-    let signed = borsh::to_vec(&env).unwrap();
-    let id = attempt_id_v2(&env.attempt);
-    let ticket = class_ticket_v3(&env.attempt, h64(0x100));
-    let old = fold_round(&s, &p, &ctx(3, 19_999, 3), &[], Some((&env, h64(0x100))), &lane()).unwrap_err();
-    assert!(old.to_string().contains("COURT_RETENTION_BELOW_GUARANTEE"), "{old}");
-    for accepted_daa in [20_000, 20_001, 20_011] {
-        let (accepted, delta) = fold_round(&s, &p, &ctx(3, accepted_daa, 3), &[], Some((&env, h64(0x100))), &lane()).unwrap();
+    for (accepted_daa, delay) in [19_999, 20_000, 20_001]
+        .into_iter()
+        .flat_map(|daa| [0, 1, 2, 10].into_iter().map(move |delay| (daa, delay)))
+        .chain([(20_011, 21)])
+    {
+        let header_daa = accepted_daa - delay;
+        let env = signed_attempt(&s, &p, header_daa);
+        let signed = borsh::to_vec(&env).unwrap();
+        let id = attempt_id_v2(&env.attempt);
+        let ticket = class_ticket_v3(&env.attempt, h64(0x100));
+        crate::palw_admission_v2::check_palw_attempt_da_pins_v1(&p, &env.attempt, header_daa).unwrap();
+        assert!(crate::palw_attempt_material_v3::verify_ready_signature_v3(
+            &env.attempt.executor_pubkey,
+            id.as_byte_slice(),
+            &env.signature,
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        ));
+        let folded = fold_round(&s, &p, &ctx(3, accepted_daa, 3), &[], Some((&env, h64(0x100))), &lane());
+        if accepted_daa < 20_000 && delay != 0 {
+            let old = folded.unwrap_err();
+            assert!(old.to_string().contains("COURT_RETENTION_BELOW_GUARANTEE"), "delay {delay}: {old}");
+            continue;
+        }
+        let (accepted, delta) = folded.unwrap();
         let span = crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(&s, &p, &h64(2), accepted_daa);
-        assert_eq!(accepted.claim(&id).unwrap().trace_retention_daa, env.attempt.trace_retention_daa.max(accepted_daa + span));
+        let expected = if accepted_daa < 20_000 {
+            env.attempt.trace_retention_daa
+        } else {
+            env.attempt.trace_retention_daa.max(accepted_daa + span)
+        };
+        assert_eq!(accepted.claim(&id).unwrap().trace_retention_daa, expected, "DAA {accepted_daa}, delay {delay}");
         let carriage = borsh::to_vec(&PalwStateCarriageV2::from_state(&accepted)).unwrap();
         let cold = borsh::from_slice::<PalwStateCarriageV2>(&carriage).unwrap().into_state(&p, Some(accepted.state_root())).unwrap();
         assert_eq!(cold.claim(&id), accepted.claim(&id));
