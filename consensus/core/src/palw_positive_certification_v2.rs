@@ -379,8 +379,6 @@ pub(crate) fn positive_certification_case_live_v2(
     header: &PositiveCertificationHeaderV2,
     case: &CaseRow,
 ) -> Result<bool, ContractError> {
-    use misaka_palw_positive_contract::messages::ClaimStatus;
-
     if case.case != header.case
         || case.result != header.result
         || case.coverage.scope != header.scope
@@ -388,7 +386,12 @@ pub(crate) fn positive_certification_case_live_v2(
     {
         return Err(ContractError::Identity);
     }
-    Ok(!matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked | ClaimStatus::EndedUnverified))
+    Ok(!positive_case_ends_certification_v2(case))
+}
+
+pub(crate) fn positive_case_ends_certification_v2(case: &CaseRow) -> bool {
+    use misaka_palw_positive_contract::messages::ClaimStatus;
+    matches!(case.status, ClaimStatus::ClaimRefuted | ClaimStatus::Revoked | ClaimStatus::EndedUnverified)
 }
 
 /// Bind the certification header to the original accepted Result row and

@@ -13,7 +13,7 @@ use misaka_palw_positive_contract::{
 pub mod restore;
 pub mod assignment;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PositiveRowErrorV2 {

@@ -46,7 +46,7 @@ pub(super) fn coverage() -> CoverageRow {
         last_event: origin(),
     }
 }
-pub(super) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow, CoverageRow) {
+pub(crate) fn signed_bundle() -> (ClaimIndexRow, ResultRow, CaseRow, FundingRow, WitnessRow, CoverageRow) {
     signed_bundle_for_relations(10)
 }
 
@@ -565,7 +565,7 @@ fn scan_row(key: &[u8], value: &[u8]) -> std::io::Result<crate::palw_native_reso
     assert_eq!(frame.remaining(), 0);
     Ok(shape)
 }
-fn empty_route() -> crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
+pub(crate) fn empty_route() -> crate::palw_kernel_route_v1::PalwKernelRouteStateV1 {
     use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1};
     PalwKernelRouteStateV1::new(
         palw_kernel_route_policy_v1(crate::Hash64::from_u64_word(61), crate::Hash64::from_u64_word(62)),
