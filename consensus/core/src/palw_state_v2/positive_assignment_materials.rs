@@ -441,6 +441,41 @@ fn encode_exact_case_material_v2<T: borsh::BorshSerialize>(value: &T, bytes: usi
     Ok(out)
 }
 
+pub(super) fn quote_assigned_case_payment_journal_v2(
+    backing: &super::positive_assignment_backing::NativeCommittedAssignedCaseV2,
+    transaction: &crate::tx::Transaction,
+) -> Result<(u64, usize), PalwStateV2Error> {
+    use crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
+    use misaka_palw_positive_contract::journal::{CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES, CaseJournalAux};
+    let failure = |why| PalwStateV2Error::DeltaMismatch(why);
+    let pin = backing.pin();
+    let policy = &backing.material().positive_policy;
+    let sequence = pin.head.sequence.checked_add(1).ok_or_else(|| failure("Case settlement sequence"))?;
+    if sequence > u64::from(backing.material().assignment_policy.max_history_frames) {
+        return Err(failure("Case settlement journal exceeds original event count"));
+    }
+    let tx_bytes = borsh::object_length(transaction).map_err(|_| failure("Case settlement transaction extent"))?;
+    let extent = tx_bytes
+        .checked_add(CASE_JOURNAL_MIN_RECORD_BYTES + CASE_JOURNAL_AUX_MATERIAL_BYTES + 4 + ASSIGNED_CASE_BOUNDARY_BYTES_V2)
+        .ok_or_else(|| failure("Case settlement record extent"))?;
+    let logical_heap = tx_bytes
+        .checked_add(ASSIGNED_CASE_BOUNDARY_BYTES_V2 + std::mem::size_of::<CaseJournalAux>())
+        .ok_or_else(|| failure("Case settlement journal logical heap"))?;
+    if logical_heap as u64 > policy.max_case_heap_bytes {
+        return Err(failure("Case settlement exceeds original journal heap"));
+    }
+    let retained = backing
+        .records()
+        .iter()
+        .map(|record| record.raw().len() as u64)
+        .try_fold(extent as u64, u64::checked_add)
+        .ok_or_else(|| failure("Case journal cumulative extent"))?;
+    if retained > policy.max_case_journal_bytes {
+        return Err(failure("Case settlement exceeds original journal storage"));
+    }
+    Ok((sequence, tx_bytes))
+}
+
 impl TransitionBuilder<'_> {
     pub(super) fn unpublished_positive_case_materials_v2(
         &self,
@@ -528,31 +563,14 @@ impl TransitionBuilder<'_> {
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_positive_assignment_case_material_v2::ASSIGNED_CASE_BOUNDARY_BYTES_V2;
         use misaka_palw_positive_contract::journal::{
-            CASE_JOURNAL_AUX_MATERIAL_BYTES, CASE_JOURNAL_MIN_RECORD_BYTES, CaseJournalAux, CaseJournalEventKind, CaseJournalHeader,
-            CaseJournalLimits, CaseJournalRecord,
+            CaseJournalAux, CaseJournalEventKind, CaseJournalHeader, CaseJournalLimits, CaseJournalRecord,
         };
         let failure = |why| PalwStateV2Error::DeltaMismatch(why);
         let action = self.assignment_active_raw.clone().ok_or_else(|| failure("Case settlement journal has no actual carrier"))?;
         let pin = backing.pin();
         let policy = &backing.material().positive_policy;
-        let sequence = pin.head.sequence.checked_add(1).ok_or_else(|| failure("Case settlement sequence"))?;
-        if sequence > u64::from(backing.material().assignment_policy.max_history_frames) {
-            return Err(failure("Case settlement journal exceeds original event count"));
-        }
+        let (sequence, tx_bytes) = quote_assigned_case_payment_journal_v2(backing, action.transaction())?;
         let boundary = self.current_positive_case_boundary_v2(pin.case)?;
-        let tx_bytes = borsh::object_length(action.transaction()).map_err(|_| failure("Case settlement transaction extent"))?;
-        let extent = tx_bytes
-            .checked_add(CASE_JOURNAL_MIN_RECORD_BYTES + CASE_JOURNAL_AUX_MATERIAL_BYTES + 4 + ASSIGNED_CASE_BOUNDARY_BYTES_V2)
-            .ok_or_else(|| failure("Case settlement record extent"))?;
-        let retained = backing
-            .records()
-            .iter()
-            .map(|record| record.raw().len() as u64)
-            .try_fold(extent as u64, u64::checked_add)
-            .ok_or_else(|| failure("Case journal cumulative extent"))?;
-        if retained > policy.max_case_journal_bytes {
-            return Err(failure("Case settlement exceeds original journal storage"));
-        }
         let mut quote = native_writers::NativeWriteQuoteV1::new("Case settlement literal journal bytes");
         quote.exact::<u8>((tx_bytes + ASSIGNED_CASE_BOUNDARY_BYTES_V2) as u64)?;
         quote.exact::<CaseJournalAux>(1)?;

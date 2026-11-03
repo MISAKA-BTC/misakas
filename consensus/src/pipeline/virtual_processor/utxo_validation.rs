@@ -283,6 +283,17 @@ impl PalwEscrowSpendLocksV1 {
         daa_score: u64,
         bond_burn: u64,
     ) -> Option<TransactionOutpoint> {
+        self.refusal_with_qualified_case_v2(tx, input_amounts, daa_score, bond_burn, None)
+    }
+
+    fn refusal_with_qualified_case_v2(
+        &self,
+        tx: &Transaction,
+        input_amounts: impl IntoIterator<Item = u64>,
+        daa_score: u64,
+        bond_burn: u64,
+        qualified_case: Option<TransactionOutpoint>,
+    ) -> Option<TransactionOutpoint> {
         if self.assignment_invalid {
             return tx.inputs.first().map(|i| i.previous_outpoint);
         }
@@ -297,14 +308,18 @@ impl PalwEscrowSpendLocksV1 {
             if self.provisional.contains(&outpoint) {
                 return Some(outpoint);
             }
-            if self.positive_case.contains_key(&outpoint) || self.assignment_prover.contains_key(&outpoint) {
+            let case_locked = self.positive_case.contains_key(&outpoint);
+            if self.assignment_prover.contains_key(&outpoint) || (case_locked && qualified_case != Some(outpoint)) {
                 return Some(outpoint);
             }
             // Cross-purpose exclusivity: neither legacy escrow nor A/C may
             // count a second locked input as the first account's fee funding.
-            if self.rows.contains_key(&outpoint) || self.assignment.contains_key(&outpoint) {
-                locked_count += 1;
-                if locked_count > 1 || (self.rows.contains_key(&outpoint) && self.assignment.contains_key(&outpoint)) {
+            let kinds = usize::from(case_locked)
+                + usize::from(self.rows.contains_key(&outpoint))
+                + usize::from(self.assignment.contains_key(&outpoint));
+            if kinds != 0 {
+                locked_count += kinds;
+                if locked_count > 1 {
                     return Some(outpoint);
                 }
             }
@@ -541,6 +556,7 @@ pub(crate) struct BondSpendFilter<'a> {
     palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
     /// **G14 lane escrow-rfc08 (RFC-0035 A): the funded-escrow locks.** `None` where none exists (below the fence, and wherever no
     /// row or same-mergeset carrier exists — every network today), which leaves this filter's answers exactly as before.
+    case_spends: Option<&'a std::collections::HashMap<TransactionId, kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2>>,
     escrow: Option<&'a PalwEscrowSpendLocksV1>,
 }
 
@@ -554,7 +570,7 @@ impl<'a> BondSpendFilter<'a> {
         palw_locked: &'a std::collections::HashSet<TransactionOutpoint>,
         palw_burns: &'a std::collections::HashMap<TransactionOutpoint, u64>,
     ) -> Self {
-        Self { bond_view: None, daa_score, palw_locked, palw_burns, escrow: None }
+        Self { bond_view: None, daa_score, palw_locked, palw_burns, case_spends: None, escrow: None }
     }
 
     /// **G14 lane escrow-rfc08: the first input of `tx` that spends a locked funded-escrow outpoint without qualification**, or
@@ -563,7 +579,18 @@ impl<'a> BondSpendFilter<'a> {
     /// touched — it runs in the ordinary validator after this.
     fn escrow_refusal(&self, tx: &Transaction, entries: &[UtxoEntry]) -> Option<TransactionOutpoint> {
         let locks = self.escrow?;
-        locks.refusal_with_bond_burn(tx, entries.iter().map(|entry| entry.amount), self.daa_score, self.burn_owed(tx))
+        let qualified = self
+            .case_spends
+            .and_then(|spends| spends.get(&tx.id()))
+            .filter(|spend| spend.matches_v2(tx, entries))
+            .map(|spend| spend.debit_v2());
+        locks.refusal_with_qualified_case_v2(
+            tx,
+            entries.iter().map(|entry| entry.amount),
+            self.daa_score,
+            self.burn_owed(tx),
+            qualified,
+        )
     }
 
     /// **G14 r5: what this transaction's qualified escrow settlements destroy** (their scheduled burns) — the same plans the
@@ -757,12 +784,103 @@ impl VirtualStateProcessor {
         inspect(state, self.palw_network_domain_v2(), accepting_daa, validated, self.palw_state_params_v2.as_ref(), native)
     }
 
+    /// Qualify only a literal op12 whose first input is the rooted Case coin.
+    /// Local archive/capacity faults propagate outside transaction rejection so
+    /// pruning or resource pressure cannot change the accepted UTXO set.
+    fn prepare_case_source_spends_v2(
+        &self,
+        state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
+        parent: BlockHash,
+        txs: &[Transaction],
+        view: &impl UtxoView,
+        daa: u64,
+        locks: &PalwEscrowSpendLocksV1,
+    ) -> Result<
+        (
+            std::collections::HashMap<TransactionId, kaspa_consensus_core::palw_state_v2::QualifiedCaseSourceSpendV2>,
+            Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1>,
+        ),
+        NativeCoverageV1,
+    > {
+        use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
+        use kaspa_consensus_core::{
+            palw_native_resource_v1::reserve_native_requests_v1,
+            palw_state_v2::{PalwStateV2Error, QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2},
+        };
+        let mut spends = std::collections::HashMap::new();
+        let mut owner: Option<kaspa_consensus_core::palw_native_resource_v1::NativeDemandLeaseV1> = None;
+        let Some(state) = state else { return Ok((spends, owner)) };
+        if locks.positive_case.is_empty()
+            || locks.assignment_invalid
+            || !self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
+            || !self
+                .palw_positive_assignment_params_v2
+                .as_ref()
+                .is_some_and(|params| params.palw_positive_assignment_v2_at(daa).is_some())
+            || !self.palw_state_params_v2.as_ref().is_some_and(|params| params.settlement_once_active_at(daa))
+        {
+            return Ok((spends, owner));
+        }
+        let unavailable = |detail| NativeCoverageV1::unsupported::<Self>("Case source spend archive", detail);
+        for tx in txs {
+            if tx.payload.get(..3) != Some(&[1, 0, 176])
+                || tx.payload.get(7) != Some(&12)
+                || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
+            {
+                continue;
+            }
+            let Some(funding) = tx.inputs.first().and_then(|input| locks.positive_case.get(&input.previous_outpoint)) else {
+                continue;
+            };
+            // The fixed op12 Case field follows its version, kind and
+            // Assignment ID. Reject foreign/missing Case tags before I/O.
+            if tx.payload.get(72) != Some(&1) || tx.payload.get(73..137) != Some(funding.consent.case.0.0.as_slice()) {
+                continue;
+            }
+            let bytes = (tx.inputs.len() as u64)
+                .checked_mul(size_of::<UtxoEntry>() as u64)
+                .ok_or_else(|| NativeCoverageV1::overflow::<UtxoEntry>("Case source populated inputs"))?;
+            let mut entry_owner = reserve_native_requests_v1(bytes)?.ok_or_else(|| unavailable("populated input owner"))?;
+            let mut entries = Vec::new();
+            entries.try_reserve_exact(tx.inputs.len()).map_err(|_| unavailable("populated input allocation"))?;
+            for input in &tx.inputs {
+                let Some(entry) = view.get(&input.previous_outpoint) else { break };
+                entry_owner.grow_memory_v1(entry.script_public_key.script().len() as u64)?;
+                entries.push(entry);
+            }
+            if entries.len() != tx.inputs.len() {
+                continue;
+            }
+            let backing = match self.prepare_committed_case_history_v2(parent, state, (funding.consent.case, None)) {
+                Ok(Some(kaspa_consensus_core::palw_state_v2::NativeAssignedCaseBackingV2::Committed(backing))) => backing,
+                Err(E::Resource(why)) => return Err(why),
+                Err(E::InvalidContinuation) => continue,
+                _ => return Err(unavailable("actual selected-parent Case history is unavailable")),
+            };
+            let spend = match qualify_case_source_spend_v2(state, parent, &backing, tx, &entries) {
+                Ok(spend) => spend,
+                Err(PalwStateV2Error::NativeResource(why)) => return Err(why),
+                Err(PalwStateV2Error::NativeContextUnavailable(_)) => return Err(unavailable("Case replay context is unavailable")),
+                Err(_) => continue,
+            };
+            let bytes = (4 * size_of::<(TransactionId, QualifiedCaseSourceSpendV2)>()) as u64;
+            match &mut owner {
+                Some(lease) => lease.grow_memory_v1(bytes)?,
+                None => owner = Some(reserve_native_requests_v1(bytes)?.ok_or_else(|| unavailable("qualified spend map owner"))?),
+            }
+            spends.try_reserve(1).map_err(|_| unavailable("qualified spend map allocation"))?;
+            spends.insert(tx.id(), spend);
+        }
+        Ok((spends, owner))
+    }
+
     pub(super) fn calculate_utxo_state<V: UtxoView + Sync>(
         &self,
         ctx: &mut UtxoProcessingContext,
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
+        case_source_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<(), NativeCoverageV1> {
         self.calculate_utxo_state_with_funded_candidates_v1(
             ctx,
@@ -770,6 +888,7 @@ impl VirtualStateProcessor {
             selected_parent_bond_view,
             pov_daa_score,
             None,
+            case_source_state,
         )
     }
 
@@ -783,6 +902,7 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
+        case_source_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<(), NativeCoverageV1> {
         let relay_plan = ctx.relay_fee_plan.take();
         let accepting = ctx.positive_accepting_point.or(ctx.positive_relay_preview_point);
@@ -886,6 +1006,14 @@ impl VirtualStateProcessor {
             // keeps every shipped network byte-identical to the legacy own-body-only gate.
             // G14 lane escrow-rfc08: the funded-escrow half joins only when it holds a lock, so every network without one builds
             // exactly the filter it built before.
+            let (case_spends, _case_spends_lease) = self.prepare_case_source_spends_v2(
+                case_source_state,
+                selected_parent,
+                txs,
+                &composed_view,
+                pov_daa_score,
+                &ctx.palw_escrow_locks,
+            )?;
             let escrow_locked = !ctx.palw_escrow_locks.is_empty();
             let bond_filter = (bond_gate_view.is_some()
                 || !ctx.palw_v2_locked_bonds.is_empty()
@@ -896,6 +1024,7 @@ impl VirtualStateProcessor {
                     daa_score: pov_daa_score,
                     palw_locked: &ctx.palw_v2_locked_bonds,
                     palw_burns: &ctx.palw_v2_bond_burns,
+                    case_spends: Some(&case_spends),
                     escrow: escrow_locked.then_some(&ctx.palw_escrow_locks),
                 });
             let (mut validated_transactions, mut inner_multiset) =
@@ -998,6 +1127,7 @@ impl VirtualStateProcessor {
                             daa_score: point.daa_score,
                             palw_locked: &ctx.palw_v2_locked_bonds,
                             palw_burns: &ctx.palw_v2_bond_burns,
+                            case_spends: Some(&case_spends),
                             escrow: locked.then_some(&ctx.palw_escrow_locks),
                         });
                     ctx.positive_native_carriers.capture(
@@ -1049,6 +1179,11 @@ impl VirtualStateProcessor {
                             }
                         }
                     }
+                }
+                if let Some(spend) = case_spends.get(&validated_tx.tx.id())
+                    && let Some(continued) = spend.continuation_v2()
+                {
+                    new_provisional_escrows.push(continued);
                 }
                 if !ctx.palw_escrow_locks.assignment.is_empty() {
                     let amounts: Vec<u64> = validated_tx.entries.iter().map(|entry| entry.amount).collect();
@@ -2536,6 +2671,7 @@ impl VirtualStateProcessor {
         args: &TransactionValidationArgs,
         palw_burns: Option<&std::collections::HashMap<TransactionOutpoint, u64>>,
         palw_escrow: Option<&PalwEscrowSpendLocksV1>,
+        case_source_parent: Option<(BlockHash, &kaspa_consensus_core::palw_state_v2::PalwChainStateV2)>,
     ) -> TxResult<()> {
         self.populate_mempool_transaction_in_utxo_context(mutable_tx, utxo_view)?;
         if let Some(burns) = palw_burns {
@@ -2546,15 +2682,42 @@ impl VirtualStateProcessor {
         // **G14 lane escrow-rfc08 round 2: the escrow half of the mempool gate** — the tip's unsettled rooted rows, asked with the
         // block path's own rule and the actual populated amounts, before the script check. A locked-escrow spend the merge would
         // skip is refused here instead of relayed. `None` (no lock) everywhere below `palw_tir_public_conviction_v1`.
-        if let Some(locks) = palw_escrow
-            && let Some(outpoint) = locks.refusal_with_bond_burn(
-                &mutable_tx.tx,
+        if let Some(locks) = palw_escrow {
+            let tx = &mutable_tx.tx;
+            let mut qualified = None;
+            if let Some(first) = tx.inputs.first().filter(|input| locks.positive_case.contains_key(&input.previous_outpoint))
+                && let Some((parent, state)) = case_source_parent
+                && tx.payload.get(7) == Some(&12)
+            {
+                let (proofs, _proof_owner) = self
+                    .prepare_case_source_spends_v2(
+                        Some(state),
+                        parent,
+                        std::slice::from_ref(tx.as_ref()),
+                        utxo_view,
+                        pov_daa_score,
+                        locks,
+                    )
+                    .map_err(|_| TxRuleError::SpendsLockedPalwEscrow(first.previous_outpoint))?;
+                if let Some(proof) = proofs.get(&tx.id())
+                    && tx
+                        .inputs
+                        .iter()
+                        .zip(&mutable_tx.entries)
+                        .all(|(input, entry)| utxo_view.get(&input.previous_outpoint).as_ref() == entry.as_ref())
+                {
+                    qualified = Some(proof.debit_v2());
+                }
+            }
+            if let Some(outpoint) = locks.refusal_with_qualified_case_v2(
+                tx,
                 mutable_tx.entries.iter().flatten().map(|entry| entry.amount),
                 pov_daa_score,
-                palw_burns.map(|burns| palw_bond_burn_owed(&mutable_tx.tx, burns)).unwrap_or(0),
-            )
-        {
-            return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
+                palw_burns.map(|burns| palw_bond_burn_owed(tx, burns)).unwrap_or(0),
+                qualified,
+            ) {
+                return Err(TxRuleError::SpendsLockedPalwEscrow(outpoint));
+            }
         }
 
         // ADR-0134: a compute-overlay transaction is not admitted to the mempool past the
@@ -3956,8 +4119,14 @@ mod tests {
             let view = ActiveBondView::from_records([(active, bond(active)), (pending_op, pending), (releasable_op, releasable)]);
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter =
-                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let filter = BondSpendFilter {
+                bond_view: Some(&view),
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: None,
+            };
 
             assert!(filter.locks(&active), "Active bond's output-0 must be locked (skip the spend)");
             assert!(filter.locks(&pending_op), "Pending bond's output-0 must be locked");
@@ -3981,22 +4150,40 @@ mod tests {
             let no_burns = std::collections::HashMap::new();
 
             // Both models live: each locks its own, and nothing else.
-            let both =
-                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
+            let both = BondSpendFilter {
+                bond_view: Some(&view),
+                daa_score: DAA,
+                palw_locked: &palw,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: None,
+            };
             assert!(both.locks(&dns_op));
             assert!(both.locks(&palw_op));
             assert!(!both.locks(&outpoint(9)));
 
             // No V2 bundle: byte-identical to the legacy gate — the PALW outpoint is just an
             // outpoint.
-            let dns_only =
-                BondSpendFilter { bond_view: Some(&view), daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let dns_only = BondSpendFilter {
+                bond_view: Some(&view),
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: None,
+            };
             assert!(dns_only.locks(&dns_op));
             assert!(!dns_only.locks(&palw_op));
 
             // DNS mergeset gate closed (or no DNS params at all): the V2 registry still locks.
-            let palw_only =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &palw, palw_burns: &no_burns, escrow: None };
+            let palw_only = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &palw,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: None,
+            };
             assert!(palw_only.locks(&palw_op));
             assert!(!palw_only.locks(&dns_op), "a DNS bond is not this model's business when the DNS view is absent");
         }
@@ -4016,7 +4203,14 @@ mod tests {
             let other = outpoint(5);
             let empty = std::collections::HashSet::new();
             let burns: std::collections::HashMap<_, _> = [(bond_op, 900u64)].into_iter().collect();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &burns, escrow: None };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &burns,
+                case_spends: None,
+                escrow: None,
+            };
 
             let spend = |ops: Vec<TransactionOutpoint>| {
                 Transaction::new(
@@ -4041,7 +4235,14 @@ mod tests {
             assert_eq!(filter.burn_owed(&spend(vec![other])), 0, "an ordinary spend owes nothing");
             // Obligations ADD: one transaction releasing two slashed bonds destroys both.
             let two: std::collections::HashMap<_, _> = [(bond_op, 900u64), (other, 100)].into_iter().collect();
-            let filter = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &two, escrow: None };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &two,
+                case_spends: None,
+                escrow: None,
+            };
             assert_eq!(filter.burn_owed(&spend(vec![bond_op, other])), 1_000);
             // And a LOCKED bond never reaches this question — it cannot be spent at all, so it
             // appears in no obligation map. The two answers are disjoint by construction.
@@ -4076,6 +4277,7 @@ mod tests {
                 daa_score: DAA,
                 palw_locked: &empty,
                 palw_burns: &no_burns,
+                case_spends: None,
                 escrow: Some(&malformed),
             };
             assert_eq!(filter.escrow_refusal(&transaction, &entries), Some(op));
@@ -4133,8 +4335,14 @@ mod tests {
                 positive_case: Default::default(),
                 assignment_prover: Default::default(),
             };
-            let filter =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: Some(&rooted),
+            };
             assert_eq!(
                 filter.escrow_refusal(&theft, &entries),
                 Some(escrow_op),
@@ -4142,8 +4350,14 @@ mod tests {
             );
             assert_eq!(filter.escrow_refusal(&payer_return, &entries), None, "the payer return after the hard deadline qualifies");
             // Before the hard deadline even the payer's own return is a settlement, and the schedule is typed-missing.
-            let early =
-                BondSpendFilter { bond_view: None, daa_score: 100, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&rooted) };
+            let early = BondSpendFilter {
+                bond_view: None,
+                daa_score: 100,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: Some(&rooted),
+            };
             assert_eq!(early.escrow_refusal(&payer_return, &entries), Some(escrow_op));
 
             // The same mergeset: the carrier's own output is provisionally locked against every spend, the payer's included.
@@ -4160,13 +4374,21 @@ mod tests {
                 daa_score: DAA,
                 palw_locked: &empty,
                 palw_burns: &no_burns,
+                case_spends: None,
                 escrow: Some(&provisional),
             };
             assert_eq!(filter.escrow_refusal(&payer_return, &entries), Some(escrow_op));
             assert_eq!(filter.escrow_refusal(&tx_spending(outpoint(12)), &entries), None, "another outpoint is never locked by it");
 
             // The next block after a refused contract: no row, no provisional lock — the ordinary payer fallback is spendable.
-            let none = BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: None };
+            let none = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: None,
+            };
             assert_eq!(none.escrow_refusal(&payer_return, &entries), None);
             assert_eq!(
                 none.escrow_refusal(&theft, &entries),
@@ -4235,8 +4457,14 @@ mod tests {
             };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: Some(&locks),
+            };
             let two_entries = vec![UtxoEntry::new(1_000, payer.clone(), 100, false), UtxoEntry::new(1_000, payer.clone(), 100, false)];
             let both = spend(
                 vec![a_op, b_op],
@@ -4290,8 +4518,14 @@ mod tests {
             };
             let empty = std::collections::HashSet::new();
             let no_burns = std::collections::HashMap::new();
-            let filter =
-                BondSpendFilter { bond_view: None, daa_score: DAA, palw_locked: &empty, palw_burns: &no_burns, escrow: Some(&locks) };
+            let filter = BondSpendFilter {
+                bond_view: None,
+                daa_score: DAA,
+                palw_locked: &empty,
+                palw_burns: &no_burns,
+                case_spends: None,
+                escrow: Some(&locks),
+            };
             let relay_op = outpoint(22);
             let spend = |out0: TransactionOutput, payload: Vec<u8>| {
                 Transaction::new(

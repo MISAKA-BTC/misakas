@@ -13968,6 +13968,7 @@ mod funded_escrow;
 mod positive_assignment;
 mod positive_assignment_backing;
 mod positive_assignment_case;
+pub use positive_assignment_case::source::{QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2};
 mod positive_assignment_funds;
 mod positive_assignment_materials;
 mod positive_assignment_raw;
