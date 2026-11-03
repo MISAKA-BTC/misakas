@@ -2784,6 +2784,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0018 Gate C: certifications are drawn, decided and — when certified — credited (safe weight, settled anchor, the held
     // issuance-funded reward). A no-op below `palw_independently_work_certified_v1`.
     super::palw_security_certification_fold_v1::sweep_security_certification_v1(builder, ctx)?;
+    builder.expire_undrawn_positive_certifications_v2(ctx)?;
     // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
     // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
     super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;

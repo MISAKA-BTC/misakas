@@ -415,10 +415,10 @@ pub struct PalwKernelRouteStateV1 {
     /// aux rows alone are serialized and hashed.
     #[borsh(skip)]
     pub(crate) positive_job_owners_v2: std::collections::BTreeSet<(Hash64, u8, Hash64)>,
-    /// Inclusive last draw DAA, row kind and subject. The rooted Open or
+    /// Row kind, inclusive last draw DAA and subject. The rooted Open or
     /// undrawn P row owns the slot; this index is rebuilt from those rows.
     #[borsh(skip)]
-    pub(crate) positive_draw_reservations_v2: std::collections::BTreeSet<(u64, u8, Hash64)>,
+    pub(crate) positive_draw_reservations_v2: std::collections::BTreeSet<(u8, u64, Hash64)>,
     /// **GAP 8: the ledger the rows describe, cached** — never state: not hashed, not encoded, not in a delta, equal for every
     /// comparison. Set by the fold's flush to exactly what [`KernelLedgerV1::from_rows`] would rebuild
     /// ([`KernelLedgerV1::as_rebuilt_from_v1`]); cleared by every other write of a ledger row or of the header (a delta applied or
@@ -472,14 +472,14 @@ fn positive_job_owner_v2(body: &misaka_palw_positive_contract::rows::NativeRowBo
     }
 }
 
-fn open_assignment_draw_slot_v2(body: &misaka_palw_positive_contract::rows::NativeRowBody) -> Option<(u64, u8, Hash64)> {
+fn open_assignment_draw_slot_v2(body: &misaka_palw_positive_contract::rows::NativeRowBody) -> Option<(u8, u64, Hash64)> {
     use misaka_palw_positive_contract::{assignment::rows::AssignmentStatusV2, rows::NativeRowBody};
     let NativeRowBody::Assignment(row) = body else { return None };
     if row.status != AssignmentStatusV2::Open {
         return None;
     }
     let last = row.bundle.terms.result_before_daa.checked_sub(1)?;
-    Some((last, b'A', Hash64::from_bytes(row.id().0.0)))
+    Some((b'A', last, Hash64::from_bytes(row.id().0.0)))
 }
 
 pub(crate) fn is_positive_draw_slot_row_v2(table: u8, key: &[u8]) -> bool {
@@ -488,7 +488,7 @@ pub(crate) fn is_positive_draw_slot_row_v2(table: u8, key: &[u8]) -> bool {
         || (table == POSITIVE_CERTIFICATION_TABLE_V2 && key.first() == Some(&b'P'))
 }
 
-fn undrawn_p_slot_v2(key: &[u8], mut raw: &[u8]) -> Result<Option<(u64, u8, Hash64)>, misaka_palw_positive_contract::ContractError> {
+fn undrawn_p_slot_v2(key: &[u8], mut raw: &[u8]) -> Result<Option<(u8, u64, Hash64)>, misaka_palw_positive_contract::ContractError> {
     use crate::palw_positive_certification_v2::{MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2, PositiveCertificationFixedV2};
     use misaka_palw_positive_contract::ContractError as E;
     if key.len() != 65 || raw.len() > MAX_POSITIVE_CERTIFICATION_ROW_BYTES_V2 {
@@ -505,7 +505,7 @@ fn undrawn_p_slot_v2(key: &[u8], mut raw: &[u8]) -> Result<Option<(u64, u8, Hash
                 return Ok(None);
             }
             let last = fixed.header.commit_origin.accepted_daa.checked_add(fixed.header.policy.certify_by_daa).ok_or(E::Range)?;
-            Ok(Some((last, b'P', Hash64::from_bytes(fixed.header.subject.0))))
+            Ok(Some((b'P', last, Hash64::from_bytes(fixed.header.subject.0))))
         }
         _ => Err(E::NonCanonical),
     }
@@ -534,11 +534,20 @@ impl PalwKernelRouteStateV1 {
         // live set only shrinks in the future until another admission.
         // Counting one extra detects a state that exceeds the shared cap.
         let probe = usize::try_from(u64::from(capacity) + 1).unwrap_or(usize::MAX);
-        self.positive_draw_reservations_v2.range((now, 0, Hash64::default())..).take(probe).count() as u64
+        let active = |kind| self.positive_draw_reservations_v2.range((kind, now, Hash64::default())..(kind + 1, 0, Hash64::default()));
+        active(b'A').chain(active(b'P')).take(probe).count() as u64
     }
 
     pub(crate) fn owns_undrawn_p_slot_v2(&self, last: u64, subject: Hash64) -> bool {
-        self.positive_draw_reservations_v2.contains(&(last, b'P', subject))
+        self.positive_draw_reservations_v2.contains(&(b'P', last, subject))
+    }
+
+    /// Only undrawn P rows whose inclusive draw deadline has elapsed.
+    /// Assignment clocks and already decided history are outside this range.
+    pub(crate) fn expired_positive_draw_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
+        self.positive_draw_reservations_v2
+            .range((b'P', 0, Hash64::default())..(b'P', now, Hash64::default()))
+            .map(|&(_, _, subject)| subject)
     }
 
     pub(crate) fn update_positive_aux_indexes_v2(

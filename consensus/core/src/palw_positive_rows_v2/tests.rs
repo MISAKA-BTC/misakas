@@ -113,6 +113,9 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         route.aux.insert(key.clone(), pending.clone());
         assert_eq!(route.positive_draw_slots_v2(last, 4), 1);
         assert_eq!(route.positive_draw_slots_v2(last + 1, 4), 0);
+        let subject = crate::Hash64::from_bytes(header.subject.0);
+        assert_eq!(route.expired_positive_draw_subjects_v2(last).next(), None);
+        assert!(route.expired_positive_draw_subjects_v2(last + 1).eq([subject]));
         let bytes = borsh::to_vec(&route).unwrap();
         let mut restored: crate::palw_kernel_route_v1::PalwKernelRouteStateV1 = borsh::from_slice(&bytes).unwrap();
         assert_eq!(restored.positive_draw_slots_v2(last, 4), 1);
@@ -121,10 +124,12 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         restored.update_positive_aux_indexes_v2(&key, Some(&expired)).unwrap();
         restored.aux.insert(key.clone(), expired);
         assert_eq!(restored.positive_draw_slots_v2(last, 4), 0);
+        assert_eq!(restored.expired_positive_draw_subjects_v2(last + 1).next(), None);
         restored.update_positive_aux_indexes_v2(&key, Some(&pending)).unwrap();
         restored.aux.insert(key, pending);
         assert_eq!(borsh::to_vec(&restored).unwrap(), bytes);
         assert_eq!(restored.positive_draw_slots_v2(last, 4), 1);
+        assert!(restored.expired_positive_draw_subjects_v2(last + 1).eq([subject]));
     }
     assert_eq!(positive_certification_case_live_v2(&header, &case), Ok(true));
     assert_eq!(check_positive_certification_result_links_v2(&header, &result, &case), Ok(()));
