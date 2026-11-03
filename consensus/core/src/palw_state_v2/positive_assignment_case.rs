@@ -168,6 +168,7 @@ struct NativeAssignedCourtV2 {
     source: crate::palw_positive_assignment_resources_v2::ReservedAssignmentSourceGeometryV2,
     source_requests:
         BTreeMap<misaka_palw_positive_contract::identity::RequestId, crate::palw_positive_source_v2::RetainedSourceRequestV2>,
+    source_fees: source::CaseSourceFeesV2,
     source_responses: BTreeMap<Digest, source::CheckedAssignedSourceResponseV2>,
     derived_heap: u64,
     checker_heap: u64,
@@ -1221,6 +1222,7 @@ fn prepare_initial_case_checker_v2(
         source,
         source_requests: BTreeMap::new(),
         source_responses: BTreeMap::new(),
+        source_fees: source::CaseSourceFeesV2::default(),
         derived_heap,
         checker_heap,
         available_heap: max_heap - retained,
@@ -1470,6 +1472,7 @@ fn replay_assigned_court_history_v2(
             return Err(refuse("archived pre-event Case row"));
         };
         check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
+        machine.check_source_fee_projection_v2(&prior)?;
         if carriage.transaction().payload.get(7) == Some(&12) {
             let after = match backing.records().get(index + 1) {
                 Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
@@ -1505,6 +1508,7 @@ fn replay_assigned_court_history_v2(
         }
     }
     check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))?;
+    machine.check_source_fee_projection_v2(&rooted.case)?;
     Ok(machine)
 }
 

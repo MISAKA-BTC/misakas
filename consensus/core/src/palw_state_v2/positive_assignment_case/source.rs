@@ -13,6 +13,20 @@ use misaka_palw_positive_contract::{
     rows::ServiceReceiptRow,
 };
 
+/// Source fees only. Rebuilt from the literal first responses and their
+/// verified UTXO payments. Other Case charges cannot free source capacity.
+#[derive(Default)]
+pub(super) struct CaseSourceFeesV2 {
+    earned: u64,
+    paid: u64,
+}
+impl CaseSourceFeesV2 {
+    fn pending_with(&self, due: u64, locked: u64, budget: u64) -> Option<u64> {
+        self.earned.checked_add(due).filter(|earned| *earned <= budget)?;
+        self.earned.checked_sub(self.paid)?.checked_add(due).filter(|pending| *pending <= locked)
+    }
+}
+
 pub(super) struct CheckedAssignedSourceResponseV2 {
     fee: SourceFeeDeltaIntent,
     duty: AcceptedMaterial,
@@ -28,6 +42,7 @@ impl CheckedAssignedSourceResponseV2 {
             return Err(refuse("source response changed Case identity"));
         };
         if receipt.result != self.fee.result
+            || receipt.settlement.is_some()
             || receipt.duty != self.duty
             || receipt.response != self.fee.accepted_response
             || receipt.provider != self.fee.provider
@@ -55,6 +70,13 @@ fn capacity() -> PalwStateV2Error {
 }
 
 impl NativeAssignedCourtV2 {
+    pub(super) fn check_source_fee_projection_v2(&self, row: &CaseRow) -> Result<(), PalwStateV2Error> {
+        if row.usage.fee != self.source_fees.earned {
+            return Err(refuse("rooted source fee usage differs from literal first responses"));
+        }
+        Ok(())
+    }
+
     fn admit_source_index_entry_v2<K, V>(&mut self, body_heap: u64) -> Result<(), PalwStateV2Error> {
         let mut quote = TirNativeRequestsV1::new();
         quote.exact_v1::<BTreeNodeEnvelopeV1<K, V>>(1).map_err(PalwStateV2Error::NativeResource)?;
@@ -80,8 +102,10 @@ impl NativeAssignedCourtV2 {
         {
             return Err(refuse("duplicate or over-budget first source response"));
         }
+        let earned = self.source_fees.earned.checked_add(checked.fee.amount).ok_or_else(|| refuse("source fee overflow"))?;
         self.admit_source_index_entry_v2::<Digest, CheckedAssignedSourceResponseV2>(body_heap)?;
         self.source_responses.insert(id, checked);
+        self.source_fees.earned = earned;
         Ok(())
     }
 
@@ -181,13 +205,13 @@ impl NativeAssignedCourtV2 {
         let fee = schedule.source_unit_due(opening_bytes).map_err(refuse)?;
         let schedule = schedule.id();
         let scope = funding_scope(result, &prior.service, &funding.basis);
+        self.check_source_fee_projection_v2(prior)?;
         if funding.current_outpoint.is_none()
             || funding.consent.scope != scope
             || funding.consent.case != *case
             || funding.consent.id().0 != prior.service.funding_consent
             || funding.basis.schedule != schedule
-            || funding.fee.remaining < fee
-            || prior.usage.fee.checked_add(fee).is_none_or(|n| n > prior.service.budget.fee)
+            || self.source_fees.pending_with(fee, funding.fee.remaining, prior.service.budget.fee).is_none()
         {
             return Err(refuse("source response fee exceeds the original C funding and service limits"));
         }
@@ -210,6 +234,7 @@ impl NativeAssignedCourtV2 {
 struct CaseSourcePaymentV2 {
     funding: misaka_palw_positive_contract::rows::FundingRow,
     debit: misaka_palw_positive_contract::rows::NativeOutpoint,
+    amount: u64,
 }
 use crate::palw_settlement_once_v1::{
     PALW_SETTLEMENT_ONCE_TABLE_V1, PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
@@ -258,6 +283,11 @@ impl NativeAssignedCourtV2 {
         let NativeRowBody::Funding(mut funding) = required(state, NativeRowKey::Funding(prior.case))? else {
             return Err(refuse("missing Case funding for settlement"));
         };
+        self.check_source_fee_projection_v2(prior)?;
+        let pending = self
+            .source_fees
+            .pending_with(0, funding.fee.remaining, prior.service.budget.fee)
+            .ok_or_else(|| refuse("unpaid source fees exceed Case funding"))?;
         let debit = funding.current_outpoint.ok_or_else(missing)?;
         let point = native_assignment_outpoint_v2(debit);
         let controls = (receipts.len() as u64)
@@ -337,8 +367,8 @@ impl NativeAssignedCourtV2 {
             }
             total = total
                 .checked_add(fee.amount)
-                .filter(|n| *n <= funding.fee.remaining)
-                .ok_or_else(|| refuse("source settlement exceeds remaining Case fees"))?;
+                .filter(|n| *n <= pending)
+                .ok_or_else(|| refuse("source settlement exceeds the unpaid first-response total"))?;
         }
 
         let continuation = locked.checked_sub(total).ok_or_else(|| refuse("source settlement conservation"))?;
@@ -363,7 +393,7 @@ impl NativeAssignedCourtV2 {
                 index: u32::try_from(receipts.len()).map_err(refuse)?,
             })
         };
-        Ok(CaseSourcePaymentV2 { funding, debit })
+        Ok(CaseSourcePaymentV2 { funding, debit, amount: total })
     }
 
     fn qualify_literal_case_source_payment_v2(
@@ -460,6 +490,11 @@ impl NativeAssignedCourtV2 {
                 return Err(refuse("source settlement receipt or once marker differs from replay"));
             }
         }
+        self.source_fees.paid = self
+            .source_fees
+            .paid
+            .checked_add(payment.amount)
+            .ok_or_else(|| refuse("source settlement cumulative payment overflow"))?;
         Ok(())
     }
 }
@@ -576,4 +611,25 @@ pub fn qualify_case_source_spend_v2(
         debit: native_assignment_outpoint_v2(payment.debit),
         continuation: payment.funding.current_outpoint.map(native_assignment_outpoint_v2),
     })
+}
+
+#[cfg(test)]
+mod source_fee_tests {
+    use super::CaseSourceFeesV2;
+
+    #[test]
+    fn case_funding_covers_the_entire_unpaid_source_balance() {
+        let mut fees = CaseSourceFeesV2 { earned: 90, paid: 0 };
+        assert_eq!(fees.pending_with(10, 100, 110), Some(100));
+        assert_eq!(fees.pending_with(11, 100, 110), None);
+        fees.paid = 40;
+        assert_eq!(fees.pending_with(10, 60, 100), Some(60));
+        assert_eq!(fees.pending_with(10, 60, 99), None);
+        assert_eq!(fees.pending_with(0, 49, 100), None);
+        fees.paid = 91;
+        assert_eq!(fees.pending_with(0, 100, 100), None);
+        assert_eq!(fees.pending_with(1, 100, 100), None);
+        fees.earned = u64::MAX;
+        assert_eq!(fees.pending_with(1, u64::MAX, u64::MAX), None);
+    }
 }
