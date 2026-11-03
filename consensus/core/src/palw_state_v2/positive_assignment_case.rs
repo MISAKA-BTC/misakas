@@ -257,7 +257,11 @@ fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &M
         | K::CourtMaterialLedger(id, _) => *id == claim || *id == job,
         // Global material parts/service and class registrations cannot be
         // interpreted as a claim alias; their referencing claim route is above.
-        K::TirLayout(_) | K::TirContainer(_) | K::CourtService | K::CourtMaterialPart(_, _) => false,
+        K::TirLayout(_)
+        | K::TirContainer(_)
+        | K::VerifiedTokenizerRegistration(_, _)
+        | K::CourtService
+        | K::CourtMaterialPart(_, _) => false,
     }) {
         return Err(refuse("actual staged native alias"));
     }

@@ -4627,8 +4627,10 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            30 => {
+            30 => <crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
+            31 => {
                 let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
@@ -4910,6 +4912,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV
                 )?;
                 Ok(sum)
             }
+            38 => <Box<crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11285,3 +11288,8 @@ impl NativeWireScanV1 for misaka_palw_tir::types::Dim {
     }
 }
 wire_struct!(misaka_palw_tir::types::TensorType; misaka_palw_tir::types::DType, Vec<misaka_palw_tir::types::Dim>);
+
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1; u16, crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2, crate::palw_class_semantics_v1::PalwClassSemanticsV1, crate::palw_state_v2::PalwBlockContextV2, crate::palw_state_v2::PalwBlockContextV2, crate::Hash64, crate::palw_tokenizer_rendering_v2::PalwDerivedTokenizerRenderingV2);
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2; crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64);
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwDerivedTokenizerRenderingV2; crate::palw_tokenizer_rendering_v2::PalwTokenizerRenderingStatementV2, u64, u64, u64, crate::Hash64, u32, u32);
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwTokenizerRenderingStatementV2; crate::Hash64, u64, crate::Hash64, u32, crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1);

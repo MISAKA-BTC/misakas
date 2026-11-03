@@ -4441,6 +4441,9 @@ impl PalwChainStateV2 {
         self.assert_terminal_evidence_v1()?;
         for (key, row) in &self.staged_courts {
             row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::VerifiedTokenizerRegistration(registration) = row {
+                registration.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
             if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(schedule) = row
                 && self.last_point().map_or(0, |point| point.daa_score) < schedule.material_until()
             {

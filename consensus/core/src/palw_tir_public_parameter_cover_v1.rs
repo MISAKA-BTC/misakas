@@ -2,7 +2,7 @@
 //! delivery, verification credit or a promise that the footprint is affordable.
 use super::PalwTirPublicSourceV1;
 use crate::Hash64;
-use crate::palw_tir_court_v1::parameter_cover::{CoverErrorV1, ParameterCoverBudgetV1, PreparedParameterCoverV1};
+use crate::palw_tir_court_v1::parameter_cover::{CoverErrorV1, ParameterCoverBudgetV1, PreparedParameterCoverV1, RootInputBoundaryV1};
 use std::collections::BTreeSet;
 
 /// Explicit caller-admitted exploration and output bounds. No defaults, adopted
@@ -299,6 +299,33 @@ impl PalwTirPublicSourceV1 {
         budget: StreamingParameterCoverBudgetV1,
         mut size_root: impl FnMut(u64, &[u32]) -> Result<u64, String>,
     ) -> Result<StreamingParameterCoverSummaryV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        Self::root_cover_streaming_size_v1(source, registered, layout, budget, false, |leaf, parameters, _| {
+            size_root(leaf, parameters)
+        })
+    }
+
+    /// Size the numerical roots with their canonical parameter and dynamic
+    /// input boundaries together. The callback must separately budget its
+    /// own codec/authentication scratch. Neither the input material nor an
+    /// original-wide boundary table is loaded or retained by this walk.
+    pub fn root_input_cover_streaming_size_v1(
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<Self>,
+        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        budget: StreamingParameterCoverBudgetV1,
+        size_root: impl FnMut(u64, &[u32], &BTreeSet<RootInputBoundaryV1>) -> Result<u64, String>,
+    ) -> Result<StreamingParameterCoverSummaryV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        Self::root_cover_streaming_size_v1(source, registered, layout, budget, true, size_root)
+    }
+
+    fn root_cover_streaming_size_v1(
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<Self>,
+        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        budget: StreamingParameterCoverBudgetV1,
+        include_inputs: bool,
+        mut size_root: impl FnMut(u64, &[u32], &BTreeSet<RootInputBoundaryV1>) -> Result<u64, String>,
+    ) -> Result<StreamingParameterCoverSummaryV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
         use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, reserve_native_pending_requests_v1};
         let original_leaves = source.header.step_leaf_count;
         if original_leaves > budget.total.max_original_leaves {
@@ -328,8 +355,12 @@ impl PalwTirPublicSourceV1 {
         // The materializer's quote for ONE retained row (including its
         // conservative one-row union allowance) covers our peak. Cumulative
         // exploration never sizes simultaneously owned coordinates here.
-        let additional =
+        let mut additional =
             PreparedParameterCoverV1::native_all_roots_requests_v1(&verified.space.program, &registered.program, 1, per_root)?;
+        if include_inputs {
+            let boundaries = native_input_requests_v1(1, per_root.max_total_edges).map_err(E::Resource)?;
+            additional = additional.checked_add(boundaries).ok_or_else(workspace_refusal)?;
+        }
         if additional > budget.max_workspace_bytes - initial {
             return Err(workspace_refusal());
         }
@@ -339,8 +370,8 @@ impl PalwTirPublicSourceV1 {
         let prepared = PreparedParameterCoverV1::new(Box::new(verified), binding.job_context).map_err(E::Decode)?;
         let mut largest_root = None;
         let mut summary = source
-            .visit_prepared_roots_v1(prepared, budget.total, per_root, false, |root, _| {
-                let bytes = size_root(root.leaf, &root.parameters).map_err(CoverErrorV1::Semantic)?;
+            .visit_prepared_roots_v1(prepared, budget.total, per_root, include_inputs, |root, inputs| {
+                let bytes = size_root(root.leaf, &root.parameters, &inputs).map_err(CoverErrorV1::Semantic)?;
                 if largest_root.is_none_or(|(_, largest)| bytes > largest) {
                     largest_root = Some((root.leaf, bytes));
                 }
@@ -742,6 +773,45 @@ mod root_input_tests {
             };
             let cover = PalwTirPublicSourceV1::root_input_cover_native_v1(&source, &f.record, &f.layout, budget).unwrap();
             assert_eq!(cover.parameters, source.parameter_cover_v1(&f.record, &f.layout, budget).unwrap());
+            let streaming = StreamingParameterCoverBudgetV1 {
+                total: budget,
+                per_root_edges: cover.parameters.roots.iter().map(|root| root.explored_edges).max().unwrap(),
+                per_root_coordinates: cover.parameters.roots.iter().map(|root| root.explored_coordinates).max().unwrap(),
+                per_root_memberships: cover.parameters.roots.iter().map(|root| root.parameters.len() as u64).max().unwrap(),
+                max_workspace_bytes: 128 << 20,
+            };
+            let mut visited = 0;
+            let summary = PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(
+                &source,
+                &f.record,
+                &f.layout,
+                streaming,
+                |leaf, parameters, inputs| {
+                    let expected = &cover.roots[visited];
+                    assert_eq!(leaf, expected.leaf);
+                    assert_eq!(parameters, cover.parameters.roots[visited].parameters.as_slice());
+                    assert!(inputs.iter().eq(expected.inputs.iter()));
+                    visited += 1;
+                    Ok(inputs.len() as u64)
+                },
+            )
+            .unwrap();
+            assert_eq!(visited, cover.roots.len());
+            assert_eq!(summary.total_edges, cover.parameters.total_edges);
+            assert_eq!(summary.total_coordinates, cover.parameters.total_coordinates);
+            assert_eq!(summary.root_memberships, cover.parameters.root_memberships);
+            let largest = cover.roots.iter().rev().max_by_key(|root| root.inputs.len()).unwrap();
+            assert_eq!(summary.largest_root, Some((largest.leaf, largest.inputs.len() as u64)));
+            assert!(matches!(
+                PalwTirPublicSourceV1::root_input_cover_streaming_size_v1(
+                    &source,
+                    &f.record,
+                    &f.layout,
+                    StreamingParameterCoverBudgetV1 { max_workspace_bytes: 0, ..streaming },
+                    |_, _, _| panic!("refused workspace must not visit roots"),
+                ),
+                Err(crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+            ));
             assert!(cover.roots.iter().any(|r| r.inputs.iter().any(|i| matches!(i, I::PromptPosition(_)))));
             assert!(cover.roots.iter().any(|r| r.inputs.iter().any(|i| matches!(i, I::GeneratedId(_)))));
         }

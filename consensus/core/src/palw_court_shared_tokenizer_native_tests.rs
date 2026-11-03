@@ -4,11 +4,11 @@
 #[test]
 fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_material() {
     use crate::palw_court_shared_tir_builder_store_v1::{
-        tokenizer_terminal::{
-            SignedTokenizerTerminalIntentV1 as Intent, TokenizerMaterialV1 as Material,
-            TOKENIZER_INTENT_SIGNATURE_CONTEXT_V1 as SIGNATURE_CONTEXT,
-        },
         SharedTirBuilderStoreV1 as Store,
+        tokenizer_terminal::{
+            SignedTokenizerTerminalIntentV1 as Intent, TOKENIZER_INTENT_SIGNATURE_CONTEXT_V1 as SIGNATURE_CONTEXT,
+            TokenizerMaterialV1 as Material,
+        },
     };
     use crate::palw_court_shared_tir_state_v1 as shared;
     use crate::palw_tokenizer_table_stream_v1::canonical_replay::Budget;
@@ -18,13 +18,9 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     let frame = &fx.frame;
     let p = frame.plan_v1();
     let claim = p.original_claim;
-    assert!(p
-        .semantic
-        .as_ref()
-        .unwrap()
-        .stages
-        .iter()
-        .any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer));
+    assert!(
+        p.semantic.as_ref().unwrap().stages.iter().any(|s| s.family == crate::palw_staged_bundle_v1::PalwStagedFamilyV1::Tokenizer)
+    );
     assert_eq!(fx.record.tokenizer_id, crate::palw_tokenizer_rendering_v1::palw_tokenizer_raw_commitment_v1(&raw));
     let (mut state, params, mut extras) = world(&fx, frame);
     state.class_semantics.insert(semantics.class_id, semantics.clone());
@@ -83,42 +79,74 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     };
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
     b.write_staged_row_v1(Key::CourtSharedContext(claim), Some(Row::CourtSharedContext(Box::new(c)))).unwrap();
-    crate::palw_court_rooted_semantic_v1::install_material_for_consumer_test_v1(&mut b.state,claim,
+    crate::palw_court_rooted_semantic_v1::install_material_for_consumer_test_v1(
+        &mut b.state,
+        claim,
         crate::palw_court_family_supplier_v1::FamilySupplierRoleV1::SemanticTable,
         crate::palw_court_family_material_v1::FamilyMaterialTargetV1::SemanticTable,
-        crate::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table));
-    crate::palw_court_rooted_semantic_v1::install_material_for_consumer_test_v1(&mut b.state,claim,
+        crate::palw_fp_constraint_job_v1::palw_token_table_file_encode_v1(&table),
+    );
+    crate::palw_court_rooted_semantic_v1::install_material_for_consumer_test_v1(
+        &mut b.state,
+        claim,
         crate::palw_court_family_supplier_v1::FamilySupplierRoleV1::TokenizerArtifact,
-        crate::palw_court_family_material_v1::FamilyMaterialTargetV1::TokenizerRaw,borsh::to_vec(&raw).unwrap());
+        crate::palw_court_family_material_v1::FamilyMaterialTargetV1::TokenizerRaw,
+        borsh::to_vec(&raw).unwrap(),
+    );
     let store = Store::new(&b.state, claim, scope, &[], &[], None).unwrap();
     // Existing registered program, signed custody/semantic bundle and rooted EOF:
     // private retained all-ID data authentication, not funded original admission.
     {
-        let encoded=(0..table.vocab()).map(|id|borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
-        let bodies=encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
-        let eog=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
-        let owner=store.retain_semantic_material_v1(&b.state,claim,&bodies,&eog,&raw).unwrap();
-        assert_eq!(owner.counts_v1().vocabulary,table.vocab());
-        assert_eq!(owner.counts_v1().raw_bytes,eof.actual_bytes);
-        assert_eq!(owner.raw_v1(),raw);
-        owner.check_scope_v1(p.source_id,claim,scope,semantics.commitment(),eof.inventory_id).unwrap();
-        assert!(owner.check_scope_v1(h(996),claim,scope,semantics.commitment(),eof.inventory_id).is_err());
-        assert!(store.retain_semantic_material_v1(&b.state,h(997),&bodies,&eog,&raw).is_err());
-        assert!(store.retain_semantic_material_v1(&b.state,claim,&bodies[..bodies.len()-1],&eog,&raw).is_err());
-        let mut changed=raw.clone();changed[0]^=1;
-        assert!(store.retain_semantic_material_v1(&b.state,claim,&bodies,&eog,&changed).is_err());
+        let encoded = (0..table.vocab()).map(|id| borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
+        let bodies = encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        let eog = borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
+        let owner = store.retain_semantic_material_v1(&b.state, claim, &bodies, &eog, &raw).unwrap();
+        assert_eq!(owner.counts_v1().vocabulary, table.vocab());
+        assert_eq!(owner.counts_v1().raw_bytes, eof.actual_bytes);
+        assert_eq!(owner.raw_v1(), raw);
+        owner.check_scope_v1(p.source_id, claim, scope, semantics.commitment(), eof.inventory_id).unwrap();
+        assert!(owner.check_scope_v1(h(996), claim, scope, semantics.commitment(), eof.inventory_id).is_err());
+        assert!(store.retain_semantic_material_v1(&b.state, h(997), &bodies, &eog, &raw).is_err());
+        assert!(store.retain_semantic_material_v1(&b.state, claim, &bodies[..bodies.len() - 1], &eog, &raw).is_err());
+        let mut changed = raw.clone();
+        changed[0] ^= 1;
+        assert!(store.retain_semantic_material_v1(&b.state, claim, &bodies, &eog, &changed).is_err());
     }
     // Production data paths generated under a local target context; the final signed
     // material intent below uses a different context and rechecks the same paths.
     let rendering = table.opening_of(0).unwrap();
-    let view=crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(source.header_v1(),&fx.record,frame.descriptor_v1().maximum_leaves).unwrap();
-    let target=crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state,&claim).unwrap();
-    let base=crate::palw_tokenizer_table_stream_v1::PalwTokenizerTableStreamV1::new_with_operand_length_view_v1(
-        h(961),&target,&view,&frame.original_v1().job,0,rendering.rendering.is_some(),
-        rendering.rendering.as_ref().map_or(0,Vec::len) as u32,&rendering.opening,eof.actual_bytes).unwrap();
-    let produced=crate::palw_tokenizer_table_stream_v1::producer::generate(&base,&raw,
-        crate::palw_tokenizer_table_stream_v1::producer::Budget{max_proofs:1000,max_nodes:513000,max_requests:1<<30,max_hash_calls:1000000,max_hash_bytes:1<<30}).unwrap();
-    let proofs=produced.proofs();
+    let view = crate::palw_decode_view_v1::PalwDecodeViewV1::from_tir_header_v1(
+        source.header_v1(),
+        &fx.record,
+        frame.descriptor_v1().maximum_leaves,
+    )
+    .unwrap();
+    let target = crate::palw_offence_attribution_v1::palw_offence_target_v1(&b.state, &claim).unwrap();
+    let base = crate::palw_tokenizer_table_stream_v1::PalwTokenizerTableStreamV1::new_with_operand_length_view_v1(
+        h(961),
+        &target,
+        &view,
+        &frame.original_v1().job,
+        0,
+        rendering.rendering.is_some(),
+        rendering.rendering.as_ref().map_or(0, Vec::len) as u32,
+        &rendering.opening,
+        eof.actual_bytes,
+    )
+    .unwrap();
+    let produced = crate::palw_tokenizer_table_stream_v1::producer::generate(
+        &base,
+        &raw,
+        crate::palw_tokenizer_table_stream_v1::producer::Budget {
+            max_proofs: 1000,
+            max_nodes: 513000,
+            max_requests: 1 << 30,
+            max_hash_calls: 1000000,
+            max_hash_bytes: 1 << 30,
+        },
+    )
+    .unwrap();
+    let proofs = produced.proofs();
     assert!(!proofs.is_empty());
     let material = Material { raw: &raw, proofs, rendering: &rendering };
     let budget = Budget { max_material_bytes: 1 << 25, max_proofs: 1000, max_native_calls: 100_000, max_packets: 10_000 };
@@ -167,25 +195,42 @@ fn shared_tokenizer_builder_uses_native_original_eof_and_rechecks_authenticated_
     let evidence = store.build_tokenizer_terminal(&b.state, &params, &rules, &intent, material, budget).unwrap();
     // Borrow the exact retained decoded payload owners: no raw/rendering clone
     // between native material owner and the real existing terminal primitive.
-    let all_encoded=(0..table.vocab()).map(|id|borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
-    let all_bodies=all_encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
-    let eog_encoded=borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
-    let retained=store.retain_semantic_material_v1(&b.state,claim,&all_bodies,&eog_encoded,&raw).unwrap();
-    let rooted_retained=store.retain_semantic_material_v1(&b.state,claim,&[],&[],&[]).unwrap();
-    assert_eq!(rooted_retained.counts_v1(),retained.counts_v1());
-    let rooted_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&rooted_retained,proofs,budget).unwrap();
-    assert_eq!(rooted_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
+    let all_encoded = (0..table.vocab()).map(|id| borsh::to_vec(&table.opening_of(id).unwrap()).unwrap()).collect::<Vec<_>>();
+    let all_bodies = all_encoded.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    let eog_encoded = borsh::to_vec(&table.eog_opening().unwrap()).unwrap();
+    let retained = store.retain_semantic_material_v1(&b.state, claim, &all_bodies, &eog_encoded, &raw).unwrap();
+    let rooted_retained = store.retain_semantic_material_v1(&b.state, claim, &[], &[], &[]).unwrap();
+    assert_eq!(rooted_retained.counts_v1(), retained.counts_v1());
+    let rooted_evidence =
+        store.build_tokenizer_terminal_retained_v1(&b.state, &params, &rules, &intent, &rooted_retained, proofs, budget).unwrap();
+    assert_eq!(
+        rooted_evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap(),
+        evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap()
+    );
     include!("palw_court_tokenizer_family_native_test_block.rs");
-    let retained_evidence=store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,proofs,budget).unwrap();
-    assert_eq!(retained_evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap(),
-        evidence.recheck(&store,&b.state,&params,&rules,budget).unwrap());
-    let mut wrong=intent.clone();wrong.inventory_id=h(966);sign(&mut wrong);
-    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
-    let mut wrong=intent.clone();wrong.scope_id=h(967);sign(&mut wrong);
-    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
-    let mut wrong=intent.clone();wrong.token_id=table.vocab();sign(&mut wrong);
-    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&wrong,&retained,proofs,budget).is_err());
-    assert!(store.build_tokenizer_terminal_retained_v1(&b.state,&params,&rules,&intent,&retained,&proofs[..proofs.len()-1],budget).is_err());
+    let retained_evidence =
+        store.build_tokenizer_terminal_retained_v1(&b.state, &params, &rules, &intent, &retained, proofs, budget).unwrap();
+    assert_eq!(
+        retained_evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap(),
+        evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap()
+    );
+    let mut wrong = intent.clone();
+    wrong.inventory_id = h(966);
+    sign(&mut wrong);
+    assert!(store.build_tokenizer_terminal_retained_v1(&b.state, &params, &rules, &wrong, &retained, proofs, budget).is_err());
+    let mut wrong = intent.clone();
+    wrong.scope_id = h(967);
+    sign(&mut wrong);
+    assert!(store.build_tokenizer_terminal_retained_v1(&b.state, &params, &rules, &wrong, &retained, proofs, budget).is_err());
+    let mut wrong = intent.clone();
+    wrong.token_id = table.vocab();
+    sign(&mut wrong);
+    assert!(store.build_tokenizer_terminal_retained_v1(&b.state, &params, &rules, &wrong, &retained, proofs, budget).is_err());
+    assert!(
+        store
+            .build_tokenizer_terminal_retained_v1(&b.state, &params, &rules, &intent, &retained, &proofs[..proofs.len() - 1], budget)
+            .is_err()
+    );
     assert!(!evidence.recheck(&store, &b.state, &params, &rules, budget).unwrap());
     let mut changed = intent.clone();
     changed.scope_id = h(962);
@@ -394,4 +439,182 @@ fn tfp1_tokenizer_intake_pins_native_container_and_signed_eof_without_changing_q
     assert!(!record.applies_to_parent_v1(&state, &extras, now, budget));
     assert!(derive(&state, &raw, &eog).is_err());
     assert!(matches!(preclaim_quote(&cache, &state, &extras), Err(Error::Local(_))));
+}
+
+#[test]
+fn verified_tokenizer_registration_root_replay_and_carriage_require_native_context() {
+    use crate::palw_native_resource_v1::{NativeHeapV1, NativeWireReaderV1, NativeWireScanV1};
+    use crate::palw_state_v2::{PalwDeltaEntryV2, PalwStateCarriageV2, PalwStateDeltaV2, apply_delta_v2, revert_delta_v2};
+    use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
+    use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, palw_rooted_tokenizer_registration_v1};
+
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut base, params, mut extras) = world(&fx, &fx.frame);
+    let class = semantics.class_id;
+    let binding = test_binding_v1(&fx.record, semantics.artifact_root, b"rooted-tokenizer");
+    let container = check_tir_container_binding_v1(&binding, &class, &semantics.artifact_root, &fx.record, 1).unwrap();
+    let pins = PalwTfp1TokenizerIntakePinsV2 {
+        class_id: class,
+        container_root: container.container_root,
+        semantics_id: semantics.commitment(),
+        inventory_id: eof.inventory_id,
+    };
+    let prior = at(&fx.frame, 0);
+    let point = at(&fx.frame, 1);
+    base.last_point = Some(prior);
+    base.class_semantics.insert(class, semantics);
+    let eof_key = Key::Inventory(eof.artifact_hash);
+    let mut prerequisites = TransitionBuilder::new(&base, &params, false, false, false, false, &extras);
+    prerequisites.write_staged_row_v1(eof_key, Some(Row::ArtifactInventory(eof))).unwrap();
+    prerequisites.write_staged_row_v1(Key::TirContainer(class), Some(Row::TirContainer(Box::new(container)))).unwrap();
+    let parent = prerequisites.state;
+    let eog = table.eog_opening().unwrap();
+    let mut dormant = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+    assert!(dormant.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &eog).is_err());
+    assert!(dormant.entries.is_empty());
+
+    extras.class_semantics_active = true;
+    extras.tir_container_identity_active = true;
+    extras.tir_public_conviction_active = true;
+    extras.staged_public_court = Some(fx.rules.config);
+    let mut b = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+    let mut bad_eog = eog.clone();
+    bad_eog.ids[0] = 0;
+    assert!(b.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &bad_eog).is_err());
+    assert!(b.entries.is_empty());
+    b.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &eog).unwrap();
+    let key = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
+    assert!(b.install_verified_tokenizer_registration_v1(&parent, point, pins, &raw, &eog).is_err());
+    let row = b.state.staged_court_row_v1(&key).unwrap();
+    let bytes = borsh::to_vec(row).unwrap();
+    assert_eq!(bytes[0], 38);
+    assert_eq!(borsh::to_vec(&key).unwrap()[0], 31);
+    assert!(bytes.len() < 1536);
+    let mut scan = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
+    assert_eq!(Row::scan_native_wire_v1(&mut scan).unwrap().heap, row.native_heap_v1("verified tokenizer fixture").bytes().unwrap());
+    assert_eq!(scan.remaining(), 0);
+    assert!(borsh::from_slice::<Row>(&bytes[..bytes.len() - 1]).is_err());
+    let decoded = borsh::from_slice::<Row>(&bytes).unwrap();
+    let mut bypass = TransitionBuilder::new(&parent, &params, false, false, false, false, &extras);
+    assert!(bypass.write_staged_row_v1(key, Some(decoded.clone())).is_err());
+    assert!(bypass.entries.is_empty());
+
+    b.state.last_point = Some(point);
+    b.entries.push(PalwDeltaEntryV2::LastPoint { old: Some(prior), new: Some(point) });
+    let delta = PalwStateDeltaV2 { point, entries: b.entries };
+    let next = apply_delta_v2(&parent, &delta, &params).unwrap();
+    assert_eq!(next.state_root(), b.state.state_root());
+    assert_eq!(revert_delta_v2(&next, &delta, &params).unwrap().state_root(), parent.state_root());
+    assert!(palw_rooted_tokenizer_registration_v1(&parent, &extras, class, point.daa_score + 1).is_none());
+    assert!(palw_rooted_tokenizer_registration_v1(&next, &extras, class, point.daa_score).is_none());
+    let record = palw_rooted_tokenizer_registration_v1(&next, &extras, class, point.daa_score + 1).unwrap();
+    assert_eq!(record.facts_v1().eog_count, 1);
+    assert_eq!(record.facts_v1().lowest_eog_id, 7);
+    let restored = borsh::from_slice::<PalwStateCarriageV2>(&borsh::to_vec(&PalwStateCarriageV2::from_state(&next)).unwrap())
+        .unwrap()
+        .into_state(&params, Some(next.state_root()))
+        .unwrap();
+    assert_eq!(palw_rooted_tokenizer_registration_v1(&restored, &extras, class, point.daa_score + 1), Some(record));
+
+    let mut prefix_filled = restored.clone();
+    prefix_filled.class_semantics.get_mut(&class).unwrap().prefix_state_relation =
+        Some(crate::palw_class_semantics_v1::PalwPrefixStateRelationV1::DenseInt32KvV1);
+    let Row::VerifiedTokenizerRegistration(historical) = prefix_filled.staged_court_row_v1(&key).unwrap() else { unreachable!() };
+    historical.check_context(&prefix_filled).unwrap();
+    assert!(palw_rooted_tokenizer_registration_v1(&prefix_filled, &extras, class, point.daa_score + 1).is_none());
+
+    let mut foreign_parent = parent.clone();
+    foreign_parent.last_point.as_mut().unwrap().block = crate::BlockHash::from_u64_word(8808);
+    assert!(apply_delta_v2(&foreign_parent, &delta, &params).is_err());
+    let mut foreign_point = delta.clone();
+    foreign_point.point.block = crate::BlockHash::from_u64_word(8809);
+    assert!(apply_delta_v2(&parent, &foreign_point, &params).is_err());
+    let mut deleted = delta.clone();
+    deleted.entries[0] = PalwDeltaEntryV2::StagedCourtSeed { key, old: Some(decoded), new: None };
+    assert!(apply_delta_v2(&next, &deleted, &params).is_err());
+    let mut orphan = PalwStateCarriageV2::from_state(&next);
+    orphan.staged_courts.remove(&eof_key);
+    assert!(orphan.into_state(&params, None).is_err());
+}
+
+#[test]
+fn rooted_tokenizer_stop_material_pins_original_ids_rendering_and_eog() {
+    use crate::palw_constraint_stream_court_v1::canonical_replay::Material as _;
+    use crate::palw_court_shared_tir_builder_store_v1::{
+        constraint_stop::RootedStopMaterialV1, constraint_terminal::ConstraintMaterialV1,
+    };
+    use crate::palw_tir_container_v1::{check_tir_container_binding_v1, test_binding_v1};
+    use crate::palw_tokenizer_rendering_v2::{PalwTfp1TokenizerIntakePinsV2, palw_rooted_claim_tokenizer_v1};
+
+    let (fx, semantics, eof, raw, table) = crate::palw_tir_public_claim_v1::palw_tir_public_tokenizer_frame_fixture_v1();
+    let (mut accepted, params, mut extras) = world(&fx, &fx.frame);
+    let claim = fx.frame.plan_v1().original_claim;
+    let class = semantics.class_id;
+    let binding = test_binding_v1(&fx.record, semantics.artifact_root, b"rooted-tokenizer-original-ids");
+    let container = check_tir_container_binding_v1(&binding, &class, &semantics.artifact_root, &fx.record, 1).unwrap();
+    let pins = PalwTfp1TokenizerIntakePinsV2 {
+        class_id: class,
+        container_root: container.container_root,
+        semantics_id: semantics.commitment(),
+        inventory_id: eof.inventory_id,
+    };
+    let eof_key = Key::Inventory(eof.artifact_hash);
+    accepted.class_semantics.insert(class, semantics.clone());
+    accepted.claim_semantics.insert(claim, semantics);
+    accepted.staged_courts.insert(eof_key, Row::ArtifactInventory(eof));
+    accepted.staged_courts.insert(Key::TirContainer(class), Row::TirContainer(Box::new(container)));
+    accepted.last_point = Some(at(&fx.frame, 0));
+    let mut registration_parent = accepted.clone();
+    registration_parent.claims.remove(&claim);
+    registration_parent.claim_semantics.remove(&claim);
+    registration_parent.staged_courts.remove(&fx.frame.key_v1());
+    registration_parent.last_point =
+        Some(PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(8810), daa_score: 10, blue_score: 10, subsidy: 0 });
+    let registration_point =
+        PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(8811), daa_score: 11, blue_score: 11, subsidy: 0 };
+    extras.class_semantics_active = true;
+    extras.tir_container_identity_active = true;
+    extras.tir_public_conviction_active = true;
+    extras.staged_public_court = Some(fx.rules.config);
+    let mut b = TransitionBuilder::new(&registration_parent, &params, false, false, false, false, &extras);
+    let eog = table.eog_opening().unwrap();
+    b.install_verified_tokenizer_registration_v1(&registration_parent, registration_point, pins, &raw, &eog).unwrap();
+    let key = Key::VerifiedTokenizerRegistration(class, pins.semantics_id);
+    let source = fx.frame.source_v1(&fx.record, &fx.layout, fx.rules.maximum_leaves).unwrap();
+    let rows = crate::palw_step_refute::tiled_logits_rows_root_v1(&fx.execution.binding.job_context, &fx.execution.rows).unwrap();
+    let ids = source.retain_complete_ids_v1(rows, &fx.execution.generated).unwrap();
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());
+    accepted.staged_courts.insert(key, b.state.staged_court_row_v1(&key).unwrap().clone());
+
+    let verifier = palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().unwrap();
+    let id = ids.ids_v1()[0];
+    let opening = table.opening_of(id).unwrap();
+    let wrong_id = table.opening_of((id + 1) % table.vocab()).unwrap();
+    assert_eq!(verifier.committed_rendering_at(0, &opening), Some(opening.rendering.as_deref()));
+    assert_eq!(verifier.committed_rendering_at(0, &wrong_id), None);
+    assert_eq!(verifier.committed_rendering_at(source.decode_count_v1(), &opening), None);
+    let material = ConstraintMaterialV1 { eog: &eog, renderings: std::slice::from_ref(&opening) };
+    let replay_view = RootedStopMaterialV1::new(material, &verifier).unwrap();
+    assert_eq!(replay_view.eog(), Some(eog.ids.as_slice()));
+    assert_eq!(replay_view.rendering(id).unwrap().bytes, opening.rendering.as_deref());
+    assert!(replay_view.rendering(wrong_id.id).is_none());
+    let mut bad_eog = eog.clone();
+    bad_eog.ids[0] = 0;
+    assert!(RootedStopMaterialV1::new(ConstraintMaterialV1 { eog: &bad_eog, ..material }, &verifier).is_err());
+    let mut bad_rendering = opening;
+    bad_rendering.rendering = Some(b"unregistered".to_vec());
+    assert!(RootedStopMaterialV1::new(ConstraintMaterialV1 { eog: &eog, renderings: &[bad_rendering] }, &verifier).is_err());
+
+    let other = crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_v1(None, 4);
+    let other_source = other.frame.source_v1(&other.record, &other.layout, other.rules.maximum_leaves).unwrap();
+    let other_rows =
+        crate::palw_step_refute::tiled_logits_rows_root_v1(&other.execution.binding.job_context, &other.execution.rows).unwrap();
+    let other_ids = other_source.retain_complete_ids_v1(other_rows, &other.execution.generated).unwrap();
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &other_ids).is_err());
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &other_source, &ids).is_err());
+    accepted.claims.get_mut(&claim).unwrap().accepted_daa = registration_point.daa_score;
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).unwrap().is_none());
+    accepted.claims.get_mut(&claim).unwrap().accepted_daa = fx.frame.plan_v1().terms.accepted_daa;
+    accepted.staged_courts.remove(&eof_key);
+    assert!(palw_rooted_claim_tokenizer_v1(&accepted, claim, &source, &ids).is_err());
 }

@@ -23410,6 +23410,25 @@ pub(crate) fn replay_delta_owned_v1(
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
     palw_claim_local_execution_cohort_census_v15::prepare_compact_replay_activity_v15(&mut state, params, delta.point);
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as CourtKey, PalwStagedCourtRowV1 as CourtRow};
+    // A verified tokenizer may only enter a trusted journal as an immutable
+    // insertion. Its prerequisite rows must already exist on the exact parent,
+    // including when unrelated writes occur before it in this journal.
+    let mut tokenizer_registration_changed = false;
+    for entry in &delta.entries {
+        if let PalwDeltaEntryV2::StagedCourtSeed { key, old, new } = entry
+            && (matches!(key, CourtKey::VerifiedTokenizerRegistration(..))
+                || matches!(old, Some(CourtRow::VerifiedTokenizerRegistration(_)))
+                || matches!(new, Some(CourtRow::VerifiedTokenizerRegistration(_))))
+        {
+            let (None, Some(CourtRow::VerifiedTokenizerRegistration(row))) = (old, new) else {
+                return Err(PalwStateV2Error::DeltaMismatch("verified tokenizer registration is immutable"));
+            };
+            row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if revert { row.check_child(&state, &delta.point) } else { row.check_adoption(&state, &delta.point) }
+                .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            tokenizer_registration_changed = true;
+        }
+    }
     let mut owner_schedule_changed = false;
     let mut replay_entry = |entry: &PalwDeltaEntryV2| {
         owner_schedule_changed |= matches!(entry, PalwDeltaEntryV2::StagedCourtSeed { key: CourtKey::TirOwnerSchedule(_), .. });
@@ -23440,6 +23459,14 @@ pub(crate) fn replay_delta_owned_v1(
     }
     palw_claim_local_execution_cohort_census_v15::replay_fold_v15(&mut state, delta, revert, params)?;
     palw_claim_local_context_gc_v3::settle_state_v3(&mut state).map_err(palw_claim_local_paid_archive_v2::state_error)?;
+    if tokenizer_registration_changed {
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::StagedCourtSeed { new: Some(CourtRow::VerifiedTokenizerRegistration(row)), .. } = entry {
+                if revert { row.check_adoption(&state, &delta.point) } else { row.check_child(&state, &delta.point) }
+                    .map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+        }
+    }
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
     rebuild_deadline_free_indices(&mut state);
     rebuild_deadline_index_v2(&mut state, params)?;
