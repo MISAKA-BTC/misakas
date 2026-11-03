@@ -1800,3 +1800,29 @@ The same Seat5 worker check, invocation
 Core at 661 seconds. Peak cgroup memory was 5,385,728,000 bytes,
 with 141,576 memory.high events and zero OOM or OOM kills at the
 sample. This is a build-resource observation, without a test verdict.
+
+### Qwen #58 one-round verdict — 07:46 UTC
+
+The bounded no-post revision passed on the original signed claim.
+At prefill position 16 and leaf 1,648,446, the native arity-four
+checker processed one disclosure and selected each of two children,
+with widths 16 and 1. The verifier was denied the model, original
+capture and answer. Both honest child proofs returned
+`ChallengerDefeated`. Compensating errors in the child accumulators
+preserved the aggregate and original signed output, so the false
+disclosure passed the native aggregation check. Native choice
+selected child 0 and its terminal checker returned `ExecutorGuilty`.
+A sibling's terminal input and a missing checkpoint anchor were
+refused. These were private unsigned transitions.
+
+The packet was 50,796 bytes, SHA-256
+`437d26bb3a239301b8b542c68e3ddd3d25ca46f33c9bf52d9b2f3a89de49a51e`.
+The checkpoint matched in 80.425 seconds, 13.390 seconds earlier
+than the preceding source revision. The full diagnostic took
+172.305 seconds, with peak child RSS 2,311,864,320 bytes, zero
+swap growth and verified RAM-volume detach. This check covers
+one held dissection and created no chain session or credit.
+
+B0, relay and the public index subsequently agreed at DAA 19,651.
+Qwen #68's carrier at 19,648 was referenced at 19,649. Both nodes
+lacked the claim and B0 recorded 20,607 DAA against 20,608.
