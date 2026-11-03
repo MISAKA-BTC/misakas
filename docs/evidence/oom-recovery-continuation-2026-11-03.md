@@ -1351,3 +1351,47 @@ The archive and protected node generations were preserved.
 The chosen path comes from the archived GHOSTDAG index. Independent
 selected-parent recomputation, strict snapshot integration, and
 live unsigned IBD remain open.
+
+## Historical registration and Qwen execution checks — 06:36 UTC
+
+The native archive reader independently selected all 10,609 parents
+on the DAA 2,844 to DAA 508 route. It rehashed 15,426 distinct headers,
+checked their declared score and work against archived compact records,
+and resolved 626 work ties with the native order. The native round
+rules excluded 3,176 round-parent references. The transcript SHA-256 is
+`1920e458bc534754d7e17ddf32b0921352479ba102dc0ae3081d9c7e40ab3408`.
+This check uses authenticated declared work. It does not independently
+recompute full GHOSTDAG mergeset work.
+
+The DAA 508 fold accepted six transactions from two DAA 507 blocks.
+The two block bodies matched their rehashed headers. All accepted IDs
+and indices matched the bodies and reconstructed the fold's accepted-ID
+root. The exact Qwen class registration was the only one for its class
+among the six transactions. Its ML-DSA signature verified against the
+registrant bond public key in the authenticated DAA 2,844 checkpoint.
+Flipping one signature bit caused verification to fail. The archived
+declaration matched the checkpoint declaration digest. This did not
+revalidate the historical UTXO state. Strict snapshot validation still
+refuses the pre-fence legacy class under the current release rule.
+No snapshot was installed or signing service operated.
+
+The original Qwen #45 query projection passed the native arithmetic
+check. A local counterfactual changed one output lane and rebuilt the
+commitments for that change. Its structure and original activation
+inputs authenticated under the synthetic root. Native arithmetic
+rejected the changed lane, and the original signed claim refused the
+synthetic root. This was a single unsigned, isolated fault case.
+Two focused tests passed and the ordinary projection output was
+byte-identical to the previous run. No synthetic claim was submitted.
+
+The full Qwen #21 Darwin arithmetic comparison reached its 2,400-second
+duration limit without a verdict. Peak RSS was 4,632,215,552 bytes
+against a 5 GiB cap. All sampled APFS and swap bounds held. The original
+artifact and executable fingerprints were unchanged. This establishes
+a timeout and does not establish an arithmetic mismatch.
+
+B0 and the relay agreed at DAA 19,629. The selected fold at DAA 19,628
+referenced a new Qwen carrier with header DAA 19,627 and signed retention
+DAA 40,235. The exact claim row was absent on both nodes. Public REST
+and WebSocket matched at DAA 19,629, with twelve sampled selected
+blocks all classified as legacy heartbeats.
