@@ -648,3 +648,14 @@ tunnel on 113 at the same sampling point. B1 remained unsynced at
 19,389 and the 113 primary remained unsynced at 19,224. The later
 public REST/WebSocket sample was available at DAA 19,598 with
 zero relay receipt blocks.
+
+The independent code review found that an active capture could still
+satisfy the planner's estimated reclamation and prevent other files
+from being selected. Commit `bce5d71b2` excludes active leads from
+planning and keeps the final locked check. The previous actual
+janitor pass returned a shortfall while an unpinned file was
+available. The updated scoped harness passed eleven tests and
+reclaimed that file while preserving the active lead. Log SHA256 is
+`761b45d14ef2488dab59d08de84cde5ff284c2a8073ff5eca860e8c84f89aba7`. The full test-metadata
+build above covers the earlier guard commit. The planning follow-up
+was verified in the scoped harness.
