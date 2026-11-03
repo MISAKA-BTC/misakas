@@ -471,3 +471,32 @@ and the same recomputed claim ID at a stable selected tip. No claim
 row or Panel assignment was present. The carrier's block DAA was
 19,588, and the observed virtual DAA was 19,592. Public REST and
 WebSocket still agreed on the ready relay.
+
+## Bounded evidence publication and merge observations — 04:40 UTC
+
+The evidence CLI now validates its staged manifest and checks every
+source chunk before publication. Upload and read-back retain one chunk
+at a time. A changed or corrupt source chunk prevents that destination's
+manifest from being published. The previous command accumulated every
+source chunk together even for a valid manifest up to 4 GiB.
+Commit `481c1ec6e` passed 20 scoped tests, including loopback
+HTTP publication of the byte-identical Qwen #32 capture and a damaged
+last chunk that prevented all destination writes. The scoped harness
+also typechecked the CLI against those same provider modules. Log
+SHA256 is `78ebb93db32c759e2c9162d8a14259ca52ce2f4d272a1d7001fae81c70c806b2`.
+
+The live producer reported 36 outputs. Its journal linked #35 and #36
+to refusal at 20,606 and 20,607 remaining DAA respectively, each
+against 20,608 required. Public REST, WebSocket and the B0 read agreed
+on the selected tip at DAA 19,594. The class view reported zero
+assignments and valid receipt seats.
+
+The local producer GC still needs an authoritative end to retention
+before allowing deletion of a publication that is absent from the
+current claim view. A scoped in-memory DAG fixture ran the actual
+GHOSTDAG mergeset function and verified four cases, including that a
+carrier already in the selected parent's DAG past cannot be merged
+again. That result does not cover carriers outside the pruning
+point's past or prove storage liveness when pruning stalls. The
+streaming CLI consumes an already staged manifest. Native accepted
+Attempt publication and end-to-end G1 remain open.
