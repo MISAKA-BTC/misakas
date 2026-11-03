@@ -1478,5 +1478,61 @@
     "stored_sha256": "c3d2d562cdddfed617a459dfac8fc78791251ca489bd9d6b080a796025dea3ee",
     "raw_bytes": 596531,
     "stored_bytes": 42136
+  },
+  {
+    "raw_name": "round-budget-core-runtime.log",
+    "stored_name": "round-budget-core-runtime.log.gz",
+    "raw_sha256": "ac2ec9a6b1b2b039d57175bcc28ebcce3645311d9dece9d073fca539bb0d8d48",
+    "stored_sha256": "e3b5f30f61ed5a83df8ae5d94172d39b525ac635cee3baabc2090eaea1f547eb",
+    "raw_bytes": 359430,
+    "stored_bytes": 24827
+  },
+  {
+    "raw_name": "virtual-parent-budget-retry-4gib-failed.log",
+    "stored_name": "virtual-parent-budget-retry-4gib-failed.log.gz",
+    "raw_sha256": "9b21b6bfb3b07097f4b939153e9753d1dde960333acbb49434ec6c8ed32fa29e",
+    "stored_sha256": "6236d37b18e36ffaed8983ede23192238e0ed5a85d0adc8fc2de8c7d9456efb2",
+    "raw_bytes": 359134,
+    "stored_bytes": 24763
+  },
+  {
+    "raw_name": "virtual-parent-budget-retry.log",
+    "stored_name": "virtual-parent-budget-retry.log.gz",
+    "raw_sha256": "8bc141aebfda2e1e25f040eac252a46640a7e18dc0b6d335b9f86cf285a02ebd",
+    "stored_sha256": "ca2d55a05ac5ee71333a8e5a806e49f143f1eb2e13ccdeabdb2dce7246411751",
+    "raw_bytes": 358323,
+    "stored_bytes": 24423
+  },
+  {
+    "raw_name": "virtual-parent-isolated.log",
+    "stored_name": "virtual-parent-isolated.log.gz",
+    "raw_sha256": "fad9ea91956c3f307ba51ebe8240aa94db8304b2a216c5d09624bb3295b4e3f3",
+    "stored_sha256": "582b927ce8973783a2632be5dab7a0114278a163617e9ab0b50434eb206a7931",
+    "raw_bytes": 186,
+    "stored_bytes": 149
+  },
+  {
+    "raw_name": "virtual-parent-clippy.log",
+    "stored_name": "virtual-parent-clippy.log.gz",
+    "raw_sha256": "31c46a52e3b7bf18f9252f7435382fe4dca0569ea8c21934327d4b2f295b92b9",
+    "stored_sha256": "4ccde1c0ea6e9154b3a1c9fd92304bc34008f1f309266c88e21112afbc5e2147",
+    "raw_bytes": 340747,
+    "stored_bytes": 23523
+  },
+  {
+    "raw_name": "virtual-parent-native-check.log",
+    "stored_name": "virtual-parent-native-check.log.gz",
+    "raw_sha256": "3a41c35e4fed6934b91e61f05b10eca72d73d9735780a01118348a8b2289740b",
+    "stored_sha256": "ae4f7bd7ee5c4d48fc950c985b7da4e9427926766a219bb2eb6f9b967e17e66d",
+    "raw_bytes": 542103,
+    "stored_bytes": 36832
+  },
+  {
+    "raw_name": "virtual-parent-evm-check.log",
+    "stored_name": "virtual-parent-evm-check.log.gz",
+    "raw_sha256": "ddd48a695984a73e64dafccf208bf4b1777558415488ba96854202ade2d0b0a4",
+    "stored_sha256": "de381d3065a22ce1c3bfc3de48fdeab814416072a9f4c17d6b40f0efb7c805af",
+    "raw_bytes": 587000,
+    "stored_bytes": 40321
   }
 ]

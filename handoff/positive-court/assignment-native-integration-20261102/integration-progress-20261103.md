@@ -1129,3 +1129,29 @@ require prefix replanning.
 Strict Core/Consensus library Clippy and native and EVM-enabled test-target
 typechecks passed. The regression's standalone runtime command was building
 the default optimized Core library when this static checkpoint was recorded.
+
+## Virtual PALW parent availability
+
+Virtual acceptance now loads one authenticated PALW tip and checks that it
+names the selected parent. EXEC anchoring, the UTXO locks and fee planning
+use that same snapshot. When Assignment or the monetary Round budget is
+active, a missing or different tip defers processing as unavailable history.
+Capacity errors and unreadable state keep separate local error outcomes.
+
+The initial Round budget retry test failed after releasing its 16 MiB test
+lease. A second run with a 4 GiB fixture limit failed at the same point.
+The existing writer quotes the widest u16 assignment row per journal write
+when no allocation policy is configured. The corrected fixture uses a
+128 GiB logical counter and allocates no buffer of that size. The runtime
+then confirmed dormant behavior, active refusal under contention, and
+successful retry from the same parent after release. Production limits
+are untouched.
+
+An isolated exact-source regression exercised the matching tip, missing
+tip, mismatched tip, capacity error and unreadable state outcomes. A native
+funded template and a full cold-node recovery run remain outstanding.
+
+Strict Core/Consensus library Clippy and Consensus test-target checks with
+and without the EVM feature passed on the same source as both successful
+runtime checks. The compressed verification record retains both failed
+fixture runs separately.

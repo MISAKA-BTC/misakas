@@ -394,6 +394,55 @@ fn native_store_capacity_v1(
         other => panic!("unexpected native store failure: {other}"),
     }
 }
+/// An armed monetary path must have the state of this exact parent before
+/// either EXEC anchoring or UTXO acceptance can use it.
+fn virtual_palw_parent_from_tip_v2(
+    loaded: kaspa_database::prelude::StoreResult<
+        Option<(BlockHash, kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1)>,
+    >,
+    parent: BlockHash,
+    required: bool,
+) -> Result<Option<kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1>, RuleError> {
+    use kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault;
+    match loaded {
+        Ok(Some((block, state))) if block == parent => Ok(Some(state)),
+        _ if !required => Ok(None),
+        Ok(_) => Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable)),
+        Err(error @ StoreError::LocalResourceUnavailable(_)) => {
+            Err(RuleError::LocalNativeCapacityUnavailable(native_store_capacity_v1(error)))
+        }
+        Err(_) => Err(RuleError::LocalNativeStateContextUnavailable(Fault::StoreUnreadable)),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn virtual_palw_parent_requires_the_matching_tip_for_armed_money() {
+    use kaspa_consensus_core::{
+        palw_native_resource_v1::NativeChainStateV1, palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1 as Fault,
+        palw_state_v2::PalwChainStateV2,
+    };
+    let parent = BlockHash::from_u64_word(1);
+    let other = BlockHash::from_u64_word(2);
+    let genesis = PalwChainStateV2::genesis();
+    let state = || NativeChainStateV1::try_from_clone_v1(&genesis).unwrap();
+    assert!(virtual_palw_parent_from_tip_v2(Ok(Some((parent, state()))), parent, true).unwrap().is_some());
+    assert!(virtual_palw_parent_from_tip_v2(Ok(Some((other, state()))), parent, false).unwrap().is_none());
+    for loaded in [Ok(None), Ok(Some((other, state())))] {
+        assert!(matches!(
+            virtual_palw_parent_from_tip_v2(loaded, parent, true),
+            Err(RuleError::LocalNativeStateContextUnavailable(Fault::HistoryUnavailable))
+        ));
+    }
+    let no_capacity = || Err(StoreError::LocalResourceUnavailable("test parent restore demand".into()));
+    assert!(virtual_palw_parent_from_tip_v2(no_capacity(), parent, false).unwrap().is_none());
+    assert!(matches!(virtual_palw_parent_from_tip_v2(no_capacity(), parent, true), Err(RuleError::LocalNativeCapacityUnavailable(_))));
+    assert!(matches!(
+        virtual_palw_parent_from_tip_v2(Err(StoreError::DataInconsistency("test bad PALW tip".into())), parent, true),
+        Err(RuleError::LocalNativeStateContextUnavailable(Fault::StoreUnreadable))
+    ));
+}
+
 struct PalwUtxoCommitV2 {
     relay_carriers: Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentScheduledActionV2>,
     root: Hash64,
@@ -3902,23 +3951,24 @@ impl VirtualStateProcessor {
 
         // Calc virtual DAA score, difficulty bits and past median time
         let virtual_daa_window = self.window_manager.block_daa_window(&virtual_ghostdag_data)?;
+        let daa = virtual_daa_window.daa_score;
+        let assignment = self.palw_positive_assignment_params_v2.as_ref().filter(|params| {
+            self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
+                && params.palw_positive_assignment_v2_at(daa).is_some()
+        });
+        let round_budget = self.palw_execution_lane_at(daa).is_some()
+            && self.palw_state_params_v2.as_ref().is_some_and(|params| params.bond_budget_active_at(daa));
+        let loaded =
+            self.palw_state_params_v2.as_ref().map_or(Ok(None), |params| self.palw_state_v2_store.read().load_tip_retained_v1(params));
+        let virtual_palw_state =
+            virtual_palw_parent_from_tip_v2(loaded, virtual_ghostdag_data.selected_parent, assignment.is_some() || round_budget)?;
 
-        // **RFC-0008 v2: the anchor the block built on this virtual will carry.** Read from the store tip, which IS virtual's selected
-        // parent (the same filter the lock and verdict reads below use). The covered EXEC blocks join virtual's reds, so virtual's UTXO
-        // state, rewards and coinbase accept them exactly as the block that anchors them will; the DAG's own window and the stored
-        // ghostdag data of every real block are untouched.
-        let exec_state = if self.palw_exec_v2_active_at(virtual_daa_window.daa_score) {
-            self.palw_state_params_v2
-                .as_ref()
-                .and_then(|params| self.palw_state_v2_store.read().load_tip_retained_v1(params).ok().flatten())
-                .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent)
-                .map(|(_, state)| state)
-        } else {
-            None
-        };
-        let (virtual_ghostdag_data, exec_anchor) = match exec_state
+        // RFC-0008 v2: augment virtual from the same parent snapshot used for
+        // the UTXO locks and fees below. The original selected parent is kept.
+        let (virtual_ghostdag_data, exec_anchor) = match virtual_palw_state
             .as_ref()
-            .and_then(|state| self.palw_exec_v2_virtual(&virtual_ghostdag_data, state, virtual_daa_window.daa_score))
+            .filter(|_| self.palw_exec_v2_active_at(daa))
+            .and_then(|state| self.palw_exec_v2_virtual(&virtual_ghostdag_data, state, daa))
         {
             Some((augmented, anchor)) => (augmented, Some(anchor)),
             None => (virtual_ghostdag_data, None),
@@ -3930,19 +3980,9 @@ impl VirtualStateProcessor {
         let virtual_bits = self.window_manager.calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window);
         let virtual_past_median_time = self.window_manager.calc_past_median_time(&virtual_ghostdag_data)?.0;
 
-        // Audit C-08: virtual acceptance runs the same bond-spend filter the chain walk runs, or
-        // the template would build on a UTXO view that includes a spend every validating node
-        // skips. Read from the store tip, which IS virtual's selected parent — and only when the
-        // tip really names it, because a tip on another branch is not this candidate's registry.
-        let virtual_palw_state = self
-            .palw_state_params_v2
-            .as_ref()
-            .and_then(|params| self.palw_state_v2_store.read().load_tip_retained_v1(params).ok().flatten())
-            .filter(|(block, _)| *block == virtual_ghostdag_data.selected_parent);
-        ctx.palw_v2_locked_bonds = virtual_palw_state
-            .as_ref()
-            .map(|(_, state)| self.palw_v2_locked_bond_outpoints(state, virtual_daa_window.daa_score))
-            .unwrap_or_default();
+        // Audit C-08: construction and validation use the same bond-spend filter.
+        ctx.palw_v2_locked_bonds =
+            virtual_palw_state.as_ref().map(|state| self.palw_v2_locked_bond_outpoints(state, daa)).unwrap_or_default();
         // …including the bonds this mergeset itself declares, exactly as the candidate walk above
         // does. The two sides must compute the SAME set or the claim made there — "construction and
         // validation compute the same set" — is false in the direction that hurts: a template built
@@ -3951,18 +3991,14 @@ impl VirtualStateProcessor {
         if virtual_palw_state.is_some() {
             ctx.palw_v2_locked_bonds.extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
         }
-        ctx.palw_v2_bond_burns = virtual_palw_state
-            .as_ref()
-            .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
-            .unwrap_or_default();
+        ctx.palw_v2_bond_burns =
+            virtual_palw_state.as_ref().map(|state| self.palw_v2_bond_burn_obligations(state, daa)).unwrap_or_default();
         // G14 lane escrow-rfc08: virtual locks the funded-escrow rows exactly as the chain walk does.
-        ctx.palw_escrow_locks.rows = virtual_palw_state
-            .as_ref()
-            .map(|(_, state)| self.palw_escrow_locked_rows_v1(state, virtual_daa_window.daa_score))
-            .unwrap_or_default();
+        ctx.palw_escrow_locks.rows =
+            virtual_palw_state.as_ref().map(|state| self.palw_escrow_locked_rows_v1(state, daa)).unwrap_or_default();
         ctx.palw_escrow_locks.assignment = virtual_palw_state
             .as_ref()
-            .map(|(_, state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
+            .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_funding_locks_v2(state))
             .transpose()
             .map_err(|why| {
                 RuleError::LocalNativeCapacityUnavailable(
@@ -3975,7 +4011,7 @@ impl VirtualStateProcessor {
             .unwrap_or_default();
         ctx.palw_escrow_locks.positive_case = virtual_palw_state
             .as_ref()
-            .map(|(_, state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
+            .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::positive_case_funding_locks_v2(state))
             .transpose()
             .map_err(|why| {
                 RuleError::LocalNativeCapacityUnavailable(
@@ -3988,7 +4024,7 @@ impl VirtualStateProcessor {
             .unwrap_or_default();
         ctx.palw_escrow_locks.assignment_prover = virtual_palw_state
             .as_ref()
-            .map(|(_, state)| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
+            .map(|state| kaspa_consensus_core::palw_positive_assignment_funds_v2::assignment_prover_funding_locks_v2(state))
             .transpose()
             .map_err(|why| {
                 RuleError::LocalNativeCapacityUnavailable(
@@ -4002,22 +4038,18 @@ impl VirtualStateProcessor {
         // ADR-0125: virtual accepts exactly the round blocks the block built on it will accept.
         ctx.palw_round_verdicts = virtual_palw_state
             .as_ref()
-            .map(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score))
+            .map(|state| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, daa))
             .transpose()
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
             .flatten();
 
-        let daa = virtual_daa_window.daa_score;
         // The reserved origin distinguishes scratch records from every real block.
         // The preview uses the real virtual bits. Timestamp-dependent Round
         // inputs and the own-attempt-dependent overlay carve need later inputs.
         if virtual_palw_state.is_some()
             && self.palw_execution_lane_at(daa).is_none()
             && !self.dns_retired_at(daa)
-            && self.palw_lifecycle_kind_fences.positive_court_reserved_active_at_v2(daa)
-            && self.palw_positive_assignment_params_v2.as_ref().is_some_and(|params| {
-                params.palw_positive_assignment_v2_at(daa).is_some() && params.palw_positive_funding_relay_v2_at(daa).is_some()
-            })
+            && assignment.is_some_and(|params| params.palw_positive_funding_relay_v2_at(daa).is_some())
         {
             ctx.positive_relay_preview_point = Some(kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
                 block: kaspa_consensus_core::blockhash::ORIGIN,
@@ -4029,9 +4061,9 @@ impl VirtualStateProcessor {
         let relay_parent_multiset = ctx.positive_relay_preview_point.map(|_| ctx.multiset_hash.clone());
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score)
+        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, daa)
             .map_err(RuleError::LocalNativeCapacityUnavailable)?;
-        if let (Some(point), Some(parent_multiset), Some((_, state))) =
+        if let (Some(point), Some(parent_multiset), Some(state)) =
             (ctx.positive_relay_preview_point, relay_parent_multiset, virtual_palw_state.as_ref())
         {
             let actions = self
