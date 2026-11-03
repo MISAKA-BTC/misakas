@@ -532,6 +532,10 @@ fn required_relay_profile_is_retained_in_original_material_without_current_polic
     let restored = AssignmentAdmissionMaterialV2::decode(&raw, 16 << 10).unwrap();
     assert_eq!(restored, material);
     restored.check_row(&row).unwrap();
+    let rules = kaspa_consensus_core::palw_state_v2::NativeAssignmentRulesV2::from_original_material_data_v2(&row, &restored).unwrap();
+    assert_eq!(rules.funding_relay_profile(), &restored.funding_relay);
+    assert_eq!(rules.rule_scope().ruleset().as_bytes(), row.bundle.terms.ruleset.0);
+    assert_eq!(rules.body_limits().unwrap().max_body_bytes, restored.assignment_policy.max_frame_bytes);
     let mut downgraded = restored.clone();
     downgraded.funding_relay = kaspa_consensus_core::config::params::AssignmentFundingRelayProfileV2::CooperativeV1;
     assert_ne!(downgraded.id(), material.id());
@@ -582,7 +586,7 @@ fn original_control_carriage_borrows_exact_body_and_rejects_detached_subject_or_
             let frame = assignment_frame_v2(subject, 1, d(8), kind, point, &payload, 2048).unwrap();
             let raw = encode_assignment_journal_record_v2(frame.header, &payload, 2048).unwrap();
             let record = AssignmentJournalRecordViewV2::decode(&raw, 2048).unwrap();
-            let actual = AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, 2048);
+            let actual = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, 2048);
             if valid {
                 let (resolved, native) = actual.unwrap();
                 assert_eq!(resolved, boundary);
@@ -595,7 +599,7 @@ fn original_control_carriage_borrows_exact_body_and_rejects_detached_subject_or_
         let frame = assignment_frame_v2(boundary.assignment, 1, d(8), kind, boundary.origin, &body, 2048).unwrap();
         let legacy = encode_assignment_journal_record_v2(frame.header, &body, 2048).unwrap();
         let record = AssignmentJournalRecordViewV2::decode(&legacy, 2048).unwrap();
-        assert!(AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, 2048).is_err());
+        assert!(AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, 2048).is_err());
     }
     let (row, material, _) = fixture_with_relay(true);
     let open = payload(&material);
@@ -608,6 +612,6 @@ fn original_control_carriage_borrows_exact_body_and_rejects_detached_subject_or_
     let frame = assignment_frame_v2(row.id(), 0, d(0), AssignmentJournalEventKindV2::Open, row.origin, &envelope, 16 << 10).unwrap();
     let raw = encode_assignment_journal_record_v2(frame.header, &envelope, 16 << 10).unwrap();
     let record = AssignmentJournalRecordViewV2::decode(&raw, 16 << 10).unwrap();
-    let (_, native) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, 16 << 10).unwrap();
+    let (_, native) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, 16 << 10).unwrap();
     assert_eq!(native, &[2, 0, 1, 0, 8]);
 }

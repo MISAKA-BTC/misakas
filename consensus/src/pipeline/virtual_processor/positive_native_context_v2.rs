@@ -501,10 +501,12 @@ impl PositiveCarrierPhaseTwoV2 {
         self,
         processor: &VirtualStateProcessor,
         current_view: &impl UtxoView,
+        selected_parent_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Vec<kaspa_consensus_core::palw_state_v2::PositiveAssignmentRawActionV2>, NativeCoverageV1> {
         use kaspa_consensus_core::palw_positive_court_v2::coordinator::{
             assignment_body::{
-                AssignmentBodyLimitsV2, PositiveAssignmentNativeOperationV2 as A, decode_assignment_body_v2, scan_assignment_body_v2,
+                PositiveAssignmentNativeOperationV2 as A, decode_assignment_body_v2, scan_assignment_body_v2,
+                scan_assignment_continuation_id_v2,
             },
             native_body::{
                 MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2,
@@ -524,22 +526,53 @@ impl PositiveCarrierPhaseTwoV2 {
         let mut actions = Vec::new();
         for carrier in self.carriers {
             let tx = carrier.transaction();
-            if !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
+            if tx.payload.get(..3) != Some(&[1, 0, 176]) {
                 continue;
             }
             let Some(kind @ 0..=13) = tx.payload.get(7).copied() else {
                 continue;
             };
             let point = carrier.prefix.accepting;
-            let Some(params) = processor.palw_positive_assignment_params_v2.as_ref() else {
+            let Some(params) = processor.palw_positive_assignment_params_v2.as_ref() else { continue };
+            // Keep the existing native interleave fence. Continuation rules
+            // inside this transport use original material, including relay
+            // profile changes while this enclosing lane stays active.
+            if params.palw_positive_assignment_v2_at(point.daa_score).is_none() {
+                continue;
+            }
+            let original = if kind >= 9 {
+                use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
+                let body = &tx.payload[3..];
+                let Ok(id) = scan_assignment_continuation_id_v2(body) else { continue };
+                if let Some(state) = selected_parent_state {
+                    match processor.original_assignment_rules_v2(carrier.prefix.selected_parent, state, id, body) {
+                        Ok(rules) => rules,
+                        Err(E::InvalidContinuation) => continue,
+                        Err(E::Resource(why)) => return Err(why),
+                        Err(why) => {
+                            return Err(NativeCoverageV1::unsupported::<Self>(
+                                "original Assignment continuation rules",
+                                &format!("{why:?}"),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let Some(rules) = original.or_else(|| {
+                NativeAssignmentRulesV2::resolve(
+                    params,
+                    point.daa_score,
+                    processor.palw_network_domain_v2(),
+                    processor.palw_prompt_ids_form_at(point.daa_score),
+                )
+            }) else {
                 continue;
             };
-            let Some(fence) = params.palw_positive_assignment_v2_at(point.daa_score) else {
-                continue;
-            };
-            let Ok(limits) = AssignmentBodyLimitsV2::from_policy(&fence.policy) else {
-                continue;
-            };
+            let Ok(limits) = rules.body_limits() else { continue };
             let heap = if kind <= 7 {
                 let Ok(summary) = scan_native_body_v2(&tx.payload[3..], old_limits) else {
                     continue;
@@ -598,14 +631,6 @@ impl PositiveCarrierPhaseTwoV2 {
                 }
             };
             let current_output = output.and_then(|index| current_view.get(&TransactionOutpoint::new(tx.id(), index)));
-            let Some(rules) = NativeAssignmentRulesV2::resolve(
-                params,
-                point.daa_score,
-                processor.palw_network_domain_v2(),
-                processor.palw_prompt_ids_form_at(point.daa_score),
-            ) else {
-                continue;
-            };
             let origin = AcceptedOrigin {
                 accepting_block: NativeHash64(point.block.as_bytes()),
                 carrier_block: NativeHash64(carrier.carrier_block.as_bytes()),

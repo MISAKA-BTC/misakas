@@ -143,6 +143,24 @@ pub enum AssignmentBodyErrorV2 {
     NonCanonical,
     Layout,
 }
+/// Reads the fixed continuation identity before any original-policy decode.
+/// The result is a lookup key. The full decoder still checks the whole body.
+pub fn scan_assignment_continuation_id_v2(raw: &[u8]) -> Result<AssignmentId, AssignmentBodyErrorV2> {
+    if raw.len() as u64 > MAX_ASSIGNMENT_BODY_BYTES_V2 {
+        return Err(AssignmentBodyErrorV2::Budget);
+    }
+    if raw.get(..4) != Some(&[2, 0, 1, 0]) {
+        return Err(AssignmentBodyErrorV2::Version);
+    }
+    let start = match raw.get(4) {
+        Some(9..=12) => 5,
+        Some(13) if raw.get(5..9) == Some(&[2, 0, 1, 0]) => 9,
+        Some(13) => return Err(AssignmentBodyErrorV2::Version),
+        _ => return Err(AssignmentBodyErrorV2::Kind),
+    };
+    let id = raw.get(start..start + 64).ok_or(AssignmentBodyErrorV2::Wire)?.try_into().map_err(|_| AssignmentBodyErrorV2::Wire)?;
+    Ok(AssignmentId(misaka_palw_positive_contract::identity::Digest(id)))
+}
 fn bounded(limits: AssignmentBodyLimitsV2) -> Result<(), AssignmentBodyErrorV2> {
     if limits.max_body_bytes == 0
         || limits.max_body_bytes > MAX_ASSIGNMENT_BODY_BYTES_V2

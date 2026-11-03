@@ -455,7 +455,7 @@ impl TransitionBuilder<'_> {
         action: &PositiveAssignmentRawActionV2,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_positive_court_v2::coordinator::assignment_body::{
-            PositiveAssignmentNativeOperationV2 as O, decode_assignment_body_v2,
+            PositiveAssignmentNativeOperationV2 as O, decode_assignment_body_v2, scan_assignment_continuation_id_v2,
         };
         // Capture before ANY event write, including resource/fee/P rows. This
         // exact delta position is persisted as DATA and re-executed by archive
@@ -497,6 +497,12 @@ impl TransitionBuilder<'_> {
             }
             let limits = rules.body_limits().map_err(refusal)?;
             let body = decode_assignment_body_v2(&tx.payload[3..], limits).map_err(refusal)?;
+            if let Some(original) = rules.original_material() {
+                let subject = scan_assignment_continuation_id_v2(&tx.payload[3..]).map_err(refusal)?;
+                if self.assignment_row_v2(subject)?.is_none_or(|row| row.admission_material != original) {
+                    return Err(refusal("original Assignment material changed at the current prefix"));
+                }
+            }
             match &body.operation {
                 O::AcceptCanonicalAssignment { bundle, source, prover, signatures, layout } => {
                     let scope = rules.rule_scope();

@@ -305,7 +305,7 @@ impl AssignmentControlBoundaryV2 {
     /// acceptance, signatures, custody, or the original policy's body budgets.
     /// Native must still retrieve and compare the actual accepted transaction.
     pub fn native_body_from_record_data_v2<'a>(
-        record: misaka_palw_positive_contract::assignment::journal::AssignmentJournalRecordViewV2<'a>,
+        record: &misaka_palw_positive_contract::assignment::journal::AssignmentJournalRecordViewV2<'a>,
         maximum_payload: u64,
     ) -> Result<(Self, &'a [u8]), misaka_palw_positive_contract::ContractError> {
         use misaka_palw_positive_contract::{

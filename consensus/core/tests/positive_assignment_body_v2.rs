@@ -231,6 +231,20 @@ fn append_only_operations_roundtrip_with_exact_fixed_widths_and_heap_quotes() {
         assert_eq!(summary.canonical_bytes, bytes.len() as u64);
         let decoded = decode_assignment_body_v2(&bytes, limits()).unwrap();
         assert_eq!(&decoded, body);
+        let continuation = match &body.operation {
+            PositiveAssignmentNativeOperationV2::AcceptCanonicalAssignment { .. } => None,
+            PositiveAssignmentNativeOperationV2::AdmitAssignedResult { assignment, .. }
+            | PositiveAssignmentNativeOperationV2::ExpireAssignment { assignment }
+            | PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, .. } => Some(*assignment),
+            PositiveAssignmentNativeOperationV2::CancelAssignment { cancellation, .. } => Some(cancellation.assignment),
+            PositiveAssignmentNativeOperationV2::JoinAssignmentProver { consent, .. } => Some(consent.assignment),
+        };
+        assert_eq!(scan_assignment_continuation_id_v2(&bytes).ok(), continuation);
+        if let Some(id) = continuation {
+            let end = if summary.kind == 13 { 73 } else { 69 };
+            assert_eq!(scan_assignment_continuation_id_v2(&bytes[..end]).unwrap(), id);
+            assert!(scan_assignment_continuation_id_v2(&bytes[..end - 1]).is_err());
+        }
         assert!(decoded.native_heap_v1("assignment body").bytes().unwrap() <= summary.heap);
         let mut r = NativeWireReaderV1::new(bytes.as_slice(), bytes.len() as u64);
         let shape = PositiveAssignmentNativeBodyV2::scan_native_wire_v1(&mut r).unwrap();

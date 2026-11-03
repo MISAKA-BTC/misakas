@@ -73,6 +73,18 @@ pub struct PositiveAssignmentRuleScopeV2 {
     assignment_policy: Digest,
 }
 impl PositiveAssignmentRuleScopeV2 {
+    pub(crate) fn from_retained_data(fired: Digest, policy: &AssignmentPolicyV2) -> Option<Self> {
+        let fired_rules = Hash::from_bytes(fired.0[..32].try_into().ok()?);
+        if fired.0[32..].iter().any(|byte| *byte != 0) {
+            return None;
+        }
+        Some(Self {
+            fired_rules,
+            ruleset: Hash64::from_bytes(ruleset_id(fired, policy.positive_policy).0),
+            positive_policy: policy.positive_policy,
+            assignment_policy: policy.id(),
+        })
+    }
     pub fn fired_rules(&self) -> Hash {
         self.fired_rules
     }

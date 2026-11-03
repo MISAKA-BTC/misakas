@@ -10,18 +10,23 @@ use crate::{
     palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
     palw_prompt_ids_v1::PalwPromptIdsFormV1,
 };
-use misaka_palw_positive_contract::{assignment::policy::AssignmentPolicyV2, identity::Digest, rows::AcceptedOrigin};
+use misaka_palw_positive_contract::{
+    assignment::policy::AssignmentPolicyV2,
+    identity::Digest,
+    rows::{AcceptedMaterial, AcceptedOrigin},
+};
 use std::sync::Arc;
 
-/// Immutable policy DATA selected from the actual native Params snapshot at
-/// this accepting clock. Possession does not authorize a row mutation.
+/// Immutable policy data from the native intake Params or the rooted original
+/// material of a continuation. The fold checks the current prefix before use.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NativeAssignmentRulesV2 {
     scope: PositiveAssignmentRuleScopeV2,
     policy: AssignmentPolicyV2,
     positive: crate::config::params::PositiveCourtPolicyV2,
     preimages: Option<AssignmentNativePreimagesV2>,
-    intake_funding_relay: AssignmentFundingRelayProfileV2,
+    funding_relay_profile: AssignmentFundingRelayProfileV2,
+    original_material: Option<AcceptedMaterial>,
     network: Digest,
     prompt_form: PalwPromptIdsFormV1,
     gate_c: Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>,
@@ -37,11 +42,38 @@ impl NativeAssignmentRulesV2 {
             policy: fence.policy,
             positive,
             preimages: fence.native_preimages.clone(),
-            intake_funding_relay: AssignmentFundingRelayProfileV2::capture_at_intake(params, daa).ok()?,
+            funding_relay_profile: AssignmentFundingRelayProfileV2::capture_at_intake(params, daa).ok()?,
+            original_material: None,
             network: Digest(network.as_bytes()),
             prompt_form,
             gate_c,
         })
+    }
+    /// Reconstruct original decode rules from a checked rooted material pair.
+    /// Native still owns accepted ancestry and the current-prefix CAS.
+    pub fn from_original_material_data_v2(
+        row: &misaka_palw_positive_contract::assignment::rows::AssignmentRow,
+        material: &crate::palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2,
+    ) -> Result<Self, misaka_palw_positive_contract::ContractError> {
+        use misaka_palw_positive_contract::ContractError;
+        material.check_row(row)?;
+        let scope = PositiveAssignmentRuleScopeV2::from_retained_data(material.fired_rules, &material.assignment_policy)
+            .filter(|scope| scope.ruleset().as_bytes() == material.ruleset.0)
+            .ok_or(ContractError::Scope)?;
+        Ok(Self {
+            scope,
+            policy: material.assignment_policy,
+            positive: material.positive_policy.clone(),
+            preimages: Some(material.native_preimages.clone()),
+            funding_relay_profile: material.funding_relay,
+            original_material: Some(row.admission_material),
+            network: material.network,
+            prompt_form: material.network_prompt_form,
+            gate_c: Some(material.certification_policy),
+        })
+    }
+    pub(super) fn original_material(&self) -> Option<AcceptedMaterial> {
+        self.original_material
     }
     pub fn rule_scope(&self) -> PositiveAssignmentRuleScopeV2 {
         self.scope
@@ -55,10 +87,10 @@ impl NativeAssignmentRulesV2 {
     pub fn native_preimages(&self) -> Option<&AssignmentNativePreimagesV2> {
         self.preimages.as_ref()
     }
-    /// NEW intake selection only. Continuing contracts use their retained
-    /// original material, including when current intake is later changed.
-    pub fn intake_funding_relay(&self) -> &AssignmentFundingRelayProfileV2 {
-        &self.intake_funding_relay
+    /// Selected at new intake or reconstructed from that contract's original
+    /// material for a continuation.
+    pub fn funding_relay_profile(&self) -> &AssignmentFundingRelayProfileV2 {
+        &self.funding_relay_profile
     }
     pub fn network(&self) -> Digest {
         self.network
@@ -219,10 +251,11 @@ impl NativeHeapV1 for NativeAssignmentRulesV2 {
     fn native_heap_v1(&self, _path: &str) -> NativeCoverageV1 {
         // All fields are bounded fixed policy/preimage values. No Params or
         // peer variable collection is hidden behind this immutable descriptor.
-        let Self { scope, policy, positive, preimages, intake_funding_relay, network, prompt_form, gate_c } = self;
+        let Self { scope, policy, positive, preimages, funding_relay_profile, original_material, network, prompt_form, gate_c } = self;
         fn require_fixed_copy<T: Copy>(_: &T) {}
         require_fixed_copy(scope);
-        require_fixed_copy(intake_funding_relay);
+        require_fixed_copy(funding_relay_profile);
+        require_fixed_copy(original_material);
         require_fixed_copy(policy);
         require_fixed_copy(network);
         require_fixed_copy(prompt_form);

@@ -1294,7 +1294,7 @@ mod palw_evm_asof_v2;
 pub(crate) mod palw_h1_guard;
 mod palw_pruning_capture_v1;
 mod palw_validate;
-mod positive_assignment_archive;
+pub(super) mod positive_assignment_archive;
 mod template;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
 pub use palw_pruning_capture_v1::PalwPruningCaptureFaultV1;
@@ -2558,8 +2558,11 @@ impl VirtualStateProcessor {
                     // Assignment decoder. Until the native complete reservation
                     // owner exists, its precise prerequisite remains visible
                     // and creates no Assignment/nonce/lock/credit mutation.
-                    let assignment_raw_actions = positive_native_phase_two
-                        .into_assignment_raw_actions_v2(self, &(&selected_parent_utxo_view).compose(&ctx.mergeset_diff))?;
+                    let assignment_raw_actions = positive_native_phase_two.into_assignment_raw_actions_v2(
+                        self,
+                        &(&selected_parent_utxo_view).compose(&ctx.mergeset_diff),
+                        palw_state.as_deref(),
+                    )?;
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
                     // native (payment) transactions are counted apart from PALW carriers and the first

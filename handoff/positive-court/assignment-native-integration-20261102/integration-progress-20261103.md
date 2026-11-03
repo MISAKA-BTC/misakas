@@ -145,3 +145,29 @@ executed-prefix reconstruction with Case history. Its borrowed framing/input
 checks have explicit DATA fixtures and do not grant native sessions. See
 [the current carriage record](control-carriage-progress-20261103.md). Native all-test-target typechecking and strict Clippy passed. All six cases
 in the focused Core material target passed. RFC-0045 remains incomplete.
+
+
+## Original rules at the continuation entrypoint
+
+The block walk now passes its selected-parent state to the op9–13 transport.
+A fixed prefix scan supplies the Assignment lookup key. For a rooted
+Assignment, the loader reads its ordinal-zero frame from the actual journal,
+checks the original material, and scans the candidate against those retained
+limits. It then checks the original accepted carriage and reconstructs the
+pre-event state. The raw fold compares the same material reference against the
+current Assignment row. Missing history for a rooted Assignment defers the
+local transition. Malformed continuation bodies fail the original codec check.
+
+This change uses the existing Assignment transport and ordering fence. It
+covers original rule selection when the relay configuration changes while that
+lane is active. Continuing a contract after removal of the enclosing lane still
+requires transport and ordering integration. Actual funding, Case admission,
+retention and P decisions still require their native owners.
+
+Core and Consensus library Clippy and focused test Clippy passed. The first
+library check found an incorrect relative module import in the UTXO child. The
+second check passed with the corrected module path. Both focused Core targets
+passed all ten cases on the same source as the passing Clippy checks. The
+artifact audit records both executable hashes and the original failed check.
+The native reader still requires an actual accepted Assignment for end-to-end
+coverage.
