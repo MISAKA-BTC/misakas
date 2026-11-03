@@ -1578,6 +1578,80 @@ impl NativeAssignedCourtV2 {
     }
 }
 
+impl NativeAssignedCourtV2 {
+    fn project_assigned_case_finish_v2(
+        &mut self,
+        state: &PalwChainStateV2,
+        material: &AssignmentAdmissionMaterialV2,
+        prior: &CaseRow,
+        replayed: &NativeAssignedCourtAdvanceV2,
+        origin: AcceptedOrigin,
+        (prior_journal_bytes, prior_events, body_bytes): (u64, u64, u64),
+    ) -> Result<(CaseRow, misaka_palw_positive_contract::rows::CoverageRow), PalwStateV2Error> {
+        use crate::{
+            palw_positive_assignment_case_material_v2::assigned_case_followup_journal_extent_v2,
+            palw_positive_common_replay_v2::LocalCourtOutcomeV2,
+        };
+        use misaka_palw_positive_contract::{
+            messages::{ClaimStatus, WitnessStatus},
+            rows::CoverageState,
+        };
+
+        let LocalCourtOutcomeV2::Finished(kind) = replayed.outcome else {
+            return Err(refuse("Finish did not produce a checked terminal"));
+        };
+        let (status, witness_status, coverage_state) = match kind {
+            TerminalKindV2::PositivePassed => (ClaimStatus::PositivePassed, WitnessStatus::Complete, CoverageState::Matched),
+            TerminalKindV2::ClaimRefuted => (ClaimStatus::ClaimRefuted, WitnessStatus::Complete, CoverageState::Mismatched),
+            TerminalKindV2::WitnessRejected => (ClaimStatus::Pending, WitnessStatus::Rejected, CoverageState::EndedUnverified),
+            TerminalKindV2::EndedUnverified => {
+                (ClaimStatus::EndedUnverified, WitnessStatus::Incomplete, CoverageState::EndedUnverified)
+            }
+        };
+
+        let before = replayed.before;
+        let after = replayed.after;
+        check_replayed_court_projection_v2(state, prior, before)?;
+        let active = before.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking).ok_or_else(missing)?;
+        let fact = self.facts.last().ok_or_else(missing)?;
+        if prior.status != ClaimStatus::Pending
+            || before.cursor != prior.coverage.mandatory_relations
+            || after.cursor != before.cursor
+            || after.status != status
+            || after.last_attempt
+                != Some(crate::palw_positive_court_v2::coordinator::contract::ContractAttemptV2 { status: witness_status, ..active })
+            || after.attempts != before.attempts
+            || after.charged_wire_bytes != before.charged_wire_bytes
+            || after.charged_elements != before.charged_elements
+            || after.charged_terms != before.charged_terms
+            || after.reserved_receipt_bytes != 0
+            || fact.terminal_kind() != kind
+            || fact.scope() != self.court.result().scope
+            || fact.case() != prior.case
+            || fact.result() != prior.result
+            || fact.witness() != active.witness
+            || fact.terminal().descriptor() != prior.coverage
+        {
+            return Err(refuse("Finish differs from the exact checked Case and Coverage"));
+        }
+
+        let NativeRowBody::Coverage(mut coverage) = required(state, NativeRowKey::Coverage(active.witness))? else {
+            return Err(refuse("Finish has no rooted Coverage"));
+        };
+        coverage.state = coverage_state;
+        coverage.last_event = origin;
+        let retained = assigned_case_followup_journal_extent_v2(body_bytes).ok_or_else(source::capacity)?;
+        let mut case = *prior;
+        case.status = status;
+        case.witness_status = witness_status;
+        case.positive_witness = (kind == TerminalKindV2::PositivePassed).then_some(active.witness);
+        case.usage.retained_bytes = case.usage.retained_bytes.checked_add(retained).ok_or_else(source::capacity)?;
+        case.last_event = origin;
+        self.consume_court_transport_reserve_v2(material, &case, (prior_journal_bytes, prior_events), retained, 0)?;
+        Ok((case, coverage))
+    }
+}
+
 /// Project the literal checker expiry without discharging any existing source
 /// duty, fee, collateral or liability. Only the active attempt is incomplete.
 fn project_assigned_case_expiry_v2(
@@ -1979,6 +2053,25 @@ fn replay_assigned_court_history_v2(
                     }
                 }
             }
+            if matches!(&body.operation, Op::Finish { .. }) {
+                let (case, coverage) = machine.project_assigned_case_finish_v2(
+                    prefix,
+                    material,
+                    &prior,
+                    &replayed,
+                    carriage.origin(),
+                    (prior_journal, index as u64, body_bytes.len() as u64),
+                )?;
+                let after = match backing.records().get(index + 1) {
+                    Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                    None => state,
+                };
+                for row in [NativeRowBody::Case(case), NativeRowBody::Coverage(coverage)] {
+                    if required(after, row.key())? != row {
+                        return Err(refuse("archived Finish differs from exact checker replay"));
+                    }
+                }
+            }
             if matches!(&body.operation, Op::Expire { .. }) {
                 let (expected_case, expected_coverage) =
                     project_assigned_case_expiry_v2(prefix, &prior, &replayed, carriage.origin())?;
@@ -2055,8 +2148,6 @@ fn recover_case_subject_v2(
     Ok((machine, bundle.case))
 }
 
-// The raw source writer owns literal request/response rows and their journal.
-// Witness, verdict and attestation publication also require their role owners.
 impl TransitionBuilder<'_> {
     pub(super) fn apply_positive_assignment_case_raw_v2(
         &mut self,
@@ -2082,7 +2173,11 @@ impl TransitionBuilder<'_> {
             Op::ExactFrame { .. } => body.operation.case_target_v2().map_err(refuse)?.map(|(case, _)| case),
             _ => None,
         };
-        if let Some(case) = source_case.or(expiry_case).or(witness_case).or(frame_case) {
+        let finish_case = match &body.operation {
+            Op::Finish { case, .. } => Some(*case),
+            _ => None,
+        };
+        if let Some(case) = source_case.or(expiry_case).or(witness_case).or(frame_case).or(finish_case) {
             let row = PositiveRowsV2::new(&self.state).read(NativeRowKey::Case(case)).map_err(refuse)?;
             match row.map(|row| row.body) {
                 Some(NativeRowBody::Case(row)) if row.last_event.accepting_block.0 != ctx.block.as_bytes() => {}
@@ -2107,7 +2202,7 @@ impl TransitionBuilder<'_> {
         let current_assignment = assignment(&self.state, backing.assignment().id())?;
         machine.check_source_request_v2(backing, &self.state, &current_assignment, &prior, origin, body)?;
         let expires = expiry_case.is_some();
-        if source_case.is_some() || expires || witness_case.is_some() || frame_case.is_some() {
+        if source_case.is_some() || expires || witness_case.is_some() || frame_case.is_some() || finish_case.is_some() {
             let controls = self.extras.positive_assignment_actions.len() as u64;
             let work = material.native_preimages.source_policy.work.court_operation_work(0, controls, 0, 0).map_err(refuse)?;
             machine.remaining_work = machine.remaining_work.checked_sub(work).ok_or_else(source::capacity)?;
@@ -2190,6 +2285,21 @@ impl TransitionBuilder<'_> {
             }
             self.write_assignment_aux_v2(NativeRowBody::Coverage(checked.coverage))?;
             self.write_assignment_aux_v2(NativeRowBody::Case(checked.case))?;
+            return self.write_assigned_case_followup_journal_v2(backing);
+        }
+        if finish_case.is_some() {
+            let prior_bytes =
+                backing.records().iter().map(|r| r.raw().len() as u64).try_fold(0, u64::checked_add).ok_or_else(source::capacity)?;
+            let (case, coverage) = machine.project_assigned_case_finish_v2(
+                &self.state,
+                material,
+                &prior,
+                &replayed,
+                origin,
+                (prior_bytes, backing.records().len() as u64, raw.len() as u64),
+            )?;
+            self.write_assignment_aux_v2(NativeRowBody::Coverage(coverage))?;
+            self.write_assignment_aux_v2(NativeRowBody::Case(case))?;
             return self.write_assigned_case_followup_journal_v2(backing);
         }
         if expires {
