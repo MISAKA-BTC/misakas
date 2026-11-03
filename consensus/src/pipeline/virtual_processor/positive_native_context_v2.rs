@@ -59,6 +59,7 @@ pub(in crate::pipeline::virtual_processor) struct OwnedPositiveCarrierV2 {
     body: BlockTransactionsV3,
     entries: Vec<UtxoEntry>,
     fee: u64,
+    relay_available_fee: Option<u64>,
     prefix: NativePrefixStampV2,
     carrier_block: BlockHash,
     index_within_block: u32,
@@ -177,6 +178,7 @@ impl PositiveCarrierCompanionsV2 {
             body: body.clone(),
             entries: validated.entries,
             fee: validated.calculated_fee,
+            relay_available_fee: None,
             prefix,
             carrier_block: actual_carrier_block,
             index_within_block: index,
@@ -188,6 +190,11 @@ impl PositiveCarrierCompanionsV2 {
     }
     /// Private transport handoff, not a Court-success result. Check exact real
     /// acceptance origin and ordinal before exposing companions to phase two.
+    pub(super) fn record_relay_fee_residual_v2(&mut self, tx: TransactionId, mandatory_burn: u64) {
+        let Some(carrier) = self.carriers.last_mut().filter(|carrier| carrier.transaction().id() == tx) else { return };
+        carrier.relay_available_fee = carrier.fee.checked_sub(mandatory_burn);
+    }
+
     pub(in crate::pipeline::virtual_processor) fn into_phase_two(
         self,
         acceptance: &AcceptanceData,
@@ -360,6 +367,7 @@ mod tests {
                 body: vec![tx].into(),
                 entries: vec![entry],
                 fee: 10,
+                relay_available_fee: None,
                 prefix: NativePrefixStampV2 {
                     accepting: point,
                     selected_parent: parent,
@@ -516,6 +524,10 @@ impl PositiveCarrierPhaseTwoV2 {
         use kaspa_consensus_core::palw_state_v2::{
             NativeAssignmentRulesV2, PositiveAssignmentRawActionV2, PositiveAssignmentScheduledActionV2,
         };
+        use kaspa_consensus_core::{
+            config::params::AssignmentFundingRelayProfileV2, palw_positive_funding_relay_v2::quote_funding_relay_body_v2,
+        };
+        use misaka_palw_positive_contract::assignment::funding_relay::{FundingRelayRegistrationBodyV2, RelayTargetV2};
         use misaka_palw_positive_contract::rows::{AcceptedOrigin, NativeHash64};
         let old_limits = NativeBodyLimitsV2 {
             max_body_bytes: MAX_BODY_BYTES_V2,
@@ -529,7 +541,7 @@ impl PositiveCarrierPhaseTwoV2 {
             if tx.payload.get(..3) != Some(&[1, 0, 176]) {
                 continue;
             }
-            let Some(kind @ 0..=13) = tx.payload.get(7).copied() else {
+            let Some(kind @ 0..=14) = tx.payload.get(7).copied() else {
                 continue;
             };
             let point = carrier.prefix.accepting;
@@ -540,7 +552,7 @@ impl PositiveCarrierPhaseTwoV2 {
             if params.palw_positive_assignment_v2_at(point.daa_score).is_none() {
                 continue;
             }
-            let original = if kind >= 9 {
+            let original = if (9..=13).contains(&kind) {
                 use crate::pipeline::virtual_processor::processor::positive_assignment_archive::NativeAssignmentArchiveErrorV2 as E;
                 let body = &tx.payload[3..];
                 let Ok(id) = scan_assignment_continuation_id_v2(body) else { continue };
@@ -576,8 +588,22 @@ impl PositiveCarrierPhaseTwoV2 {
             }) else {
                 continue;
             };
+            let relay_cap = if kind == 14 {
+                let AssignmentFundingRelayProfileV2::RequiresRelayV2 { physical, .. } = rules.funding_relay_profile() else {
+                    continue;
+                };
+                Some((physical.max_frame_bytes, physical.max_decoded_bytes, physical.max_heap_bytes))
+            } else {
+                None
+            };
             let Ok(limits) = rules.body_limits() else { continue };
-            let heap = if kind <= 7 {
+            let heap = if let Some((frame, decoded, heap)) = relay_cap {
+                let Ok(quote) = quote_funding_relay_body_v2(&tx.payload[3..], frame) else { continue };
+                if quote.decoded_inline_bytes > decoded || quote.logical_decode_requests > heap {
+                    continue;
+                }
+                Some(quote.logical_decode_requests)
+            } else if kind <= 7 {
                 let Ok(summary) = scan_native_body_v2(&tx.payload[3..], old_limits) else {
                     continue;
                 };
@@ -601,7 +627,21 @@ impl PositiveCarrierPhaseTwoV2 {
                 .ok_or_else(|| NativeCoverageV1::overflow::<Self>("native Positive raw retained action"))?;
             let decode = require_positive_carrier_lease_v2(reserve_native_requests_v1(bytes)?)?;
             let mut signed_anchor = None;
-            let output = if kind <= 7 {
+            let output = if let Some((frame, _, _)) = relay_cap {
+                let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], frame) else { continue };
+                if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. }) {
+                    continue; // Other purposes need their own original account owner.
+                }
+                let anchor = BlockHash::from_bytes(body.terms.contract_anchor.0);
+                if !processor.reachability_service.try_is_chain_ancestor_of(anchor, carrier.prefix.selected_parent).unwrap_or(false) {
+                    continue;
+                }
+                let daa = processor.headers_store.get_daa_score(anchor).map_err(|_| {
+                    NativeCoverageV1::unsupported::<Self>("funding relay signed ancestor", "verified ancestor header unavailable")
+                })?;
+                signed_anchor = Some((anchor, daa));
+                None
+            } else if kind <= 7 {
                 let Ok(body) = decode_native_body_v2(&tx.payload[3..], old_limits) else {
                     continue;
                 };
@@ -665,6 +705,17 @@ impl PositiveCarrierPhaseTwoV2 {
                 transport,
                 decode,
             )?;
+            let action = if kind == 14 {
+                let available = carrier.relay_available_fee.ok_or_else(|| {
+                    NativeCoverageV1::unsupported::<Self>(
+                        "relay fee residual",
+                        "accepted carrier fee after mandatory burns unavailable",
+                    )
+                })?;
+                action.with_relay_available_fee_v2(available)?
+            } else {
+                action
+            };
             let action = match signed_anchor {
                 Some((block, daa)) => action.with_signed_anchor_clock_v2(block, daa)?,
                 None => action,

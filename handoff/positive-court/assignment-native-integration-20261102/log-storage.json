@@ -822,5 +822,37 @@
     "stored_sha256": "6602cf744966ba823e3617afaa04fb8634a5943f2f53e5af270b8cf5af973cf9",
     "raw_bytes": 54566,
     "stored_bytes": 4396
+  },
+  {
+    "raw_name": "relay-prefix-clippy-first.log",
+    "stored_name": "relay-prefix-clippy-first.log.gz",
+    "raw_sha256": "e889b5a8e65ad9618ef615a94691b2a56783bc15d9ced971aba0cd74a67d8851",
+    "stored_sha256": "aab8f6b8c3c408b0c8eb39d18e5e0690253c0986a06404d91f1e1bbd64e1a096",
+    "raw_bytes": 293445,
+    "stored_bytes": 20916
+  },
+  {
+    "raw_name": "relay-prefix-clippy-second.log",
+    "stored_name": "relay-prefix-clippy-second.log.gz",
+    "raw_sha256": "4eb182e63d29e047ac1f06e3e87971feef3b4392f1e7e62268ec20bb68940f72",
+    "stored_sha256": "947944fa594fd38736a6ce7e1202ad7074ce65d78f9d24f0f7f1f17fe7af5a69",
+    "raw_bytes": 341727,
+    "stored_bytes": 23621
+  },
+  {
+    "raw_name": "relay-prefix-fence-check-second.log",
+    "stored_name": "relay-prefix-fence-check-second.log.gz",
+    "raw_sha256": "bae2713d99d15c695a212a7114674263797f9d29fddc94e5765f462c0d8ca0d6",
+    "stored_sha256": "c722603613dc293003e33e74d99629ab29449ba2513aa50bc102972f8af2d01e",
+    "raw_bytes": 340793,
+    "stored_bytes": 23617
+  },
+  {
+    "raw_name": "relay-prefix-contract-second.log",
+    "stored_name": "relay-prefix-contract-second.log.gz",
+    "raw_sha256": "9458dacb02e0ab2e5b6802fd8e8f61a870a8eb0cde871036d5fa58605a0c235b",
+    "stored_sha256": "371b69a609a197a070028f1f9413bd4ed23fd9c22dc882dcf893510ad6580c08",
+    "raw_bytes": 52856,
+    "stored_bytes": 4121
   }
 ]

@@ -408,6 +408,15 @@ fn relay_metadata_is_some_only_and_every_shipped_preset_remains_dormant() {
     assert!(future.palw_positive_funding_relay_v2_at(4999).is_none());
     assert!(future.palw_positive_funding_relay_v2_at(5000).is_some());
     assert!(future.validate_palw_positive_funding_relay_v2().is_err());
+    let malformed = [1, 0, 176, 2, 0, 1, 0, 14];
+    let fences = future.palw_lifecycle_kind_fences_v1();
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{
+        palw_positive_lifecycle_unjudged_v2, validate_palw_lifecycle_tx_in_context_v1,
+    };
+    assert!(palw_positive_lifecycle_unjudged_v2(&malformed, &fences, 4999));
+    assert!(validate_palw_lifecycle_tx_in_context_v1(&malformed, &fences, 4999).is_ok());
+    assert!(!palw_positive_lifecycle_unjudged_v2(&malformed, &fences, 5000));
+    assert!(validate_palw_lifecycle_tx_in_context_v1(&malformed, &fences, 5000).is_err());
     let mut never = original.clone();
     let mut fence = relay_fence(u64::MAX);
     fence.policy.max_pending_global = 0;

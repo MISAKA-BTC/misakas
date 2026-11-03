@@ -133,6 +133,7 @@ struct PositiveAssignmentRawDataV2 {
     case_backing: Option<Arc<NativeAssignedCaseBackingV2>>,
     original_open: Option<Arc<NativeAcceptedCaseCarriageV2>>,
     signed_anchor: Option<(BlockHash, u64)>,
+    relay_available_fee: Option<u64>,
     _transport: Arc<NativeDemandLeaseV1>,
     _decode: Arc<NativeDemandLeaseV1>,
 }
@@ -169,6 +170,7 @@ impl PositiveAssignmentRawActionV2 {
             case_backing: None,
             original_open: None,
             signed_anchor: None,
+            relay_available_fee: None,
             _transport: Arc::new(transport),
             _decode: Arc::new(decode),
         })))
@@ -183,11 +185,13 @@ impl PositiveAssignmentRawActionV2 {
         (arc_data + 2 * arc_ticket) as u64
     }
     /// Attach the signed ancestor's clock after native reachability/header
-    /// lookup. The fold binds it to the literal op8 and accepting point.
+    /// lookup. The fold binds it to the literal op8/op14 and accepting point.
     pub fn with_signed_anchor_clock_v2(mut self, block: BlockHash, daa: u64) -> Result<Self, NativeCoverageV1> {
         let error = || NativeCoverageV1::unsupported::<Self>("Assignment signed ancestor", "wrong operation, clock or shared owner");
         let data = Arc::get_mut(&mut self.0).ok_or_else(error)?;
-        if data.signed_anchor.is_some() || data.body[data.index as usize].payload.get(7) != Some(&8) || daa > data.origin.accepted_daa
+        if data.signed_anchor.is_some()
+            || !matches!(data.body[data.index as usize].payload.get(7), Some(8 | 14))
+            || daa > data.origin.accepted_daa
         {
             return Err(error());
         }
@@ -197,6 +201,21 @@ impl PositiveAssignmentRawActionV2 {
     pub(super) fn signed_anchor_clock_v2(&self) -> Option<(BlockHash, u64)> {
         self.0.signed_anchor
     }
+    /// Transport the actual accepted carrier's fee remaining after existing
+    /// mandatory destruction. This allocates no metadata fee.
+    pub fn with_relay_available_fee_v2(mut self, available: u64) -> Result<Self, NativeCoverageV1> {
+        let invalid = || NativeCoverageV1::unsupported::<Self>("relay fee residual", "wrong operation, amount or shared owner");
+        let data = Arc::get_mut(&mut self.0).ok_or_else(invalid)?;
+        if data.relay_available_fee.is_some() || data.body[data.index as usize].payload.get(7) != Some(&14) || available > data.fee {
+            return Err(invalid());
+        }
+        data.relay_available_fee = Some(available);
+        Ok(self)
+    }
+    pub(super) fn relay_available_fee_v2(&self) -> Option<u64> {
+        self.0.relay_available_fee
+    }
+
     /// Retain the original accepted op8 and executed prefix for op9 replay.
     pub fn with_original_open_carriage_v2(mut self, carriage: NativeAcceptedCaseCarriageV2) -> Result<Self, NativeCoverageV1> {
         let error =
@@ -281,6 +300,7 @@ impl PartialEq for PositiveAssignmentRawActionV2 {
             && self.current_output() == other.current_output()
             && self.rules() == other.rules()
             && self.signed_anchor_clock_v2() == other.signed_anchor_clock_v2()
+            && self.relay_available_fee_v2() == other.relay_available_fee_v2()
             && match (&self.0.original_open, &other.0.original_open) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Arc::ptr_eq(a, b),
@@ -374,6 +394,7 @@ impl NativeHeapV1 for PositiveAssignmentRawActionV2 {
             case_backing,
             original_open,
             signed_anchor: _,
+            relay_available_fee: _,
             _transport: _,
             _decode: _,
         } = &*self.0;

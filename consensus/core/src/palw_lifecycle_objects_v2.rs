@@ -1121,7 +1121,8 @@ pub fn palw_positive_object_bytes_v2(object: &[u8]) -> bool {
 pub fn palw_positive_lifecycle_unjudged_v2(payload: &[u8], fences: &PalwLifecycleKindFencesV1, daa: u64) -> bool {
     palw_positive_lifecycle_payload_v2(payload)
         && (!fences.positive_court_reserved_active_at_v2(daa)
-            || (matches!(payload.get(7), Some(8..=13)) && fences.assignment_body_limits_v2_at(daa).is_none()))
+            || (matches!(payload.get(7), Some(8..=13)) && fences.assignment_body_limits_v2_at(daa).is_none())
+            || (payload.get(7) == Some(&14) && fences.funding_relay_frame_cap_v2_at(daa).is_none()))
 }
 
 /// Predecode syntax/resource check only; this installs no decoder or acceptance
@@ -1129,6 +1130,7 @@ pub fn palw_positive_lifecycle_unjudged_v2(payload: &[u8], fences: &PalwLifecycl
 fn preflight_positive_lifecycle_payload_v2(
     payload: &[u8],
     assignment_limits: Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2>,
+    relay_frame_cap: Option<u64>,
 ) -> Result<(), PalwLifecycleTxError> {
     use crate::palw_positive_court_v2::coordinator::native_body::{
         MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2, scan_native_body_v2,
@@ -1144,6 +1146,12 @@ fn preflight_positive_lifecycle_payload_v2(
         let limits = assignment_limits.ok_or(PalwLifecycleTxError::Undecodable)?;
         return crate::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(&payload[3..],limits)
             .map(|_|()).map_err(|_|PalwLifecycleTxError::Undecodable);
+    }
+    if payload.get(7) == Some(&14) {
+        let maximum = relay_frame_cap.ok_or(PalwLifecycleTxError::Undecodable)?;
+        return crate::palw_positive_funding_relay_v2::quote_funding_relay_body_v2(&payload[3..], maximum)
+            .map(|_| ())
+            .map_err(|_| PalwLifecycleTxError::Undecodable);
     }
     // These are codec defense ceilings, not an adopted execution profile. The
     // native driver must additionally clamp to its rooted finite runtime policy.
@@ -1173,7 +1181,11 @@ fn extract_lifecycle_objects_v2(txs: &[Transaction], context: Option<(&PalwLifec
             out.skipped.push((id, "positive2 is undecodable below its owning fence"));
             continue;
         }
-        if preflight_positive_lifecycle_payload_v2(&tx.payload, context.and_then(|(fences,daa)|fences.assignment_body_limits_v2_at(daa))).is_err() {
+        if preflight_positive_lifecycle_payload_v2(
+            &tx.payload,
+            context.and_then(|(fences, daa)| fences.assignment_body_limits_v2_at(daa)),
+            context.and_then(|(fences, daa)| fences.funding_relay_frame_cap_v2_at(daa)),
+        ).is_err() {
             out.skipped.push((id, "payload does not decode"));
             continue;
         }
@@ -1880,6 +1892,7 @@ pub struct PalwLifecycleKindFencesV1 {
     /// Separate finite codec routing for RFC-0045. This is never admission.
     assignment_body_limits_v2: Option<(crate::config::params::ForkActivation,
         crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2)>,
+    funding_relay_frame_cap_v2: Option<(crate::config::params::ForkActivation, u64)>,
 }
 
 impl PalwLifecycleKindFencesV1 {
@@ -1896,6 +1909,12 @@ impl PalwLifecycleKindFencesV1 {
     }
     pub fn assignment_body_limits_v2_at(&self, daa:u64)->Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2> {
         self.assignment_body_limits_v2.filter(|(at,_)|*at!=crate::config::params::ForkActivation::never() && at.is_active(daa)).map(|(_,limits)|limits)
+    }
+    fn funding_relay_frame_cap_v2_at(&self, daa: u64) -> Option<u64> {
+        self.assignment_body_limits_v2_at(daa)?;
+        self.funding_relay_frame_cap_v2
+            .filter(|(at, _)| *at != crate::config::params::ForkActivation::never() && at.is_active(daa))
+            .map(|(_, limit)| limit)
     }
     pub fn positive_court_reserved_active_at_v2(&self, daa: u64) -> bool {
         self.positive_court_reserved_v2.is_some_and(|at| at != crate::config::params::ForkActivation::never() && at.is_active(daa))
@@ -1937,7 +1956,7 @@ impl PalwLifecycleKindFencesV1 {
 impl crate::config::params::Params {
     /// **The owning fences, resolved once** — the one reading every height-holding site asks ([`PalwLifecycleKindFencesV1`]).
     pub fn palw_lifecycle_kind_fences_v1(&self) -> PalwLifecycleKindFencesV1 {
-        PalwLifecycleKindFenceV1::ALL
+        let mut fences = PalwLifecycleKindFenceV1::ALL
             .into_iter()
             .fold(PalwLifecycleKindFencesV1::default(), |fences, fence| {
                 fences.with(
@@ -2002,7 +2021,11 @@ impl crate::config::params::Params {
             )
             .with_assignment_body_limits_v2(self.palw_positive_assignment_v2.as_ref().and_then(|fence|
                 crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2::from_policy(&fence.policy)
-                    .ok().map(|limits|(fence.activation,limits))))
+                    .ok().map(|limits|(fence.activation,limits))));
+        fences.funding_relay_frame_cap_v2 = self.palw_positive_funding_relay_v2.as_ref()
+            .filter(|fence| fence.validate_preimages().is_ok())
+            .map(|fence| (fence.activation, fence.physical.max_frame_bytes));
+        fences
     }
 
     /// Both fences armed (neither `never()`): the later one; otherwise none.
@@ -2060,7 +2083,11 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
     if palw_positive_lifecycle_unjudged_v2(payload, fences, ctx_daa_score) {
         return Ok(());
     }
-    preflight_positive_lifecycle_payload_v2(payload, fences.assignment_body_limits_v2_at(ctx_daa_score))?;
+    preflight_positive_lifecycle_payload_v2(
+        payload,
+        fences.assignment_body_limits_v2_at(ctx_daa_score),
+        fences.funding_relay_frame_cap_v2_at(ctx_daa_score),
+    )?;
     let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(payload) else { return Ok(()) };
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return Ok(());

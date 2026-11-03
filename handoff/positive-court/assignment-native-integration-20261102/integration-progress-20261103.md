@@ -478,3 +478,33 @@ contract cases passed on the same source map, including join consent and
 separate account invariants. The new native preflight was typechecked.
 No native op13 acceptance, lock or journal mutation was executed.
 The documentation check found zero new issues.
+
+## Initial A relay at the actual accepted prefix
+
+The height-aware lifecycle scanner now routes op14 through its distinct
+relay fence and exact fixed-body limits. The existing op0–13 decoders
+keep their own codecs. The Full-validated carrier handoff retains the
+initial-A target, actual signed ancestor clock and the native accepted
+fee remaining after the existing mandatory bond/escrow destruction.
+That residual is transported by the real carrier identity.
+
+At the canonical interleave, the initial-A relay qualification checks
+the current fired contract and relay scopes, original policy window,
+current eligible poster key, refund script and current poster nonce.
+It reserves the signature template workspace and verifies the literal
+purpose signature and ordinary relay transaction signature. The
+independently calculable minimum fee is checked against the residual
+and the signed fee ceiling before signature work. No fee is deducted
+at this stage.
+
+Case, join and continuation targets still require their separate
+original-account owners. The full metadata fee, exact-once allocation
+before fee consumers, actual bounded custody and retention, raw DB
+publication and binding the real funding output remain unfinished.
+
+Core and Consensus libraries and the focused fence test target passed
+Clippy with warnings denied. Seven contract relay tests passed. The
+first Clippy run failed because the template workspace quote was moved
+twice. The corrected runs used a single frozen source map. The added
+fence-boundary case was typechecked. Native relay registration and a
+new metadata burn were not exercised.

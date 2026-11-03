@@ -1022,6 +1022,11 @@ impl VirtualStateProcessor {
                 // documentation ("enters circulation nowhere") would still be false. Burned by
                 // don't-mint, the mechanism the §F service share already uses.
                 let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0).saturating_add(escrow_burned);
+                if validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
+                    && validated_tx.tx.payload.get(..8) == Some(&[1, 0, 176, 2, 0, 1, 0, 14])
+                {
+                    ctx.positive_native_carriers.record_relay_fee_residual_v2(validated_tx.id(), owed);
+                }
                 if collect_carrier_fees {
                     palw_record_accepted_carrier_fees_v1(
                         validated_tx,

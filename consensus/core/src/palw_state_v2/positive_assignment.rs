@@ -898,6 +898,102 @@ pub(super) fn apply_raw_before_object_v2(
     Ok(())
 }
 impl TransitionBuilder<'_> {
+    fn check_initial_assignment_relay_v2(
+        &self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::{
+            config::params::AssignmentFundingRelayProfileV2,
+            palw_native_resource_v1::{NativeCoverageV1, TirNativeRequestsV1, reserve_native_requests_v1},
+            palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, ReservedFundingRelayBodyV2},
+            palw_positive_relay_signature_v2::{ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2, FundingRelaySignatureTemplateV2},
+        };
+        use misaka_palw_positive_contract::assignment::funding_relay::RelayTargetV2;
+
+        let rules = action.rules();
+        let AssignmentFundingRelayProfileV2::RequiresRelayV2 { ruleset, policy, fees, physical, .. } = rules.funding_relay_profile()
+        else {
+            return Err(refusal("initial relay fence is dormant"));
+        };
+        let reserved =
+            ReservedFundingRelayBodyV2::decode(&action.transaction().payload[3..], physical.max_frame_bytes, physical.max_heap_bytes)
+                .map_err(|error| match error {
+                    FundingRelayBodyErrorV2::Contract(why) => refusal(why),
+                    FundingRelayBodyErrorV2::Native(why) => PalwStateV2Error::NativeResource(why),
+                })?;
+        let body = reserved.body();
+        let terms = &body.terms;
+        let RelayTargetV2::InitialAssignment { poster_nonce, .. } = terms.target else {
+            return Err(refusal("relay target needs the original Case, join or continuation owner"));
+        };
+        policy.check_terms(terms, ctx.daa_score).map_err(refusal)?;
+        let (anchor, _) = action.signed_anchor_clock_v2().ok_or_else(missing_assignment_history)?;
+        if terms.contract_network != rules.network()
+            || terms.contract_ruleset.0 != rules.rule_scope().ruleset().as_bytes()
+            || terms.relay_ruleset != *ruleset
+            || terms.contract_anchor.0 != anchor.as_bytes()
+            || terms.expected_amount > crate::constants::MAX_SOMPI
+            || reserved.quote().decoded_inline_bytes > physical.max_decoded_bytes
+        {
+            return Err(refusal("initial relay differs from the current contract or native relay scope"));
+        }
+        let native_key = native_bond(terms.payer_bond);
+        let bond = self.state.bond(&native_key).ok_or_else(|| refusal("initial relay poster bond missing"))?;
+        if !palw_bond_may_take_work_v2(bond, self.params.min_collateral_sompi) {
+            return Err(refusal("initial relay poster cannot take new work"));
+        }
+        let key: &[u8; PUBKEY_BYTES] = bond.pubkey.as_slice().try_into().map_err(refusal)?;
+        if terms.refund_payload.0 != kaspa_hashes::blake2b_512_address_payload(key).as_bytes() {
+            return Err(refusal("initial relay refund script differs from poster"));
+        }
+        let rows = PositiveRowsV2::new(&self.state);
+        let nonce = match rows.read(NativeRowKey::AssignmentNonce(terms.payer_bond)).map_err(refusal)? {
+            None => AssignmentNonceV2::default(),
+            Some(row) => match row.body {
+                NativeRowBody::AssignmentNonce(row) => row.nonce,
+                _ => return Err(refusal("wrong initial relay poster nonce row")),
+            },
+        };
+        nonce.after_accepting(poster_nonce).map_err(refusal)?;
+
+        // Only the unavoidable portion can be priced before the custody
+        // owner quotes its writes, retention and replay. This is no charge.
+        let minimum_fee = fees
+            .per_signature
+            .checked_mul(u64::from(reserved.quote().signatures))
+            .and_then(|n| n.checked_add(fees.per_frame_byte.checked_mul(reserved.quote().encoded_bytes)?))
+            .and_then(|n| n.checked_add(fees.admission))
+            .and_then(|n| n.checked_add(fees.retirement))
+            .ok_or_else(|| refusal("initial relay minimum metadata fee overflow"))?;
+        let available = action.relay_available_fee_v2().ok_or_else(missing_assignment_history)?;
+        if minimum_fee > terms.max_metadata_fee || minimum_fee > available {
+            return Err(refusal("initial relay cannot fund the minimum metadata fee after mandatory burns"));
+        }
+
+        let mut requests = TirNativeRequestsV1::new();
+        requests.exact_v1::<FundingRelaySignatureTemplateV2>(1).map_err(PalwStateV2Error::NativeResource)?;
+        requests.exact_v1::<crate::tx::TransactionInput>(1).map_err(PalwStateV2Error::NativeResource)?;
+        // The literal payload and the P2PKH script Vec plus ScriptVec copy.
+        requests.exact_v1::<u8>((ASSIGNMENT_RELAY_PAYLOAD_BYTES_V2 + 2 * 69) as u64).map_err(PalwStateV2Error::NativeResource)?;
+        let template_bytes = requests.bytes_v1();
+        if reserved.quote().logical_decode_requests.checked_add(template_bytes).is_none_or(|n| n > physical.max_heap_bytes) {
+            return Err(refusal("initial relay signature template exceeds the native heap cap"));
+        }
+        let _lease = reserve_native_requests_v1(template_bytes).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
+            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<FundingRelaySignatureTemplateV2>(
+                "initial relay signature template",
+                "native owner is not armed",
+            ))
+        })?;
+        terms.authenticate_purpose(key, &body.purpose_signature).map_err(refusal)?;
+        FundingRelaySignatureTemplateV2::new(terms.assignment, native_bond(terms.funding_outpoint).0, terms.expected_amount, *key)
+            .and_then(|template| template.verify(&body.relay_signature))
+            .map_err(refusal)
+    }
+}
+
+impl TransitionBuilder<'_> {
     /// The raw executor is shared by rehearsal and final native fold. Every
     /// operation enters one canonical checkpoint and decodes afresh. No saved
     /// prepared rows, public boolean or generic authority trait is consumed.
@@ -928,6 +1024,10 @@ impl TransitionBuilder<'_> {
                 return Err(refusal("raw action lost its actual native transaction/origin binding"));
             }
             let rules = action.rules();
+            if tx.payload.get(7) == Some(&14) {
+                self.check_initial_assignment_relay_v2(ctx, action)?;
+                return Err(refusal("native relay fee allocation and custody owners are not yet connected"));
+            }
             if matches!(tx.payload.get(7), Some(0..=7)) {
                 let old_limits = crate::palw_positive_court_v2::coordinator::native_body::NativeBodyLimitsV2 {
                     max_body_bytes: crate::palw_positive_court_v2::coordinator::native_body::MAX_BODY_BYTES_V2,
