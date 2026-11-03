@@ -1736,7 +1736,7 @@ impl TransitionBuilder<'_> {
         } else {
             None
         };
-        let _source = machine.prepare_assigned_source_update_v2(
+        let source = machine.prepare_assigned_source_update_v2(
             &self.state,
             &current_assignment,
             material,
@@ -1748,6 +1748,16 @@ impl TransitionBuilder<'_> {
             (key, response.as_ref()),
             work_before,
         )?;
+        let _journal = source
+            .as_ref()
+            .filter(|update| update.changes_case())
+            .map(|_| {
+                self.prepare_assigned_case_journal_v2(
+                    backing,
+                    misaka_palw_positive_contract::journal::CaseJournalEventKind::NativeBody,
+                )
+            })
+            .transpose()?;
         let replayed = machine.advance(&self.state, (&current_assignment, material, *backing.pin()), origin, body)?;
         let delta = crate::palw_positive_common_source_replay_v2::CourtUsageDeltaV2::between(Some(replayed.before), replayed.after)
             .map_err(refuse)?;
