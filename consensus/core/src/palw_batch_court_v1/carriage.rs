@@ -69,6 +69,25 @@ impl BorshDeserialize for SignedBatchDemandV1 {
 pub enum BatchCourtWireV1 {
     Open(SignedBatchDemandV1),
     Respond(BatchMaterialControlV1),
+    Stop(BatchStopControlV1),
+}
+
+/// The signed Stop operands are framed before the original-specific EOG
+/// size and native terminal slot are resolved.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
+pub struct BatchStopControlV1 {
+    pub operands: Vec<u8>,
+}
+
+impl BorshDeserialize for BatchStopControlV1 {
+    fn deserialize_reader<R: Read>(r: &mut R) -> io::Result<Self> {
+        use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::{
+            MAX_BATCH_STOP_OPERANDS_BYTES_V1, check_batch_stop_operands_v1,
+        };
+        let operands = crate::palw_public_binding_v1::read_bounded_bytes_v1(r, MAX_BATCH_STOP_OPERANDS_BYTES_V1)?;
+        check_batch_stop_operands_v1(&operands)?;
+        Ok(Self { operands })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
@@ -134,6 +153,7 @@ fn read_batch_signature_v1(r: &mut impl Read) -> io::Result<Vec<u8>> {
 
 /// Distinct lifecycle payload prefix for the candidate Batch dispatcher.
 pub const BATCH_COURT_CARRIER_MAGIC_V1: &[u8; 4] = b"BCT1";
+pub(crate) const BATCH_STOP_WIRE_OVERHEAD_V1: u64 = BATCH_COURT_CARRIER_MAGIC_V1.len() as u64 + 1 + 4;
 pub(crate) const BATCH_OPEN_WIRE_OVERHEAD_V1: u64 = BATCH_COURT_CARRIER_MAGIC_V1.len() as u64 + 1;
 pub(crate) const BATCH_RESPONSE_WIRE_OVERHEAD_V1: u64 = BATCH_OPEN_WIRE_OVERHEAD_V1 + 8;
 
@@ -179,6 +199,21 @@ pub fn decode_batch_court_carrier_v1(carrier: &crate::tx::Transaction) -> Result
         return Ok(None);
     }
     decode_batch_court_payload_v1(&carrier.payload).map_err(|error| error.to_string())
+}
+
+/// Shape-only check used by fee projection and lifecycle admission, without
+/// allocating a second copy of the signed Stop operands.
+pub(crate) fn batch_stop_wire_shape_v1(payload: &[u8]) -> io::Result<bool> {
+    let Some(body) = payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1).and_then(|body| body.strip_prefix(&[2])) else {
+        return Ok(false);
+    };
+    let mut operands = body;
+    let count = u32::deserialize_reader(&mut operands)? as usize;
+    if count != operands.len() {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Batch Stop carrier length"));
+    }
+    crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::check_batch_stop_operands_v1(operands)?;
+    Ok(true)
 }
 
 pub(crate) fn decode_batch_court_payload_v1(payload: &[u8]) -> io::Result<Option<BatchCourtWireV1>> {

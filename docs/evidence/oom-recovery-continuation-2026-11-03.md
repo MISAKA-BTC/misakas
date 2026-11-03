@@ -2887,3 +2887,27 @@ remain unverified. See
 B0 and relay agreed at DAA 19,700 with no new Qwen carrier in the
 selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/g14-stop-payload-live.Uv6A1k/page.json`.
+
+## BCT1 Stop framing and accepting handoff
+
+The dormant Batch carrier now appends Stop at discriminant 2.
+It carries only the bounded signed Stop operands. Lifecycle shape
+and the collectible fee quote validate the literal framing and
+operand lengths without allocating a second body. The accepting
+UTXO handoff reserves the raw operand length before retaining it.
+Stop has no Begin storage debit, so its existing available fee
+remains collectible. The reservation counts the four-byte BCT1
+prefix, the discriminant and the four-byte vector length.
+
+The extracted suite passed 37 checks. The Stop fixture checks
+canonical carrier bytes, shape and decode agreement, truncation,
+the fee split and the exact framing overhead. Open and Respond
+round-trip tests also passed. The native terminal fold still
+refuses this operation until its rooted slot, duty and verdict
+effects are connected. The integrated build and public activation
+remain unverified. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-stop-carrier.epPS3c/tests.log`.
+
+B0 and relay agreed at DAA 19,701 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-stop-carrier-live.sEHazw/page.json`.

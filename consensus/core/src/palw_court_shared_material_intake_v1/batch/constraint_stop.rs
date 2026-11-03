@@ -10,7 +10,7 @@ use crate::{
 use std::ops::Range;
 
 // SignedConstraintStopIntentV1 with one fixed-length ML-DSA-87 signature.
-// This is the signed operand size, before any future terminal carrier framing.
+// This is the signed intent size, before the EOG material and BCT1 framing.
 pub(crate) const STOP_INTENT_BYTES_V1: u64 =
     2 + 5 * 64 + 4 + 1 + (64 + 4) + 4 + crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64;
 
@@ -77,8 +77,8 @@ impl ConstraintStopBatchOperandsV1 {
         verification_cost: ServiceCost,
         stop_cost: ServiceCost,
     ) -> Result<(MaximumBatchDemandV1<'_>, [CausalServicePacketV1; 2]), String> {
-        if stop_cost.bytes < self.signed_operands_bytes {
-            return Err("Batch Stop cost omits signed operands".into());
+        if stop_cost.bytes < self.signed_operands_bytes + crate::palw_batch_court_v1::carriage::BATCH_STOP_WIRE_OVERHEAD_V1 {
+            return Err("Batch Stop cost omits signed carrier bytes".into());
         }
         let id = |stage| {
             crate::palw_court_shared_tir_stream_v1::stream_digest(
@@ -125,9 +125,10 @@ mod tests {
         let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
         let first = 3_121;
         let before = 9_999;
-        assert!(operands.graph_v1(0, first..before, cost(1), cost(operands.signed_operands_bytes - 1)).is_err());
+        let stop_bytes = operands.signed_operands_bytes + crate::palw_batch_court_v1::carriage::BATCH_STOP_WIRE_OVERHEAD_V1;
+        assert!(operands.graph_v1(0, first..before, cost(1), cost(stop_bytes - 1)).is_err());
         let (demand, [verification, stop]) =
-            operands.graph_v1(0, first..before, cost(1), cost(operands.signed_operands_bytes)).unwrap();
+            operands.graph_v1(0, first..before, cost(1), cost(stop_bytes)).unwrap();
         let mut terminal = stop.clone();
         terminal.packet.id = h(4).as_bytes();
         terminal.predecessors = vec![stop.packet.id];

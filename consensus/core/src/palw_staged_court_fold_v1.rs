@@ -1139,6 +1139,9 @@ impl TransitionBuilder<'_> {
                 )?;
                 Ok(())
             }
+            BatchCourtWireV1::Stop(_) => Err(PalwStateV2Error::CarriageInconsistent(
+                "Batch Stop terminal fold is dormant".into(),
+            )),
         }
     }
 

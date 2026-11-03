@@ -1843,6 +1843,11 @@ impl PalwLifecycleKindFencesV1 {
         if !self.batch_court_in_force_at(daa) {
             return Ok(false);
         }
+        if crate::palw_batch_court_v1::carriage::batch_stop_wire_shape_v1(payload)
+            .map_err(|_| PalwLifecycleTxError::Undecodable)?
+        {
+            return Ok(true);
+        }
         crate::palw_batch_court_v1::carriage::decode_batch_court_payload_v1(payload)
             .map(|wire| wire.is_some())
             .map_err(|_| PalwLifecycleTxError::Undecodable)
