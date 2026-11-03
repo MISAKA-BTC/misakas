@@ -176,6 +176,7 @@ struct NativeAssignedCourtV2 {
     checker_heap: u64,
     available_heap: u64,
     remaining_work: u64,
+    relay_continuations: Option<(u64, u32)>,
     candidate_heap: u64,
     candidate_lease: Option<NativeDemandLeaseV1>,
     _lease: NativeDemandLeaseV1,
@@ -1360,6 +1361,12 @@ fn prepare_initial_case_checker_v2(
         checker_heap,
         available_heap: max_heap - retained,
         remaining_work,
+        relay_continuations: match &material.funding_relay {
+            crate::config::params::AssignmentFundingRelayProfileV2::RequiresRelayV2 { policy, .. } => {
+                Some((horizon.retention_until_daa, policy.max_account_continuations))
+            }
+            _ => None,
+        },
         candidate_heap: 0,
         candidate_lease: None,
         _lease: lease,
