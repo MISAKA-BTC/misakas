@@ -2213,3 +2213,32 @@ and replay obligations. The all-root runtime queue for `f5f39b2dc`
 expired before starting a compiler. Its last sample had 66% reported
 memory availability and three other compiler processes. B0 and relay
 agreed at DAA 19,677, with no new Qwen carrier since the prior cursor.
+
+## Native StepRun projection and T12 selected-chain follow-up
+
+The Batch planner projects root-local step intervals into canonical shared
+material targets with the same identity as native intake. The Court
+builder can now read a leaf and its opening from an authenticated
+StepRun. The local candidate retains support for individual StepLeaf
+units. RFC-0026 §11.3 specifies the projection, authentication, and
+reservation boundaries.
+
+The standalone SmolLM2 harness authenticated a 256-leaf interval as two
+runs of 254 and 2 under the 256-part ceiling. It compared all 256
+extracted leaf preimages and openings with the individual leaf material.
+It reproduced the canonical range siblings across the split and refused
+an absent leaf. The two runs used 16 and 1 actual parts, with native
+reserved upper bounds of 256 and 3 parts. This harness links the cached
+Studio verifier and uses the candidate projection and builder methods,
+with mirrored scratch accounting at the private API seam. It does not
+execute signed material intake or the full live Court.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-step-run-builder.WATEkR/run.stdout`.
+
+B0 and the relay agreed on the selected tip at DAA 19,678. The paired
+read observed the Qwen carrier at DAA 19,676 referenced by the selected
+fold at DAA 19,677. Its signed retention is 40,284 DAA and both
+readers returned an absent live claim row. The exact producer journal
+shows submission. No rejecting fold reason or accepting claim row was
+observed. See
+`/private/tmp/misaka-t12-oom-20261102/g14-run-builder-live.rLm3LS/page.json`
+and its sibling `journal.txt`.
