@@ -225,6 +225,7 @@ impl FundingRelayCustodyRowV2 {
         }
         if let Some(binding) = self.binding
             && (binding.origin.carrier_transaction != self.funding_outpoint.transaction
+                || binding.origin.accepting_block == self.material.origin.accepting_block
                 || binding.origin.accepted_daa < self.material.origin.accepted_daa
                 || binding.reservation.origin != binding.origin)
         {

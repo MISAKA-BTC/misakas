@@ -15,6 +15,7 @@ use crate::{
         contract::{ContractCourtV2, TerminalKindV2},
         tir_checker::TirCourtCheckerV2,
     },
+    palw_positive_funding_relay_v2::canonical_equal,
     palw_positive_journal_chain_v2::{CaseJournalPinV2, CaseJournalSourceV2},
     palw_positive_rows_v2::{PositiveRowBundleV2, PositiveRowsV2},
     palw_security_certification_v1::PalwSecurityCertificationPolicyV1,
@@ -261,7 +262,9 @@ fn reject_legacy_aliases(state: &PalwChainStateV2, a: &AssignmentRow, result: &M
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
     // Real typed projection owns its native allocation/decoder; unsupported or
     // missing projection is an error, never an empty kernel ledger.
-    let ledger = route.ledger_native_projection_v9().map_err(refuse)?;
+    let ledger = route
+        .ledger_native_projection_checked_v9()
+        .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing()))?;
     let claim = result.claim_id().0.0;
     let job = result.job.0;
     if ledger.claims.contains_key(&claim)
@@ -302,7 +305,6 @@ impl NativeAssignedCaseCacheV2 {
         {
             return Err(refuse("actual replay before rows disagree"));
         }
-        reject_legacy_aliases(state, &a, self.court.result())?;
         let terminal = self.facts.last();
         let material = self.terminal_material.ok_or_else(missing)?;
         let fact = terminal.ok_or_else(missing)?;
@@ -587,29 +589,6 @@ impl NativeAssignedCaseCacheV2 {
         }
         Ok(NativeAssignedCourtAdvanceV2 { before, after, outcome })
     }
-}
-
-/// Full canonical byte comparison without an additional body/transaction Vec.
-fn canonical_equal<T: borsh::BorshSerialize>(value: &T, expected: &[u8]) -> bool {
-    struct Compare<'a> {
-        expected: &'a [u8],
-        at: usize,
-    }
-    impl std::io::Write for Compare<'_> {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            let end = self.at.checked_add(bytes.len()).ok_or(std::io::ErrorKind::InvalidData)?;
-            if self.expected.get(self.at..end) != Some(bytes) {
-                return Err(std::io::ErrorKind::InvalidData.into());
-            }
-            self.at = end;
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut compare = Compare { expected, at: 0 };
-    borsh::to_writer(&mut compare, value).is_ok() && compare.at == expected.len()
 }
 
 /// Borrowed index over real committed archive bytes. This validates native

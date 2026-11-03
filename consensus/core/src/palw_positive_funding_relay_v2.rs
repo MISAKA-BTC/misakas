@@ -147,3 +147,32 @@ pub fn verify_funding_relay_package_signatures_v2(
     .and_then(|template| template.verify(&body.relay_signature))
     .map_err(|_| FundingRelayBodyErrorV2::Contract(ContractError::Signature))
 }
+
+/// Match canonical carrier framing and every signed byte without allocating a
+/// second body buffer while the historical replay lease is held.
+pub fn funding_relay_carrier_matches_v2(body: &FundingRelayRegistrationBodyV2, payload: &[u8]) -> bool {
+    payload.strip_prefix(&[1, 0, 176]).is_some_and(|encoded| canonical_equal(body, encoded))
+}
+
+/// Full canonical byte comparison without an additional body/transaction Vec.
+pub(crate) fn canonical_equal<T: borsh::BorshSerialize>(value: &T, expected: &[u8]) -> bool {
+    struct Compare<'a> {
+        expected: &'a [u8],
+        at: usize,
+    }
+    impl std::io::Write for Compare<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            let end = self.at.checked_add(bytes.len()).ok_or(std::io::ErrorKind::InvalidData)?;
+            if self.expected.get(self.at..end) != Some(bytes) {
+                return Err(std::io::ErrorKind::InvalidData.into());
+            }
+            self.at = end;
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut compare = Compare { expected, at: 0 };
+    borsh::to_writer(&mut compare, value).is_ok() && compare.at == expected.len()
+}

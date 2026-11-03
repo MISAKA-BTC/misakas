@@ -468,6 +468,11 @@ pub(in crate::pipeline::virtual_processor) enum AssignmentIngressPrerequisiteV2 
     PendingFraudReservationOwner,
     NativeAssignmentCheckpointOwner,
 }
+fn pending_relay_archive_workspace_v2() -> u64 {
+    use misaka_palw_positive_contract::{assignment::funding_relay::FundingRelayRegistrationBodyV2, rows::NativeRowValue};
+    (4 * size_of::<NativeRowValue>() + 2 * size_of::<FundingRelayRegistrationBodyV2>() + 2 * 1024 + 2 * 74) as u64
+}
+
 impl VirtualStateProcessor {
     /// Check the archived registration behind an exact repeat against the
     /// actual selected-parent state and its persisted acceptance index.
@@ -480,19 +485,11 @@ impl VirtualStateProcessor {
         body: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayRegistrationBodyV2,
         payload: &[u8],
     ) -> Result<Option<kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2>, NativeCoverageV1> {
-        use crate::model::stores::ghostdag::GhostdagStoreReader;
-        use kaspa_consensus_core::{
-            config::params::AssignmentFundingRelayProfileV2,
-            palw_positive_funding_relay_v2::{FundingRelayBodyErrorV2, verify_funding_relay_package_signatures_v2},
-            palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
-        };
-        use misaka_palw_positive_contract::{
-            native::NativeRowKey,
-            rows::{NativeRowBody, NativeRowValue},
-        };
+        use kaspa_consensus_core::palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2};
+        use misaka_palw_positive_contract::{native::NativeRowKey, rows::NativeRowBody};
 
         let fault = |why| NativeCoverageV1::unsupported::<Self>("rooted relay archive", why);
-        let workspace = (4 * size_of::<NativeRowValue>() + 2 * size_of_val(body) + 2 * 1024 + 2 * 74) as u64;
+        let workspace = pending_relay_archive_workspace_v2();
         let _lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(workspace)?)?;
         let funding = body.terms.funding_outpoint;
         let purpose = body.terms.funding_purpose;
@@ -522,17 +519,112 @@ impl VirtualStateProcessor {
         if custody.binding.is_some() || now >= custody.retention_until_daa {
             return Ok(None);
         }
+        self.verify_pending_relay_archive_v2(parent, state, &auth, &custody, body, Some(payload), workspace).map(Some)
+    }
+
+    /// Initial F must use a registration rooted in its selected parent's
+    /// state. Rebuild the fixed literal package from that row pair and compare
+    /// it with the archive before handing off any replay data.
+    fn check_initial_f_relay_archive_v2(
+        &self,
+        parent: BlockHash,
+        now: u64,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        bundle: &misaka_palw_positive_contract::assignment::AssignmentAdmissionBundleV2,
+        funding: misaka_palw_positive_contract::rows::NativeOutpoint,
+        amount: u64,
+    ) -> Result<Option<kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2>, NativeCoverageV1> {
+        use kaspa_consensus_core::{
+            palw_positive_assignment_funds_v2::check_initial_assignment_relay_target_v2,
+            palw_positive_rows_v2::{PositiveRowErrorV2, PositiveRowsV2},
+        };
+        use misaka_palw_positive_contract::{
+            assignment::funding_relay::{FUNDING_RELAY_OPERATION_V2, FundingRelayRegistrationBodyV2, RelayFundingPurposeV2},
+            native::NativeRowKey,
+            rows::NativeRowBody,
+        };
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("initial Assignment relay archive", why);
+        let workspace = pending_relay_archive_workspace_v2();
+        let _lease = require_positive_carrier_lease_v2(reserve_native_requests_v1(workspace)?)?;
+        let purpose = RelayFundingPurposeV2::PosterA;
+        let rows = PositiveRowsV2::new(state);
+        let row = match rows.read(NativeRowKey::FundingRelayAuthorization { funding, purpose }) {
+            Ok(Some(row)) => row,
+            Ok(None) | Err(PositiveRowErrorV2::MissingKernelRoute) => return Ok(None),
+            Err(_) => return Err(fault("malformed rooted relay authorization")),
+        };
+        let NativeRowBody::FundingRelayAuthorization(auth) = row.body else {
+            return Err(fault("unexpected rooted relay authorization kind"));
+        };
+        if check_initial_assignment_relay_target_v2(&auth.terms, bundle, funding, amount, now).is_err() {
+            return Ok(None);
+        }
+        let Some(NativeRowBody::FundingRelayCustody(custody)) = rows
+            .read(NativeRowKey::FundingRelayCustody { funding, purpose })
+            .map_err(|_| fault("malformed rooted relay custody"))?
+            .map(|row| row.body)
+        else {
+            return Err(fault("missing rooted relay custody"));
+        };
+        custody.check_pair(&auth).map_err(|_| fault("rooted relay rows disagree"))?;
+        if custody.binding.is_some() || now >= custody.retention_until_daa {
+            return Ok(None);
+        }
+        let body = FundingRelayRegistrationBodyV2 {
+            version: misaka_palw_positive_contract::CONTRACT_VERSION,
+            revision: misaka_palw_positive_contract::CONTRACT_REVISION,
+            operation: FUNDING_RELAY_OPERATION_V2,
+            terms: auth.terms,
+            purpose_signature: auth.purpose_signature,
+            relay_signature: custody.relay_signature,
+        };
+        self.verify_pending_relay_archive_v2(parent, state, &auth, &custody, &body, None, workspace).map(Some)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_pending_relay_archive_v2(
+        &self,
+        parent: BlockHash,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        auth: &misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayAuthorizationRowV2,
+        custody: &misaka_palw_positive_contract::assignment::funding_relay_rows::FundingRelayCustodyRowV2,
+        body: &misaka_palw_positive_contract::assignment::funding_relay::FundingRelayRegistrationBodyV2,
+        exact_retry_payload: Option<&[u8]>,
+        workspace: u64,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2, NativeCoverageV1> {
+        use crate::model::stores::ghostdag::GhostdagStoreReader;
+        use kaspa_consensus_core::{
+            config::params::AssignmentFundingRelayProfileV2,
+            palw_positive_funding_relay_v2::{
+                FundingRelayBodyErrorV2, funding_relay_carrier_matches_v2, verify_funding_relay_package_signatures_v2,
+            },
+        };
+        let fault = |why| NativeCoverageV1::unsupported::<Self>("rooted relay archive", why);
         // Two rooted rows, two reachability checks, header, selected parent,
         // acceptance index and both material keys.
         if auth.quote.usage.replay_reads < 9 || auth.quote.usage.heap_bytes < workspace {
             return Err(fault("original relay replay limits do not cover archive lookup"));
         }
-        let auth_bytes = borsh::object_length(&auth).map_err(|_| fault("original relay authorization extent"))? as u64;
-        let custody_bytes = borsh::object_length(&custody).map_err(|_| fault("original relay custody extent"))? as u64;
+        let payload_bytes = auth.quote.usage.frame_bytes.checked_add(3).ok_or_else(|| fault("relay frame extent overflow"))?;
+        let matches_payload = |raw: &[u8]| {
+            raw.len() as u64 == payload_bytes
+                && exact_retry_payload.map_or_else(|| funding_relay_carrier_matches_v2(body, raw), |exact| raw == exact)
+        };
+        // F compares two canonical encodings against the borrowed archive and
+        // the historical transaction without retaining an extra payload Vec.
+        let comparison_work = if exact_retry_payload.is_some() {
+            0
+        } else {
+            payload_bytes.checked_mul(2).ok_or_else(|| fault("relay comparison work overflow"))?
+        };
+        let auth_bytes = borsh::object_length(auth).map_err(|_| fault("original relay authorization extent"))? as u64;
+        let custody_bytes = borsh::object_length(custody).map_err(|_| fault("original relay custody extent"))? as u64;
         // Both Borsh row envelopes (version, revision, kind) and aux keys.
         let fixed_work = auth_bytes
             .checked_add(custody_bytes)
-            .and_then(|n| n.checked_add((payload.len() + FUNDING_RELAY_CHARGE_BYTES_V2 + 2 * (74 + 5)) as u64))
+            .and_then(|n| n.checked_add(payload_bytes))
+            .and_then(|n| n.checked_add((FUNDING_RELAY_CHARGE_BYTES_V2 + 2 * (74 + 5)) as u64))
+            .and_then(|n| n.checked_add(comparison_work))
             .ok_or_else(|| fault("original relay fixed replay extent overflow"))?;
         let maximum_bytes = auth
             .quote
@@ -600,7 +692,7 @@ impl VirtualStateProcessor {
         let observed_fees = self
             .palw_state_v2_store
             .read()
-            .check_funding_relay_archive_v2(&auth, payload)
+            .check_funding_relay_archive_v2(auth, matches_payload)
             .map_err(|_| fault("rooted relay payload or charge unavailable"))?;
         use crate::pipeline::virtual_processor::processor::positive_assignment_archive::{
             NativeAssignmentArchiveErrorV2, RelayCarrierReplayV2,
@@ -608,7 +700,7 @@ impl VirtualStateProcessor {
         self.replay_original_relay_carrier_v2(RelayCarrierReplayV2 {
             origin,
             index: accepted.index_within_block,
-            payload,
+            matches_payload: &matches_payload,
             gross_fee: observed_fees.gross_fee(),
             remaining_reads: auth.quote.usage.replay_reads - 9,
             remaining_work: maximum_bytes - acceptance_bytes,
@@ -616,8 +708,8 @@ impl VirtualStateProcessor {
             acceptance_bytes,
             selected_parent: parent,
             state,
-            authorization: &auth,
-            custody: &custody,
+            authorization: auth,
+            custody,
         })
         .map_err(|error| match error {
             NativeAssignmentArchiveErrorV2::Resource(why) => why,
@@ -629,12 +721,12 @@ impl VirtualStateProcessor {
                 FundingRelayBodyErrorV2::Native(why) => why,
             }
         })?;
-        Ok(Some(kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2 {
+        Ok(kaspa_consensus_core::palw_state_v2::NativePendingRelayReplayV2 {
             selected_parent: parent,
             reservation: custody.reservation,
             fees: observed_fees,
             physical: auth.physical,
-        }))
+        })
     }
 }
 
@@ -848,6 +940,7 @@ impl PositiveCarrierPhaseTwoV2 {
             let decode = require_positive_carrier_lease_v2(reserve_native_requests_v1(bytes)?)?;
             let mut signed_anchor = None;
             let mut pending_relay = None;
+            let mut initial_f = None;
             let output = if let Some(physical) = relay_cap {
                 let Ok(body) = FundingRelayRegistrationBodyV2::decode(&tx.payload[3..], physical.max_frame_bytes) else { continue };
                 if !matches!(body.terms.target, RelayTargetV2::InitialAssignment { .. }) {
@@ -912,6 +1005,9 @@ impl PositiveCarrierPhaseTwoV2 {
                             NativeCoverageV1::unsupported::<Self>("Assignment signed ancestor", "verified ancestor header unavailable")
                         })?;
                         signed_anchor = Some((anchor, anchor_daa));
+                        if matches!(rules.funding_relay_profile(), AssignmentFundingRelayProfileV2::RequiresRelayV2 { .. }) {
+                            initial_f = Some(*bundle);
+                        }
                         Some(bundle.funding.funding_output_index)
                     }
                     A::AdmitAssignedResult { payload, .. } => Some(payload.consent.funding_output_index),
@@ -920,6 +1016,18 @@ impl PositiveCarrierPhaseTwoV2 {
                 }
             };
             let current_output = output.and_then(|index| current_view.get(&TransactionOutpoint::new(tx.id(), index)));
+            if let (Some(bundle), Some(state), Some(entry)) = (initial_f, selected_parent_state, current_output.as_ref()) {
+                use misaka_palw_positive_contract::rows::NativeOutpoint;
+                pending_relay = processor.check_initial_f_relay_archive_v2(
+                    carrier.prefix.selected_parent,
+                    point.daa_score,
+                    state,
+                    &bundle,
+                    NativeOutpoint { transaction: NativeHash64(tx.id().as_bytes()), index: bundle.funding.funding_output_index },
+                    entry.amount,
+                )?;
+            }
+
             let origin = AcceptedOrigin {
                 accepting_block: NativeHash64(point.block.as_bytes()),
                 carrier_block: NativeHash64(carrier.carrier_block.as_bytes()),

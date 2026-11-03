@@ -67,7 +67,7 @@ pub(in crate::pipeline::virtual_processor) enum NativeAssignmentArchiveErrorV2 {
 pub(in crate::pipeline::virtual_processor) struct RelayCarrierReplayV2<'a> {
     pub origin: AcceptedOrigin,
     pub index: u32,
-    pub payload: &'a [u8],
+    pub matches_payload: &'a dyn Fn(&[u8]) -> bool,
     pub gross_fee: u64,
     pub remaining_reads: u64,
     pub remaining_work: u64,
@@ -427,7 +427,7 @@ impl VirtualStateProcessor {
             || !tx.id_is_current()
             || tx.id().as_bytes() != replay.origin.carrier_transaction.0
             || tx.subnetwork_id != kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE
-            || tx.payload != replay.payload
+            || !(replay.matches_payload)(&tx.payload)
         {
             return Err(E::Invalid("original relay carrier differs from literal archive"));
         }

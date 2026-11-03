@@ -75,6 +75,15 @@ fn fixture() -> (FundingRelayRegistrationBodyV2, [u8; PUBKEY_BYTES]) {
 fn exact_body_and_real_typed_owner_enforce_both_frame_and_construction_limits() {
     let (body, key) = fixture();
     let raw = borsh::to_vec(&body).unwrap();
+    let mut carrier = vec![1, 0, 176];
+    carrier.extend_from_slice(&raw);
+    assert!(funding_relay_carrier_matches_v2(&body, &carrier));
+    assert!(!funding_relay_carrier_matches_v2(&body, &carrier[1..]));
+    carrier.push(0);
+    assert!(!funding_relay_carrier_matches_v2(&body, &carrier));
+    carrier.pop();
+    carrier[raw.len()] ^= 1;
+    assert!(!funding_relay_carrier_matches_v2(&body, &carrier));
     let q = quote_funding_relay_body_v2(&raw, raw.len() as u64).unwrap();
     assert_eq!(q.encoded_bytes, raw.len() as u64);
     assert_eq!(q.signatures, 2);
@@ -181,6 +190,28 @@ fn structural_restore_requires_complete_same_material_and_one_purpose_per_outpoi
     changed.relay_signature[0] ^= 1;
     rows.insert(k.clone(), encode(NativeRowBody::FundingRelayCustody(changed)).1);
     assert!(validate_positive_aux_restore_v2(&rows).is_err());
+    let bound_origin = AcceptedOrigin {
+        accepting_block: NativeHash64([60; 64]),
+        carrier_transaction: body.terms.funding_outpoint.transaction,
+        accepted_daa: 150,
+        accepted_blue_score: 150,
+        ..origin
+    };
+    let mut orphan = custody.clone();
+    orphan.binding = Some(FundingRelayBindingV2 {
+        origin: bound_origin,
+        original_funding: body.terms.funding_outpoint,
+        predecessor: None,
+        original_contract: d(9),
+        reservation: AcceptedMaterial { origin: bound_origin, digest: d(60) },
+    });
+    orphan.check_pair(&auth).unwrap();
+    rows.insert(k.clone(), encode(NativeRowBody::FundingRelayCustody(orphan)).1);
+    assert!(matches!(
+        validate_positive_aux_restore_v2(&rows),
+        Err(kaspa_consensus_core::palw_positive_rows_v2::PositiveRowErrorV2::MissingRequiredRow)
+    ));
+
     rows.insert(k, encode(NativeRowBody::FundingRelayCustody(custody)).1);
     let mut other = auth;
     other.terms.funding_purpose = RelayFundingPurposeV2::CaseC;

@@ -8,11 +8,20 @@ use kaspa_consensus_core::{
     palw_positive_rows_v2::PositiveRowsV2,
     subnets::SUBNETWORK_ID_PALW_LIFECYCLE,
 };
+use kaspa_database::prelude::{ConnBuilder, DB};
 use misaka_palw_positive_contract::{
-    assignment::{AssignmentId, funding_relay::*},
+    assignment::{
+        AssignmentId,
+        funding_relay::*,
+        funding_relay_rows::{FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2},
+    },
     identity::{Digest as ContractDigest, principal},
     native::NativeRowKey,
     rows::{NativeHash64, NativeOutpoint, NativeRowBody},
+};
+use std::{
+    path::Path,
+    sync::{Arc, Weak},
 };
 
 #[path = "../../../../../core/tests/support/positive_assignment.rs"]
@@ -36,7 +45,7 @@ fn positive_initial_relay_burns_once_through_the_native_node() {
 }
 
 #[inline(never)]
-fn relay_network() -> Net {
+fn relay_network(make: impl FnOnce(&Config) -> TestConsensus) -> Net {
     let (config, bundle, premine, floats) = kernel_config();
     let mut params = config.params;
     // The current template preview covers relay-only acceptance outside the
@@ -50,7 +59,7 @@ fn relay_network() -> Net {
     params.palw_positive_court_v2 = Some(positive);
     params.palw_positive_funding_relay_v2 = Some(relay_fixture::relay_fence(activation.daa_score()));
     assert!(params.validate_palw_positive_funding_relay_v2().is_err());
-    Net::over_cfg((Config::new(params), bundle, premine, floats), TestConsensus::new)
+    Net::over_cfg((Config::new(params), bundle, premine, floats), make)
 }
 
 fn signed_relay(net: &Net) -> FundingRelayRegistrationBodyV2 {
@@ -121,6 +130,58 @@ fn carrier(net: &Net, card: usize, payload: &[u8], fee: u64) -> Transaction {
     tx
 }
 
+#[inline(never)]
+fn reopen_relay_net(
+    net: Net,
+    path: &Path,
+    previous: &mut Weak<DB>,
+    carrier: &Transaction,
+    rooted: &(FundingRelayAuthorizationRowV2, FundingRelayCustodyRowV2),
+    payload: &[u8],
+) -> Net {
+    let sink = net.chain.sink();
+    let root = root_at(&net.chain, sink);
+    let spent = carrier.inputs[0].previous_outpoint;
+    let change = TransactionOutpoint::new(carrier.id(), 0);
+    let node = &net.chain.ctx.consensus;
+    assert!(node.get_virtual_utxo_entry(spent).is_none());
+    let change_entry = node.get_virtual_utxo_entry(change).expect("accepted relay change UTXO");
+    let net = net.restart_with(|| {
+        assert!(previous.upgrade().is_none(), "the old relay database must be closed");
+        let db = ConnBuilder::default()
+            .with_files_limit(10)
+            .with_db_path(path.to_path_buf())
+            .with_create_if_missing(false)
+            .build()
+            .expect("reopen the existing relay database");
+        *previous = Arc::downgrade(&db);
+        db
+    });
+    assert_eq!(net.chain.sink(), sink);
+    assert_eq!(root_at(&net.chain, sink), root);
+    let node = &net.chain.ctx.consensus;
+    assert!(node.get_virtual_utxo_entry(spent).is_none());
+    assert_eq!(node.get_virtual_utxo_entry(change), Some(change_entry));
+    let (auth, custody) = rooted;
+    let vp = net.chain.vp();
+    let store = vp.palw_state_v2_store.read();
+    let (tip, state) = store.load_tip_retained_v1(&net.bundle.state).unwrap().unwrap();
+    assert_eq!(tip, sink);
+    let rows = PositiveRowsV2::new(&state);
+    let funding = auth.terms.funding_outpoint;
+    let purpose = auth.terms.funding_purpose;
+    let restored_auth = rows.read(NativeRowKey::FundingRelayAuthorization { funding, purpose }).unwrap().unwrap();
+    let restored_custody = rows.read(NativeRowKey::FundingRelayCustody { funding, purpose }).unwrap().unwrap();
+    assert_eq!(restored_auth.body, NativeRowBody::FundingRelayAuthorization(auth.clone()));
+    assert_eq!(restored_custody.body, NativeRowBody::FundingRelayCustody(custody.clone()));
+    let fees = store.check_funding_relay_archive_v2(auth, |raw| raw == payload).unwrap();
+    assert_eq!(fees.gross_fee(), GROSS_FEE);
+    assert_eq!(fees.relay_charge(), auth.quote.fee);
+    drop(store);
+    drop(vp);
+    net
+}
+
 #[tokio::test]
 async fn native_relay_worker() {
     if std::env::var(RELAY_CHILD).as_deref() == Ok("1") {
@@ -133,22 +194,27 @@ fn run_relay() -> TestFuture<()> {
     Box::pin(async {
         // Register the class below the fence, then arm the local demand meter
         // before advancing into the active Assignment prefix.
-        let mut world = World::on(relay_network()).await;
-        assert!(world.net.daa() < RELAY_ACTIVATION_DAA);
-        let follower = Box::new(relay_network());
+        let dir = kaspa_database::utils::get_kaspa_tempdir();
+        let db = ConnBuilder::default().with_files_limit(10).with_db_path(dir.path().to_path_buf()).build().unwrap();
+        let mut previous = Arc::downgrade(&db);
+        let (sender, receiver) = async_channel::unbounded();
+        let mut initial = relay_network(|config| TestConsensus::with_db(db, config, sender));
+        initial._keep.push(Box::new(receiver));
+        let World { mut net, .. } = World::on(initial).await;
+        assert!(net.daa() < RELAY_ACTIVATION_DAA);
+        let follower = Box::new(relay_network(TestConsensus::new));
         let limit = 16 << 30;
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: limit }));
-        let net = &mut world.net;
         net.beat_to(RELAY_ACTIVATION_DAA + 2).await;
         let step = net.ttpb();
-        let body = signed_relay(net);
+        let body = signed_relay(&net);
         let mut payload = vec![1, 0, 176];
         payload.extend(borsh::to_vec(&body).unwrap());
         let fence = net.config.params.palw_positive_funding_relay_v2_at(net.daa()).unwrap();
         let metadata_fee = fence.fees.registration_quote(&fence.policy, &fence.physical, &body.terms, net.daa()).unwrap().fee;
-        let short = carrier(net, 3, &payload, metadata_fee - 1);
-        let first = carrier(net, 0, &payload, GROSS_FEE);
-        let retry = carrier(net, 2, &payload, GROSS_FEE);
+        let short = carrier(&net, 3, &payload, metadata_fee - 1);
+        let first = carrier(&net, 0, &payload, GROSS_FEE);
+        let retry = carrier(&net, 2, &payload, GROSS_FEE);
         assert_ne!(first.id(), retry.id());
         let outpoint = body.terms.funding_outpoint;
         let purpose = body.terms.funding_purpose;
@@ -185,7 +251,7 @@ fn run_relay() -> TestFuture<()> {
             let NativeRowBody::FundingRelayCustody(custody) = custody.expect("custody row").body else { panic!("row kind") };
             custody.check_pair(&auth).unwrap();
             assert!(custody.binding.is_none());
-            let fees = store.check_funding_relay_archive_v2(&auth, &payload).unwrap();
+            let fees = store.check_funding_relay_archive_v2(&auth, |raw| raw == payload).unwrap();
             assert_eq!(fees.before_relay(), GROSS_FEE);
             if !register {
                 assert_eq!(Some((auth, custody)), rooted);
@@ -195,6 +261,10 @@ fn run_relay() -> TestFuture<()> {
                 assert_eq!(auth.quote, quote);
                 assert_eq!(fees.relay_charge(), quote.fee);
                 rooted = Some((auth, custody));
+                drop(state);
+                drop(store);
+                drop(vp);
+                net = reopen_relay_net(net, dir.path(), &mut previous, &tx, rooted.as_ref().unwrap(), &payload);
             }
         }
 
@@ -207,7 +277,10 @@ fn run_relay() -> TestFuture<()> {
         assert_eq!(follower.chain.sink(), tip);
         assert_eq!(root_at(&follower.chain, tip), root_at(&net.chain, tip));
         let (auth, _) = rooted.expect("the original registration was accepted");
-        let follower_fees = follower.chain.vp().palw_state_v2_store.read().check_funding_relay_archive_v2(&auth, &payload).unwrap();
+        let follower_fees =
+            follower.chain.vp().palw_state_v2_store.read().check_funding_relay_archive_v2(&auth, |raw| raw == payload).unwrap();
         assert_eq!(follower_fees.relay_charge(), auth.quote.fee);
+        drop(net);
+        assert!(previous.upgrade().is_none(), "the last relay connection is also closed");
     })
 }
