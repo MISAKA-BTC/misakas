@@ -1178,3 +1178,49 @@ comparison and ran for 474 seconds. The APFS free-space guard
 stopped it after a sample reported 939,098,112 bytes free.
 The measured peak RSS was 4.42 GB, scratch stayed empty, swap
 did not grow, and there was no arithmetic verdict.
+
+## Studio TFP1 preflight and owner scheduling — 06:01 UTC
+
+Studio `ca3769c` reads the selected JSON peer's exact class registration
+before the rail reads its key. With a configured public bond, the same
+peer's producer facts supply an explicit unbound-container refusal.
+The startup error includes the independent inactive fence and local
+semantics-file checks. Automatic bond selection still leaves the
+binding check to the job's native unsigned quote. The Studio runtime
+suite passed 259 tests with one ignored. The startup regression uses
+JSON wRPC fixtures and checks that neither identity nor outbox exists
+after each refusal.
+
+Integration rail `b925495f8` carries `--tfp1 require` into each watched job
+and refuses missing binding or RPC inputs. The extracted Rust mode
+regression passed. The owner now ranks Demands by the last DAA at
+which the accepted request can leave its full response span before the
+stream deadline. It skips impossible new Demands and drops expired
+unsent Demands. The exact Rust clock predicate passed 4,096 small
+tuples and checked integer boundaries.
+Kaspad's test crate, including the actual outbox ordering fixture,
+passed metadata compilation with default and EVM features. The
+outbox fixture was not linked or run.
+
+The public T12 acceptance blockers remain. The fixture lacks an
+applied registration, the two existing TIR classes lack an accepted
+PALWART3 binding, and the class-semantics fence is unscheduled. The
+recorded same-job quote requires 8,782,776 DAA against 3,120 allowed.
+Removing the legacy tokenizer charges alone would still leave 347,858
+DAA of TIR costs. The read-only rendering derivation has no native
+record or claim-admission effect. Public TFP1 carrier, same-claim
+Panel and Gate C, PFS4, reward and G14 dialogue are unverified.
+
+B0 and the relay matched at virtual DAA 19,617. Exact Qwen #49
+was absent as a claim and B0 again recorded 20,607 DAA of
+remaining retention against 20,608 required. At 06:01:16 UTC,
+public REST and WebSocket both reported virtual DAA 19,619, with
+a current selected-chain index and zero receipt blocks reported
+by that relay process. The three sampled selected blocks were
+legacy heartbeats.
+
+The closed Linux scratch checkout now retains the Git object tree,
+build binary and logs, with only Cargo manifests checked out. This
+recovered about 760 MiB. The exact Darwin Qwen #21 replay was
+relaunched in private scratch under the existing APFS, RSS and
+swap guards. No verdict was available during this observation.
