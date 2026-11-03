@@ -954,3 +954,32 @@ Neither had a claim on B0 or the relay. B0's #44 refusal recorded
 WebSocket returned the same REAL carrier. The guarded build was
 still compiling workspace dependencies with about 13.3 GiB free,
 and the arithmetic unit retained its original waiting invocation.
+
+## Producer custody and diagnostic disk pressure — 05:29 UTC
+
+A read-only B0 custody probe bracketed the selected tip and service
+invocation, then looked up the exact signed Qwen #44 by claim and class.
+Neither its material nor its answer was present. B0 also lacked the
+accepted claim row. The aggregate retention logs show GC reclamation
+before and during the build, with one 18-group pass during source
+staging. They do not identify the deletion of individual #44 files.
+
+B0 uses the default 60-minute wall-clock retention setting. Its root
+volume reserve was 15,545,570,700 bytes, derived from its measured
+310,911,414,272-byte capacity. The 12.5 GiB build and 12 GiB run stop
+floors omitted that higher reserve. The exact Qwen diagnostic staging
+and compilation added disk pressure on the shared root volume.
+
+After matching the invocation IDs, the operator stopped the
+diagnostic waiter and then the build. Both units were inactive with
+zero main PID, and the arithmetic process had not started. Logs and
+the source pin were saved. Removing the diagnostic's reproducible
+source and target scratch raised the reported free space from
+14,229,671,936 to 15,666,597,888 bytes. The original model, signed
+history, Court materials and production services were preserved.
+A private bounded tmpfs is a candidate for the exact Linux
+diagnostic. It had not been mounted or used.
+
+After cleanup, B0 and the relay agreed on their selected tip and were
+synced at DAA 19,609. B0 reported 44 Qwen model blocks, zero receipt
+blocks and zero kernel Finals. B1 remained unsynced at DAA 19,389.
