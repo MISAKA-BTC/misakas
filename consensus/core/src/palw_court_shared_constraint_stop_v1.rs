@@ -22,7 +22,7 @@ pub(crate) fn verify_rooted_batch_stop_v1(
     rules: &NativeCourtRulesV1,
     operands: &[u8],
 ) -> Result<Option<Fault>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
-    use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::ConstraintStopBatchOperandsV1;
+    use crate::palw_court_shared_material_intake_v1::batch::constraint_stop::check_batch_stop_slot_v1;
     use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
     use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
     let (claim, filer) = batch_payload::batch_stop_identity_v1(operands).map_err(|why| E::Decode(why.to_string()))?;
@@ -30,36 +30,19 @@ pub(crate) fn verify_rooted_batch_stop_v1(
     if bytes > rules.court.max_close_bytes() {
         return Err(E::Decode("Batch Stop exceeds the native close byte limit".into()));
     }
+    let bounds = check_batch_stop_slot_v1(state, claim, filer, rules.at.daa_score, bytes).map_err(E::Decode)?;
     let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(E::Decode)?;
-    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim)
-        .ok_or_else(|| E::Decode("Batch Stop original frame absent".into()))?;
-    if filer == frame.custody_v1().pledge_v1().producer
-        || frame.original_custody_v1().credit_v1(&filer).is_some()
-        || frame.original_custody_v1().grant_v1(&filer).is_some()
-    {
-        return Err(E::Decode("Batch Stop filer is liable on this claim".into()));
-    }
     let key = Key::CourtSharedIds(claim);
     let Some(Row::CourtSharedIds(shared_ids)) = state.staged_court_row_v1(&key) else {
         return Err(E::Decode("Batch Stop has no accepted FullIds".into()));
     };
-    shared_ids.check(&key).map_err(E::Decode)?;
-    if shared_ids.scope_id != context.scope_id
-        || shared_ids.ids.len() != frame.original_v1().decode_tokens_executed as usize
-    {
-        return Err(E::Decode("Batch Stop FullIds differ from the original scope or count".into()));
-    }
     let source = context.source(state).map_err(E::Decode)?;
     let ids = source.retain_complete_ids_classified_v2(shared_ids.rows_root, &shared_ids.ids)?;
     let tokenizer = palw_rooted_claim_tokenizer_v1(state, claim, &source, &ids)
         .map_err(E::Decode)?
         .ok_or_else(|| E::Decode("Batch Stop has no verified tokenizer registration for the original".into()))?;
-    let bounds = tokenizer.opening_bounds_v1();
-    let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(context.scope_id, frame.original_v1(), bounds)
-        .ok_or_else(|| E::Decode("Batch Stop original is outside the constrained Stop profile".into()))?;
-    let notice_filer = plan.check_rooted_slot_v1(state, rules.at.daa_score, bytes).map_err(E::Decode)?;
-    if filer != notice_filer {
-        return Err(E::Decode("Batch Stop filer differs from the signer of the accepted notice".into()));
+    if tokenizer.opening_bounds_v1() != bounds {
+        return Err(E::Decode("Batch Stop operand bounds changed during source authentication".into()));
     }
     let payload = batch_payload::BatchStopPayloadV1::decode_v1(operands, bounds.eog_opening_bytes)?;
     let store = Store {

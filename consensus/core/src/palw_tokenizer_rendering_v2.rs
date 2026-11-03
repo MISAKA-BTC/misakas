@@ -1140,9 +1140,7 @@ pub(crate) struct PalwRootedClaimTokenizerV1<'a> {
 
 impl<'a> PalwRootedClaimTokenizerV1<'a> {
     pub(crate) fn opening_bounds_v1(&self) -> PalwRootedTokenizerOpeningBoundsV1 {
-        let mut bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(self.row.record_id_v1(), self.row.facts_v1());
-        bounds.full_ids_body_bytes = Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(self.ids.ids_v1().len() as u32));
-        bounds
+        self.row.opening_bounds_for_generated_ids_v1(self.ids.ids_v1().len() as u32)
     }
 
     /// Check against an ID supplied by the native ordered court cursor.
@@ -1168,14 +1166,20 @@ impl<'a> PalwRootedClaimTokenizerV1<'a> {
     }
 }
 
-/// Historical claims and claims without a matching registration keep the
-/// ordinary route. A present prospective row with broken context fails closed.
-pub(crate) fn palw_rooted_claim_tokenizer_v1<'a>(
-    state: &'a PalwChainStateV2,
+impl PalwRootedTokenizerRegistrationRowV1 {
+    pub(crate) fn opening_bounds_for_generated_ids_v1(&self, count: u32) -> PalwRootedTokenizerOpeningBoundsV1 {
+        let mut bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(self.record_id_v1(), self.facts_v1());
+        bounds.full_ids_body_bytes = Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(count));
+        bounds
+    }
+}
+
+/// Resolve the registration that was available at this claim's acceptance.
+/// The caller still checks the original, source and authenticated operands.
+pub(crate) fn palw_claim_tokenizer_registration_v1(
+    state: &PalwChainStateV2,
     claim_id: Hash64,
-    source: &PalwTirPublicSourceV1,
-    ids: &'a PalwTirPublicAuthenticatedIdsV1,
-) -> Result<Option<PalwRootedClaimTokenizerV1<'a>>, String> {
+) -> Result<Option<&PalwRootedTokenizerRegistrationRowV1>, String> {
     let Some(claim) = state.claim(&claim_id) else { return Ok(None) };
     let Some(semantics) = state.claim_semantics_v1(&claim_id) else { return Ok(None) };
     let key = PalwStagedCourtKeyV1::VerifiedTokenizerRegistration(claim.class_id, semantics.commitment());
@@ -1193,6 +1197,20 @@ pub(crate) fn palw_rooted_claim_tokenizer_v1<'a>(
         return Err("rooted claim tokenizer record or acceptance point changed".into());
     }
     row.check_context(state)?;
+    Ok(Some(row.as_ref()))
+}
+
+/// Historical claims and claims without a matching registration keep the
+/// ordinary route. A present prospective row with broken context fails closed.
+pub(crate) fn palw_rooted_claim_tokenizer_v1<'a>(
+    state: &'a PalwChainStateV2,
+    claim_id: Hash64,
+    source: &PalwTirPublicSourceV1,
+    ids: &'a PalwTirPublicAuthenticatedIdsV1,
+) -> Result<Option<PalwRootedClaimTokenizerV1<'a>>, String> {
+    let Some(row) = palw_claim_tokenizer_registration_v1(state, claim_id)? else { return Ok(None) };
+    let claim = state.claim(&claim_id).ok_or("rooted claim tokenizer lost its claim")?;
+    let semantics = state.claim_semantics_v1(&claim_id).ok_or("rooted claim tokenizer lost its semantics")?;
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim_id)
         .ok_or("rooted claim tokenizer original frame absent")?;
     let original = frame.original_v1();

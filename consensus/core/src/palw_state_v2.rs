@@ -14529,7 +14529,7 @@ pub fn palw_v2_apply_one_batch_carrier_retained_v1(
     )
 }
 
-/// Read-only block-template filter for the reserved Open and Respond slots.
+/// Read-only block-template filter for reserved Batch Court slots.
 /// This is a selection hint. The accepting fold verifies signatures, fees,
 /// delivery, the actual accepting point and all state changes independently.
 pub fn palw_batch_template_slot_v1(
@@ -14548,9 +14548,11 @@ pub fn palw_batch_template_slot_v1(
         return Ok(());
     }
     let Some(payload) = tx.payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else { return Ok(()) };
-    // Stop has its own native terminal verifier and does not use the response slot path.
+    // Stop does not need an owned wire copy for the template's slot check.
     if payload.first() == Some(&2) {
-        return Ok(());
+        return crate::palw_court_shared_material_intake_v1::batch::constraint_stop::check_batch_stop_template_slot_v1(
+            state, at.daa_score, &tx.payload,
+        );
     }
     let mut q = TirNativeRequestsV1::new();
     q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(|why| why.to_string())?;
@@ -14592,7 +14594,7 @@ pub fn palw_batch_template_slot_v1(
             .map(|_| ())
             .map_err(|why| why.to_string())
         }
-        BatchCourtWireV1::Stop(_) => Ok(()),
+        BatchCourtWireV1::Stop(_) => Err("unexpected decoded Batch Stop during template slot check".into()),
     }
 }
 

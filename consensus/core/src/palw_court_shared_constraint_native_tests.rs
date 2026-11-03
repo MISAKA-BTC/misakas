@@ -475,6 +475,14 @@ fn shared_constraint_stop_terminal_uses_full_ids_without_row_and_preserves_bound
         crate::palw_court_shared_material_intake_v1::batch::constraint_stop::STOP_INTENT_BYTES_V1);
     use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::BatchStopPayloadV1;
     let wire=borsh::to_vec(&(&end_only,&eog,eog_only.renderings)).unwrap();
+    {
+        use crate::palw_batch_court_v1::carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, BatchStopControlV1};
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(&BatchCourtWireV1::Stop(BatchStopControlV1 { operands: wire.clone() })).unwrap());
+        let tx = crate::tx::Transaction::new(0, vec![], vec![], 0, crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
+        assert!(matches!(crate::palw_state_v2::palw_batch_template_slot_v1(&b.state, &tx, &rules.at),
+            Err(reason) if reason.contains("no accepted FullIds")));
+    }
     assert!(matches!(
         crate::palw_court_shared_tir_builder_store_v1::constraint_stop::verify_rooted_batch_stop_v1(
             &b.state,&params,&rules,&wire,

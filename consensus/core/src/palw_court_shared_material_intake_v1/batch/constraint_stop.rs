@@ -21,6 +21,53 @@ pub(crate) const STOP_INTENT_BYTES_V1: u64 =
 /// One Stop delivery per original. Ordinary source demands use lower ordinals.
 pub(crate) const BATCH_STOP_ORDINAL_V1: u64 = u64::MAX;
 
+/// Template eligibility uses rooted availability and the exact reserved
+/// terminal slot. It borrows the carrier and does not run the EOG verdict.
+pub(crate) fn check_batch_stop_template_slot_v1(state: &PalwChainStateV2, at: u64, payload: &[u8]) -> Result<(), String> {
+    use crate::palw_batch_court_v1::carriage::batch_stop_wire_operands_v1;
+    use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::batch_stop_identity_v1;
+    use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
+    let operands = batch_stop_wire_operands_v1(payload).map_err(|why| why.to_string())?.ok_or("missing Batch Stop operands")?;
+    let (claim, filer) = batch_stop_identity_v1(operands).map_err(|why| why.to_string())?;
+    if state.staged_court_row_v1(&Key::CourtBatchStopReceipt(claim)).is_some() {
+        return Err("Batch Stop already has a retained verdict".into());
+    }
+    check_batch_stop_slot_v1(state, claim, filer, at, payload.len() as u64).map(|_| ())
+}
+
+/// Shared preflight for template and native filing. The reserved verification
+/// packet provides capacity. The actual verdict still needs operand replay.
+pub(crate) fn check_batch_stop_slot_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    filer: crate::palw_state_v2::PalwBondKeyV2,
+    at: u64,
+    carrier_bytes: u64,
+) -> Result<PalwRootedTokenizerOpeningBoundsV1, String> {
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim)?;
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(state, claim).ok_or("Batch Stop original frame absent")?;
+    if filer == frame.custody_v1().pledge_v1().producer
+        || frame.original_custody_v1().credit_v1(&filer).is_some()
+        || frame.original_custody_v1().grant_v1(&filer).is_some()
+    {
+        return Err("Batch Stop filer is liable on this claim".into());
+    }
+    if !matches!(state.staged_court_row_v1(&Key::CourtSharedIds(claim)), Some(Row::CourtSharedIds(_))) {
+        return Err("Batch Stop has no accepted FullIds".into());
+    }
+    let registration = crate::palw_tokenizer_rendering_v2::palw_claim_tokenizer_registration_v1(state, claim)?
+        .ok_or("Batch Stop has no verified tokenizer registration for the original")?;
+    let original = frame.original_v1();
+    let bounds = registration.opening_bounds_for_generated_ids_v1(original.decode_tokens_executed);
+    let plan = ConstraintStopBatchOperandsV1::from_bounds_v1(context.scope_id, original, bounds)
+        .ok_or("Batch Stop original is outside the constrained Stop profile")?;
+    if plan.check_rooted_slot_v1(state, at, carrier_bytes)? != filer {
+        return Err("Batch Stop filer differs from the signer of the accepted notice".into());
+    }
+    Ok(bounds)
+}
+
 pub(crate) struct ConstraintStopBatchOperandsV1 {
     claim: Hash64,
     scope: Hash64,

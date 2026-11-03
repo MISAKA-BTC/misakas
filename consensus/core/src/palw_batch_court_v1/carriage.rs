@@ -233,16 +233,22 @@ pub fn decode_batch_court_carrier_v1(carrier: &crate::tx::Transaction) -> Result
 /// Shape-only check used by fee projection and lifecycle admission, without
 /// allocating a second copy of the signed Stop operands.
 pub(crate) fn batch_stop_wire_shape_v1(payload: &[u8]) -> io::Result<bool> {
+    let Some(operands) = batch_stop_wire_operands_v1(payload)? else { return Ok(false) };
+    crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::check_batch_stop_operands_v1(operands)?;
+    Ok(true)
+}
+
+/// Borrow the length-delimited operand slice without decoding EOG material.
+pub(crate) fn batch_stop_wire_operands_v1(payload: &[u8]) -> io::Result<Option<&[u8]>> {
     let Some(body) = payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1).and_then(|body| body.strip_prefix(&[2])) else {
-        return Ok(false);
+        return Ok(None);
     };
     let mut operands = body;
     let count = u32::deserialize_reader(&mut operands)? as usize;
     if count != operands.len() {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "Batch Stop carrier length"));
     }
-    crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload::check_batch_stop_operands_v1(operands)?;
-    Ok(true)
+    Ok(Some(operands))
 }
 
 pub(crate) fn decode_batch_court_payload_v1(payload: &[u8]) -> io::Result<Option<BatchCourtWireV1>> {
@@ -335,5 +341,21 @@ mod tests {
         let length = body.len() - SIG - 4 - 1 - 4;
         body[length..length + 4].copy_from_slice(&u32::MAX.to_le_bytes());
         assert!(borsh::from_slice::<BatchCourtWireV1>(&body).is_err());
+    }
+
+    #[test]
+    fn stop_carrier_framing_borrows_exact_operand_bytes() {
+        let mut carrier = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        carrier.push(2);
+        carrier.extend(3u32.to_le_bytes());
+        carrier.extend([4, 5, 6]);
+        let borrowed = batch_stop_wire_operands_v1(&carrier).unwrap().unwrap();
+        assert_eq!(borrowed, [4, 5, 6]);
+        assert_eq!(borrowed.as_ptr(), carrier[carrier.len() - 3..].as_ptr());
+        assert!(batch_stop_wire_shape_v1(&carrier).is_err(), "framing alone does not validate operands");
+        carrier.pop();
+        assert!(batch_stop_wire_operands_v1(&carrier).is_err());
+        carrier[4] = 1;
+        assert!(batch_stop_wire_operands_v1(&carrier).unwrap().is_none());
     }
 }

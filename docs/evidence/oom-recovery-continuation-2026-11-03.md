@@ -3492,3 +3492,24 @@ The native fixture, template process and deployed path have not run.
 B0 and relay agreed at virtual DAA 19,719 with no new Qwen carrier.
 See `/private/tmp/misaka-t12-oom-20261102/g14-template-slot-live.rcClXb/page.json`
 and `/private/tmp/misaka-t12-oom-20261102/tfp1-template-slot.htSv69/tests.log`.
+
+## Template selection checks the booked Batch Stop
+
+The template now borrows the length-delimited Stop operands and checks
+the selected parent's claim, original tokenizer registration, accepted
+FullIds and notice signer against the reserved terminal slot. The slot
+check uses the actual FullIds acceptance DAA and requires the booked
+verification and Stop positions in causal order. The accepting fold
+shares that preflight and independently authenticates the FullIds and
+EOG material before deciding the verdict.
+
+The extracted suite passed 44 checks, including borrowed Stop framing
+and the causal FullIds, verification and Stop reservation. Rustfmt
+parsed the six changed Rust files. A native fixture also checks that
+the template defers a Stop without accepted FullIds. The native fixture,
+whole-node template path and same-claim terminal flow remain unverified.
+
+B0 and relay agreed at virtual DAA 19,719. The selected chain advanced
+by one block in the scanned page and contained no new Qwen carrier.
+See `/private/tmp/misaka-t12-oom-20261102/g14-stop-template-live.sHoAz8/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-stop-template.ue9GpH/tests.log`.
