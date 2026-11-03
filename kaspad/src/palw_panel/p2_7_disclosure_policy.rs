@@ -535,6 +535,10 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     assert!(read < pinned && pinned < built && built < queued, "read, pin, build, queue");
     let court_call = worker.find(".court_progress_tick_v1(").expect("court stage");
     assert!(court_call < seats, "court/DA progression precedes the seat duty read");
+    let seat_progress = worker.find_code("self.seat_progress_tick_v1(").expect("the seat pass");
+    let provider_dispatch =
+        worker.find_code("let court_request = self.provider_court_request.lock().unwrap().take();").expect("deferred Court fetch");
+    assert!(seat_progress < provider_dispatch, "the seat's existing HTTP fallback gets first use of the slot");
     let fp = &source[source.find_code("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
     let fp = &fp[..fp.find("\n    }\n").expect("its end")];
     assert!(

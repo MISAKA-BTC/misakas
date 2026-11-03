@@ -4544,6 +4544,9 @@ pub struct PalwPanelService {
     foreign_prune_at: std::sync::Mutex<std::time::Instant>,
     provider_http_fetch: Arc<tokio::sync::Semaphore>,
     pending_provider_http: Arc<std::sync::Mutex<Option<PendingProviderMaterialV1>>>,
+    // A metadata-only request from this tick's Court pass. Seat pulls get
+    // first use of the single HTTP slot before this request is dispatched.
+    provider_court_request: std::sync::Mutex<Option<(Hash64, Hash64, misaka_palw_remote::evidence::ClaimRoots)>>,
     /// The claims the panel's last tick held live (its duties, court duties and disputes): their
     /// files in `retention/foreign/` are out of the sweep's reach, age and count alike
     /// ([`prune_foreign_retention_v1`]).
@@ -5068,6 +5071,7 @@ impl PalwPanelService {
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             provider_http_fetch: Arc::new(tokio::sync::Semaphore::new(1)),
             pending_provider_http: Arc::new(std::sync::Mutex::new(None)),
+            provider_court_request: std::sync::Mutex::new(None),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
@@ -9350,6 +9354,7 @@ impl PalwPanelService {
             self.drain_panel_inbox_v1(&mut inbox, &mut pool_books, &mut first_seen, &mut shard_books.arrivals, &mut receipt_arrivals);
 
             let provider_tick_started = std::time::Instant::now();
+            self.provider_court_request.lock().unwrap().take();
             let pending = self.pending_provider_http.lock().unwrap().take_if(|ready| ready.court_carrier.is_none());
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
@@ -10205,6 +10210,12 @@ impl PalwPanelService {
                 },
             )
             .await;
+            let court_request = self.provider_court_request.lock().unwrap().take();
+            if let Some((claim, carrier, roots)) = court_request
+                && self.provider_claim_roots(roots.network_domain, claim, Some(carrier)) == Some(roots)
+            {
+                self.queue_provider_http_fetch(claim, roots, Some(carrier));
+            }
             tick_guard.phase("duty-sweep");
             // --- the seat's re-send: its own receipts, while their panels stand (fix (4)) ---
             //
@@ -13426,7 +13437,7 @@ impl PalwPanelService {
                     && roots.execution_root == first.execution_root
                     && roots.trace_root == first.trace_root
                 {
-                    self.queue_provider_http_fetch(claim, roots, Some(carrier));
+                    self.provider_court_request.lock().unwrap().get_or_insert((claim, carrier, roots));
                 }
                 return Err(PalwDaClaimHoldV1::Material(why));
             }
@@ -13447,16 +13458,32 @@ impl PalwPanelService {
         tokio::task::spawn_blocking(move || {
             let _replay_guard = _held_for_the_answers;
             let _transport_guard = _transport_reservation;
-            let current_duties = if let Some(roots) = provider_roots {
+            let (session, current_duties) = if let Some(roots) = provider_roots {
                 let active = consensus_manager.consensus().unguarded_session();
+                let view = || {
+                    active.with_consensus_api_v1(|c| {
+                        let (import, stable) = c.pruning_import_status().map_err(|error| error.to_string())?;
+                        if !stable || import.active.is_some() {
+                            return Err("provider-backed DA awaits a stable import".to_owned());
+                        }
+                        Ok((import.epoch, c.get_sink(), c.get_virtual_daa_score()))
+                    })
+                };
+                let before = view()?;
                 if Self::provider_claim_roots_in_v1(&active, network_domain, claim, court_carrier) != Some(roots) {
                     return Err("the accepted claim changed while building its provider-backed DA answer".into());
                 }
-                let now = active.get_virtual_daa_score();
                 let current = active.palw_disclosure_duties_v1(vec![discloser]).duties;
-                Some((current, now))
+                let latest = consensus_manager.consensus().unguarded_session();
+                if view()? != before
+                    || !active
+                        .with_consensus_api_v1(|observed| latest.with_consensus_api_v1(|current| std::ptr::eq(observed, current)))
+                {
+                    return Err("the active view changed while checking the provider-backed DA duty".into());
+                }
+                (active, Some((current, before.2)))
             } else {
-                None
+                (session, None)
             };
             let sign = |message: &[u8], context: &[u8]| {
                 keypair.as_ref().and_then(|kp| {
