@@ -1351,3 +1351,12 @@ This does not establish native replay or registration. The candidate stays
 staged while the initial A runtime is pinned. C op14 still needs the actual
 original Assignment material/profile owner at registration and an end-to-end
 test covering a ruleset change, actual fees, custody, retry and recovery.
+
+### Integrated Core runtime
+
+The unchanged `45927210f` source passed seven actual Core Assignment funds
+and four relay tests. The guarded optimized test command exited zero, with
+equal source maps and no remaining process-group members. The
+[execution record](initial-f-core-runtime-20261103.json.gz) and
+[raw log](initial-f-core-runtime-20261103.log.gz) preserve this result.
+The Linux Consensus node test is a separate run.
