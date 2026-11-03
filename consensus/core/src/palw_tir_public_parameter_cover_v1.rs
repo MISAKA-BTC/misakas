@@ -16,6 +16,30 @@ pub struct OriginalParameterCoverBudgetV1 {
     /// limit alone cannot bound the retained root-to-parameter relation.
     pub max_root_memberships: u64,
 }
+/// Separate bounds on one root's live walk and the complete traversal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamingParameterCoverBudgetV1 {
+    pub total: OriginalParameterCoverBudgetV1,
+    pub per_root_edges: u64,
+    pub per_root_coordinates: u64,
+    pub per_root_memberships: u64,
+    /// Additional construction and walk memory; the supplied Source keeps
+    /// its own lease. The sizing callback must separately admit its scratch.
+    pub max_workspace_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StreamingParameterCoverSummaryV1 {
+    pub source_id: Hash64,
+    pub original_leaves: u64,
+    pub numerical_roots: u64,
+    pub total_edges: u64,
+    pub total_coordinates: u64,
+    pub root_memberships: u64,
+    /// (leaf, measured bytes); first canonical leaf wins a tie.
+    pub largest_root: Option<(u64, u64)>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamedParameterCoverV1 {
     pub leaf: u64,
@@ -264,6 +288,69 @@ impl PalwTirPublicSourceV1 {
         Ok(NativeRetainedV1::from_owner_reserved_v1(OriginalRootInputCoverV1 { parameters, roots }, lease))
     }
 
+    /// Size one root at a time in canonical order. The callback receives
+    /// borrowed coordinates and returns its measured byte count. Its calls
+    /// are provisional: only a successful summary certifies full traversal.
+    /// No network, consensus, or retained root-to-parameter rows are changed.
+    pub fn parameter_cover_streaming_size_v1(
+        source: &crate::palw_native_resource_v1::NativeRetainedV1<Self>,
+        registered: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+        layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+        budget: StreamingParameterCoverBudgetV1,
+        mut size_root: impl FnMut(u64, &[u32]) -> Result<u64, String>,
+    ) -> Result<StreamingParameterCoverSummaryV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, reserve_native_pending_requests_v1};
+        let original_leaves = source.header.step_leaf_count;
+        if original_leaves > budget.total.max_original_leaves {
+            return Err(CoverErrorV1::Local("original parameter cover leaf budget exhausted").native());
+        }
+        let initial = Self::native_construction_requests_v1(registered, layout, &source.header)?;
+        let workspace_refusal = || CoverErrorV1::Local("streaming parameter cover workspace budget exhausted").native();
+        if initial > budget.max_workspace_bytes {
+            return Err(workspace_refusal());
+        }
+        let mut lease = reserve_native_pending_requests_v1(initial).map_err(E::Resource)?;
+        let binding = source
+            .header
+            .resolve_registered_layout_v1(registered, layout, source.header.committed_execution_root, source.maximum_leaves)
+            .map_err(E::Decode)?;
+        let verified =
+            crate::palw_tir_step_v1::verify_tir_binding_v1(&binding, source.maximum_leaves).map_err(|e| E::Decode(e.to_string()))?;
+        if verified.class_id != source.class_id || verified.context_hash != source.context_hash {
+            return Err(E::Decode("original parameter cover substitutes source geometry".into()));
+        }
+        let per_root = OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 1,
+            max_total_edges: budget.per_root_edges.min(budget.total.max_total_edges),
+            max_total_coordinates: budget.per_root_coordinates.min(budget.total.max_total_coordinates),
+            max_root_memberships: budget.per_root_memberships.min(budget.total.max_root_memberships),
+        };
+        // The materializer's quote for ONE retained row (including its
+        // conservative one-row union allowance) covers our peak. Cumulative
+        // exploration never sizes simultaneously owned coordinates here.
+        let additional =
+            PreparedParameterCoverV1::native_all_roots_requests_v1(&verified.space.program, &registered.program, 1, per_root)?;
+        if additional > budget.max_workspace_bytes - initial {
+            return Err(workspace_refusal());
+        }
+        if let Some(ticket) = lease.as_mut() {
+            grow_cover_memory_v1(ticket, additional).map_err(E::Resource)?;
+        }
+        let prepared = PreparedParameterCoverV1::new(Box::new(verified), binding.job_context).map_err(E::Decode)?;
+        let mut largest_root = None;
+        let mut summary = source
+            .visit_prepared_roots_v1(prepared, budget.total, per_root, false, |root, _| {
+                let bytes = size_root(root.leaf, &root.parameters).map_err(CoverErrorV1::Semantic)?;
+                if largest_root.is_none_or(|(_, largest)| bytes > largest) {
+                    largest_root = Some((root.leaf, bytes));
+                }
+                Ok(())
+            })
+            .map_err(CoverErrorV1::native)?;
+        summary.largest_root = largest_root;
+        Ok(summary)
+    }
+
     fn parameter_cover_prepared_v1(
         &self,
         prepared: PreparedParameterCoverV1,
@@ -284,16 +371,47 @@ impl PalwTirPublicSourceV1 {
         budget: OriginalParameterCoverBudgetV1,
         mut inputs: Option<&mut Vec<NamedRootInputCoverV1>>,
     ) -> Result<OriginalParameterCoverV1, CoverErrorV1> {
-        let mut out = OriginalParameterCoverV1 {
+        let mut roots = Vec::new();
+        let mut union = BTreeSet::new();
+        let summary = self.visit_prepared_roots_v1(prepared, budget, budget, inputs.is_some(), |root, boundaries| {
+            if let Some(out) = inputs.as_mut() {
+                out.push(NamedRootInputCoverV1 { leaf: root.leaf, inputs: boundaries.into_iter().collect() });
+            }
+            union.extend(root.parameters.iter().copied());
+            roots.push(root);
+            Ok(())
+        })?;
+        Ok(OriginalParameterCoverV1 {
+            source_id: summary.source_id,
+            original_leaves: summary.original_leaves,
+            roots,
+            union: union.into_iter().collect(),
+            total_edges: summary.total_edges,
+            total_coordinates: summary.total_coordinates,
+            root_memberships: summary.root_memberships,
+        })
+    }
+
+    fn visit_prepared_roots_v1(
+        &self,
+        prepared: PreparedParameterCoverV1,
+        budget: OriginalParameterCoverBudgetV1,
+        per_root: OriginalParameterCoverBudgetV1,
+        include_inputs: bool,
+        mut visit: impl FnMut(
+            NamedParameterCoverV1,
+            BTreeSet<crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1>,
+        ) -> Result<(), CoverErrorV1>,
+    ) -> Result<StreamingParameterCoverSummaryV1, CoverErrorV1> {
+        let mut out = StreamingParameterCoverSummaryV1 {
             source_id: self.source_id,
             original_leaves: self.header.step_leaf_count,
-            roots: Vec::new(),
-            union: Vec::new(),
+            numerical_roots: 0,
             total_edges: 0,
             total_coordinates: 0,
             root_memberships: 0,
+            largest_root: None,
         };
-        let mut union = BTreeSet::new();
         for leaf in 0..out.original_leaves {
             let remaining_edges =
                 budget.max_total_edges.checked_sub(out.total_edges).ok_or(CoverErrorV1::Local("original cover edge accounting"))?;
@@ -304,18 +422,19 @@ impl PalwTirPublicSourceV1 {
             let remaining_memberships = budget
                 .max_root_memberships
                 .checked_sub(out.root_memberships)
-                .ok_or(CoverErrorV1::Local("original cover membership accounting"))?;
-            let walk_budget = ParameterCoverBudgetV1 { max_edges: remaining_edges, max_coordinates: remaining_coordinates };
-            let mut boundaries = BTreeSet::new(); // no allocations in the legacy None path
-            let cover = if inputs.is_some() {
+                .ok_or(CoverErrorV1::Local("original cover membership accounting"))?
+                .min(per_root.max_root_memberships);
+            let walk_budget = ParameterCoverBudgetV1 {
+                max_edges: remaining_edges.min(per_root.max_total_edges),
+                max_coordinates: remaining_coordinates.min(per_root.max_total_coordinates),
+            };
+            let mut boundaries = BTreeSet::new();
+            let cover = if include_inputs {
                 prepared.named_with_inputs_v1(leaf, walk_budget, remaining_memberships, &mut boundaries)?
             } else {
                 prepared.named_with_leaf_limit_typed(leaf, walk_budget, remaining_memberships)?
             };
             let Some(cover) = cover else { continue };
-            if let Some(out) = inputs.as_mut() {
-                out.push(NamedRootInputCoverV1 { leaf, inputs: boundaries.into_iter().collect() });
-            }
             let members = u64::try_from(cover.leaves.len()).map_err(|_| "original cover membership count overflow")?;
             if members > remaining_memberships {
                 return Err(CoverErrorV1::Local("original parameter cover membership budget exhausted"));
@@ -323,15 +442,17 @@ impl PalwTirPublicSourceV1 {
             out.total_edges = add(out.total_edges, cover.explored_edges)?;
             out.total_coordinates = add(out.total_coordinates, cover.explored_coordinates)?;
             out.root_memberships = add(out.root_memberships, members)?;
-            union.extend(cover.leaves.iter().copied());
-            out.roots.push(NamedParameterCoverV1 {
-                leaf,
-                parameters: cover.leaves,
-                explored_edges: cover.explored_edges,
-                explored_coordinates: cover.explored_coordinates,
-            });
+            out.numerical_roots = add(out.numerical_roots, 1)?;
+            visit(
+                NamedParameterCoverV1 {
+                    leaf,
+                    parameters: cover.leaves,
+                    explored_edges: cover.explored_edges,
+                    explored_coordinates: cover.explored_coordinates,
+                },
+                boundaries,
+            )?;
         }
-        out.union = union.into_iter().collect();
         Ok(out)
     }
 }
@@ -345,6 +466,71 @@ mod native_owner_tests {
         max_total_coordinates: 1_000_000,
         max_root_memberships: 1_000_000,
     };
+    #[test]
+    fn streaming_cover_matches_all_roots_and_withholds_summary_on_any_failure() {
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1;
+        let f = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
+        let original = f.frame.original_v1();
+        let source = PalwTirPublicSourceV1::new_native_v1(
+            &f.record,
+            &f.layout,
+            f.frame.header_v1(),
+            original.execution_root,
+            original.trace_root,
+            f.rules.maximum_leaves,
+        )
+        .unwrap();
+        let expected = source.parameter_cover_v1(&f.record, &f.layout, B).unwrap();
+        assert!(!expected.roots.is_empty());
+        let budget = StreamingParameterCoverBudgetV1 {
+            total: OriginalParameterCoverBudgetV1 {
+                max_original_leaves: expected.original_leaves,
+                max_total_edges: expected.total_edges,
+                max_total_coordinates: expected.total_coordinates,
+                max_root_memberships: expected.root_memberships,
+            },
+            per_root_edges: expected.roots.iter().map(|root| root.explored_edges).max().unwrap(),
+            per_root_coordinates: expected.roots.iter().map(|root| root.explored_coordinates).max().unwrap(),
+            per_root_memberships: expected.roots.iter().map(|root| root.parameters.len() as u64).max().unwrap(),
+            max_workspace_bytes: 128 << 20,
+        };
+        let mut visited = 0;
+        let got =
+            PalwTirPublicSourceV1::parameter_cover_streaming_size_v1(&source, &f.record, &f.layout, budget, |leaf, parameters| {
+                assert_eq!((leaf, parameters), (expected.roots[visited].leaf, expected.roots[visited].parameters.as_slice()));
+                visited += 1;
+                // Constant size also checks that ties keep the first leaf.
+                Ok(100)
+            })
+            .unwrap();
+        assert_eq!(visited, expected.roots.len());
+        assert_eq!(got.source_id, expected.source_id);
+        assert_eq!(got.original_leaves, expected.original_leaves);
+        assert_eq!(got.numerical_roots, expected.roots.len() as u64);
+        assert_eq!(got.total_edges, expected.total_edges);
+        assert_eq!(got.total_coordinates, expected.total_coordinates);
+        assert_eq!(got.root_memberships, expected.root_memberships);
+        assert_eq!(got.largest_root, Some((expected.roots[0].leaf, 100)));
+
+        let total = OriginalParameterCoverBudgetV1 { max_total_edges: expected.total_edges - 1, ..budget.total };
+        for too_small in [
+            StreamingParameterCoverBudgetV1 { total, ..budget },
+            StreamingParameterCoverBudgetV1 { per_root_edges: budget.per_root_edges - 1, ..budget },
+            StreamingParameterCoverBudgetV1 { max_workspace_bytes: 0, ..budget },
+        ] {
+            assert!(matches!(
+                PalwTirPublicSourceV1::parameter_cover_streaming_size_v1(&source, &f.record, &f.layout, too_small, |_, _| Ok(100)),
+                Err(NativeDecodeErrorV1::Resource(_))
+            ));
+        }
+        assert!(matches!(
+            PalwTirPublicSourceV1::parameter_cover_streaming_size_v1(&source, &f.record, &f.layout, budget, |_, _| {
+                Err("diagnostic sizing refused".into())
+            }),
+            Err(NativeDecodeErrorV1::Decode(error)) if error == "diagnostic sizing refused"
+        ));
+    }
+
     #[test]
     fn native_original_parameter_cover_preserves_actual_all_root_relation() {
         let f = crate::palw_tir_public_claim_v1::palw_tir_public_history_frame_fixture_v1();
