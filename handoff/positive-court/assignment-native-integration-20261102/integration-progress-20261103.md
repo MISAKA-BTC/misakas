@@ -1249,3 +1249,19 @@ also subtracts the original R rollback margin before qualifying the minimum
 F retention horizon and propagates a local ledger projection resource
 failure through assigned Court replay. Neither change supplies the
 prospective all-branch or bound-account owner.
+
+The follow-up recovery fixture builds a competing native branch with real
+conflicting spends of the three relay carrier inputs. Its assertions compare
+the reorged node against the independently built branch, require the old
+relay rows and change outputs to disappear, and allow the old content-addressed
+archive to remain available for rollback. The isolated Consensus test target
+typechecked. The branch has not yet been exercised at runtime.
+
+An exact native-wire preflight of a fixture-shaped delta with only the two
+pending relay records and a final point measured 160,630 bytes of combined
+replay workspace under the prior quote. The fixture's original cap is 128,000
+bytes. Borrowed canonical row comparison and a fixed nonce projection reduce
+the same minimum to 120,574 bytes. A larger real delta still requires its
+actual preflight. Thirteen standalone Contract and streaming cases passed
+and the isolated Consensus test target typechecked. The changes are staged
+as candidates while the current heartbeat runtime pins its source.
