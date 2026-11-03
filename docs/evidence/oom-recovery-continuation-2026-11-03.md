@@ -659,3 +659,29 @@ reclaimed that file while preserving the active lead. Log SHA256 is
 `761b45d14ef2488dab59d08de84cde5ff284c2a8073ff5eca860e8c84f89aba7`. The full test-metadata
 build above covers the earlier guard commit. The planning follow-up
 was verified in the scoped harness.
+
+## Rider capture ownership and Qwen carrier #39 — 05:00 UTC
+
+Commit `5ea7b81b9` pins a rider's capture before persisting it
+and moves the guard for that exact attempt into the existing
+rider batch. The same owner covers producer handoff, Court queue
+admission, and an in-process carrier retry. The guard occupies the
+prior attempt-ID slot in the batch. Five scoped rider outbox tests
+passed against the exact guard and outbox source, including wrong
+attempt ID, retry after queue refusal, and release when the batch
+is dropped. Log SHA256 is
+`d377d3d9dc53730b906c2ffe43ecd7cfb765330dc5197c9023ef291152c7c2c5`.
+Node default/EVM test metadata compiled. The extended Court flight
+regression was type-checked. This commit still needs a Linux
+executable and live qualification. Its scope ends at local queue
+retirement and does not cover post-submit admission or restart.
+
+B0, the relay, the RPC tunnel on 113, and public Explorer agreed on
+the selected tip at DAA 19,599. Explorer REST returned 200 with a
+current index. The public WebSocket also returned the original
+Qwen #39 carrier as a real BLUE block outside the selected chain.
+B0 logged a retention refusal for the same block at 20,607 remaining
+DAA against 20,608 required. Its exact claim, Court, and lifecycle
+rows were absent on B0, and B0's receipt and kernel Final counters
+were zero. B1 and the primary on 113 remained unsynced. The live
+Panel load measurement and promotion criteria remain open.
