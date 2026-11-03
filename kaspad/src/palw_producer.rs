@@ -132,6 +132,7 @@ pub struct PalwProducerConfig {
     pub riders: u32,
     /// **RFC-0009: builder mode** (`--palw-redemption-auth-dir`) — see [`PalwProducerService::produce_redemption`].
     pub redemption_auth_dir: Option<std::path::PathBuf>,
+    pub redemption_providers: Vec<misaka_palw_remote::transport::ProviderSpecV1>,
     /// **The operator's `--enable-unsynced-mining`, threaded to the producer** — the same escape
     /// the RPC mining path honours (`rpc/service`: `!enable_unsynced_mining && !is_synced` ⇒
     /// refuse). Without it a PALW network cannot be BORN: `should_mine` requires the sink to be
@@ -1074,6 +1075,9 @@ impl PalwProducerService {
         let mut debt = crate::palw_producer_backpressure::PalwProducerDebtV1::default();
         let mut debt_read_at: Option<std::time::Instant> = None;
         let mut last_floor_submission: Option<std::time::Instant> = None;
+        let mut redemption_sync: Option<std::thread::JoinHandle<std::io::Result<misaka_palw_remote::transport::RedemptionSyncV1>>> =
+            None;
+        let mut next_redemption_sync = std::time::Instant::now();
         loop {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
@@ -1159,6 +1163,41 @@ impl PalwProducerService {
                 }
                 facts.class_admission_refusal = None;
             }
+            if redemption_sync.as_ref().is_some_and(|sync| sync.is_finished()) {
+                let result = redemption_sync.take().expect("a completed sync exists").join();
+                match result {
+                    Ok(Ok(report)) => {
+                        if !report.written.is_empty() {
+                            info!("[{PALW_PRODUCER}] fetched {} public redemption authorizations", report.written.len());
+                        }
+                        if let Some((provider, _, why)) = report.skipped.first() {
+                            kaspa_core::debug!("[{PALW_PRODUCER}] redemption provider {provider}: {why}");
+                        }
+                    }
+                    Ok(Err(err)) => warn!("[{PALW_PRODUCER}] cannot mirror public redemption authorizations: {err}"),
+                    Err(_) => warn!("[{PALW_PRODUCER}] redemption mirror thread panicked"),
+                }
+            }
+            if redemption_sync.is_none()
+                && std::time::Instant::now() >= next_redemption_sync
+                && !self.config.redemption_providers.is_empty()
+                && self.consensus_config.params.palw_receipt_spend_v4_active_at(facts.daa_score)
+                && let Some(dir) = self.config.redemption_auth_dir.clone()
+            {
+                next_redemption_sync = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                let specs = self.config.redemption_providers.clone();
+                let daa = facts.daa_score;
+                // A provider's network I/O must not delay block production or daemon shutdown.
+                match std::thread::Builder::new().name("palw-redemptions".into()).spawn(move || {
+                    use misaka_palw_remote::transport::{EvidenceProvider, open_providers_v1, sync_redemptions_v1};
+                    let providers = open_providers_v1(&specs);
+                    let refs: Vec<&dyn EvidenceProvider> = providers.iter().map(|provider| provider.as_ref()).collect();
+                    sync_redemptions_v1(&refs, &dir, Some(network_domain), Some(daa))
+                }) {
+                    Ok(sync) => redemption_sync = Some(sync),
+                    Err(err) => warn!("[{PALW_PRODUCER}] cannot start redemption mirror: {err}"),
+                }
+            }
             // **The receipt lane, first — and ahead of the attempt lane's readiness.** A certified
             // free-prompt claim whose quantum wins its draw is a receipt block waiting to be mined,
             // and it needs no nonce search — the quantum ticket is the lottery, already decided at
@@ -1172,22 +1211,6 @@ impl PalwProducerService {
             // only inside its use window, so the hold did not delay a free-prompt executor's pay, it
             // forfeited it. The bond that fills its ceiling is exactly the one committing
             // free-prompt claims.
-            // ADR-0135: the registry's class-local gate, read before a draw is built. Not a rule of
-            // this node's — the fold refuses what it refuses — but a draw for a HELD class or one at
-            // its inflight cap is a block the chain will not take, so it is not built.
-            if let Some(detail) = self.registry_holds_class(&session, facts.daa_score) {
-                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
-                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
-                if last_hold.as_deref() != Some(detail.as_str()) || stale {
-                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
-                    last_hold = Some(detail);
-                    last_hold_at = Some(std::time::Instant::now());
-                }
-                if !self.tick(std::time::Duration::from_secs(5)).await {
-                    break;
-                }
-                continue;
-            }
             if facts.ready_to_spend_receipts(&self.verification_key()).is_ok() {
                 match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
                     Ok(Some(hash)) => {
@@ -1242,6 +1265,22 @@ impl PalwProducerService {
                         }
                     }
                 }
+            }
+            // ADR-0135: the registry's class-local gate, read before a draw is built. Not a rule of
+            // this node's — the fold refuses what it refuses — but a draw for a HELD class or one at
+            // its inflight cap is a block the chain will not take, so it is not built.
+            if let Some(detail) = self.registry_holds_class(&session, facts.daa_score) {
+                self.flow_context.update_palw_runtime(|r| r.set_producer("holding", &detail));
+                let stale = last_hold_at.is_none_or(|at| at.elapsed() >= std::time::Duration::from_secs(300));
+                if last_hold.as_deref() != Some(detail.as_str()) || stale {
+                    log_producer_hold_v1(&detail, false, last_progress_at.elapsed());
+                    last_hold = Some(detail);
+                    last_hold_at = Some(std::time::Instant::now());
+                }
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
+                continue;
             }
             // Route-matrix #11: a class this node can never produce for disables the attempt lane
             // alone — the receipt lane above keeps spending this bond's quanta.
@@ -1640,7 +1679,7 @@ impl PalwProducerService {
     /// Reads the `RDA4` bundles in `dir`, and for the first whose network is ours, whose authorization has not expired, whose claim holds a
     /// WINNING quantum inside the authorized range and its use window, builds a receipt block carrying a V4 spend: the executor's
     /// authorization and signature whole, and this node's bond and key as the builder. The chain admits it only past
-    /// `palw_receipt_spend_v4` (so this does nothing on every shipped preset), pays the miner leg to the executor bond's registered payout and
+    /// `palw_receipt_spend_v4`, pays the miner leg to the executor bond's registered payout and
     /// the authorization's fee — plus this block's own transaction fees — to this node's pay address.
     ///
     /// `Ok(None)` when nothing is redeemable now (the fence is dormant, no bundle applies, no quantum wins): the normal case.
@@ -1657,7 +1696,11 @@ impl PalwProducerService {
             return Ok(None);
         }
         let seed = self.key_seed.ok_or("no signing key")?;
-        let entries = std::fs::read_dir(dir).map_err(|e| format!("cannot read the redemption directory {}: {e}", dir.display()))?;
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound && !self.config.redemption_providers.is_empty() => return Ok(None),
+            Err(err) => return Err(format!("cannot read the redemption directory {}: {err}", dir.display())),
+        };
         let mut names: Vec<std::path::PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
         names.sort();
         for path in names {

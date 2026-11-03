@@ -164,6 +164,12 @@ pub fn validate_args(args: &Args) -> ConfigResult<()> {
     // `--palw-drill-genesis-salt`.
     crate::palw_drill::palw_drill_validate_args_v1(args)?;
 
+    if let Some(providers) = &args.palw_redemption_providers {
+        let parsed = misaka_palw_remote::transport::parse_provider_list_v1(providers).map_err(ConfigError::PalwRedemptionProviders)?;
+        if parsed.is_empty() {
+            return Err(ConfigError::PalwRedemptionProviders("at least one provider is required".into()));
+        }
+    }
     if !args.connect_peers.is_empty() && !args.add_peers.is_empty() {
         return Err(ConfigError::MixedConnectAndAddPeers);
     }
@@ -1578,7 +1584,18 @@ Do you confirm? (y/n)";
                         attempt_retention: std::time::Duration::from_secs(args.palw_attempt_retention_minutes.saturating_mul(60)),
                         riders: args.palw_riders,
                         // RFC-0009: builder mode's authorization directory (unread while `palw_receipt_spend_v4` is dormant).
-                        redemption_auth_dir: args.palw_redemption_auth_dir.clone().map(std::path::PathBuf::from),
+                        redemption_auth_dir: args.palw_redemption_auth_dir.clone().map(PathBuf::from).or_else(|| {
+                            args.palw_redemption_providers
+                                .as_ref()
+                                .map(|_| app_dir.join(network.to_prefixed()).join("palw-redemptions"))
+                        }),
+                        redemption_providers: args
+                            .palw_redemption_providers
+                            .as_deref()
+                            .map(misaka_palw_remote::transport::parse_provider_list_v1)
+                            .transpose()
+                            .expect("redemption providers validated at startup")
+                            .unwrap_or_default(),
                         // A fresh network's genesis is always "too old" for the sync rule; the
                         // operator's flag is the only thing that can say "start anyway".
                         enable_unsynced_mining: args.enable_unsynced_mining,
