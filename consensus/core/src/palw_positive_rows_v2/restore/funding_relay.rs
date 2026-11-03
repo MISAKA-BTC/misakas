@@ -131,44 +131,4 @@ impl Reader<'_> {
         }
         Ok(())
     }
-    fn validate_initial_case_relay_binding(
-        &mut self,
-        auth: &FundingRelayAuthorizationRowV2,
-        binding: FundingRelayBindingV2,
-    ) -> Result<(), PositiveRowErrorV2> {
-        let id = auth.terms.assignment;
-        let NativeRowBody::AssignmentUse(used) = self.required(NativeRowKey::AssignmentUse(id))? else {
-            return Err(PositiveRowErrorV2::WrongRowKind);
-        };
-        let NativeRowBody::Assignment(assignment) = self.required(NativeRowKey::Assignment(id))? else {
-            return Err(PositiveRowErrorV2::WrongRowKind);
-        };
-        let result = self.result(used.result)?;
-        let case = self.case(used.case)?;
-        let NativeRowBody::Funding(account) = self.required(NativeRowKey::Funding(used.case))? else {
-            return Err(PositiveRowErrorV2::WrongRowKind);
-        };
-        check_initial_case_relay_target_v2(
-            &auth.terms,
-            &assignment.bundle,
-            result.result.id(),
-            &account.consent,
-            account.original_outpoint,
-            account.initial_locked,
-            binding.origin.accepted_daa,
-        )?;
-        // Preserve the original source of funds after any cursor changes.
-        // AssignmentUse is validated separately against its Case and journal.
-        if used.origin != binding.origin
-            || result.origin != binding.origin
-            || account.funding_origin != binding.origin
-            || account.payer_key != auth.payer_key
-            || account.consent.scope != result.funding_scope
-            || binding.original_contract != account.consent.id().0
-            || binding.reservation != case.reservation
-        {
-            return inconsistent();
-        }
-        Ok(())
-    }
 }
