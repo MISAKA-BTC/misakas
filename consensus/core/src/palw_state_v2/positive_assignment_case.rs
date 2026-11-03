@@ -1096,10 +1096,49 @@ fn prepare_initial_case_checker_v2(
     })
 }
 
+fn check_replayed_court_projection_v2(
+    state: &PalwChainStateV2,
+    row: &CaseRow,
+    checked: crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2,
+) -> Result<(), PalwStateV2Error> {
+    use misaka_palw_positive_contract::{
+        messages::{ClaimStatus, WitnessStatus},
+        rows::CoverageState,
+    };
+    let status_matches = checked.status == row.status
+        || (checked.status == ClaimStatus::Pending && checked.attempts == 0 && row.status == ClaimStatus::ResultCommitted);
+    let witness =
+        if checked.status == ClaimStatus::PositivePassed { Some(checked.last_attempt.ok_or_else(missing)?.witness) } else { None };
+    if !status_matches
+        || checked.attempts != row.usage.witness_attempts
+        || checked.last_attempt.map_or(WitnessStatus::Building, |attempt| attempt.status) != row.witness_status
+        || witness != row.positive_witness
+    {
+        return Err(refuse("replayed arithmetic outcome differs from rooted Case"));
+    }
+    if let Some(active) = checked.last_attempt.filter(|attempt| attempt.status == WitnessStatus::Checking) {
+        let NativeRowBody::Coverage(coverage) = required(state, NativeRowKey::Coverage(active.witness))? else {
+            return Err(refuse("archived active Coverage row"));
+        };
+        if coverage.witness != active.witness
+            || coverage.case != row.case
+            || coverage.result != row.result
+            || coverage.plan != row.coverage.plan
+            || coverage.mandatory_relations != row.coverage.mandatory_relations
+            || coverage.next_relation != checked.cursor
+            || coverage.state != CoverageState::Checking
+        {
+            return Err(refuse("replayed active cursor differs from rooted Coverage"));
+        }
+    }
+    Ok(())
+}
+
 /// Replay the arithmetic projection in event order against actual native
 /// pre-event role state. The source and certification owners still have to
 /// reconcile their transitions before the writer may publish any Case change.
 fn replay_assigned_court_history_v2(
+    state: &PalwChainStateV2,
     backing: &NativeCommittedAssignedCaseV2,
     rooted: &PositiveRowBundleV2,
 ) -> Result<(), PalwStateV2Error> {
@@ -1110,7 +1149,6 @@ fn replay_assigned_court_history_v2(
             PositiveNativeBodyV2, PositiveNativeOperationV2 as Op, decode_native_body_v2, scan_native_body_v2,
         },
     };
-    use misaka_palw_positive_contract::messages::{ClaimStatus, WitnessStatus};
 
     let capacity = || {
         PalwStateV2Error::NativeContextUnavailable(
@@ -1209,23 +1247,15 @@ fn replay_assigned_court_history_v2(
         {
             return Err(refuse("archived Court Assignment prefix differs"));
         }
+        let NativeRowBody::Case(prior) = required(prefix, NativeRowKey::Case(pin.case))? else {
+            return Err(refuse("archived pre-event Case row"));
+        };
+        check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
         if !matches!(&body.operation, Op::PositiveCourtAttestation { .. }) {
             machine.advance(prefix, (&a, material, pin), carriage.origin(), &body)?;
         }
     }
-    let checked = snapshot(&machine.court);
-    let status_matches = checked.status == rooted.case.status
-        || (checked.status == ClaimStatus::Pending && checked.attempts == 0 && rooted.case.status == ClaimStatus::ResultCommitted);
-    let witness =
-        if checked.status == ClaimStatus::PositivePassed { Some(checked.last_attempt.ok_or_else(missing)?.witness) } else { None };
-    if !status_matches
-        || checked.attempts != rooted.case.usage.witness_attempts
-        || checked.last_attempt.map_or(WitnessStatus::Building, |attempt| attempt.status) != rooted.case.witness_status
-        || witness != rooted.case.positive_witness
-    {
-        return Err(refuse("replayed arithmetic outcome differs from rooted Case"));
-    }
-    Ok(())
+    check_replayed_court_projection_v2(state, &rooted.case, snapshot(&machine.court))
 }
 
 impl TransitionBuilder<'_> {
@@ -1256,7 +1286,7 @@ impl TransitionBuilder<'_> {
             // unpublished material must be replayed before this operation.
             return Err(missing());
         }
-        replay_assigned_court_history_v2(backing, &bundle)
+        replay_assigned_court_history_v2(&self.state, backing, &bundle)
     }
 }
 
@@ -1352,10 +1382,7 @@ mod tests {
         assert!(matches!(builder.write_claim(claim, Some(row)), Err(PalwStateV2Error::KernelRouteRefused(_))));
         let panel = PalwPanelStateV2 { anchor: other, seats: Vec::new(), bound_daa: 12 };
         assert!(matches!(builder.write_panel(claim, Some(panel)), Err(PalwStateV2Error::KernelRouteRefused(_))));
-        assert!(matches!(
-            builder.write_legacy_dispute(claim, Some(Default::default())),
-            Err(PalwStateV2Error::KernelRouteRefused(_))
-        ));
+        assert!(matches!(builder.write_legacy_dispute(claim, Some(Default::default())), Err(PalwStateV2Error::KernelRouteRefused(_))));
 
         use crate::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
         let bond = PalwBondKeyV2(TransactionOutpoint::new(other, 0));
