@@ -175,8 +175,7 @@ impl TransitionBuilder<'_> {
                 tx.inputs.first().is_some_and(|input| input.previous_outpoint == native_assignment_outpoint_v2(point))
             })
         {
-            self.check_case_source_settlement_v2(action, *assignment, *case, receipts)?;
-            return Err(refused("qualified Case source settlement writer unavailable"));
+            return self.apply_case_source_settlement_v2(ctx, action, *assignment, *case, receipts);
         }
         if self.native_writers_tracking_v1() {
             let mut quote = native_writers::NativeWriteQuoteV1::new("Assignment settlement input amount workspace");

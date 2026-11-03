@@ -207,45 +207,62 @@ impl NativeAssignedCourtV2 {
     }
 }
 
-impl TransitionBuilder<'_> {
+struct CaseSourcePaymentV2 {
+    funding: misaka_palw_positive_contract::rows::FundingRow,
+    debit: misaka_palw_positive_contract::rows::NativeOutpoint,
+    material: AcceptedMaterial,
+}
+use crate::palw_settlement_once_v1::{
+    PALW_SETTLEMENT_ONCE_TABLE_V1, PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+    PalwSettlementOnceRowV1, palw_settlement_subject_v1,
+};
+
+fn source_fee_obligation_v2(assignment: AssignmentId, fee: &SourceFeeDeltaIntent) -> PalwSettlementObligationV1 {
+    PalwSettlementObligationV1::with_party(
+        PalwSettlementLegV1::AssignmentServiceFee,
+        palw_settlement_subject_v1(b"assignment-service/v2", &[&assignment.0.0, &fee.accepted_response.digest.0]),
+        fee.provider.0.0,
+        0,
+    )
+}
+
+impl NativeAssignedCourtV2 {
     /// Preflight op12 against the unique first receipts and actual current
     /// input. The enclosing writer owns the spend, updates and journal.
-    pub(in crate::palw_state_v2) fn check_case_source_settlement_v2(
-        &self,
-        action: &PositiveAssignmentRawActionV2,
+    fn qualify_case_source_payment_v2(
+        &mut self,
+        state: &PalwChainStateV2,
+        backing: &NativeCommittedAssignedCaseV2,
+        prior: &CaseRow,
+        carriage: (&crate::tx::Transaction, &[crate::tx::UtxoEntry], u64, AcceptedOrigin),
         assignment: AssignmentId,
-        case: CaseId,
         receipts: &[AcceptedMaterial],
-    ) -> Result<(), PalwStateV2Error> {
+        decode_heap: u64,
+    ) -> Result<CaseSourcePaymentV2, PalwStateV2Error> {
         use crate::{
             mldsa87_primitives::p2pkh_mldsa87_payload,
-            palw_positive_assignment_funds_v2::native_assignment_outpoint_v2,
-            palw_settlement_once_v1::{
-                PALW_SETTLEMENT_ONCE_TABLE_V1, PalwSettlementLegV1, PalwSettlementObligationV1, palw_settlement_subject_v1,
-            },
+            palw_positive_assignment_funds_v2::{AssignmentLegDebitV2, debit_assignment_leg_v2, native_assignment_outpoint_v2},
         };
-        let (backing, machine, prior) = self.prepare_case_subject_v2(action, case, None)?;
+        let (tx, entries, carrier_fee, origin) = carriage;
         if backing.assignment().id() != assignment
             || receipts.is_empty()
             || receipts.len() as u64 > backing.material().native_preimages.source_policy.max_responses
         {
             return Err(refuse("source settlement has the wrong Assignment or receipt extent"));
         }
-        let NativeRowBody::Funding(funding) = required(&self.state, NativeRowKey::Funding(case))? else {
+        let NativeRowBody::Funding(mut funding) = required(state, NativeRowKey::Funding(prior.case))? else {
             return Err(refuse("missing Case funding for settlement"));
         };
-        let point = native_assignment_outpoint_v2(funding.current_outpoint.ok_or_else(missing)?);
-        let tx = action.transaction();
-        let entries = action.entries();
+        let debit = funding.current_outpoint.ok_or_else(missing)?;
+        let point = native_assignment_outpoint_v2(debit);
         let controls = (receipts.len() as u64)
             .checked_mul(4)
             .and_then(|n| n.checked_add(entries.len() as u64))
             .and_then(|n| n.checked_add(tx.outputs.len() as u64))
             .ok_or_else(capacity)?;
         let work = backing.material().native_preimages.source_policy.work.court_operation_work(0, controls, 0, 0).map_err(refuse)?;
-        if work > machine.remaining_work {
-            return Err(refuse("source settlement exceeds the remaining Case work"));
-        }
+        self.remaining_work =
+            self.remaining_work.checked_sub(work).ok_or_else(|| refuse("source settlement exceeds the remaining Case work"))?;
         let locked = [funding.fee.remaining, funding.capital.remaining, funding.surplus.remaining]
             .into_iter()
             .try_fold(0u64, u64::checked_add)
@@ -265,15 +282,16 @@ impl TransitionBuilder<'_> {
         let worker = &backing.assignment().worker_key;
         let payee = kaspa_hashes::blake2b_512_address_payload(worker);
         let provider = principal(worker);
-        let route = self.state.kernel_route_state_v1().ok_or_else(missing)?;
+        let route = state.kernel_route_state_v1().ok_or_else(missing)?;
         let mut quote = TirNativeRequestsV1::new();
         quote.exact_v1::<BTreeNodeEnvelopeV1<Digest, ()>>(receipts.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
         quote.exact_v1::<u8>(64).map_err(PalwStateV2Error::NativeResource)?;
         let bytes = quote.bytes_v1();
-        if machine
+        if self
             .available_heap
-            .checked_sub(machine.checker_heap)
-            .and_then(|n| n.checked_sub(machine.candidate_heap))
+            .checked_sub(self.checker_heap)
+            .and_then(|n| n.checked_sub(self.candidate_heap))
+            .and_then(|n| n.checked_sub(decode_heap))
             .is_none_or(|n| bytes > n)
         {
             return Err(capacity());
@@ -283,7 +301,7 @@ impl TransitionBuilder<'_> {
         let mut total = 0u64;
         for (index, supplied) in receipts.iter().enumerate() {
             let checked =
-                machine.source_responses.get(&supplied.digest).ok_or_else(|| refuse("settlement receipt absent from Case replay"))?;
+                self.source_responses.get(&supplied.digest).ok_or_else(|| refuse("settlement receipt absent from Case replay"))?;
             let fee = &checked.fee;
             if fee.accepted_response != *supplied
                 || fee.result != prior.result
@@ -294,15 +312,10 @@ impl TransitionBuilder<'_> {
             {
                 return Err(refuse("settlement receipt differs from its unique recovered duty"));
             }
-            let NativeRowBody::ServiceReceipt(rooted) = required(&self.state, fee.receipt_key)? else {
+            let NativeRowBody::ServiceReceipt(rooted) = required(state, fee.receipt_key)? else {
                 return Err(refuse("settlement receipt is missing"));
             };
-            let obligation = PalwSettlementObligationV1::with_party(
-                PalwSettlementLegV1::AssignmentServiceFee,
-                palw_settlement_subject_v1(b"assignment-service/v2", &[&assignment.0.0, &supplied.digest.0]),
-                provider.0.0,
-                0,
-            );
+            let obligation = source_fee_obligation_v2(assignment, fee);
             if rooted.settlement.is_some()
                 || rooted.response != *supplied
                 || rooted.result != fee.result
@@ -332,9 +345,161 @@ impl TransitionBuilder<'_> {
         let paid_outputs = receipts.len() + usize::from(continuation != 0);
         let unrelated_in = entries.iter().skip(1).map(|entry| entry.amount).try_fold(0u64, u64::checked_add);
         let unrelated_out = tx.outputs.iter().skip(paid_outputs).map(|out| out.value).try_fold(0u64, u64::checked_add);
-        match (unrelated_in, unrelated_out) {
-            (Some(inputs), Some(outputs)) if inputs.checked_sub(outputs) == Some(action.fee()) => Ok(()),
-            _ => Err(refuse("Case funds cannot sponsor unrelated outputs or carrier fees")),
+        if unrelated_in.zip(unrelated_out).and_then(|(inputs, outputs)| inputs.checked_sub(outputs)) != Some(carrier_fee) {
+            return Err(refuse("Case funds cannot sponsor unrelated outputs or carrier fees"));
         }
+        let material = source_material(origin)?;
+        funding.fee =
+            debit_assignment_leg_v2(funding.fee, AssignmentLegDebitV2 { paid: total, ..Default::default() }, 0).map_err(refuse)?;
+        funding.last_settlement = Some(material);
+        funding.current_outpoint = if continuation == 0 {
+            None
+        } else {
+            Some(misaka_palw_positive_contract::rows::NativeOutpoint {
+                transaction: origin.carrier_transaction,
+                index: u32::try_from(receipts.len()).map_err(refuse)?,
+            })
+        };
+        Ok(CaseSourcePaymentV2 { funding, debit, material })
+    }
+
+    pub(super) fn replay_case_source_payment_v2(
+        &mut self,
+        backing: &NativeCommittedAssignedCaseV2,
+        prefix: &PalwChainStateV2,
+        after: &PalwChainStateV2,
+        prior: &CaseRow,
+        carriage: &NativeAcceptedCaseCarriageV2,
+    ) -> Result<(), PalwStateV2Error> {
+        use crate::palw_positive_court_v2::coordinator::assignment_body::{
+            PositiveAssignmentNativeOperationV2, decode_assignment_body_v2,
+        };
+        let original = backing.material();
+        let rules = NativeAssignmentRulesV2::from_original_material_data_v2(backing.assignment(), original).map_err(refuse)?;
+        let raw = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
+        let quote = original.native_preimages.source_policy.work.court_body_work(raw.len() as u64).map_err(refuse)?;
+        self.remaining_work = self.remaining_work.checked_sub(quote).ok_or_else(|| refuse("source payment replay codec work"))?;
+        let limits = rules.body_limits().map_err(refuse)?;
+        let summary =
+            crate::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(raw, limits).map_err(refuse)?;
+        if self
+            .available_heap
+            .checked_sub(self.checker_heap)
+            .and_then(|n| n.checked_sub(self.candidate_heap))
+            .is_none_or(|n| summary.heap > n)
+        {
+            return Err(capacity());
+        }
+        let _decode = reserve_native_requests_v1(summary.heap).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(capacity)?;
+        let body = decode_assignment_body_v2(raw, limits).map_err(refuse)?;
+        let PositiveAssignmentNativeOperationV2::SettleAssignment { assignment, case: Some(case), receipts } = body.operation else {
+            return Err(refuse("Case settlement journal requires the literal op12"));
+        };
+        if case != prior.case {
+            return Err(refuse("settlement journal names a different Case"));
+        }
+        let payment = self.qualify_case_source_payment_v2(
+            prefix,
+            backing,
+            prior,
+            (carriage.transaction(), carriage.entries(), carriage.fee(), carriage.origin()),
+            assignment,
+            &receipts,
+            summary.heap,
+        )?;
+        let mut expected_case = *prior;
+        expected_case.last_event = carriage.origin();
+        if required(after, NativeRowKey::Funding(case))? != NativeRowBody::Funding(payment.funding)
+            || required(after, NativeRowKey::Case(case))? != NativeRowBody::Case(expected_case)
+        {
+            return Err(refuse("replayed source payment differs from the committed Case or funding rows"));
+        }
+        let route = after.kernel_route_state_v1().ok_or_else(missing)?;
+        for supplied in &receipts {
+            let checked = self.source_responses.get(&supplied.digest).ok_or_else(missing)?;
+            let fee = &checked.fee;
+            let NativeRowBody::ServiceReceipt(mut expected) = required(prefix, fee.receipt_key)? else {
+                return Err(refuse("missing pre-payment source receipt"));
+            };
+            expected.settlement = Some(payment.material);
+            let obligation = source_fee_obligation_v2(assignment, fee);
+            let id = obligation.id_v1();
+            let recorded = route.aux.get(&(PALW_SETTLEMENT_ONCE_TABLE_V1, id.to_vec())).ok_or_else(missing)?;
+            let marker: PalwSettlementOnceRowV1 = borsh::from_slice(recorded).map_err(refuse)?;
+            marker.validate_v1(&id).map_err(refuse)?;
+            if required(after, fee.receipt_key)? != NativeRowBody::ServiceReceipt(expected)
+                || marker.obligation != obligation
+                || marker.consumer != PalwSettlementConsumerV1::AssignmentNativeUtxo
+                || marker.amount != fee.amount
+                || marker.settled_daa != carriage.origin().accepted_daa
+                || marker.debit
+                    != (PalwSettlementDebitV1::NativeUtxo {
+                        outpoint: crate::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2(payment.debit),
+                        amount: fee.amount,
+                    })
+            {
+                return Err(refuse("source settlement receipt or once marker differs from replay"));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TransitionBuilder<'_> {
+    pub(in crate::palw_state_v2) fn apply_case_source_settlement_v2(
+        &mut self,
+        ctx: &PalwBlockContextV2,
+        action: &PositiveAssignmentRawActionV2,
+        assignment: AssignmentId,
+        case: CaseId,
+        receipts: &[AcceptedMaterial],
+    ) -> Result<(), PalwStateV2Error> {
+        use super::super::palw_settlement_once_fold_v1::PalwSettleOnceV1;
+        if !self.params.settlement_once_active_at(ctx.daa_score) {
+            return Err(refuse("actual settlement-once owner is dormant"));
+        }
+        let (backing, mut machine, mut prior) = self.prepare_case_subject_v2(action, case, None)?;
+        let origin = action.origin();
+        let payment = machine.qualify_case_source_payment_v2(
+            &self.state,
+            backing,
+            &prior,
+            (action.transaction(), action.entries(), action.fee(), origin),
+            assignment,
+            receipts,
+            0,
+        )?;
+        if let Some(point) = payment.funding.current_outpoint {
+            self.require_assignment_output_unlocked_v2(point)?;
+        }
+        // The active raw op12 owns the enclosing checkpoint, including every
+        // once marker, source receipt, funding row and retained journal entry.
+        for supplied in receipts {
+            let checked = machine.source_responses.get(&supplied.digest).ok_or_else(missing)?;
+            let fee = &checked.fee;
+            let obligation = source_fee_obligation_v2(assignment, fee);
+            if self.settle_once_v1(
+                ctx.daa_score,
+                obligation,
+                PalwSettlementConsumerV1::AssignmentNativeUtxo,
+                fee.amount,
+                PalwSettlementDebitV1::NativeUtxo {
+                    outpoint: crate::palw_positive_assignment_funds_v2::native_assignment_outpoint_v2(payment.debit),
+                    amount: fee.amount,
+                },
+            )? != PalwSettleOnceV1::First
+            {
+                return Err(refuse("source fee settlement is dormant, refused or already consumed"));
+            }
+            let NativeRowBody::ServiceReceipt(mut receipt) = required(&self.state, fee.receipt_key)? else {
+                return Err(refuse("source payment lost its actual receipt"));
+            };
+            receipt.settlement = Some(payment.material);
+            self.write_assignment_aux_v2(NativeRowBody::ServiceReceipt(receipt))?;
+        }
+        prior.last_event = origin;
+        self.write_assignment_aux_v2(NativeRowBody::Funding(payment.funding))?;
+        self.write_assignment_aux_v2(NativeRowBody::Case(prior))?;
+        self.write_assigned_case_payment_journal_v2(backing)
     }
 }

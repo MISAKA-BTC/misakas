@@ -1452,15 +1452,6 @@ fn replay_assigned_court_history_v2(
     let limits = case_replay_body_limits_v2(&material.positive_policy);
     for (index, record) in backing.records().iter().enumerate().skip(1) {
         let carriage = record.carriage();
-        let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
-        let _body = machine.reserve_operation_v2(body_bytes, material)?;
-        let body = decode_native_body_v2(body_bytes, limits).map_err(refuse)?;
-        let Some((case, result)) = body.operation.case_target_v2().map_err(refuse)? else {
-            return Err(refuse("legacy admission in assigned Case history"));
-        };
-        if case != pin.case || result.is_some_and(|id| id != pin.result) {
-            return Err(refuse("archived Court operation subject differs"));
-        }
         let prefix = carriage.prefix_state().map_err(|_| missing())?;
         let a = assignment(prefix, backing.assignment().id())?;
         if a.bundle != backing.assignment().bundle
@@ -1473,6 +1464,23 @@ fn replay_assigned_court_history_v2(
             return Err(refuse("archived pre-event Case row"));
         };
         check_replayed_court_projection_v2(prefix, &prior, snapshot(&machine.court))?;
+        if carriage.transaction().payload.get(7) == Some(&12) {
+            let after = match backing.records().get(index + 1) {
+                Some(next) => next.carriage().prefix_state().map_err(|_| missing())?,
+                None => state,
+            };
+            machine.replay_case_source_payment_v2(backing, prefix, after, &prior, carriage)?;
+            continue;
+        }
+        let body_bytes = carriage.transaction().payload.get(3..).ok_or_else(missing)?;
+        let _body = machine.reserve_operation_v2(body_bytes, material)?;
+        let body = decode_native_body_v2(body_bytes, limits).map_err(refuse)?;
+        let Some((case, result)) = body.operation.case_target_v2().map_err(refuse)? else {
+            return Err(refuse("legacy admission in assigned Case history"));
+        };
+        if case != pin.case || result.is_some_and(|id| id != pin.result) {
+            return Err(refuse("archived Court operation subject differs"));
+        }
         machine.check_source_request_v2(backing, prefix, &a, &prior, carriage.origin(), &body)?;
         machine.remember_source_request_v2(material, carriage.origin(), &body, _body.memory_v1())?;
         if let Op::SourceResponse { .. } = &body.operation {
