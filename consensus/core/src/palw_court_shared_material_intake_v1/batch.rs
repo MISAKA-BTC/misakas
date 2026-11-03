@@ -20,6 +20,27 @@ pub(crate) mod native_ranges;
 
 const PART: u64 = PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as u64;
 
+/// Per-submitter draft ceiling for a Batch-only original. Every reserved
+/// Part includes its full payload in the booked byte cost. Counting the
+/// other packets as well is conservative; range, fee and exact-slot checks
+/// still govern each draft independently.
+pub(crate) fn booked_material_ledger_ceiling_v1(
+    state: &PalwChainStateV2,
+    context: &crate::palw_court_shared_tir_state_v1::SharedTirContextV1,
+) -> Result<u64, String> {
+    let service = state.court_service_state_v1().ok_or("Batch material has no rooted service book")?;
+    context.check_binding(service)?;
+    let binding = service.claims.get(&context.claim).ok_or("Batch material has no original reservation")?;
+    sum_booked_wire_bytes_v1(&service.book, &binding.packet_ids)
+}
+
+fn sum_booked_wire_bytes_v1(book: &ServiceReservations, owned: &std::collections::BTreeSet<[u8; 64]>) -> Result<u64, String> {
+    owned.iter().try_fold(0u64, |total, id| {
+        let packet = book.packet(id).ok_or("Batch ledger reservation has no booked packet")?;
+        total.checked_add(packet.cost.bytes).ok_or_else(|| "Batch ledger reservation bytes overflow".into())
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize)]
 pub(crate) enum Stage {
     Begin,
@@ -1025,6 +1046,21 @@ mod tests {
 
     fn test_case() -> BatchCourtWindowV1 {
         BatchCourtWindowV1 { claim_accepted_daa: 2, challenge_opened_daa: 7, collect_until_daa: 20, material_until_daa: 11_000 }
+    }
+
+    #[test]
+    fn draft_ceiling_counts_only_owned_immutable_packet_costs() {
+        let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
+        let packet = |id, release_daa, bytes| ServicePacket { id: [id; 64], release_daa, service_before: release_daa + 1, cost: cost(bytes) };
+        let mut book = ServiceReservations::new(cost(u64::MAX)).unwrap();
+        book.reserve(&[packet(1, 1, 50), packet(2, 2, 60), packet(3, 3, u64::MAX)], 5).unwrap();
+        let mut owned = std::collections::BTreeSet::from([[1; 64], [2; 64]]);
+        assert_eq!(sum_booked_wire_bytes_v1(&book, &owned), Ok(110));
+        owned.insert([3; 64]);
+        assert!(sum_booked_wire_bytes_v1(&book, &owned).is_err());
+        owned.remove(&[3; 64]);
+        owned.insert([4; 64]);
+        assert!(sum_booked_wire_bytes_v1(&book, &owned).is_err());
     }
 
     #[test]

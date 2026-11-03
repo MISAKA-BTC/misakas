@@ -95,8 +95,8 @@ pub(super) fn checked_batch_response_slot_v1(
     let m::MaterialActionV1::Begin { total_bytes, .. } = declaration.action else {
         return Err(refused("Batch material declaration missing"));
     };
-    // This is an exact slot lookup. Begin separately checks the native
-    // target ceiling before writing; subsequent steps use that retained draft.
+    // This is an exact slot lookup. Batch-only Opens already bind the
+    // native target ceiling; subsequent steps use the retained draft.
     let delivery = m::batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand.demand, ordinal, declaration, total_bytes)
         .map_err(refused)?;
     if delivery.request_root_v1() != request_root {
@@ -174,7 +174,7 @@ fn material_intake_inner(
         None => s.verify_v1(network, &bond.pubkey),
     }
     .map_err(refused)?;
-    let source = c.source(&b.state).map_err(refused)?;
+    let booked_batch = request_root.is_some() && c.batch_notice_only_v1();
     let complete = m::target_complete_v1(&b.state, s.claim, s.target).map_err(refused)?;
     match &s.action {
         m::MaterialActionV1::Begin { total_bytes, body_hash } => {
@@ -206,12 +206,21 @@ fn material_intake_inner(
             if complete {
                 return Ok(MaterialIntakeEffectV1::AlreadyComplete);
             }
-            let program = m::class_program_v1(&b.state, s.claim).map_err(refused)?;
-            let leaves = m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?;
-            let bound = m::target_bound_v1(&b.state, &c, &source, s.target, &program, &leaves).map_err(refused)?;
-            if *total_bytes == 0 || *total_bytes > bound {
-                return Err(refused("material declaration exceeds the original's native requirement"));
-            }
+            // The Batch-only path reached this point through its accepted
+            // range and exact paid slot. Rebuilding the legacy all-root
+            // universe here can refuse a response to an already booked Open.
+            let legacy = if booked_batch {
+                None
+            } else {
+                let source = c.source(&b.state).map_err(refused)?;
+                let program = m::class_program_v1(&b.state, s.claim).map_err(refused)?;
+                let leaves = m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?;
+                let bound = m::target_bound_v1(&b.state, &c, &source, s.target, &program, &leaves).map_err(refused)?;
+                if *total_bytes == 0 || *total_bytes > bound {
+                    return Err(refused("material declaration exceeds the original's native requirement"));
+                }
+                Some((source, program, leaves))
+            };
             let lkey = Key::CourtMaterialLedger(s.claim, s.submitter);
             let mut ledger = match b.state.staged_court_row_v1(&lkey) {
                 Some(Row::CourtMaterialLedger(l)) => (**l).clone(),
@@ -219,7 +228,10 @@ fn material_intake_inner(
                     version: 1,
                     claim: s.claim,
                     submitter: s.submitter,
-                    budget_bytes: m::claim_budget_v1(&b.state, &c, &source, &program, &leaves).map_err(refused)?,
+                    budget_bytes: match &legacy {
+                        Some((source, program, leaves)) => m::claim_budget_v1(&b.state, &c, source, program, leaves).map_err(refused)?,
+                        None => m::batch::booked_material_ledger_ceiling_v1(&b.state, &c).map_err(refused)?,
+                    },
                     reserved_bytes: 0,
                     charged_sompi: 0,
                     material_until_daa: c.material_until_daa,
@@ -343,6 +355,7 @@ fn material_intake_inner(
             if crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) != draft.body_hash {
                 return Err(refused("material body checksum mismatch"));
             }
+            let source = c.source(&b.state).map_err(refused)?;
             match s.target {
                 m::MaterialTargetV1::FullIds => {
                     let ids = if request_root.is_some() {
@@ -355,7 +368,7 @@ fn material_intake_inner(
                 }
                 target => {
                     let leaves = match target {
-                        m::MaterialTargetV1::Parameter { .. } => {
+                        m::MaterialTargetV1::Parameter { .. } if !booked_batch => {
                             Some(m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?)
                         }
                         _ => None,

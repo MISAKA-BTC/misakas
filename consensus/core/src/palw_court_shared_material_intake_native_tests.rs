@@ -915,6 +915,14 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let after_open = b.state.state_root();
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert_eq!(b.state.state_root(), after_open);
+    // The accepted Open already checked this root. Its responses must not
+    // try to materialize the entire original under a legacy cover budget.
+    set_material_intake_test_schedule_v1(Some(MaterialIntakeScheduleV1 {
+        cover: crate::palw_tir_public_source_v1::parameter_cover_v1::OriginalParameterCoverBudgetV1 {
+            max_original_leaves: 0, ..storage.cover
+        },
+        ..storage
+    }));
     let rent = body.len() as u64 * storage.sompi_per_byte;
     assert!(apply(&mut b, &begin_at, &begin, rent, 1).is_err());
     assert_eq!(b.state.state_root(), after_open);

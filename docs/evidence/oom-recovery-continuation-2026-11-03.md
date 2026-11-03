@@ -3936,3 +3936,28 @@ B0 and relay agreed at virtual DAA 19,734. The one selected block
 contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-native-leaf-open.pIlDum/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-native-leaf-open-live.VSzttL/page.json`.
+
+## Use the booked range when admitting Batch material responses
+
+The Batch-only response path no longer re-enumerates the legacy
+all-root input cover at Begin or at a parameter Finish. The accepted
+Open already checked the selected leaf's target, declared length and
+authentication mode. Each response still checks the exact owned
+slot, signed request root, draft and applicable carrier fee. Finish
+still authenticates the full body against the original before making
+it canonical. Parts no longer reconstruct the source when the
+operation only needs the retained draft and signed slot.
+
+A new submitter's draft ledger uses a conservative ceiling from the
+original's owned packet byte costs. It includes carrier overhead and
+therefore serves as a ceiling, with exact range and slot enforcement
+remaining independent. Missing packet identities and overflow fail
+closed. The extracted suite passed 55 tests, including unrelated,
+missing and overflowing packet costs. The native fixture reduces the legacy cover limit to zero
+after accepting Open and then exercises Begin, Part and Finish.
+The integrated fixture has not run.
+
+B0 and relay agreed at virtual DAA 19,735. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-booked-response.uxlcTw/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-booked-response-live.pAWgzc/page.json`.
