@@ -251,6 +251,10 @@ impl<'a> TransitionBuilder<'a> {
         let mut q = NativeWriteQuoteV1::new(path);
         // `(table, key.clone())` for the map, `bytes.clone()` for the map value, both exact-capacity clones.
         q.exact::<u8>(key_len)?.exact::<u8>(value_len)?.member_if::<(u8, Vec<u8>), Vec<u8>>(absent)?.slots(1)?;
+        // New Positive aux rows also increase the retained typed workspace coverage.
+        if absent && table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE {
+            q.exact::<u8>(crate::palw_native_resource_v1::positive_rows::positive_aux_row_memory_bytes_v1())?;
+        }
         q.member_if::<(Hash64, u8, Hash64), ()>(
             new.is_some() && crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table, key),
         )?;
