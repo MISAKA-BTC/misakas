@@ -702,7 +702,10 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         record: CaseJournalRecordView<'_>,
         carriage: &NativeAcceptedCaseCarriageV2,
     ) -> Result<(), PalwStateV2Error> {
-        use crate::palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, initial_assigned_case_bind_header_v2};
+        use crate::{
+            palw_positive_assignment_case_material_v2::{AssignmentCaseBoundaryV2, rooted_initial_assigned_case_bind_v2},
+            palw_positive_rows_v2::PositiveRowErrorV2,
+        };
         let tx = carriage.transaction();
         let h = record.header();
         if !tx.id_is_current()
@@ -735,18 +738,10 @@ impl<'a> NativeAssignedArchiveV2<'a> {
         boundary.check_populated_data(tx, carriage.entries(), carriage.fee()).map_err(refuse)?;
         if h.sequence == 1 {
             let id = backing.assignment().id();
-            let NativeRowBody::AssignmentUse(use_row) = required(current, NativeRowKey::AssignmentUse(id))? else {
-                return Err(refuse("actual initial Case has no AssignmentUse row"));
-            };
-            let bind = initial_assigned_case_bind_header_v2(record, boundary, &use_row).map_err(refuse)?;
-            let NativeRowBody::AssignmentJournalFrame(frame) =
-                required(current, NativeRowKey::AssignmentJournalFrame { assignment: id, ordinal: bind.ordinal })?
-            else {
-                return Err(refuse("actual initial Case has no BindResult frame"));
-            };
-            if frame.header != bind {
-                return Err(refuse("initial Case differs from the rooted BindResult frame"));
-            }
+            rooted_initial_assigned_case_bind_v2(current, id, record, boundary).map_err(|why| match why {
+                PositiveRowErrorV2::MissingRequiredRow | PositiveRowErrorV2::MissingKernelRoute => missing(),
+                other => refuse(other),
+            })?;
             // The current pre-event Assignment can be cancelled/consumed only
             // after this exact op9; a final saved Use is not historical authority.
             let a = assignment(prefix, backing.assignment().id())?;
