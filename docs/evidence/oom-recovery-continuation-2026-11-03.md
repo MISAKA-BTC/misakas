@@ -300,3 +300,24 @@ node RPC, reported `committed: false`, and wrote no commitment files.
 The smoke receipt SHA256 is
 `24e4199ca1ba96c7e2ef50f4cdb81dee442977ed9e0b633206503a7cb566290b`.
 Live framed G14 dialogue admission and settlement remain unverified.
+
+## G14 validation gates — 03:43 UTC
+
+| Gate | Current evidence | Required next observation |
+| --- | --- | --- |
+| G0, deployment identity | Executable digests, process generations, T12 genesis, parameter ID, schedule ID, and the live 20,000 retention fence were checked on B0, B1 and the relay. The repaired worker also passed two keyless 8K dialogue turns. | Bind each participating miner, verifier, provider and model-free node to the exact release and limits. Record the actual workload and cold or warm conditions. |
+| G1, claim admission | The first 21 B0 submissions each matched a claim ID decoded from their carrier on B0 and the relay. Every carrier matched a typed retention refusal. Both claim-detail RPCs returned `found: false` for each ID. Remaining retention was 20,605 DAA for 3, 20,606 for 14, and 20,607 for 4. All required 20,608. The general checked GC fix is absent from the running binaries. | Observe one new normal claim with its signed deadline, accepting block and DAA, stored effective deadline, and matching provider and GC behavior. |
+| G2, independent panel | On the current branch the producer's own bond was the sole ready Qwen seat. No independent assignment or receipt was observed. | Bind a qualified independent seat selected by the actual draw, verify its reservation and full-scope receipt. |
+| G3, independent normal verification | The ordinary ModelOne seat replays locally and signs a receipt. The native licence checks the assigned receipt, scope and backing. A separate Panel-generated normal evidence path to an independent Node arithmetic check has yet to be demonstrated for Qwen 8K. | Trace normal inference, evidence construction and bounded data responses to a Node decision for the same real Qwen claim. Verify the with-data, requested-data and withheld-data cases. |
+| G4, adversarial cases | Local ModelOne tests cover an independent seat, scoped signatures and false-valid liability. These are narrower than the requested role and arithmetic matrix. | Run the complete honest and adversarial matrix on an isolated network, including authenticated incorrect arithmetic and accountability for unavailable data. |
+| G5, credit and settlement | Gate C and Final are separate in the current path. No new Qwen receipt, Final, certification or payout was observed in the audited cohort. | Trace all credit and accounting paths and verify unpaid, valid, invalid and unavailable outcomes independently. |
+| G6, concurrent miners | Nine local collector-queue tests passed. The real cohort did not reach the Panel. | First drain staged cohorts, then measure controlled open arrival rates with independent miners and fixed Panel resources, followed by Panel and Node scaling. |
+| G7, operational qualification | The public relay advances without observed OOM. B1 remains on another branch and fresh unsigned IBD did not complete. | Repeat restart, reorg, IBD, pruning, overload and sustained retention tests on the same candidate under measured limits. |
+
+The exact 21-claim receipt SHA256 is
+`6120d2d9284a170a7379802bcb8724eb1ba794f1ea0e3da114dd1e6bdb4c5175`.
+The rebuilt worker answered `4` and `7` using the committed 8K artifact
+in the same keyless loopback test. Its receipt SHA256 is
+`a5da97d888794eb79efefd0e42449e2ecdf63ed91d2e3f63c746b75cb63d9bad`.
+The existing G14 rollout, independent arithmetic adjudication and mainnet
+load qualification are tracked as separate outcomes.
