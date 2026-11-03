@@ -762,6 +762,11 @@ impl KernelCaseAliasesV2 {
             ledger.seals.len(),
             ledger.proof_seals.len(),
             ledger.opv.claims.len(),
+            ledger.demands.len(),
+            ledger.served.len(),
+            ledger.served_demands.len(),
+            ledger.seg_progress.len(),
+            ledger.court_scope.len(),
         ]
         .into_iter()
         .try_fold(0u64, |n, len| n.checked_add(len as u64))
@@ -785,7 +790,17 @@ impl KernelCaseAliasesV2 {
             jobs.insert(job);
             claims.insert(claim);
         }
-        for &claim in ledger.opv.claims.keys().chain(ledger.proof_seals.keys().map(|(claim, _)| claim)) {
+        for &claim in ledger
+            .opv
+            .claims
+            .keys()
+            .chain(ledger.proof_seals.keys().map(|(claim, _)| claim))
+            .chain(ledger.demands.keys().map(|(claim, ..)| claim))
+            .chain(ledger.served.keys().map(|(claim, ..)| claim))
+            .chain(ledger.served_demands.keys().map(|(claim, ..)| claim))
+            .chain(ledger.seg_progress.keys().map(|(claim, ..)| claim))
+            .chain(ledger.court_scope.keys())
+        {
             claims.insert(claim);
         }
         for &job in ledger

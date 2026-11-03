@@ -1149,6 +1149,9 @@ fn prepare_initial_case_checker_v2(
     {
         return Err(refuse("original op9 did not consume the same open Assignment"));
     }
+    // A later prefix can have cleared a legacy duty. Establish that the
+    // original accepted Case started with closed ingress before using its clock.
+    reject_legacy_aliases(bind_prefix, &prior, &payload.result)?;
     let NativeRowBody::AssignmentFunding(funding) = required(bind_prefix, NativeRowKey::AssignmentFunding(*id))? else {
         return Err(refuse("original Case payer row"));
     };
@@ -1869,7 +1872,10 @@ mod tests {
     #[test]
     fn rooted_positive_claim_refuses_legacy_primary_and_kernel_holder_writes() {
         use crate::palw_kernel_route_v1::{PalwKernelRouteStateV1, palw_kernel_route_policy_v1};
-        use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1};
+        use misaka_palw_kernel::rows::{
+            TABLE_CLAIMS_V1, TABLE_COURT_SCOPE_V1, TABLE_DEMANDS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1,
+            TABLE_SEG_PROGRESS_V1, TABLE_SERVED_DEMAND_BONDS_V1, TABLE_SERVED_V1,
+        };
         use misaka_palw_positive_contract::{identity::ClaimId, native::KERNEL_AUX_TABLE};
 
         let claim = Hash64::from_bytes([13; 64]);
@@ -1947,6 +1953,17 @@ mod tests {
         ] {
             assert!(matches!(builder.write_kernel_row(table, key, Some(value)), Err(PalwStateV2Error::KernelRouteRefused(_))));
         }
+        let demand_key = borsh::to_vec(&(claim.as_bytes(), 1u8, 2u32)).unwrap();
+        for table in [TABLE_DEMANDS_V1, TABLE_SERVED_V1, TABLE_SERVED_DEMAND_BONDS_V1, TABLE_SEG_PROGRESS_V1] {
+            assert!(matches!(
+                builder.write_kernel_row(table, demand_key.clone(), Some(vec![1])),
+                Err(PalwStateV2Error::KernelRouteRefused(_))
+            ));
+        }
+        assert!(matches!(
+            builder.write_kernel_row(TABLE_COURT_SCOPE_V1, claim.as_bytes().to_vec(), Some(vec![1])),
+            Err(PalwStateV2Error::KernelRouteRefused(_))
+        ));
         assert!(builder.entries.is_empty());
         assert_eq!(builder.state.state_root(), root);
     }

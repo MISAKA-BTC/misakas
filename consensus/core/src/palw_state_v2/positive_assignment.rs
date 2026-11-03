@@ -599,7 +599,6 @@ impl TransitionBuilder<'_> {
         }
         plan.binding.check_result(&plan.result.result).map_err(refusal)?;
         validate_bundle(&plan.index, &plan.result, &plan.case, &plan.funding).map_err(refusal)?;
-        super::positive_assignment_case::reject_legacy_aliases(&self.state, expected, &plan.result.result)?;
         let future = expected.bundle.future_case;
         if plan.funding.consent.payer != future.payer
             || plan.funding.consent.refund_payload != future.refund_payload
@@ -2013,6 +2012,7 @@ impl TransitionBuilder<'_> {
             return Err(missing_assignment_history());
         };
         payload.result.authenticate(&row.worker_key, &payload.miner_signature).map_err(refusal)?;
+        super::positive_assignment_case::reject_legacy_aliases(&self.state, row, &payload.result)?;
         payload
             .consent
             .authenticate(
