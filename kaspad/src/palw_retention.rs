@@ -24,7 +24,7 @@
 //! will, is classified the same way as one it holds.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
@@ -49,6 +49,28 @@ const PALW_RETENTION_PARTIAL_HORIZON: Duration = Duration::from_secs(3600);
 const PALW_RETENTION_PERIOD: Duration = Duration::from_secs(60);
 /// The free-prompt capture's envelope magic (`palw_fp_capture_encode_v1`).
 const FP_CAPTURE_MAGIC: &[u8; 4] = b"FPC1";
+
+// Only in-flight lead publications are registered here. The guard lives
+// across the asynchronous submission without holding the mutex.
+static ACTIVE_ATTEMPT_PUBLICATIONS: Mutex<std::collections::BTreeMap<Hash64, usize>> = Mutex::new(std::collections::BTreeMap::new());
+
+pub(crate) struct AttemptPublicationGuard(Hash64);
+
+pub(crate) fn pin_attempt_publication(claim: Hash64) -> AttemptPublicationGuard {
+    *ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().entry(claim).or_default() += 1;
+    AttemptPublicationGuard(claim)
+}
+
+impl Drop for AttemptPublicationGuard {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
+        let count = active.get_mut(&self.0).expect("publication guard must be registered");
+        *count -= 1;
+        if *count == 0 {
+            active.remove(&self.0);
+        }
+    }
+}
 
 /// **The free space the space rule keeps**: `max(8 GiB, 5 % of the volume)`.
 pub(crate) fn retention_reserve_bytes_v1(total_bytes: u64) -> u64 {
@@ -187,7 +209,10 @@ fn prune_retained_claims_v1(
     let mut bytes = 0u64;
     for i in doomed {
         let c = &claims[i];
-        if !matches!(material_owed(&c.claim), Ok(false)) {
+        // Coordinate the final check and unlink with registration. A lead
+        // publisher must acquire its guard before writing the capture.
+        let active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
+        if active.contains_key(&c.claim) || !matches!(material_owed(&c.claim), Ok(false)) {
             continue;
         }
         let mut removed_file = false;
@@ -548,6 +573,24 @@ mod tests {
         let (doomed, _) = plan(unowed);
         assert_eq!(prune_retained_claims_v1(&claims, doomed, unowed), (3, 90));
         assert!(claims.iter().all(|claim| !claim.paths[0].exists()));
+    }
+
+    #[test]
+    fn active_lead_publication_keeps_material_through_pressure_reclaim() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut row = claim(15, RetainedKindV1::Attempt, 3, 0);
+        let material = dir.path().join("claim.material");
+        row.paths = vec![material.clone()];
+        // The deletion plan predates the publication. Both guards share the
+        // same claim, and an early exit drops only its own guard.
+        let first = pin_attempt_publication(row.claim);
+        let second = pin_attempt_publication(row.claim);
+        std::fs::write(&material, b"new").unwrap();
+        drop(first);
+        assert_eq!(prune_retained_claims_v1(&[row.clone()], vec![0], |_| Ok(false)), (0, 0));
+        assert_eq!(std::fs::read(&material).unwrap(), b"new");
+        drop(second);
+        assert_eq!(prune_retained_claims_v1(&[row], vec![0], |_| Ok(false)), (1, 3));
     }
 
     #[test]

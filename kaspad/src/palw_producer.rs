@@ -2458,6 +2458,7 @@ impl PalwProducerService {
             };
             // The promise, kept before it is made. See `retain_execution`.
             require_fresh_routing_v2()?;
+            let _retention_pin = crate::palw_retention::pin_attempt_publication(message);
             self.retain_execution(message, &material)?;
             // **RFC-0007 Part II: the witness is the producer's obligation** (§II.7): a class whose attempts commit witness chunks keeps its
             // witness for the claim — the canonical serving set's `MatMul` outputs, in exactly the pinned number of chunks, with their
