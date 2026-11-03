@@ -3887,3 +3887,28 @@ B0 and relay agreed at virtual DAA 19,732. The two selected blocks
 contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-route-repair.YBjLTB/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-route-repair-live.maEHcy/page.json`.
+
+## Quote the selected numerical leaf from the booked range layout
+
+The Batch-only numerical Open quote now visits the signed notice's
+single leaf using the bounded native input walk. It derives the
+canonical material targets for that leaf and reads each group's
+position count from the original's owned Begin packets. It uses the
+same partition the preclaim all-root projection booked, without
+scanning unrelated roots on every quote. The signed lengths still
+have to match those targets and fit the original response slots.
+The original admission projection and the older quote path retain
+their existing full traversal.
+
+The partition regression checks every prefix and ordinal in a
+multi-group envelope and rejects a missing earlier group. The native
+source fixture now compares the one-leaf walk with the complete
+parameter and dynamic input cover, and checks the invalid leaf
+boundary. The full native fixture has not run. The accepted-carrier
+fold still needs to call the same selected-leaf projection so a
+directly signed carrier cannot bypass the operator quote.
+
+B0 and relay agreed at virtual DAA 19,733. The two selected blocks
+contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-booked-leaf.xysTP1/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-booked-leaf-live.9yk7gS/page.json`.

@@ -151,7 +151,7 @@ pub fn quote_numerical_batch_open_v1(
         return Err(E::Decode("numerical Batch notice or opening differs from the accepted case".into()));
     }
     let wire_bytes = batch_open_wire_bytes_v1(lengths.len()).map_err(E::Decode)?;
-    let (_, _, opened_daa) =
+    let (_, binding, opened_daa) =
         reserved_open_slot_v1(state, claim, context.scope_id, demand_index as u64, wire_bytes).map_err(E::Decode)?;
     if state.last_point().is_some_and(|point| point.daa_score > opened_daa) {
         return Err(E::Decode("numerical Batch opening slot has passed".into()));
@@ -188,10 +188,74 @@ pub fn quote_numerical_batch_open_v1(
             NativeDecodeErrorV1::Decode(why) => E::Decode(why.to_string()),
             NativeDecodeErrorV1::Resource(why) => E::Resource(why),
         })?;
-    let demand = numerical_batch_streaming_demand_v1(
-        frame, &source, record, layout, &program, context.profile_id, streaming, maximum_ranges, leaf, demand_index,
-    )?;
+    let demand = if context.batch_notice_only_v1() {
+        let set = TirSharedRequestSetV1::new(frame, &source, context.profile_id).map_err(E::Decode)?;
+        if set.scope_id().map_err(E::Decode)? != context.scope_id {
+            return Err(E::Decode("numerical Batch source differs from its reserved scope".into()));
+        }
+        let ranges = selected_root_ranges_v1(frame, &source, &set, record, layout, &program, streaming, leaf, maximum_ranges)?;
+        let span = booked_range_span_v1(ranges.len(), demand_index, |ordinal, index| {
+            let position = super::BatchResponsePositionV1 { demand_ordinal: ordinal as u64, range_index: index as u32 };
+            Ok(binding.packet_ids.contains(&position.packet_id(claim, context.scope_id, super::Stage::Begin)?))
+        })
+        .map_err(E::Decode)?;
+        retain_root_demand_v1(claim, context.scope_id, &ranges, demand_index, span)?
+    } else {
+        numerical_batch_streaming_demand_v1(
+            frame, &source, record, layout, &program, context.profile_id, streaming, maximum_ranges, leaf, demand_index,
+        )?
+    };
     demand.quote_open_v1(state, notice, lengths)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn selected_root_ranges_v1(
+    frame: &PalwTirPublicClaimV1,
+    source: &NativeRetainedV1<PalwTirPublicSourceV1>,
+    set: &TirSharedRequestSetV1<'_>,
+    record: &crate::palw_tir_admission_v1::PalwTirClassRecordV1,
+    layout: &crate::palw_tir_class_v1::PalwTirLayoutV1,
+    program: &TirProgramV1,
+    streaming: StreamingParameterCoverBudgetV1,
+    leaf: u64,
+    maximum_ranges: usize,
+) -> Result<RootRanges, E> {
+    let mut result = None;
+    let walked = PalwTirPublicSourceV1::visit_selected_root_inputs_v1(source, record, layout, streaming, leaf, |params, inputs| {
+        result = Some(root_ranges_v1(frame, source, set, leaf, inputs.iter().copied(), params, program, maximum_ranges, &mut None));
+        Ok(())
+    });
+    walked?;
+    result.ok_or_else(|| E::Decode("numerical Batch root is absent from the original".into()))?
+}
+
+/// The native reservation fixes positional capacities before the notice.
+/// A shorter root consumes a prefix of the same groups. Stop's special
+/// ordinal is never visited, and each earlier group must have a Begin slot.
+fn booked_range_span_v1(
+    count: usize,
+    demand_index: usize,
+    mut has_begin: impl FnMut(usize, usize) -> Result<bool, String>,
+) -> Result<std::ops::Range<usize>, String> {
+    if demand_index >= count {
+        return Err("numerical Batch root has no material at the reserved demand index".into());
+    }
+    let mut start = 0;
+    for ordinal in 0..=demand_index {
+        let mut capacity = 0;
+        while capacity < MAX_BATCH_RANGES_V1 && has_begin(ordinal, capacity)? {
+            capacity += 1;
+        }
+        if capacity == 0 || start >= count {
+            break;
+        }
+        let end = start + capacity;
+        if ordinal == demand_index {
+            return Ok(start..end.min(count));
+        }
+        start = end;
+    }
+    Err("numerical Batch root has no material at the reserved demand index".into())
 }
 
 /// Fold the positional maxima while visiting one authenticated root at a
@@ -404,6 +468,16 @@ fn finish_root_demand_v1(
     demand_index: usize,
 ) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
     let span = root_demand_span_v1(maximums, ranges.values().map(|(_, bytes)| *bytes), demand_index).map_err(E::Decode)?;
+    retain_root_demand_v1(claim, scope, ranges, demand_index, span)
+}
+
+fn retain_root_demand_v1(
+    claim: Hash64,
+    scope: Hash64,
+    ranges: &BTreeMap<Hash64, (MaterialTargetV1, u64)>,
+    demand_index: usize,
+    span: std::ops::Range<usize>,
+) -> Result<NativeRetainedV1<NumericalBatchRootDemandV1>, E> {
     let mut q = TirNativeRequestsV1::new();
     q.vec_v1::<(MaterialTargetV1, u64)>(span.len() as u64).map_err(E::Resource)?;
     q.exact_v1::<NumericalBatchRootDemandV1>(1).map_err(E::Resource)?;
@@ -541,7 +615,7 @@ fn root_ranges_v1(
 
 #[cfg(test)]
 mod tests {
-    use super::{check_material_lengths_v1, fold_maximums, partition_maximums_v1, root_demand_span_v1};
+    use super::{booked_range_span_v1, check_material_lengths_v1, fold_maximums, partition_maximums_v1, root_demand_span_v1};
 
     #[test]
     fn exact_lengths_cannot_substitute_or_reorder_selected_targets() {
@@ -587,6 +661,22 @@ mod tests {
         assert_eq!(root_demand_span_v1(&maximums, actual.into_iter(), 1).unwrap(), 1..2);
         assert!(root_demand_span_v1(&maximums, actual.into_iter(), 2).is_err());
         assert!(root_demand_span_v1(&maximums, [1, 3].into_iter(), 0).is_err());
+    }
+
+    #[test]
+    fn begin_slots_reconstruct_the_reserved_partition() {
+        use crate::palw_batch_court_v1::{MAX_BATCH_PART_BYTES_V1, MAX_BATCH_PARTS_V1};
+        let full = MAX_BATCH_PARTS_V1 as u64 * u64::from(MAX_BATCH_PART_BYTES_V1);
+        let maximums = [full, 2, 3, full, 2, 3];
+        let groups = partition_maximums_v1(&maximums).collect::<Vec<_>>();
+        for count in 0..=maximums.len() {
+            for ordinal in 0..=maximums.len() {
+                let booked = booked_range_span_v1(count, ordinal, |d, r| Ok(groups.get(d).is_some_and(|g| r < g.len())));
+                let expected = root_demand_span_v1(&maximums, (0..count).map(|_| 1), ordinal);
+                assert_eq!(booked, expected);
+            }
+        }
+        assert!(booked_range_span_v1(3, 1, |ordinal, _| Ok(ordinal == 1)).is_err());
     }
 
     #[test]
