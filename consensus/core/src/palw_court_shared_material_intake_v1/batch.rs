@@ -1,13 +1,14 @@
 //! Service projection of the signed pipelined material codec. The coordinator
 //! binds an accepted demand, native target bound and literal responder first.
 use super::{
-    MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1 as Action, MaterialIntakeScheduleV1, MaterialTargetV1,
-    SignedMaterialIntakeV1, material_batch_draft_id_v1,
+    MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1 as Action, MaterialDraftV1, MaterialIntakeScheduleV1,
+    MaterialTargetV1, SignedMaterialIntakeV1, material_batch_draft_id_v1,
 };
 use crate::Hash64;
 use crate::palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1};
 use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceRefusal, ServiceReservations, causal::CausalServicePacketV1};
-use crate::palw_state_v2::PalwBondKeyV2;
+use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
+use crate::palw_state_v2::{PalwBondKeyV2, PalwChainStateV2};
 use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
 use borsh::BorshSerialize;
 use std::collections::BTreeMap;
@@ -212,6 +213,15 @@ impl MaterialBatchDeliveryV1 {
         book: &ServiceReservations,
         schedule: MaterialIntakeScheduleV1,
     ) -> Result<(), ServiceRefusal> {
+        self.check_draft_assignments_v1(book, schedule, None)
+    }
+
+    fn check_draft_assignments_v1(
+        &self,
+        book: &ServiceReservations,
+        schedule: MaterialIntakeScheduleV1,
+        retained: Option<&MaterialDraftV1>,
+    ) -> Result<(), ServiceRefusal> {
         use ServiceRefusal::{DeadlineExhausted, InvalidState};
         let assigned = |stage| {
             let id = self.packet_id(stage).map_err(|_| InvalidState)?;
@@ -228,7 +238,11 @@ impl MaterialBatchDeliveryV1 {
             .claim_accepted_daa
             .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
             .ok_or(DeadlineExhausted)?;
-        let expires = schedule.draft_expires_v1(begin, hard, self.case_window.material_until_daa).map_err(|_| DeadlineExhausted)?;
+        let expires = match retained {
+            Some(draft) if draft.begun_daa == begin && draft.expires_daa <= hard => draft.expires_daa,
+            Some(_) => return Err(InvalidState),
+            None => schedule.draft_expires_v1(begin, hard, self.case_window.material_until_daa).map_err(|_| DeadlineExhausted)?,
+        };
         if finish >= expires {
             return Err(DeadlineExhausted);
         }
@@ -237,6 +251,23 @@ impl MaterialBatchDeliveryV1 {
             if part <= begin || part >= finish {
                 return Err(DeadlineExhausted);
             }
+        }
+        Ok(())
+    }
+
+    fn check_retained_draft_v1(&self, draft: &MaterialDraftV1) -> Result<(), ServiceRefusal> {
+        use ServiceRefusal::InvalidState;
+        draft.check(&Key::CourtMaterialDraft(self.claim, self.draft)).map_err(|_| InvalidState)?;
+        if draft.version != MATERIAL_BATCH_VERSION
+            || draft.scope_id != self.scope
+            || draft.head != self.request_root
+            || draft.target != self.target
+            || draft.submitter != self.signer
+            || draft.total_bytes != self.total
+            || draft.body_hash != self.body_hash
+            || draft.material_until_daa != self.case_window.material_until_daa
+        {
+            return Err(InvalidState);
         }
         Ok(())
     }
@@ -305,6 +336,91 @@ impl BatchCourtWindowV1 {
     }
 }
 
+/// Recover unresolved Batch deliveries against the same branch's accepted
+/// drafts. A completed or otherwise retired delivery is resolved by the
+/// coordinator before this repair path.
+pub(crate) fn repair_batch_material_v1(
+    state: &PalwChainStateV2,
+    window: BatchCourtWindowV1,
+    book: &mut ServiceReservations,
+    graph: &[CausalServicePacketV1],
+    deliveries: &[MaterialBatchDeliveryV1],
+    schedule: MaterialIntakeScheduleV1,
+) -> Result<usize, ServiceRefusal> {
+    use ServiceRefusal::InvalidState;
+    let claim = deliveries.first().ok_or(InvalidState)?.claim;
+    let service = state.court_service_state_v1().ok_or(InvalidState)?;
+    let binding = service.claims.get(&claim).ok_or(InvalidState)?;
+    let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(|_| InvalidState)?;
+    context.check_binding(service).map_err(|_| InvalidState)?;
+    if &service.book != &*book
+        || deliveries.iter().any(|delivery| delivery.claim != claim || delivery.scope != context.scope_id)
+        || graph.iter().any(|node| !binding.packet_ids.contains(&node.packet.id))
+    {
+        return Err(InvalidState);
+    }
+    let retained = deliveries
+        .iter()
+        .map(|delivery| match state.staged_court_row_v1(&Key::CourtMaterialDraft(delivery.claim, delivery.draft)) {
+            Some(Row::CourtMaterialDraft(draft)) => Ok((delivery, Some(draft.as_ref()))),
+            Some(_) => Err(ServiceRefusal::InvalidState),
+            None => Ok((delivery, None)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    repair_batch_material_with_drafts_v1(window, book, graph, &retained, schedule)
+}
+
+fn repair_batch_material_with_drafts_v1(
+    window: BatchCourtWindowV1,
+    book: &mut ServiceReservations,
+    graph: &[CausalServicePacketV1],
+    deliveries: &[(&MaterialBatchDeliveryV1, Option<&MaterialDraftV1>)],
+    schedule: MaterialIntakeScheduleV1,
+) -> Result<usize, ServiceRefusal> {
+    use ServiceRefusal::{DeadlineExhausted, InvalidState};
+    window.check().map_err(|_| InvalidState)?;
+    let hard = window
+        .claim_accepted_daa
+        .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
+        .ok_or(DeadlineExhausted)?
+        .min(window.collect_until_daa);
+    if deliveries.is_empty() || deliveries.iter().any(|(delivery, _)| delivery.case_window != window) {
+        return Err(InvalidState);
+    }
+    book.check_causal_v1(graph)?;
+    let nodes: BTreeMap<_, _> = graph.iter().map(|node| (node.packet.id, node)).collect();
+    let mut expires = BTreeMap::new();
+    for (delivery, retained) in deliveries {
+        delivery.check_case_dependencies_v1(&nodes)?;
+        if let Some(draft) = retained {
+            delivery.check_retained_draft_v1(draft)?;
+            let id = |stage| delivery.packet_id(stage).map_err(|_| InvalidState);
+            // Begin already exists on this branch. A repair may not move it.
+            expires.insert(id(Stage::Begin)?, draft.begun_daa.checked_add(1).ok_or(DeadlineExhausted)?);
+            expires.insert(id(Stage::Finish)?, draft.expires_daa);
+            for offset in (0..delivery.total).step_by(PART as usize) {
+                expires.insert(id(Stage::Part(offset))?, draft.expires_daa);
+            }
+        }
+        delivery.check_draft_assignments_v1(book, schedule, *retained)?;
+    }
+    let ids = nodes.keys().copied().collect();
+    let edges = graph.iter().map(|node| (node.packet.id, node.predecessors.clone())).collect();
+    book.repair_missing_ordered_checked_v1(
+        &ids,
+        hard,
+        &edges,
+        |id| expires.get(id).copied(),
+        |candidate| {
+            candidate.check_causal_v1(graph)?;
+            for (delivery, draft) in deliveries {
+                delivery.check_draft_assignments_v1(candidate, schedule, *draft)?;
+            }
+            Ok(())
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,6 +486,87 @@ mod tests {
         case.reserve_latest_notice_material_v1(&mut book, &graph, terminal, 1, &[delivery], schedule).unwrap();
         assert_eq!(book.assigned_daa(&finish), Some(first + 2));
         assert_eq!(book.assigned_daa(&terminal), Some(first + 3));
+    }
+
+    #[test]
+    fn missing_batch_part_repair_keeps_retained_begin_and_expiry() {
+        let h = Hash64::from_u64_word;
+        let case = BatchCourtWindowV1 {
+            claim_accepted_daa: 2,
+            challenge_opened_daa: 3_122,
+            collect_until_daa: 10_002,
+            material_until_daa: 11_000,
+        };
+        let first = case.challenge_opened_daa + 1;
+        let begin = SignedMaterialIntakeV1 {
+            version: MATERIAL_BATCH_VERSION,
+            claim: h(1),
+            scope_id: h(2),
+            target: MaterialTargetV1::Unit { ordinal: 7 },
+            submitter: PalwBondKeyV2(TransactionOutpoint::new(h(3), 0)),
+            action: Action::Begin { total_bytes: 1, body_hash: h(4) },
+            signature: Vec::new(),
+        };
+        let cost = |bytes| Ok(ServiceCost { bytes, work: 1, io: 1, controls: 1 });
+        let delivery = MaterialBatchDeliveryV1::new(h(5), &begin, 1, case, first, first + 12).unwrap();
+        let mut graph = delivery.service_graph_v1(first, first + 12, cost).unwrap();
+        graph[2].packet.release_daa = first + 5;
+        let (begin_packet, part_packet, finish_packet) = (graph[0].packet.id, graph[1].packet.id, graph[2].packet.id);
+        let terminal = [18; 64];
+        graph.push(CausalServicePacketV1 {
+            packet: ServicePacket { id: terminal, release_daa: first, service_before: first + 12, cost: cost(1).unwrap() },
+            predecessors: vec![finish_packet],
+        });
+        let mut schedule = super::super::material_intake_schedule_v1().unwrap();
+        schedule.draft_ttl_daa = 7;
+        let mut book = ServiceReservations::new(ServiceCost { bytes: PART * 2, work: 1, io: 1, controls: 1 }).unwrap();
+        case.reserve_latest_notice_material_v1(&mut book, &graph, terminal, 1, std::slice::from_ref(&delivery), schedule).unwrap();
+        let begun_block = h(20);
+        book.observe_block(first, begun_block.as_bytes(), ServiceCost::default()).unwrap();
+        let draft = MaterialDraftV1 {
+            version: begin.version,
+            claim: begin.claim,
+            scope_id: begin.scope_id,
+            target: begin.target,
+            submitter: begin.submitter,
+            draft_id: delivery.draft,
+            total_bytes: 1,
+            body_hash: h(4),
+            begun_block,
+            begun_daa: first,
+            last_daa: first,
+            accepted_bytes: 0,
+            head: delivery.request_root,
+            expires_daa: first + 7,
+            material_until_daa: case.material_until_daa,
+        };
+        let mut repaired: ServiceReservations = borsh::from_slice(&borsh::to_vec(&book).unwrap()).unwrap();
+        let retained: MaterialDraftV1 = borsh::from_slice(&borsh::to_vec(&draft).unwrap()).unwrap();
+        repaired.observe_block(first + 2, h(21).as_bytes(), ServiceCost::default()).unwrap();
+        assert_eq!(
+            repair_batch_material_with_drafts_v1(case, &mut repaired, &graph, &[(&delivery, Some(&retained))], schedule),
+            Ok(1),
+        );
+        assert_eq!(repaired.assigned_daa(&begin_packet), Some(first));
+        assert_eq!(repaired.assigned_daa(&part_packet), Some(first + 3));
+        assert_eq!(repaired.assigned_daa(&finish_packet), Some(first + 5));
+
+        let mut late = book;
+        late.observe_block(first + 6, h(22).as_bytes(), ServiceCost::default()).unwrap();
+        let old = late.clone();
+        schedule.draft_ttl_daa = 50;
+        assert_eq!(
+            repair_batch_material_with_drafts_v1(case, &mut late, &graph, &[(&delivery, Some(&retained))], schedule),
+            Err(ServiceRefusal::DeadlineExhausted),
+        );
+        assert_eq!(late, old);
+        let mut foreign = retained;
+        foreign.head = h(23);
+        assert_eq!(
+            repair_batch_material_with_drafts_v1(case, &mut late, &graph, &[(&delivery, Some(&foreign))], schedule),
+            Err(ServiceRefusal::InvalidState),
+        );
+        assert_eq!(late, old);
     }
 
     #[test]

@@ -265,11 +265,26 @@ impl ServiceReservations {
         hard_deadline: u64,
         edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
     ) -> Result<usize, ServiceRefusal> {
+        self.repair_missing_ordered_checked_v1(ids, hard_deadline, edges, |_| None, |_| Ok(()))
+    }
+
+    /// Native recovery may shorten a slot's search window and verify the
+    /// proposed assignments without changing the original packet promises.
+    pub(crate) fn repair_missing_ordered_checked_v1(
+        &mut self,
+        ids: &BTreeSet<[u8; 64]>,
+        hard_deadline: u64,
+        edges: &BTreeMap<[u8; 64], Vec<[u8; 64]>>,
+        expires_before: impl Fn(&[u8; 64]) -> Option<u64>,
+        check_assignments: impl FnOnce(&Self) -> Result<(), ServiceRefusal>,
+    ) -> Result<usize, ServiceRefusal> {
         self.check().map_err(|_| ServiceRefusal::InvalidState)?;
+        let deadline = |packet: &ServicePacket| packet.service_before.min(expires_before(&packet.id).unwrap_or(u64::MAX));
         let Some(now) = self.last_observed_daa else {
             if ids.iter().any(|id| !self.packets.contains_key(id)) {
                 return Err(ServiceRefusal::InvalidState);
             }
+            check_assignments(self)?;
             return Ok(0);
         };
         let mut missing = Vec::new();
@@ -284,10 +299,11 @@ impl ServiceReservations {
             }
         }
         if missing.is_empty() {
+            check_assignments(self)?;
             return Ok(0);
         }
         let next = now.checked_add(1).ok_or(ServiceRefusal::DeadlineExhausted)?;
-        if missing.iter().any(|packet| next >= packet.service_before) {
+        if missing.iter().any(|packet| next >= deadline(packet)) {
             return Err(ServiceRefusal::DeadlineExhausted);
         }
         // Topological order over the missed set (ready by deadline then identity: the legacy order when no edge applies).
@@ -306,7 +322,7 @@ impl ServiceReservations {
             }
             waiting.insert(packet.id, count);
             if count == 0 {
-                ready.insert((packet.service_before, packet.id));
+                ready.insert((deadline(packet), packet.id));
             }
         }
         let mut order = Vec::with_capacity(missing.len());
@@ -316,7 +332,7 @@ impl ServiceReservations {
                 let count = waiting.get_mut(child).ok_or(ServiceRefusal::InvalidState)?;
                 *count -= 1;
                 if *count == 0 {
-                    ready.insert((by_id[child].service_before, *child));
+                    ready.insert((deadline(by_id[child]), *child));
                 }
             }
         }
@@ -349,7 +365,7 @@ impl ServiceReservations {
                     .ok_or(ServiceRefusal::DeadlineExhausted)?;
                 floor = floor.max(after);
             }
-            let (slot, residual) = (floor..packet.service_before)
+            let (slot, residual) = (floor..deadline(packet))
                 .find_map(|daa| {
                     candidate.remaining.get(&daa).copied().unwrap_or(candidate.budget).subtract(packet.cost).map(|left| (daa, left))
                 })
@@ -371,6 +387,7 @@ impl ServiceReservations {
             }
         }
         candidate.check().map_err(|_| ServiceRefusal::InvalidState)?;
+        check_assignments(&candidate)?;
         *self = candidate;
         Ok(missing.len())
     }

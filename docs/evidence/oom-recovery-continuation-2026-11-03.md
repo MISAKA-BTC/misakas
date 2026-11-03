@@ -2394,3 +2394,27 @@ B0 and relay agreed on the selected tip at DAA 19,683. The bounded
 selected-chain read found no new Qwen carrier after the previous
 cursor. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-expiry-live.PYjEXy/page.json`.
+
+## Batch recovery under the retained draft deadline
+
+The native recovery adapter checks that the service book, binding,
+packet ownership and retained drafts come from the same claim state.
+A retained Begin keeps its accepted DAA. The missing-slot scheduler
+uses the retained exclusive expiry for the remaining parts and Finish,
+then checks the repaired graph and draft spans before committing any
+assignment. An expired or foreign draft leaves the existing book
+intact, with no new default authority.
+
+Nineteen extracted Core checks passed. The recovery fixture Borsh
+round-tripped the book and draft, repaired one missed Part ahead of its
+retained Finish, and rejected recovery at the original expiry even
+with a longer current schedule. It also refused a substituted draft
+root. This harness does not exercise the native state lookup or the
+production dispatcher.
+See `/private/tmp/misaka-t12-oom-20261102/tfp1-material-repair.r6RwFg/tests.log`.
+
+B0 and relay agreed at DAA 19,684. A new Qwen carrier at DAA 19,681
+was referenced by the selected fold at DAA 19,683. Its signed retention
+is 40,289, and the paired reads found no claim row. The producer
+journal confirms the submission. No exact fold refusal was observed.
+See `/private/tmp/misaka-t12-oom-20261102/g14-batch-repair-live.ELiRuy/page.json`.
