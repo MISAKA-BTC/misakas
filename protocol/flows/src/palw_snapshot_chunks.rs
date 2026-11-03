@@ -447,6 +447,14 @@ pub(crate) struct SnapshotSender {
     pub profile: Option<SnapshotCompressionV1>,
     next: u32,
 }
+
+#[derive(Debug)]
+pub(crate) enum SnapshotChunkReadError {
+    RequestMismatch,
+    Expired,
+    Storage(io::Error),
+}
+
 impl SnapshotSender {
     /// Called on the blocking pool AFTER acquiring the global session lease and before
     /// materializing the native snapshot. Writes Borsh directly; no whole encoded Vec.
@@ -535,20 +543,22 @@ impl SnapshotSender {
         self.next = index;
         Ok(())
     }
-    pub(crate) fn chunk(&mut self, point: Hash64, root: Option<Hash64>, index: u32) -> io::Result<Vec<u8>> {
-        if self.expired()
-            || point != self.point
+    pub(crate) fn chunk(&mut self, point: Hash64, root: Option<Hash64>, index: u32) -> Result<Vec<u8>, SnapshotChunkReadError> {
+        if self.expired() {
+            return Err(SnapshotChunkReadError::Expired);
+        }
+        if point != self.point
             || index != self.next
             || index >= self.count
             || (index == 0 && root.is_some())
             || (index > 0 && root != Some(self.root))
         {
-            return Err(invalid("snapshot point/root/order/session changed"));
+            return Err(SnapshotChunkReadError::RequestMismatch);
         }
         let offset = index as u64 * CHUNK_BYTES as u64;
         let mut bytes = vec![0; (self.total - offset).min(CHUNK_BYTES as u64) as usize];
-        self.spill.file.seek(SeekFrom::Start(offset))?;
-        self.spill.file.read_exact(&mut bytes)?;
+        self.spill.file.seek(SeekFrom::Start(offset)).map_err(SnapshotChunkReadError::Storage)?;
+        self.spill.file.read_exact(&mut bytes).map_err(SnapshotChunkReadError::Storage)?;
         self.next += 1;
         Ok(bytes)
     }
@@ -1300,6 +1310,23 @@ mod tests {
         }
         let got: (Vec<u8>, Vec<(Hash64, Vec<u8>)>) = receiver.decode().unwrap();
         assert_eq!(got, value);
+    }
+
+    #[test]
+    fn chunk_spill_failure_and_expiry_do_not_implicate_the_peer() {
+        let budget = Arc::new(Semaphore::new(1));
+        let spill = SnapshotSpill::with_budget(budget.clone()).unwrap();
+        let mut sender = SnapshotSender::encode(spill, h(1), &vec![1u8; 10]).unwrap();
+        assert!(matches!(sender.chunk(h(2), None, 0), Err(SnapshotChunkReadError::RequestMismatch)));
+        // This is a local storage failure after an otherwise valid request.
+        sender.spill.file.set_len(0).unwrap();
+        assert!(matches!(sender.chunk(h(1), None, 0), Err(SnapshotChunkReadError::Storage(ref error))
+            if error.kind() == io::ErrorKind::UnexpectedEof));
+        assert_eq!(sender.next_index(), 0);
+        sender.spill.created = Instant::now() - SESSION_TTL - Duration::from_secs(1);
+        assert!(matches!(sender.chunk(h(1), None, 0), Err(SnapshotChunkReadError::Expired)));
+        drop(sender);
+        assert_eq!(budget.available_permits(), 1);
     }
     #[test]
     fn hostile_chunk_order_replay_point_root_length_eof_and_cancel_are_refused() {
