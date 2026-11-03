@@ -1265,3 +1265,16 @@ the same minimum to 120,574 bytes. A larger real delta still requires its
 actual preflight. Thirteen standalone Contract and streaming cases passed
 and the isolated Consensus test target typechecked. The changes are staged
 as candidates while the current heartbeat runtime pins its source.
+
+The [empty-heartbeat differential](native-journal-empty-heartbeat-differential.json)
+links the same driver against the old and repaired Core archives. The old
+archive refuses the first metered transition. The repaired archive matches
+eight unmetered roots and deltas under a 1 MiB logical cap, and applying and
+reverting each of those deltas reproduces its child and parent roots.
+
+The exact recovery candidate is preserved as commit `7eaf2ba68`. It also
+refuses a new registration before its debit when its heap cap cannot cover
+even the two inserted rows and the mandatory final point. The extracted
+floor matched the actual fixture-shaped native wire preflight at 120,190
+bytes. Integrated validation is pending. The primary worktree retains the
+running heartbeat test's source map.
