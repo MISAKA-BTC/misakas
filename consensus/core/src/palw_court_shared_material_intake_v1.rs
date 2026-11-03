@@ -762,6 +762,16 @@ fn decode_unit(
 ) -> Result<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1, String> {
     let bound = source.unit_bound_v1(&q)?;
     let _scratch = crate::palw_native_resource_v1::reserve_native_requests_v1(bound.resident_ram_bytes).map_err(|e| e.to_string())?;
+    decode_unit_after_reservation_v1(state, c, source, q, bytes)
+}
+
+fn decode_unit_after_reservation_v1(
+    state: &PalwChainStateV2,
+    c: &shared::SharedTirContextV1,
+    source: &Source,
+    q: Query,
+    bytes: &[u8],
+) -> Result<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1, String> {
     let response = source.decode_response_v1(&q, bytes)?;
     let rows = match q {
         Query::RowsNode { .. } | Query::TileNode { .. } | Query::TraceTile { .. } => {
@@ -806,6 +816,95 @@ pub(crate) struct RootedMaterialV1 {
 }
 #[allow(dead_code)]
 impl RootedMaterialV1 {
+    /// Load only the selected numerical target IDs, in canonical order, for
+    /// a later verification point. The caller derives this list from the
+    /// accepted notice and original reservation. This does not run a verdict.
+    pub(crate) fn load_selected_batch_v1(
+        state: &PalwChainStateV2,
+        claim: Hash64,
+        targets: &[MaterialTargetV1],
+        verify_daa: u64,
+    ) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<Self>, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
+        use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, NativeRetainedV1, TirNativeRequestsV1, reserve_native_requests_v1};
+        use crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1 as Unit;
+        let c = shared::context(state, claim).map_err(E::Decode)?;
+        if !c.batch_notice_only_v1()
+            || !(c.original_accepted_daa..c.hard_daa).contains(&verify_daa)
+            || !(1..=batch::native_ranges::MAX_BOOKED_NUMERICAL_RANGES_V1).contains(&targets.len())
+        {
+            return Err(E::Decode("selected Batch material has a foreign scope, count or verification point".into()));
+        }
+        let source = c.source(state).map_err(E::Decode)?;
+        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, claim).map_err(E::Decode)?, &source, c.profile_id)
+            .map_err(E::Decode)?;
+        let mut quote = TirNativeRequestsV1::new();
+        quote.exact_v1::<Self>(1).map_err(E::Resource)?;
+        let mut previous = None;
+        let (mut unit_count, mut param_count, mut tile_count) = (0, 0, 0);
+        for &target in targets {
+            let id = target.id_v1(claim).map_err(E::Decode)?;
+            if previous.is_some_and(|old| old >= id) {
+                return Err(E::Decode("selected Batch material repeats or reorders a target".into()));
+            }
+            previous = Some(id);
+            if target == MaterialTargetV1::FullIds {
+                selected_batch_ids_v1(state, c, verify_daa).map_err(E::Decode)?;
+                continue;
+            }
+            let row = selected_batch_row_v1(state, c, target, id, verify_daa).map_err(E::Decode)?;
+            match target {
+                MaterialTargetV1::Unit { ordinal } => {
+                    let request = set.request_at(ordinal).map_err(E::Decode)?;
+                    if !matches!(request, Query::StepLeaf { .. } | Query::StepRun { .. }) {
+                        return Err(E::Decode("selected Batch unit is not numerical step material".into()));
+                    }
+                    let bound = source.unit_bound_v1(&request).map_err(E::Decode)?;
+                    quote.add_v1(bound.resident_ram_bytes).map_err(E::Resource)?;
+                    unit_count += 1;
+                }
+                MaterialTargetV1::Parameter { .. } => param_count += 1,
+                MaterialTargetV1::PromptFlat | MaterialTargetV1::PromptTile { .. } => {
+                    quote.add_v1(TirNativeRequestsV1::product_v1(row.bytes.len() as u64, 2).map_err(E::Resource)?)
+                        .map_err(E::Resource)?;
+                    tile_count += u64::from(matches!(target, MaterialTargetV1::PromptTile { .. }));
+                }
+                MaterialTargetV1::FullIds => unreachable!("FullIds handled before the row lookup"),
+            }
+        }
+        quote.vec_v1::<Unit>(unit_count).map_err(E::Resource)?;
+        quote.vec_v1::<NativeRetainedV1<crate::palw_artifact::PalwArtifactOpeningV1>>(param_count).map_err(E::Resource)?;
+        quote.vec_v1::<PalwPromptIdsOpeningV1>(tile_count).map_err(E::Resource)?;
+        let lease = reserve_native_requests_v1(quote.bytes_v1()).map_err(E::Resource)?;
+        let mut units = Vec::with_capacity(unit_count as usize);
+        let mut params = Vec::with_capacity(param_count as usize);
+        let mut tiles = Vec::with_capacity(tile_count as usize);
+        let (mut flat, mut ids) = (None, None);
+        for &target in targets {
+            if target == MaterialTargetV1::FullIds {
+                let row = selected_batch_ids_v1(state, c, verify_daa).map_err(E::Decode)?;
+                ids = Some(source.retain_complete_ids_classified_v2(row.rows_root, &row.ids)?);
+                continue;
+            }
+            let id = target.id_v1(claim).map_err(E::Decode)?;
+            let row = selected_batch_row_v1(state, c, target, id, verify_daa).map_err(E::Decode)?;
+            row.check(&Key::CourtMaterial(claim, id)).map_err(E::Decode)?;
+            if let MaterialTargetV1::Unit { ordinal } = target {
+                let request = set.request_at(ordinal).map_err(E::Decode)?;
+                units.push(decode_unit_after_reservation_v1(state, c, &source, request, &row.bytes).map_err(E::Decode)?);
+                continue;
+            }
+            match decode_material_v1(state, c, &source, claim, target, &row.bytes, None).map_err(E::Decode)? {
+                DecodedMaterialV1::Parameter(p) => params.push(p),
+                DecodedMaterialV1::PromptFlat(v) => flat = Some(v),
+                DecodedMaterialV1::PromptTile(t) => tiles.push(t),
+                DecodedMaterialV1::Unit(u) => units.push(u),
+            }
+        }
+        Self::from_decoded_v1(units, params, ids, flat, tiles)
+            .map(|material| NativeRetainedV1::from_owner_reserved_v1(material, lease))
+            .map_err(E::Decode)
+    }
+
     /// Reads canonical intake rows and the existing shared query bodies / ID row.
     pub(crate) fn load_v1(state: &PalwChainStateV2, claim: Hash64) -> Result<Self, String> {
         let c = shared::context(state, claim)?;
@@ -831,23 +930,35 @@ impl RootedMaterialV1 {
                 DecodedMaterialV1::Unit(u) => units.push(u),
             }
         }
-        // Existing rooted shared query bodies are the same authenticated units.
-        let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, claim)?, &source, c.profile_id)?;
-        for ordinal in 0..set.len() {
-            let q = set.request_at(ordinal)?;
-            if matches!(q, Query::Ids { .. })
-                || units.iter().any(|u: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1| u.request_v1() == q)
-            {
-                continue;
-            }
-            if let Some(Row::CourtSharedQuery(row)) = state.staged_court_row_v1(&Key::CourtSharedQuery(set.request_id(ordinal)?))
-                && let Some(body) = &row.body
-            {
-                units.push(decode_unit(state, c, &source, q, &body.bytes)?);
+        // Batch-only contexts never admit bodies on the legacy shared rows.
+        if !c.batch_notice_only_v1() {
+            let set = crate::palw_court_tir_requests_v1::TirSharedRequestSetV1::new(frame_of(state, claim)?, &source, c.profile_id)?;
+            for ordinal in 0..set.len() {
+                let q = set.request_at(ordinal)?;
+                if matches!(q, Query::Ids { .. })
+                    || units.iter().any(|u: &crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1| u.request_v1() == q)
+                {
+                    continue;
+                }
+                if let Some(Row::CourtSharedQuery(row)) = state.staged_court_row_v1(&Key::CourtSharedQuery(set.request_id(ordinal)?))
+                    && let Some(body) = &row.body
+                {
+                    units.push(decode_unit(state, c, &source, q, &body.bytes)?);
+                }
             }
         }
-        params.sort_by_key(|p| p.leaf_index);
-        tiles.sort_by_key(|t| t.tile_index);
+        Self::from_decoded_v1(units, params, ids, flat, tiles)
+    }
+
+    fn from_decoded_v1(
+        units: Vec<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedUnitV1>,
+        mut params: Vec<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_artifact::PalwArtifactOpeningV1>>,
+        ids: Option<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1>>,
+        flat: Option<Vec<u32>>,
+        mut tiles: Vec<PalwPromptIdsOpeningV1>,
+    ) -> Result<Self, String> {
+        params.sort_unstable_by_key(|p| p.leaf_index);
+        tiles.sort_unstable_by_key(|t| t.tile_index);
         let prompt = match (flat, tiles.is_empty()) {
             (Some(v), true) => RootedPromptV1::Flat(v),
             (None, false) => RootedPromptV1::Merkle(tiles),
@@ -887,9 +998,55 @@ impl RootedMaterialV1 {
     }
 }
 
+fn selected_batch_row_v1<'a>(
+    state: &'a PalwChainStateV2, c: &shared::SharedTirContextV1, target: MaterialTargetV1, id: Hash64, verify_daa: u64,
+) -> Result<&'a MaterialRowV1, String> {
+    let Some(Row::CourtMaterial(row)) = state.staged_court_row_v1(&Key::CourtMaterial(c.claim, id)) else {
+        return Err("selected Batch material is missing".into());
+    };
+    if (row.claim, row.scope_id, row.target, row.target_id, row.material_until_daa)
+        != (c.claim, c.scope_id, target, id, c.material_until_daa)
+        || !batch_material_precedes_verification_v1(c.original_accepted_daa, row.accepted_daa, verify_daa, row.material_until_daa)
+    {
+        return Err("selected Batch material changes the original or verification window".into());
+    }
+    Ok(row)
+}
+
+fn selected_batch_ids_v1<'a>(
+    state: &'a PalwChainStateV2, c: &shared::SharedTirContextV1, verify_daa: u64,
+) -> Result<&'a shared::SharedTirIdsV1, String> {
+    let key = Key::CourtSharedIds(c.claim);
+    let Some(Row::CourtSharedIds(row)) = state.staged_court_row_v1(&key) else {
+        return Err("selected Batch FullIds are missing".into());
+    };
+    row.check(&key)?;
+    if (row.scope_id, row.material_until_daa) != (c.scope_id, c.material_until_daa)
+        || !batch_material_precedes_verification_v1(c.original_accepted_daa, row.accepted_daa, verify_daa, row.material_until_daa)
+    {
+        return Err("selected Batch FullIds change the original or verification window".into());
+    }
+    Ok(row)
+}
+
+fn batch_material_precedes_verification_v1(original: u64, accepted: u64, verify: u64, material_until: u64) -> bool {
+    original <= accepted && accepted < verify && verify < material_until
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_material_must_precede_verification_and_still_be_retained() {
+        assert!(batch_material_precedes_verification_v1(100, 100, 200, 201));
+        assert!(batch_material_precedes_verification_v1(100, 199, 200, 201));
+        assert!(!batch_material_precedes_verification_v1(100, 99, 200, 201));
+        assert!(!batch_material_precedes_verification_v1(100, 200, 200, 201));
+        assert!(!batch_material_precedes_verification_v1(100, 201, 200, 201));
+        assert!(!batch_material_precedes_verification_v1(100, 199, 200, 200));
+        assert!(!batch_material_precedes_verification_v1(100, 199, 200, 199));
+    }
     #[test]
     fn material_schedule_is_the_approved_estimate_unless_injected() {
         set_material_intake_test_schedule_v1(None);

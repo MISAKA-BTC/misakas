@@ -968,6 +968,17 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
     let Some(Row::CourtMaterial(material)) = b.state.staged_court_row_v1(&key) else { panic!("Batch material did not become canonical") };
     assert_eq!(material.bytes, body);
+    let verify_daa = response_deadline;
+    assert!(RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &[target], finish_at.daa_score).is_err());
+    assert!(RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &[target, target], verify_daa).is_err());
+    let mut selected = lengths.iter().map(|(target, _)| *target).collect::<Vec<_>>();
+    selected.push(MaterialTargetV1::PromptTile { tile: u32::MAX });
+    selected.sort_unstable_by_key(|target| target.id_v1(claim).unwrap());
+    assert!(RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &selected, verify_daa).is_err());
+    let material = RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &[target], verify_daa).unwrap();
+    let store = material.store_v1(&b.state, claim, scope_id).unwrap();
+    use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
+    assert_eq!(store.prompt_token_ids().unwrap(), fx.execution.prompt);
     let completed = quote_batch_response_v1(&b.state, claim, ordinal, target).unwrap();
     assert!(completed.material_available);
     assert!(completed.retained_submitter.is_none());

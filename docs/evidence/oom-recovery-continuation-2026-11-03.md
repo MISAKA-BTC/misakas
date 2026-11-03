@@ -3961,3 +3961,27 @@ B0 and relay agreed at virtual DAA 19,735. The two selected blocks
 contained no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-booked-response.uxlcTw/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-booked-response-live.pAWgzc/page.json`.
+
+## Load selected Batch inputs for the numerical verifier
+
+The material adapter now accepts a canonical selected target list
+and a verification DAA. It looks up those rooted inputs directly,
+checks their original and retention interval, and re-authenticates
+their bodies before constructing the existing evidence store. It
+quotes retained step and prompt workspace before decoding and
+keeps the memory lease with the loaded material. The generic
+loader also skips the legacy shared-query scan for Batch-only
+contexts, where those rows cannot contain bodies.
+
+The extracted timing test passed all seven boundary assertions.
+The native fixture adds missing, duplicate and same-DAA refusal
+checks and reads back the authenticated prompt through the evidence
+store. The integrated fixture has not run. The loader is a
+preparation API. The reserved terminal operation must still derive
+the complete selected list, invoke the numerical verifier and
+commit its outcome with the claim.
+
+B0 and relay agreed at virtual DAA 19,735. The one additional
+selected block contained no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-selected-material.ojxsDg/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-selected-material-live.8lMql9/page.json`.
