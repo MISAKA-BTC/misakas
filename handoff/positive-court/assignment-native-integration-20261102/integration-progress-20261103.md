@@ -1509,3 +1509,23 @@ regression and the one-byte-under heap-cap checks, but they have yet to
 run on A0. Full Consensus verification, cold archive I/O accounting and
 connection of the Case reader to accepted op9 remain open. The candidate
 is separate from the source pinned by the custody/index run.
+
+### Pinned acceptance archive reads
+
+The [combined candidate](assigned-case-pinned-acceptance-candidate-20261103.tar.gz)
+adds a pinned acceptance-data view to the reconciled Case archive patch.
+It validates the exact persisted bincode record before finding a creator
+strictly earlier than the current accepted transaction. Original Assignment,
+Case and relay input reconstruction borrow that view rather than decoding
+the full mergeset vectors into the ordinary cache. The work bound charges
+both per-input traversals by the accepted record's byte extent, including
+mergeset blocks with zero accepted transactions.
+
+The isolated parser regression passed with the repository's Hash64 and
+bincode. The same store source and test also passed with actual RocksDB
+and an empty cache after DB reopen. The direct test harness uses the
+repository's acceptance structs and block hasher with linked DB and
+serialization dependencies. It does not exercise the full Consensus
+archive caller. The combined patch applies cleanly to A0 and is staged
+outside the active source map. Cold block-body and UTXO-diff decode
+ownership, plus full Consensus typechecking and native replay, remain open.
