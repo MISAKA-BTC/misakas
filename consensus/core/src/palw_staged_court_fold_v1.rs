@@ -1155,7 +1155,7 @@ impl TransitionBuilder<'_> {
         &mut self,
         at: &PalwBlockContextV2,
         signed: &crate::palw_court_shared_material_intake_v1::batch::numerical_verification::SignedNumericalBatchVerificationV1,
-        budget: crate::palw_court_shared_material_intake_v1::batch::native_ranges::NumericalBatchReplayBudgetV1,
+        budget: crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayBudgetV1,
     ) -> Result<(), PalwStateV2Error> {
         use crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1;
         use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::verify_rooted_numerical_batch_v1;

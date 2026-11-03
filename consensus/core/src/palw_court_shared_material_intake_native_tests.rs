@@ -764,19 +764,24 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let range_count = ranges.len();
     let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
     use batch::admission::{NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1, reserve_native_batch_delivery_v1};
+    use batch::numerical_verification::NumericalBatchReplayBudgetV1;
     let mut service = crate::palw_court_service_release_v1::CourtServiceRowV3::from_v2(state.court_service_state_v1().unwrap());
     service.state.book = ServiceReservations::new(ServiceCost { bytes: 64 * 64 * 1024, work: 64, io: 64, controls: 64 }).unwrap();
     service.state.claims.get_mut(&claim).unwrap().packet_ids.clear();
     let envelope = NumericalBatchEnvelopeV1::test_only_v1(claim, context.profile_id, scope_id, vec![PART as u64; range_count]);
     let costs = NativeBatchDeliveryCostsV1 {
-        numerical_verification: cost(1), terminal: cost(1), recovery_daa: 1, maximum_packets: 3 + 3 * range_count,
+        numerical_verification: NumericalBatchReplayBudgetV1::test_only_v1(),
+        terminal: cost(1), recovery_daa: 1, maximum_packets: 3 + 3 * range_count,
         timing: NativeBatchDeliveryTimingV1 {
             open_daa: 2, provider_wait_daa: 2, begin_daa: 2, parts_daa: 2,
             finish_daa: 3, verification_daa: 2, stop_daa: 1, terminal_daa: 1,
         },
     };
+    let replay_budget = costs.numerical_verification;
+    let (verification, _) = batch::admission::batch_numerical_service_ids_v1(claim, scope_id).unwrap();
     let (quote, service) = reserve_native_batch_delivery_v1(service, frame, &envelope, None, costs, storage, |_, bytes| Ok(cost(bytes))).unwrap();
     assert!(quote.required_daa <= 10_000);
+    assert_eq!(service.state.book.packet(&verification).unwrap().cost, replay_budget.service_cost_v1().unwrap());
     assert_eq!(quote.carrier_storage_rent_sompi, range_count as u64 * PART as u64 * storage.sompi_per_byte);
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
 

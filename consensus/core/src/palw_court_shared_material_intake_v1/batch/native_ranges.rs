@@ -291,13 +291,6 @@ pub(crate) struct PreparedNumericalBatchMaterialV1 {
     pub material: NativeRetainedV1<super::super::RootedMaterialV1>,
 }
 
-/// The native profile must account for both bounded evaluation passes and
-/// the temporary cone carriage and interpreter workspace.
-pub(crate) struct NumericalBatchReplayBudgetV1 {
-    pub work: crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1,
-    pub workspace_bytes: u64,
-}
-
 pub(crate) struct NumericalBatchFindingV1 {
     pub claim: Hash64,
     pub leaf: u64,
@@ -313,7 +306,7 @@ pub(crate) fn replay_numerical_batch_v1(
     state: &PalwChainStateV2,
     claim: Hash64,
     rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
-    budget: NumericalBatchReplayBudgetV1,
+    budget: super::numerical_verification::NumericalBatchReplayBudgetV1,
 ) -> Result<NumericalBatchFindingV1, E> {
     use crate::palw_tir_court_v1::{PalwTirCourtRulesV1, replay_tir_cone_from_store_v1};
     rules.check().map_err(E::Decode)?;

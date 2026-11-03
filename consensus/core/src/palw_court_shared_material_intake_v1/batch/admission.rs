@@ -1,6 +1,7 @@
 //! Preclaim capacity projection for bounded native Batch material paths.
 use super::{BatchResponsePositionV1, MaterialIntakeScheduleV1, PART, Stage};
 use super::{constraint_stop::ConstraintStopBatchOperandsV1, native_ranges::NumericalBatchEnvelopeV1};
+use super::numerical_verification::NumericalBatchReplayBudgetV1;
 use crate::{
     Hash64,
     palw_batch_court_v1::{BatchCourtErrorV1, BatchCourtWindowV1, MAX_BATCH_PARTS_V1, MAX_BATCH_RANGES_V1},
@@ -64,7 +65,7 @@ pub(crate) struct BatchAdmissionQuoteV1 {
 /// Costs supplied by the versioned native profile. A reservation covers
 /// delivery and these service stages, without recording a verdict or credit.
 pub(crate) struct NativeBatchDeliveryCostsV1 {
-    pub numerical_verification: ServiceCost,
+    pub numerical_verification: NumericalBatchReplayBudgetV1,
     pub terminal: ServiceCost,
     pub recovery_daa: u64,
     pub maximum_packets: usize,
@@ -151,8 +152,8 @@ pub(crate) fn reserve_native_batch_delivery_v1(
         return Err(CaseGraph);
     }
     let valid_cost = |cost: ServiceCost| cost.work > 0 && cost.controls == 1;
-    if !valid_cost(costs.numerical_verification)
-        || !valid_cost(costs.terminal)
+    let numerical_verification = costs.numerical_verification.service_cost_v1().ok_or(DeliveryCost)?;
+    if !valid_cost(costs.terminal)
         || stop.is_some_and(|(_, verify, file)| !valid_cost(verify) || !valid_cost(file))
     {
         return Err(DeliveryCost);
@@ -207,7 +208,7 @@ pub(crate) fn reserve_native_batch_delivery_v1(
     }));
     let mut graph = Vec::with_capacity(if stop.is_some() { 4 } else { 2 });
     graph.push(CausalServicePacketV1 {
-        packet: packet(verification, costs.numerical_verification, &verification_window),
+        packet: packet(verification, numerical_verification, &verification_window),
         predecessors: vec![],
     });
     graph.push(CausalServicePacketV1 {

@@ -4089,3 +4089,27 @@ native profile and a separate terminal operation using the receipt.
 B0 and relay agreed at virtual DAA 19,740. The additional selected block
 had DAA 19,739 and no new Qwen carrier reference. See
 `/private/tmp/misaka-t12-oom-20261102/g14-numerical-receipt-live.s4EXlY/page.json`.
+
+## Quote the actual numerical verification slot
+
+The native delivery planner now derives the numerical verification cost
+from the typed replay budget. The signed BCT1 body and tag take 4,970
+bytes. The quote includes the two arithmetic passes, target and source
+limits, and profile-supplied non-arithmetic work and IO. A missing
+workspace or required limit, or overflowing work, refuses the quote.
+Before source reconstruction, the native verifier checks the reserved
+packet cost and current accepting DAA against the same quote.
+
+The extracted suite passed 56 tests. The signed codec test compared its
+actual encoded length with the fixed quote. The cost test covered both
+passes, missing workspace, missing non-arithmetic work or IO, and
+overflow. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-numerical-service-price.rBdHnf/tests.log`.
+The native reservation fixture also asserts that the booked packet uses
+this quote, but the integrated fixture has not run. The profile's
+production values still require measurements. The BCT1 dispatcher and
+terminal credit remain separate outstanding work.
+
+B0 and relay agreed at virtual DAA 19,740. The additional selected block
+had no new Qwen carrier reference. See
+`/private/tmp/misaka-t12-oom-20261102/g14-numerical-price-live.C6ZsYY/page.json`.

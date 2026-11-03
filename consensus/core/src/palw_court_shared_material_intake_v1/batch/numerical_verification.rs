@@ -2,11 +2,60 @@
 use super::admission::batch_numerical_service_ids_v1;
 use crate::Hash64;
 use crate::palw_batch_court_v1::carriage::{BATCH_OPEN_WIRE_OVERHEAD_V1, read_batch_signature_v1};
+use crate::palw_court_service_v1::ServiceCost;
 use crate::palw_state_v2::PalwBondKeyV2;
+use crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1;
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{self, Read};
 
 const SIGNATURE_CONTEXT_V1: &[u8] = b"misaka-palw/batch-numerical-verification/v1/mldsa87";
+const SIGNATURE_BYTES: usize = crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN;
+// Version, four identifiers, leaf, filer outpoint, vector length and signature.
+const SIGNED_BODY_BYTES: u64 = (2 + 4 * 64 + 8 + 64 + 4 + 4 + SIGNATURE_BYTES) as u64;
+
+/// The native profile supplies the replay ceilings and the costs outside the
+/// arithmetic meter. Admission and acceptance use the same service quote.
+#[derive(Clone, Copy)]
+pub(crate) struct NumericalBatchReplayBudgetV1 {
+    pub work: PalwTirBuilderWorkLimitsV1,
+    pub workspace_bytes: u64,
+    /// Non-arithmetic work, including signature, source and evidence checks.
+    pub base_work: u64,
+    pub io: u64,
+}
+
+impl NumericalBatchReplayBudgetV1 {
+    pub(crate) fn service_cost_v1(self) -> Option<ServiceCost> {
+        if self.workspace_bytes == 0 || self.base_work == 0 || self.io == 0
+            || self.work.max_source_reads == 0 || self.work.max_target_requests == 0
+            || self.work.evaluation.max_elements == 0 || self.work.evaluation.max_terms == 0
+        {
+            return None;
+        }
+        // Both the construction pass and the independent adjudicator can
+        // reach the supplied evaluation ceilings.
+        let work = self.work.evaluation.max_elements.checked_add(self.work.evaluation.max_terms)?
+            .checked_mul(2)?
+            .checked_add(self.work.max_target_requests)?
+            .checked_add(self.work.max_source_reads)?
+            .checked_add(self.base_work)?;
+        Some(ServiceCost { bytes: SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1, work, io: self.io, controls: 1 })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_only_v1() -> Self {
+        Self {
+            work: PalwTirBuilderWorkLimitsV1 {
+                evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: 1, max_terms: 2 },
+                max_target_requests: 3,
+                max_source_reads: 4,
+            },
+            workspace_bytes: 4096,
+            base_work: 5,
+            io: 6,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize)]
 pub(crate) struct SignedNumericalBatchVerificationV1 {
@@ -36,7 +85,7 @@ impl SignedNumericalBatchVerificationV1 {
     }
 
     fn verify_signature_v1(&self, network: Hash64, pubkey: &[u8]) -> Result<(), String> {
-        if self.signature.len() != crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN
+        if self.signature.len() != SIGNATURE_BYTES
             || !crate::palw_constraint_stream_carriage_v1::palw_staged_verify_mldsa87_v1(
                 pubkey,
                 self.signing_message_v1(network)?.as_byte_slice(),
@@ -69,14 +118,14 @@ impl BorshDeserialize for SignedNumericalBatchVerificationV1 {
     }
 }
 
-/// Authenticate a prospective verification control before running the
-/// bounded replay. A successful finding still needs a journalled writer.
+/// Authenticate the verification control and charge the originally booked
+/// service before running the bounded replay.
 pub(crate) fn verify_rooted_numerical_batch_v1(
     state: &crate::palw_state_v2::PalwChainStateV2,
     params: &crate::palw_state_v2::PalwStateParamsV2,
     rules: &crate::palw_court_close_receipt_v1::NativeCourtRulesV1,
     signed: &SignedNumericalBatchVerificationV1,
-    budget: super::native_ranges::NumericalBatchReplayBudgetV1,
+    budget: NumericalBatchReplayBudgetV1,
 ) -> Result<super::native_ranges::NumericalBatchFindingV1, crate::palw_native_resource_v1::NativeDecodeErrorV1<String>> {
     use crate::palw_court_shared_tir_state_v1::{self as shared, BatchNoticeTargetV1};
     use crate::palw_native_resource_v1::NativeDecodeErrorV1 as E;
@@ -97,11 +146,7 @@ pub(crate) fn verify_rooted_numerical_batch_v1(
     let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&Key::CourtSharedQuery(signed.notice)) else {
         return Err(invalid("numerical Batch verification has no accepted notice"));
     };
-    let target = crate::palw_batch_court_v1::rooted::checked_initial_notice_target_v1(state, context, notice, signed.notice)
-        .map_err(E::Decode)?;
-    if (notice.claim, notice.scope_id, notice.opened_by) != (signed.claim, signed.scope, signed.filer)
-        || target != Some(BatchNoticeTargetV1::Numerical { leaf: signed.leaf })
-    {
+    if (notice.claim, notice.scope_id, notice.opened_by) != (signed.claim, signed.scope, signed.filer) {
         return Err(invalid("numerical Batch verification differs from its accepted notice"));
     }
     let service = state.court_service_state_v1().ok_or_else(|| invalid("numerical Batch verification has no service book"))?;
@@ -109,14 +154,18 @@ pub(crate) fn verify_rooted_numerical_batch_v1(
     let binding = service.claims.get(&signed.claim).ok_or_else(|| invalid("numerical Batch verification has no original binding"))?;
     let (packet, _) = batch_numerical_service_ids_v1(signed.claim, signed.scope)
         .map_err(|_| invalid("numerical Batch verification packet identities are invalid"))?;
-    let bytes = (borsh::object_length(signed).map_err(|why| E::Decode(why.to_string()))? as u64)
-        .checked_add(BATCH_OPEN_WIRE_OVERHEAD_V1).ok_or_else(|| invalid("numerical Batch verification size overflow"))?;
+    let cost = budget.service_cost_v1().ok_or_else(|| invalid("invalid numerical Batch replay budget"))?;
     if !binding.packet_ids.contains(&packet) || service.book.assigned_daa(&packet) != Some(rules.at.daa_score)
-        || service.book.packet(&packet).is_none_or(|packet| bytes > packet.cost.bytes)
+        || service.book.packet(&packet).is_none_or(|packet| packet.cost != cost)
     {
         return Err(invalid("numerical Batch verification exceeds its reserved slot"));
     }
     signed.verify_signature_v1(rules.network_domain, &bond.pubkey).map_err(E::Decode)?;
+    let target = crate::palw_batch_court_v1::rooted::checked_initial_notice_target_v1(state, context, notice, signed.notice)
+        .map_err(E::Decode)?;
+    if target != Some(BatchNoticeTargetV1::Numerical { leaf: signed.leaf }) {
+        return Err(invalid("numerical Batch verification differs from its accepted notice"));
+    }
     super::native_ranges::replay_numerical_batch_v1(state, signed.claim, rules, budget)
 }
 
@@ -137,6 +186,7 @@ mod tests {
             &keys.signing_key, intent.signing_message_v1(net).unwrap().as_byte_slice(), SIGNATURE_CONTEXT_V1, [124; 32],
         ).unwrap().as_ref().to_vec();
         let bytes = borsh::to_vec(&intent).unwrap();
+        assert_eq!(bytes.len() as u64, SIGNED_BODY_BYTES);
         assert_eq!(borsh::from_slice::<SignedNumericalBatchVerificationV1>(&bytes).unwrap(), intent);
         let key = keys.verification_key.as_ref();
         assert!(intent.verify_signature_v1(net, key).is_ok());
@@ -165,5 +215,19 @@ mod tests {
         let mut trailing = borsh::to_vec(&intent).unwrap();
         trailing.push(0);
         assert!(borsh::from_slice::<SignedNumericalBatchVerificationV1>(&trailing).is_err());
+    }
+
+    #[test]
+    fn numerical_replay_quotes_both_passes_and_rejects_unfunded_work() {
+        let mut budget = NumericalBatchReplayBudgetV1::test_only_v1();
+        let cost = budget.service_cost_v1().unwrap();
+        assert_eq!(cost, ServiceCost {
+            bytes: SIGNED_BODY_BYTES + BATCH_OPEN_WIRE_OVERHEAD_V1, work: 18, io: 6, controls: 1,
+        });
+        assert!(NumericalBatchReplayBudgetV1 { workspace_bytes: 0, ..budget }.service_cost_v1().is_none());
+        assert!(NumericalBatchReplayBudgetV1 { base_work: 0, ..budget }.service_cost_v1().is_none());
+        assert!(NumericalBatchReplayBudgetV1 { io: 0, ..budget }.service_cost_v1().is_none());
+        budget.work.evaluation.max_terms = u64::MAX;
+        assert!(budget.service_cost_v1().is_none());
     }
 }

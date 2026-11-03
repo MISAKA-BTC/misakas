@@ -257,10 +257,12 @@
                     },
                 };
                 use crate::palw_court_service_v1::ServiceCost;
+                use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayBudgetV1;
                 let (verification, terminal) = batch_numerical_service_ids_v1(claim, streamed_envelope.scope_v1()).unwrap();
                 let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
                 let costs = NativeBatchDeliveryCostsV1 {
-                    numerical_verification: cost(1), terminal: cost(1), recovery_daa: 1, maximum_packets: 32_768,
+                    numerical_verification: NumericalBatchReplayBudgetV1::test_only_v1(),
+                    terminal: cost(1), recovery_daa: 1, maximum_packets: 32_768,
                     timing: NativeBatchDeliveryTimingV1 {
                         open_daa: 8, provider_wait_daa: 64, begin_daa: 16, parts_daa: 512,
                         finish_daa: 16, verification_daa: 16, stop_daa: 16, terminal_daa: 16,
