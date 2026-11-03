@@ -1360,3 +1360,25 @@ equal source maps and no remaining process-group members. The
 [execution record](initial-f-core-runtime-20261103.json.gz) and
 [raw log](initial-f-core-runtime-20261103.log.gz) preserve this result.
 The Linux Consensus node test is a separate run.
+
+### Native Case relay registration
+
+Commit `9b607f689` uses the rooted original Open record or an earlier accepted
+Open event in the same block to qualify the original relay profile. It keeps
+R's actual fee policy separate from the accepted Assignment contract, and
+charges pending Case registration against the poster and original account
+caps. Admission checks the minimum future Open and carrier replay resources.
+Core and Consensus library Clippy and all Consensus test-target checks passed
+on one unchanged source map. The focused Core typecheck was stopped while
+waiting for the shared build lock. The
+[verification record](case-relay-registration-verification-20261103.json.gz)
+and [logs](case-relay-registration-logs-20261103.tar.gz) preserve that distinction.
+
+Bound Case restore now has a candidate that requires the canonical
+AssignmentUse, Result, original funding output and signed funding consent.
+Its isolated orphan regression passes. The additional Case capital quote
+covers the full initial bound pair and the bounded successor history,
+including both original archive key/value records. An isolated encoding
+check matched the initial and successor quote to the complete literal bytes.
+These follow-ups are applied for integrated checks. Actual F binding still
+requires the live native storage owner and atomic native account writer.
