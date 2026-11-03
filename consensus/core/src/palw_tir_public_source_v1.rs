@@ -734,6 +734,51 @@ impl PalwTirPublicSourceV1 {
                 .ok_or("TIR public unit RAM overflow")?,
         })
     }
+
+    /// Split a legal original run into contiguous queries whose native
+    /// maximum response fits one prospective Batch demand each. Reserve every
+    /// returned demand, even when a particular honest response uses fewer
+    /// parts. Each query is authenticated against the same original root.
+    pub fn batch_step_run_partitions_v1(
+        &self,
+        first: u64,
+        count: u32,
+        max_parts_per_demand: usize,
+    ) -> Result<Vec<(PalwTirPublicRequestV1, PalwTirPublicUnitBoundV1)>, String> {
+        use crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1;
+        use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
+        use PalwTirPublicRequestV1::StepRun;
+        self.check_request_v1(&StepRun { first, count })?;
+        if !(1..=MAX_BATCH_PARTS_V1).contains(&max_parts_per_demand) {
+            return Err("TIR Batch demand part count outside its profile".into());
+        }
+        let maximum_bytes = (max_parts_per_demand * PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64;
+
+        // StepRun's original native upper depends on its width, not the
+        // offset. Search the bounded legal widths once, then check each
+        // emitted query again under the actual native request geometry.
+        let mut width = count;
+        while self.unit_bound_v1(&StepRun { first, count: width })?.maximum_response_bytes > maximum_bytes {
+            width -= 1;
+            if width == 0 {
+                return Err("TIR Batch cannot reserve one StepRun leaf".into());
+            }
+        }
+        let mut partitions = Vec::with_capacity(count.div_ceil(width) as usize);
+        let (mut at, mut remaining) = (first, count);
+        while remaining > 0 {
+            let count = remaining.min(width);
+            let request = StepRun { first: at, count };
+            let bound = self.unit_bound_v1(&request)?;
+            if bound.maximum_response_bytes > maximum_bytes {
+                return Err("TIR Batch partition exceeds its native part budget".into());
+            }
+            partitions.push((request, bound));
+            at += u64::from(count); // original interval checked above
+            remaining -= count;
+        }
+        Ok(partitions)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
