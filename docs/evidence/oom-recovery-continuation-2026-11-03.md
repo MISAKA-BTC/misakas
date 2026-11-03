@@ -528,3 +528,23 @@ The latest B0 and relay views agreed at that DAA, with zero active
 Panel assignments and zero valid receipts. The observer produces
 publication inputs. It does not write a provider manifest or change
 retention.
+
+## Keyless Qwen material staging rehearsal — 04:46 UTC
+
+A private operator-stage harness combines the actual T12 header and
+signed material checks with the read-only paired acceptance receipt.
+It verifies the original public executor key and the exact Qwen
+capture, derives the provider manifest from the effective expiry,
+writes a fresh local provider directory with the current publication
+code, and reads all bytes back. The harness performs no network
+writes and uses no signing secret.
+
+The real #32 bytes survived staging and read-back byte for byte in
+three chunks. The fixture supplied a synthetic acceptance at DAA
+20,000. Its provider deadline was 40,608 while the signed envelope
+still said 40,193. The real unaccepted #36 receipt, a manifest deadline
+shorter than the accepted requirement, and a changed trace root each
+failed before staging. Harness receipt SHA256 is `f229b2c67a3e48317e784ee95248e738aed4c36320799d6ea3134e0a6293323a`.
+The fixture validates staging and refusal. The first live post-fence
+acceptance, ordinary producer export, and automatic provider
+retention across reorg still require verification.
