@@ -1666,6 +1666,22 @@ pub trait ConsensusApi: Send + Sync {
         Default::default()
     }
 
+    /// Check one queued provider-backed ordinary DA answer against resident accepted state.
+    /// Returns the matched immutable candidate view, a proven stale answer, or a local read refusal.
+    fn palw_provider_da_answer_current_v1(
+        &self,
+        _duty: &crate::palw_producer_v2::PalwDisclosureDutyV1,
+        _roots: &crate::palw_evidence_v1::ClaimRoots,
+        _stage: crate::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> Result<Option<crate::palw_producer_v2::PalwProviderDaCurrentViewV1>, String> {
+        Err("provider DA reader unavailable".into())
+    }
+
+    /// Cheap, fail-closed check of a previously matched provider DA view.
+    fn palw_provider_da_view_current_v1(&self, _view: &crate::palw_producer_v2::PalwProviderDaCurrentViewV1) -> bool {
+        false
+    }
+
     /// Bounded read-only progress from one accepted staged court/reservation snapshot.
     fn palw_staged_paid_authority_v1(
         &self,

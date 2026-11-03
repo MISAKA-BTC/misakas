@@ -210,8 +210,17 @@ impl super::PalwPanelService {
         session: &kaspa_consensusmanager::ConsensusProxy,
         prepared: PreparedCarrierV1,
     ) -> Result<SubmittedCarrierV1, String> {
+        self.submit_prepared_carrier_with_guard_v1(session, prepared, None).await
+    }
+
+    pub(super) async fn submit_prepared_carrier_with_guard_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        prepared: PreparedCarrierV1,
+        guard: Option<kaspa_mining::manager::LocalTransactionSubmissionGuard>,
+    ) -> Result<SubmittedCarrierV1, String> {
         let PreparedCarrierV1 { tx, change } = prepared;
-        self.submit_carrier_v1(session, tx).await?;
+        self.submit_carrier_v1(session, tx, guard).await?;
         Ok(SubmittedCarrierV1 { change })
     }
     /// Canonical/bootstrap/evaluation callers keep their original direct RPC door

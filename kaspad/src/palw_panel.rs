@@ -6321,7 +6321,13 @@ impl PalwPanelService {
     /// opening stands ([`PalwCarrierReplacementV1::is_replaced_by`]) is the pool's replacement of it
     /// (RBF, `submit_rpc_transaction_replacement`), and the opening records it; every other carrier
     /// is submitted exactly as before. `Err` carries the pool's refusal for the site to log.
-    async fn submit_carrier_v1(&self, session: &kaspa_consensusmanager::ConsensusProxy, tx: Transaction) -> Result<(), String> {
+    async fn submit_carrier_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        tx: Transaction,
+        guard: Option<kaspa_mining::manager::LocalTransactionSubmissionGuard>,
+    ) -> Result<(), String> {
+        use kaspa_mining::mempool::tx::RbfPolicy;
         // DRILL ONLY (the G14 collusion drill): a colluding seat files nothing against its producer — no accusation, demand,
         // disclosure or filing leaves this node; its receipts, readiness proofs and bond objects do.
         if !self.config.drill_collude_with.is_empty()
@@ -6333,11 +6339,27 @@ impl PalwPanelService {
             return Err(format!("PALW DRILL (G14 collusion): a colluding seat files no {kind}"));
         }
         let opening = self.carrier_replacement.lock().unwrap().as_ref().filter(|opening| opening.is_replaced_by(&tx)).cloned();
-        let Some(opening) = opening else {
-            return self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await.map_err(|e| e.to_string());
-        };
         let txid = tx.id();
-        let replaced = self.flow_context.submit_rpc_transaction_replacement(session, tx).await.map_err(|e| e.to_string())?;
+        let replaced = match (opening.as_ref(), guard) {
+            (None, None) => {
+                return self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await.map_err(|e| e.to_string());
+            }
+            (Some(_), None) => self.flow_context.submit_rpc_transaction_replacement(session, tx).await.map_err(|e| e.to_string())?,
+            (None, Some(guard)) => {
+                self.flow_context
+                    .submit_rpc_transaction_guarded(session, tx, RbfPolicy::Forbidden, guard)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+            (Some(_), Some(guard)) => self
+                .flow_context
+                .submit_rpc_transaction_guarded(session, tx, RbfPolicy::Mandatory, guard)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or("accepted replacement did not return the replaced transaction")?,
+        };
+        let opening = opening.expect("only a replacement reaches its bookkeeping");
         if let Some(open) = self.carrier_replacement.lock().unwrap().as_mut() {
             open.replaced_by = Some(txid);
         }
@@ -7273,6 +7295,7 @@ impl PalwPanelService {
         court_outbox: &mut CourtOutboxV1,
         carrier: &mut CarrierBookMutV1<'_>,
         challenged: &mut HashSet<Hash64>,
+        da_flat_sent: &mut HashMap<Hash64, u64>,
     ) {
         // The court's moves first: a rung has a deadline and a receipt quorum does not — and among
         // them the one due first (EDF; the licences' turn and the one-in-flight rule are the tick's
@@ -7294,6 +7317,33 @@ impl PalwPanelService {
             }
         };
         for (session_id, round, mine_is_responder, object) in batch {
+            let key = (session_id, round, mine_is_responder);
+            let stamp = match court_outbox.provider_da_stamp(key, &object) {
+                Ok(stamp) => stamp,
+                Err(why) => {
+                    warn!("[{PALW_PANEL}] provider DA packet withheld: {why}");
+                    continue;
+                }
+            };
+            let provider = match stamp {
+                None => None,
+                Some(stamp) => {
+                    let Some(stage) =
+                        kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1::from_object(&object, stamp.manifest)
+                    else {
+                        continue;
+                    };
+                    Some((stamp, stage))
+                }
+            };
+            let provider_check = || {
+                provider.map(|(stamp, stage)| self.current_provider_da_session(stamp, stage)).transpose().inspect_err(|why| {
+                    debug!("[{PALW_PANEL}] provider DA packet no longer current: {why}");
+                })
+            };
+            let Ok(provider_session) = provider_check() else { continue };
+            let (funding_session, funding_daa) =
+                provider_session.as_ref().map_or((session, current_daa), |(active, daa)| (active, *daa));
             let rider_batch = crate::palw_rider_outbox::palw_rider_queued_v1(round, mine_is_responder, &object);
             if let Err(why) = court_outbox.refresh_rider(&object, &self.consensus_config.params, session) {
                 warn!("[{PALW_PANEL}] rider native work withheld before funding: {why}");
@@ -7312,12 +7362,12 @@ impl PalwPanelService {
                 }
                 continue;
             }
-            let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
+            let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, funding_daa);
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the
             // same unavailable heavy budget for every queued proof; cheap moves may still use
             // the smaller float we retained. A successful submission ends the free slot.
             if failed_minimum.is_none_or(|failed| minimum < failed)
-                && let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, carrier).await
+                && let Some(failed) = self.ensure_carrier_funding_v2(funding_session, &object, funding_daa, carrier).await
             {
                 failed_minimum = Some(failed);
             }
@@ -7349,8 +7399,10 @@ impl PalwPanelService {
                 }
                 continue;
             }
+            let Ok(provider_session) = provider_check() else { continue };
+            let sign_daa = provider_session.as_ref().map_or(current_daa, |(_, daa)| *daa);
             let prepared = match court_outbox.current_source_then(&object, session, || {
-                self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa)
+                self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, sign_daa)
             }) {
                 Ok(prepared) => prepared,
                 Err(why) => {
@@ -7373,9 +7425,13 @@ impl PalwPanelService {
                         }
                         continue;
                     }
-                    let submission = match court_outbox
-                        .current_source_then(&object, session, || self.submit_prepared_carrier_v1(session, prepared_carrier))
-                    {
+                    let Ok(provider_session) = provider_check() else { continue };
+                    let (submit_session, submit_daa) =
+                        provider_session.as_ref().map_or((session, current_daa), |(active, daa)| (active, *daa));
+                    let guard = provider.map(|(stamp, stage)| self.provider_da_submission_guard(stamp.clone(), stage));
+                    let submission = match court_outbox.current_source_then(&object, session, || {
+                        self.submit_prepared_carrier_with_guard_v1(submit_session, prepared_carrier, guard)
+                    }) {
                         Ok(submission) => submission,
                         Err(why) => {
                             warn!("[{PALW_PANEL}] source response withheld before carrier submission: {why}");
@@ -7405,7 +7461,10 @@ impl PalwPanelService {
                             }
                             sent_carrier
                                 .record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| self.persist_fee_outpoint(next));
-                            court_outbox.mark_submitted((session_id, round, mine_is_responder), current_daa);
+                            court_outbox.mark_submitted(key, submit_daa);
+                            if provider_session.is_some() && court_outbox::ProviderDaStampV1::is_flat(&object) {
+                                da_flat_sent.insert(session_id, submit_daa);
+                            }
                             if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
                                 challenged.insert(*claim);
                             }
@@ -10613,6 +10672,7 @@ impl PalwPanelService {
                     licence_idle: &mut licence_idle,
                     court_outbox: &mut court_outbox,
                     challenged: &mut challenged,
+                    da_flat_sent: &mut da_flat_sent,
                     carrier_chain: &mut carrier_chain,
                     registration: &mut registration,
                     readiness_lane: &mut readiness_lane,
@@ -13329,9 +13389,12 @@ impl PalwPanelService {
         network_domain: Hash64,
         duties: &[&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1],
         flat_queued: bool,
-    ) -> Result<Vec<Result<Option<PalwConsensusObjectV2>, String>>, PalwDaClaimHoldV1> {
+    ) -> Result<
+        (Vec<Result<Option<court_outbox::ProviderDaBuiltAnswerV1>, String>>, Option<misaka_palw_remote::evidence::ClaimRoots>),
+        PalwDaClaimHoldV1,
+    > {
         use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
-        let Some(first) = duties.first() else { return Ok(Vec::new()) };
+        let Some(first) = duties.first() else { return Ok((Vec::new(), None)) };
         let (claim, class_id, artifact_root) = (first.claim_id, first.class_id, first.artifact_root);
         let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> = match first.role {
             PalwDisclosureRoleV1::Producer => self.executor_backend_v1(session, class_id, artifact_root),
@@ -13519,7 +13582,7 @@ impl PalwPanelService {
                     libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32]).ok().map(|sig| sig.as_ref().to_vec())
                 })
             };
-            Ok(duties
+            let answers = duties
                 .iter()
                 .zip(built.answers)
                 .map(|(duty, answer)| match answer {
@@ -13545,7 +13608,7 @@ impl PalwPanelService {
                             false,
                             |message, context| sign(message, context),
                         )?;
-                        da_answer_chunks::next_answer_object_v2(
+                        let object = da_answer_chunks::next_answer_object_v2(
                             object,
                             progress.as_ref(),
                             session.get_virtual_daa_score(),
@@ -13553,15 +13616,79 @@ impl PalwPanelService {
                             maximum,
                             &network_domain,
                             |message, context| sign(message, context),
-                        )
-                        .map(Some)
+                        )?;
+                        let manifest =
+                            if provider_roots.is_some() && matches!(&object, PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. }) {
+                                let progress = progress.as_ref().ok_or("provider DA chunk has no accepted manifest")?;
+                                Some(
+                                    kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2::new(
+                                        &progress.declaration,
+                                        progress.deadline_daa,
+                                    )
+                                    .map_err(|error| error.to_string())?,
+                                )
+                            } else {
+                                None
+                            };
+                        Ok(Some(court_outbox::ProviderDaBuiltAnswerV1 { object, manifest }))
                     }
                 })
-                .collect())
+                .collect();
+            Ok((answers, provider_roots))
         })
         .await
         .map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))?
         .map_err(PalwDaClaimHoldV1::Material)
+    }
+
+    fn current_provider_da_session(
+        &self,
+        stamp: &court_outbox::ProviderDaStampV1,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> Result<(kaspa_consensusmanager::ConsensusProxy, u64), String> {
+        let active = self.consensus_manager.consensus().unguarded_session();
+        let view =
+            active.with_consensus_api_v1(|pinned| Self::check_provider_da_current(&self.consensus_manager, pinned, stamp, stage))?;
+        Ok((active, view.daa_score))
+    }
+
+    fn check_provider_da_current(
+        manager: &kaspa_consensusmanager::ConsensusManager,
+        pinned: &dyn kaspa_consensus_core::api::ConsensusApi,
+        stamp: &court_outbox::ProviderDaStampV1,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> Result<kaspa_consensus_core::palw_producer_v2::PalwProviderDaCurrentViewV1, String> {
+        if !manager.is_current_consensus_v1(pinned) {
+            return Err("provider DA pinned consensus is no longer active".into());
+        }
+        let view = pinned
+            .palw_provider_da_answer_current_v1(&stamp.duty, &stamp.roots, stage)?
+            .ok_or("provider DA carrier, roots, duty or multipart stage changed")?;
+        if !palw_disclosure_due_v1(&stamp.duty, view.daa_score) || !manager.is_current_consensus_v1(pinned) {
+            return Err("provider DA duty is outside its turn or the active consensus changed".into());
+        }
+        Ok(view)
+    }
+
+    fn provider_da_submission_guard(
+        &self,
+        stamp: court_outbox::ProviderDaStampV1,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> kaspa_mining::manager::LocalTransactionSubmissionGuard {
+        let manager = self.consensus_manager.clone();
+        Box::new(move |pinned| {
+            let view = Self::check_provider_da_current(&manager, pinned, &stamp, stage)?;
+            let manager = Arc::clone(&manager);
+            Ok(Box::new(move |pinned| {
+                if !manager.is_current_consensus_v1(pinned)
+                    || !pinned.palw_provider_da_view_current_v1(&view)
+                    || !manager.is_current_consensus_v1(pinned)
+                {
+                    return Err("provider DA authority changed before insertion".into());
+                }
+                Ok(())
+            }))
+        })
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;

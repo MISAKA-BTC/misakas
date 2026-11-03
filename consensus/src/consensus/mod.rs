@@ -3972,6 +3972,19 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_disclosure_duties_v1_impl(&mine)
     }
 
+    fn palw_provider_da_answer_current_v1(
+        &self,
+        duty: &kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1,
+        roots: &kaspa_consensus_core::palw_evidence_v1::ClaimRoots,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> Result<Option<kaspa_consensus_core::palw_producer_v2::PalwProviderDaCurrentViewV1>, String> {
+        self.virtual_processor.palw_provider_da_answer_current_v1(duty, roots, stage)
+    }
+
+    fn palw_provider_da_view_current_v1(&self, view: &kaspa_consensus_core::palw_producer_v2::PalwProviderDaCurrentViewV1) -> bool {
+        self.virtual_processor.palw_provider_da_view_current_v1(view)
+    }
+
     fn palw_da_accusation_check_v1(
         &self,
         claim: kaspa_consensus_core::Hash64,

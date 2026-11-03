@@ -21269,6 +21269,104 @@ fn da3_a_valid_disclosure_charges_the_accuser_and_nobody_else() {
     );
 }
 
+#[test]
+fn provider_da_single_duty_agrees_with_batch_and_rejects_stale_answer() {
+    use crate::{
+        palw_da_rcore_v1::{PalwDaAnswerV1, PalwDaClaimV1, PalwDaSessionV1, PalwDaStageV1, PalwDaUnitV1},
+        palw_evidence_v1::ClaimRoots,
+        palw_panel_var_v1::PalwSlashableLockV1,
+        palw_producer_v2::{
+            PalwDisclosureRoleV1, PalwProviderDaAnswerStageV1, palw_disclosure_duties_v1, palw_disclosure_duty_v1,
+            palw_provider_da_answer_matches_v1,
+        },
+        palw_verification_v2::PalwSegmentMaskV2,
+    };
+    let legacy_params = params();
+    let (mut state, claim_id, _, fx) = da_setup(&legacy_params, 999_999);
+    let params = legacy_params.with_rcore_plus_mirrors(Some(0), 0, Vec::new());
+    let extras = PalwTransitionExtrasV1::default();
+    let unit = PalwDaUnitV1::Event { row: 0, tile: 0 };
+    for (accuser, deadline_daa) in [(bond_key(2), 109), (bond_key(3), 119)] {
+        state.da_deadlines.insert((deadline_daa, claim_id, accuser));
+        state.da_sessions.insert(
+            (claim_id, accuser),
+            PalwDaSessionV1 {
+                opened_daa: 103,
+                deadline_daa,
+                accuser_is_seat: true,
+                exposure: 1,
+                units: vec![unit],
+                stage: PalwDaStageV1::Live,
+            },
+        );
+    }
+    state.da_claims.insert(claim_id, PalwDaClaimV1::default());
+    for seat in [bond_key(2), bond_key(3)] {
+        state.slashable_locks.insert(
+            (seat, claim_id),
+            PalwSlashableLockV1 {
+                claim: claim_id,
+                amount: 1,
+                expiry_daa: 120,
+                settled_at_final: 0,
+                attested: PalwSegmentMaskV2::full(1),
+                segments: 1,
+            },
+        );
+    }
+    let producer = bond_key(1);
+    let signer = bond_key(3);
+    let get = |state: &PalwChainStateV2, bond, daa| {
+        palw_disclosure_duties_v1(state, &params, &extras, &[bond], daa)
+            .duties
+            .into_iter()
+            .find(|d| d.claim_id == claim_id && d.unit == unit)
+            .unwrap()
+    };
+    let producer_duty = get(&state, producer, 104);
+    let signer_duty = get(&state, signer, 104);
+    assert_eq!(producer_duty.role, PalwDisclosureRoleV1::Producer);
+    assert_eq!(signer_duty.role, PalwDisclosureRoleV1::CoveringSigner);
+    assert_eq!(signer_duty.signer_rank, 1);
+    for duty in [&producer_duty, &signer_duty] {
+        assert_eq!(palw_disclosure_duty_v1(&state, &params, &extras, duty, 104).as_ref(), Some(duty));
+        assert_eq!(duty.deadline_daa, 109);
+    }
+    let claim = state.claim(&claim_id).unwrap();
+    let roots = ClaimRoots {
+        network_domain: h64(88),
+        trace_root: claim.trace_root,
+        output_root: claim.output_root,
+        execution_root: claim.execution_root,
+        trace_chunk_count: claim.trace_chunk_count,
+        retention_deadline: claim.trace_retention_daa,
+    };
+    let PalwConsensusObjectV2::MaterialDisclosed { disclosure, .. } = da_disclose(claim_id, 0, &fx) else { panic!("fixture answer") };
+    let answer = PalwConsensusObjectV2::MaterialDisclosedV2 {
+        claim: claim_id,
+        unit,
+        discloser: signer,
+        answer: PalwDaAnswerV1::Event(disclosure),
+        signature: Vec::new(),
+    };
+    let stage = PalwProviderDaAnswerStageV1::from_object(&answer, None).unwrap();
+    let current = |state: &PalwChainStateV2, roots: &ClaimRoots, now| {
+        palw_provider_da_answer_matches_v1(state, &params, &extras, &signer_duty, roots, stage, now)
+    };
+    assert!(current(&state, &roots, 109));
+    assert!(!current(&state, &roots, 110), "an unexpired later duty has a different deadline");
+    assert!(!current(&state, &ClaimRoots { output_root: h64(90), ..roots }, 109));
+    let earlier = state.slashable_locks.remove(&(bond_key(2), claim_id)).unwrap();
+    assert!(!current(&state, &roots, 109), "covering rank changed");
+    assert_eq!(get(&state, signer, 109).signer_rank, 0);
+    state.slashable_locks.insert((bond_key(2), claim_id), earlier);
+    assert!(current(&state, &roots, 109));
+    state.claims.get_mut(&claim_id).unwrap().accepted_block = h64(91);
+    assert!(!palw_provider_da_answer_matches_v1(&state, &params, &extras, &signer_duty, &roots, stage, 109));
+    state.da_claims.get_mut(&claim_id).unwrap().answered.insert(unit);
+    assert!(palw_disclosure_duty_v1(&state, &params, &extras, &producer_duty, 109).is_none());
+}
+
 /// **DA-4: a disclosure carried by a block the producer did not mine is accepted.**
 ///
 /// SA-3's other half. The disclosure is signed by the producer's bond, so who CARRIED it is

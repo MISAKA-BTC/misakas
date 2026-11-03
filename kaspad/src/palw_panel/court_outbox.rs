@@ -22,6 +22,10 @@ use routing::CourtRoutingV2;
 #[path = "court_outbox_source_response.rs"]
 mod source_response;
 use source_response::CourtSourceResponsesV1;
+#[path = "court_outbox_provider_da.rs"]
+mod provider_da;
+use provider_da::ProviderDaGuardsV1;
+pub(super) use provider_da::{ProviderDaBuiltAnswerV1, ProviderDaStampV1};
 pub(super) use source_response::{SourceResponseFaultV1, SourceResponseSnapshotV1, is_source_response_v1};
 
 /// This invalidates only the local pending execution. It is neither a claim
@@ -48,6 +52,7 @@ pub(crate) struct CourtOutboxV1 {
     payload_tickets: CourtPayloadTicketsV1,
     rider_guards: CourtRoutingV2,
     source_guards: CourtSourceResponsesV1,
+    provider_da_guards: ProviderDaGuardsV1,
     rider_due_frame: Option<NativeDemandLeaseV1>,
     pending_frame: Option<CourtFrameLeaseV1>,
     flight_frame: Option<CourtFrameLeaseV1>,
@@ -211,6 +216,36 @@ impl CourtOutboxV1 {
         self.source_guards.insert(guard);
         Ok(())
     }
+    pub(super) fn try_push_provider_da(
+        &mut self,
+        key: CourtMoveKeyV1,
+        object: PalwConsensusObjectV2,
+        due: u64,
+        stamp: ProviderDaStampV1,
+    ) -> Result<(), String> {
+        if self.pending.iter().any(|(s, r, b, _)| (*s, *r, *b) == key) {
+            return Err("provider DA queue key is already pending".into());
+        }
+        let capacity = self.pending.len().checked_add(1).ok_or("provider DA queue capacity overflow")?.max(self.pending.capacity());
+        self.pending_frame = Some(CourtFrameLeaseV1::reserve(capacity).map_err(|e| e.to_string())?);
+        self.rider_due_frame = crate::palw_rider_outbox::RiderBatchV2::reserve_court_due(self.due.len(), self.due.capacity())
+            .map_err(|e| e.to_string())?;
+        self.pending.try_reserve_exact(1).map_err(|e| e.to_string())?;
+        self.due.try_reserve(1).map_err(|e| e.to_string())?;
+        self.provider_da_guards.insert(key, stamp, &object)?;
+        self.due.insert(key, due);
+        self.pending.push((key.0, key.1, key.2, object));
+        Ok(())
+    }
+
+    pub(super) fn provider_da_stamp(
+        &self,
+        key: CourtMoveKeyV1,
+        object: &PalwConsensusObjectV2,
+    ) -> Result<Option<&ProviderDaStampV1>, String> {
+        self.provider_da_guards.stamp(key, object)
+    }
+
     pub(super) fn finish_source_packet(&mut self, object: &PalwConsensusObjectV2) {
         self.source_guards.finish_packet(object);
     }
@@ -286,6 +321,7 @@ impl CourtOutboxV1 {
         self.payload_tickets.prune(&self.pending);
         self.rider_guards.prune(&self.pending);
         self.source_guards.prune(&self.pending);
+        self.provider_da_guards.prune(&self.pending);
     }
     pub(super) fn set_due(&mut self, key: CourtMoveKeyV1, due: u64) -> Option<u64> {
         self.due.insert(key, due)
@@ -321,6 +357,11 @@ impl CourtOutboxV1 {
     pub(super) fn mark_provider_material_miss(&mut self, key: CourtMoveKeyV1, at: u64) {
         self.submitted.insert(key, CourtMoveStampV1 { at, waiting_for_provider: true });
     }
+    pub(super) fn clear_provider_material_miss(&mut self, key: &CourtMoveKeyV1) {
+        if self.submitted.get(key).is_some_and(|stamp| stamp.waiting_for_provider) {
+            self.submitted.remove(key);
+        }
+    }
     pub(super) fn has_submitted(&self, key: &CourtMoveKeyV1) -> bool {
         self.submitted.contains_key(key)
     }
@@ -346,6 +387,7 @@ impl CourtOutboxV1 {
         self.rider_guards.finish_flush(&self.pending);
         self.recover_source_flight()?;
         self.source_guards.finish_flush(&self.pending);
+        self.provider_da_guards.finish_flush(&self.pending);
         CourtRetryBufferV1::new(self.pending.len())
     }
     pub(super) fn try_take_priority(&mut self) -> Result<Vec<CourtMoveV1>, NativeCoverageV1> {
@@ -355,6 +397,7 @@ impl CourtOutboxV1 {
         self.payload_tickets.start_flush();
         self.rider_guards.start_flush();
         self.source_guards.start_flush();
+        self.provider_da_guards.start_flush();
         Ok(std::mem::take(&mut self.pending))
     }
     /// Legacy EDF remains only as a fixture/parity reference.
@@ -364,6 +407,7 @@ impl CourtOutboxV1 {
         self.payload_tickets.start_flush();
         self.rider_guards.start_flush();
         self.source_guards.start_flush();
+        self.provider_da_guards.start_flush();
         palw_court_queue_edf_v1(&mut self.pending, &self.due);
         std::mem::take(&mut self.pending)
     }
@@ -381,6 +425,7 @@ impl CourtOutboxV1 {
         self.payload_tickets.finish_flush(&self.pending);
         self.rider_guards.finish_flush(&self.pending);
         self.source_guards.finish_flush(&self.pending);
+        self.provider_da_guards.finish_flush(&self.pending);
         self.due.retain(|key, _| self.pending.iter().any(|(s, r, b, _)| (*s, *r, *b) == *key));
     }
     #[cfg(test)]
@@ -413,6 +458,7 @@ impl CourtOutboxV1 {
             payload_tickets: CourtPayloadTicketsV1::default(),
             rider_guards: CourtRoutingV2::default(),
             source_guards: CourtSourceResponsesV1::default(),
+            provider_da_guards: ProviderDaGuardsV1::default(),
             rider_due_frame: None,
             pending_frame: None,
             flight_frame: None,
@@ -423,6 +469,7 @@ impl CourtOutboxV1 {
         assert!(self.payload_tickets.is_empty(), "fixture extraction must not detach payload tickets");
         assert!(self.rider_guards.is_empty(), "fixture extraction must not detach native rider guards");
         assert!(self.source_guards.is_empty(), "fixture extraction must not detach original source response guards");
+        assert!(self.provider_da_guards.is_empty(), "fixture extraction must not detach provider DA guards");
         assert!(
             self.pending_frame.as_ref().is_none_or(|f| !f.is_reserved())
                 && self.flight_frame.as_ref().is_none_or(|f| !f.is_reserved()),

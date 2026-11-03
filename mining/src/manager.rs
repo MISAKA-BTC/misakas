@@ -914,14 +914,33 @@ impl MiningManager {
         orphan: Orphan,
         rbf_policy: RbfPolicy,
     ) -> MiningManagerResult<TransactionInsertion> {
+        self.validate_and_insert_mutable_transaction_guarded(consensus, transaction, priority, orphan, rbf_policy, None)
+    }
+
+    fn validate_and_insert_mutable_transaction_guarded(
+        &self,
+        consensus: &dyn ConsensusApi,
+        transaction: MutableTransaction,
+        priority: Priority,
+        orphan: Orphan,
+        rbf_policy: RbfPolicy,
+        guard: Option<&LocalTransactionSubmissionGuard>,
+    ) -> MiningManagerResult<TransactionInsertion> {
+        let exact = || guard.map(|guard| guard(consensus)).transpose().map_err(MiningManagerError::LocalSubmissionWithheld);
+        drop(exact()?);
         // read lock on mempool
         let TransactionPreValidation { mut transaction, feerate_threshold } =
             self.mempool.read().pre_validate_and_populate_transaction(consensus, transaction, rbf_policy)?;
         let args = TransactionValidationArgs::new(feerate_threshold);
         // no lock on mempool
         let validation_result = validate_mempool_transaction(consensus, &mut transaction, &args);
-        // write lock on mempool
+        // Match the exact duty after contextual validation without holding the
+        // pool lock. Under the lock only compare the immutable authority pin.
+        let pin = exact()?;
         let mut mempool = self.mempool.write();
+        if let Some(pin) = &pin {
+            pin(consensus).map_err(MiningManagerError::LocalSubmissionWithheld)?;
+        }
         match mempool.post_validate_and_insert_transaction(consensus, validation_result, transaction, priority, orphan, rbf_policy)? {
             TransactionPostValidation { removed, accepted: Some(accepted_transaction) } => {
                 let unorphaned_transactions = mempool.get_unorphaned_transactions_after_accepted_transaction(&accepted_transaction);
@@ -1643,7 +1662,14 @@ impl MiningManager {
     }
 }
 
-/// Async proxy for the mining manager
+/// A fixed-size local authority pin checked with the pool write lock held.
+/// Its check must fail closed without taking a blocking consensus lock.
+pub type LocalTransactionSubmissionPin = Box<dyn Fn(&dyn ConsensusApi) -> Result<(), String> + Send>;
+
+/// Exact local-origin policy checked outside the pool lock by its worker.
+pub type LocalTransactionSubmissionGuard = Box<dyn Fn(&dyn ConsensusApi) -> Result<LocalTransactionSubmissionPin, String> + Send>;
+
+/// Async proxy for the mining manager.
 #[derive(Clone)]
 pub struct MiningManagerProxy {
     inner: Arc<MiningManager>,
@@ -1789,6 +1815,30 @@ impl MiningManagerProxy {
         consensus
             .clone()
             .spawn_blocking(move |c| self.inner.validate_and_insert_transaction(c, transaction, priority, orphan, rbf_policy))
+            .await
+    }
+
+    pub async fn validate_and_insert_transaction_guarded(
+        self,
+        consensus: &ConsensusProxy,
+        transaction: Transaction,
+        priority: Priority,
+        orphan: Orphan,
+        rbf_policy: RbfPolicy,
+        guard: LocalTransactionSubmissionGuard,
+    ) -> MiningManagerResult<TransactionInsertion> {
+        consensus
+            .clone()
+            .spawn_blocking(move |consensus| {
+                self.inner.validate_and_insert_mutable_transaction_guarded(
+                    consensus,
+                    MutableTransaction::from_tx(transaction),
+                    priority,
+                    orphan,
+                    rbf_policy,
+                    Some(&guard),
+                )
+            })
             .await
     }
 
