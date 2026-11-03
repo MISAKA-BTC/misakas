@@ -101,6 +101,9 @@ impl TirOwnerScheduleRowV2 {
         if state.last_point().is_some_and(|point| self.schedule.now > point.daa_score) {
             return Err("TIR owner snapshot runs ahead of its branch clock".into());
         }
+        if state.tir_owner_schedule_acquisitions_v2(self.claim).any(|key| self.schedule.phase(key).is_none()) {
+            return Err("TIR owner snapshot omitted a rooted acquisition".into());
+        }
         for row in &self.schedule.rows {
             let Some(TirAcquisition(owner)) = state.staged_court_row_v1(&row.key) else {
                 return Err("TIR owner snapshot has no rooted acquisition".into());
@@ -135,8 +138,9 @@ impl TirOwnerScheduleRowV2 {
         Ok(())
     }
 
-    /// Stage an already authenticated and funded owner Open. A future native
-    /// writer must pair this row with the original Open's acquisition row.
+    /// Stage an already authenticated and funded native owner Open. A future
+    /// writer must pair it with the Open's acquisition row. A shared RFC-0031
+    /// notice alone creates no acquisition, owner slot, or response duty.
     pub fn stage_open(&self, owner: &crate::palw_tir_public_state_v1::PalwTirPublicAcquisitionRowV1) -> Result<Self, String> {
         self.check_owner(owner)?;
         let key = owner.key_v1()?;
@@ -214,7 +218,7 @@ impl crate::palw_native_resource_v1::wire::NativeWireScanV1 for TirOwnerSchedule
     fn scan_native_wire_v1<R: io::Read>(
         reader: &mut crate::palw_native_resource_v1::wire::NativeWireReaderV1<R>,
     ) -> io::Result<crate::palw_native_resource_v1::wire::NativeWireShapeV1> {
-        use crate::palw_native_resource_v1::wire::{NativeWireScanV1, NativeWireShapeV1};
+        use crate::palw_native_resource_v1::wire::NativeWireShapeV1;
         use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1;
         use std::io::Read;
         reader.step()?;
@@ -332,6 +336,13 @@ mod rooted_tests {
         schedule.check_context(&child).unwrap();
         assert_eq!(revert_delta_v2(&child, &delta, &bundle.state).unwrap(), base);
         assert!(apply_delta_v2(&child, &delta, &bundle.state).is_err());
+
+        // A valid parked-row codec is not permission to restore a response
+        // reservation without its native acquisition in the same branch.
+        let PalwDeltaEntryV2::StagedCourtSeed { new, .. } = &mut delta.entries[1] else { unreachable!() };
+        *new = Some(parked);
+        assert!(apply_delta_v2(&base, &delta, &bundle.state).is_err());
+        *new = Some(row);
         let PalwDeltaEntryV2::StagedCourtSeed { key, .. } = &mut delta.entries[1] else { unreachable!() };
         *key = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1::TirOwnerSchedule(Hash64::from_u64_word(9));
         assert!(apply_delta_v2(&base, &delta, &bundle.state).is_err());

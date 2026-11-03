@@ -22674,13 +22674,33 @@ pub(crate) fn replay_delta_owned_v1(
     params: &PalwStateParamsV2,
     revert: bool,
 ) -> Result<PalwChainStateV2, PalwStateV2Error> {
+    use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as CourtKey, PalwStagedCourtRowV1 as CourtRow};
+    let mut owner_schedule_changed = false;
+    let mut replay_entry = |entry: &PalwDeltaEntryV2| {
+        owner_schedule_changed |= matches!(entry, PalwDeltaEntryV2::StagedCourtSeed { key: CourtKey::TirOwnerSchedule(_), .. });
+        apply_delta_entry(&mut state, entry, revert)
+    };
     if revert {
         for entry in delta.entries.iter().rev() {
-            apply_delta_entry(&mut state, entry, true)?;
+            replay_entry(entry)?;
         }
     } else {
         for entry in &delta.entries {
-            apply_delta_entry(&mut state, entry, false)?;
+            replay_entry(entry)?;
+        }
+    }
+    // Candidate acquisition/response and roster rows must agree after the
+    // whole journal is applied, in either direction. Legacy deltas have no
+    // schedule key and do not pay for the second traversal.
+    if owner_schedule_changed {
+        let now = state.last_point().map_or(0, |point| point.daa_score);
+        for entry in &delta.entries {
+            if let PalwDeltaEntryV2::StagedCourtSeed { key: key @ CourtKey::TirOwnerSchedule(_), .. } = entry
+                && let Some(CourtRow::TirOwnerSchedule(row)) = state.staged_court_row_v1(key)
+                && now < row.material_until()
+            {
+                row.check_context(&state).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
         }
     }
     palw_panel_v3_fold_v1::refresh_derived_v1(&mut state)?;
