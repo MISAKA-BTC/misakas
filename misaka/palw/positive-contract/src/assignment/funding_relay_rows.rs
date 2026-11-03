@@ -268,7 +268,11 @@ impl FundingRelayCustodyRowV2 {
                     if binding.original_funding == original_funding
                         && binding.predecessor == Some(predecessor)
                         && binding.original_contract == original_contract => {}
-                RelayTargetV2::InitialAssignment { .. } | RelayTargetV2::InitialCase { .. } | RelayTargetV2::InitialProver { .. }
+                RelayTargetV2::InitialAssignment { bundle, .. }
+                    if binding.original_funding == self.funding_outpoint
+                        && binding.predecessor.is_none()
+                        && binding.original_contract == bundle => {}
+                RelayTargetV2::InitialCase { .. } | RelayTargetV2::InitialProver { .. }
                     if binding.original_funding == self.funding_outpoint && binding.predecessor.is_none() => {}
                 _ => return Err(ContractError::Identity),
             }
