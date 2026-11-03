@@ -2654,3 +2654,28 @@ See `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-processor-ingress.pa7jeB/te
 B0 and relay agreed at DAA 19,694. The selected interval contained no
 new Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-batch-processor-live.53cslt/page.json`.
+
+## Batch handoff memory reservations
+
+The accepting UTXO walk now reserves a conservative typed allocation
+bound before decoding a BCT1 signature, range list or response part.
+The retained lease covers the decoded value, shared owner, handoff
+indices and replay fee allocation. The fee input set has a separate
+temporary reservation. Rehearsal and final replay share the retained
+value and lease. Local reservation and wire allocation failures in
+this handoff stop the local transition before commit. Malformed
+carriers keep their existing handling and the fee calculation uses
+the same validated difference. The stateless fee quote and header
+shape path remain separate bounded decoders.
+
+The extracted suite passed 34 checks, including early refusal of an
+unknown carrier kind, typed reservation failure, and matching fee
+projection. It uses a shim for the retained owner and prebuilt Core
+dependencies. The integrated ledger fixture for rollback and shared
+lease lifetime has been added and remains unrun, along with the
+processor build and isolated activation. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-handoff-quota.HjeGul/tests.log`.
+
+B0 and relay agreed at DAA 19,695. The selected interval contained no
+new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-quota-live.950Rz9/page.json`.

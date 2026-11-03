@@ -4,8 +4,8 @@
 //! ordinary script validation. In particular an escrow output is already in
 //! `total_outputs`; it cannot also increase the available fee.
 
-use crate::tx::{PopulatedTransaction, Transaction, TransactionOutpoint, UtxoEntry, ValidatedTransaction};
-use std::collections::BTreeMap;
+use crate::tx::{PopulatedTransaction, Transaction, UtxoEntry, ValidatedTransaction};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CarrierFeeRefusalV1 {
@@ -50,10 +50,10 @@ impl CarrierFeeBudgetV1 {
         if entries.len() != tx.inputs.len() {
             return Err(CarrierFeeRefusalV1::MissingEntries);
         }
-        let mut inputs = std::collections::HashSet::<TransactionOutpoint>::new();
+        let mut inputs = BTreeSet::new();
         let mut total_in = 0u64;
         for (input, entry) in tx.inputs.iter().zip(entries) {
-            if !inputs.insert(input.previous_outpoint) {
+            if !inputs.insert((input.previous_outpoint.transaction_id, input.previous_outpoint.index)) {
                 return Err(CarrierFeeRefusalV1::DuplicateInput);
             }
             total_in = total_in.checked_add(entry.amount).ok_or(CarrierFeeRefusalV1::Overflow)?;
@@ -91,7 +91,7 @@ impl CarrierFeeBudgetV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tx::{ScriptPublicKey, TransactionInput, TransactionOutput};
+    use crate::tx::{ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput};
 
     fn tx(amounts: &[u64], outputs: &[u64]) -> (Transaction, Vec<UtxoEntry>) {
         let inputs = amounts

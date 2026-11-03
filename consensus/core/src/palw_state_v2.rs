@@ -20773,7 +20773,7 @@ pub struct PalwTransitionExtrasV1 {
     pub batch_court_active_v1: bool,
     /// The accepted UTXO facts, in accepted carrier order. The index is the
     /// count of already accepted ordinary objects immediately before the carrier.
-    pub batch_court_carriers_v1: Vec<(usize, std::sync::Arc<crate::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1>)>,
+    pub batch_court_carriers_v1: Vec<(usize, crate::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1)>,
     /// Native-resolved original TIR rules, never limits deserialized from a carrier.
     /// None keeps the new original-allocation route dormant.
     pub tir_public_allocation_rules_v1: Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1>,

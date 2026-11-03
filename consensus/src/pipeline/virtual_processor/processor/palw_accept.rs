@@ -3,7 +3,7 @@
 use super::*;
 use kaspa_consensus_core::palw_batch_court_v1::fold_order::{AcceptedCourtItemV1, in_accepted_order_v1, index_batch_carriers_v1};
 
-pub(super) type BatchHandoffV1 = std::sync::Arc<kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1>;
+pub(super) type BatchHandoffV1 = kaspa_consensus_core::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1;
 pub(super) type IndexedBatchHandoffsV1 = Vec<(usize, BatchHandoffV1)>;
 
 /// Immutable output of the existing production resolver at one block. The legacy
@@ -2662,7 +2662,7 @@ impl VirtualStateProcessor {
         block_daa: u64,
         raw_carrier_fees: &std::collections::HashMap<TransactionId, u64>,
         rent_available_fees: &std::collections::HashMap<TransactionId, u64>,
-        batch_handoffs: &std::collections::HashMap<TransactionId, BatchHandoffV1>,
+        batch_handoffs: &std::collections::BTreeMap<TransactionId, BatchHandoffV1>,
     ) -> Result<(Vec<PalwCarriedObjectV1>, IndexedBatchHandoffsV1), PalwLocalTransitionFaultV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Ok((Vec::new(), Vec::new()));

@@ -2538,7 +2538,7 @@ impl VirtualStateProcessor {
                             subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
                         });
                     }
-                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score);
+                    self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, &*bond_view, pov_daa_score)?;
                     // ADR-0125: one line a chain block that merges the lane — what an operator (and the
                     // devnet drill) reads to see permits granted and the transactions they carried. The
                     // native (payment) transactions are counted apart from PALW carriers and the first
@@ -3859,7 +3859,8 @@ impl VirtualStateProcessor {
             .and_then(|(_, state)| self.palw_round_verdicts_v1(state, &virtual_ghostdag_data, virtual_daa_window.daa_score));
 
         // Calc virtual UTXO state relative to selected parent
-        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score);
+        self.calculate_utxo_state(&mut ctx, &selected_parent_utxo_view, selected_parent_bond_view, virtual_daa_window.daa_score)
+            .map_err(RuleError::LocalNativeCapacityUnavailable)?;
 
         // Update the accumulated diff
         accumulated_diff.with_diff_in_place(&ctx.mergeset_diff).unwrap();

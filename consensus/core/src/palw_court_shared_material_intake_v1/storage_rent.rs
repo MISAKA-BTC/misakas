@@ -3,13 +3,21 @@
 use super::{
     MATERIAL_BATCH_VERSION, MATERIAL_PIPELINED_MAX_BYTES, MaterialActionV1, SignedMaterialIntakeV1, material_intake_schedule_v1,
 };
-use crate::palw_batch_court_v1::carriage::{BatchCourtWireV1, BatchMaterialControlV1, decode_batch_court_carrier_v1};
+use crate::palw_batch_court_v1::{
+    BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1,
+    carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, BatchMaterialControlV1, decode_batch_court_payload_v1},
+};
 use crate::palw_court_carrier_fee_v1::CarrierFeeBudgetV1;
+use crate::palw_native_resource_v1::{
+    NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, NativeRetainedV1, TirNativeRequestsV1, btree_node_envelope_bytes_v1,
+    reserve_native_pending_requests_v1,
+};
 use crate::palw_state_v2::PalwBlockContextV2;
 use crate::{
     Hash64,
     tx::{Transaction, ValidatedTransaction},
 };
+use std::sync::Arc;
 
 /// Quote the existing per-byte storage rate for a V3 declaration only.
 pub fn material_batch_storage_rent_v1(intake: &SignedMaterialIntakeV1) -> Result<Option<u64>, String> {
@@ -53,13 +61,26 @@ struct PreparedBatchCarrierV1 {
 }
 
 impl PreparedBatchCarrierV1 {
-    fn decode_v1(carrier: &Transaction) -> Result<Option<Self>, String> {
-        let Some(wire) = decode_batch_court_carrier_v1(carrier)? else { return Ok(None) };
+    fn decode_v1(carrier: &Transaction) -> Result<Option<Self>, HandoffError> {
+        use NativeDecodeErrorV1::{Decode, Resource};
+        if carrier.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+            return Ok(None);
+        }
+        let Some(wire) = decode_batch_court_payload_v1(&carrier.payload).map_err(|error| {
+            if error.kind() == std::io::ErrorKind::OutOfMemory {
+                Resource(NativeCoverageV1::unsupported::<Self>("Batch carrier decode", &error.to_string()))
+            } else {
+                Decode(error.to_string())
+            }
+        })?
+        else {
+            return Ok(None);
+        };
         if !carrier.id_is_current() {
-            return Err("Batch carrier transaction identity is stale".into());
+            return Err(Decode("Batch carrier transaction identity is stale".into()));
         }
         let storage_rent = match &wire {
-            BatchCourtWireV1::Respond(control) => material_batch_storage_rent_v1(&control.intake)?,
+            BatchCourtWireV1::Respond(control) => material_batch_storage_rent_v1(&control.intake).map_err(Decode)?,
             BatchCourtWireV1::Open(_) => None,
         };
         Ok(Some(Self { carrier: carrier.id(), wire, storage_rent }))
@@ -110,21 +131,69 @@ pub struct ValidatedBatchCarrierV1 {
     at: PalwBlockContextV2,
 }
 
+/// Clones of the accepting-block handoff share the decoded bytes and lease.
+pub type SharedValidatedBatchCarrierV1 = Arc<NativeRetainedV1<ValidatedBatchCarrierV1>>;
+
+type HandoffError = NativeDecodeErrorV1<String>;
+
 impl ValidatedBatchCarrierV1 {
     pub fn prepare_v1(
         validated: &ValidatedTransaction<'_>,
         preceding_fee: u64,
         at: PalwBlockContextV2,
-    ) -> Result<Option<Self>, String> {
-        let Some(batch) = PreparedBatchCarrierV1::decode_v1(validated.tx)? else { return Ok(None) };
-        let fee_error = |err| format!("Batch native carrier fee: {err:?}");
+    ) -> Result<Option<SharedValidatedBatchCarrierV1>, NativeDecodeErrorV1<String>> {
+        Self::prepare_reserved_v1(validated, preceding_fee, at, reserve_native_pending_requests_v1)
+    }
+
+    fn prepare_reserved_v1(
+        validated: &ValidatedTransaction<'_>,
+        preceding_fee: u64,
+        at: PalwBlockContextV2,
+        mut reserve: impl FnMut(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    ) -> Result<Option<SharedValidatedBatchCarrierV1>, HandoffError> {
+        use NativeDecodeErrorV1::{Decode, Resource};
+        if validated.tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
+            return Ok(None);
+        }
+        let Some(body) = validated.tx.payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else {
+            return Ok(None);
+        };
+        let mut q = TirNativeRequestsV1::new();
+        q.exact_v1::<u8>(crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64).map_err(Resource)?;
+        match body.first() {
+            // The bounded decoder may reserve a declared length before discovering
+            // truncated data. Quote the codec maximum, never the unread suffix.
+            Some(0) => q.exact_v1::<BatchRangeV1>(MAX_BATCH_RANGES_V1 as u64),
+            Some(1) => q.exact_v1::<u8>(u64::from(MAX_BATCH_PART_BYTES_V1)),
+            _ => return Err(Decode("unknown Batch Court carrier kind".into())),
+        }
+        .map_err(Resource)?;
+        q.exact_v1::<NativeRetainedV1<Self>>(1).map_err(Resource)?;
+        q.add_v1((std::mem::size_of::<[usize; 2]>() + std::mem::align_of::<NativeRetainedV1<Self>>()) as u64).map_err(Resource)?;
+        q.add_v1(btree_node_envelope_bytes_v1::<crate::TransactionId, SharedValidatedBatchCarrierV1>() as u64).map_err(Resource)?;
+        // One preceding allocation in the retained fee budget. During replay
+        // one scratch copy coexists and can add the storage debit.
+        q.add_v1(3 * btree_node_envelope_bytes_v1::<[u8; 64], u64>() as u64).map_err(Resource)?;
+        // Candidate, accepted and final-extra index arrays may coexist.
+        for _ in 0..3 {
+            q.vec_v1::<(usize, SharedValidatedBatchCarrierV1)>(1).map_err(Resource)?;
+        }
+        let lease = reserve(q.bytes_v1()).map_err(Resource)?;
+        let scratch = (validated.tx.inputs.len() as u64)
+            .checked_mul(btree_node_envelope_bytes_v1::<(crate::TransactionId, u32), ()>() as u64)
+            .ok_or_else(|| Resource(NativeCoverageV1::overflow::<Self>("Batch fee input set")))?;
+        let _scratch = if scratch == 0 { None } else { reserve(scratch).map_err(Resource)? };
+        let batch = PreparedBatchCarrierV1::decode_v1(validated.tx)?
+            .ok_or_else(|| Decode("validated Batch carrier lost its payload".into()))?;
+        let fee_error = |err| Decode(format!("Batch native carrier fee: {err:?}"));
         let mut budget = CarrierFeeBudgetV1::from_validated_v1(validated).map_err(fee_error)?;
         if preceding_fee != 0 {
             let identity =
-                crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-preceding-fee/v1", &validated.tx.id())?;
+                crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/batch-preceding-fee/v1", &validated.tx.id())
+                    .map_err(Decode)?;
             budget.allocate_v1(identity.as_bytes(), preceding_fee).map_err(fee_error)?;
         }
-        Ok(Some(Self { batch, budget, at }))
+        Ok(Some(Arc::new(NativeRetainedV1::from_owner_reserved_v1(Self { batch, budget, at }, lease))))
     }
 
     pub fn fee_v1(&self) -> MaterialBatchCarrierFeeV1 {
@@ -154,7 +223,7 @@ impl ValidatedBatchCarrierV1 {
 /// Shared fee accounting for an enabled V3 route. Callers supply the fee
 /// remaining after mandatory bond burn and all preceding fee allocations.
 pub fn material_batch_carrier_fee_v1(carrier: &Transaction, available_fee: u64) -> Result<MaterialBatchCarrierFeeV1, String> {
-    Ok(match PreparedBatchCarrierV1::decode_v1(carrier)? {
+    Ok(match PreparedBatchCarrierV1::decode_v1(carrier).map_err(|error| error.to_string())? {
         Some(batch) => batch.split_v1(available_fee),
         None => MaterialBatchCarrierFeeV1::split(0, available_fee),
     })
@@ -177,7 +246,9 @@ impl MaterialBatchStorageDebitV1 {
         request_root: Hash64,
         at: PalwBlockContextV2,
     ) -> Result<Self, String> {
-        let prepared = PreparedBatchCarrierV1::decode_v1(carrier)?.ok_or("Batch storage rent carrier has another purpose")?;
+        let prepared = PreparedBatchCarrierV1::decode_v1(carrier)
+            .map_err(|error| error.to_string())?
+            .ok_or("Batch storage rent carrier has another purpose")?;
         prepared.allocate_v1(budget, request_root, at)?.ok_or_else(|| "Batch storage rent carrier is not a V3 Begin".into())
     }
 
@@ -221,6 +292,54 @@ mod tests {
         PopulatedTransaction, ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry,
         ValidatedTransaction,
     };
+
+    fn assert_batch_lease_lifetime_v1(
+        validated: &ValidatedTransaction<'_>,
+        at: PalwBlockContextV2,
+        retained: u64,
+        scratch: u64,
+    ) {
+        use crate::palw_native_resource_v1::{
+            NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1,
+        };
+        let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
+            memory_bytes: retained + scratch,
+            database_bytes: 0,
+        });
+        let owner = ValidatedBatchCarrierV1::prepare_reserved_v1(validated, 1, at, |bytes| {
+            checker.reserve_requests_v1(bytes, 0).map(Some)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            checker.outstanding(),
+            (retained, 0),
+            "temporary input set charge is released"
+        );
+        let shared = Arc::clone(&owner);
+        drop(owner);
+        assert_eq!(
+            checker.outstanding(),
+            (retained, 0),
+            "the remaining owner holds the same lease"
+        );
+        drop(shared);
+        assert_eq!(checker.outstanding(), (0, 0));
+
+        let limited = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 {
+            memory_bytes: retained,
+            database_bytes: 0,
+        });
+        let blocked = ValidatedBatchCarrierV1::prepare_reserved_v1(validated, 1, at, |bytes| {
+            limited.reserve_requests_v1(bytes, 0).map(Some)
+        });
+        assert!(matches!(blocked, Err(NativeDecodeErrorV1::Resource(_))));
+        assert_eq!(
+            limited.outstanding(),
+            (0, 0),
+            "the first reservation rolls back on scratch refusal"
+        );
+    }
 
     #[test]
     fn batch_storage_rent_uses_one_exact_accepted_carrier_allocation() {
@@ -270,6 +389,32 @@ mod tests {
             PopulatedTransaction::new(&tx, vec![UtxoEntry::new(output + 2 * amount + 1, ScriptPublicKey::default(), 1, false)]),
             2 * amount + 1,
         );
+        let mut requests = Vec::new();
+        let metered = ValidatedBatchCarrierV1::prepare_reserved_v1(&native, 1, at, |bytes| {
+            requests.push(bytes);
+            Ok(None)
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(metered.fee_v1(), full_split);
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0] > crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN as u64 && requests[1] > 0);
+        let mut malformed = tx.clone();
+        malformed.payload[BATCH_COURT_CARRIER_MAGIC_V1.len()] = u8::MAX;
+        malformed.finalize();
+        let malformed = ValidatedTransaction::new(
+            PopulatedTransaction::new(&malformed, native.entries.clone()),
+            native.calculated_fee,
+        );
+        let malformed = ValidatedBatchCarrierV1::prepare_reserved_v1(&malformed, 1, at, |_| {
+            panic!("an unknown carrier kind must be rejected before reservation")
+        });
+        assert!(matches!(malformed, Err(NativeDecodeErrorV1::Decode(_))));
+        let denied = ValidatedBatchCarrierV1::prepare_reserved_v1(&native, 1, at, |_| {
+            Err(NativeCoverageV1::unsupported::<ValidatedBatchCarrierV1>("Batch test", "no space"))
+        });
+        assert!(matches!(denied, Err(NativeDecodeErrorV1::Resource(_))));
+        assert_batch_lease_lifetime_v1(&native, at, requests[0], requests[1]);
         let handoff = ValidatedBatchCarrierV1::prepare_v1(&native, 1, at).unwrap().unwrap();
         assert_eq!(handoff.fee_v1(), full_split);
         assert!(handoff.wire_at_v1(&at).is_ok());

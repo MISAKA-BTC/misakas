@@ -58,12 +58,7 @@ impl BorshDeserialize for SignedBatchDemandV1 {
         let notice_id = Hash64::deserialize_reader(r)?;
         let signer = PalwBondKeyV2::deserialize_reader(r)?;
         let demand = BatchDemandV1::deserialize_reader(r)?;
-        let length = u32::deserialize_reader(r)? as usize;
-        if length != SIG {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Batch demand signature length"));
-        }
-        let mut signature = vec![0; SIG];
-        r.read_exact(&mut signature)?;
+        let signature = read_batch_signature_v1(r)?;
         Ok(Self { version, claim, scope_id, ordinal, notice_id, signer, demand, signature })
     }
 }
@@ -120,14 +115,21 @@ impl BorshDeserialize for BatchMaterialControlV1 {
             2 => Action::Finish { draft_id: Hash64::deserialize_reader(r)? },
             _ => return Err(invalid("unknown Batch response action")),
         };
-        let length = u32::deserialize_reader(r)? as usize;
-        if length != SIG {
-            return Err(invalid("Batch response signature length"));
-        }
-        let mut signature = vec![0; SIG];
-        r.read_exact(&mut signature)?;
+        let signature = read_batch_signature_v1(r)?;
         Ok(Self { demand_ordinal, intake: SignedMaterialIntakeV1 { version, claim, scope_id, target, submitter, action, signature } })
     }
+}
+
+fn read_batch_signature_v1(r: &mut impl Read) -> io::Result<Vec<u8>> {
+    let length = u32::deserialize_reader(r)? as usize;
+    if length != SIG {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "Batch signature length"));
+    }
+    let mut signature = Vec::new();
+    signature.try_reserve_exact(SIG).map_err(|_| io::Error::new(io::ErrorKind::OutOfMemory, "Batch signature allocation failed"))?;
+    signature.resize(SIG, 0);
+    r.read_exact(&mut signature)?;
+    Ok(signature)
 }
 
 /// Distinct lifecycle payload prefix for the candidate Batch dispatcher.
@@ -176,12 +178,12 @@ pub fn decode_batch_court_carrier_v1(carrier: &crate::tx::Transaction) -> Result
     if carrier.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return Ok(None);
     }
-    decode_batch_court_payload_v1(&carrier.payload)
+    decode_batch_court_payload_v1(&carrier.payload).map_err(|error| error.to_string())
 }
 
-pub(crate) fn decode_batch_court_payload_v1(payload: &[u8]) -> Result<Option<BatchCourtWireV1>, String> {
+pub(crate) fn decode_batch_court_payload_v1(payload: &[u8]) -> io::Result<Option<BatchCourtWireV1>> {
     let Some(body) = payload.strip_prefix(BATCH_COURT_CARRIER_MAGIC_V1) else { return Ok(None) };
-    borsh::from_slice(body).map(Some).map_err(|error| error.to_string())
+    borsh::from_slice(body).map(Some)
 }
 
 #[cfg(test)]

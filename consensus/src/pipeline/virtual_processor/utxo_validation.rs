@@ -202,8 +202,8 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// Real accepting point and BCT1 facts retained only for the candidate
     /// block's Court walk. The virtual template needs fee projection only.
     pub palw_batch_accepting_point_v1: Option<kaspa_consensus_core::palw_state_v2::PalwBlockContextV2>,
-    pub palw_batch_handoffs_v1: std::collections::HashMap<
-        TransactionId, std::sync::Arc<kaspa_consensus_core::palw_court_shared_material_intake_v1::ValidatedBatchCarrierV1>,
+    pub palw_batch_handoffs_v1: std::collections::BTreeMap<
+        TransactionId, kaspa_consensus_core::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1,
     >,
     /// **ADR-0125: the merged round blocks and which of them hold their permit**, decided against
     /// the parent state before acceptance runs. `None` where the lane is not open at this block, so
@@ -617,14 +617,14 @@ impl VirtualStateProcessor {
         selected_parent_utxo_view: &V,
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
-    ) {
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         self.calculate_utxo_state_with_funded_candidates_v1(
             ctx,
             selected_parent_utxo_view,
             selected_parent_bond_view,
             pov_daa_score,
             None,
-        );
+        )
     }
 
     /// Borrow branch PALW state only while actual native validated inputs live.
@@ -637,7 +637,7 @@ impl VirtualStateProcessor {
         selected_parent_bond_view: &ActiveBondView,
         pov_daa_score: u64,
         candidate_state: Option<(&kaspa_consensus_core::palw_state_v2::PalwChainStateV2, u64)>,
-    ) {
+    ) -> Result<(), kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1> {
         let selected_parent_transactions = self.block_transactions_store.get(ctx.selected_parent()).unwrap();
         let validated_coinbase = ValidatedTransaction::new_coinbase(&selected_parent_transactions[0]);
 
@@ -927,10 +927,13 @@ impl VirtualStateProcessor {
                     ) {
                         Ok(Some(handoff)) => {
                             batch_fee = Some(handoff.fee_v1().collectible_fee);
-                            ctx.palw_batch_handoffs_v1.insert(validated_tx.id(), std::sync::Arc::new(handoff));
+                            ctx.palw_batch_handoffs_v1.insert(validated_tx.id(), handoff);
                         }
                         Ok(None) => {}
-                        Err(why) => debug!("[palw-batch] carrier {} did not yield a UTXO handoff: {why}", validated_tx.id()),
+                        Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why)) => return Err(why),
+                        Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why)) => {
+                            debug!("[palw-batch] carrier {} did not yield a UTXO handoff: {why}", validated_tx.id());
+                        }
                     }
                 }
                 let collectible = batch_fee.unwrap_or_else(|| {
@@ -980,6 +983,7 @@ impl VirtualStateProcessor {
         // from genesis everywhere (the 4-way reserve/victim split is the part
         // fenced behind `pos_v2_activation_daa_score` — see below).
         self.apply_slashing_side_effects(ctx, selected_parent_utxo_view, selected_parent_bond_view, pov_daa_score);
+        Ok(())
     }
 
     /// kaspa-pq Phase 11 (ADR-0013 Addendum C / ADR-0016 §D.4): the atomic
