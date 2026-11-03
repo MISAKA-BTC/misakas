@@ -1047,6 +1047,31 @@ fn prepare_initial_case_checker_v2(
             &payload.payer_signature,
         )
         .map_err(refuse)?;
+    let qualified = crate::palw_positive_assignment_funds_v2::qualify_accepted_case_funding_output_v2(
+        &prior,
+        &funding,
+        &payload.result,
+        &payload.service,
+        &payload.basis,
+        &payload.consent,
+        &funding.payer_key,
+        first.transaction(),
+        first.origin().accepted_daa,
+    )
+    .map_err(refuse)?;
+    let rooted_funding = &bundle.funding;
+    let [_, fee, capital, surplus] = qualified.initial_legs();
+    if rooted_funding.funding_origin != first.origin()
+        || rooted_funding.original_outpoint != qualified.outpoint()
+        || rooted_funding.initial_locked != qualified.amount()
+        || [rooted_funding.fee.initial, rooted_funding.capital.initial, rooted_funding.surplus.initial]
+            != [fee.initial, capital.initial, surplus.initial]
+        || rooted_funding.consent != payload.consent
+        || rooted_funding.payer_key != funding.payer_key
+        || rooted_funding.payer_signature != payload.payer_signature
+    {
+        return Err(refuse("rooted Case funds differ from the actual accepted C output"));
+    }
     let layout_quote = preflight_native_value_v1::<PalwTirLayoutV1>(layout.as_slice(), layout.len() as u64).map_err(refuse)?;
     let layout_heap = layout_quote.logical_requests_v1();
     heap = heap.checked_sub(layout_heap).ok_or_else(capacity)?;

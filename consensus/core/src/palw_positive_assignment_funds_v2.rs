@@ -637,6 +637,40 @@ pub fn qualify_assigned_case_funding_output_v2(
     current_entry: Option<&UtxoEntry>,
     now: u64,
 ) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
+    let qualified = qualify_accepted_case_funding_output_v2(
+        assignment,
+        assignment_funding,
+        result,
+        service,
+        basis,
+        consent,
+        payer_key,
+        transaction,
+        now,
+    )?;
+    let output = &transaction.outputs[consent.funding_output_index as usize];
+    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
+    if output.value != entry.amount || output.script_public_key != entry.script_public_key || entry.is_coinbase {
+        return Err(AssignmentFundsErrorV2::CurrentUtxo);
+    }
+    Ok(qualified)
+}
+
+/// Common signed output qualification. In cold replay the caller supplies the
+/// original transaction from the authenticated accepting prefix. Live intake
+/// additionally compares the current UTXO through its own entry point.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn qualify_accepted_case_funding_output_v2(
+    assignment: &misaka_palw_positive_contract::assignment::rows::AssignmentRow,
+    assignment_funding: &AssignmentFundingRow,
+    result: &misaka_palw_positive_contract::messages::MinerResultCommit,
+    service: &misaka_palw_positive_contract::messages::MinerServiceContract,
+    basis: &misaka_palw_positive_contract::funding::FundingPlanBasis,
+    consent: &misaka_palw_positive_contract::funding::FundingConsent,
+    payer_key: &[u8; PUBKEY_BYTES],
+    transaction: &Transaction,
+    now: u64,
+) -> Result<AssignmentFundingOutputV2, AssignmentFundsErrorV2> {
     assignment.validate_shape()?;
     assignment_funding.validate_shape()?;
     consent.validate(result, service, basis, now)?;
@@ -666,12 +700,7 @@ pub fn qualify_assigned_case_funding_output_v2(
         return Err(AssignmentFundsErrorV2::Expired);
     }
     let output = transaction.outputs.get(consent.funding_output_index as usize).ok_or(AssignmentFundsErrorV2::Output)?;
-    let entry = current_entry.ok_or(AssignmentFundsErrorV2::CurrentUtxo)?;
-    if output.value != entry.amount
-        || output.script_public_key != entry.script_public_key
-        || entry.is_coinbase
-        || payload(output) != Some(consent.refund_payload)
-    {
+    if payload(output) != Some(consent.refund_payload) {
         return Err(AssignmentFundsErrorV2::CurrentUtxo);
     }
     let required = add([basis.required_fee, basis.required_capital])?;
