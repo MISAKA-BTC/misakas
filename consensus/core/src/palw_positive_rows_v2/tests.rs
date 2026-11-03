@@ -130,6 +130,8 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         assert_eq!(borsh::to_vec(&restored).unwrap(), bytes);
         assert_eq!(restored.positive_draw_slots_v2(last, 4), 1);
         assert!(restored.due_positive_certification_subjects_v2(last + 1).eq([subject]));
+        assert!(restored.undrawn_positive_subjects_v2(last).eq([subject]));
+        assert_eq!(restored.undrawn_positive_subjects_v2(last + 1).next(), None);
     }
     {
         use crate::{
@@ -190,6 +192,7 @@ fn p_terminal_case_requires_its_exact_result_scope_and_liability() {
         let subject = crate::Hash64::from_bytes(h.subject.0);
         install(&mut route, &p);
         assert_eq!(route.positive_draw_slots_v2(at, 4), 0);
+        assert_eq!(route.undrawn_positive_subjects_v2(at).next(), None);
         assert_eq!(route.due_positive_certification_subjects_v2(deadline).next(), None);
         let before_vote = borsh::to_vec(&route).unwrap();
         let restored: PalwKernelRouteStateV1 = borsh::from_slice(&before_vote).unwrap();

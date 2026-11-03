@@ -477,6 +477,39 @@ impl NativeAssignedCourtV2 {
     }
 }
 
+pub(super) fn original_reservation_preimage_v2<'a>(
+    backing: &'a NativeCommittedAssignedCaseV2,
+    assignment: &AssignmentRow,
+    remaining_work: &mut u64,
+) -> Result<&'a [u8], PalwStateV2Error> {
+    use misaka_palw_positive_contract::assignment::{
+        control_material::AssignmentControlViewV2,
+        journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
+        open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
+    };
+    let material = backing.material();
+    let schedule = &material.native_preimages.source_policy.work;
+    let raw = backing.open_raw();
+    let quote = schedule.court_body_work(raw.len() as u64).map_err(refuse)?;
+    let quote = quote.checked_mul(2).ok_or_else(|| refuse("verifier roster wire work overflow"))?;
+    *remaining_work = remaining_work.checked_sub(quote).ok_or_else(|| refuse("verifier roster wire work"))?;
+    let open = AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
+    let header = open.header();
+    if header.kind != AssignmentJournalEventKindV2::Open || header.assignment != assignment.id() || header.origin != assignment.origin
+    {
+        return Err(refuse("verifier roster must belong to the original Open"));
+    }
+    let cap = material.assignment_policy.max_frame_bytes;
+    let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
+    let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
+    let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
+    let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
+    if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
+        return Err(refuse("verifier roster differs from original custody"));
+    }
+    Ok(roster)
+}
+
 fn snapshot(
     court: &ContractCourtV2<TirCourtCheckerV2, PanelSignatureVerifierV2<NativeAssignedPanelAuthorityV2>>,
 ) -> crate::palw_positive_common_replay_v2::LocalCourtSnapshotV2 {
@@ -1725,34 +1758,8 @@ impl NativeAssignedCourtV2 {
         assignment: &AssignmentRow,
         remaining_work: &mut u64,
     ) -> Result<super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2<'a>, PalwStateV2Error> {
-        use misaka_palw_positive_contract::assignment::{
-            control_material::AssignmentControlViewV2,
-            journal::{AssignmentJournalEventKindV2, AssignmentJournalRecordViewV2},
-            open_material::{AssignmentOpenLimitsV2, AssignmentOpenPreimageKindV2, AssignmentOpenViewV2},
-        };
-        let material = backing.material();
-        let schedule = &material.native_preimages.source_policy.work;
-        let raw = backing.open_raw();
-        let quote = schedule.court_body_work(raw.len() as u64).map_err(refuse)?;
-        let quote = quote.checked_mul(2).ok_or_else(|| refuse("verifier roster wire work overflow"))?;
-        *remaining_work = remaining_work.checked_sub(quote).ok_or_else(|| refuse("verifier roster wire work"))?;
-        let open =
-            AssignmentJournalRecordViewV2::decode(raw, material.native_assignment_journal_storage_limit_v2()).map_err(refuse)?;
-        let header = open.header();
-        if header.kind != AssignmentJournalEventKindV2::Open
-            || header.assignment != assignment.id()
-            || header.origin != assignment.origin
-        {
-            return Err(refuse("verifier roster must belong to the original Open"));
-        }
-        let cap = material.assignment_policy.max_frame_bytes;
-        let envelope = AssignmentControlViewV2::decode(open.payload(), cap).map_err(refuse)?;
-        let open = AssignmentOpenViewV2::decode(envelope.inner(), AssignmentOpenLimitsV2::within_payload(cap)).map_err(refuse)?;
-        let roster = open.preimage(AssignmentOpenPreimageKindV2::ReservationCustody);
-        let expected = material.custody.preimage_bytes[AssignmentOpenPreimageKindV2::ReservationCustody as usize];
-        if crate::palw_positive_assignment_material_v2::assignment_custody_bytes_id_v2(roster) != expected {
-            return Err(refuse("verifier roster differs from original custody"));
-        }
+        let roster = original_reservation_preimage_v2(backing, assignment, remaining_work)?;
+        let schedule = &backing.material().native_preimages.source_policy.work;
         super::positive_assignment_verifiers::AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
             roster,
             schedule.per_control,

@@ -603,6 +603,12 @@ impl PalwKernelRouteStateV1 {
         self.positive_gate_c_schedule_v2.contains(&(b'P', last, subject))
     }
 
+    pub(crate) fn undrawn_positive_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {
+        self.positive_gate_c_schedule_v2
+            .range((b'P', now, Hash64::default())..(b'Q', 0, Hash64::default()))
+            .map(|&(_, _, subject)| subject)
+    }
+
     /// Draw and attestation deadlines are inclusive. A veto is due as
     /// soon as its signed votes are in the accepted prefix.
     pub(crate) fn due_positive_certification_subjects_v2(&self, now: u64) -> impl Iterator<Item = Hash64> + '_ {

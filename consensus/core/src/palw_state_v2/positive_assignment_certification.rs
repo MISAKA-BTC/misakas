@@ -425,6 +425,7 @@ impl TransitionBuilder<'_> {
         subject: Digest,
         material: &AssignmentAdmissionMaterialV2,
         reservation_preimage: &[u8],
+        remaining_work: &mut u64,
     ) -> Result<(), PalwStateV2Error> {
         let origin = PositiveCertificationDrawOriginV2 {
             block: NativeHash64(ctx.block.as_bytes()),
@@ -473,8 +474,11 @@ impl TransitionBuilder<'_> {
         {
             return Err(unavailable("original P reservation preimage unavailable or corrupted"));
         }
-        let candidates = AssignmentVerifierCandidatesV2::decode(reservation_preimage)
-            .map_err(|_| unavailable("invalid retained verifier candidates"))?;
+        let candidates = AssignmentVerifierCandidatesV2::decode_with_work_bound_v2(
+            reservation_preimage,
+            material.native_preimages.source_policy.work.per_control,
+            remaining_work,
+        )?;
         let keys = candidates.keys();
         let count = keys.len();
         let _pool_lease = reserve_p_workspace(pool_workspace_bytes(count as u64).map_err(PalwStateV2Error::NativeResource)?)?;
@@ -679,89 +683,67 @@ impl TransitionBuilder<'_> {
         write(self, row)
     }
 }
-#[derive(Default)]
-pub(super) struct PositiveCertificationSweepReportV2 {
-    pub draws: u64,
-    pub failures: u64,
-    pub deferred_queue_or_seed: u64,
-    pub waiting_native_session: u64,
-}
 impl TransitionBuilder<'_> {
-    /// Run after the legacy sweep so both use the SAME actual N claim-unit
-    /// owner. A full queue/missinglaterseed defers; after certify_by the original
-    /// frozen clock expires. No fallback policy or synthetic seed is supplied.
-    pub(super) fn sweep_positive_certification_v2<'a>(
+    /// Use the selected parent's live undrawn slots after the legacy sweep.
+    /// A newly admitted Case cannot supply its original archive until the next block.
+    pub(super) fn draw_due_positive_cases_v2(
         &mut self,
+        parent: &PalwChainStateV2,
         ctx: &PalwBlockContextV2,
-        mut original_reservation: impl FnMut(AssignmentId) -> Result<(&'a AssignmentAdmissionMaterialV2, &'a [u8]), PalwStateV2Error>,
-    ) -> Result<PositiveCertificationSweepReportV2, PalwStateV2Error> {
-        let count = self.state.kernel_route.as_ref().map_or(0, |route| {
-            route.aux.range((136, Vec::new())..(137, Vec::new())).filter(|((_, key), _)| key.first() == Some(&b'P')).count()
-        });
-        // Existing chains with no P rows perform no P allocation and do not
-        // require a resource owner merely to preserve their legacy sweep.
-        if count == 0 {
-            return Ok(PositiveCertificationSweepReportV2::default());
+        input: &mut PositiveCaseReplayInputV2<'_>,
+    ) -> Result<(), PalwStateV2Error> {
+        let Some(route) = parent.kernel_route_state_v1() else { return Ok(()) };
+        let subjects = route.undrawn_positive_subjects_v2(ctx.daa_score);
+        if route.undrawn_positive_subjects_v2(ctx.daa_score).take(input.live_case_cap.saturating_add(1)).count() > input.live_case_cap
+        {
+            return Err(refuse("undrawn Positive Cases exceed native live capacity"));
         }
-        let mut q = TirNativeRequestsV1::new();
-        q.vec_v1::<Digest>(count as u64).map_err(PalwStateV2Error::NativeResource)?;
-        let _keys_owner = reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?.ok_or_else(|| {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<Digest>>("P sweep keys", "actual checker not armed"))
-        })?;
-        let mut subjects = Vec::new();
-        subjects.try_reserve_exact(count).map_err(|_| {
-            PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<Digest>>("P sweep keys", "allocator refusal"))
-        })?;
-        if let Some(route) = self.state.kernel_route.as_ref() {
-            for ((_, key), _) in route.aux.range((136, Vec::new())..(137, Vec::new())) {
-                if key.first() != Some(&b'P') {
-                    continue;
-                }
-                if key.len() != 65 {
-                    return Err(refuse("malformed P key"));
-                }
-                subjects.push(Digest(key[1..].try_into().map_err(refuse)?));
-            }
-        }
-        let mut report = PositiveCertificationSweepReportV2::default();
+        let mut parent_root = None;
         for subject in subjects {
+            let subject = Digest(subject.as_bytes());
             let owned = read(&self.state, subject, 0)?;
             let row = &owned.row;
-            if positive_certification_failure_v2(row, ctx.daa_score, case_live(&self.state, &row.fixed.header)?).is_some() {
-                drop(owned);
-                self.fail_positive_certification_v2(ctx, subject)?;
-                report.failures += 1;
-                continue;
-            }
-            if row.fixed.outcome.is_some() {
-                continue;
-            }
-            if row.draw.is_some() {
-                report.waiting_native_session += 1;
-                continue;
-            }
             let h = &row.fixed.header;
-            let earliest = h.committed_span.unwrap_or(0).checked_add(h.policy.anchor_delay_spans.max(1));
-            let later = self.state.round_seed_anchor.is_some_and(|a| earliest.is_some_and(|s| a.span >= s));
-            let policy_ok = queue_policy(self, &h.policy, ctx.daa_score).is_ok();
-            if !later || !policy_ok {
-                report.deferred_queue_or_seed += 1;
+            if row.fixed.outcome.is_some() || row.draw.is_some() || !case_live(&self.state, h)? {
+                continue;
+            }
+            let earliest = h
+                .committed_span
+                .unwrap_or(0)
+                .checked_add(h.policy.anchor_delay_spans.max(1))
+                .ok_or_else(|| refuse("seed span overflow"))?;
+            if !self.state.round_seed_anchor.is_some_and(|anchor| anchor.span >= earliest)
+                || queue_policy(self, &h.policy, ctx.daa_score).is_err()
+            {
                 continue;
             }
             let network_key = (POSITIVE_CERTIFICATION_TABLE_V2, certification_network_key_v1());
             let epoch = ctx.daa_score / h.policy.epoch_daa;
             let draws = shared_network_draws_v2(&self.state, &network_key, epoch, h.policy.draws_per_epoch)?;
             if draws == h.policy.draws_per_epoch {
-                report.deferred_queue_or_seed += 1;
                 continue;
             }
-            let (material, reservation_preimage) = original_reservation(h.assignment)?;
+            let (assignment, case, result) = (h.assignment, h.case, h.result);
             drop(owned);
-            self.draw_positive_certification_v2(ctx, subject, material, reservation_preimage)?;
-            report.draws += 1;
+            let NativeAssignedCaseBackingV2::Committed(backing) = (input.load)(case, result)? else {
+                return Err(unavailable("missing original Case for protected draw"));
+            };
+            if backing.parent() != input.selected_parent
+                || backing.parent_state_root() != *parent_root.get_or_insert_with(|| parent.state_root())
+                || backing.assignment().id() != assignment
+                || backing.pin().case != case
+                || backing.pin().result != result
+            {
+                return Err(refuse("protected draw archive differs from the selected parent Case"));
+            }
+            let material = backing.material();
+            let mut work = material.positive_policy.max_case_work.min(material.assignment_policy.max_replay_work);
+            let roster = super::positive_assignment_case::original_reservation_preimage_v2(&backing, backing.assignment(), &mut work)?;
+            self.draw_positive_certification_v2(ctx, subject, material, roster, &mut work)?;
         }
-        Ok(report)
+        Ok(())
     }
+
     /// Release only the P attestors' computation-liability slice after an actual
     /// fully replayed closed native boundary. This does not release source/join
     /// capital or service dues. A Refuted/Revoked claim needs a separate actual
