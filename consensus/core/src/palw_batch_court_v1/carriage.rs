@@ -19,6 +19,19 @@ pub struct SignedBatchDemandV1 {
     pub signature: Vec<u8>,
 }
 
+/// Unsigned Open for a rooted original and an accepted notice. The caller
+/// signs the result using the notice issuer's key and the real network domain.
+/// The quote checks reserved capacity; the accepting fold checks live authority.
+pub fn quote_batch_open_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    claim: Hash64,
+    notice_id: Hash64,
+    ordinal: u64,
+    ranges: Vec<super::BatchRangeV1>,
+) -> Result<SignedBatchDemandV1, String> {
+    super::rooted::quote_open_v1(state, claim, notice_id, ordinal, ranges)
+}
+
 impl SignedBatchDemandV1 {
     pub fn signing_message_v1(&self, network: Hash64) -> Result<Hash64, String> {
         if self.version != 1 || [network, self.claim, self.scope_id, self.notice_id].contains(&Hash64::default()) {

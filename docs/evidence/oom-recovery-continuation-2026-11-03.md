@@ -3125,3 +3125,26 @@ B0 and relay agreed at DAA 19,709 with no Qwen carrier in the newly
 scanned selected interval. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-workspace.EnboGP/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-batch-workspace-live.FmeDg3/page.json`.
+
+## Quote an Open from the accepted notice and reservation
+
+Core can now build an unsigned BCT1 Open from the same-branch notice,
+original service book, requested ranges and reserved opening ordinal.
+The quote returns the original notice signer, canonical case and range
+ordering, the reserved opening DAA, and the exclusive response deadline
+one DAA after the last booked Finish. It refuses an absent notice, an
+already opened ordinal, missing or undersized slots, and a deadline
+outside the native collection window. Open acceptance uses the same
+deadline calculation and still checks live bond authority and signature.
+
+The extracted suite passed 39 checks, including Finish equality refusal,
+the first valid exclusive deadline, the collection boundary and the
+native draft expiry. A native fixture now builds and signs a quoted
+Open before submitting the actual Respond sequence. The full native
+fixture, Studio or RPC integration, the full preclaim profile and live
+completion remain unverified.
+
+B0 and relay agreed on an advanced selected tip at DAA 19,709 with no
+Qwen carrier in the new selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-batch-open-quote.dsc4oo/tests.log`
+and `/private/tmp/misaka-t12-oom-20261102/g14-batch-open-quote-live.HTUX0l/page.json`.

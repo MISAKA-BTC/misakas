@@ -700,11 +700,10 @@ fn material_intake_measure_wall_time_and_retained_bytes() {
 #[test]
 fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     use crate::palw_batch_court_v1::carriage::{
-        BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, SignedBatchDemandV1,
+        BATCH_COURT_CARRIER_MAGIC_V1, BATCH_DEMAND_SIGNATURE_CONTEXT_V1, BatchCourtWireV1, BatchMaterialControlV1, quote_batch_open_v1,
     };
-    use crate::palw_batch_court_v1::rooted::batch_case_id_v1;
     use crate::palw_court_policy_v1::NOTICE_WINDOW_DAA;
-    use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchDemandV1, BatchRangeAuthenticationV1, BatchRangeV1};
+    use crate::palw_batch_court_v1::{BatchCourtWindowV1, BatchRangeAuthenticationV1, BatchRangeV1};
     use crate::palw_court_service_v1::{ServiceCost, ServicePacket, ServiceReservations, causal::CausalServicePacketV1};
     use crate::palw_court_shared_material_intake_v1::*;
     use crate::palw_court_shared_tir_frontier_v1::{SHARED_REQUEST_CONTEXT_V1, SignedSharedRequestV1};
@@ -737,32 +736,16 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert!(body.len() <= PART);
     let hash = palw_tir_public_body_hash_v1(&body);
     let ordinal = 0;
-    let demand = BatchDemandV1 {
-        case_id: batch_case_id_v1(claim, scope_id, notice_id, notice_at.block, notice_at.daa_score, ordinal).unwrap(),
-        case_window: BatchCourtWindowV1 {
-            claim_accepted_daa: context.original_accepted_daa,
-            challenge_opened_daa: notice_at.daa_score,
-            collect_until_daa: context.hard_daa,
-            material_until_daa: context.material_until_daa,
-        },
-        opened_daa: open_at.daa_score, response_deadline_daa: response_deadline, maximum_bytes: body.len() as u64,
-        part_bytes: PART as u32,
-        ranges: vec![BatchRangeV1 { id: target.id_v1(claim).unwrap(), bytes: body.len() as u32,
-            authentication: BatchRangeAuthenticationV1::WholeRange }],
-    };
-    let request_root = demand.checked_request_root_v1().unwrap();
-    let mut open = SignedBatchDemandV1 { version: 1, claim, scope_id, ordinal, notice_id, signer: who, demand, signature: vec![] };
-    open.signature = sign(open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
-    let respond = |action| {
-        let mut intake = SignedMaterialIntakeV1 { version: MATERIAL_BATCH_VERSION, claim, scope_id, target, submitter: who,
-            action, signature: vec![] };
-        intake.signature = sign(intake.batch_signing_message_v1(network, request_root).unwrap(), MATERIAL_BATCH_CONTEXT_V1);
-        BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: ordinal, intake })
-    };
-    let begin = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
+    let ranges = vec![BatchRangeV1 { id: target.id_v1(claim).unwrap(), bytes: body.len() as u32,
+        authentication: BatchRangeAuthenticationV1::WholeRange }];
     let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
     use batch::admission::{BatchAdmissionV1, MaximumBatchDemandV1};
-    let window = open.demand.case_window;
+    let window = BatchCourtWindowV1 {
+        claim_accepted_daa: context.original_accepted_daa,
+        challenge_opened_daa: notice_at.daa_score,
+        collect_until_daa: context.hard_daa,
+        material_until_daa: context.material_until_daa,
+    };
     let terminal = Hash64::from_u64_word(997).as_bytes();
     let verification = Hash64::from_u64_word(998).as_bytes();
     let storage = MaterialIntakeScheduleV1 { sompi_per_byte: 2, ..material_test_schedule() };
@@ -784,7 +767,19 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     state.staged_courts.insert(Key::CourtService, Row::CourtServiceV3(Box::new(service).into()));
 
     let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+    assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).is_err());
     super::super::palw_court_shared_tir_fold_v1::request(&mut b, &notice_at, claim, &notice).unwrap();
+    let mut open = quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges.clone()).unwrap();
+    assert_eq!((open.signer, open.demand.opened_daa, open.demand.response_deadline_daa), (who, open_at.daa_score, response_deadline));
+    let request_root = open.demand.checked_request_root_v1().unwrap();
+    open.signature = sign(open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
+    let respond = |action| {
+        let mut intake = SignedMaterialIntakeV1 { version: MATERIAL_BATCH_VERSION, claim, scope_id, target, submitter: who,
+            action, signature: vec![] };
+        intake.signature = sign(intake.batch_signing_message_v1(network, request_root).unwrap(), MATERIAL_BATCH_CONTEXT_V1);
+        BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: ordinal, intake })
+    };
+    let begin = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
     use crate::tx::{PopulatedTransaction, ScriptPublicKey, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry, ValidatedTransaction};
     let apply = |b: &mut TransitionBuilder<'_>, point: &PalwBlockContextV2, wire: &BatchCourtWireV1, fee, preceding| {
         let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
@@ -812,6 +807,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     };
     let opening = BatchCourtWireV1::Open(open);
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
+    assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges).is_err());
     let after_open = b.state.state_root();
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert_eq!(b.state.state_root(), after_open);

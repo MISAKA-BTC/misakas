@@ -1,5 +1,5 @@
 //! Branch-retained Batch demand and its original's reserved opening slot.
-use super::{BatchDemandV1, BatchRangeV1, MAX_BATCH_RANGES_V1, carriage::BatchStopControlV1};
+use super::{BatchCourtWindowV1, BatchDemandV1, BatchRangeV1, MAX_BATCH_PART_BYTES_V1, MAX_BATCH_RANGES_V1, carriage::BatchStopControlV1};
 use crate::palw_court_shared_tir_builder_store_v1::constraint_stop::batch_payload;
 use crate::palw_court_shared_tir_state_v1 as shared;
 use crate::palw_native_resource_v1::wire::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1, wire_bad};
@@ -197,21 +197,85 @@ impl RootedBatchDemandV1 {
         if (self.opened_block, self.demand.opened_daa) != (at.block, at.daa_score) {
             return Err("Batch demand differs from the accepting point".into());
         }
-        let service = state.court_service_state_v1().ok_or("Batch demand has no rooted service book")?;
-        shared::context(state, self.claim)?.check_binding(service)?;
-        let binding = service.claims.get(&self.claim).ok_or("Batch demand has no original binding")?;
-        let packet_id = batch_open_packet_v1(self.claim, self.scope_id, self.ordinal)?.as_bytes();
-        let packet = service.book.packet(&packet_id).ok_or("Batch demand has no reserved opening packet")?;
-        if !binding.packet_ids.contains(&packet_id)
-            || service.book.assigned_daa(&packet_id) != Some(at.daa_score)
-            || packet.cost.bytes < signed_bytes
-        {
-            return Err("Batch demand opening lacks reserved original capacity".into());
+        let (book, binding, opened_daa) = reserved_open_slot_v1(state, self.claim, self.scope_id, self.ordinal, signed_bytes)?;
+        if opened_daa != at.daa_score {
+            return Err("Batch demand opening differs from its reserved DAA".into());
         }
         use crate::palw_court_shared_material_intake_v1 as material;
         let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
-        material::batch::check_open_response_slots_v1(self, &service.book, &binding.packet_ids, schedule)
+        material::batch::check_open_response_slots_v1(self, book, &binding.packet_ids, schedule)
     }
+}
+
+fn reserved_open_slot_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    scope: Hash64,
+    ordinal: u64,
+    signed_bytes: u64,
+) -> Result<(&crate::palw_court_service_v1::ServiceReservations, &crate::palw_court_service_state_v2::ServiceClaimBinding, u64), String> {
+    let service = state.court_service_state_v1().ok_or("Batch demand has no rooted service book")?;
+    shared::context(state, claim)?.check_binding(service)?;
+    let binding = service.claims.get(&claim).ok_or("Batch demand has no original binding")?;
+    let packet_id = batch_open_packet_v1(claim, scope, ordinal)?.as_bytes();
+    let packet = service.book.packet(&packet_id).ok_or("Batch demand has no reserved opening packet")?;
+    if !binding.packet_ids.contains(&packet_id) || packet.cost.bytes < signed_bytes {
+        return Err("Batch demand opening lacks reserved original capacity".into());
+    }
+    let daa = service.book.assigned_daa(&packet_id).ok_or("Batch demand opening has no assigned DAA")?;
+    Ok((&service.book, binding, daa))
+}
+
+pub(super) fn quote_open_v1(
+    state: &PalwChainStateV2,
+    claim: Hash64,
+    notice_id: Hash64,
+    ordinal: u64,
+    mut ranges: Vec<BatchRangeV1>,
+) -> Result<super::carriage::SignedBatchDemandV1, String> {
+    use crate::palw_court_shared_material_intake_v1 as material;
+    let context = shared::context(state, claim)?;
+    let notice_key = Key::CourtSharedQuery(notice_id);
+    let Some(Row::CourtSharedQuery(notice)) = state.staged_court_row_v1(&notice_key) else {
+        return Err("Batch quote has no accepted notice".into());
+    };
+    notice.check(&notice_key)?;
+    if notice.claim != claim
+        || notice.scope_id != context.scope_id
+        || notice.material_until_daa != context.material_until_daa
+        || state.court_shared_initial_notice_daa_v1(claim) != Some(notice.opened_daa)
+        || state.staged_court_row_v1(&Key::CourtBatchDemand(claim, ordinal)).is_some()
+    {
+        return Err("Batch quote does not name an unused opening of the accepted notice".into());
+    }
+    let signed_bytes = super::carriage::batch_open_wire_bytes_v1(ranges.len())?;
+    let scope = context.scope_id;
+    let (book, binding, opened_daa) = reserved_open_slot_v1(state, claim, scope, ordinal, signed_bytes)?;
+    if state.last_point().is_some_and(|point| point.daa_score > opened_daa) {
+        return Err("Batch quote's reserved opening DAA has passed".into());
+    }
+    ranges.sort_unstable_by_key(|range| range.id);
+    let mut demand = BatchDemandV1 {
+        case_id: batch_case_id_v1(claim, scope, notice_id, notice.opened_block, notice.opened_daa, ordinal)?,
+        case_window: BatchCourtWindowV1 {
+            claim_accepted_daa: context.original_accepted_daa,
+            challenge_opened_daa: notice.opened_daa,
+            collect_until_daa: context.hard_daa,
+            material_until_daa: context.material_until_daa,
+        },
+        opened_daa,
+        response_deadline_daa: 0,
+        maximum_bytes: ranges.iter().map(|range| u64::from(range.bytes)).sum(),
+        part_bytes: MAX_BATCH_PART_BYTES_V1,
+        ranges,
+    };
+    let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
+    demand.response_deadline_daa = material::batch::batch_open_response_deadline_v1(
+        claim, scope, ordinal, &demand, book, &binding.packet_ids, schedule,
+    )?;
+    demand.checked_request_root_v1().map_err(|why| format!("Batch quote shape: {why:?}"))?;
+    Ok(super::carriage::SignedBatchDemandV1 { version: 1, claim, scope_id: scope, ordinal, notice_id, signer: notice.opened_by,
+        demand, signature: Vec::new() })
 }
 
 pub(crate) fn batch_case_id_v1(

@@ -115,25 +115,51 @@ pub(crate) fn check_open_response_slots_v1(
     owned: &std::collections::BTreeSet<[u8; 64]>,
     schedule: MaterialIntakeScheduleV1,
 ) -> Result<(), String> {
+    let minimum = batch_open_response_deadline_v1(
+        rooted.claim, rooted.scope_id, rooted.ordinal, &rooted.demand, book, owned, schedule,
+    )?;
+    if rooted.demand.response_deadline_daa < minimum {
+        return Err("Batch signed response deadline excludes reserved service".into());
+    }
+    Ok(())
+}
+
+/// Earliest exclusive deadline that includes every booked response position.
+/// The input's proposed response deadline is intentionally not read here.
+pub(crate) fn batch_open_response_deadline_v1(
+    claim: Hash64,
+    scope: Hash64,
+    ordinal: u64,
+    demand: &crate::palw_batch_court_v1::BatchDemandV1,
+    book: &ServiceReservations,
+    owned: &std::collections::BTreeSet<[u8; 64]>,
+    schedule: MaterialIntakeScheduleV1,
+) -> Result<u64, String> {
     use crate::palw_batch_court_v1::BatchRangeAuthenticationV1;
-    let demand = &rooted.demand;
-    if u64::from(demand.part_bytes) != PART {
-        return Err("Batch native demand has another part width".into());
+    if u64::from(demand.part_bytes) != PART
+        || !(1..=crate::palw_batch_court_v1::MAX_BATCH_RANGES_V1).contains(&demand.ranges.len())
+    {
+        return Err("Batch native demand has an invalid part width or range count".into());
+    }
+    let parts: u64 = demand.ranges.iter().map(|range| u64::from(range.bytes).div_ceil(PART)).sum();
+    if parts > crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1 as u64 {
+        return Err("Batch native demand exceeds the aggregate part bound".into());
     }
     let release = demand.opened_daa.checked_add(1).ok_or("Batch demand opening overflows")?;
-    let service = release..demand.response_deadline_daa;
     let hard = demand
         .case_window
         .claim_accepted_daa
         .checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA)
         .ok_or("Batch original clock overflows")?;
+    let service = release..hard.min(demand.case_window.collect_until_daa);
+    let mut last_finish = demand.opened_daa;
     for (range_index, range) in demand.ranges.iter().enumerate() {
         if range.authentication != BatchRangeAuthenticationV1::WholeRange {
             return Err("Batch native demand requires whole range authentication".into());
         }
-        let position = BatchResponsePositionV1 { demand_ordinal: rooted.ordinal, range_index: range_index as u32 };
+        let position = BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: range_index as u32 };
         let graph =
-            position.reservation_graph_v1(rooted.claim, rooted.scope_id, u64::from(range.bytes), service.clone(), |bytes| {
+            position.reservation_graph_v1(claim, scope, u64::from(range.bytes), service.clone(), |bytes| {
                 Ok(ServiceCost { bytes, work: 1, io: 0, controls: 1 })
             })?;
         let slot = |id| {
@@ -149,6 +175,7 @@ pub(crate) fn check_open_response_slots_v1(
         if finish >= expires {
             return Err("Batch response finish crosses the draft expiry".into());
         }
+        last_finish = last_finish.max(finish);
         for node in graph {
             let id = node.packet.id;
             let at = slot(id)?;
@@ -162,7 +189,11 @@ pub(crate) fn check_open_response_slots_v1(
             }
         }
     }
-    Ok(())
+    let deadline = last_finish.checked_add(1).ok_or("Batch response deadline overflows")?;
+    if deadline >= demand.case_window.collect_until_daa || deadline > hard {
+        return Err("Batch response has no exclusive deadline inside the collection window".into());
+    }
+    Ok(deadline)
 }
 
 /// An exact signed delivery branch of a previously accepted demand. Original
@@ -834,6 +865,18 @@ mod tests {
             },
         };
         assert!(check_open_response_slots_v1(&rooted, &book, &owned, schedule).is_ok());
+        let finish = book.assigned_daa(&graph.last().unwrap().packet.id).unwrap();
+        let mut earliest = rooted.clone();
+        earliest.demand.response_deadline_daa = finish;
+        let deadline = batch_open_response_deadline_v1(
+            earliest.claim, earliest.scope_id, earliest.ordinal, &earliest.demand, &book, &owned, schedule,
+        ).unwrap();
+        assert_eq!(deadline, finish + 1);
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
+        earliest.demand.response_deadline_daa = deadline;
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_ok());
+        earliest.demand.case_window.collect_until_daa = deadline;
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
         let expired = MaterialIntakeScheduleV1 { draft_ttl_daa: 2, ..schedule };
         assert!(check_open_response_slots_v1(&rooted, &book, &owned, expired).is_err());
         owned.remove(&graph[1].packet.id);
