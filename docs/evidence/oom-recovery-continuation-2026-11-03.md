@@ -2470,3 +2470,31 @@ with local validation and public acceptance pending. The sampled lines
 do not establish a rejection cause.
 See `/private/tmp/misaka-t12-oom-20261102/g14-batch-signed-open-live.0A5OPd/page.json`
 and the accompanying `journal.txt`.
+
+## Prebookable Batch response positions
+
+The previous response packet ID included the actual request root and
+draft ID. The draft ID included the body hash and supplier. Those inputs
+cannot be known when the original reserves service. The candidate now
+books a maximum Begin/Part/Finish graph by original claim, scope, demand
+ordinal and canonical range position. The signed Open verifies ownership,
+encoded byte capacity, assigned order, and the native draft deadline
+for every requested position. The request identity also binds the
+ordinal. The first authenticated Begin fixes the supplier and declaration
+in one draft per request range. A conflicting Begin cannot create a
+second draft in the same reserved position.
+
+The extracted suite passed 27 checks, including a short late declaration
+against a previously reserved maximum, and refusal for a missing owned
+slot or a draft expiring at Finish. The seeded Core fixture now books
+maximum capacity independently of the signed response and includes
+an identical Begin retry and a conflicting signed Begin. This fixture
+still needs the integrated Core build and execution. Native original
+admission must derive the complete maximum graph, including any permitted
+alternative after responder contention or silence. Public transaction
+validation, coinbase accounting and activation are separate outstanding
+work. See `/private/tmp/misaka-t12-oom-20261102/tfp1-prebooked-response.DLUAmD/tests.log`.
+
+B0 and relay agreed at DAA 19,687. The selected interval from the last
+cursor had no new Qwen carrier. See
+`/private/tmp/misaka-t12-oom-20261102/g14-batch-dispatch-live.KOtYNh/page.json`.

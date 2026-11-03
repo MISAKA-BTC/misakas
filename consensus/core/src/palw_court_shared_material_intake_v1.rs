@@ -89,23 +89,13 @@ pub(crate) fn material_draft_id_for_version(
     crate::palw_court_shared_tir_stream_v1::stream_digest(domain, &(claim, target, submitter, total_bytes, body_hash))
 }
 
-/// V3 keeps the original scope field and stores this Batch request root in
-/// the draft's head slot. Parts are indexed by the resulting draft identity.
-pub fn material_batch_draft_id_v1(
-    request_root: Hash64,
-    claim: Hash64,
-    target: MaterialTargetV1,
-    submitter: PalwBondKeyV2,
-    total_bytes: u64,
-    body_hash: Hash64,
-) -> Result<Hash64, String> {
+/// One draft can occupy a V3 request range. The first authenticated Begin
+/// fixes its responder, length and body hash in the rooted draft row.
+pub fn material_batch_draft_id_v1(request_root: Hash64, claim: Hash64, target: MaterialTargetV1) -> Result<Hash64, String> {
     if request_root == Hash64::default() {
         return Err("material Batch request root is empty".into());
     }
-    crate::palw_court_shared_tir_stream_v1::stream_digest(
-        b"misaka-palw/material-draft/v3",
-        &(request_root, claim, target, submitter, total_bytes, body_hash),
-    )
+    crate::palw_court_shared_tir_stream_v1::stream_digest(b"misaka-palw/material-batch-range-draft/v1", &(request_root, claim, target))
 }
 
 // ---------------------------------------------------------------------------
@@ -313,7 +303,7 @@ impl MaterialDraftV1 {
 
     pub fn check(&self, key: &Key) -> Result<(), String> {
         let draft_id = if self.version == MATERIAL_BATCH_VERSION {
-            material_batch_draft_id_v1(self.head, self.claim, self.target, self.submitter, self.total_bytes, self.body_hash)?
+            material_batch_draft_id_v1(self.head, self.claim, self.target)?
         } else {
             material_draft_id_for_version(self.version, self.claim, self.target, self.submitter, self.total_bytes, self.body_hash)?
         };

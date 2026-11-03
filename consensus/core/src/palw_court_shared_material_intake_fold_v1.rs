@@ -84,7 +84,7 @@ pub(super) fn material_intake_pipelined(
     };
     // This is an exact slot lookup. Begin separately checks the native
     // target ceiling before writing; subsequent steps use that retained draft.
-    let delivery = m::batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand.demand, declaration, total_bytes)
+    let delivery = m::batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand.demand, ordinal, declaration, total_bytes)
         .map_err(refused)?;
     if delivery.request_root_v1() != request_root {
         return Err(refused("Batch material delivery root differs from the retained demand"));
@@ -169,7 +169,7 @@ fn material_intake_inner(
                 return Err(refused("pipelined material exceeds its part cap"));
             }
             let draft_id = match request_root {
-                Some(root) => m::material_batch_draft_id_v1(root, s.claim, s.target, s.submitter, *total_bytes, *body_hash),
+                Some(root) => m::material_batch_draft_id_v1(root, s.claim, s.target),
                 None => m::material_draft_id_for_version(s.version, s.claim, s.target, s.submitter, *total_bytes, *body_hash),
             }
             .map_err(refused)?;
@@ -178,6 +178,12 @@ fn material_intake_inner(
                 Some(Row::CourtMaterialDraft(old)) => {
                     if ctx.daa_score < old.begun_daa {
                         return Err(refused("material Begin replay predates accepted draft"));
+                    }
+                    if let Some(root) = request_root
+                        && (old.head, old.submitter, old.total_bytes, old.body_hash)
+                            != (root, s.submitter, *total_bytes, *body_hash)
+                    {
+                        return Err(refused("Batch range already has another signed declaration"));
                     }
                     return Ok(MaterialIntakeEffectV1::Retried);
                 }

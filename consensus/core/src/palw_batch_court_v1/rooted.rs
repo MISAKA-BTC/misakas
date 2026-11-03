@@ -55,7 +55,7 @@ impl RootedBatchDemandV1 {
             || self.demand.response_deadline_daa > context.hard_daa
             || state.court_shared_initial_notice_daa_v1(self.claim) != Some(notice.opened_daa)
             || notice.opened_daa != self.demand.case_window.challenge_opened_daa
-            || batch_case_id_v1(self.claim, self.scope_id, self.notice_id, notice.opened_block, notice.opened_daa)?
+            || batch_case_id_v1(self.claim, self.scope_id, self.notice_id, notice.opened_block, notice.opened_daa, self.ordinal)?
                 != self.demand.case_id
         {
             return Err("Batch demand substitutes its original or accepted notice".into());
@@ -80,7 +80,9 @@ impl RootedBatchDemandV1 {
         {
             return Err("Batch demand opening lacks reserved original capacity".into());
         }
-        Ok(())
+        use crate::palw_court_shared_material_intake_v1 as material;
+        let schedule = material::material_intake_schedule_v1().map_err(|_| "Batch material storage schedule missing")?;
+        material::batch::check_open_response_slots_v1(self, &service.book, &binding.packet_ids, schedule)
     }
 }
 
@@ -90,10 +92,11 @@ pub(crate) fn batch_case_id_v1(
     notice: Hash64,
     notice_block: BlockHash,
     notice_daa: u64,
+    demand_ordinal: u64,
 ) -> Result<Hash64, String> {
     crate::palw_court_shared_tir_stream_v1::stream_digest(
-        b"misaka-palw/batch-case/v1",
-        &(claim, scope, notice, notice_block, notice_daa),
+        b"misaka-palw/batch-case-demand/v1",
+        &(claim, scope, notice, notice_block, notice_daa, demand_ordinal),
     )
 }
 
@@ -151,7 +154,7 @@ mod tests {
     fn rooted_batch_request_round_trip_binds_key_and_bounded_wire() {
         let h = Hash64::from_u64_word;
         let mut demand = BatchDemandV1 {
-            case_id: batch_case_id_v1(h(1), h(2), h(3), h(4), 20).unwrap(),
+            case_id: batch_case_id_v1(h(1), h(2), h(3), h(4), 20, 0).unwrap(),
             case_window: BatchCourtWindowV1 {
                 claim_accepted_daa: 10,
                 challenge_opened_daa: 20,
@@ -174,7 +177,8 @@ mod tests {
             request_root: demand.checked_request_root_v1().unwrap(),
             demand: demand.clone(),
         };
-        assert_ne!(demand.case_id, batch_case_id_v1(h(1), h(2), h(3), h(9), 20).unwrap(),);
+        assert_ne!(demand.case_id, batch_case_id_v1(h(1), h(2), h(3), h(9), 20, 0).unwrap(),);
+        assert_ne!(demand.case_id, batch_case_id_v1(h(1), h(2), h(3), h(4), 20, 1).unwrap());
         let key = row.key();
         assert_eq!(borsh::to_vec(&key).unwrap()[0], 32);
         assert_eq!(borsh::to_vec(&Row::CourtBatchDemand(Box::new(row.clone()))).unwrap()[0], 39);

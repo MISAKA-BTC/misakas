@@ -223,8 +223,8 @@ fn pipelined_material_restores_out_of_order_parts_before_native_authentication()
     };
     let request_root = demand.checked_request_root_v1().unwrap();
     let other_root = Hash64::from_u64_word(987);
-    let draft_id = material_batch_draft_id_v1(request_root, claim, target, who, body.len() as u64, hash).unwrap();
-    assert_ne!(draft_id, material_batch_draft_id_v1(other_root, claim, target, who, body.len() as u64, hash).unwrap());
+    let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
+    assert_ne!(draft_id, material_batch_draft_id_v1(other_root, claim, target).unwrap());
     assert_ne!(draft_id, material_draft_id_for_version(2, claim, target, who, body.len() as u64, hash).unwrap());
     assert_ne!(draft_id, material_draft_id_v1(claim, target, who, body.len() as u64, hash).unwrap());
     let signed_at = |action, root| {
@@ -736,7 +736,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let hash = palw_tir_public_body_hash_v1(&body);
     let ordinal = 0;
     let demand = BatchDemandV1 {
-        case_id: batch_case_id_v1(claim, scope_id, notice_id, notice_at.block, notice_at.daa_score).unwrap(),
+        case_id: batch_case_id_v1(claim, scope_id, notice_id, notice_at.block, notice_at.daa_score, ordinal).unwrap(),
         case_window: BatchCourtWindowV1 {
             claim_accepted_daa: context.original_accepted_daa,
             challenge_opened_daa: notice_at.daa_score,
@@ -758,11 +758,11 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: ordinal, intake })
     };
     let begin = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: hash });
-    let BatchCourtWireV1::Respond(control) = &begin else { unreachable!() };
-    let delivery = batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(&context, &open.demand, &control.intake, body.len() as u64).unwrap();
     let cost = |bytes| ServiceCost { bytes, work: 1, io: 1, controls: 1 };
     let open_id = batch_open_packet_v1(claim, scope_id, ordinal).unwrap().as_bytes();
-    let mut graph = delivery.service_graph_v1(begin_at.daa_score, response_deadline, |bytes| Ok(cost(bytes))).unwrap();
+    let position = batch::BatchResponsePositionV1 { demand_ordinal: ordinal, range_index: 0 };
+    let mut graph = position.reservation_graph_v1(claim, scope_id, PART as u64, begin_at.daa_score..response_deadline,
+        |bytes| Ok(cost(bytes))).unwrap();
     graph[0].predecessors.push(open_id);
     graph.push(CausalServicePacketV1 {
         packet: ServicePacket { id: open_id, release_daa: open_at.daa_score, service_before: begin_at.daa_score,
@@ -787,7 +787,12 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     b.apply_batch_court_wire_v1(&open_at, &opening, None).unwrap();
     assert_eq!(b.state.state_root(), after_open);
     b.apply_batch_court_wire_v1(&begin_at, &begin, None).unwrap();
-    let draft_id = material_batch_draft_id_v1(request_root, claim, target, who, body.len() as u64, hash).unwrap();
+    let after_begin = b.state.state_root();
+    b.apply_batch_court_wire_v1(&begin_at, &begin, None).unwrap();
+    let conflicting = respond(MaterialActionV1::Begin { total_bytes: body.len() as u64, body_hash: Hash64::from_u64_word(999) });
+    assert!(b.apply_batch_court_wire_v1(&begin_at, &conflicting, None).is_err());
+    assert_eq!(b.state.state_root(), after_begin);
+    let draft_id = material_batch_draft_id_v1(request_root, claim, target).unwrap();
     b.apply_batch_court_wire_v1(&at(frame, 4), &respond(MaterialActionV1::Part { draft_id, offset: 0, bytes: body.clone() }), None).unwrap();
     b.apply_batch_court_wire_v1(&at(frame, 5), &respond(MaterialActionV1::Finish { draft_id }), None).unwrap();
     let key = Key::CourtMaterial(claim, target.id_v1(claim).unwrap());
