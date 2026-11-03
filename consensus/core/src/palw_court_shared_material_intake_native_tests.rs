@@ -805,6 +805,12 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
         }
         folded.map(|()| split)
     };
+    let before_open = b.state.state_root();
+    let mut late_open = open.clone();
+    late_open.demand.response_deadline_daa += 1;
+    late_open.signature = sign(late_open.signing_message_v1(network).unwrap(), BATCH_DEMAND_SIGNATURE_CONTEXT_V1);
+    assert!(apply(&mut b, &open_at, &BatchCourtWireV1::Open(late_open), 0, 0).is_err());
+    assert_eq!(b.state.state_root(), before_open);
     let opening = BatchCourtWireV1::Open(open);
     apply(&mut b, &open_at, &opening, 0, 0).unwrap();
     assert!(quote_batch_open_v1(&b.state, claim, notice_id, ordinal, ranges).is_err());
@@ -841,6 +847,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     assert_eq!(view["kind"], "palwBatchResponse");
     assert_eq!(view["target"], "prompt-flat");
     assert_eq!(view["response"]["requestRoot"], request_root.to_string());
+    assert_eq!(view["response"]["responseDeadlineDaa"], response_deadline);
     assert_eq!(view["response"]["parts"][0]["acceptedDaa"], quote.parts[0].assigned_daa);
     let draft_key = Key::CourtMaterialDraft(claim, draft_id);
     let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&draft_key) else { panic!("missing Batch draft") };

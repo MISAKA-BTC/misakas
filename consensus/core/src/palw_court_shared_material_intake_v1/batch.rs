@@ -115,11 +115,13 @@ pub(crate) fn check_open_response_slots_v1(
     owned: &std::collections::BTreeSet<[u8; 64]>,
     schedule: MaterialIntakeScheduleV1,
 ) -> Result<(), String> {
-    let minimum = batch_open_response_deadline_v1(
+    let deadline = batch_open_response_deadline_v1(
         rooted.claim, rooted.scope_id, rooted.ordinal, &rooted.demand, book, owned, schedule,
     )?;
-    if rooted.demand.response_deadline_daa < minimum {
-        return Err("Batch signed response deadline excludes reserved service".into());
+    // A later deadline would advertise response time with no corresponding
+    // slots and could extend the wait into a reserved fallback turn.
+    if rooted.demand.response_deadline_daa != deadline {
+        return Err("Batch signed response deadline differs from reserved service".into());
     }
     Ok(())
 }
@@ -220,6 +222,7 @@ pub struct BatchResponseQuoteV1 {
     pub total_bytes: u64,
     pub begin_daa: u64,
     pub finish_daa: u64,
+    pub response_deadline_daa: u64,
     pub draft_expires_daa: u64,
     /// Accepted Begin, if a draft is still retained. Shared material may outlive that draft.
     pub retained_submitter: Option<PalwBondKeyV2>,
@@ -316,6 +319,7 @@ pub fn quote_batch_response_v1(
         total_bytes,
         begin_daa,
         finish_daa,
+        response_deadline_daa: demand.response_deadline_daa,
         draft_expires_daa,
         retained_submitter,
         retained_body_hash,
@@ -970,7 +974,7 @@ mod tests {
                 case_id: h(6),
                 case_window: test_case(),
                 opened_daa: 10,
-                response_deadline_daa: 15,
+                response_deadline_daa: 14,
                 maximum_bytes: 1,
                 part_bytes: PART as u32,
                 ranges: vec![BatchRangeV1 { id: h(7), bytes: 1, authentication: BatchRangeAuthenticationV1::WholeRange }],
@@ -1002,6 +1006,9 @@ mod tests {
         assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
         earliest.demand.response_deadline_daa = deadline;
         assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_ok());
+        earliest.demand.response_deadline_daa = deadline + 1;
+        assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
+        earliest.demand.response_deadline_daa = deadline;
         earliest.demand.case_window.collect_until_daa = deadline;
         assert!(check_open_response_slots_v1(&earliest, &book, &owned, schedule).is_err());
         let expired = MaterialIntakeScheduleV1 { draft_ttl_daa: 2, ..schedule };

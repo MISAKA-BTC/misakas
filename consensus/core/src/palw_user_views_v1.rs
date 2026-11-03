@@ -426,6 +426,7 @@ fn batch_response_json_v1(
         Ok(quote) => (json!({
             "requestRoot": quote.request_root.to_string(), "draftId": quote.draft_id.to_string(),
             "totalBytes": quote.total_bytes, "beginDaa": quote.begin_daa, "finishDaa": quote.finish_daa,
+            "responseDeadlineDaa": quote.response_deadline_daa,
             "draftExpiresDaa": quote.draft_expires_daa,
             "retainedSubmitter": quote.retained_submitter.as_ref().map(palw_bond_key_text_v1),
             "retainedBodyHash": quote.retained_body_hash.map(|hash| hash.to_string()),

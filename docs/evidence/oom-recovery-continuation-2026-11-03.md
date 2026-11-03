@@ -3239,3 +3239,24 @@ B0 and relay agreed at DAA 19,712 and the scanned interval contained no
 Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/tfp1-batch-respond-cli.TfTkm4/tests.log`
 and `/private/tmp/misaka-t12-oom-20261102/g14-batch-respond-cli-live.aBTzNv/page.json`.
+
+## Batch Open deadline matches reserved response service
+
+The rooted Open admission now requires the signed response deadline to
+equal the DAA after the latest reserved Finish across the demand. The
+quote and accepting fold use the same derivation. A notice signer could
+previously declare a later deadline even though no additional response
+slot was reserved. The response view now reports the demand-wide cutoff
+alongside the target-specific Finish slot.
+
+The extracted suite passed 39 checks, including exact, one-slot early,
+and one-slot late deadline assertions and the 10,000 DAA scheduler
+fixture. A native regression assertion also checks that a valid
+signature over a late deadline cannot mutate the branch. That native
+fixture and the public Batch path remain unrun. The production funded
+schedule resolver still returns typed `Missing(Schedule)`, and the
+native profile has no complete original-admission Batch graph.
+
+B0 and relay agreed at virtual DAA 19,713 with zero new Qwen carriers.
+See `/private/tmp/misaka-t12-oom-20261102/g14-profile-audit.iqmutK/page.json`
+and `/private/tmp/misaka-t12-oom-20261102/tfp1-canonical-response-deadline.NjdWhR/tests.log`.
