@@ -1539,3 +1539,40 @@ fold at DAA 19,634. B0 logged 20,606 remaining against
 At DAA 19,636 the public REST index briefly reported
 checkpoint context lag and then matched its synced
 WebSocket tip with HTTP 200.
+
+## Same-DAA Court recovery and second model-free Qwen relation — 07:02 UTC
+
+The first ordinary Court material miss previously stamped
+the duty as submitted. The result could arrive during the
+same DAA, but the next Court pass skipped that duty for ten
+DAA and discarded the ready result as unused. The outbox now
+distinguishes a miss that reserved a provider request from
+a submission stamp. Only a ready result for the exact
+claim and carrier can bypass the miss cooldown. A real
+submission keeps the original cooldown. The Kaspad test
+crate and dependency metadata compiled. The extracted
+production debounce methods passed the same-DAA test.
+This is a local scheduling check. A full provider and
+carrier process test, competing fetch fairness and reorg
+between queueing and final submission remain open.
+
+A new independent run on the original Qwen #58 checked
+layer-0 attention RMS normalization. A verifier denied
+access to the model, original capture, answer and network
+authenticated all 12 input tiles of the activation row
+and recomputed all 128 output lanes. The 16,165-byte
+packet uses no artifact opening because the selected
+kernel has no such operand. Omitted and altered
+activations were rejected. Both cross-substitutions
+with the existing query projection packet were refused
+and the existing query result was byte-identical.
+The new packet SHA-256 is
+`20fdead9b9005e62c7f44122bda05dc6b72d7ac07e24d79477936762b28f99ad`.
+The scope is now two distinct legacy Court relations of
+the same real signed claim, plus its separate full
+arithmetic comparison using the model.
+
+B0, the relay and the public index matched at virtual DAA
+19,637. Qwen #60 was referenced by the selected fold at
+DAA 19,636. B0 rejected it with 20,606 of the required
+20,608 DAA remaining. Both nodes lacked the exact claim.
