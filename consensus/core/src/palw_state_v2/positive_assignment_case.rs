@@ -1042,7 +1042,7 @@ fn prepare_initial_case_checker_v2(
     {
         return Err(refuse("original Case source and policy"));
     }
-    let horizon =
+    let (horizon, source_ledger) =
         super::positive_assignment::assignment_horizon_v2(&rules, signed, source, prover, resources, row.origin.accepted_daa)?;
     let accepted_daa = first.origin().accepted_daa;
     let gate_c = rules.gate_c_clock(accepted_daa).map_err(refuse)?;
@@ -1053,6 +1053,7 @@ fn prepare_initial_case_checker_v2(
             policy.refund_window_daa,
             positive.max_attempts,
             resources.all_attempt_signed_frame_bytes_v2().map_err(refuse)?,
+            source_ledger,
         )
         .map_err(refuse)?;
     if bundle.case.maturity_daa < accepted_daa

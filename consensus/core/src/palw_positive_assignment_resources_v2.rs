@@ -244,6 +244,16 @@ impl AssignmentCaseFeeScheduleV2 {
             .and_then(|n| n.checked_add(self.per_source_unit))
             .ok_or(AssignmentResourceErrorV2::Budget)
     }
+    /// The whole catalog can earn each unit fee once, even when read by
+    /// multiple authorized roles or retransmitted.
+    pub(crate) fn source_catalog_due(&self, source: &SourceCatalogQuoteV2) -> Result<u64, AssignmentResourceErrorV2> {
+        self.validate()?;
+        self.per_source_unit
+            .checked_mul(source.units)
+            .and_then(|n| self.per_source_opening_byte.checked_mul(source.opening_bytes).and_then(|x| n.checked_add(x)))
+            .ok_or(AssignmentResourceErrorV2::Budget)
+    }
+
     pub fn quote(
         &self,
         source: &SourceCatalogQuoteV2,
@@ -251,12 +261,9 @@ impl AssignmentCaseFeeScheduleV2 {
         record_bytes: u64,
         retained_bytes: u64,
     ) -> Result<AssignmentCaseMoneyQuoteV2, AssignmentResourceErrorV2> {
-        self.validate()?;
         let fee = self
-            .per_source_unit
-            .checked_mul(source.units)
-            .and_then(|n| self.per_source_opening_byte.checked_mul(source.opening_bytes).and_then(|x| n.checked_add(x)))
-            .and_then(|n| self.per_checked_relation.checked_mul(attempt_relations).and_then(|x| n.checked_add(x)))
+            .source_catalog_due(source)?
+            .checked_add(self.per_checked_relation.checked_mul(attempt_relations).ok_or(AssignmentResourceErrorV2::Budget)?)
             .and_then(|n| self.per_record_byte.checked_mul(record_bytes).and_then(|x| n.checked_add(x)))
             .and_then(|n| n.checked_add(self.admission))
             .ok_or(AssignmentResourceErrorV2::Budget)?;

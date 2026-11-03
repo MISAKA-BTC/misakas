@@ -174,6 +174,8 @@ const CONSENT_BYTES: u64 = 4 + 4 * 64 + 3 * 8 + 4;
 const SIGNED_OPAQUE_BODY_OVERHEAD_V2: u64 = 2 + 2 + 1 + 4 + SIGNATURE_BYTES as u64;
 pub(crate) const EXACT_FRAME_BODY_OVERHEAD_V2: u64 = SIGNED_OPAQUE_BODY_OVERHEAD_V2;
 pub(crate) const WITNESS_BODY_OVERHEAD_V2: u64 = SIGNED_OPAQUE_BODY_OVERHEAD_V2 + 4 + 6 * 64 + 4 + 1 + 4 * 64;
+pub(crate) const SOURCE_REQUEST_BODY_BYTES_V2: u64 = 5 + 4 + 3 * 64 + 1 + 2 * 8 + 64 + SIGNATURE_BYTES as u64;
+pub(crate) const SOURCE_RESPONSE_BODY_OVERHEAD_V2: u64 = 5 + 2 * 64 + 4;
 /// Existing body0 payload width, excluding its 5-byte version/revision/kind.
 /// Assigned Result syntax shares this scanner without accepting a separate op0.
 pub(super) const RESULT_ADMISSION_PAYLOAD_BYTES_V2: u64 =

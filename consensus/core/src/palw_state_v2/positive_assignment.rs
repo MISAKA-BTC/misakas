@@ -62,7 +62,13 @@ pub(super) fn assignment_horizon_v2(
     prover: &misaka_palw_positive_contract::assignment::consents::AssignmentProverConsentV2,
     resources: &crate::palw_positive_assignment_resources_v2::AssignmentDerivedResourcesV2,
     original_daa: u64,
-) -> Result<crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2, PalwStateV2Error> {
+) -> Result<
+    (
+        crate::palw_positive_assignment_horizon_v2::AssignmentHorizonSpecV2,
+        crate::palw_positive_assignment_horizon_v2::AssignmentSourceLedgerFloorV2,
+    ),
+    PalwStateV2Error,
+> {
     let preimages = rules.native_preimages().ok_or_else(|| refusal("missing original Case cost preimages"))?;
     let certification = rules.certification_policy().ok_or_else(|| refusal("missing actual original Gate C policy"))?;
     resources
@@ -78,7 +84,7 @@ pub(super) fn assignment_horizon_v2(
         &preimages.case_fees,
         rules.funding_relay_profile(),
         resources,
-        preimages.source_policy.max_units_per_request,
+        &preimages.source_policy,
         original_daa,
     )
     .map_err(refusal)
@@ -1575,7 +1581,7 @@ impl TransitionBuilder<'_> {
                         return Err(refusal("independently derived native job/source catalog differs from signed bundle"));
                     }
                     resources.binding().authenticate_bundle_roles(&self.state, bundle, signatures).map_err(refusal)?;
-                    let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
+                    let (horizon, _) = assignment_horizon_v2(rules, bundle, source, prover, resources, ctx.daa_score)?;
                     if rules.funding_relay_profile().requires_relay() {
                         let checked = self.check_pending_initial_f_relay_v2(
                             ctx,
@@ -1790,7 +1796,7 @@ impl TransitionBuilder<'_> {
         if resources.all_attempt_relations() / u64::from(rules.positive_policy().max_attempts) != payload.basis.mandatory_relations {
             return Err(refusal("Case relation count differs from the original registered program"));
         }
-        let horizon = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
+        let (horizon, source_ledger) = assignment_horizon_v2(rules, bundle, source, prover, resources, row.origin.accepted_daa)?;
         let gate_c = rules.gate_c_clock(ctx.daa_score).map_err(refusal)?;
         horizon
             .check_case_source_floor_v2(
@@ -1799,6 +1805,7 @@ impl TransitionBuilder<'_> {
                 rules.assignment_policy().refund_window_daa,
                 rules.positive_policy().max_attempts,
                 resources.all_attempt_signed_frame_bytes_v2().map_err(assignment_resource_error)?,
+                source_ledger,
             )
             .map_err(refusal)?;
         let relay = if rules.funding_relay_profile().requires_relay() {
