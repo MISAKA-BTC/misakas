@@ -1738,11 +1738,12 @@ fn apply_witness_part_v1(
     }
     let key = Key::TirWitness(claim_id, filer);
     let existing = match b.state.staged_court_row_v1(&key) {
-        Some(Row::TirWitness(row)) => Some(row.as_ref().clone()),
+        Some(Row::TirWitness(row)) => Some(row.as_ref()),
         Some(_) => return Err(refused("TIR staged witness key holds another row")),
         None => None,
     };
-    let mut row = match (existing.clone(), part.offset) {
+    let had_prefix = existing.is_some();
+    let mut row = match (existing, part.offset) {
         (None, 0) => Witness {
             claim: claim_id,
             filer,
@@ -1752,14 +1753,30 @@ fn apply_witness_part_v1(
             until_daa: terms.collect_until_daa,
             received: Vec::new(),
         },
-        (Some(row), offset) if offset != 0 => row,
+        (Some(prefix), offset) if offset != 0 => {
+            if (prefix.total_bytes, prefix.digest, prefix.allocation_id, prefix.received.len() as u64)
+                != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, offset)
+            {
+                return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
+            }
+            // Keep the old committed prefix available for rollback, and copy
+            // it once into the exact-sized candidate assembly.
+            let length =
+                prefix.received.len().checked_add(part.bytes.len()).ok_or_else(|| refused("TIR staged witness length overflow"))?;
+            let mut received = Vec::with_capacity(length);
+            received.extend_from_slice(&prefix.received);
+            Witness {
+                claim: prefix.claim,
+                filer: prefix.filer,
+                allocation_id: prefix.allocation_id,
+                total_bytes: prefix.total_bytes,
+                digest: prefix.digest,
+                until_daa: prefix.until_daa,
+                received,
+            }
+        }
         _ => return Err(refused("TIR staged witness part is out of order (a witness opens once, at offset 0)")),
     };
-    if (row.total_bytes, row.digest, row.allocation_id, row.received.len() as u64)
-        != (part.total_bytes, part.digest, frame.plan_v1().allocation_id, part.offset)
-    {
-        return Err(refused("TIR staged witness part changes its declared whole or skips accepted bytes"));
-    }
     row.received.extend_from_slice(&part.bytes);
     if (row.received.len() as u64) < row.total_bytes {
         row.check_structure_v1(claim_id, filer).map_err(refused)?;
@@ -1772,7 +1789,7 @@ fn apply_witness_part_v1(
     }
     let evidence =
         crate::palw_tir_public_carriage_v1::PalwTirPublicConvictionEvidenceV1::decode_staged_v1(&row.received).map_err(refused)?;
-    if existing.is_some() && !b.state.court_service_holds_material_v1(&key) {
+    if had_prefix && !b.state.court_service_holds_material_v1(&key) {
         b.write_staged_row_v1(key, None)?;
     }
     // A recovery hold retains the existing partial row, without changing the
