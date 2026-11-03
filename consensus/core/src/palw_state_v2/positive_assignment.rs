@@ -435,6 +435,7 @@ impl TransitionBuilder<'_> {
             return Err(refusal("initial Assignment/funding/journal mismatch"));
         }
         self.require_absent_assignment_key_v2(NativeRowKey::Assignment(id))?;
+        self.require_unowned_assignment_job_v2(Hash64::from_bytes(row.job.0))?;
         self.check_assignment_live_slots_v2(row.bundle.terms.prover, Some(&row.bundle.terms), rules)?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentFunding(id))?;
         self.require_absent_assignment_key_v2(NativeRowKey::AssignmentUse(id))?;
@@ -573,10 +574,6 @@ impl TransitionBuilder<'_> {
         plan.binding.check_result(&plan.result.result).map_err(refusal)?;
         validate_bundle(&plan.index, &plan.result, &plan.case, &plan.funding).map_err(refusal)?;
         super::positive_assignment_case::reject_legacy_aliases(&self.state, expected, &plan.result.result)?;
-        let job = Hash64::from_bytes(plan.result.result.job.0);
-        if self.state.kernel_route.as_ref().is_some_and(|route| route.contains_positive_job_v2(job)) {
-            return Err(refusal("Positive job already owns a Result at this prefix"));
-        }
         let future = expected.bundle.future_case;
         if plan.funding.consent.payer != future.payer
             || plan.funding.consent.refund_payload != future.refund_payload
@@ -1575,6 +1572,7 @@ impl TransitionBuilder<'_> {
                     )
                     .map_err(assignment_resource_error)?;
                     let resources = reserved.resources();
+                    self.require_unowned_assignment_job_v2(resources.binding().job().job_id)?;
                     if resources.source_quote().digest != bundle.source_catalog
                         || resources.binding().job().context_hash().as_bytes() != bundle.job_context.0
                     {
@@ -1609,6 +1607,13 @@ impl TransitionBuilder<'_> {
                     }
                     let certification = rules.certification_policy().ok_or_else(|| refusal("missing actual Gate C policy"))?;
                     let maximum_scan = rules.assignment_policy().max_replay_work / preimages.source_policy.work.per_control;
+                    let draw_epochs = self.check_assignment_draw_calendar_v2(
+                        certification,
+                        ctx.daa_score,
+                        bundle.terms.result_before_daa,
+                        maximum_scan,
+                    )?;
+                    let maximum_scan = maximum_scan - draw_epochs;
                     let heap_budget = rules
                         .assignment_policy()
                         .max_heap_bytes
@@ -1692,6 +1697,15 @@ impl TransitionBuilder<'_> {
             },
         };
         use misaka_palw_positive_contract::identity::Digest;
+        let job = Hash64::from_bytes(row.job.0);
+        let route = self.state.kernel_route_state_v1().ok_or_else(missing_assignment_history)?;
+        if row.status != AssignmentStatusV2::Open
+            || payload.result.job != row.job
+            || route.contains_positive_job_v2(job)
+            || !route.owns_open_assignment_job_v2(job, Hash64::from_bytes(row.id().0.0))
+        {
+            return Err(refusal("BindResult requires the original exclusive open Assignment job"));
+        }
         let rules = action.rules();
         let open = action.original_open_carriage_v2().ok_or_else(missing_assignment_history)?;
         if open.origin() != row.origin || rules.original_material() != Some(row.admission_material) {

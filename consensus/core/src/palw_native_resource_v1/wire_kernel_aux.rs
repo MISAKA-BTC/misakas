@@ -1198,8 +1198,8 @@ pub(crate) fn scan_native_aux_row_v1<R: Read>(
         misaka_palw_positive_contract::native::KERNEL_AUX_TABLE => {
             let shape = super::positive_rows::scan_positive_aux_row_v1(key, frame)?;
             shape.allocation(
-                u64::from(crate::palw_kernel_route_v1::is_positive_result_row_v2(table, key)),
-                size_of::<typed::BTreeNodeEnvelopeV1<(kaspa_hashes::Hash64, kaspa_hashes::Hash64), ()>>(),
+                u64::from(crate::palw_kernel_route_v1::is_positive_job_owner_row_v2(table, key)),
+                size_of::<typed::BTreeNodeEnvelopeV1<(kaspa_hashes::Hash64, u8, kaspa_hashes::Hash64), ()>>(),
             )?
         }
         145 => return Err(wire::wire_bad("unallocated receipt pause row namespace")),

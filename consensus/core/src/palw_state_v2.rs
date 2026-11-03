@@ -25556,7 +25556,7 @@ impl PalwStateCarriageV2 {
                         .filter(|((table, _), _)| *table != crate::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1)
                         .map(|(key, row)| (key.clone(), row.clone()))
                         .collect(),
-                    positive_job_results_v2: route.positive_job_results_v2.clone(),
+                    positive_job_owners_v2: route.positive_job_owners_v2.clone(),
                     ledger_cache: Default::default(),
                 }
             }),

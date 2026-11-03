@@ -313,8 +313,28 @@ fn has_legacy_staged_alias_v2<V>(
 
 impl TransitionBuilder<'_> {
     pub(super) fn reject_positive_job_alias_v2(&self, job: Hash64) -> Result<(), PalwStateV2Error> {
-        if self.state.kernel_route.as_ref().is_some_and(|route| route.contains_positive_job_v2(job)) {
+        if self
+            .state
+            .kernel_route
+            .as_ref()
+            .is_some_and(|route| route.contains_positive_job_v2(job) || route.contains_open_assignment_job_v2(job))
+        {
             return Err(refuse("legacy ingress overlaps a rooted Positive job"));
+        }
+        Ok(())
+    }
+
+    /// The Open row protects this job against old ingress until Bind or close.
+    pub(super) fn require_unowned_assignment_job_v2(&self, job: Hash64) -> Result<(), PalwStateV2Error> {
+        self.reject_positive_job_alias_v2(job)?;
+        let route = self.state.kernel_route_state_v1().ok_or_else(missing)?;
+        if self.state.has_claim_for_job_v2(job)
+            || has_legacy_staged_alias_v2(&self.state.staged_courts, job)
+            || route
+                .has_legacy_case_alias_v2(None, &job.as_bytes())
+                .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing()))?
+        {
+            return Err(refuse("Assignment job already belongs to a legacy claim or Court"));
         }
         Ok(())
     }
@@ -376,7 +396,7 @@ pub(super) fn reject_legacy_aliases(
     }
     let route = state.kernel_route_state_v1().ok_or_else(missing)?;
     if route
-        .has_legacy_case_alias_v2(&claim.as_bytes(), &job.as_bytes())
+        .has_legacy_case_alias_v2(Some(&claim.as_bytes()), &job.as_bytes())
         .map_err(|why| crate::palw_kernel_route_v1::kernel_ledger_projection_state_error_v1(why, |_| missing()))?
     {
         return Err(refuse("kernel job/claim/OPV alias"));

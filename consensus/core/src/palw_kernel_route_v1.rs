@@ -411,10 +411,10 @@ pub struct PalwKernelRouteStateV1 {
     pub header: PalwKernelRouteHeaderV1,
     pub rows: LedgerRowsV1,
     pub aux: BTreeMap<(u8, Vec<u8>), Vec<u8>>,
-    /// Derived from canonical Result rows on write and restore. The canonical
+    /// Derived from canonical Open Assignment and Result rows. The canonical
     /// aux rows alone are serialized and hashed.
     #[borsh(skip)]
-    pub(crate) positive_job_results_v2: std::collections::BTreeSet<(Hash64, Hash64)>,
+    pub(crate) positive_job_owners_v2: std::collections::BTreeSet<(Hash64, u8, Hash64)>,
     /// **GAP 8: the ledger the rows describe, cached** — never state: not hashed, not encoded, not in a delta, equal for every
     /// comparison. Set by the fold's flush to exactly what [`KernelLedgerV1::from_rows`] would rebuild
     /// ([`KernelLedgerV1::as_rebuilt_from_v1`]); cleared by every other write of a ledger row or of the header (a delta applied or
@@ -446,21 +446,44 @@ fn positive_p_restore_key_v2<R: std::io::Read>(reader: &mut R) -> std::io::Resul
     Ok((key, positive))
 }
 
-/// Result is the first key kind in the frozen aux151 wire namespace.
-pub(crate) fn is_positive_result_row_v2(table: u8, key: &[u8]) -> bool {
-    table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE && key.get(4) == Some(&0)
+const RESULT_JOB_OWNER_V2: u8 = 0;
+const OPEN_ASSIGNMENT_JOB_OWNER_V2: u8 = 10;
+
+/// Price the derived index slot for either frozen aux151 row kind.
+pub(crate) fn is_positive_job_owner_row_v2(table: u8, key: &[u8]) -> bool {
+    table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE
+        && matches!(key.get(4).copied(), Some(RESULT_JOB_OWNER_V2 | OPEN_ASSIGNMENT_JOB_OWNER_V2))
 }
 
-fn positive_job_result_v2(result: &misaka_palw_positive_contract::rows::ResultRow) -> (Hash64, Hash64) {
-    (Hash64::from_bytes(result.result.job.0), Hash64::from_bytes(result.result.id().0.0))
+fn positive_job_owner_v2(body: &misaka_palw_positive_contract::rows::NativeRowBody) -> Option<(Hash64, u8, Hash64)> {
+    use misaka_palw_positive_contract::{assignment::rows::AssignmentStatusV2, rows::NativeRowBody};
+    match body {
+        NativeRowBody::Result(row) => {
+            Some((Hash64::from_bytes(row.result.job.0), RESULT_JOB_OWNER_V2, Hash64::from_bytes(row.result.id().0.0)))
+        }
+        NativeRowBody::Assignment(row) if row.status == AssignmentStatusV2::Open => {
+            Some((Hash64::from_bytes(row.job.0), OPEN_ASSIGNMENT_JOB_OWNER_V2, Hash64::from_bytes(row.id().0.0)))
+        }
+        _ => None,
+    }
 }
 
 impl PalwKernelRouteStateV1 {
+    fn positive_job_owners_for_kind_v2(&self, job: Hash64, kind: u8) -> impl Iterator<Item = &(Hash64, u8, Hash64)> {
+        self.positive_job_owners_v2.range((job, kind, Hash64::default())..=(job, kind, Hash64::from_bytes([u8::MAX; 64])))
+    }
+
     pub(crate) fn contains_positive_job_v2(&self, job: Hash64) -> bool {
-        self.positive_job_results_v2
-            .range((job, Hash64::default())..=(job, Hash64::from_bytes([u8::MAX; 64])))
-            .next()
-            .is_some()
+        self.positive_job_owners_for_kind_v2(job, RESULT_JOB_OWNER_V2).next().is_some()
+    }
+
+    pub(crate) fn contains_open_assignment_job_v2(&self, job: Hash64) -> bool {
+        self.positive_job_owners_for_kind_v2(job, OPEN_ASSIGNMENT_JOB_OWNER_V2).next().is_some()
+    }
+
+    pub(crate) fn owns_open_assignment_job_v2(&self, job: Hash64, id: Hash64) -> bool {
+        let mut owners = self.positive_job_owners_for_kind_v2(job, OPEN_ASSIGNMENT_JOB_OWNER_V2);
+        owners.next().is_some_and(|(_, _, owner)| *owner == id) && owners.next().is_none()
     }
 
     pub(crate) fn update_positive_job_index_v2(
@@ -468,32 +491,24 @@ impl PalwKernelRouteStateV1 {
         key: &(u8, Vec<u8>),
         next: Option<&[u8]>,
     ) -> Result<(), misaka_palw_positive_contract::ContractError> {
-        use misaka_palw_positive_contract::{
-            ContractError,
-            rows::{NativeRowBody, NativeRowValue},
-        };
+        use misaka_palw_positive_contract::rows::NativeRowValue;
 
-        if !is_positive_result_row_v2(key.0, &key.1) {
+        if !is_positive_job_owner_row_v2(key.0, &key.1) {
             return Ok(());
         }
         let previous = self.aux.get(key).map(Vec::as_slice);
         if previous == next {
             return Ok(());
         }
-        let decode = |bytes: &[u8]| {
-            let NativeRowBody::Result(row) = NativeRowValue::decode(&key.1, bytes)?.body else {
-                return Err(ContractError::Identity);
-            };
-            Ok(positive_job_result_v2(&row))
-        };
-        let previous = previous.map(decode).transpose()?;
-        let next = next.map(decode).transpose()?;
+        let decode = |bytes: &[u8]| NativeRowValue::decode(&key.1, bytes).map(|row| positive_job_owner_v2(&row.body));
+        let previous = previous.map(decode).transpose()?.flatten();
+        let next = next.map(decode).transpose()?.flatten();
         if previous != next {
             if let Some(previous) = previous {
-                self.positive_job_results_v2.remove(&previous);
+                self.positive_job_owners_v2.remove(&previous);
             }
             if let Some(next) = next {
-                self.positive_job_results_v2.insert(next);
+                self.positive_job_owners_v2.insert(next);
             }
         }
         Ok(())
@@ -519,7 +534,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
         let rows = LedgerRowsV1::deserialize_reader(reader)?;
         let count = u32::deserialize_reader(reader)?;
         let mut aux = BTreeMap::new();
-        let mut positive_job_results_v2 = std::collections::BTreeSet::new();
+        let mut positive_job_owners_v2 = std::collections::BTreeSet::new();
         // Positive keys must be canonical BEFORE BTreeMap can sort/collapse
         // them. Other aux tables retain their legacy ordering semantics.
         let mut previous_positive = [0u8; misaka_palw_positive_contract::rows::MAX_NATIVE_KEY_BYTES];
@@ -536,8 +551,8 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 let value = positive_blob(reader, misaka_palw_positive_contract::rows::MAX_NATIVE_ROW_BYTES)?;
                 let row = misaka_palw_positive_contract::rows::NativeRowValue::decode(&key, &value)
                     .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "Positive aux key/value mismatch"))?;
-                if let misaka_palw_positive_contract::rows::NativeRowBody::Result(result) = row.body {
-                    positive_job_results_v2.insert(positive_job_result_v2(&result));
+                if let Some(owner) = positive_job_owner_v2(&row.body) {
+                    positive_job_owners_v2.insert(owner);
                 }
                 (key, value)
             } else if table == crate::palw_positive_certification_v2::POSITIVE_CERTIFICATION_TABLE_V2 {
@@ -567,7 +582,7 @@ impl BorshDeserialize for PalwKernelRouteStateV1 {
                 return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "duplicate kernel aux key"));
             }
         }
-        Ok(Self { header, rows, aux, positive_job_results_v2, ledger_cache: KernelLedgerCacheV1::default() })
+        Ok(Self { header, rows, aux, positive_job_owners_v2, ledger_cache: KernelLedgerCacheV1::default() })
     }
 }
 
@@ -645,8 +660,8 @@ impl KernelCaseAliasesV2 {
         }
         Ok(Self { claims, jobs, lease })
     }
-    fn contains(&self, claim: &[u8; 64], job: &[u8; 64]) -> bool {
-        self.claims.contains(claim) || self.jobs.contains(job)
+    fn contains(&self, claim: Option<&[u8; 64]>, job: &[u8; 64]) -> bool {
+        claim.is_some_and(|claim| self.claims.contains(claim)) || self.jobs.contains(job)
     }
 }
 
@@ -724,7 +739,7 @@ impl PalwKernelRouteStateV1 {
             header,
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
-            positive_job_results_v2: Default::default(),
+            positive_job_owners_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
@@ -737,7 +752,7 @@ impl PalwKernelRouteStateV1 {
             header: PalwKernelRouteHeaderV1 { policy, config_root, scalars, opv, typed_roots },
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
-            positive_job_results_v2: Default::default(),
+            positive_job_owners_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         }
     }
@@ -1377,7 +1392,7 @@ impl PalwKernelRouteStateV1 {
             header,
             rows: LedgerRowsV1::new(),
             aux: BTreeMap::new(),
-            positive_job_results_v2: Default::default(),
+            positive_job_owners_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
         };
         for (table, key, row) in rows {
@@ -1385,7 +1400,9 @@ impl PalwKernelRouteStateV1 {
                 route.rows.insert((table, key), row).is_some()
             } else {
                 let key = (table, key);
-                route.update_positive_job_index_v2(&key, Some(&row)).map_err(|error| format!("invalid Positive Result row: {error:?}"))?;
+                route
+                    .update_positive_job_index_v2(&key, Some(&row))
+                    .map_err(|error| format!("invalid Positive job owner row: {error:?}"))?;
                 route.aux.insert(key, row).is_some()
             };
             if twice {
@@ -1918,7 +1935,7 @@ impl PalwKernelRouteStateV1 {
 
     pub(crate) fn has_legacy_case_alias_v2(
         &self,
-        claim: &[u8; 64],
+        claim: Option<&[u8; 64]>,
         job: &[u8; 64],
     ) -> Result<bool, PalwKernelLedgerProjectionErrorV1> {
         if let Some(index) = self.ledger_cache.2.get() {
@@ -2465,6 +2482,35 @@ mod case_alias_cache_tests {
     use crate::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1};
 
     #[test]
+    fn assignment_and_result_owners_are_distinct_and_duplicate_open_jobs_refuse() {
+        let mut route = PalwKernelRouteStateV1::new_typed(
+            palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None,
+            None,
+            LedgerScalarsV1 { daa: 0, burned: 0 },
+        );
+        let job = Hash64::from_bytes([5; 64]);
+        let first = Hash64::from_bytes([6; 64]);
+        let second = Hash64::from_bytes([7; 64]);
+        let a = (job, OPEN_ASSIGNMENT_JOB_OWNER_V2, first);
+        let other_a = (job, OPEN_ASSIGNMENT_JOB_OWNER_V2, second);
+        let result = (job, RESULT_JOB_OWNER_V2, first);
+        let canonical = borsh::to_vec(&route).unwrap();
+        route.positive_job_owners_v2.insert(a);
+        assert!(route.owns_open_assignment_job_v2(job, first));
+        assert!(!route.contains_positive_job_v2(job));
+        assert!(!route.owns_open_assignment_job_v2(job, second));
+        route.positive_job_owners_v2.insert(other_a);
+        assert!(!route.owns_open_assignment_job_v2(job, first));
+        route.positive_job_owners_v2.remove(&other_a);
+        route.positive_job_owners_v2.remove(&a);
+        route.positive_job_owners_v2.insert(result);
+        assert!(route.contains_positive_job_v2(job));
+        assert!(!route.contains_open_assignment_job_v2(job));
+        assert_eq!(borsh::to_vec(&route).unwrap(), canonical);
+    }
+
+    #[test]
     fn kernel_case_alias_lease_follows_only_the_unchanged_route_copies() {
         let checker = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: 4096, database_bytes: 0 });
         let claim = [2; 64];
@@ -2476,7 +2522,7 @@ mod case_alias_cache_tests {
         };
         assert!(cache.2.set(std::sync::Arc::new(index)).is_ok());
         let old_route_cache = cache.clone();
-        assert!(old_route_cache.2.get().unwrap().contains(&claim, &[0; 64]));
+        assert!(old_route_cache.2.get().unwrap().contains(Some(&claim), &[0; 64]));
         cache.clear();
         assert!(cache.2.get().is_none());
         assert_eq!(cache.case_alias_heap_v2(), 0);

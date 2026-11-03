@@ -43,6 +43,40 @@ fn row() -> PalwClaimCertificationRowV1 {
     }
 }
 #[test]
+fn prospective_draw_epochs_cover_the_last_legal_result_and_no_later_epoch() {
+    let policy = policy();
+    let epochs = AssignmentGateCDrawEpochsV2::from_result_window(&policy, 10, 16, 3).unwrap();
+    assert_eq!(epochs.epochs(), 0..=2);
+    assert_eq!(epochs.epoch_count(), 3);
+    // Result at 14 may draw through DAA 21. An excluded Result at 15
+    // would have reached 22 and wrongly booked epoch 2.
+    let boundary = AssignmentGateCDrawEpochsV2::from_result_window(&policy, 10, 15, 2).unwrap();
+    assert_eq!(boundary.epochs(), 0..=1);
+    assert_eq!(
+        AssignmentGateCDrawEpochsV2::from_result_window(&policy, 10, 16, 2),
+        Err(AssignmentGateCClockErrorV2::DrawEpochWorkBound)
+    );
+    assert_eq!(
+        AssignmentGateCDrawEpochsV2::from_result_window(&policy, 10, 10, 10),
+        Err(AssignmentGateCClockErrorV2::InvalidClockOrder)
+    );
+    assert_eq!(
+        AssignmentGateCDrawEpochsV2::from_result_window(&policy, u64::MAX - 11, u64::MAX - 1, 10),
+        Err(AssignmentGateCClockErrorV2::Overflow)
+    );
+}
+
+#[test]
+fn shared_draw_queue_does_not_treat_a_future_or_overfull_row_as_available() {
+    let full = PalwCertificationNetworkRowV1 { epoch: 3, draws: 4 };
+    assert_eq!(assignment_gate_c_draws_used_v2(&full, 3, 4), Ok(4));
+    assert_eq!(assignment_gate_c_draws_used_v2(&full, 4, 4), Ok(0));
+    assert_eq!(assignment_gate_c_draws_used_v2(&full, 2, 4), Err(AssignmentGateCClockErrorV2::InconsistentDrawQueue));
+    assert_eq!(assignment_gate_c_draws_used_v2(&full, 3, 3), Err(AssignmentGateCClockErrorV2::InconsistentDrawQueue));
+    assert_eq!(assignment_gate_c_draws_used_v2(&full, 3, 0), Err(AssignmentGateCClockErrorV2::InvalidPolicy));
+}
+
+#[test]
 fn clocks_preserve_actual_inclusive_draw_and_exclusive_failure_boundaries() {
     let policy = policy();
     let clock = AssignmentGateCClockV2::from_existing_policy(&policy, 100).unwrap();
