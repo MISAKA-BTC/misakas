@@ -2729,3 +2729,33 @@ RPC diagnostic wiring still need an integrated build and run. See
 B0 and relay agreed on DAA 19,696 and the newly selected block in
 the scanned interval had no Qwen carrier. See
 `/private/tmp/misaka-t12-oom-20261102/g14-rooted-tokenizer-quote-live.bofd73/page.json`.
+
+## Exact FullIds body for Batch and tokenizer quotes
+
+The rooted tokenizer diagnostic now reports the complete native FullIds
+body size for a nonempty tiled decode. The same calculation serves
+the single-chunk size, owned acquisition quote and shared decoder.
+It counts the response tag, rows root and vector length for every
+chunk including the last short chunk, plus four bytes for each ID.
+The owned acquisition quote takes the existing RAM bound from the
+largest chunk without walking every response.
+
+The Batch FullIds decoder rejects a wrong total length before
+reservation, reserves the accumulated ID vector, then decodes each
+bounded native response and authenticates the exact original outer
+trace at EOF. The authenticated owner reuses the vector. Batch maps
+decoder capacity faults to a local resource error. Draft body
+assembly before this decoder remains a separate allocation path.
+The tokenizer diagnostic still excludes carrier, scheduling and
+terminal costs.
+
+The extracted renderer and size checks passed 10 tests, including
+native Borsh comparisons at 1,023/1,024/1,025 and 2,050 IDs. The
+native 2,050-ID fixture now checks the actual decoder and rejects
+truncation and an altered stream. The integrated fixture, processor
+and public quote were not run. See
+`/private/tmp/misaka-t12-oom-20261102/tfp1-full-ids-body.YKw1QO/test.log`.
+
+B0 and relay agreed on DAA 19,697 with no new Qwen carrier in the
+selected interval. See
+`/private/tmp/misaka-t12-oom-20261102/g14-full-ids-body-live.219trY/page.json`.

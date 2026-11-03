@@ -19,6 +19,15 @@ mod response_native_v2;
 
 pub const PALW_TIR_PUBLIC_FRONTIER_HASHES_V1: usize = 1024;
 pub const PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1: u32 = 1024;
+// Borsh response discriminant, rows root and ID vector length.
+const IDS_RESPONSE_HEADER_BYTES_V1: u64 = 1 + 64 + 4;
+
+/// The concatenated native response bodies through exact original EOF.
+/// Zero generated IDs have no FullIds stream.
+pub(crate) fn full_ids_wire_bytes_v1(count: u32) -> u64 {
+    u64::from(count.div_ceil(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1)) * IDS_RESPONSE_HEADER_BYTES_V1 + 4 * u64::from(count)
+}
+
 pub const PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1: u32 = crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;
 const PATH: usize = 64;
 const RUN: usize = PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1 as usize;
@@ -719,7 +728,7 @@ impl PalwTirPublicSourceV1 {
                     + 76
                     + tile_h * 64
             }
-            Ids { offset } => 1 + 64 + 4 + u64::from((self.decode_count_v1() - offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1)) * 4,
+            Ids { offset } => full_ids_wire_bytes_v1((self.decode_count_v1() - offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1)),
         };
         let work = bytes.checked_mul(16).and_then(|n| n.checked_add(65_536)).ok_or("TIR public unit work overflow")?;
         Ok(PalwTirPublicUnitBoundV1 {
@@ -1369,6 +1378,20 @@ mod tests {
         let rows_root = Hash64::from_u64_word(27);
         let generated = vec![0; 2050];
         let (source, _) = geometry_with_trace(8, 2050, Some((rows_root, &generated)));
+        let body: Vec<_> = generated
+            .chunks(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize)
+            .flat_map(|ids| borsh::to_vec(&PalwTirPublicResponseV1::Ids { rows_root, ids: ids.to_vec() }).unwrap())
+            .collect();
+        let bound = crate::palw_tir_public_owned_v1::request_body_bound_v1(&source, PalwTirPublicRequestV1::Ids { offset: 0 })
+            .unwrap();
+        assert_eq!(bound.0, body.len() as u64);
+        let decode = crate::palw_court_shared_tir_stream_state_v1::decode_ids_body_classified_v1;
+        assert_eq!(decode(&source, &body).unwrap().ids_v1(), generated);
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode;
+        assert!(matches!(decode(&source, &body[..body.len() - 1]), Err(Decode(_))));
+        let mut changed = body;
+        *changed.last_mut().unwrap() = 1;
+        assert!(matches!(decode(&source, &changed), Err(Decode(_))));
         let mut intake = PalwTirPublicIdsAssemblerV1::default();
         intake.ids.try_reserve_exact(generated.len()).unwrap();
         let allocation = intake.ids.as_ptr();

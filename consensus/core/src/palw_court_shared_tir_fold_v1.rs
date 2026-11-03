@@ -197,7 +197,7 @@ fn share_body_inner(
     b.write_staged_row_v1(key, Some(Row::CourtSharedQuery(Box::new(row))))?;
     Ok(true)
 }
-fn shared_ids_auth_fault_v2(why: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwStateV2Error {
+pub(super) fn shared_ids_auth_fault_v2(why: crate::palw_native_resource_v1::NativeDecodeErrorV1<String>) -> PalwStateV2Error {
     match why {
         crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(why) => PalwStateV2Error::NativeResource(why),
         crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(why) => refused(why),

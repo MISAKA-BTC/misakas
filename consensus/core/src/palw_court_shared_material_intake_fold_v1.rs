@@ -320,7 +320,13 @@ fn material_intake_inner(
             }
             match s.target {
                 m::MaterialTargetV1::FullIds => {
-                    let ids = crate::palw_court_shared_tir_stream_state_v1::decode_ids_body(&source, &body).map_err(refused)?;
+                    use super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2;
+                    let ids = if request_root.is_some() {
+                        crate::palw_court_shared_tir_stream_state_v1::decode_ids_body_classified_v1(&source, &body)
+                            .map_err(shared_ids_auth_fault_v2)?
+                    } else {
+                        crate::palw_court_shared_tir_stream_state_v1::decode_ids_body(&source, &body).map_err(refused)?
+                    };
                     super::palw_court_shared_tir_fold_v1::share_ids(b, ctx, s.claim, ids.rows_root_v1(), ids.ids_v1())?;
                 }
                 target => {

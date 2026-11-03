@@ -1074,6 +1074,9 @@ pub struct PalwRootedTokenizerOpeningBoundsV1 {
     pub registration_id: Hash64,
     pub maximum_rendering_opening_bytes: u64,
     pub eog_opening_bytes: u64,
+    /// Complete native ID response body before Batch carrier framing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_ids_body_bytes: Option<u64>,
 }
 
 impl PalwRootedTokenizerOpeningBoundsV1 {
@@ -1089,6 +1092,7 @@ impl PalwRootedTokenizerOpeningBoundsV1 {
             // ID, Some discriminant, Vec length, rendering bytes and opening.
             maximum_rendering_opening_bytes: 4 + 1 + 4 + facts.maximum_rendering_bytes + step_opening_bytes(rendering_siblings),
             eog_opening_bytes: 4 + 4 * u64::from(facts.eog_count) + step_opening_bytes(eog_siblings),
+            full_ids_body_bytes: None,
         }
     }
 }
@@ -1114,7 +1118,12 @@ pub(crate) fn palw_rooted_tokenizer_opening_bounds_v1(
     {
         return None;
     }
-    Some(PalwRootedTokenizerOpeningBoundsV1::from_facts(row.record_id_v1(), facts))
+    let mut bounds = PalwRootedTokenizerOpeningBoundsV1::from_facts(row.record_id_v1(), facts);
+    if record.facts.tiled && original.decode_tokens_executed > 0 {
+        bounds.full_ids_body_bytes =
+            Some(crate::palw_tir_public_source_v1::full_ids_wire_bytes_v1(original.decode_tokens_executed));
+    }
+    Some(bounds)
 }
 
 /// Borrowed facts for one accepted original and its source-authenticated IDs.
