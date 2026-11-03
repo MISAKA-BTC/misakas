@@ -1764,3 +1764,22 @@ before compilation or test execution. Temporary metadata from seven
 completed scratch checks was released. The remaining headroom was
 insufficient for another guarded Linux build at that point. The first
 runtime failure and the second environment stop are separate outcomes.
+
+### Scoped prover lookup and heartbeat isolation
+
+The [scoped role candidate](scoped-prover-role-range-candidate-20261103.tar.gz)
+uses the canonical aux151 Assignment/prover key prefix to bound role
+resolution to the current Case's Assignment. The writer admits the fixed
+range buffers, caps the number of visited rows before decoding them and
+preserves role authentication and funding checks. The isolated test using
+production key encoding covered neighboring tables, Assignments and roles,
+and exposed malformed keys under the exact prefix to the decoder. Core
+and focused test metadata passed, including with the Gate C provenance
+and expiry candidates applied together.
+
+A separate Core heartbeat driver exercises testnet-12 pre-object
+preparation and folding before and after metering, with warm and decoded
+state. Its metadata typechecked. The linked run could not start because
+the older Core archives' transitive crate metadata no longer matched the
+shared build cache. It has not localized the Linux allocation mismatch.
+The earlier optimized macOS ingress run remains live on its source pin.
