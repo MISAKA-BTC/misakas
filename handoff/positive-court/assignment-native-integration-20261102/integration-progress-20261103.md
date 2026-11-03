@@ -1215,3 +1215,26 @@ typechecking. It rechecks selected-parent relay material against the actual
 funding output and requires the original custody to cover the derived minimum
 retention horizon. It awaits integrated validation and grants no Assignment
 admission or bound-account custody.
+
+The follow-up candidate compares the signed canonical R body directly against
+both the borrowed archive and the historical transaction. It avoids keeping a
+second payload buffer during bounded original-payer replay. It also checks
+that a restored initial Assignment binding has its matching Assignment and
+original funding account, and rejects R and F recorded in the same accepting
+block. The standalone Contract suite and streaming comparison passed 12
+tests. Standalone Core and both focused targets typechecked, as did the
+Consensus transport against the original Core with the two pure matchers
+copied into the isolated build. The candidate awaits integrated validation.
+
+The capacity-armed runtime reached an ordinary pre-carrier heartbeat. The
+fold refused the fresh delta because the fixed output owner and final journal
+entries exceeded the construction reservation. A direct execution of the
+same binary localized the refusal to `beat_to`, before any relay carrier.
+The [capacity runtime record](funded-native-relay-capacity-verification-20261103.json.gz)
+preserves the failed execution and the backtrace.
+
+Commit `00c7f4195` reserves the fixed output owners before the fold and the
+actual weight/frontier/point journal slots before writing them. The latter
+quote includes the difference between the retained vector capacity and the
+pinned Borsh growth bound. The guarded Clippy and runtime repeat started on
+this source. No relay carrier outcome is recorded yet.
