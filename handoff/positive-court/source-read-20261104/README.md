@@ -1,5 +1,37 @@
 # Native source read connection candidate — 2026-11-04
 
+## Frozen executable retention
+
+The verified 50d Consensus executable (441,079,792 bytes) and f9 Core test
+executable (176,577,168 bytes) were copied from the isolated tmpfs target to
+`/tmp/misaka-positive-frozen-binaries.7e9xqr1z/` on IBM. SHA256 was checked
+before copying and after fsync of each destination, then only those two old
+source executables were removed. The current build's libraries and source
+were not changed. The [retention manifest](results/frozen-binary-archive-20261104.json)
+records original/archive paths, exact sizes and unchanged hashes. Original
+runtime logs retain their actual execution paths; these are historical paths,
+not a claim that the binaries remain there. This recovered roughly 589 MiB
+of build tmpfs while retaining both verified executables.
+
+## Source-preparation work correction: focused runtime passed
+
+Frozen `efb8862fc` passed the actual
+`source_preparation_covers_both_children_at_every_u32_merkle_level` regression:
+one pass, zero failures, four filtered tests, exit 0; executable build took
+30m44s. Post-run binary SHA256 is
+`9e059a4038f66a8814c3ea13b505860f1b9d23875b1a1c5a4f03ae2615999189`.
+[Runtime result and artifact hashes](results/efb-work/source-work-result.json)
+accompany the original log, exit and hash record. Together with the static
+checks below, all three queued stages passed on this exact source.
+
+This tests numeric work bounds for u32 Merkle geometry under the existing
+schedule. It does not measure physical CPU/I/O/RSS, execute a model, or serve
+an actual native source request. Earlier pending runtime notes below are
+superseded by this result. The queue has advanced to clean `5917693dd` for
+kaspad test-target checking with `evm,positive-miner-client`; its protected
+store regression and later provider/Batch stages remain pending. The original
+native/real-model/Gate C/payment/credit objective remains incomplete.
+
 ## Source-preparation work correction: test targets typechecked
 
 The same clean frozen `efb8862fc` passed Core and Consensus test-target
