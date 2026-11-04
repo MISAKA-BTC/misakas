@@ -14265,6 +14265,7 @@ mod positive_assignment_backing;
 mod positive_assignment_case;
 pub use positive_assignment_case::qualify_worker_payment_candidate_v2;
 pub use positive_assignment_case::source::{QualifiedCaseSourceSpendV2, qualify_case_source_spend_v2};
+pub use positive_assignment_case::source_read::{NativeAssignedSourceSnapshotV2, replay_assigned_source_snapshot_v2};
 mod positive_assignment_funds;
 mod positive_assignment_materials;
 mod positive_assignment_raw;

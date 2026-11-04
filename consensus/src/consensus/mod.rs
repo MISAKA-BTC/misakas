@@ -1153,6 +1153,17 @@ impl Consensus {
 }
 
 impl ConsensusApi for Consensus {
+    fn palw_positive_source_duty_v2(
+        &self,
+        request: misaka_palw_positive_contract::identity::RequestId,
+        result: misaka_palw_positive_contract::identity::ResultId,
+    ) -> Result<
+        Box<dyn kaspa_consensus_core::palw_positive_source_read_v2::PositiveSourceReadV2>,
+        kaspa_consensus_core::palw_positive_source_read_v2::PositiveSourceReadErrorV2,
+    > {
+        self.virtual_processor.positive_source_duty_v2(request, result)
+    }
+
     fn build_block_template(
         &self,
         miner_data: MinerData,

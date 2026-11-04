@@ -36,6 +36,7 @@ use misaka_palw_positive_contract::{
 use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
 pub(super) mod source;
+pub(super) mod source_read;
 
 fn refuse(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::KernelRouteRefused(format!("assigned Case: {why:?}"))

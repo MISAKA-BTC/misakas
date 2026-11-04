@@ -1625,6 +1625,7 @@ pub(crate) mod palw_h1_guard;
 mod palw_pruning_capture_v1;
 mod palw_validate;
 pub(super) mod positive_assignment_archive;
+mod positive_source_read;
 mod template;
 mod template_parent_snapshot_v1;
 pub(crate) use palw_evm_asof_v2::NativeEvmAsOfFaultV2;
