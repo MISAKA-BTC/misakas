@@ -3311,7 +3311,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod archive_tests {
     use super::*;
     use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as K;
     use std::collections::BTreeMap;
