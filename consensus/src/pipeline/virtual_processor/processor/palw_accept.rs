@@ -426,9 +426,7 @@ impl VirtualStateProcessor {
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
     ) -> Result<usize, PalwLocalTransitionFaultV1> {
         self.palw_v2_accepted_objects_and_refunds_inner(
-            state,
-            params,
-            point,
+            (state, params, point),
             Self::unpriced_for_tests(objects),
             point.block,
             None,
@@ -466,8 +464,16 @@ impl VirtualStateProcessor {
         let (carried, batch) = self.palw_v2_objects_of_block(
             acceptance, state, point.block, point.daa_score, raw_fees, rent_fees, &Default::default(),
         )?;
-        let (objects, folded, _, _, funded, _, _, _) =
-            self.palw_v2_accepted_objects_and_originals(state, params, point, carried, point.block, None, &[], &[], &batch, &mut Vec::new())?;
+        let (objects, folded, _, _, funded, _, _, _) = self.palw_v2_accepted_objects_and_originals(
+            (state, params, point),
+            carried,
+            point.block,
+            None,
+            &[],
+            &[],
+            &batch,
+            &mut Vec::new(),
+        )?;
         Ok((objects, folded, funded.len()))
     }
 
@@ -609,9 +615,7 @@ impl VirtualStateProcessor {
         PalwLocalTransitionFaultV1,
     > {
         let (accepted, folded, refunds, _, _, _, _, _) = self.palw_v2_accepted_objects_and_originals(
-            state,
-            state_params,
-            point,
+            (state, state_params, point),
             objects,
             block,
             own_attempt_class,
@@ -629,9 +633,11 @@ impl VirtualStateProcessor {
     #[allow(clippy::type_complexity)]
     pub(super) fn palw_v2_accepted_objects_and_originals(
         &self,
-        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
-        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        (state, state_params, point): (
+            &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+            &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+            &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        ),
         objects: Vec<PalwCarriedObjectV1>,
         block: BlockHash,
         own_attempt_class: Option<kaspa_hashes::Hash64>,
@@ -660,9 +666,7 @@ impl VirtualStateProcessor {
     > {
         kaspa_consensus_core::palw_attempt_rules_v1::palw_with_prompt_root_block_memo_v2(point.block, || {
             self.palw_v2_accepted_objects_and_refunds_inner(
-                state,
-                state_params,
-                point,
+                (state, state_params, point),
                 objects,
                 block,
                 own_attempt_class,
@@ -833,9 +837,11 @@ impl VirtualStateProcessor {
 
     pub(super) fn palw_v2_accepted_objects_and_refunds_inner(
         &self,
-        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
-        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        (state, state_params, point): (
+            &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+            &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+            &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        ),
         objects: Vec<PalwCarriedObjectV1>,
         block: BlockHash,
         // The class of the block's own attempt (from its header), `None` for a block with none: past
