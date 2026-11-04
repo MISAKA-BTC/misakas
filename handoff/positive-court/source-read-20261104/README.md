@@ -1,5 +1,20 @@
 # Native source read connection candidate — 2026-11-04
 
+## Own-node source constructor: enabled test targets typechecked
+
+Frozen `5917693dd` passed `cargo check -p kaspad --features
+evm,positive-miner-client --tests` (offline, locked, Rust 1.93), exit 0 in
+10m56s. The [exact-source result and artifact hashes](results/591-source/check-result.json)
+include the full original log, exit, source identity and guarded queue script.
+Nine unused-adapter warnings remain in the library output. They are retained;
+this is not strict Clippy success or evidence of a service-loop caller.
+
+The real RocksDB refusal/cold-reopen regression now builds on the same
+unchanged source. It has not executed yet. Even a successful negative resolver
+test would not establish a real accepted native Case or positive source duty.
+Later provider retrieval and integrated Batch changes, and the full original
+native/real-model/Gate C/payment/credit objective, remain unverified.
+
 ## Frozen executable retention
 
 The verified 50d Consensus executable (441,079,792 bytes) and f9 Core test
