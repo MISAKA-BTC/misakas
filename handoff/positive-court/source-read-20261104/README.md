@@ -1,5 +1,39 @@
 # Native source read connection candidate — 2026-11-04
 
+## Native authorization before protected local storage
+
+`5917693dd` changes the own-node Miner source constructor to resolve a
+literal accepted source request before binding its irreversible local Case
+namespace. Previously a correctly signed but unadmitted Result could bind
+that namespace before `respond` first checked native state. Different outputs
+for the same execution share a CaseId, while the protected store freezes the
+ResultId, so the earlier order could prevent opening another Result for that
+Case even after the process released its writer lock.
+
+The constructor now requires its actual Consensus session and RequestId.
+Local signer/service authentication precedes native archive work; native duty
+resolution precedes protected-store binding and journal creation/recovery.
+It rechecks the native view after recovery before returning. Existing local
+I/O history and explicit Create/Resume/DiscardUnanchoredTail modes remain;
+there is no automatic reset on failure or reorg. This adapter still has no
+production service-loop caller, and no successful native Case is claimed.
+
+The added regression uses signed local test data, a refusing resolver and
+real RocksDB. All three recovery modes must leave no journal or immutable
+Case binding on native refusal; after a full database close/reopen, another
+signed Result with the same CaseId must still be bindable by the lower-level
+local store. The resolver is an explicitly negative test double, not an
+accepted native session. Formatting and whitespace checks passed; the test
+has not executed yet.
+
+The guarded IBM queue `/tmp/misaka-positive-5917693dd-verify.sh` waits for
+the preceding `efb8862fc` verification and then checks kaspad's enabled test
+targets with `evm,positive-miner-client`, followed by the actual protected-store
+regression. Stage logs/results use
+`/tmp/misaka-positive-5917693dd-<stage>.{log,exit}`. These results and the full
+original objective remain pending; the earlier frozen `50d5eda4c` runtime
+passes below do not validate this later constructor change.
+
 ## Frozen-candidate native runtime passed
 
 `50d5eda4cd92c506eef20b042a6f85b505fd4877` passed both actual native
