@@ -930,7 +930,7 @@ effective_deadline = min(proposed_challenge_deadline, hard_deadline)
 
 ## 改定 — 2026-10-19(異議があった claim だけ延長する期限、応答義務に基づく勝敗、court 提出経路の liveness と DDoS 対策:採用方針)
 
-**状態:** ユーザーが方針として採用(2026-10-19「この方針で進める」)。実装・敵対的試験・実ノード試験・有効化は未実施。数値(3,120・10,000・容量の割合)は設計の起点で、本番の定数ではない。2026-10-12 改定(X3 の固定期限)とは、「異議がない claim はその固定期限のまま」「有効な異議がある claim だけ、事前に定めた規則で関連期限を一括して延長する」という形で両立させる。延長の規則は新しい versioned fence で導入し、旧 claim には旧 ruleset を適用する。関連:[RFC-0024](0024-court-door-3200-to-ctx-2m.md)(door の短縮)、[RFC-0025](0025-scalable-objective-court-many-models-mass-disputes.md)(大量 court の容量予約と混雑延長)。
+**状態** ユーザーが方針として採用(2026-10-19「この方針で進める」)。TFP1 への適用と実装・検証・有効化の状況は RFC-0026 §11 に記載する。2026-10-12 改定の固定期限を通常時に適用し、有効な異議を受理した claim は事前に定めた規則で関連期限を一括して更新する。適用する ruleset は original claim の受付点で決定する。[RFC-0026 §11](0026-court-policy-master-contract.md#11-tfp1-の一括対話batch-pipelined-court) [RFC-0024](0024-court-door-3200-to-ctx-2m.md) [RFC-0025](0025-scalable-objective-court-many-models-mass-disputes.md)
 
 ### A. 対話の回数(16 分岐・1 tile 16 位置の場合)
 
@@ -947,14 +947,14 @@ effective_deadline = min(proposed_challenge_deadline, hard_deadline)
 
 | 項目 | 扱い |
 |---|---|
-| 通常の異議受付期間 | original claim の受付から 3,120 DAA |
+| 通常の異議受付期間 | original claim の受付から 3,120 DAA。適格者が検出の根拠を示して最初の異議を申し立てる期間。計算不正の確定は C の裁定に従う |
 | 異議がない claim | 他の保持・責任条件も満たしたら、通常どおり担保を解放する |
 | 有効な異議がある claim | 関連する担保・報酬・Final を保留し、対話型 court を続ける |
 | 係争の最終期限 | **original claim の受付から** 10,000 DAA |
 | 各手番の応答期限 | 10,000 とは別に定め、応答義務者が守る |
 | 終了後 | 裁定結果と、残る保持・復旧義務に従って担保を解放または徴収する |
 
-- 起点は original claim の受付時とする。3,120 の直前に申し立てられても、残りは `10,000 − 3,120 = 6,880 DAA`。受入条件は、**遅い申立てでも、残りの対話・証拠配送・最終収録・回復の余裕が 6,880 DAA に収まること**。
+- 起点は original claim の受付時とする。申立ての締切と係争の最終期限の差は `10,000 − 3,120 = 6,880 DAA`。受入条件は、遅い申立てでも、対話・証拠配送・最終収録・回復が所定の境界内に収まること。TFP1 の一括対話候補は終端 DAA の notice を受理し、境界余裕の 1 DAA を含めて予約するため、最遅 notice 後の配分上限は `6,879 DAA` となる。[RFC-0026 §11](0026-court-policy-master-contract.md#11-tfp1-の一括対話batch-pipelined-court)
 - 「申立てから 10,000」を与える案は、original からの拘束が最大約 13,120 DAA になる別の仕様で、採らない。
 - **bond の返還時点だけを延ばしても足りない。** 証拠の受付が 3,120 で閉じれば、後から証明できない。延長の対象には、court の最終期限に加え、該当経路の `collect_until`、開示義務、資料保持、Final の保留、bond の解放条件を含め、1 つの原子的な状態更新で動かす。現行の公開 allocation 経路は `material_until = collect_until + reorg_retention`、`bond_exit_after = material_until` と連動しており、clock を実行時に延長しない前提で書かれている。したがってこれは定数の変更ではなく、**有効な申立てを契機に関連期限を更新する、明示的な新規則**である。
 - 同じ bond が別の claim の責任も負っている場合、このcourt の終了だけで全額は返らない。解放は、claim ごとの責任と予約を基準にする。
@@ -1041,4 +1041,7 @@ effective_deadline = min(proposed_challenge_deadline, hard_deadline)
 - B の「通常どおり担保を解放」は無条件の全額返還ではない。post-Final の公開告発 window、Gate C、monetary material の保持、同じ bond の別 claim の責任を満たしてから(RFC-0026 §3.3)。
 - A の分岐数の表は 16 分岐の仮定例。監査の読み取りでは出荷 t12 preset は 4 分岐で、32K は 6 往復、2M は 9 往復になる(RFC-0026 §7.1)。
 - 10-12 改定の `d <= deadline` は例示であり、`collect_until` の排他的境界とは別の時計。変数ごとの境界表を RFC-0026 §2.2 で要求する(F09)。
-- TFP1 で B の二段階期限を使う一括対話の実装候補は [RFC-0026 §11](0026-court-policy-master-contract.md#11-tfp1-の一括対話batch-pipelined-court) に記載する。取得を並行できる資料はまとめて要求し、前の結果に依存する手番を分ける。最遅の有効な申立てから裁定と回復まで収まることを有効化条件にする。
+- TFP1 で B の二段階期限を使う一括対話の実装候補では、Panel が独立して取得できる資料をまとめて要求し、Miner／Provider が上限付きで分割送信し、Node が受理済み資料を独立に検査する。前の結果に依存する処理は別の手番にする。tokenizer 登録記録の再利用、資料保持と処理枠の分離、TIR 局所化、最遅の申立てと合法な最遅応答を含む全分岐の予約を [RFC-0026 §11](0026-court-policy-master-contract.md#11-tfp1-の一括対話batch-pipelined-court) で規定する。
+- Initial notice の受理で係争を開始し、Batch Open は同じ original の受理済み notice と対応する予約枠を参照して資料要求を開始する。局所裁定で不一致が見つからなかった場合、結果の適用範囲は調べた争点に限る。正常側の認証には profile 所定の範囲の検査と、Gate C の独立した抽選席による承認を適用する。[RFC-0026 §11.1](0026-court-policy-master-contract.md#111-申立てと対話の起点) [§11.2](0026-court-policy-master-contract.md#112-役割と対話)
+- 一括対話の応答は、受理済みの要求に対する Begin・Part・Finish で進める。先行送信できる資料の搬送と、受理済み資料に依存する Node 検査・終端提出を分けて予約する。再送・再開・owner 交代は元の claim の時計に従う。実収録点の判定と再開手順は RFC-0026 の [実装契約](0026-court-policy-master-contract.md#113-実装契約) と [時計・資源予算](0026-court-policy-master-contract.md#114-時計と資源の予算) に従う。
+- 数値争点では、受理済み notice が選んだ leaf に必要な認証済み資料を使い、Node が予約枠で独立に局所裁定する。数値検査、終端提出、claim の認証・決済はそれぞれ別の条件を持つ。候補の署名・予約・検査条件と検証状況は RFC-0026 の [数値裁定](0026-court-policy-master-contract.md#tir-の局所要求とネイティブ認証) と [有効化条件](0026-court-policy-master-contract.md#115-実装検証の順序) に従う。
