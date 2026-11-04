@@ -1,5 +1,26 @@
 # Native source read connection candidate — 2026-11-04
 
+## Frozen 50d legacy native regression: four passed
+
+The existing `50d5eda4c` consensus test binary passed four additional exact
+legacy G14 tests: replay/reorg roots (5.32 s), same-DB node restart (5.71 s),
+pruned-import carriage continuation (2.92 s), and poster-escrow reward once
+across reorg/replay/redemption (12.03 s). Each ran in a separate process and
+reported exactly one pass, exit zero. Binary SHA256 before and after remained
+`583efd6d80d36d6de19d4bc9db21d0e96a6700fcf686975fa634253f4289cadd`.
+The XFS project 713 quota audit records inherited project assignment and the
+original 256 MiB hard limit; the runner unmounted it on completion.
+
+[Raw result](results/50d-legacy/misaka-positive-50d-legacy-results.json) and
+[artifact hashes and limits](results/50d-legacy/assessment.json) accompany
+all original logs, exits and the executed script. These are existing tiny
+legacy fixtures. The restart test retains its DB Arc while restarting node
+services, and the pruned-import test installs carriage through the harness;
+neither expands to a full cold DB close or complete network IBD claim. The
+old reward route is not Positive Assignment WorkerPayment. These passes apply
+only to frozen 50d, not the current integrated source, and do not complete
+the original real-model/native/Gate C/payment/credit objective.
+
 ## Remaining OOM signed Batch fixture integrated
 
 `31d2550ef` ports the remaining three-file uncommitted OOM test change onto

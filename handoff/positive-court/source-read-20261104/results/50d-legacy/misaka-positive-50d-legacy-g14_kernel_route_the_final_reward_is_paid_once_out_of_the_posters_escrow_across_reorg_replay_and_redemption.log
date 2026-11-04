@@ -1,0 +1,7 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escrow_across_reorg_replay_and_redemption ... [GAP-5] on B after the reorg: minted 500000000, owed 0, poster slashed 600000000
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1465 filtered out; finished in 11.98s
+
