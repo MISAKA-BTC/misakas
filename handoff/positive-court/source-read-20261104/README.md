@@ -1,5 +1,27 @@
 # Native source read connection candidate — 2026-11-04
 
+## Batch regression follow-up
+
+`f9a4a9c80dbe64657863a9d22f85b97db1eed198` ports the pending OOM
+worktree correction for `batch_native_dispatch_opens_and_finishes_the_same_rooted_demand`.
+The fixture selects a parameter opening, so its RPC target and retained
+material assertions now compare that exact parameter leaf instead of prompt
+IDs. The private fixture also enables the existing TIR conviction rule used
+by its numerical verification path. Production rules and the existing rent,
+reservation, duplicate, incomplete-material and terminal checks are unchanged.
+Rustfmt parsed the changed test file successfully; `git diff --check` passed.
+These checks execute no tests.
+
+The frozen `50d5eda4c` runtime build remains untouched. Its Cargo/rustc
+processes were confirmed live while preparing this follow-up. A separate
+guarded IBM script waits for that owner's exit and requires successful
+Clippy, test-target checking, generation tests and relay execution before
+selecting the clean `f9a4a9c80` source and running the focused Core Batch test.
+The queue is `/tmp/misaka-positive-f9a4a9c80-verify.sh`; its log and result are
+`/tmp/misaka-positive-f9a4a9c80-batch.{log,exit}`. Runtime success is pending,
+and the full Assignment/Case, three-process, certification and settlement
+goal is still open.
+
 Implementation candidate `1376b0e9b`, on top of publication generation
 `7583923ac` and integration `f5c463f70`. This is not an end-to-end acceptance
 or a successful runtime source-service result. These candidates have not
