@@ -123,3 +123,21 @@ are `/tmp/misaka-positive-806a07f13-{clippy,check,generation,relay}.{log,exit}`;
 the script records its exact source and executable hash separately. These
 results remain pending. Candidates after `f5c463f70` are still local and have
 not been pushed to `pre`.
+
+## Consensus acceptance argument correction
+
+`806a07f13` cleared the ten Core diagnostics and completed its RocksDB native
+dependency build. Strict Clippy then exited 101 with two too-many-arguments
+findings in the Consensus acceptance wrappers. See
+[the completed log](results/806-clippy.log). No runtime stage ran after that
+failure.
+
+`50d5eda4c` groups the existing immutable state, state parameters and block
+context into one tuple argument in the two affected wrappers, and updates
+all callers. Values, branch/clock selection, original-material transport,
+Batch handoffs and acceptance policy remain unchanged. No additional lint
+suppression was added. Its guarded Clippy -> all-test-target check -> native
+generation tests -> quota-backed relay trial pipeline is now running on IBM.
+Artifacts use `/tmp/misaka-positive-50d5eda4c-<stage>.{log,exit}`. This is still
+an unverified runtime candidate, not completion of Assignment/Case or the
+original whole-chain/three-process goal.
