@@ -152,3 +152,21 @@ Core/dependency artifacts were reused; the final invocation finished in
 All-test-target checking is now running on the same candidate. Actual native
 generation and corrected relay execution remain pending; the complete
 original three-process/chain integration goal remains open.
+
+## Same-candidate static verification complete; runtime build started
+
+`50d5eda4cd92c506eef20b042a6f85b505fd4877` also passed all Core/Consensus
+test-target typechecking, exit code 0, in 16m01s. The checkout was clean when
+collected. See [the exact-source check record](results/50d-check.json) and
+[raw log](results/50d-check.log). Strict library Clippy and all test-target
+checking now both pass for this same source.
+
+The guarded native generation/relay stage has started compiling its executable.
+No runtime success is asserted. The source-read backend and publication
+freshness implementation, corrected shallow-reorg fixture, and integration
+lint corrections are ready for the user's requested `pre` integration. Later
+commits in this branch contain evidence/documents only; `main` remains outside
+this push. Accepted Assignment/Case, live source sessions, PositivePassed,
+independent Gate C approval, real worker/service/refund payments, role-process
+integration, all purpose-specific credit predicates, and the remaining
+restart/reorg/pruning/IBD invariants are still required by the original goal.
