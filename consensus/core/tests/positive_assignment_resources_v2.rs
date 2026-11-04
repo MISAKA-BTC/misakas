@@ -144,3 +144,35 @@ fn native_work_mapping_is_explicit_original_policy_and_overflow_checked() {
     changed.per_codec_step = 0;
     assert_eq!(changed.validate(), Err(AssignmentResourceErrorV2::Policy));
 }
+
+#[test]
+fn source_preparation_covers_both_children_at_every_u32_merkle_level() {
+    let schedule = AssignmentWorkScheduleV2 {
+        version: 2, revision: 1,
+        per_codec_step: 2, per_hash_byte: 3, per_signature: 5,
+        per_element: 7, per_term: 11, per_io_byte: 13, per_control: 17,
+    };
+    for leaves in [1u32, 2, 3, 4, 255, 65_535, u32::MAX] {
+        let mut width = u64::from(leaves);
+        let mut levels = 0u128;
+        while width > 1 {
+            width = width.div_ceil(2);
+            levels += 1;
+        }
+        for body_bytes in [64u64, 512, 65_536] {
+            // Independent lower bound: encoded-body codec + body hash,
+            // two 64-byte children at each branch, actual read and control.
+            // Odd promotion can require fewer hashes; a full path is bounded.
+            let minimum = 2u128 * u128::from(body_bytes)
+                + 3 * (u128::from(body_bytes) + 128 * levels)
+                + 13 * u128::from(body_bytes) + 17;
+            let quoted = schedule.source_preparation_read_work_v2(body_bytes).unwrap();
+            assert!(u128::from(quoted) >= minimum, "{leaves} leaves, {body_bytes} body bytes");
+        }
+    }
+    assert_eq!(schedule.source_preparation_read_work_v2(u64::MAX), Err(AssignmentResourceErrorV2::Budget));
+    assert_eq!(schedule.source_preparation_read_work_v2(u64::MAX - 4096), Err(AssignmentResourceErrorV2::Budget));
+    let mut invalid = schedule;
+    invalid.per_hash_byte = 0;
+    assert_eq!(invalid.source_preparation_read_work_v2(512), Err(AssignmentResourceErrorV2::Policy));
+}

@@ -5,7 +5,6 @@ use super::source::capacity;
 use super::*;
 use crate::{
     palw_positive_assignment_funds_v2::native_assignment_outpoint_v2,
-    palw_positive_assignment_resources_v2::AssignmentWorkQuantitiesV2,
     palw_positive_source_read_v2::{PositiveSourceReadBoundsV2, PositiveSourceReadErrorV2, PositiveSourceUnitBoundsV2},
     tx::{TransactionOutpoint, UtxoEntry},
 };
@@ -141,17 +140,7 @@ pub fn replay_assigned_source_snapshot_v2(
             ledger.status(request.kind, request.source, unit),
         ));
     }
-    let work_per_read = schedule
-        .charge(AssignmentWorkQuantitiesV2 {
-            codec_steps: maximum_body,
-            hash_bytes: maximum_body,
-            signatures: 0,
-            elements: 0,
-            terms: 0,
-            io_bytes: maximum_body,
-            controls: 1,
-        })
-        .map_err(refuse)?;
+    let work_per_read = schedule.source_preparation_read_work_v2(maximum_body).map_err(refuse)?;
     Ok(NativeAssignedSourceSnapshotV2 {
         request,
         result: ledger.result().clone(),

@@ -117,6 +117,24 @@ impl AssignmentWorkScheduleV2 {
         })
     }
 
+    /// Local source preparation includes reading the encoded opening and
+    /// authenticating its Merkle path. A u32 inventory has at most 32 levels;
+    /// each branch hashes two 64-byte children, not just its supplied sibling.
+    /// Match the conservative opening allowance used by native source intake.
+    /// This quote grants neither a duty nor an accepted source receipt.
+    pub fn source_preparation_read_work_v2(&self, body_bytes: u64) -> Result<u64, AssignmentResourceErrorV2> {
+        let authenticated_bytes = body_bytes.checked_add(32 * 128).ok_or(AssignmentResourceErrorV2::Budget)?;
+        self.charge(AssignmentWorkQuantitiesV2 {
+            codec_steps: authenticated_bytes,
+            hash_bytes: authenticated_bytes,
+            signatures: 0,
+            elements: 0,
+            terms: 0,
+            io_bytes: body_bytes,
+            controls: 1,
+        })
+    }
+
     pub(crate) fn court_operation_work(
         &self,
         carrier_signatures: u64,
