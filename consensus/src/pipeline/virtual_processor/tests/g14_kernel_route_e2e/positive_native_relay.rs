@@ -193,10 +193,19 @@ fn check_relay_rollback<'a>(
     prefix: Vec<Block>,
     auth: &'a FundingRelayAuthorizationRowV2,
     payload: &'a [u8],
-    original_relay_spends: [TransactionOutpoint; 3],
+    original_relay_spends: [TransactionOutpoint; 2],
+    underpaid_change: TransactionOutpoint,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'a>> {
     Box::pin(async move {
         let timestamp = prefix.last().unwrap().header.timestamp;
+        let common_daa = prefix.last().unwrap().header.daa_score;
+        let incumbent_daa = follower.chain.ctx.consensus.get_header(follower.chain.sink()).unwrap().daa_score;
+        assert!(
+            incumbent_daa.checked_sub(common_daa).is_some_and(|depth| {
+                depth <= kaspa_consensus_core::palw_fork_authority_v2::PALW_REORG_SHALLOW_TIE_DAA_V1
+            }),
+            "the relay rollback fixture must stay within the actual economic-tie reorg window"
+        );
         for block in prefix {
             arrive(&fork.chain, block, "relay rollback fork prefix").await;
         }
@@ -206,7 +215,7 @@ fn check_relay_rollback<'a>(
         // The alternate branch spends the same fee inputs before its work
         // overtakes the relay branch. Virtual merges cannot replay the old
         // R carriers through their now-conflicting inputs.
-        let conflicts: Vec<_> = [3, 0, 2].into_iter().map(|card| signed_fee_spend(&fork, card, None, GROSS_FEE)).collect();
+        let conflicts: Vec<_> = [0, 2].into_iter().map(|card| signed_fee_spend(&fork, card, None, GROSS_FEE)).collect();
         let carrying = fork.chain.heartbeat(step, conflicts.clone()).await;
         arrive(&follower.chain, carrying, "alternate relay fee spends").await;
         for _ in 0..9 {
@@ -250,6 +259,8 @@ fn check_relay_rollback<'a>(
             let expected = fork.chain.ctx.consensus.get_virtual_utxo_entry(change).expect("fork change is accepted");
             assert_eq!(node.get_virtual_utxo_entry(change), Some(expected));
         }
+        let expected = fork.chain.ctx.consensus.get_virtual_utxo_entry(underpaid_change).expect("common underpaid change UTXO");
+        assert_eq!(node.get_virtual_utxo_entry(underpaid_change), Some(expected));
     })
 }
 
@@ -279,17 +290,18 @@ fn run_relay() -> TestFuture<()> {
         arm_native_logical_limits_v1(Some(NativeSnapshotResourceLimitsV1 { memory_bytes: limit, database_bytes: limit }));
         net.beat_to(RELAY_ACTIVATION_DAA + 2).await;
         let step = net.ttpb();
-        let prefix = chain_blocks(&net.chain, net.chain.sink());
+        let mut prefix = None;
         let body = signed_relay(&net);
         let mut payload = vec![1, 0, 176];
         payload.extend(borsh::to_vec(&body).unwrap());
         let fence = net.config.params.palw_positive_funding_relay_v2_at(net.daa()).unwrap();
         let metadata_fee = fence.fees.registration_quote(&fence.policy, &fence.physical, &body.terms, net.daa()).unwrap().fee;
         let short = signed_fee_spend(&net, 3, Some(&payload), metadata_fee - 1);
+        let underpaid_change = TransactionOutpoint::new(short.id(), 0);
         let first = signed_fee_spend(&net, 0, Some(&payload), GROSS_FEE);
         let retry = signed_fee_spend(&net, 2, Some(&payload), GROSS_FEE);
         assert_ne!(first.id(), retry.id());
-        let relay_spends = [&short, &first, &retry].map(|tx| TransactionOutpoint::new(tx.id(), 0));
+        let relay_spends = [&first, &retry].map(|tx| TransactionOutpoint::new(tx.id(), 0));
         let outpoint = body.terms.funding_outpoint;
         let purpose = body.terms.funding_purpose;
         let mut rooted = None;
@@ -319,6 +331,10 @@ fn run_relay() -> TestFuture<()> {
             let custody = rows.read(NativeRowKey::FundingRelayCustody { funding: outpoint, purpose }).unwrap();
             if gross < metadata_fee {
                 assert!(auth.is_none() && custody.is_none(), "one sompi short cannot register");
+                // The failed registration belongs to both branches. Fork here,
+                // before the real registration, so the later registration and
+                // duplicate retry fit the production two-DAA shallow tie rule.
+                prefix = Some(chain_blocks(&net.chain, accepting.hash()));
                 continue;
             }
             let NativeRowBody::FundingRelayAuthorization(auth) = auth.expect("authorization row").body else { panic!("row kind") };
@@ -354,7 +370,16 @@ fn run_relay() -> TestFuture<()> {
         let follower_fees =
             follower.chain.vp().palw_state_v2_store.read().check_funding_relay_archive_v2(&auth, |raw| raw == payload).unwrap();
         assert_eq!(follower_fees.relay_charge(), auth.quote.fee);
-        check_relay_rollback(fork, &follower, prefix, &auth, &payload, relay_spends).await;
+        check_relay_rollback(
+            fork,
+            &follower,
+            prefix.expect("the underpaid registration was tested"),
+            &auth,
+            &payload,
+            relay_spends,
+            underpaid_change,
+        )
+        .await;
         drop(net);
         assert!(previous.upgrade().is_none(), "the last relay connection is also closed");
     })
