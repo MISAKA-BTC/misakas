@@ -102,7 +102,7 @@ fn source_material(origin: AcceptedOrigin) -> Result<AcceptedMaterial, PalwState
     Ok(AcceptedMaterial { origin, digest: Digest(origin.carrier_transaction.0) })
 }
 
-fn capacity() -> PalwStateV2Error {
+pub(super) fn capacity() -> PalwStateV2Error {
     PalwStateV2Error::NativeContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable)
 }
 

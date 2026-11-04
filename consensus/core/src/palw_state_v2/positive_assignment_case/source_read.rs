@@ -1,6 +1,7 @@
 //! Read projection of the same authenticated Case replay used by the writer.
 //! A snapshot alone is not a live service authorization. Consensus must bind it
 //! to its own publication/import generation and current real funding UTXO.
+use super::source::capacity;
 use super::*;
 use crate::{
     palw_positive_assignment_funds_v2::native_assignment_outpoint_v2,
