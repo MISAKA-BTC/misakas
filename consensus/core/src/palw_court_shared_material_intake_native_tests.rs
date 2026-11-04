@@ -954,6 +954,7 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let frame = &fx.frame;
     let (mut state, params, mut extras, claim, scope_id) = material_intake_world(&fx);
     extras.batch_court_active_v1 = true;
+    extras.tir_public_conviction_active = true;
     let network = extras.tir_public_network_domain_v1.unwrap();
     let context = crate::palw_court_shared_tir_state_v1::context(&state, claim).unwrap().clone();
     let who = outsider();
@@ -1228,7 +1229,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let view = palw_court_state_json_v1(&b.state, &params, PalwCourtTargetV1::BatchResponse { claim, ordinal, target },
         &PalwUserViewClockV1::default()).unwrap();
     assert_eq!(view["kind"], "palwBatchResponse");
-    assert_eq!(view["target"], "prompt-flat");
+    let MaterialTargetV1::Parameter { leaf } = target else { panic!("expected a parameter opening") };
+    assert_eq!(view["target"], format!("parameter:{leaf}"));
     assert_eq!(view["response"]["requestRoot"], request_root.to_string());
     assert_eq!(view["response"]["responseDeadlineDaa"], response_deadline);
     assert_eq!(view["response"]["parts"][0]["acceptedDaa"], quote.parts[0].assigned_daa);
@@ -1262,7 +1264,8 @@ fn batch_native_dispatch_opens_and_finishes_the_same_rooted_demand() {
     let material = RootedMaterialV1::load_selected_batch_v1(&b.state, claim, &[target], verify_daa).unwrap();
     let store = material.store_v1(&b.state, claim, scope_id).unwrap();
     use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
-    assert_eq!(store.prompt_token_ids().unwrap(), fx.execution.prompt);
+    let MaterialTargetV1::Parameter { leaf } = target else { panic!("planned parameter target") };
+    assert_eq!(store.param_opening(leaf).unwrap(), fx.execution.param_opening(leaf).unwrap());
     set_material_intake_test_schedule_v1(Some(storage));
     assert!(matches!(
         batch::native_ranges::prepare_numerical_batch_material_v1(&b.state, claim, verify_daa),
