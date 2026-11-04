@@ -22,7 +22,7 @@ use crate::palw_funded_original_coordinator_v1::{
 };
 use crate::palw_court_shared_material_intake_v1::batch::admission::BatchAdmissionQuoteV1;
 use crate::palw_court_service_release_v1::CourtServiceRowV3;
-use crate::palw_funded_original_admission_v1::{FundedAdmissionDerivationV1, FundedAdmissionScheduleV1};
+use crate::palw_funded_original_admission_v1::FundedAdmissionScheduleV1;
 
 /// Typed refusal of the coordinator. `Missing` = a contract/value does not exist (never a fraud finding); `Invalid` = the carrier or
 /// its consents do not match the native derivation; `State` = an inner native error; `Resource` = local coverage (never invalid).
