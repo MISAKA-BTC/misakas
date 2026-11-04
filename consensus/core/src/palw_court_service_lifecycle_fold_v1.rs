@@ -176,7 +176,7 @@ pub(super) fn install_prepared_batch_frontier_v1(
         || quote.required_daa > crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA
         || book.state.book.packet(&verification).is_none_or(|packet| packet.cost != service)
         || book.state.book.packet(&terminal).is_none_or(|packet| !profile.budget.covers_terminal_recheck_v1(packet.cost))
-        || !book.causal.get(&terminal).is_some_and(|parents| parents.binary_search(&verification).is_ok())
+        || book.causal.get(&terminal).is_none_or(|parents| parents.binary_search(&verification).is_err())
     {
         return Err(refused("Batch frontier slots differ from the original reservation"));
     }

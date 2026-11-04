@@ -309,7 +309,7 @@ impl AssignmentAdmissionMaterialV2 {
             assignment_policy: *rules.assignment_policy(),
             positive_policy: rules.positive_policy().clone(),
             native_preimages,
-            funding_relay: rules.funding_relay_profile().clone(),
+            funding_relay: *rules.funding_relay_profile(),
             certification_policy,
             network_prompt_form: rules.prompt_form(),
             class_prompt_form,

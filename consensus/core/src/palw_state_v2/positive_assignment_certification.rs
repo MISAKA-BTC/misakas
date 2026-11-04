@@ -496,10 +496,10 @@ impl TransitionBuilder<'_> {
             .committed_span
             .unwrap_or(0)
             .checked_add(h.policy.anchor_delay_spans.max(1));
-        if !self
+        if self
             .state
             .round_seed_anchor
-            .is_some_and(|a| earliest.is_some_and(|s| a.span >= s))
+            .is_none_or(|a| earliest.is_none_or(|s| a.span < s))
             || queue_policy(self, &h.policy, ctx.daa_score).is_err()
         {
             return Ok(());

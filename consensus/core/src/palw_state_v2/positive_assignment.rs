@@ -751,9 +751,9 @@ impl TransitionBuilder<'_> {
         // The Open encoder replaces the three custody pins before publishing.
         let pending = pin(Digest([0; 64]));
         let row = AssignmentRow {
-            bundle: bundle.clone(),
-            source_consent: source.clone(),
-            prover_consent: prover.clone(),
+            bundle: *bundle,
+            source_consent: *source,
+            prover_consent: *prover,
             origin,
             worker_key,
             positive_policy: rules.assignment_policy().positive_policy,
