@@ -924,7 +924,7 @@ impl VirtualStateProcessor {
         if record.header().kind == AssignmentJournalEventKindV2::MetadataReceipt {
             return Err(E::Unavailable("actual metadata receipt carriage owner is not connected"));
         }
-        let (boundary, native_body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(record, maximum_payload)
+        let (boundary, native_body) = AssignmentControlBoundaryV2::native_body_from_record_data_v2(&record, maximum_payload)
             .map_err(|_| E::Invalid("invalid original Assignment control carriage framing"))?;
         let accepted = self.load_positive_accepted_carriage_v2(
             current_selected_parent,
