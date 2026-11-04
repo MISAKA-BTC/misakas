@@ -1,5 +1,33 @@
 # Native source read connection candidate — 2026-11-04
 
+## Source preparation Merkle work correction
+
+`efb8862fc` corrects the native source read projection's conservative
+`work_per_read`. The previous projection priced codec/hash/I/O over only
+the encoded body. Artifact authentication hashes both 64-byte children
+at each Merkle branch; the encoded path supplies only one sibling.
+The projection now includes the same maximum 32-level, 128-byte-per-level
+opening allowance used by native assigned-source intake, in addition to
+the actual body read. Original schedule rates and signed budgets are
+unchanged. The projection cannot increase a signed budget, accept a
+receipt or grant payment/credit.
+
+The new adversarial test enumerates odd and power-of-two inventory widths
+through `u32::MAX`, checks an independent full-path hashing lower bound,
+and checks overflow and invalid rates. The exact numeric methods, field
+definitions and added test passed in an extracted Rust harness with
+`-D warnings`: [scope and raw output](results/source-preparation-work-extracted.json).
+The reduced error enum in that harness is explicitly a stand-in. This is
+not full Core typechecking or native source-service execution.
+
+The guarded `/tmp/misaka-positive-efb8862fc-verify.sh` on IBM waits for the
+preceding Batch verification owner and its successful result before selecting
+the clean `efb8862fc` candidate. It then runs strict Core/Consensus library
+Clippy, all test-target typechecking and the actual added Core integration
+test. Logs/results use `/tmp/misaka-positive-efb8862fc-<stage>.{log,exit}`.
+All these integrated results remain pending. The frozen running `50d5eda4c`
+source is unchanged, and the full original objective remains open.
+
 ## Canonical job input audit
 
 The existing three-process short-job report explicitly records
