@@ -1,5 +1,37 @@
 # Native source read connection candidate — 2026-11-04
 
+## Remaining OOM signed Batch fixture integrated
+
+`31d2550ef` ports the remaining three-file uncommitted OOM test change onto
+the expanded Family/Prefix/archive fixture. The old patch did not apply and
+was not used as a whole-file replacement. All eleven existing test entry
+points remain, with one added `g14_native_funded_batch_candidate_v1` entry.
+The new path uses the existing material constructor's executor argument to
+regenerate the 2/2 Input-history fixture in the signer's own FP job context;
+it does not rewrite an already executed job. Existing Family recursive source
+history calls explicitly select their previous mode. The source pledge uses
+the derived custodian count, and the new Batch mode derives its allocation
+upper bound. It cannot overwrite the legacy generator's requested dump.
+
+The all-branch service-book checks run on the new material fixture and remain
+on existing production-material Family paths. The legacy synthetic generator
+no longer enters that material-dependent block. The explicit 8/64 test FP
+quanta apply only to the new Batch path; existing Family clock parameters
+remain unchanged. No released Params or production admission code changes.
+
+Rustfmt parsing of both fixture modules and the wrapped include fragment,
+whitespace checks, and a comparison preserving all old test entry names
+passed. Typechecking and execution have NOT yet passed. The guarded queue
+`/tmp/misaka-positive-31d2550ef-verify.sh` waits for the provider-bound tests,
+requires their newly added regression to appear as passed (not a zero-test
+success), then checks all enabled Core test targets and runs five individual
+regressions: legacy generator, signed Batch, ordinary Family financial path,
+scoped Prefix checkpoint/reorg, and legacy OAR2 source/archive replay. Each
+runtime log must report exactly one passed test. Logs/exits are
+`/tmp/misaka-positive-31d2550ef-<stage>.{log,exit}`. This is tiny existing G14
+regression coverage; it is not successful RFC-0045 Assignment/Case admission,
+real-model execution, Gate C, payment or DAG credit.
+
 ## Per-unit bounds at provider retrieval
 
 `719bb0e90` passes the canonical per-unit raw-data and encoded-body bounds
