@@ -1,0 +1,19 @@
+{
+  "source_commit": "50d5eda4cd92c506eef20b042a6f85b505fd4877",
+  "source_tree": "3ec2f664820f9c547c75da060e4a25e393522451",
+  "command": "cargo +1.93.0 clippy --offline --locked -p kaspa-consensus-core -p kaspa-consensus --features evm --lib -- -D warnings",
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/misaka-positive-pre-isolated-target"
+  },
+  "exit_code": 0,
+  "elapsed": "24.04s with completed identical-source dependency artifacts reused",
+  "log_sha256": "49beb37e601a90befebe0ce79ddc0346e2a06175f503a96b3e5c983ca273f8e2",
+  "source_status": "clean when collected",
+  "scope": "Strict library Clippy for Core and Consensus. No tests executed by this command.",
+  "all_test_target_check": "running on the same candidate",
+  "native_generation_and_relay_execution": "pending successful all-test-target check",
+  "original_goal": "incomplete"
+}

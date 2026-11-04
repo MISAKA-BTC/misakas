@@ -141,3 +141,14 @@ generation tests -> quota-backed relay trial pipeline is now running on IBM.
 Artifacts use `/tmp/misaka-positive-50d5eda4c-<stage>.{log,exit}`. This is still
 an unverified runtime candidate, not completion of Assignment/Case or the
 original whole-chain/three-process goal.
+
+## Strict Clippy passed
+
+`50d5eda4cd92c506eef20b042a6f85b505fd4877` passed strict Core and Consensus
+library Clippy with `-D warnings`, exit code 0. Completed identical-source
+Core/dependency artifacts were reused; the final invocation finished in
+24.04s. The checkout was clean when collected. See
+[the exact-source record](results/50d-clippy.json) and [raw log](results/50d-clippy.log).
+All-test-target checking is now running on the same candidate. Actual native
+generation and corrected relay execution remain pending; the complete
+original three-process/chain integration goal remains open.
