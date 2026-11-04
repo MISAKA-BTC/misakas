@@ -1,0 +1,72 @@
+{
+  "collected_at_utc": "2026-11-04T05:46:38.412312+00:00",
+  "source_commit": "50d5eda4cd92c506eef20b042a6f85b505fd4877",
+  "source_tree": "3ec2f664820f9c547c75da060e4a25e393522451",
+  "source_evidence": "Guarded script selected the exact frozen source and recorded it before execution. The next guarded queue has since advanced the checkout to f9a4a9c80; that later checkout is not the source of these results.",
+  "binary": {
+    "path": "/dev/shm/misaka-positive-pre-isolated-target/debug/deps/kaspa_consensus-a625c93f0f85ef22",
+    "sha256": "583efd6d80d36d6de19d4bc9db21d0e96a6700fcf686975fa634253f4289cadd",
+    "rechecked_after_execution": true
+  },
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/misaka-positive-pre-isolated-target",
+    "features": [
+      "evm"
+    ],
+    "toolchain": "1.93.0",
+    "relay_tmpdir": "XFS loop image mounted with prjquota by the saved guarded script; no public network activation"
+  },
+  "generation": {
+    "command": "cargo +1.93.0 test --offline --locked -p kaspa-consensus --features evm --lib lkg_generation_tests -- --nocapture",
+    "exit_code": 0,
+    "passed": 2,
+    "failed": 0,
+    "build_elapsed": "66m 02s",
+    "verified": [
+      "Same-state Arc away-and-back invalidates the old publication generation",
+      "Concurrent publications never reuse a generation"
+    ]
+  },
+  "relay": {
+    "command": "cargo +1.93.0 test --offline --locked -p kaspa-consensus --features evm --lib positive_initial_relay_burns_once_through_the_native_node -- --nocapture",
+    "exit_code": 0,
+    "logical_cases_passed": 1,
+    "failed": 0,
+    "duration_seconds": 4.69,
+    "child_is_same_logical_case": true,
+    "scope": "Private native initial-relay mechanics. The declared future Assignment funding outpoint is not an admitted Assignment escrow. Actual fee-input/change UTXOs are checked.",
+    "verified": [
+      "One-sompi-short registration does not install authorization or custody",
+      "Initial registration applies the exact relay metadata charge",
+      "RocksDB fully closes and reopens; selected root, exact authorization/custody, original signed payload, charged fee and actual fee/change UTXOs match",
+      "Distinct-carrier retry preserves the original authorization/custody and incurs no second relay charge; ordinary carrier fees remain payable",
+      "Independent node replays actual blocks and reaches the same root and relay charge",
+      "Competing branch within the production shallow tie boundary removes canonical authorization/custody, restores the fork UTXO view and preserves the common underpaid change; archived payload remains retained"
+    ]
+  },
+  "same_source_static_checks": {
+    "strict_core_consensus_library_clippy": "50d-clippy.json",
+    "all_enabled_test_targets_typechecked": "50d-check.json"
+  },
+  "not_verified": [
+    "Live accepted op3/op4 source service or Miner/Provider process connection",
+    "Actual accepted Canonical Assignment and Result/Case happy path",
+    "Real-model canonical inference and PositivePassed through native transaction intake",
+    "Independent Gate C Certified and actual worker/service/refund UTXO settlement",
+    "Purpose-specific DAG/credit consumers and full restart/reorg/IBD/pruning/legacy regression objective",
+    "Later efb8862fc source-preparation work correction and f9a4a9c80 Batch runtime result"
+  ],
+  "full_original_goal": "incomplete",
+  "artifacts": {
+    "50d-generation.log": "62ba40464d8210472a266dedaa1cea5c23eb6f66e81aaee5b24f653d73858688",
+    "50d-generation.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "50d-relay.log": "b6cc738e0ab7d6934d6590c0fe492e28689522cc4bbc07832311f6c635a5814d",
+    "50d-relay.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "50d-runtime.sha256": "994d02d7b50712b76ccb0623e6a04ed626cdb56a9b1b899cffc02224a5989365",
+    "50d-source.txt": "3a7576ca75c1b9f5f4fbf78e5de66bf23b993da161e5c043100c4134e37a654a",
+    "50d-verify.sh": "fa46c481c7e98e28cb62c6ad139cd8a527ca63b2a0def4d1a204ac2e9707e82c"
+  }
+}

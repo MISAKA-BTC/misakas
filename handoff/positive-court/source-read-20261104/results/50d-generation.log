@@ -1,0 +1,43 @@
+   Compiling kaspa-consensus-core v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/core)
+   Compiling kaspa-txscript v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/dev/shm/misaka-oom-positive-next/mining/errors)
+   Compiling kaspa-consensus-client v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/client)
+   Compiling kaspa-index-core v1.1.0 (/dev/shm/misaka-oom-positive-next/indexes/core)
+   Compiling kaspa-consensus-wasm v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/wasm)
+   Compiling kaspa-consensusmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/consensusmanager)
+   Compiling kaspa-rpc-core v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/core)
+   Compiling kaspa-p2p-lib v1.1.0 (/dev/shm/misaka-oom-positive-next/protocol/p2p)
+   Compiling kaspa-addressmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/addressmanager)
+   Compiling kaspa-mining v1.1.0 (/dev/shm/misaka-oom-positive-next/mining)
+   Compiling kaspa-connectionmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/connectionmanager)
+   Compiling kaspa-p2p-mining v1.1.0 (/dev/shm/misaka-oom-positive-next/protocol/mining)
+   Compiling kaspa-pow v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/pow)
+   Compiling kaspa-p2p-flows v1.1.0 (/dev/shm/misaka-oom-positive-next/protocol/flows)
+   Compiling kaspa-grpc-core v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/grpc/core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/exec)
+   Compiling kaspa-utxoindex v1.1.0 (/dev/shm/misaka-oom-positive-next/indexes/utxoindex)
+   Compiling kaspa-rpc-service v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/service)
+   Compiling kaspa-pq-validator-core v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/lower)
+   Compiling kaspa-grpc-client v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/grpc/client)
+   Compiling misaka-endpoints v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/endpoints)
+   Compiling misaka-palw-sdk v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/sdk)
+   Compiling kaspa-wrpc-client v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/wrpc/client)
+   Compiling misaka-palw-remote v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/remote)
+   Compiling kaspa-wrpc-server v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/wrpc/server)
+   Compiling kaspa-evm v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/evm/core)
+   Compiling kaspa-grpc-server v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/grpc/server)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/sketch)
+   Compiling kaspa-consensus v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus)
+    Finished `test` profile [unoptimized] target(s) in 66m 02s
+     Running unittests src/lib.rs (/dev/shm/misaka-positive-pre-isolated-target/debug/deps/kaspa_consensus-a625c93f0f85ef22)
+
+running 2 tests
+test model::stores::virtual_state::lkg_generation_tests::returning_to_the_same_state_invalidates_the_old_generation ... ok
+test model::stores::virtual_state::lkg_generation_tests::concurrent_publications_do_not_reuse_a_generation ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 1464 filtered out; finished in 0.00s
+

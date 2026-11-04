@@ -1,5 +1,37 @@
 # Native source read connection candidate — 2026-11-04
 
+## Frozen-candidate native runtime passed
+
+`50d5eda4cd92c506eef20b042a6f85b505fd4877` passed both actual native
+publication-generation tests and the private native initial-relay trial.
+The test binary built in 66m02s. The relay trial completed in 4.69s, including
+its separate child process; the child and parent are one logical relay case,
+not two distinct cases. Both Cargo invocations exited 0. See
+[the source/binary-pinned runtime record](results/50d-runtime.json),
+[generation log](results/50d-generation.log) and [relay log](results/50d-relay.log).
+
+The relay trial covers the one-sompi-short refusal, exact registration charge,
+full RocksDB close/reopen with identical root, signed authorization/custody
+and actual fee/change UTXOs, distinct-carrier retry without a second relay
+charge, independent native block replay, and rollback across the production
+shallow economic-tie boundary. The rolled-back canonical rows and UTXOs
+follow the selected branch while original archive bytes remain retained.
+The future Assignment funding outpoint in this standalone relay test is
+declared only; no Assignment escrow or Case is admitted by this trial.
+
+Binary SHA-256:
+`583efd6d80d36d6de19d4bc9db21d0e96a6700fcf686975fa634253f4289cadd`.
+Strict library Clippy and all-test-target typechecking also passed on this
+same frozen source, as recorded below. The later preparation-work correction
+is a different candidate and is not credited with these results.
+
+The guarded queue has now selected clean `f9a4a9c80` and started the actual
+Core Batch fixture build. Its verified live Cargo PID at collection was
+1481807. The `efb8862fc` Clippy/check/source-work test queue still waits for
+that result. Live source-service execution, actual Assignment/Case admission,
+real-model canonical native completion, Gate C, worker/service/refund UTXOs,
+all credit consumers and full recovery/regression verification remain open.
+
 ## Source preparation Merkle work correction
 
 `efb8862fc` corrects the native source read projection's conservative
