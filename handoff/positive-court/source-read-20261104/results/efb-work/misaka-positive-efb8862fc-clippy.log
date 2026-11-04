@@ -1,0 +1,11 @@
+    Checking kaspa-consensus-core v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/core)
+    Checking kaspa-txscript v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/txscript)
+    Checking kaspa-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/notify)
+    Checking kaspa-consensus-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/notify)
+    Checking kaspa-pq-validator-core v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/pq/validator-core)
+    Checking misaka-palw-base0 v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/base0)
+    Checking kaspa-consensusmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/consensusmanager)
+    Checking kaspa-evm v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/evm/core)
+    Checking kaspa-pow v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/pow)
+    Checking kaspa-consensus v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus)
+    Finished `dev` profile [unoptimized] target(s) in 5m 31s

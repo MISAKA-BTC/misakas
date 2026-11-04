@@ -1,5 +1,17 @@
 # Native source read connection candidate — 2026-11-04
 
+## Source-preparation work correction: strict library Clippy passed
+
+Frozen `efb8862fc` passed Core and Consensus library Clippy with
+`--features evm --lib -- -D warnings`, exit 0 in 5m31s. The
+[exact-source result and artifact hashes](results/efb-work/clippy-result.json)
+include the original log, exit, source identity and executed queue script.
+The same guarded queue has started all enabled Core/Consensus test-target
+typechecking, followed by the source-preparation Merkle-work regression.
+Those results remain pending. This static check does not validate the later
+source adapter/provider/Batch test changes or complete native intake,
+real-model execution, independent Gate C, payment or credit.
+
 ## Frozen f9 Batch Core regression passed
 
 `f9a4a9c80` built its Core unit-test executable in 69m55s and passed the
