@@ -488,7 +488,7 @@ impl BatchProgressV1 {
             .iter()
             .map(|range| {
                 (0..range.bytes.div_ceil(size))
-                    .filter_map(|part| slots.next().expect("validated part count").is_none().then_some(part))
+                    .filter(|_| slots.next().expect("validated part count").is_none())
                     .map(|part| u64::from((range.bytes - part * size).min(size)))
                     .sum::<u64>()
             })

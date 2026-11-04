@@ -109,7 +109,7 @@ pub(crate) fn reserved_numerical_terminal_v1<'a>(
         || !binding.packet_ids.contains(&terminal)
         || service.state.book.assigned_daa(&verification) != Some(receipt.at.daa_score)
         || service.state.book.assigned_daa(&terminal) != Some(at.daa_score)
-        || !service.causal.get(&terminal).is_some_and(|parents| parents.binary_search(&verification).is_ok())
+        || service.causal.get(&terminal).is_none_or(|parents| parents.binary_search(&verification).is_err())
         || at.daa_score <= receipt.at.daa_score
         || at.daa_score >= context.hard_daa.min(receipt.material_until_daa)
     {

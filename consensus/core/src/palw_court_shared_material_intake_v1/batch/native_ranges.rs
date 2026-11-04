@@ -463,7 +463,7 @@ pub(crate) fn prepare_numerical_batch_material_v1(
         || book.assigned_daa(&verification) != Some(verify_daa)
         || verify_daa >= context.hard_daa
         || book.assigned_daa(&terminal).is_none_or(|daa| daa <= verify_daa || daa >= context.hard_daa)
-        || !service.causal.get(&terminal).is_some_and(|ids| ids.binary_search(&verification).is_ok())
+        || service.causal.get(&terminal).is_none_or(|ids| ids.binary_search(&verification).is_err())
     {
         return Err(invalid("numerical verification differs from its reserved stage"));
     }

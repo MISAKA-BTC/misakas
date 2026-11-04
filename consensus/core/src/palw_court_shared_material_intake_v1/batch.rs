@@ -700,7 +700,7 @@ pub(crate) fn repair_batch_material_v1(
     let binding = service.claims.get(&claim).ok_or(InvalidState)?;
     let context = crate::palw_court_shared_tir_state_v1::context(state, claim).map_err(|_| InvalidState)?;
     context.check_binding(service).map_err(|_| InvalidState)?;
-    if &service.book != &*book
+    if service.book != *book
         || deliveries.iter().any(|delivery| delivery.claim != claim || delivery.scope != context.scope_id)
         || graph.iter().any(|node| !binding.packet_ids.contains(&node.packet.id))
     {
