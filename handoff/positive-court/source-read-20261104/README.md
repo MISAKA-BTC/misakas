@@ -1,5 +1,28 @@
 # Native source read connection candidate — 2026-11-04
 
+## Per-unit bounds at provider retrieval
+
+`719bb0e90` passes the canonical per-unit raw-data and encoded-body bounds
+into `StoredProviderV2::unit_bounded` before each charged provider attempt.
+The default delegates to the existing borrowed-unit lookup for preloaded,
+independently bounded stores. File/network adapters doing I/O during this
+call must override it and apply the supplied bounds before retrieval;
+transport framing/probes retain separate finite process allowances.
+Post-retrieval geometry, authentication, budget, and final native-view checks
+remain in place. No transport or production service-loop caller is added.
+
+The regression exercises the real responder with the existing authenticated
+ragged prompt fixture. Its provider refuses the old unbounded entry point,
+checks each supplied bound including the short tail, and must receive no
+further calls after response budget exhaustion. This is local responder
+coverage, not native acceptance or a service receipt. Rustfmt and whitespace
+checks passed. Runtime remains pending in the guarded IBM queue
+`/tmp/misaka-positive-719bb0e90-verify.sh`, after both stages of `5917693dd`
+succeed; the queue runs all `miner::positive_v2::unit_bounds_tests` with
+`positive-miner` enabled. Logs/results are
+`/tmp/misaka-positive-719bb0e90-unit-bounds.{log,exit}`. It checks the exact
+preceding clean source before switching; it does not alter the active build.
+
 ## Native authorization before protected local storage
 
 `5917693dd` changes the own-node Miner source constructor to resolve a
