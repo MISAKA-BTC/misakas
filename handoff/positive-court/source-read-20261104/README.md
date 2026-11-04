@@ -86,3 +86,19 @@ if checking succeeds. Logs and exit files use
 `/tmp/misaka-positive-source-8aaf-{check,clippy}.{log,exit}` on IBM.
 No successful source-service execution or completion of the overall goal is
 claimed by these changes.
+
+## Corrected candidate typecheck result
+
+`8aaf6ac4c489325b551a0c0f4cf58019f2e584f1` passed Core and Consensus
+all-test-target typechecking with exit code 0 in 15m36s. The source checkout
+was clean when collected. See [the exact-source record](results/8aaf-check.json)
+and [Cargo log](results/8aaf-check.log). This command executes no tests.
+Strict library Clippy is now running. A separate guarded command waits for
+both check and Clippy success, then builds/runs the actual native cache's two
+`lkg_generation_tests` and the corrected native relay trial, on that same
+source candidate. Relay execution uses the existing isolated enforced XFS
+project-quota image. Logs and exit files are
+`/tmp/misaka-positive-source-8aaf-{generation,relay}.{log,exit}` on IBM;
+the native executable hash will be recorded in
+`/tmp/misaka-positive-source-8aaf-runtime.sha256` after its build.
+No runtime success is asserted yet. The full original goal remains open.

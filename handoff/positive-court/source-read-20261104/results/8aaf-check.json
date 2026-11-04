@@ -1,0 +1,19 @@
+{
+  "source_commit": "8aaf6ac4c489325b551a0c0f4cf58019f2e584f1",
+  "source_tree": "85e2854f7a539af475b0c92581acc70c21ff7a64",
+  "source_status": "clean when result was collected",
+  "command": "cargo +1.93.0 check --offline --locked -p kaspa-consensus-core -p kaspa-consensus --features evm --tests",
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/misaka-positive-pre-isolated-target"
+  },
+  "exit_code": 0,
+  "elapsed": "15m 36s",
+  "log_sha256": "a0d5c611f77d0e97103c9e182c26980848427bcc29e4c501789e0094b26c60a6",
+  "scope": "Core and Consensus libraries and all enabled test targets typechecked; no tests executed by this command.",
+  "strict_clippy": "running; no success asserted",
+  "native_generation_and_relay_execution": "queued after successful check and Clippy; not yet executed",
+  "end_to_end_assignment_case_gate_c_payment_dag_verification": "incomplete"
+}
