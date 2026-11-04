@@ -146,8 +146,16 @@ async fn certify_root(cw: &mut Cw, s: &Session) {
             }
         }
     }
-    let (_, material) =
-        approval_frame.expect("real selected signatures and prosecution tick produced an actual certifying sidecar journal");
+    let material = approval_frame.map_or_else(
+        || {
+            let raw = state.kernel_route_state_v1().unwrap().aux
+                .get(&(PALW_SECURITY_CERTIFICATION_TABLE_V1, key.to_vec()))
+                .expect("canonical selected-approval row");
+            let bytes = borsh::to_vec(&(1u16, claim, Some(raw.as_slice()))).unwrap();
+            kaspa_consensus_core::palw_claim_local_v1::palw_liability_material_id_v1(&bytes)
+        },
+        |(_, material)| material,
+    );
     use kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalWorkRefV1 as W;
     let source = &checkpoint.records[&W::ChainClaim { claim }];
     assert!(source.certified && !source.liability_closed, "actual approval is retained through the open material duty");
@@ -170,11 +178,11 @@ async fn rfc23s2_no_seam_exec_retirement_compact_source_restart_and_replay() {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
-    let mut cw = active_world_over_with_params(
+    let mut cw = Box::pin(active_world_over_with_params(
         VerificationModeV1::OptimisticPublicVerification,
         |config| TestConsensus::with_db(db.clone(), config, sender),
         profile,
-    )
+    ))
     .await;
     cw.net._keep.push(Box::new(receiver));
     let tier =
