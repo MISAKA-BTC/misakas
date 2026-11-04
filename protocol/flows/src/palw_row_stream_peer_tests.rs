@@ -92,6 +92,9 @@ async fn rfc37_real_peer_wrong_preimage_stops_before_requesting_the_next_chunk()
 }
 
 async fn real_peer_transfer(wrong_preimage: bool) {
+    // Each transfer uses both process-wide snapshot slots.
+    static TRANSFER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _transfer_guard = TRANSFER_LOCK.lock().await;
     let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap();
     let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
     for i in 1..=35_000u64 {
