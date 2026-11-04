@@ -59,3 +59,30 @@ state-change/import/UTXO denial through the live API, cold restart and local
 spent-I/O preservation, and the complete same-candidate Assignment/Case,
 PositivePassed, Gate C, settlement/reward and DAG-credit trial. A native
 source-read implementation does not itself create any of those transitions.
+
+## First run and follow-up
+
+The `f6fd18ea8` native relay trial built successfully in 65m04s and then
+failed at the competing-branch selection assertion. Both branches were
+UTXO-valid; selected DAA/work were 13/28 and competing DAA/work were 15/32.
+The preceding registration, cold-close/reopen, distinct-carrier retry and
+independent replay assertions were reached, but this is an overall FAILED
+trial. Its raw log, binary hash and explicit scope are in
+[the result record](results/f6fd-relay.json) and [raw log](results/f6fd-relay.log).
+
+Static inspection found that the original common ancestor was too old for
+the production two-DAA economic-tie reorg limit. `c826615a5` instead puts the
+underpaid non-registration in the common prefix, before the successful
+registration. It explicitly checks the actual shallow depth and preserves
+the common underpaid change UTXO. The consensus rule is unchanged. Runtime
+verification of the corrected fixture remains pending.
+
+Core typechecking of `1376b0e9b` reported unresolved references to the
+source owner's capacity helper. `8aaf6ac4c` makes that existing helper
+visible to the sibling read projection and imports it. A queued verification
+waits for the preceding check process to finish, selects that exact candidate,
+and runs all Core/Consensus test-target checks, then strict library Clippy
+if checking succeeds. Logs and exit files use
+`/tmp/misaka-positive-source-8aaf-{check,clippy}.{log,exit}` on IBM.
+No successful source-service execution or completion of the overall goal is
+claimed by these changes.
