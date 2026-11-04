@@ -729,6 +729,7 @@ pub fn authorize_assigned_p_source_request_v2(
     let _owner = crate::palw_native_resource_v1::reserve_native_requests_v1(requests)
         .map_err(PositivePSourceErrorV2::Native)?
         .ok_or(PositivePSourceErrorV2::Unavailable)?;
+    let rowkey = positive_certification_key_v2(subject);
     let row = PositiveCertificationRowV2::decode(&rowkey, bytes)
         .map_err(|_| PositivePSourceErrorV2::Binding)?;
     let h = &row.fixed.header;

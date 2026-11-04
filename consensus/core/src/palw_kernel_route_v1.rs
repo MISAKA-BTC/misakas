@@ -1112,8 +1112,6 @@ impl PalwKernelRouteStateV1 {
             positive_job_owners_v2: Default::default(),
             positive_gate_c_schedule_v2: Default::default(),
             ledger_cache: KernelLedgerCacheV1::default(),
-            positive_job_owners_v2: Default::default(),
-            positive_gate_c_schedule_v2: Default::default(),
         }
     }
 
