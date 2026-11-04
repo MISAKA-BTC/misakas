@@ -131,10 +131,25 @@ impl From<kaspa_consensus_core::palw_positive_source_geometry_v2::PositiveSource
 }
 
 /// Stored data and PREEXISTING openings only. Returning a borrowed unit lets
-/// A2 enforce the byte cap before cloning it into an outbound response. Network
-/// providers must apply these same read bounds in their transport adapter.
+/// A2 enforce the byte cap before cloning it into an outbound response.
 pub trait StoredProviderV2 {
     fn unit(&self, kind: SourceKind, source: Digest, index: u64) -> Result<&StoredUnitV2, String>;
+
+    /// The responder supplies the admitted per-unit bounds before retrieval.
+    /// The default is for already loaded, independently bounded stores only.
+    /// Providers doing file or network I/O here must override this method and
+    /// bound retrieval before allocation/read, including a ragged final unit.
+    /// Transport framing and probing need their own finite process allowances;
+    /// these bounds describe the canonical data and encoded G14 body only.
+    fn unit_bounded(
+        &self,
+        kind: SourceKind,
+        source: Digest,
+        index: u64,
+        _bounds: SourceUnitBoundsV2,
+    ) -> Result<&StoredUnitV2, String> {
+        self.unit(kind, source, index)
+    }
 }
 
 /// A4's capability supplies these finite bounds from the accepted, signed
@@ -392,7 +407,7 @@ impl<D: CanonicalDataDutyV2> MinerResponderV2<'_, D> {
                 self.meter.additional_work = work;
                 self.meter.provider_reads += 1;
                 self.record(journal, None)?;
-                let Ok(unit) = provider.unit(request.kind, request.source, index) else { continue };
+                let Ok(unit) = provider.unit_bounded(request.kind, request.source, index, unit_bounds) else { continue };
                 // Reject oversized fields before any serialization/hash walk.
                 if !unit.bounded(unit_bounds.body_bytes) {
                     continue;

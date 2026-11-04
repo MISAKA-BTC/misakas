@@ -130,6 +130,53 @@ fn ragged_prompt_uses_per_unit_raw_and_body_sums_instead_of_maximum_times_count(
 }
 
 #[test]
+fn provider_receives_native_geometry_before_retrieval_and_no_call_after_budget_exhaustion() {
+    struct BoundedProvider<'a> {
+        inner: &'a dyn StoredProviderV2,
+        calls: Cell<u64>,
+    }
+    impl StoredProviderV2 for BoundedProvider<'_> {
+        fn unit(&self, _: SourceKind, _: Digest, _: u64) -> Result<&StoredUnitV2, String> {
+            panic!("retrieval must receive its bound before any provider I/O")
+        }
+        fn unit_bounded(
+            &self,
+            kind: SourceKind,
+            source: Digest,
+            index: u64,
+            bounds: SourceUnitBoundsV2,
+        ) -> Result<&StoredUnitV2, String> {
+            let expected = if index == 2 {
+                SourceUnitBoundsV2 { data_bytes: 4, body_bytes: 220 }
+            } else {
+                SourceUnitBoundsV2 { data_bytes: 128, body_bytes: 344 }
+            };
+            assert_eq!(bounds, expected);
+            self.calls.set(self.calls.get() + 1);
+            self.inner.unit(kind, source, index)
+        }
+    }
+    let f = fixture(260, 908);
+    let provider = BoundedProvider { inner: &f.provider, calls: Cell::new(0) };
+    let providers: [&dyn StoredProviderV2; 1] = [&provider];
+    let duty = duty(
+        &f,
+        SourceKind::Input,
+        0,
+        &[
+            SourceUnitBoundsV2 { data_bytes: 128, body_bytes: 344 },
+            SourceUnitBoundsV2 { data_bytes: 128, body_bytes: 344 },
+            SourceUnitBoundsV2 { data_bytes: 4, body_bytes: 220 },
+        ],
+    );
+    let mut miner = responder(&f, &providers);
+    assert_eq!(miner.respond(&duty).unwrap().units.len(), 3);
+    assert_eq!(provider.calls.get(), 3);
+    assert_eq!(miner.respond(&duty), Err(MinerErrorV2::Budget));
+    assert_eq!(provider.calls.get(), 3);
+}
+
+#[test]
 fn forged_exact_raw_or_body_bounds_cannot_release_larger_or_different_data() {
     for quote in [
         SourceUnitBoundsV2 { data_bytes: 15, body_bytes: 178 },
