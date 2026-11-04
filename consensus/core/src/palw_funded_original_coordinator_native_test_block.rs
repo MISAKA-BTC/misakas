@@ -240,7 +240,7 @@
 }
 
             // Lane r5: the all-branch candidate reserves every branch's packet in ONE book row (pure; the fold writes it at install).
-            {
+            if batch || production {
                 let b = TransitionBuilder::try_new(&served, &params, false, false, false, false, &ok).unwrap();
                 let prepared = prepare_paired_original_v1(&b, &ctx, &object, Some(&fp.commitment)).unwrap().unwrap();
                 let geometry = prepared.enrich_native_geometry_v1(&b, &ctx).unwrap();
@@ -407,7 +407,8 @@
                     });
                     e
                 };
-                let batch_params = params.clone().with_court_clock_v2_from_daa(Some(ctx.daa_score));
+                let batch_params = if batch { params.clone().with_fp_quanta(8,64).unwrap() } else { params.clone() };
+                let batch_params = batch_params.with_court_clock_v2_from_daa(Some(ctx.daa_score));
                 let old_extras = batch_extras(&pairing);
                 let mut refused = TransitionBuilder::try_new(&served, &batch_params, false, false, false, false, &old_extras).unwrap();
                 let before = refused.state.state_root();

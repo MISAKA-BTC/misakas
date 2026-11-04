@@ -711,6 +711,11 @@ pub(crate) fn palw_tir_public_material_frame_fixture_v1(prompt_input: bool) -> P
         2,
     )
 }
+/// Small Batch material fixture executed in the signer's own FP job context.
+#[cfg(test)]
+pub(crate) fn palw_tir_public_signed_material_frame_fixture_v1(key: &[u8]) -> PalwTirPublicFrameFixtureV1 {
+    tests::signed_material_frame_v1(key)
+}
 /// A distinct registered and honestly executed program: numerical Select condition
 /// reads actual Input(0), not a synthetic site or a mutated admitted plan.
 #[cfg(test)]
@@ -1723,6 +1728,13 @@ mod tests {
         );
         let (sem, eof, raw, table) = material.unwrap();
         (frame, sem, eof, raw, table)
+    }
+    pub(super) fn signed_material_frame_v1(key: &[u8]) -> super::PalwTirPublicFrameFixtureV1 {
+        history_frame_shape_material_v1(
+            HistoryConditionV1::Input,
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+            2, 2, false, Some(key), None, None,
+        ).0
     }
     fn history_frame_shape_material_v1(
         condition: HistoryConditionV1,

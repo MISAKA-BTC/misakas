@@ -2,6 +2,10 @@
     #[test]
     fn g14_native_funded_candidate_fixture_generator_v1() { run_family_funded_native_fixture_v1(false,false,false); }
     #[test]
+    fn g14_native_funded_batch_candidate_v1() {
+        let _=run_family_funded_native_history_at_v67(false,false,false,false,false,false,None,None,false,false,false,None,true);
+    }
+    #[test]
     fn family_supplier_four_role_prefix_native_original_and_financial_transitions() { run_family_funded_native_fixture_v1(true,true,false); }
     #[test]
     fn family_supplier_ordinary_native_original_and_financial_transitions(){run_family_funded_native_fixture_v1(false,true,false);}
@@ -80,13 +84,16 @@
         prefix:bool,production:bool,scoped:bool,constraint:bool,observe_archive:bool,producer_material_only:bool,
         source_export_request:Option<crate::palw_freeprompt_v3::PalwFpPrefixStateV1>,source_prompt:Option<Vec<u32>>,archive_finance:bool,archive_mixed:bool,archive_legacy_geometry:bool,
     )->Option<ScopedPrefixSourceHistoryV1> {
-        run_family_funded_native_history_at_v67(prefix,production,scoped,constraint,observe_archive,producer_material_only,source_export_request,source_prompt,archive_finance,archive_mixed,archive_legacy_geometry,None)
+        run_family_funded_native_history_at_v67(prefix,production,scoped,constraint,observe_archive,producer_material_only,source_export_request,source_prompt,archive_finance,archive_mixed,archive_legacy_geometry,None,false)
     }
     fn run_family_funded_native_history_at_v67(
         prefix:bool,production:bool,scoped:bool,constraint:bool,observe_archive:bool,producer_material_only:bool,
         source_export_request:Option<crate::palw_freeprompt_v3::PalwFpPrefixStateV1>,source_prompt:Option<Vec<u32>>,archive_finance:bool,archive_mixed:bool,archive_legacy_geometry:bool,
         prospective:Option<crate::palw_tir_public_claim_v1::PalwCompactPairProspectiveContextV67>,
+        batch:bool,
     )->Option<ScopedPrefixSourceHistoryV1> {
+        // Batch exercises the independent tiny material path, never Family history.
+        assert!(!batch||(!production&&!prefix&&!scoped&&!constraint&&!observe_archive&&!producer_material_only&&!archive_finance&&!archive_mixed&&!archive_legacy_geometry&&source_export_request.is_none()&&source_prompt.is_none()&&prospective.is_none()));
         let pair_contexts=(production&&scoped&&prefix).then(crate::palw_tir_public_claim_v1::palw_compact_pair_prospective_contexts_v67);
         let prospective=prospective.or(pair_contexts.map(|(_,child)|child));
         assert!(!archive_legacy_geometry||(archive_finance&&archive_mixed));
@@ -154,6 +161,8 @@
                 crate::palw_tir_public_claim_v1::palw_tir_public_family_source_frame_with_executor_network_fixture_v1(&key,fixture_network,source_fault)
             };
             (fx,Some(sem),Some(eof),Some(raw),Some(table))
+        } else if batch {
+            (crate::palw_tir_public_claim_v1::palw_tir_public_signed_material_frame_fixture_v1(&key),None,None,None,None)
         } else {
             (crate::palw_tir_public_claim_v1::palw_tir_public_frame_fixture_ruled_v1(2, |job| job.executor_pubkey=key.clone(),None),None,None,None,None)
         };
@@ -170,7 +179,7 @@
             let last=prompt.len()-1;prompt[last]=(prompt[last]+1)%fx.record.logits_vocab;
             assert_ne!(prompt,fx.execution.prompt);
             assert_eq!(&prompt[..consumed.prefix_tokens as usize],&fx.execution.prompt[..consumed.prefix_tokens as usize]);
-            Some(run_family_funded_native_history_at_v67(false,true,true,false,false,false,Some(consumed),Some(prompt),archive_finance,archive_mixed,archive_legacy_geometry,Some(pair_contexts.unwrap().0)).unwrap())
+            Some(run_family_funded_native_history_at_v67(false,true,true,false,false,false,Some(consumed),Some(prompt),archive_finance,archive_mixed,archive_legacy_geometry,Some(pair_contexts.unwrap().0),false).unwrap())
         }else{None};
         if let Some(history)=source_history.as_mut(){
             let parent_hard=history.point.daa_score.checked_add(crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA).unwrap();
@@ -373,6 +382,10 @@
             params.econ_contracts_v1.horizon_extension=Some((ctx.daa_score,crate::palw_econ_contracts_v1::PalwHorizonExtensionPolicyV1::unapproved_probe_v1()));
             extras.original_archive_data_observer_v16=true;
         }
+        if batch {
+            let maximum_custodians=crate::palw_tir_frame_cost_v1::palw_tir_frame_custodian_upper_v1(ctx.daa_score,&params,&extras).unwrap();
+            extras.tir_public_allocation_rules_v1.as_mut().unwrap().maximum_custodians=maximum_custodians;
+        }
         let builder = TransitionBuilder::try_new(&state, &params, false, false, false, false, &extras).unwrap();
         let (plan, _, _, _) = original_plan_v1(&builder, ctx.daa_score, &fp.commitment, fx.frame.header_v1()).unwrap();
         drop(builder);
@@ -381,6 +394,7 @@
         pledge.job_identity = crate::palw_fp_execution_v3::palw_fp_job_pin_v1(&fp.commitment);
         pledge.resource_plan_id = plan.resource_plan_id;
         pledge.source_id = plan.source_id;
+        pledge.maximum_custodians=plan.acquisition.maximum_custodians;
         pledge.material_until_daa=plan.terms.material_until_daa;
         pledge.signature = mldsa::sign(&kp.signing_key, pledge.id_v1().as_byte_slice(),
             crate::palw_tir_public_custody_v1::PALW_TIR_SOURCE_PLEDGE_CONTEXT_V1, seed).unwrap().as_ref().to_vec();
@@ -466,7 +480,7 @@
         // Retain only requested public legacy transport bytes before native
         // construction takes ownership of the original envelope. The dump is
         // the unclaimed prestate, rather than the transformed funding.
-        let legacy_fixture_literal=if source_history.is_none()&&std::env::var_os("MISAKA_G14_NATIVE_FIXTURE_DIR").is_some(){
+        let legacy_fixture_literal=if !batch&&source_history.is_none()&&std::env::var_os("MISAKA_G14_NATIVE_FIXTURE_DIR").is_some(){
             Some(envelope.encode_v1().unwrap())
         }else{None};
         if !production {
@@ -483,7 +497,7 @@
         let restore_params=source_history.as_ref().map_or(&params,|h|&h.params);
         let loaded = carriage.clone().into_state(restore_params, Some(state.state_root())).unwrap();
         assert_eq!(loaded.state_root(), state.state_root());
-        if source_history.is_none(){if let Ok(dir) = std::env::var("MISAKA_G14_NATIVE_FIXTURE_DIR") {
+        if !batch&&source_history.is_none(){if let Ok(dir) = std::env::var("MISAKA_G14_NATIVE_FIXTURE_DIR") {
             let dir = std::path::Path::new(&dir);
             std::fs::create_dir_all(dir).unwrap();
             std::fs::write(dir.join("state.borsh"), borsh::to_vec(&carriage).unwrap()).unwrap();
