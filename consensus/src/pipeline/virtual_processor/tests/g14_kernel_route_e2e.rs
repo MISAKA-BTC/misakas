@@ -2897,6 +2897,19 @@ fn onb_fixture(seed: u64) -> OnbFixture {
 impl Net {
     /// **A V2 IR class registration for `f`**, signed by card `card` (the SDK's `build_tir_registration_v1`, over the chain's own pricing).
     fn v2_registration(&self, f: &OnbFixture, card: usize, activation_daa: u64) -> Obj {
+        self.v2_registration_for_class(&f.class, f.artifact_root, card, activation_daa)
+    }
+
+    /// Register the literal class and inventory supplied by a role fixture.
+    /// The ordinary native registration still checks its pricing, signature,
+    /// program, layout and canonical job; no registry row is installed here.
+    fn v2_registration_for_class(
+        &self,
+        class: &kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+        inventory_root: Hash64,
+        card: usize,
+        activation_daa: u64,
+    ) -> Obj {
         use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1;
         use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_v1, palw_tir_job_context_v1};
         use kaspa_consensus_core::palw_tir_class_v1::{
@@ -2909,12 +2922,12 @@ impl Net {
             state.class(&floor).unwrap().slash_value_per_pwu,
             self.bundle.court.max_step_leaf_count(),
         );
-        let facts = PalwTirJobFactsV1::of_class(&f.class, f.class.class_id(&f.artifact_root)).expect("decodes");
-        let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&f.class).expect("wide enough"));
+        let facts = PalwTirJobFactsV1::of_class(class, class.class_id(&inventory_root)).expect("decodes");
+        let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(class).expect("wide enough"));
         let mut o = palw_tir_post_genesis_registration_v1(
-            f.class.clone(),
+            class.clone(),
             canonical,
-            f.artifact_root,
+            inventory_root,
             0,
             target,
             slash,
