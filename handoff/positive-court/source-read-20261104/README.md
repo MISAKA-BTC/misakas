@@ -1,5 +1,26 @@
 # Native source read connection candidate — 2026-11-04
 
+## Canonical job input audit
+
+The existing three-process short-job report explicitly records
+`canonical_job: false` and `native_authority: false`. Its 16-input/1-output
+execution cannot stand in for the RFC-0045 canonical Assignment job.
+Running the exact two extracted production numeric helpers against the
+retained original-context pins gives 1,023 prefill / 2 decode for both
+SmolLM2 registrations (8,192 positions), and 255 / 2 for Pythia-70M
+(2,048 positions). See [the source-pinned numeric result](results/canonical-job-shape.json).
+The token-budget field uses the existing native positions-plus-one convention;
+the registered model layout/context is not shortened or modified.
+
+This extraction checks only the context-to-count calculation. It does not
+derive or authenticate an Assignment ID, prompt, accepted registration,
+source catalogue, coverage, fee, reservation or role contract, and executes
+no model. Pythia's retained program is wide Q24; this numeric result does
+not establish support in the initial ExactStream Assignment profile.
+The live integration driver must obtain its actual job, prompt and complete
+resource plan from the native registered metadata and signed terms rather
+than copying the earlier short-job execution or its budgets.
+
 ## Batch regression follow-up
 
 `f9a4a9c80dbe64657863a9d22f85b97db1eed198` ports the pending OOM
