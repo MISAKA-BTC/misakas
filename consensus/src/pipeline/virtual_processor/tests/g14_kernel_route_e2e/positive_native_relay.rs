@@ -214,7 +214,21 @@ fn check_relay_rollback<'a>(
             arrive(&follower.chain, block, "alternate relay branch work").await;
         }
         let tip = fork.chain.sink();
-        assert_eq!(follower.chain.sink(), tip, "the competing branch is selected");
+        let selected = follower.chain.sink();
+        if selected != tip {
+            let node = &follower.chain.ctx.consensus;
+            let selected_header = node.get_header(selected).unwrap();
+            let competing_header = node.get_header(tip).unwrap();
+            panic!(
+                "competing branch was not selected: selected {selected} DAA {} blue work {:?} status {:?}, competing {tip} DAA {} blue work {:?} status {:?}",
+                selected_header.daa_score,
+                selected_header.blue_work,
+                node.get_block_status(selected),
+                competing_header.daa_score,
+                competing_header.blue_work,
+                node.get_block_status(tip),
+            );
+        }
         assert_eq!(root_at(&follower.chain, tip), root_at(&fork.chain, tip));
         let vp = follower.chain.vp();
         let store = vp.palw_state_v2_store.read();
