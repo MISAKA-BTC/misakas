@@ -146,16 +146,8 @@ async fn certify_root(cw: &mut Cw, s: &Session) {
             }
         }
     }
-    let material = approval_frame.map_or_else(
-        || {
-            let raw = state.kernel_route_state_v1().unwrap().aux
-                .get(&(PALW_SECURITY_CERTIFICATION_TABLE_V1, key.to_vec()))
-                .expect("canonical selected-approval row");
-            let bytes = borsh::to_vec(&(1u16, claim, Some(raw.as_slice()))).unwrap();
-            kaspa_consensus_core::palw_claim_local_v1::palw_liability_material_id_v1(&bytes)
-        },
-        |(_, material)| material,
-    );
+    let (_, material) =
+        approval_frame.expect("real selected signatures and prosecution tick produced an actual certifying sidecar journal");
     use kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalWorkRefV1 as W;
     let source = &checkpoint.records[&W::ChainClaim { claim }];
     assert!(source.certified && !source.liability_closed, "actual approval is retained through the open material duty");
