@@ -26474,7 +26474,6 @@ impl PalwStateCarriageV2 {
             epoch_budgets: self.epoch_budgets,
             receipt_targets: self.receipt_targets,
             capabilities: self.capabilities,
-            claims_by_job,
             claims: self.claims,
             claims_by_job,
             pending_payouts: self.pending_payouts,
