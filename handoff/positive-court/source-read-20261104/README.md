@@ -1,5 +1,18 @@
 # Native source read connection candidate — 2026-11-04
 
+## Source-preparation work correction: test targets typechecked
+
+The same clean frozen `efb8862fc` passed Core and Consensus test-target
+checking with `--features evm --tests`, exit 0 in 16m44s. The
+[check result and artifact hashes](results/efb-work/check-result.json)
+include the original log and exit. Together with the strict library Clippy
+below, this proves those static checks for this source only. It executes no
+regression and does not check other features or later source changes.
+The queued source-preparation Merkle regression has started building its
+actual executable on that unchanged source; its runtime result is pending.
+Native Assignment/Case and the original real-model/Gate C/payment/credit
+objective remain incomplete.
+
 ## Source-preparation work correction: strict library Clippy passed
 
 Frozen `efb8862fc` passed Core and Consensus library Clippy with

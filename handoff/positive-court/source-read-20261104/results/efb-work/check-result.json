@@ -1,0 +1,13 @@
+{
+  "source_commit": "efb8862fcca43b088279847c4a8ed91714f8d492",
+  "command": "cargo +1.93.0 check --offline --locked -p kaspa-consensus-core -p kaspa-consensus --features evm --tests",
+  "exit_code": 0,
+  "elapsed_seconds": 1004,
+  "scope": "All test targets enabled by evm for Core and Consensus typechecked. This executes no test; other features/crates and later source are excluded. Merkle source-preparation runtime is still building. Native Assignment/Case, real-model PositivePassed, Gate C, settlement and credit remain incomplete.",
+  "artifacts_sha256": {
+    "misaka-positive-efb8862fc-check.log": "312c75a3456ed4a056c893145723d138003f687180ff4e684b78cc71c85a83fa",
+    "misaka-positive-efb8862fc-check.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "misaka-positive-efb8862fc-source.txt": "7e0db07f02d8fcc38ed566cf439a0911ff3320b141c26f55809ec3d457b78dd2",
+    "misaka-positive-efb8862fc-verify.sh": "e2317850f42c7541daaae4d23aa8f3e2bc02c73ddbb7747596b2a52d14e1a268"
+  }
+}
