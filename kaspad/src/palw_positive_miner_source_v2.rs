@@ -27,6 +27,16 @@ pub(crate) enum SourceJournalOpenV2 {
     Resume,
     DiscardUnanchoredTail,
 }
+pub(crate) struct NativeSourceOpenV2 {
+    pub session: ConsensusProxy,
+    pub request: RequestId,
+}
+pub(crate) struct SourceRecoveryV2<'a> {
+    pub database: &'a RocksAnchorDbV2,
+    pub journal: &'a Path,
+    pub limits: JournalLimitsV2,
+    pub mode: SourceJournalOpenV2,
+}
 pub(crate) struct SignedSourceCaseV2<'a> {
     pub admission: &'a AdmissionContext,
     pub result: MinerResultCommit,
@@ -36,8 +46,8 @@ pub(crate) struct SignedSourceCaseV2<'a> {
     pub now: u64,
 }
 
-/// Concrete own-node path: authenticated local result -> exclusive protected
-/// case lease -> write-ahead journal -> actual-session native duty -> G14 units.
+/// Concrete own-node path: authenticated result -> actual-session native duty
+/// -> exclusive protected case lease -> write-ahead journal -> G14 units.
 /// No method treats these local units as accepted service or a payable claim.
 pub(crate) struct NativeMinerSourceV2<'p> {
     result: MinerResultCommit,
@@ -45,15 +55,27 @@ pub(crate) struct NativeMinerSourceV2<'p> {
 }
 impl<'p> NativeMinerSourceV2<'p> {
     pub(crate) fn open(
+        native: NativeSourceOpenV2,
         signed: SignedSourceCaseV2<'_>,
         providers: &'p [&'p dyn StoredProviderV2],
         process_limits: ProcessLimitsV2,
-        database: &RocksAnchorDbV2,
-        journal: &Path,
-        journal_limits: JournalLimitsV2,
-        mode: SourceJournalOpenV2,
+        recovery: SourceRecoveryV2<'_>,
     ) -> Result<Self, MinerErrorV2> {
-        // Authenticate before even occupying the immutable protected case slot.
+        Self::open_resolved(signed, providers, process_limits, recovery, |result| {
+            NativeSourceDutyV2::resolve(native.session, native.request, result)
+        })
+    }
+
+    // Private seam for testing native refusal before any durable namespace is
+    // occupied. Production always supplies the actual own-node resolver above.
+    fn open_resolved(
+        signed: SignedSourceCaseV2<'_>,
+        providers: &'p [&'p dyn StoredProviderV2],
+        process_limits: ProcessLimitsV2,
+        recovery: SourceRecoveryV2<'_>,
+        resolve: impl FnOnce(&MinerResultCommit) -> Result<NativeSourceDutyV2, MinerErrorV2>,
+    ) -> Result<Self, MinerErrorV2> {
+        // Authenticate before the native archive lookup as well as storage.
         let inner = MinerResponderV2::new(
             signed.admission,
             signed.result.clone(),
@@ -64,14 +86,21 @@ impl<'p> NativeMinerSourceV2<'p> {
             providers,
             process_limits,
         )?;
-        let anchors = database.bind(&inner)?;
-        let responder = match mode {
-            SourceJournalOpenV2::Create => DurableMinerResponderV2::create(journal, inner, journal_limits, anchors),
-            SourceJournalOpenV2::Resume => DurableMinerResponderV2::resume(journal, inner, journal_limits, anchors),
+        // A valid local signature alone cannot pin this immutable namespace.
+        // Different signed outputs share a CaseId; an unadmitted one must not
+        // prevent the actual accepted Result from opening its protected store.
+        let duty = resolve(&signed.result)?;
+        let anchors = recovery.database.bind(&inner)?;
+        let responder = match recovery.mode {
+            SourceJournalOpenV2::Create => DurableMinerResponderV2::create(recovery.journal, inner, recovery.limits, anchors),
+            SourceJournalOpenV2::Resume => DurableMinerResponderV2::resume(recovery.journal, inner, recovery.limits, anchors),
             SourceJournalOpenV2::DiscardUnanchoredTail => {
-                DurableMinerResponderV2::resume_discarding_unanchored_tail(journal, inner, journal_limits, anchors)
+                DurableMinerResponderV2::resume_discarding_unanchored_tail(recovery.journal, inner, recovery.limits, anchors)
             }
         }?;
+        // Storage/recovery may span a publication or import transition. Keep
+        // its local costs, but release no service session on the stale view.
+        duty.authorize(&signed.result)?;
         Ok(Self { result: signed.result, responder })
     }
 
@@ -170,3 +199,7 @@ fn source_error(error: PositiveSourceReadErrorV2) -> MinerErrorV2 {
         PositiveSourceReadErrorV2::Binding | PositiveSourceReadErrorV2::Range => MinerErrorV2::Binding,
     }
 }
+
+#[cfg(all(test, unix))]
+#[path = "palw_positive_miner_source_v2_tests.rs"]
+mod tests;
