@@ -102,3 +102,24 @@ project-quota image. Logs and exit files are
 the native executable hash will be recorded in
 `/tmp/misaka-positive-source-8aaf-runtime.sha256` after its build.
 No runtime success is asserted yet. The full original goal remains open.
+
+## Strict Clippy result and complete correction candidate
+
+The `8aaf6ac4c` strict library Clippy run exited 101 with ten diagnostics:
+four clone-on-Copy uses, four nonminimal boolean expressions, one unnecessary
+filter_map and one redundant borrowed comparison. See the
+[complete Clippy log](results/8aaf-clippy.log). The earlier successful test-target
+typecheck result remains valid for that exact source; it is not Clippy success.
+
+`57b252442` fixes the first six diagnostics and `806a07f13` fixes the remaining
+four emitted later in the completed run. Changes use direct copies, equivalent
+Option predicates, a filter preserving the original ordinal iterator, and a
+borrow-equivalent comparison. No lint suppression or policy changes were added.
+The full correction candidate `806a07f13` is queued behind the existing
+verification owner. Its guarded script runs strict library Clippy first,
+all Core/Consensus test-target checks second, and actual generation and relay
+execution only if every preceding stage succeeds. Stage logs and exit files
+are `/tmp/misaka-positive-806a07f13-{clippy,check,generation,relay}.{log,exit}`;
+the script records its exact source and executable hash separately. These
+results remain pending. Candidates after `f5c463f70` are still local and have
+not been pushed to `pre`.
