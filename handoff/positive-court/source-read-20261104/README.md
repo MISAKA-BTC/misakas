@@ -1,5 +1,25 @@
 # Native source read connection candidate — 2026-11-04
 
+## Frozen f9 Batch Core regression passed
+
+`f9a4a9c80` built its Core unit-test executable in 69m55s and passed the
+single focused `batch_native_dispatch_opens_and_finishes_the_same_rooted_demand`
+test in 2.68s (exit 0, 5,900 other tests filtered out). The result now replaces
+the earlier pending queue status below. The post-run binary SHA256 is
+`ccacfce66004821a4e9ed9bd3bcc5b1cdf5e22f0729a4eaa07e74692b04c5749`.
+[Exact result, scope and artifact hashes](results/f9-batch/result.json)
+accompany the original build/test log, exit, source identity and queue script.
+
+This is a Core fold test using constructed populated/ValidatedTransaction
+inputs, not ordinary consensus Full UTXO/script validation. It opens a rooted
+Batch and completes one planned parameter response; full numerical material
+is intentionally incomplete and verification refuses. A separately inserted
+receipt tests only reading/terminal refusal and is not an accepted computation
+verdict. It does not establish successful Positive Assignment/Case intake,
+real-model PositivePassed, Gate C, settlement or credit. The guarded queue
+has advanced to clean `efb8862fc` and started its strict Core/Consensus Clippy;
+those later check and runtime results remain pending.
+
 ## Frozen 50d legacy native regression: four passed
 
 The existing `50d5eda4c` consensus test binary passed four additional exact
@@ -209,7 +229,7 @@ guarded IBM script waits for that owner's exit and requires successful
 Clippy, test-target checking, generation tests and relay execution before
 selecting the clean `f9a4a9c80` source and running the focused Core Batch test.
 The queue is `/tmp/misaka-positive-f9a4a9c80-verify.sh`; its log and result are
-`/tmp/misaka-positive-f9a4a9c80-batch.{log,exit}`. Runtime success is pending,
+`/tmp/misaka-positive-f9a4a9c80-batch.{log,exit}`. At queue creation runtime success was pending (now superseded by the f9 pass above),
 and the full Assignment/Case, three-process, certification and settlement
 goal is still open.
 
