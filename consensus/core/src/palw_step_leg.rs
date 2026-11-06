@@ -1282,13 +1282,16 @@ pub fn step_opening_capped_v1(
 // Leaf preimages
 // ---------------------------------------------------------------------------------------------
 
-/// One committed node-output tile: exact canonical f32-LE bytes at pinned coordinates.
+/// Step-tile byte carrier with the existing field layout. Legacy consumers require
+/// version 1 and four-byte lanes. Explicit TIR wide-step APIs additionally interpret
+/// version 2/eight-byte lanes only at the canonical final post I64 logits node;
+/// this DTO alone grants no width/profile acceptance to a legacy consumer.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PalwStepTileLeafV1 {
     pub version: u16,
     pub coord: PalwStepCoordinateV1,
     pub value_count: u32,
-    /// `4 × value_count` little-endian f32 bytes.
+    /// Opaque lane bytes; the selected explicit profile validates width and count.
     pub values_le: Vec<u8>,
 }
 
@@ -1300,6 +1303,8 @@ pub fn step_tile_leaf_hash_ctx_v1(ctx: &PalwJobContextV2, shape_profile_hash: &H
     step_tile_leaf_hash_v1(&ctx.leaf_context_hash_v1(leaf.coord.call_index, leaf.coord.position), shape_profile_hash, leaf)
 }
 
+/// Raw data identity over version/context/class/coordinates/count/bytes. Hashing a
+/// carrier does not validate its lane width or authorize any consumer/profile.
 pub fn step_tile_leaf_hash_v1(job_context_hash: &Hash64, shape_profile_hash: &Hash64, leaf: &PalwStepTileLeafV1) -> Hash64 {
     let mut w = Writer::new();
     w.u16(leaf.version);

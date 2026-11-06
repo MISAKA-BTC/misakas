@@ -230,6 +230,12 @@ pub fn palw_tir_class_record_v1(
     artifact_root: &Hash64,
 ) -> misaka_palw_tir::TirResult<(PalwTirClassRecordV1, TirProgramV1)> {
     let program = class.decode_program()?;
+    if program.wide_logits_q24() {
+        return Err(misaka_palw_tir::TirError::new(
+            misaka_palw_tir::TirErrorKind::NormalForm,
+            "wide Q24 class records require an explicit v2 record factory, not legacy job facts",
+        ));
+    }
     let class_id = class.class_id(artifact_root);
     let post = &program.blocks[program.schedule.post as usize];
     let logits_vocab = post.nodes[program.logits as usize].out.elements_at(1);
@@ -272,11 +278,11 @@ pub fn palw_tir_binding_strip_program_v1(binding: &mut crate::palw_tir_step_v1::
     binding.class.program = Vec::new();
 }
 
-fn tir_program_error(e: misaka_palw_tir::TirError) -> PalwClassAdmissionError {
+pub(crate) fn tir_program_error(e: misaka_palw_tir::TirError) -> PalwClassAdmissionError {
     PalwClassAdmissionError::TirProgram(e.to_string())
 }
 
-fn exceeds(what: &'static str, got: u64, ceiling: u64) -> Result<(), PalwClassAdmissionError> {
+pub(crate) fn exceeds(what: &'static str, got: u64, ceiling: u64) -> Result<(), PalwClassAdmissionError> {
     if got > ceiling { Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) } else { Ok(()) }
 }
 
@@ -398,7 +404,7 @@ pub const PALW_TIR_DISSECT_MOVE_FRAME_BYTES_V1: u64 = 1 + 64 + 4 + 4 + 4_627 + 6
 ///   (the held clock opens at the accusation's leaf: no ladder rounds), over `max_context` positions
 ///   in `h_tile` tiles — the legacy fused row's window rule applied to this site.
 #[allow(clippy::too_many_arguments)]
-fn palw_tir_dissected_cone_admits_v1(
+pub(crate) fn palw_tir_dissected_cone_admits_v1(
     bundle: &PalwConsensusParamsV2,
     rules: &PalwTirAdmissionRulesV1,
     class: &PalwTirClassV1,

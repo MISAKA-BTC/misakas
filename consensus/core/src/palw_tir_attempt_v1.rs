@@ -65,6 +65,12 @@ impl PalwTirJobFactsV1 {
     /// [`Self::of`], decoding the class's program strictly first.
     pub fn of_class(class: &PalwTirClassV1, class_id: Hash64) -> misaka_palw_tir::TirResult<Self> {
         let program = class.decode_program()?;
+        if program.wide_logits_q24() {
+            return Err(misaka_palw_tir::TirError::new(
+                misaka_palw_tir::TirErrorKind::NormalForm,
+                "wide Q24 jobs require the explicit v2 profile resolver, not legacy tiled=false facts",
+            ));
+        }
         Ok(Self::of(class, &program, class_id))
     }
 

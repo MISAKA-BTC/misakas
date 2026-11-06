@@ -1,0 +1,23 @@
+diff --git a/consensus/core/src/lib.rs b/consensus/core/src/lib.rs
+index 502b9d4f0..02ba6543c 100644
+--- a/consensus/core/src/lib.rs
++++ b/consensus/core/src/lib.rs
+@@ -773,6 +773,10 @@ pub mod palw_terminal;
+ pub mod palw_terminal_carriage_v1;
+ /// RFC-0002 Phase F step F6: admission v10 — the gate an IR class registration passes, its builder and the node's preflight.
+ pub mod palw_tir_admission_v1;
++/// Explicit pure wide-only TIR admission data; no native dispatch or activation.
++pub mod palw_tir_admission_v2;
++/// Chain-selected legacy/wide registration routing; no object or environment selector.
++pub mod palw_tir_registration_dispatch_v1;
+ /// RFC-0002 Phase F (F3): the TIR inventory — the artifact layout an IR class's `artifact_root` commits to.
+ pub mod palw_tir_artifact_v1;
+ /// RFC-0002 Phase F step F6: an IR class's attempt job — the canonical job, the yardstick context and the job an anchor names (J5).
+@@ -781,6 +785,7 @@ pub mod palw_tir_attempt_v1;
+ pub mod palw_tir_profile_resolver_v2;
+ /// Explicit profile-aware schema-1 class record data; no native admission or activation.
+ pub mod palw_tir_class_record_v2;
++pub mod palw_tir_row_profile_v2;
+ /// RFC-0002 Phase F step F6: the IR family certifier — drill evidence graded by the shipped IR court into a family over the program's primitives.
+ pub mod palw_tir_certify_v1;
+ /// RFC-0002 Phase F step F2: an IR class — the program, its commitment layout, its identity and its registration carriage.

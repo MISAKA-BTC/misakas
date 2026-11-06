@@ -139,6 +139,7 @@ impl PalwStateParamsV2 {
             final_lock_life_from_daa: None,
             floor_refusal_retry_from_daa: None,
             tir_from_daa: None,
+            tir_wide_registration_fence: None,
             gen_from_daa: None,
             fp_job_v5_from_daa: None,
             gen_max_inflight_claims: [0; 4],
@@ -172,6 +173,9 @@ impl PalwStateParamsV2 {
             reporter_income_from_daa: None,
             material_income_from_daa: None,
             settlement_once_from_daa: None,
+            family_supplier_from_daa: None,
+            verifier_watch_v1: None,
+            verifier_watch_maturity_v1: None,
             paid_claim_trap_from_daa: None,
             native_liability_horizon_from_daa: None,
             monetary_material: None,
@@ -374,7 +378,33 @@ impl PalwStateParamsV2 {
     /// nothing else (and by fixtures); `None` where the fence is not armed.
     pub fn with_tir_from_daa(mut self, from_daa: Option<u64>) -> Self {
         self.tir_from_daa = from_daa;
+        self.tir_wide_registration_fence = None;
         self
+    }
+
+    /// Atomically mirror the selected Params fence. Only court2 retains a full
+    /// runtime mirror; narrow settings keep their historical serialized bytes.
+    pub fn with_tir_registration_fence(mut self, selected: Option<crate::palw_tir_v1::PalwTirFenceV1>) -> Self {
+        let selected = selected.filter(|f| f.activation != crate::config::params::ForkActivation::never());
+        self.tir_from_daa = selected.map(|f| f.activation.daa_score());
+        self.tir_wide_registration_fence = selected.filter(|f| f.court_version == 2);
+        self
+    }
+
+    /// Runtime mirror data, checked against the complete Params fence at setup.
+    pub fn tir_wide_registration_fence(&self) -> Option<crate::palw_tir_v1::PalwTirFenceV1> {
+        self.tir_wide_registration_fence
+    }
+
+    /// Wide registration selection requires the original activation and the
+    /// legacy height mirror to agree. No object or environment flag participates.
+    pub fn tir_wide_registration_fence_at(&self, daa_score: u64) -> Option<crate::palw_tir_v1::PalwTirFenceV1> {
+        self.tir_wide_registration_fence.filter(|f| {
+            f.court_version == 2
+                && f.activation != crate::config::params::ForkActivation::never()
+                && self.tir_from_daa == Some(f.activation.daa_score())
+                && f.activation.is_active(daa_score)
+        })
     }
 
     /// `Params::palw_tir_v1`'s height, if the network arms it (the mirror).
@@ -991,6 +1021,17 @@ impl PalwStateParamsV2 {
     }
     pub fn material_income_active_at(&self, daa: u64) -> bool {
         self.reporter_income_active_at(daa) && self.material_income_from_daa.is_some_and(|from| daa >= from)
+    }
+
+    pub fn with_family_supplier_from(mut self, from: Option<u64>) -> Self {
+        self.family_supplier_from_daa = from;
+        self
+    }
+    pub fn family_supplier_from(&self) -> Option<u64> {
+        self.family_supplier_from_daa
+    }
+    pub fn family_supplier_active_at(&self, daa: u64) -> bool {
+        self.family_supplier_from_daa.is_some_and(|from| daa >= from)
     }
 
     /// RFC-0008 once-only settlement registry mirror (`Params::palw_settlement_once_v1`).

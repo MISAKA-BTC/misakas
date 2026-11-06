@@ -1,0 +1,256 @@
+{
+  "schema": "a3-current50fe-qualified-executable-lossless-preservation-v1",
+  "completed_utc": "2026-11-01T20:34:49.550616+00:00",
+  "source": "50fe43e4c9ded609b1be9ab51125caa33ffffd8b",
+  "scope": "Only current50fe Core54 outercases; nested SourceFacade child1 excluded, no other runtime qualification",
+  "failed_probe_history": "Initial preservation precheck expected PASS on runtime-only manifests; guard stopped before archive writes. Exact RUNTIME_ONLY_PASS+closedUTC+all nonzero successful runs verified and accepted.",
+  "original": {
+    "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-e0bff1a98c19079f",
+    "bytes": 247609528,
+    "device": 16777234,
+    "inode": 48401835,
+    "nlink": 1,
+    "mtime_ns": 1793565060996792788,
+    "ctime_ns": 1793565060996792788,
+    "mode": "0o755",
+    "sha256": "8b168559a9b0c250d06a411ed685066e11d1f4384c9c2e6a5eef27422302fbb6",
+    "uuids": [
+      "fb2b1ae1-6183-37b6-9545-1187bfb3dc06"
+    ]
+  },
+  "original_ALIAS_RETAINED": true,
+  "gzip": {
+    "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-50fe-preserved-20261102/kaspa_consensus_core-e0bff1a98c19079f.gz",
+    "sha256": "fa793624cd931dabc6002238c0a4dedee7f0826a9dda6c89d1f27a44615730da",
+    "bytes": 59057472,
+    "mode": "0o444"
+  },
+  "actual_new_file_restoration": {
+    "path": "/Users/wata/Downloads/MISAKA-testnet/target/history-qualified-core54-50fe-preserved-20261102/kaspa_consensus_core-e0bff1a98c19079f.actual-new-restore.tmp",
+    "bytes": 247609528,
+    "device": 16777234,
+    "inode": 48402178,
+    "nlink": 1,
+    "mtime_ns": 1793565285765761700,
+    "ctime_ns": 1793565285766755204,
+    "mode": "0o755",
+    "sha256": "8b168559a9b0c250d06a411ed685066e11d1f4384c9c2e6a5eef27422302fbb6",
+    "uuids": [
+      "fb2b1ae1-6183-37b6-9545-1187bfb3dc06"
+    ]
+  },
+  "restoration_temporary_removed": true,
+  "restoration_executed": false,
+  "qualification_manifests": [
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102.json",
+      "sha256": "b575b1cdde0c100e90a460f2a10d18514c09a35176fd65cfd20229385204f791"
+    }
+  ],
+  "raw_build_runtime_identity_logs": [
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-core-build.jsonl",
+      "sha256": "95fd1fd9a49ba30ee07a1a5a874bcb500a02075047d61bf7b86111754951c10c",
+      "kind": "buildlog"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-native_dispatch_and_full_mirror.log",
+      "sha256": "07fa0d5e05699918548f4338ea872d471795365c6c746e6cad3d5d46fe857d05",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-native_dispatch_and_full_mirror-list.log",
+      "sha256": "3cc794842e43698c3c28283d06f4b25a3572ce3152843a3afabb859e21acd3b3",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-known_wide_legacy_attempts_refuse_before_writes_with_mesh_off_or_on.log",
+      "sha256": "72f616f472703c7afaad17bf0d4b73ab68d99e355d1b21876cff1f6e79be051f",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-known_wide_legacy_attempts_refuse_before_writes_with_mesh_off_or_on-list.log",
+      "sha256": "11be58859aed042dfcaa253cba3609c3797bba7484baca52669c64813525dea4",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-own_and_merged_legacy_wide_claim_generation_refuse_independently_of_mesh.log",
+      "sha256": "183168d1b94c67b19c7d1ae37884c33a2838c5c9048b28871d0aa0abcc03c4d8",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-own_and_merged_legacy_wide_claim_generation_refuse_independently_of_mesh-list.log",
+      "sha256": "f3bbd6dd0d6701530edfca089850798a189eb3e45b5c8178e683a853ec9a504f",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off.log",
+      "sha256": "387b8ff7a19fa9410368fad07e0b00d656e8493d7cfe07359c929f61f4c605d3",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-ordinary_wide_free_prompt_refuses_even_with_derived_and_original_fences_off-list.log",
+      "sha256": "59e852f67ce43fd95546a5bfc05d369edf1d54938f56dd1bbc63ae54c4e020c1",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-the_version_22_state_root_golden_vectors.log",
+      "sha256": "a2175e8f9340e9645f5d701b1f7c68c3f67e9e47d1b1422e1aa3b50715ec765d",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-the_version_22_state_root_golden_vectors-list.log",
+      "sha256": "8d2d667d39fc4a3ed38a3513e9612af71f38a8fb217681f97022d50025f8b640",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-carriage_round_trips_bit_for_bit_and_refuses_tampering.log",
+      "sha256": "c8d3e5780b16d434cd10312308a2617f6dd881f506f6519ebf27763ee963379d",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-carriage_round_trips_bit_for_bit_and_refuses_tampering-list.log",
+      "sha256": "56a4cacf5f15432b49c9e394c3451b2bdd04799ce47ff3b37218675bedb13f15",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first.log",
+      "sha256": "caa2b293e035b534626beb0f7c0e7dc2eba8050300e8b4fe05d4f3670dc91a1e",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first-list.log",
+      "sha256": "96bd9df18d17aac1db37a0b5220b825c3e1eafd7b8e478719c77f8c6632a2c3d",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-row_profile_including_two_new_denials.log",
+      "sha256": "bb973a385431b22e2d64a99a6a8799f9e19fc7f7bf16f0e4c13e1d25f52d371e",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-row_profile_including_two_new_denials-list.log",
+      "sha256": "c22a14012bc41d7f40cc2429e5fb8df75632f5175a9d93bf8d8ee0e388625636",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-full_relation_10_old_8_stream.log",
+      "sha256": "e6b490d0324b12738878b43563e230107cc08979aede1f1ad0a937e1a2bad05a",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-full_relation_10_old_8_stream-list.log",
+      "sha256": "8bb56b164907827fd62dac2fa4e705553d7e264a00b0d18ef2c92120e74cc103",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-source_facade_8.log",
+      "sha256": "89006bb3c16350c44ddf691e62607059e1efcaf73bf5b16152da2c67e7a62613",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-source_facade_8-list.log",
+      "sha256": "f17ec054085f88008cb8bf95c16c53671b53ae73dd1a014501769b3be84a78b9",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-source_observation_ports_2.log",
+      "sha256": "b0efa6a33f2252f613df74e91e98defedf0f4ba54e9312a5db0dfb1b8459077d",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-source_observation_ports_2-list.log",
+      "sha256": "e144d9f83604bb6d7f501f22a1548bd1ec2ac892b5022fea43ad6724443ccd4a",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-old_source_profile_3.log",
+      "sha256": "24f73ce1ce5c10338961d9499c164a7d207bf8a1ff4e63bd8795aa7840f777bc",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-old_source_profile_3-list.log",
+      "sha256": "3d3ca121214c0fb1fc060111a6b325b897ce0b960456d2644144018e5baef040",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-old_vec_1.log",
+      "sha256": "a1e0e14608765d1ab46636e5f572adca2fe79b5acf8bb0cbe45db1f8532f8dd3",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-old_vec_1-list.log",
+      "sha256": "6b2c64c2d226ed8976e449b14db7743fc8d4c468181afac242261f6a38cf944d",
+      "kind": "identitylist"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-old_vec_2.log",
+      "sha256": "0b8129a5f189560438566085af0f5cc33c8c3a16cdfc53c26847e661fda09f95",
+      "kind": "runtime"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-old_vec_2-list.log",
+      "sha256": "98945a2a1054c7094ad0243742586942e2629337e5e769be17454f00809e819e",
+      "kind": "identitylist"
+    }
+  ],
+  "actual_Cargo_compiler_artifact": {
+    "log": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/core54-focused-50fe-20261102-core-build.jsonl",
+    "log_sha256": "95fd1fd9a49ba30ee07a1a5a874bcb500a02075047d61bf7b86111754951c10c",
+    "line": 424,
+    "line_sha256": "1b5ae07a78b14afcd7e9fb844edb71316b0c2fa7757d166d65b3cac1cfeed358",
+    "package_id": "path+file:///Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/consensus/core#kaspa-consensus-core@1.1.0",
+    "profile": {
+      "opt_level": "0",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    },
+    "filenames": [
+      "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-e0bff1a98c19079f"
+    ],
+    "executable": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-e0bff1a98c19079f"
+  },
+  "focused_prerequisite": null,
+  "independent_audit": null,
+  "Root_plan": {
+    "path": "/tmp/positive-a0-50fe-Native22-qualified-binary-archive-plan.json",
+    "sha256": "e8aab3c3689969ac7568466c7706185fe1ddca3f41fba572a92889d1d2b0a450"
+  },
+  "source_native_pin_recheck": {
+    "Core54": {
+      "source_pin_count": 4921,
+      "native_pin_count": 21
+    },
+    "Nodefocused": {
+      "source_pin_count": 4921,
+      "native_pin_count": 19
+    },
+    "Nodescopes": [
+      {
+        "source_pin_count": 4921,
+        "native_pin_count": 19
+      },
+      {
+        "source_pin_count": 4921,
+        "native_pin_count": 19
+      }
+    ]
+  },
+  "pre_space": {
+    "available_bytes": 1975746560,
+    "df_k": "Filesystem   1024-blocks      Used Available Capacity iused    ifree %iused  Mounted on\n/dev/disk3s1   482797652 457457160   1929440   100% 3236345 19294400   14%   /System/Volumes/Data"
+  },
+  "post_space": {
+    "available_bytes": 1916616704,
+    "df_k": "Filesystem   1024-blocks      Used Available Capacity iused    ifree %iused  Mounted on\n/dev/disk3s1   482797652 457514904   1871696   100% 3236346 18716960   15%   /System/Volumes/Data"
+  },
+  "final_lsof": {
+    "exit": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "alias_count_in_exact_target_roots": 1,
+  "no_actions": "No alias deletion/current source/cacheRust/model/native/raw/FP/.d/other executable changes; no Cargo/CPP/model/runtime/debugger/signals/checkouts"
+}

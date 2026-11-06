@@ -1,0 +1,60 @@
+{
+  "utc": "2026-10-26T06:41:07Z",
+  "host": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+  "load": [
+    20.013671875,
+    19.3828125,
+    17.2431640625
+  ],
+  "files": [
+    {
+      "path": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/legacy/dolphin3.0-qwen25-1.5b-a16-32k-precise.palwart",
+      "bytes": 1811942348,
+      "sha256": "8d88abf0cf46d86bed52466328690dbfebf6b49efb2b278a9648f947c4843da6",
+      "recorded_sha256": "8d88abf0cf46d86bed52466328690dbfebf6b49efb2b278a9648f947c4843da6",
+      "matches": true,
+      "magic_hex": "50414c5742304132",
+      "hash_read_wall_seconds": 1.221122834
+    },
+    {
+      "path": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/out/Dolphin3.0-Qwen2.5-1.5B-PALW.palwart",
+      "bytes": 5433,
+      "sha256": "4c039d64aeb87802470522ef1904cc64ef1377c948d0b05bd3da45541f68b1b0",
+      "recorded_sha256": "4c039d64aeb87802470522ef1904cc64ef1377c948d0b05bd3da45541f68b1b0",
+      "matches": true,
+      "magic_hex": "50414c5741525433",
+      "hash_read_wall_seconds": 0.003728791999999981
+    },
+    {
+      "path": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/out/Dolphin3.0-Qwen2.5-1.5B-PALW.00000.palwseg",
+      "bytes": 1826164766,
+      "sha256": "7c3d4b18919afc410b79dd8d36a9443df6d8d4d8f1161dfd8e3e08db31056223",
+      "recorded_sha256": "7c3d4b18919afc410b79dd8d36a9443df6d8d4d8f1161dfd8e3e08db31056223",
+      "matches": true,
+      "magic_hex": "50414c5742304132",
+      "hash_read_wall_seconds": 1.410134583
+    },
+    {
+      "path": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/calib/eval-a16-long-tokens.json",
+      "bytes": 152175,
+      "sha256": "41069932f1940b3d7a59b54647bff7fe81fc03de9582b999fe57c2e0bd119d2d",
+      "recorded_sha256": null,
+      "matches": null,
+      "magic_hex": "7b2273657175656e",
+      "hash_read_wall_seconds": 0.0007688329999999688
+    },
+    {
+      "path": "/Users/wata/Downloads/genesis-models/work/01-dolphin3-qwen25-1p5b/manifest.json",
+      "bytes": 3606,
+      "sha256": "f659bca3f69ebd62f4b21b57622621c2b9d1a81fc747a8f76a3767681b40907c",
+      "recorded_sha256": null,
+      "matches": null,
+      "magic_hex": "7b0a202273636865",
+      "hash_read_wall_seconds": 0.00023304200000007214
+    }
+  ],
+  "notes": [
+    "Hash reads warm the filesystem cache; not cold-network-fetch evidence.",
+    "User confirmed no 9B artifact; Dolphin is measured separately."
+  ]
+}

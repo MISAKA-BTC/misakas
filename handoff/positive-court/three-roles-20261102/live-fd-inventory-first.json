@@ -1,0 +1,18 @@
+{
+  "observed_at_utc": "2026-11-02T06:05:59.532422+00:00",
+  "processes": {
+    "97153": {
+      "returncode": 0,
+      "stdout": "p97153\nfcwd\ntDIR\nn/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet\nftxt\ntREG\nn/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_wide_material_v2-b6cae2802249778d\nftxt\ntREG\nn/usr/lib/dyld\nf0\ntCHR\nn/dev/null\nf1\ntREG\nn/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/three-roles-20261102/pythia-three-first.log\nf2\ntREG\nn/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/three-roles-20261102/pythia-three-first.log\nf3\ntREG\nn/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/model.palwtir.private-wide-q24.palwtir\nf4\ntREG\nn/private/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/.tmpLueDx6\nf5\ntREG\nn/private/var/folders/p_/72yk2mzx0c59xvl8kpvpqg980000gn/T/.tmppEqhCz\nf6\ntunix\nn->0xcc90af0468107af4\n",
+      "stderr": ""
+    },
+    "97188": {
+      "returncode": 0,
+      "stdout": "p97188\nfcwd\ntDIR\nn/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet\nftxt\ntREG\nn/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_wide_material_v2-b6cae2802249778d\nftxt\ntREG\nn/usr/lib/dyld\nf0\ntunix\nn->0xfe93153d02b4a240\nf1\ntREG\nn/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/three-roles-20261102/pythia-three-first.log\nf2\ntREG\nn/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/three-roles-20261102/pythia-three-first.log\n",
+      "stderr": ""
+    }
+  },
+  "miner_pid": 97156,
+  "miner_already_exited": true,
+  "scope": "point-in-time OS descriptor observation; not a claim about all future execution"
+}

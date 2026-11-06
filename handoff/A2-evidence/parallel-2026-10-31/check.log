@@ -1,0 +1,197 @@
+    Checking libc v0.2.186
+    Checking cfg-if v1.0.0
+    Checking serde_core v1.0.228
+    Checking crossbeam-utils v0.8.20
+    Checking byteorder v1.5.0
+    Checking pin-project-lite v0.2.14
+    Checking memchr v2.7.4
+    Checking once_cell v1.20.2
+    Checking zerocopy v0.7.35
+    Checking serde v1.0.228
+    Checking futures-core v0.3.31
+    Checking itoa v1.0.11
+    Checking zmij v1.0.23
+    Checking concurrent-queue v2.5.0
+    Checking bitflags v2.9.4
+    Checking serde_json v1.0.151
+    Checking futures-io v0.3.31
+    Checking parking v2.2.1
+    Checking getrandom v0.2.15
+    Checking borsh v1.5.1
+    Checking slab v0.4.9
+    Checking wasm-bindgen v0.2.100
+    Checking event-listener v5.3.1
+    Checking ppv-lite86 v0.2.20
+    Checking thiserror v1.0.64
+    Checking event-listener-strategy v0.5.2
+    Checking value-bag v1.9.0
+    Checking fastrand v2.1.1
+    Checking log v0.4.22
+    Checking typenum v1.17.0
+    Checking core-foundation-sys v0.8.7
+    Checking num-traits v0.2.19
+    Checking generic-array v0.14.7
+    Checking futures-lite v2.3.0
+    Checking errno v0.3.9
+    Checking pin-utils v0.1.0
+    Checking futures-sink v0.3.31
+    Checking tracing-core v0.1.36
+    Checking tracing v0.1.44
+    Checking futures-channel v0.3.31
+    Checking rustix v0.38.37
+    Checking js-sys v0.3.77
+    Checking async-channel v2.3.1
+    Checking rand_core v0.6.4
+    Checking either v1.13.0
+    Checking async-task v4.7.1
+    Checking atomic-waker v1.1.2
+    Checking futures-task v0.3.31
+    Checking subtle v2.6.1
+    Checking futures-util v0.3.31
+    Checking piper v0.2.4
+    Checking polling v3.7.3
+    Checking getrandom v0.3.4
+    Checking block-buffer v0.10.4
+    Checking crypto-common v0.1.6
+    Checking iana-time-zone v0.1.61
+    Checking async-lock v3.4.2
+    Checking atty v0.2.14
+    Checking event-listener v2.5.3
+    Checking termcolor v1.4.1
+    Checking unicode-width v0.1.14
+    Checking lazy_static v1.5.0
+    Checking console v0.15.8
+    Checking hexplay v0.3.0
+    Checking async-io v2.3.4
+    Checking chrono v0.4.38
+    Checking digest v0.10.7
+    Checking rand_core v0.9.3
+    Checking blocking v1.6.1
+    Checking crossbeam-epoch v0.9.20
+    Checking async-executor v1.13.1
+    Checking smallvec v1.13.2
+    Checking downcast v0.11.0
+    Checking option-ext v0.2.0
+    Checking triggered v0.1.2
+    Checking bytes v1.11.1
+    Checking dirs-sys v0.4.1
+    Checking workflow-log v0.18.0
+    Checking async-global-executor v2.4.1
+    Checking crossbeam-deque v0.8.5
+    Checking tokio v1.54.1
+    Checking rand_chacha v0.9.0
+    Checking rlimit v0.10.2
+    Checking futures-executor v0.3.31
+    Checking async-channel v1.9.0
+    Checking web-sys v0.3.77
+    Checking rand_chacha v0.3.1
+    Checking kv-log-macro v1.0.7
+    Checking cpufeatures v0.2.14
+    Checking arrayref v0.3.9
+    Checking constant_time_eq v0.3.1
+    Checking arrayvec v0.7.6
+    Checking scopeguard v1.2.0
+    Checking lock_api v0.4.12
+    Checking blake2b_simd v1.0.2
+    Checking async-std v1.13.0
+    Checking rand v0.8.6
+    Checking futures v0.3.31
+    Checking rand v0.9.4
+    Checking rayon-core v1.12.1
+    Checking parking_lot_core v0.9.10
+    Checking dirs v5.0.1
+    Checking serde-wasm-bindgen v0.6.5
+    Checking faster-hex v0.9.0
+    Checking hash32 v0.3.1
+    Checking instant v0.1.13
+    Checking bs58 v0.5.1
+    Checking stable_deref_trait v1.2.0
+    Checking heapless v0.8.0
+    Checking workflow-core v0.18.0
+    Checking rayon v1.10.0
+    Checking parking_lot v0.12.3
+    Checking workflow-panic-hook v0.18.0
+    Checking memoffset v0.9.1
+    Checking wasm-bindgen-futures v0.4.50
+    Checking arc-swap v1.7.1
+    Checking workflow-wasm v0.18.0
+    Checking nix v0.28.0
+    Checking faster-hex v0.10.1
+    Checking sha2 v0.10.8
+    Checking num_cpus v1.16.0
+    Checking hax-lib v0.3.7
+    Checking sysinfo v0.31.4
+    Checking mac_address v1.1.7
+    Checking uuid v1.18.1
+    Checking itertools v0.13.0
+    Checking ipnet v2.10.1
+    Checking ryu v1.0.18
+    Checking ahash v0.8.11
+    Checking keccak v0.1.6
+    Checking rand_core v0.10.1
+    Checking rand v0.10.1
+    Checking libcrux-secrets v0.0.6
+    Checking hashbrown v0.17.0
+    Checking kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/utils)
+    Checking adler2 v2.0.0
+    Checking equivalent v1.0.1
+    Checking destructure_traitobject v0.2.0
+    Checking unsafe-any-ors v1.0.0
+    Checking indexmap v2.14.0
+    Checking kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/crypto/hashes)
+    Checking miniz_oxide v0.8.0
+    Checking thiserror v2.0.18
+    Checking libcrux-traits v0.0.8
+    Checking libm v0.2.8
+    Checking libcrux-intrinsics v0.0.8
+    Checking hashbrown v0.14.5
+    Checking itertools v0.11.0
+    Checking ordered-float v2.10.1
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/tir/core)
+    Checking libcrux-platform v0.0.3
+    Checking crc32fast v1.4.2
+    Checking unsafe-libyaml v0.2.11
+    Checking serde_yaml v0.9.34+deprecated
+    Checking flate2 v1.0.34
+    Checking libcrux-sha3 v0.0.10
+    Checking malachite-base v0.4.16
+    Checking serde-value v0.7.0
+    Checking nix v0.29.0
+    Checking derive_more v2.1.1
+    Checking typemap-ors v1.0.0
+    Checking anyhow v1.0.103
+    Checking thread-id v5.1.0
+    Checking base64ct v1.6.0
+    Checking log-mdc v0.1.0
+    Checking humantime v2.1.0
+    Checking mock_instant v0.6.0
+    Checking fnv v1.0.7
+    Checking unicode-segmentation v1.12.0
+    Checking log4rs v1.4.0
+    Checking password-hash v0.5.0
+    Checking libcrux-ml-dsa v0.0.10
+    Checking ctrlc v3.4.5
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/gen)
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/challenge)
+    Checking malachite-nz v0.4.16
+    Checking blake2 v0.10.6
+    Checking argon2 v0.5.3
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/kernel)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/math)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/core)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/crypto/addresses)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/crypto/merkle)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/panel)
+    Checking sha3 v0.10.8
+    Checking workflow-serializer v0.18.0
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/crypto/txscript/errors)
+    Checking kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/wasm/core)
+    Checking misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/tir/artifact)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/consensus/core)
+    Checking misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/endpoints)
+    Checking kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/crypto/txscript)
+    Checking misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/remote)
+    Finished `dev` profile [unoptimized] target(s) in 1m 31s

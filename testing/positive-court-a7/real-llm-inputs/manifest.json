@@ -1,0 +1,39 @@
+{
+  "schema": "misaka.a7.retained-natural-text-prompts.v1",
+  "source_commit": "4753ee4beae5e245095954c6ef6e9b96fa05f361",
+  "prompts": [
+    {
+      "model_directory": "HuggingFaceTB__SmolLM2-360M",
+      "source_calibration": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-360M/run/calibration.json",
+      "source_sha256": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "selection": "sequence index 0, first of the three previously saved natural-text excerpts; no new tokenization",
+      "prompt_file": "smollm2-360m.json",
+      "prompt_sha256": "6c1a7d347fbad6e1511bbc8d560ec610c170952e6dbff26a12369bc50c5a92c3",
+      "tokens": 16,
+      "decode_tokens_planned": 1,
+      "scope": "short local job, not maximum-context coverage"
+    },
+    {
+      "model_directory": "HuggingFaceTB__SmolLM2-135M",
+      "source_calibration": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/HuggingFaceTB__SmolLM2-135M/run/calibration.json",
+      "source_sha256": "616cd2c08043901407c062edff6389067709e4ef3ae2648d9e2e911f7e11a6d4",
+      "selection": "sequence index 0, first of the three previously saved natural-text excerpts; no new tokenization",
+      "prompt_file": "smollm2-135m.json",
+      "prompt_sha256": "6c1a7d347fbad6e1511bbc8d560ec610c170952e6dbff26a12369bc50c5a92c3",
+      "tokens": 16,
+      "decode_tokens_planned": 1,
+      "scope": "short local job, not maximum-context coverage"
+    },
+    {
+      "model_directory": "EleutherAI__pythia-70m",
+      "source_calibration": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/calibration.json",
+      "source_sha256": "978271f06419adee72e538aea6c97b0f4b0ff014ace3ccc5e988a6945ce30299",
+      "selection": "sequence index 0, first of the three previously saved natural-text excerpts; no new tokenization",
+      "prompt_file": "pythia-70m.json",
+      "prompt_sha256": "4c8cddb074ec598ad93a8e441dbd92f2cb10c9d3fc4f9a6b0bcaf14266a296f8",
+      "tokens": 16,
+      "decode_tokens_planned": 1,
+      "scope": "short local job, not maximum-context coverage"
+    }
+  ]
+}

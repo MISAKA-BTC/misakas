@@ -1,0 +1,484 @@
+{
+  "source_head": "cd25c24a7a097070246628be70f76dd816fdf332",
+  "scope": "Root-owned Rust library intermediates for TIR/core and reverse-dependent known PALW crates only. New R5 TIR node_cost and Core Vec/helper changes already applied make these previous-profile outputs rebuildable/stale. No binaries/raw/source/models/native archives/other owner cache touched. Actual A7 binary remains runnable and pinned; prior test exe archives are retained. No Rust rlib copy/restore.",
+  "files": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-08d2a89ac5296efd.rmeta",
+      "bytes": 69303984,
+      "inode": 48312774,
+      "mtime_ns": 1793541891307888790,
+      "sha256": "e837cc46fe4c488e47a492a163e55f386b44f71851d12bdc31b202113712033c"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rlib",
+      "bytes": 368140152,
+      "inode": 48314212,
+      "mtime_ns": 1793542516649595839,
+      "sha256": "78b6fc400ca80021093ed45260c3ac69db39d846ac871501625ad988a444e189"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rmeta",
+      "bytes": 119182752,
+      "inode": 48314152,
+      "mtime_ns": 1793542491368722519,
+      "sha256": "d5752fc1e5f367d844f4bdac267093149e4496e516213795ab15f7dffe8b64f1"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-b06a0af49abd5698.rlib",
+      "bytes": 368302600,
+      "inode": 48316490,
+      "mtime_ns": 1793543399669396213,
+      "sha256": "54ffb036149962ead5157be0bbda2d53469de52d7161b7ed5e8ab317d4581d13"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-b06a0af49abd5698.rmeta",
+      "bytes": 119182752,
+      "inode": 48316256,
+      "mtime_ns": 1793543360841248351,
+      "sha256": "f0ad6d8182ea3c79df3215b5d4455c4851d49c1ef2f20cab2d79c11014c3a87e"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-e07369eb66fcd971.rmeta",
+      "bytes": 69304736,
+      "inode": 48307922,
+      "mtime_ns": 1793540721588918149,
+      "sha256": "69ad2266f2f9c89666d621798c0de0f5e796fed1eda4522928a752b1c714901c"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-496a52934f11e0eb.rlib",
+      "bytes": 1038368,
+      "inode": 47937699,
+      "mtime_ns": 1793463000921276242,
+      "sha256": "72eb41d281942ef6d040325754d34556d8d111c4abd2d1a0366066026a6e2beb"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-496a52934f11e0eb.rmeta",
+      "bytes": 405486,
+      "inode": 47937690,
+      "mtime_ns": 1793463000847094502,
+      "sha256": "de4ce17bae2a51c41829dffa9ee771f34238e427e13613a84954d8d52b550f95"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-4e2768cd32349279.rlib",
+      "bytes": 1038488,
+      "inode": 48315812,
+      "mtime_ns": 1793543302591450870,
+      "sha256": "d8a9456316e6084605ecd241903af9af2b9c448d1e3c7fbdcda849587f781392"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-4e2768cd32349279.rmeta",
+      "bytes": 405486,
+      "inode": 48315802,
+      "mtime_ns": 1793543302523141555,
+      "sha256": "6adfc5b57fee9f41335d56e9b7e42e5a9e83713cab9438de3ffabbd858f8395c"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-5a8188cecd519df2.rmeta",
+      "bytes": 361486,
+      "inode": 47925859,
+      "mtime_ns": 1793462195966700919,
+      "sha256": "fc61369f5e652896e0d09ec4186dd0768f4b2ab363fb6aef798b9f83d5c9d322"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-6f677a4cfab8d523.rmeta",
+      "bytes": 361486,
+      "inode": 48312707,
+      "mtime_ns": 1793541885687705630,
+      "sha256": "fda8260e504aea4b4bfcea126a1579643266cd3d4c90aa2737ec6a1d82f79ed3"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-cf4eeaa200d75d48.rlib",
+      "bytes": 1038624,
+      "inode": 47925394,
+      "mtime_ns": 1793462112663169706,
+      "sha256": "eb376c6a59c24f2f797b5870eda0131b7666b0a6e77215312df37ca1ad4b2b22"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_gen-cf4eeaa200d75d48.rmeta",
+      "bytes": 405486,
+      "inode": 47925384,
+      "mtime_ns": 1793462112589653507,
+      "sha256": "ebd9f24505e6997f629ce0d2f62347d1fe6b33913b5f282fc56a46956eb691e3"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_kernel-0cf8c111fd7f99b4.rlib",
+      "bytes": 48478960,
+      "inode": 48316057,
+      "mtime_ns": 1793543316031114071,
+      "sha256": "a6cae940d79cffa362f0d5334bbe421412103b14cfcd11c8b91ab122ae0d3217"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_kernel-0cf8c111fd7f99b4.rmeta",
+      "bytes": 13686122,
+      "inode": 48316014,
+      "mtime_ns": 1793543309502527764,
+      "sha256": "f411a622f2b89c0e031fe9fdc400b1670f3cd0877979fb4e790dbd554d71e23f"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_kernel-83c29d78937188e9.rmeta",
+      "bytes": 7968731,
+      "inode": 48312732,
+      "mtime_ns": 1793541886201138002,
+      "sha256": "42daaf81466bbbda2762a1cbadb9f29b953b7196511bb3903e58043bfd9146b8"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_kernel-fc1467d1bac8ae21.rlib",
+      "bytes": 48468656,
+      "inode": 48314118,
+      "mtime_ns": 1793542448678530959,
+      "sha256": "5bf58f720302ac4a61d2e0fc40c35bb58be1d775acf8ec6b74867a81bb9cb0d4"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_kernel-fc1467d1bac8ae21.rmeta",
+      "bytes": 13686122,
+      "inode": 48314088,
+      "mtime_ns": 1793542441958035319,
+      "sha256": "6081354ed50337bf30750e24af069ade305bc22198473194dea82baf164d9aab"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-0a3e27d41a82be1f.rmeta",
+      "bytes": 495436,
+      "inode": 47960149,
+      "mtime_ns": 1793463922423163658,
+      "sha256": "165829e0623372f80ceb48cd7359b90c317660eba80e1af701c7f99959f7fdbb"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-4b9009a085eaacb0.rmeta",
+      "bytes": 495436,
+      "inode": 48312715,
+      "mtime_ns": 1793541886328826680,
+      "sha256": "e5508782e3e96f338c636cfe523dc14156536d4a450a6cb4be31b1edf4dd5a32"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-686211ff6aa7d386.rlib",
+      "bytes": 3914256,
+      "inode": 48079130,
+      "mtime_ns": 1793466519624440861,
+      "sha256": "6d3fc38050b7cfcf80c4e05dcde07926b10b47039d142e01be458f0d826191ef"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-686211ff6aa7d386.rmeta",
+      "bytes": 1446832,
+      "inode": 48079110,
+      "mtime_ns": 1793466519364356756,
+      "sha256": "e7b9697b0b36588b49b5641762a782d82c6a50b1db7737448a34b672b6323d1f"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-9588bc220d05ff0e.rlib",
+      "bytes": 3915232,
+      "inode": 48081870,
+      "mtime_ns": 1793466894331215705,
+      "sha256": "cdaec1073b6bb6dec3889c4202997cdae05c8eca5aa78ed39dd419438dbd9fe2"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-9588bc220d05ff0e.rmeta",
+      "bytes": 1446832,
+      "inode": 48081848,
+      "mtime_ns": 1793466893833894412,
+      "sha256": "67a85f874e698477285b8fa0aee2f20a3281104b31d8e824bec0f5b6ec0afffb"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-c7040611d7b5ccf1.rmeta",
+      "bytes": 495436,
+      "inode": 48307724,
+      "mtime_ns": 1793540717378373572,
+      "sha256": "984a6c4f04a14b9fbbe8b660b662d53ae92105198e8e38a28ac511d48d0eb5d3"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-e9ccb61bdf0aec22.rlib",
+      "bytes": 3914712,
+      "inode": 48315883,
+      "mtime_ns": 1793543304989064327,
+      "sha256": "0d8f546827f3ada2d187664c009d76fe2e4ca175498d208a21ddf66bc3553a77"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_panel-e9ccb61bdf0aec22.rmeta",
+      "bytes": 1446832,
+      "inode": 48315863,
+      "mtime_ns": 1793543304504013186,
+      "sha256": "e01317cdea8a28f960d5f6bceed510789bff7edd88843fa5b0ad71dd2a009b90"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_positive_accounting_node-1f63aac16f3c7f05.rmeta",
+      "bytes": 207006,
+      "inode": 48312621,
+      "mtime_ns": 1793541883729759670,
+      "sha256": "b8178c754ecc06cd883d0d7400318c8cd008c75ed5d9545f190c5c53bb243f19"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_positive_accounting_node-2c212c11bc42b1e1.rlib",
+      "bytes": 777712,
+      "inode": 48316431,
+      "mtime_ns": 1793543388241536116,
+      "sha256": "657193e1a931461b9c6caf48d8cdfe093ff37596407b254c5aa33701cff5f01d"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_positive_accounting_node-2c212c11bc42b1e1.rmeta",
+      "bytes": 298963,
+      "inode": 48316415,
+      "mtime_ns": 1793543388135069361,
+      "sha256": "f91814f0cc3b5226373be7bb794fbac34a979dece8136b589c486ae4ca65b857"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_remote-c33562a73b449a04.rlib",
+      "bytes": 13827656,
+      "inode": 48316407,
+      "mtime_ns": 1793543387886408952,
+      "sha256": "d34bdb9175a75c323a13a802f2128da7d21a99fb3e05a22ea6bbc4d0dc8e3c31"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_remote-c33562a73b449a04.rmeta",
+      "bytes": 4413780,
+      "inode": 48316383,
+      "mtime_ns": 1793543386097458865,
+      "sha256": "a6a397e98d0b9d16b8d1333693546b6d671aacd3b5c56ad735072324fdd25f51"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_sdk-7ed6fe66c91694f7.rmeta",
+      "bytes": 6534396,
+      "inode": 48307613,
+      "mtime_ns": 1793540706041332842,
+      "sha256": "11959195d66149965c4762a6598ebdf52ef4e2d7248bd13187ede63703590a10"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_sdk-82d61e712417ac80.rlib",
+      "bytes": 48098096,
+      "inode": 48296976,
+      "mtime_ns": 1793540122325918439,
+      "sha256": "c1e82948a94d11eea346eb99789a04a84aff5d73e554339d3f8ee892cfc51e8d"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_sdk-82d61e712417ac80.rmeta",
+      "bytes": 12123785,
+      "inode": 48296937,
+      "mtime_ns": 1793540118841383762,
+      "sha256": "c0ae651b443d51e897c615eea2f5c50a56796dde04b3bfbdb1caf4d40b65c030"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-0e2af577d79e3d81.rlib",
+      "bytes": 9739240,
+      "inode": 48315821,
+      "mtime_ns": 1793543302663325774,
+      "sha256": "bb61ec4a0e06e267520a268a58588be968f22cc5146f8595c4d5ad2a61940f76"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-0e2af577d79e3d81.rmeta",
+      "bytes": 1959097,
+      "inode": 48315739,
+      "mtime_ns": 1793543301282865621,
+      "sha256": "f10165e3ceda15c25f9b10007a982d9f613576eeed3043802d0d932bfb72490e"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-1e1fc1395ba9983b.rmeta",
+      "bytes": 1272775,
+      "inode": 48312704,
+      "mtime_ns": 1793541884871056991,
+      "sha256": "7a00a0ac820d10ab5987d28e2dad4b7980e3f93be3358a89523afd24cc5bd734"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-2ed71d81a7d66ab3.rlib",
+      "bytes": 9736304,
+      "inode": 48314015,
+      "mtime_ns": 1793542436247768336,
+      "sha256": "291970dc53e24e4b131dfcfb96043d0d9b92751ad9156f3eb2b23c88696a281f"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-2ed71d81a7d66ab3.rmeta",
+      "bytes": 1959097,
+      "inode": 48313995,
+      "mtime_ns": 1793542434808899330,
+      "sha256": "c922ef3d831cefbffdf6588fcf62731c55339c5cb03977533a2c3023e68249da"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-9a821dd85ef15d42.rlib",
+      "bytes": 9739176,
+      "inode": 47925420,
+      "mtime_ns": 1793462113230158522,
+      "sha256": "5da59e36606b6affe7d3706114442fd23883b89e8263f0414ee7d0159e8cea94"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-9a821dd85ef15d42.rmeta",
+      "bytes": 1956143,
+      "inode": 47925293,
+      "mtime_ns": 1793462112286820716,
+      "sha256": "81a54fb8a2899177826e588f0c182f8ba97e2fb0f12a1271d831f6136149d865"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir-f7a50f0bbcde2181.rmeta",
+      "bytes": 1272847,
+      "inode": 47925864,
+      "mtime_ns": 1793462194952386121,
+      "sha256": "5795940c3c408081778a766cae967ae9a0a17de73bfe292e69dc6a43d1a54cfc"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_artifact-304783076f3e6495.rlib",
+      "bytes": 3403824,
+      "inode": 47971230,
+      "mtime_ns": 1793465662610746890,
+      "sha256": "75bd018269e278b33eec91f0481cad4605fa5be9cce54eb9a64f9bf00ec0a371"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_artifact-304783076f3e6495.rmeta",
+      "bytes": 575282,
+      "inode": 47971209,
+      "mtime_ns": 1793465662088974845,
+      "sha256": "b03d44f8b4842cd2c3f73c6839f4bace7dc8556dcd003a1d6346ff9d98721316"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_artifact-37debf01a6b1fc29.rmeta",
+      "bytes": 366195,
+      "inode": 48312727,
+      "mtime_ns": 1793541887258569896,
+      "sha256": "b420a3f47cb3b2574dd8247788d1f6c24ffdd1967f0504a93b2e792ca2d8b800"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_artifact-9868c66f403a6288.rlib",
+      "bytes": 3746832,
+      "inode": 48314082,
+      "mtime_ns": 1793542437446405028,
+      "sha256": "b34aa31c75b36e743120ce799f1c358b1fb27be2cb257c8b1a73c35419da91c6"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_artifact-9868c66f403a6288.rmeta",
+      "bytes": 670948,
+      "inode": 48314017,
+      "mtime_ns": 1793542436845311366,
+      "sha256": "2e95d2fdf6da20494e0f87044ace73e878eb92a5117e76c0866adb9172b99d82"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_artifact-f4df7825a96ebd8a.rlib",
+      "bytes": 3747984,
+      "inode": 48315984,
+      "mtime_ns": 1793543307660049954,
+      "sha256": "3e97f12aa8b884c61837e67240a5f646c6f22bab234a094cfd651a7b7119f6b5"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_artifact-f4df7825a96ebd8a.rmeta",
+      "bytes": 670948,
+      "inode": 48315963,
+      "mtime_ns": 1793543307086605374,
+      "sha256": "4abaf57700a4ad144ec514140596a7b28c96161822c001c4de09f1954ec2d1b1"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rlib",
+      "bytes": 42505872,
+      "inode": 48314457,
+      "mtime_ns": 1793542638765364366,
+      "sha256": "13f6e119904887f6ba44f265a0a9994e8c74de546e963466cef9e3f3edcff7c7"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rmeta",
+      "bytes": 3532787,
+      "inode": 48314429,
+      "mtime_ns": 1793542635449109334,
+      "sha256": "159f1a5ccc495687f6d6e2f8d9a147ef3b7473d7d8155c8e6baf6a6e7f7e3740"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-2b5ce5c2e0b9d98e.rlib",
+      "bytes": 42511544,
+      "inode": 48316316,
+      "mtime_ns": 1793543371264694513,
+      "sha256": "9554cdf01059a0942fbbeaa7c08b2e72bf2e456f5bdfb5213b130b54cd4fac62"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-2b5ce5c2e0b9d98e.rmeta",
+      "bytes": 3532787,
+      "inode": 48316279,
+      "mtime_ns": 1793543364750331985,
+      "sha256": "4c772c3343925cadf4ec237e32021a22f575175c6edcb477eb189b8f86638602"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rlib",
+      "bytes": 31527112,
+      "inode": 48097680,
+      "mtime_ns": 1793467272803084351,
+      "sha256": "25c0ace12ff96ddbf808aa0f8dfe72fe328b3e67d6ce0c2b387fcf75be86d3e2"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rmeta",
+      "bytes": 1288567,
+      "inode": 48097636,
+      "mtime_ns": 1793467269818600730,
+      "sha256": "72a6ee85068c3c8fd21d2d4c98b37607380aabacf57325d09bace17292829ff8"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-7b2ee800f1e80cb6.rlib",
+      "bytes": 40708616,
+      "inode": 48311732,
+      "mtime_ns": 1793541681262669838,
+      "sha256": "e7ad27bbde4118b73b9e1a48bc0cab29b7228aeef0bcabeea0cd84ec9a9e404a"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-7b2ee800f1e80cb6.rmeta",
+      "bytes": 3017361,
+      "inode": 48311706,
+      "mtime_ns": 1793541678059811396,
+      "sha256": "4596503486c21936412568b1ee3050bd679381bcee754cd5d821278449e77689"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-891ea95bb6099c6f.rmeta",
+      "bytes": 2394243,
+      "inode": 48307582,
+      "mtime_ns": 1793540696568440045,
+      "sha256": "3aed540704deda03bc2f979e688a63f844ec93f90b8d1082f2374e199ce9c7fd"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-8fba50a766c2f8bd.rmeta",
+      "bytes": 2556641,
+      "inode": 48312777,
+      "mtime_ns": 1793541928893400200,
+      "sha256": "e502510f9266e4133ea59b97ed4de272a6b022b212f8ac2b6a3977b2317a8696"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-b50405d466a679ba.rlib",
+      "bytes": 40711888,
+      "inode": 48309586,
+      "mtime_ns": 1793541164844756261,
+      "sha256": "83bdd0cddf4472d37101973fa447e4f7f631b4ba4a10cde52fb9a4581ca59c39"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-b50405d466a679ba.rmeta",
+      "bytes": 3017361,
+      "inode": 48309550,
+      "mtime_ns": 1793541158838378536,
+      "sha256": "8850a4f2beaac66229540c01a1943458a7e87de5a95ce7248ff3f51ad554f28d"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-c3d0b9f49e01ea47.rlib",
+      "bytes": 31517112,
+      "inode": 47971288,
+      "mtime_ns": 1793465666686140827,
+      "sha256": "340077cc256fe7b6b6d12d89fececc0f642b66cc393c2c688c4534eba84e31eb"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-c3d0b9f49e01ea47.rmeta",
+      "bytes": 1288293,
+      "inode": 47971183,
+      "mtime_ns": 1793465661980987764,
+      "sha256": "9b69e0f97e6e9625980c4dbeb6fa6de7851284c137b75e92c84fcdeef44454c5"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-d40787466725f964.rmeta",
+      "bytes": 888824,
+      "inode": 48307716,
+      "mtime_ns": 1793540716166568665,
+      "sha256": "3c13a94dd2d72958becc4a0becd3aff8c843e8aefe37dbba465636c82b3a3075"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-e02e5ae021c19f2b.rlib",
+      "bytes": 39987112,
+      "inode": 48296555,
+      "mtime_ns": 1793540070678457187,
+      "sha256": "755696c6a3e9aab805ac5608192a9d303d478802acdca1f80ab5dd9264a04ad3"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-e02e5ae021c19f2b.rmeta",
+      "bytes": 2795315,
+      "inode": 48296514,
+      "mtime_ns": 1793540064328277363,
+      "sha256": "4977e379e5faedcc63f16ec88cc95a3348d3bcb2a0a6d0bf67c059cc4a1a3cc7"
+    }
+  ],
+  "apparent_bytes": 1699211002,
+  "deleted": true
+}

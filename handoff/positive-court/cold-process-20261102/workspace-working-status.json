@@ -1,0 +1,50 @@
+[
+  {
+    "role": "A0",
+    "branch": "codex/positive-court-a0",
+    "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet",
+    "status_porcelain": " M misaka/palw/tir/exec/tests/positive_wide_material_v2/trained_roles.rs\n?? handoff/positive-court/cold-process-20261102/\n?? misaka/palw/tir/exec/tests/positive_wide_material_v2/trained_roles/\n"
+  },
+  {
+    "role": "A1",
+    "branch": "codex/a1-wide-native-registration",
+    "path": "/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet",
+    "status_porcelain": ""
+  },
+  {
+    "role": "A2",
+    "branch": "codex/positive-court-a2-miner",
+    "path": "/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet",
+    "status_porcelain": ""
+  },
+  {
+    "role": "A3",
+    "branch": "codex/a3-final-positive-court-20261102",
+    "path": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet",
+    "status_porcelain": ""
+  },
+  {
+    "role": "A4",
+    "branch": "codex/a4-wide-q24-sizing",
+    "path": "/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet",
+    "status_porcelain": ""
+  },
+  {
+    "role": "A5",
+    "branch": "codex/a5-row-restore-fixtures",
+    "path": "/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet",
+    "status_porcelain": ""
+  },
+  {
+    "role": "A6",
+    "branch": "codex/positive-court-native-validation-f7bf",
+    "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet",
+    "status_porcelain": ""
+  },
+  {
+    "role": "A7",
+    "branch": "codex/a7-class-only-07d7",
+    "path": "/Users/wata/.codex/worktrees/a7-positive-court-tests/MISAKA-testnet",
+    "status_porcelain": ""
+  }
+]

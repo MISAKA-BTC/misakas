@@ -1,0 +1,48 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--offline",
+    "--locked",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "-p",
+    "misaka-palw-positive-accounting-node",
+    "--no-default-features",
+    "--all-targets",
+    "--no-deps",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "base_commit": "cc45ad4ae8930692e234479a22dbb71978a2dcf6",
+  "a0_shared_commit": "c2e93ec4982d76a9c5fdbc5e6db64a168e7212b5",
+  "a0_receipt_dependency": "fa1c73f184868080af7e4c7bcb44794712952fbe",
+  "source_sha256": {
+    "misaka/palw/positive-accounting-node/src/dues.rs": "7b86d96e72c32267cedd5a26a39c7f80e10877e3785f28130322addda1d01e58",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8d2c5d8c25fac2f1b6c667cc5c173701d85250c90f1e896e9a06b82f62877b7f",
+    "misaka/palw/positive-accounting-node/src/lib.rs": "62657713cd3311968ca27ffc5bbefdd768593e5fb387451478f3005ee5d47c49",
+    "misaka/palw/positive-accounting-node/src/native.rs": "27011bd251f0496a26d4279e56682dbdc5f03b82697034e402aec3d11b41277c",
+    "misaka/palw/positive-accounting-node/src/native/tests.rs": "f96ea0bec32adfbed4d9d8c1ae6ef7fb11866277829bd5df192ae3e3db1ffcc6",
+    "misaka/palw/positive-accounting-node/src/native_funds.rs": "53800ab7889605d141407e588e9d51d384f023ca483c1c4506ef54fe2e1fdb0a",
+    "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": "ce6f998ee72d35c7737b207e0a0818db6cccf4ec7eeb182bf998bdd8ce31b99c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "a78a2a6aa0148874ee0f6a354b1c24b8f11a7d1cb1ce855a41dc6e1b3b035807",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "c09507b31356a1c3384d3fce6a28a22abdc31b972d11be872e0803117ae210a3",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "14b8840d1db8f3d04180eb993236a878ed1d05298806cf10ec8e88b7e1d0ed29",
+    "misaka/palw/positive-contract/src/funding.rs": "0996296c8d2b114e099133d46b16814ae13e02acf177acee16246fb4163162a9",
+    "misaka/palw/positive-contract/src/rows.rs": "53d42d3a6f65af575eaf3ccebc16e63155501bb9128ae6c934994b5a683be7d4",
+    "misaka/palw/positive-contract/tests/native_rows.rs": "a87849b1ab0f919b0acf5a24c3a68964d8d2b98e43f05d81f21ea9edc31b685a"
+  },
+  "exit_code": 0,
+  "raw_log": "node-clippy-rev2.log",
+  "scope": "shared DATA alias and official packet receipt bound; no native context authority",
+  "source_unchanged_during_run": true
+}

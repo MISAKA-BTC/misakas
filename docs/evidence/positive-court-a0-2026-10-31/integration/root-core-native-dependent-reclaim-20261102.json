@@ -1,0 +1,313 @@
+{
+  "head": "babfda57e74b62ed8bb83cfbbac9a535107fd25e",
+  "status": "ONLY_18_STALE_ROOT_INTERMEDIATES_UNLINKED_AFTER_NATIVE_CORE_SOURCE_CHANGE",
+  "source_change": [
+    "4bab4b9d2",
+    "fb204eb8a"
+  ],
+  "total_bytes": 1678852517,
+  "files": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-08d2a89ac5296efd.rmeta",
+      "bytes": 69310969,
+      "mtime_ns": 1793546900090915501,
+      "inode": 48326034,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "7ab8825e38419afc5ccbe91ecd7e2e558f2cc00a6bdd938960be1ce82257e777",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-08d2a89ac5296efd.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rlib",
+      "bytes": 368143040,
+      "mtime_ns": 1793546544851167059,
+      "inode": 48324209,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "90f1ab65288af2e147fb58643efad237b5ee2a8a471ee33f825738fcb2b71009",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-0bbd599cd27ef842.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rmeta",
+      "bytes": 119189265,
+      "mtime_ns": 1793546515873742931,
+      "inode": 48323990,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "e5431a6c8ae20da5bf6d0eb0a5ec04037de460501fae9c2433640db3088746f3",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-0bbd599cd27ef842.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-b06a0af49abd5698.rlib",
+      "bytes": 368185752,
+      "mtime_ns": 1793547140746257429,
+      "inode": 48326818,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "25a2db3def8cea175caf30dadde6f2a70debaab0ddccea89c25713573273aa6d",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-b06a0af49abd5698.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-b06a0af49abd5698.rmeta",
+      "bytes": 119189265,
+      "mtime_ns": 1793547102263518632,
+      "inode": 48326630,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "a0f511b3594eb76af5775f0db7bcc362191d22d705cd66cdbaef6055c5734dfc",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-b06a0af49abd5698.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-e6494b85b43e13bc.rlib",
+      "bytes": 367722880,
+      "mtime_ns": 1793546804820033611,
+      "inode": 48325517,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "cc49c7fe5e9399fdb9d0d5d8f4a256806938ce1d10142fd641d0570c1705e53d",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-e6494b85b43e13bc.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libkaspa_consensus_core-e6494b85b43e13bc.rmeta",
+      "bytes": 119184898,
+      "mtime_ns": 1793546779377256432,
+      "inode": 48325343,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "e93b9cdece5d1ebd4b74bbff2767c0dd0c81a681e01977ba7db98fd86c65fb72",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-e6494b85b43e13bc.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rlib",
+      "bytes": 42827536,
+      "mtime_ns": 1793546525975511867,
+      "inode": 48324076,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "b02fc3241ec6c64cf7b7905118640bf78f76ea1cd221e8cb4380979dfa830096",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_tir_exec-22dd77663ab0ee50.d",
+      "root_source_in_depfile": false,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched.",
+      "root_manifest_in_compiler_artifact": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rmeta",
+      "bytes": 3665617,
+      "mtime_ns": 1793546519642156739,
+      "inode": 48324000,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "c7658a9473ba8ab584551d48485906488e911b222a47aaef01c7b54599afd9b7",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_tir_exec-22dd77663ab0ee50.d",
+      "root_source_in_depfile": false,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched.",
+      "root_manifest_in_compiler_artifact": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-2b5ce5c2e0b9d98e.rlib",
+      "bytes": 42829376,
+      "mtime_ns": 1793547112741456460,
+      "inode": 48326719,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "3370e6723bf81ee24e282d1048be1a651b54253c3bd75fefca7a5fff9aaf4165",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_tir_exec-2b5ce5c2e0b9d98e.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-2b5ce5c2e0b9d98e.rmeta",
+      "bytes": 3665617,
+      "mtime_ns": 1793547106117734542,
+      "inode": 48326684,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "95a77fc75201490a0e3459ea16fc0e2fb780eeb811c5d49fbc93666dec22f1d6",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_tir_exec-2b5ce5c2e0b9d98e.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rlib",
+      "bytes": 31527112,
+      "mtime_ns": 1793546601951278206,
+      "inode": 48324830,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "d185d841cf13512a9d7c628d72b26bf4e1c3c96225302e2759b596656ea10398",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_tir_exec-4075bee861628009.d",
+      "root_source_in_depfile": false,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched.",
+      "root_manifest_in_compiler_artifact": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rmeta",
+      "bytes": 1288567,
+      "mtime_ns": 1793546597750656281,
+      "inode": 48324707,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "ecce753b80a2ce75ba11843fc0d6fa0c44fb37dd3115cbaab4371a2689b29317",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_tir_exec-4075bee861628009.d",
+      "root_source_in_depfile": false,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched.",
+      "root_manifest_in_compiler_artifact": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-8fba50a766c2f8bd.rmeta",
+      "bytes": 2813032,
+      "mtime_ns": 1793546938426415657,
+      "inode": 48326042,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "b9dd38cea63160305f210b2656520faea286d3a7c6a0836e2d1d85a04b786c7f",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_tir_exec-8fba50a766c2f8bd.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_remote-c33562a73b449a04.rlib",
+      "bytes": 13819152,
+      "mtime_ns": 1793547129309494761,
+      "inode": 48326783,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "6d2f2edaa45cda9cd328111e73068729bfd6bf8b380952056ba03edf36ca3346",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_remote-c33562a73b449a04.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_remote-c33562a73b449a04.rmeta",
+      "bytes": 4413764,
+      "mtime_ns": 1793547127506238145,
+      "inode": 48326760,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "63e8841ec3fb952492869c636af613ab6f4ecfdd4edbc3cd6e5330b442cefb85",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_remote-c33562a73b449a04.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_positive_accounting_node-2c212c11bc42b1e1.rlib",
+      "bytes": 777712,
+      "mtime_ns": 1793547129670507591,
+      "inode": 48326794,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "0c05f26c9e37353f6dd6be8694f9868c1e190b06a6402bc317f93f34d2bb3893",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting_node-2c212c11bc42b1e1.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_positive_accounting_node-2c212c11bc42b1e1.rmeta",
+      "bytes": 298963,
+      "mtime_ns": 1793547129558330808,
+      "inode": 48326785,
+      "device": 16777234,
+      "nlink": 1,
+      "sha256": "acf131eff2750c49fc814c354eaa24fd8bb8bac6b976e26da297bbcef0b74977",
+      "depfile": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting_node-2c212c11bc42b1e1.d",
+      "root_source_in_depfile": true,
+      "reason": "Core native registration source changed after4e672. Core and these Core reverse-dependent intermediates require normal Cargo rebuild; no data/evidence/binary/native archive touched."
+    }
+  ],
+  "relative_depfile_cargo_artifact_provenance": {
+    "libmisaka_palw_tir_exec-22dd77663ab0ee50": [
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-exec-ce016-20261102-exec-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rlib",
+        "fresh": true
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-exec-ce016-20261102-exec-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rmeta",
+        "fresh": true
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-exec-1c903-20261102-exec-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rlib",
+        "fresh": false
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-exec-1c903-20261102-exec-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rmeta",
+        "fresh": false
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-exec-9193-20261102-exec-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rlib",
+        "fresh": false
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-exec-9193-20261102-exec-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-22dd77663ab0ee50.rmeta",
+        "fresh": false
+      }
+    ],
+    "libmisaka_palw_tir_exec-4075bee861628009": [
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-core-geometry-artifact-1c903-20261102-geometry-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rlib",
+        "fresh": true
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-core-geometry-artifact-1c903-20261102-geometry-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rmeta",
+        "fresh": true
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-core-geometry-artifact-1c903-20261102-core-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rlib",
+        "fresh": false
+      },
+      {
+        "log": "docs/evidence/positive-court-a0-2026-10-31/integration/panel-r5-core-geometry-artifact-1c903-20261102-core-build.jsonl",
+        "manifest_path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml",
+        "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/libmisaka_palw_tir_exec-4075bee861628009.rmeta",
+        "fresh": false
+      }
+    ]
+  },
+  "all_root_provenance": true,
+  "no_open_files_lsof": {
+    "exit_code": 1,
+    "stdout": "",
+    "stderr": ""
+  },
+  "free_before": 1976913920,
+  "free_after": 3656499200,
+  "finished_unix": 1793547618.233356,
+  "forbidden_untouched": [
+    "all models/source/raw/evidence/test executables",
+    "native archives",
+    "TIR/artifact/kernel/panel/contract/accounting leaf crates",
+    "other owners caches",
+    "Main Downloads target"
+  ]
+}

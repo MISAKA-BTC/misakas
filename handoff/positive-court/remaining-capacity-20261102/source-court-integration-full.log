@@ -1,0 +1,47 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+     Running tests/positive_court_a4_integration.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_court_a4_integration-b0b7dbbb6d304557)
+
+running 40 tests
+test a6_journal_replay::actual_checker_panel_failure_keeps_charged_wire_without_miner_refutation ... ok
+test a6_journal_replay::actual_tir_journal_replay_recomputes_pass_and_genuine_miner_mismatch ... ok
+test a6_journal_replay::bounded_budget_refusal_precedes_native_authentication_and_external_callbacks ... ok
+test a6_journal_replay::current_clock_expiry_and_final_generation_or_clock_changes_are_rechecked ... ok
+test a6_journal_replay::current_historical_frame_role_is_rechecked_under_the_step_guard ... ok
+test a6_journal_replay::omitted_record_or_relation_and_future_or_idempotent_court_deliveries_are_not_journal_events ... ok
+test a6_journal_replay::pinned_tail_and_exact_native_material_references_cannot_be_shortened ... ok
+test a6_journal_replay::real_source_replay::a_fitting_court_charge_cannot_spend_capacity_still_owed_to_real_source_responses ... ok
+test a6_journal_replay::real_source_replay::bad_current_panel_frame_after_source_completion_preserves_global_cost_receipts_and_first_fees ... ok
+test a6_journal_replay::real_source_replay::copied_source_request_or_completed_response_cannot_append_or_charge_a_second_fee ... ok
+test a6_journal_replay::real_source_replay::interleaved_real_g14_and_tir_replay_reconstructs_receipts_union_and_global_usage_exactly_once ... ok
+test a6_journal_replay::real_source_replay::local_source_due_never_supplies_the_missing_qualified_native_settlement_port ... ok
+test a6_journal_replay::real_source_replay::missing_duty_or_canonical_history_and_partial_global_basis_or_origin_substitution_are_rejected ... ok
+test a6_journal_replay::real_source_replay::missing_historical_capacity_protection_after_source_apply_cannot_publish_partial_state ... ok
+test a6_journal_replay::real_source_replay::policy_failure_after_real_source_apply_poisons_every_getter_and_a_fresh_replay_is_clean ... ok
+test a6_journal_replay::real_source_replay::real_db_replay::an_older_persisted_caller_pin_replays_only_its_prefix_while_future_raw_tail_is_retained ... ok
+test a6_journal_replay::real_source_replay::real_db_replay::clean_db_reopen_replays_the_same_actual_court_source_and_once_only_due_from_persisted_delta_pin ... ok
+test a6_journal_replay::real_source_replay::real_db_replay::reopened_missing_middle_or_tail_and_corrupted_tail_never_fall_back_to_fixture_records ... ok
+test a6_journal_replay::unsupported_source_and_native_settlement_ports_refuse_without_any_live_commit ... ok
+test a_context_for_another_signed_witness_cannot_be_opened_under_the_same_result_and_plan ... ok
+test accepted_packet_receipts_require_the_full_plan_capacity_before_spending_an_attempt ... ok
+test accepted_packet_replays_are_receipt_bound_and_never_spend_budget_or_mint_coverage ... ok
+test actual_checker_finishes_signed_result_only_after_all_required_relations ... ok
+test admitted_fact_bridge::bound_transition_checks_current_scope_resolution_and_store_epoch_after_undo ... ok
+test admitted_fact_bridge::first_binding_after_funding_cutoff_uses_independent_current_court_deadline ... ok
+test admitted_fact_bridge::foreign_receipt_case_result_branch_reverse_generation_or_missing_case_cannot_bind_fact ... ok
+test admitted_fact_bridge::real_a1_fact_binds_recovered_actual_book_after_restart_and_funding_cutoff ... ok
+test admitted_fact_bridge::real_checked_terminal_binds_real_private_admission_and_closes_its_hold_once ... ok
+test admitted_fact_bridge::timely_bound_fact_can_close_after_normal_generation_advance_and_service_expiry ... ok
+test authenticated_bad_panel_material_does_not_refute_miner_or_reset_attempt_and_wire_budgets ... ok
+test authenticated_noncanonical_relation_count_is_refused_before_case_charging ... ok
+test candidate_authority_requires_a_finite_usable_signed_packet_limit ... ok
+test exclusive_deadline_rejects_final_frame_before_any_success_fact ... ok
+test fresh_common_court_replays_actual_authenticated_history_and_reconstructs_all_counters ... ok
+test honest_material_with_insufficient_inner_evaluation_allowance_stays_unverified ... ok
+test repeated_authenticated_future_relation_cannot_exhaust_the_case_and_is_usable_later ... ok
+test replay_on_another_branch_or_after_the_current_cutoff_cannot_reuse_the_old_success ... ok
+test self_signed_unassigned_prover_cannot_spend_attempts_or_replace_the_active_candidate ... ok
+test signed_result_cannot_replace_rooted_input_even_with_its_own_valid_signature ... ok
+test unauthenticated_self_consistent_bad_material_cannot_poison_or_charge_an_honest_candidate ... ok
+
+test result: ok. 40 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.86s
+

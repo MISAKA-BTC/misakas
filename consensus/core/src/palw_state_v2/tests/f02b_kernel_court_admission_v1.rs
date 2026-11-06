@@ -128,7 +128,7 @@ fn f02b_kernel_admission_reserves_every_branch_and_its_capital_atomically() {
     let state = parent(1_000_000_000_000);
     let (p, e) = (slice_params(), test_only_estimate_extras());
     let mut b = TransitionBuilder::new(&state, &p, false, false, false, false, &e);
-    let committed_before = b.committed_at(&producer(), COMMIT_DAA);
+    let committed_before = b.committed_at(&producer(), COMMIT_DAA).unwrap();
     let mark = b.entries.len();
     assert!(admit(&mut b), "admitted with enough free collateral");
     let book = b.state.court_service_state_v1().expect("book written").clone();
@@ -143,7 +143,7 @@ fn f02b_kernel_admission_reserves_every_branch_and_its_capital_atomically() {
     assert_eq!(lock.hard_deadline_daa, COMMIT_DAA + crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA);
     #[allow(clippy::int_plus_one)]
     assert!(binding.packet_ids.len() as u64 >= 1 + (s.profile.packets_per_signer - 1) * s.follow_up_branches_per_turn);
-    assert_eq!(b.committed_at(&producer(), COMMIT_DAA), committed_before + lock.amount, "capital is committed collateral");
+    assert_eq!(b.committed_at(&producer(), COMMIT_DAA).unwrap(), committed_before + lock.amount, "capital is committed collateral");
     book.check_context(&b.state).unwrap_or_else(|e| panic!("kernel binding passes the context check: {e}"));
     // Reorg: undo restores the parent exactly; restart: replaying the journal reproduces the admitted state.
     let done = b.state.state_root();
@@ -251,12 +251,12 @@ fn f02b_held_set_supply_check_and_capital_release() {
     assert!(supplied.kernel_court_default_held_v1(Some(&TEST_ONLY_PREMISE)).is_empty(), "all supplied: ordinary default");
     assert!(supplied.court_service_release_eligible_v1(&claim), "a fully decided kernel binding is release-eligible");
     // Capital release: the row stays before hard while bound, and goes at hard.
-    let committed = b.committed_at(&producer(), COMMIT_DAA);
+    let committed = b.committed_at(&producer(), COMMIT_DAA).unwrap();
     super::super::palw_kernel_route_fold_v1::release_kernel_court_capital_v1(&mut b, &ctx(3, hard - 1, 3)).unwrap();
     assert_eq!(b.state.kernel_court_capital_rows_v1().len(), 1, "hard - 1: still reserved");
     super::super::palw_kernel_route_fold_v1::release_kernel_court_capital_v1(&mut b, &ctx(4, hard, 4)).unwrap();
     assert!(b.state.kernel_court_capital_rows_v1().is_empty(), "= hard: released");
-    assert!(b.committed_at(&producer(), COMMIT_DAA) < committed, "the collateral is returned");
+    assert!(b.committed_at(&producer(), COMMIT_DAA).unwrap() < committed, "the collateral is returned");
 }
 
 /// **G14 S3c''' (lane LEGACY, 2026-10-27): no producer default without an opportunity under the premise.** On the fully supplied

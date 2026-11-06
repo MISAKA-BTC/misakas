@@ -55,7 +55,11 @@ use misaka_palw_tir::{MapParams, Tensor};
 use misaka_palw_tir_sketch::fixture::wide128_v1;
 use std::collections::BTreeMap;
 
+mod positive_native_relay;
+
 type Premine = Vec<(TransactionOutpoint, UtxoEntry)>;
+// Separate large fixture construction from polling on the standard test stack.
+type TestFuture<T> = std::pin::Pin<Box<dyn std::future::Future<Output = T>>>;
 
 const FEE: u64 = 2_000_000;
 const MAX_POSITIONS: u32 = 64;
@@ -450,14 +454,25 @@ impl Net {
 
     /// **A real restart**: the node is shut down and a new `Consensus` is opened over the SAME database; the actors carry on.
     fn restart(self, db: std::sync::Arc<kaspa_database::prelude::DB>) -> Net {
+        self.restart_with(|| db)
+    }
+
+    /// Shut down before obtaining the next database handle. Unlike `restart`, this also lets a test
+    /// release the final DB owner and open the persisted files through a new RocksDB connection.
+    fn restart_with(self, open: impl FnOnce() -> std::sync::Arc<kaspa_database::prelude::DB>) -> Net {
         let Net { chain, config, bundle, premine, floats, funding, domain, rnd, _keep } = self;
         let (simulated_time, nonce) = (chain.ctx.simulated_time, chain.nonce_for_reopen());
+        let simulated_validation = chain.ctx.consensus.has_validation_time_for_test();
         drop(chain); // TestContext's Drop shuts the processors down and releases the node's handles on the database
+        let db = open();
         let mut resumed = config.clone();
         resumed.process_genesis = false;
         let (sender, receiver) = async_channel::unbounded();
         let second = TestConsensus::with_db(db, &resumed, sender);
         let chain = t12_reopened_chain(second, &resumed, &bundle, simulated_time, nonce);
+        if simulated_validation {
+            chain.ctx.consensus.set_validation_time_for_test(simulated_time);
+        }
         let mut keep = _keep;
         keep.push(Box::new(receiver));
         Net { chain, config, bundle, premine, floats, funding, domain, rnd, _keep: keep }
@@ -751,8 +766,9 @@ struct World {
 }
 
 impl World {
-    async fn new() -> World {
-        World::on(Net::new()).await
+    #[inline(never)]
+    fn new() -> TestFuture<World> {
+        Box::pin(async move { World::on(Net::new()).await })
     }
 
     /// **An OPV network** (RFC-0015): `Params::palw_panel_free_v1` carries the network's admission list and the interim terms
@@ -783,19 +799,22 @@ impl World {
     }
 
     /// Registers the class (signed by card 1) over `net`.
-    async fn on(mut net: Net) -> World {
-        let fx = fixture();
-        let d = k2_tir_v2_descriptor();
-        let register = K::RegisterClass {
-            descriptor: d.digest(),
-            program_bytes: fx.program.encode(),
-            plan: fx.plan.clone(),
-            param_commitments: fx.pc.clone(),
-        };
-        let o = net.route(1, &register);
-        net.send(vec![(1, o)]).await;
-        let class = *net.ledger().classes.keys().next().expect("the class registered through the real path");
-        World { net, fx, class, jobs: 0 }
+    #[inline(never)]
+    fn on(mut net: Net) -> TestFuture<World> {
+        Box::pin(async move {
+            let fx = fixture();
+            let d = k2_tir_v2_descriptor();
+            let register = K::RegisterClass {
+                descriptor: d.digest(),
+                program_bytes: fx.program.encode(),
+                plan: fx.plan.clone(),
+                param_commitments: fx.pc.clone(),
+            };
+            let o = net.route(1, &register);
+            net.send(vec![(1, o)]).await;
+            let class = *net.ledger().classes.keys().next().expect("the class registered through the real path");
+            World { net, fx, class, jobs: 0 }
+        })
     }
 
     fn restart(self, db: std::sync::Arc<kaspa_database::prelude::DB>) -> World {
@@ -1959,77 +1978,84 @@ pub(super) fn assert_kernel_conserved_v1(before: KernelMoneyV1, after: KernelMon
 /// Σ kernel payouts ≤ Σ kernel debits, nothing issued.
 #[tokio::test]
 async fn g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escrow_across_reorg_replay_and_redemption() {
-    kaspa_core::log::try_init_logger("warn");
-    let mut w = World::new().await;
-    let pol = w.policy();
-    let reward = pol.claim_reward;
-    let (slashed0, reserved0) = (w.net.slashed(1), w.net.kernel_reserved(1));
-    let job = w.job().await; // card 1 posts every job
-    assert_eq!(w.net.kernel_reserved(1), reserved0 + u128::from(reward), "the escrow is reserved on the poster's real bond");
-    assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee, "the posting fee is a real slash (burned at release)");
-    assert_eq!(w.net.ledger().job_escrows[&job.id()].amount, reward);
-    let claim = w.claim(0, &job, false).await;
-    w.cover(&claim.id).await;
-    let ClaimStateV1::ProbabilisticPass { window_end_daa, .. } = w.net.claim_state(&claim.id) else { panic!("covered") };
-    w.net.beat_to(window_end_daa - 1).await;
-    let fork = w.net.chain.sink();
-    assert!(!matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
-    w.net.beat_to(window_end_daa).await;
-    assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
-    assert_eq!(minted_and_owed(&w.net, &w.net.chain, 0), (0, reward), "queued once, out of the escrow");
-    assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee + reward, "the poster's escrow debited");
-    assert_eq!(w.net.kernel_reserved(1), reserved0, "and its reservation spent");
-    assert!(w.net.ledger().job_escrows.is_empty());
+    final_reward_once_across_reorg_replay_and_redemption().await;
+}
 
-    // A second node replays; then B, from just before the Final, out-works A: the reorg undoes A's Final and B finalizes the claim on
-    // its own branch — still exactly one reward and one debit.
-    let z = w.net.replay().await;
-    w.net.assert_same(&z, "Z on A");
-    let zn = w.net.on_chain(z);
-    let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
-    let up_to_fork = chain_blocks(&w.net.chain, fork);
-    let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
-    for blk in up_to_fork {
-        arrive(&b, blk, "a block up to the fork").await;
-    }
-    let mut b = b;
-    b.ctx.simulated_time = fork_timestamp;
-    let ttpb = w.net.ttpb();
-    let mut b_blocks = Vec::new();
-    for _ in 0..4 {
-        b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
-    }
-    for blk in &b_blocks {
-        arrive(&zn.chain, blk.clone(), "B's block").await;
-    }
-    assert_eq!(zn.chain.sink(), b.sink(), "B out-works A: Z reorgs onto B");
-    let (minted, owed) = minted_and_owed(&w.net, &zn.chain, 0);
-    eprintln!("[GAP-5] on B after the reorg: minted {minted}, owed {owed}, poster slashed {}", zn.slashed(1) - slashed0);
-    assert_eq!(minted + owed, reward, "the reorg undid A's Final; B's Final pays once — never twice");
-    assert_eq!(zn.slashed(1), slashed0 + pol.job_fee + reward, "and debits the escrow once");
-    assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1());
+#[inline(never)]
+fn final_reward_once_across_reorg_replay_and_redemption() -> TestFuture<()> {
+    Box::pin(async move {
+        kaspa_core::log::try_init_logger("warn");
+        let mut w = World::new().await;
+        let pol = w.policy();
+        let reward = pol.claim_reward;
+        let (slashed0, reserved0) = (w.net.slashed(1), w.net.kernel_reserved(1));
+        let job = w.job().await; // card 1 posts every job
+        assert_eq!(w.net.kernel_reserved(1), reserved0 + u128::from(reward), "the escrow is reserved on the poster's real bond");
+        assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee, "the posting fee is a real slash (burned at release)");
+        assert_eq!(w.net.ledger().job_escrows[&job.id()].amount, reward);
+        let claim = w.claim(0, &job, false).await;
+        w.cover(&claim.id).await;
+        let ClaimStateV1::ProbabilisticPass { window_end_daa, .. } = w.net.claim_state(&claim.id) else { panic!("covered") };
+        w.net.beat_to(window_end_daa - 1).await;
+        let fork = w.net.chain.sink();
+        assert!(!matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
+        w.net.beat_to(window_end_daa).await;
+        assert!(matches!(w.net.claim_state(&claim.id), ClaimStateV1::Final { .. }));
+        assert_eq!(minted_and_owed(&w.net, &w.net.chain, 0), (0, reward), "queued once, out of the escrow");
+        assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee + reward, "the poster's escrow debited");
+        assert_eq!(w.net.kernel_reserved(1), reserved0, "and its reservation spent");
+        assert!(w.net.ledger().job_escrows.is_empty());
 
-    // A out-works B again: Z returns to A — one reward, one debit.
-    let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();
-    for _ in 0..4 {
-        w.net.chain.heartbeat(ttpb, Vec::new()).await;
-    }
-    for blk in chain_blocks(&w.net.chain, w.net.chain.sink()).into_iter().skip(old_len) {
-        arrive(&zn.chain, blk, "A's later block").await;
-    }
-    w.net.assert_same(&zn.chain, "Z back on A");
-    let (minted, owed) = minted_and_owed(&w.net, &zn.chain, 0);
-    assert_eq!((minted, owed), (reward, 0), "redeemed by A's next coinbase, once");
-    assert_eq!(zn.slashed(1), slashed0 + pol.job_fee + reward);
+        // A second node replays; then B, from just before the Final, out-works A: the reorg undoes A's Final and B finalizes the claim on
+        // its own branch — still exactly one reward and one debit.
+        let z = w.net.replay().await;
+        w.net.assert_same(&z, "Z on A");
+        let zn = w.net.on_chain(z);
+        let b = t12_genesis_chain(&w.net.config, &w.net.bundle, &w.net.premine, &w.net.floats);
+        let up_to_fork = chain_blocks(&w.net.chain, fork);
+        let fork_timestamp = up_to_fork.last().unwrap().header.timestamp;
+        for blk in up_to_fork {
+            arrive(&b, blk, "a block up to the fork").await;
+        }
+        let mut b = b;
+        b.ctx.simulated_time = fork_timestamp;
+        let ttpb = w.net.ttpb();
+        let mut b_blocks = Vec::new();
+        for _ in 0..4 {
+            b_blocks.push(b.heartbeat(ttpb, Vec::new()).await);
+        }
+        for blk in &b_blocks {
+            arrive(&zn.chain, blk.clone(), "B's block").await;
+        }
+        assert_eq!(zn.chain.sink(), b.sink(), "B out-works A: Z reorgs onto B");
+        let (minted, owed) = minted_and_owed(&w.net, &zn.chain, 0);
+        eprintln!("[GAP-5] on B after the reorg: minted {minted}, owed {owed}, poster slashed {}", zn.slashed(1) - slashed0);
+        assert_eq!(minted + owed, reward, "the reorg undid A's Final; B's Final pays once — never twice");
+        assert_eq!(zn.slashed(1), slashed0 + pol.job_fee + reward, "and debits the escrow once");
+        assert_eq!(zn.chain.ctx.consensus.palw_kernel_route_v1(), b.ctx.consensus.palw_kernel_route_v1());
 
-    // A re-applied claim (its seal and its reveal carried again) is dropped: nothing is paid twice.
-    let again = w.claim_with(0, &job, false, Delivery::Direct).await;
-    assert_eq!(again.id, claim.id, "the same claim");
-    w.net.beat_to(w.net.daa() + 3).await;
-    assert_eq!(minted_and_owed(&w.net, &w.net.chain, 0), (reward, 0), "the queue redeemed it once; a re-application pays nothing");
-    assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee + reward, "the poster was debited one escrow");
-    let z = w.net.replay().await;
-    w.net.assert_same(&z, "replay");
+        // A out-works B again: Z returns to A — one reward, one debit.
+        let old_len = chain_blocks(&w.net.chain, w.net.chain.sink()).len();
+        for _ in 0..4 {
+            w.net.chain.heartbeat(ttpb, Vec::new()).await;
+        }
+        for blk in chain_blocks(&w.net.chain, w.net.chain.sink()).into_iter().skip(old_len) {
+            arrive(&zn.chain, blk, "A's later block").await;
+        }
+        w.net.assert_same(&zn.chain, "Z back on A");
+        let (minted, owed) = minted_and_owed(&w.net, &zn.chain, 0);
+        assert_eq!((minted, owed), (reward, 0), "redeemed by A's next coinbase, once");
+        assert_eq!(zn.slashed(1), slashed0 + pol.job_fee + reward);
+
+        // A re-applied claim (its seal and its reveal carried again) is dropped: nothing is paid twice.
+        let again = w.claim_with(0, &job, false, Delivery::Direct).await;
+        assert_eq!(again.id, claim.id, "the same claim");
+        w.net.beat_to(w.net.daa() + 3).await;
+        assert_eq!(minted_and_owed(&w.net, &w.net.chain, 0), (reward, 0), "the queue redeemed it once; a re-application pays nothing");
+        assert_eq!(w.net.slashed(1), slashed0 + pol.job_fee + reward, "the poster was debited one escrow");
+        let z = w.net.replay().await;
+        w.net.assert_same(&z, "replay");
+    })
 }
 
 // ---- C4 F-C4R3-03: the route's own chunk lane (tag 113, aux table 41) ---------------------------------------------------------
@@ -2871,6 +2897,19 @@ fn onb_fixture(seed: u64) -> OnbFixture {
 impl Net {
     /// **A V2 IR class registration for `f`**, signed by card `card` (the SDK's `build_tir_registration_v1`, over the chain's own pricing).
     fn v2_registration(&self, f: &OnbFixture, card: usize, activation_daa: u64) -> Obj {
+        self.v2_registration_for_class(&f.class, f.artifact_root, card, activation_daa)
+    }
+
+    /// Register the literal class and inventory supplied by a role fixture.
+    /// The ordinary native registration still checks its pricing, signature,
+    /// program, layout and canonical job; no registry row is installed here.
+    fn v2_registration_for_class(
+        &self,
+        class: &kaspa_consensus_core::palw_tir_class_v1::PalwTirClassV1,
+        inventory_root: Hash64,
+        card: usize,
+        activation_daa: u64,
+    ) -> Obj {
         use kaspa_consensus_core::palw_tir_admission_v1::palw_tir_post_genesis_registration_v1;
         use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_attempt_canonical_v1, palw_tir_job_context_v1};
         use kaspa_consensus_core::palw_tir_class_v1::{
@@ -2883,12 +2922,12 @@ impl Net {
             state.class(&floor).unwrap().slash_value_per_pwu,
             self.bundle.court.max_step_leaf_count(),
         );
-        let facts = PalwTirJobFactsV1::of_class(&f.class, f.class.class_id(&f.artifact_root)).expect("decodes");
-        let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(&f.class).expect("wide enough"));
+        let facts = PalwTirJobFactsV1::of_class(class, class.class_id(&inventory_root)).expect("decodes");
+        let canonical = palw_tir_job_context_v1(&facts, palw_tir_attempt_canonical_v1(class).expect("wide enough"));
         let mut o = palw_tir_post_genesis_registration_v1(
-            f.class.clone(),
+            class.clone(),
             canonical,
-            f.artifact_root,
+            inventory_root,
             0,
             target,
             slash,
@@ -3600,7 +3639,7 @@ mod conformance;
 // mempool's acceptance gate (GAP 10) and the cached ledger (GAP 8): `g14_kernel_route_e2e/real_scale.rs`.
 mod artifact_tile;
 mod model_artifact;
-mod model_conformance;
+pub(crate) mod model_conformance;
 mod real_scale;
 // Lane RFC02-T: the RFC-0002 P0 residual on the kernel route's own FileProof (re-encoding theft; the sealed-bounty rule).
 mod rfc02t_sealed_bounty;
@@ -3647,6 +3686,7 @@ mod source_verifier_economics_v2;
 // RFC08: signed material generations and exact finalized GC intent binding.
 mod material_gc_v4;
 mod material_typed_ingress_v4;
+mod provider_fee_lifecycle_v2;
 // Lane ROLES: the slice root attested past the Panel=1 fence only: `g14_kernel_route_e2e/roles_slice_attest.rs`.
 mod roles_slice_attest;
 

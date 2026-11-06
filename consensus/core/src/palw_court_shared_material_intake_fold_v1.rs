@@ -2,11 +2,12 @@
 //! rows written through the ordinary staged writer, so block deltas, reorg undo,
 //! carriage restart and the material-horizon sweep apply unchanged.
 //!
-//! Dormant: refused unless `palw_staged_tir_route_v1` is in force at the block
-//! (`extras.staged_tir_route_active`, the dormant G-10 fence the shared TIR
-//! court lives under), the original has an installed shared context, and the
-//! storage fee schedule resolves — it is typed-missing in every non-test build.
-//! No lifecycle dispatcher/wire tag calls this yet (see lane notes).
+//! Refused unless `palw_staged_tir_route_v1` is in force at the block
+//! (`extras.staged_tir_route_active`, the material-intake fence). Below that
+//! fence the storage schedule stays typed-missing and nothing is debited. Past
+//! it the schedule is the pinned V5 estimate, and a positive fee is debited
+//! from the submitter bond in the same step that records `charged_sompi` and
+//! writes the draft. A zero fee debits nothing and records nothing owed.
 use super::*;
 use crate::palw_court_shared_material_intake_v1 as m;
 use crate::palw_court_shared_tir_state_v1 as shared;
@@ -15,6 +16,33 @@ use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART
 
 fn refused(s: impl Into<String>) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(s.into())
+}
+
+/// Burn `fee` sompi from the intake submitter. Zero records nothing and writes
+/// no bond delta. A positive fee must leave the bond in full; [`TransitionBuilder::slash_bond`]
+/// is the same debit the other court fees use, and a clamp or a shortfall refuses.
+fn debit_submitter_storage_fee_v1(
+    b: &mut TransitionBuilder<'_>,
+    submitter: PalwBondKeyV2,
+    fee: u64,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    if fee == 0 {
+        return Ok(());
+    }
+    let collateral = b.state.bond(&submitter).ok_or(PalwStateV2Error::MissingBond(submitter))?.collateral;
+    if collateral < fee {
+        return Err(refused("material storage fee exceeds the submitter bond"));
+    }
+    let held = super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(b, &submitter, now)?;
+    if u128::from(collateral).saturating_sub(held) < u128::from(fee) {
+        return Err(refused("material storage fee exceeds the submitter free principal"));
+    }
+    let debited = b.slash_bond(submitter, u128::from(fee))?;
+    if debited != fee {
+        return Err(refused("material storage fee was not debited in full from the submitter bond"));
+    }
+    Ok(())
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -36,8 +64,106 @@ pub(super) fn material_intake(
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    if s.version != 1 {
+        return Err(refused("material intake version is not active on this route"));
+    }
+    if shared::context(&b.state, s.claim).is_ok_and(|c| c.batch_notice_only_v1()) {
+        return Err(refused("Batch original requires its reserved material route"));
+    }
+    material_intake_atomic(b, ctx, s, None, None)
+}
+
+/// Candidate native adapter for a demand and response declaration authenticated
+/// by the Batch coordinator. The native intake still verifies the action,
+/// original data and accepted predecessor rows before writing.
+pub(super) fn material_intake_pipelined(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+    ordinal: u64,
+    storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    let request_root = checked_batch_response_slot_v1(&b.state, ctx.daa_score, s, ordinal)?;
+    material_intake_atomic(b, ctx, s, Some((request_root, ordinal)), storage_debit)
+}
+
+pub(super) fn checked_batch_response_slot_v1(
+    state: &PalwChainStateV2,
+    daa: u64,
+    s: &m::SignedMaterialIntakeV1,
+    ordinal: u64,
+) -> Result<Hash64, PalwStateV2Error> {
+    let key = Key::CourtBatchDemand(s.claim, ordinal);
+    let Some(Row::CourtBatchDemand(demand)) = state.staged_court_row_v1(&key) else {
+        return Err(refused("Batch material has no accepted demand"));
+    };
+    if demand.scope_id != s.scope_id {
+        return Err(refused("Batch material differs from the retained request"));
+    }
+    let request_root = demand.request_root;
+    let context = shared::context(state, s.claim).map_err(refused)?;
+    let retained;
+    let declaration = match &s.action {
+        m::MaterialActionV1::Begin { .. } => s,
+        m::MaterialActionV1::Part { draft_id, .. } | m::MaterialActionV1::Finish { draft_id } => {
+            let draft = own_draft(state, s, *draft_id, Some(request_root))?;
+            retained = m::SignedMaterialIntakeV1 {
+                version: draft.version,
+                claim: draft.claim,
+                scope_id: draft.scope_id,
+                target: draft.target,
+                submitter: draft.submitter,
+                action: m::MaterialActionV1::Begin { total_bytes: draft.total_bytes, body_hash: draft.body_hash },
+                signature: Vec::new(),
+            };
+            &retained
+        }
+    };
+    let m::MaterialActionV1::Begin { total_bytes, .. } = declaration.action else {
+        return Err(refused("Batch material declaration missing"));
+    };
+    // This is an exact slot lookup. Batch-only Opens already bind the
+    // native target ceiling; subsequent steps use the retained draft.
+    let delivery = m::batch::MaterialBatchDeliveryV1::from_accepted_demand_v1(context, &demand.demand, ordinal, declaration, total_bytes)
+        .map_err(refused)?;
+    if delivery.request_root_v1() != request_root {
+        return Err(refused("Batch material delivery root differs from the retained demand"));
+    }
+    let service = state.court_service_state_v1().ok_or_else(|| refused("Batch material has no rooted service book"))?;
+    let binding = service.claims.get(&s.claim).ok_or_else(|| refused("Batch material original has no service binding"))?;
+    let id = delivery.check_slot_v1(&service.book, daa, s).map_err(refused)?;
+    if !binding.packet_ids.contains(&id) {
+        return Err(refused("Batch material slot is not funded by this original"));
+    }
+    if matches!(s.action, m::MaterialActionV1::Begin { .. }) {
+        let schedule = m::material_intake_schedule_v1().map_err(|_| refused("Batch material storage schedule missing"))?;
+        delivery
+            .check_draft_schedule_v1(&service.book, schedule)
+            .map_err(|err| refused(format!("Batch material draft schedule: {err:?}")))?;
+    }
+    Ok(request_root)
+}
+
+#[cfg(test)]
+pub(super) fn material_intake_pipelined_codec_test(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+    request_root: Hash64,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    assert_eq!(s.version, m::MATERIAL_BATCH_VERSION);
+    material_intake_atomic(b, ctx, s, Some((request_root, 0)), None)
+}
+
+fn material_intake_atomic(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    s: &m::SignedMaterialIntakeV1,
+    batch_request: Option<(Hash64, u64)>,
+    storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
+) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
     let saved = b.try_checkpoint()?;
-    let result = material_intake_inner(b, ctx, s);
+    let result = material_intake_inner(b, ctx, s, batch_request, storage_debit);
     if result.is_err() {
         b.restore(saved);
     }
@@ -48,11 +174,15 @@ fn material_intake_inner(
     b: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     s: &m::SignedMaterialIntakeV1,
+    batch_request: Option<(Hash64, u64)>,
+    storage_debit: Option<&m::MaterialBatchStorageDebitV1>,
 ) -> Result<MaterialIntakeEffectV1, PalwStateV2Error> {
+    let request_root = batch_request.map(|(root, _)| root);
     if !b.extras.staged_tir_route_active {
         return Err(refused("material intake is dormant below palw_staged_tir_route_v1"));
     }
-    let schedule = m::material_intake_schedule_v1().map_err(|_| refused("material intake storage fee schedule is not adopted"))?;
+    let schedule = m::material_intake_schedule_at_fence_v1(b.extras.staged_tir_route_active)
+        .map_err(|_| refused("material intake storage fee schedule is not adopted"))?;
     let network = b.extras.tir_public_network_domain_v1.ok_or_else(|| refused("material intake native network domain missing"))?;
     let c = shared::context(&b.state, s.claim).map_err(refused)?.clone();
     if ctx.daa_score < c.original_accepted_daa || ctx.daa_score >= c.hard_daa {
@@ -67,17 +197,34 @@ fn material_intake_inner(
     if !matches!(bond.status, PalwBondStatusV2::Active) || bond.collateral < b.params.min_collateral_sompi() {
         return Err(refused("material submitter is not active/above existing floor"));
     }
-    s.verify_v1(network, &bond.pubkey).map_err(refused)?;
-    let source = c.source(&b.state).map_err(refused)?;
+    match request_root {
+        Some(root) => s.verify_batch_v1(network, root, &bond.pubkey),
+        None => s.verify_v1(network, &bond.pubkey),
+    }
+    .map_err(refused)?;
+    let booked_batch = request_root.is_some() && c.batch_notice_only_v1();
     let complete = m::target_complete_v1(&b.state, s.claim, s.target).map_err(refused)?;
     match &s.action {
         m::MaterialActionV1::Begin { total_bytes, body_hash } => {
-            let draft_id = m::material_draft_id_v1(s.claim, s.target, s.submitter, *total_bytes, *body_hash).map_err(refused)?;
+            if m::material_is_pipelined_v1(s.version) && *total_bytes > m::MATERIAL_PIPELINED_MAX_BYTES {
+                return Err(refused("pipelined material exceeds its part cap"));
+            }
+            let draft_id = match request_root {
+                Some(root) => m::material_batch_draft_id_v1(root, s.claim, s.target),
+                None => m::material_draft_id_for_version(s.version, s.claim, s.target, s.submitter, *total_bytes, *body_hash),
+            }
+            .map_err(refused)?;
             let key = Key::CourtMaterialDraft(s.claim, draft_id);
             match b.state.staged_court_row_v1(&key) {
                 Some(Row::CourtMaterialDraft(old)) => {
                     if ctx.daa_score < old.begun_daa {
                         return Err(refused("material Begin replay predates accepted draft"));
+                    }
+                    if let Some(root) = request_root
+                        && (old.head, old.submitter, old.total_bytes, old.body_hash)
+                            != (root, s.submitter, *total_bytes, *body_hash)
+                    {
+                        return Err(refused("Batch range already has another signed declaration"));
                     }
                     return Ok(MaterialIntakeEffectV1::Retried);
                 }
@@ -87,12 +234,21 @@ fn material_intake_inner(
             if complete {
                 return Ok(MaterialIntakeEffectV1::AlreadyComplete);
             }
-            let program = m::class_program_v1(&b.state, s.claim).map_err(refused)?;
-            let leaves = m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?;
-            let bound = m::target_bound_v1(&b.state, &c, &source, s.target, &program, &leaves).map_err(refused)?;
-            if *total_bytes == 0 || *total_bytes > bound {
-                return Err(refused("material declaration exceeds the original's native requirement"));
-            }
+            // The Batch-only path reached this point through its accepted
+            // range and exact paid slot. Rebuilding the legacy all-root
+            // universe here can refuse a response to an already booked Open.
+            let legacy = if booked_batch {
+                None
+            } else {
+                let source = c.source(&b.state).map_err(refused)?;
+                let program = m::class_program_v1(&b.state, s.claim).map_err(refused)?;
+                let leaves = m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?;
+                let bound = m::target_bound_v1(&b.state, &c, &source, s.target, &program, &leaves).map_err(refused)?;
+                if *total_bytes == 0 || *total_bytes > bound {
+                    return Err(refused("material declaration exceeds the original's native requirement"));
+                }
+                Some((source, program, leaves))
+            };
             let lkey = Key::CourtMaterialLedger(s.claim, s.submitter);
             let mut ledger = match b.state.staged_court_row_v1(&lkey) {
                 Some(Row::CourtMaterialLedger(l)) => (**l).clone(),
@@ -100,7 +256,10 @@ fn material_intake_inner(
                     version: 1,
                     claim: s.claim,
                     submitter: s.submitter,
-                    budget_bytes: m::claim_budget_v1(&b.state, &c, &source, &program, &leaves).map_err(refused)?,
+                    budget_bytes: match &legacy {
+                        Some((source, program, leaves)) => m::claim_budget_v1(&b.state, &c, source, program, leaves).map_err(refused)?,
+                        None => m::batch::booked_material_ledger_ceiling_v1(&b.state, &c).map_err(refused)?,
+                    },
                     reserved_bytes: 0,
                     charged_sompi: 0,
                     material_until_daa: c.material_until_daa,
@@ -114,17 +273,9 @@ fn material_intake_inner(
                 .ok_or_else(|| refused("material declaration exceeds the submitter's per-claim native budget"))?;
             let fee = schedule.sompi_per_byte.checked_mul(*total_bytes).ok_or_else(|| refused("material fee overflow"))?;
             ledger.charged_sompi = ledger.charged_sompi.checked_add(fee).ok_or_else(|| refused("material fee overflow"))?;
-            let expires_daa = ctx
-                .daa_score
-                .checked_add(schedule.draft_ttl_daa)
-                .ok_or_else(|| refused("material TTL overflow"))?
-                .min(c.hard_daa)
-                .min(c.material_until_daa);
-            if expires_daa <= ctx.daa_score {
-                return Err(refused("material draft would expire at once"));
-            }
+            let expires_daa = schedule.draft_expires_v1(ctx.daa_score, c.hard_daa, c.material_until_daa).map_err(refused)?;
             let draft = m::MaterialDraftV1 {
-                version: 1,
+                version: s.version,
                 claim: s.claim,
                 scope_id: c.scope_id,
                 target: s.target,
@@ -136,25 +287,26 @@ fn material_intake_inner(
                 begun_daa: ctx.daa_score,
                 last_daa: ctx.daa_score,
                 accepted_bytes: 0,
-                head: Hash64::default(),
+                head: request_root.unwrap_or_default(),
                 expires_daa,
                 material_until_daa: c.material_until_daa,
             };
-            // audit B-09 (fix-b): a fee is never merely ACCOUNTED. Its payer is an unadopted part of the V5 storage schedule, and a
-            // debit here would also leave the intake's derived native read/write set, so a non-zero fee REFUSES the intake (nothing
-            // written) until V5 adopts the payer and its debit; a zero fee charges nothing and records nothing owed.
-            if fee > 0 {
-                return Err(refused(
-                    "material storage fee has no adopted payer (V5): intake refused rather than accounted and never debited",
-                ));
+            if let Some((root, ordinal)) = batch_request.filter(|_| fee > 0) {
+                let debit = storage_debit.ok_or_else(|| refused("Batch material storage fee has no accepted carrier debit"))?;
+                debit.check_v1(s, root, ordinal, ctx, fee).map_err(refused)?;
+            } else if batch_request.is_none() {
+                debit_submitter_storage_fee_v1(b, s.submitter, fee, ctx.daa_score)?;
             }
             b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
             b.write_staged_row_v1(key, Some(Row::CourtMaterialDraft(Box::new(draft))))?;
             Ok(MaterialIntakeEffectV1::Begun)
         }
         m::MaterialActionV1::Part { draft_id, offset, bytes } => {
-            let mut draft = own_draft(b, s, *draft_id)?;
-            if ctx.daa_score >= draft.expires_daa || ctx.daa_score < draft.last_daa {
+            let mut draft = own_draft(&b.state, s, *draft_id, request_root)?.clone();
+            if ctx.daa_score >= draft.expires_daa
+                || ctx.daa_score < draft.last_daa
+                || draft.pipelined() && ctx.daa_score <= draft.begun_daa
+            {
                 return Err(refused("material part outside its draft's window"));
             }
             let part_key = Key::CourtMaterialPart(*draft_id, *offset);
@@ -167,56 +319,83 @@ fn material_intake_inner(
             if complete {
                 return Err(refused("material target already complete; no further storage"));
             }
-            let end = crate::palw_court_shared_tir_stream_v1::check_shared_stream_part_v1(
-                draft.total_bytes,
-                draft.accepted_bytes,
-                *offset,
-                bytes.len(),
-            )
+            let accepted = if draft.pipelined() {
+                draft.check_pipelined_geometry(*offset, bytes.len(), draft.accepted_bytes)
+            } else {
+                crate::palw_court_shared_tir_stream_v1::check_shared_stream_part_v1(
+                    draft.total_bytes,
+                    draft.accepted_bytes,
+                    *offset,
+                    bytes.len(),
+                )
+            }
             .map_err(refused)?;
-            let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
-            q.exact_v1::<u8>(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
-            let _raw =
-                crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(PalwStateV2Error::NativeResource)?;
+            use crate::palw_native_resource_v1::{
+                NativeCoverageV1, reserve_native_pending_requests_v1, reserve_native_requests_v1,
+            };
+            let reserve = if request_root.is_some() { reserve_native_pending_requests_v1 } else { reserve_native_requests_v1 };
+            let raw = reserve(bytes.len() as u64).map_err(PalwStateV2Error::NativeResource)?;
+            let mut retained_bytes = Vec::new();
+            retained_bytes.try_reserve_exact(bytes.len()).map_err(|_| {
+                PalwStateV2Error::NativeResource(NativeCoverageV1::unsupported::<Vec<u8>>("material part", "allocation refused"))
+            })?;
+            retained_bytes.extend_from_slice(bytes);
+            if let Some(lease) = &raw {
+                lease.materialized_v1();
+            }
             let part = m::MaterialPartV1 {
-                version: 1,
+                version: draft.version,
                 claim: s.claim,
                 draft_id: *draft_id,
                 offset: *offset,
-                previous: draft.head,
-                bytes: bytes.clone(),
+                previous: if draft.pipelined() { Hash64::default() } else { draft.head },
+                bytes: retained_bytes,
                 daa: ctx.daa_score,
                 expires_daa: draft.expires_daa,
             };
-            draft.head = m::material_part_digest_v1(&part).map_err(refused)?;
-            draft.accepted_bytes = end;
+            if !draft.pipelined() {
+                draft.head = m::material_part_digest_v1(&part).map_err(refused)?;
+            }
+            draft.accepted_bytes = accepted;
             draft.last_daa = ctx.daa_score;
             b.write_staged_row_v1(part_key, Some(Row::CourtMaterialPart(Box::new(part).into())))?;
             b.write_staged_row_v1(Key::CourtMaterialDraft(s.claim, *draft_id), Some(Row::CourtMaterialDraft(Box::new(draft))))?;
             Ok(MaterialIntakeEffectV1::Part)
         }
         m::MaterialActionV1::Finish { draft_id } => {
-            let draft = own_draft(b, s, *draft_id)?;
+            let draft = own_draft(&b.state, s, *draft_id, request_root)?.clone();
             if complete {
                 // First complete authenticated body already won; this one is released.
                 release_draft(b, &draft)?;
                 return Ok(MaterialIntakeEffectV1::AlreadyComplete);
             }
-            if ctx.daa_score >= draft.expires_daa || draft.accepted_bytes != draft.total_bytes {
+            if ctx.daa_score >= draft.expires_daa
+                || draft.accepted_bytes != draft.total_bytes
+                || draft.pipelined() && ctx.daa_score <= draft.last_daa
+            {
                 return Err(refused("material Finish of an expired or incomplete draft"));
             }
-            let body = draft.body(&b.state).map_err(refused)?;
+            use super::palw_court_shared_tir_fold_v1::shared_ids_auth_fault_v2;
+            let (body, _body_lease) = draft.body_reserved(&b.state).map_err(|error| {
+                if request_root.is_some() { shared_ids_auth_fault_v2(error) } else { refused(error.to_string()) }
+            })?;
             if crate::palw_tir_public_owned_v1::palw_tir_public_body_hash_v1(&body) != draft.body_hash {
                 return Err(refused("material body checksum mismatch"));
             }
+            let source = c.source(&b.state).map_err(refused)?;
             match s.target {
                 m::MaterialTargetV1::FullIds => {
-                    let ids = crate::palw_court_shared_tir_stream_state_v1::decode_ids_body(&source, &body).map_err(refused)?;
+                    let ids = if request_root.is_some() {
+                        crate::palw_court_shared_tir_stream_state_v1::decode_ids_body_classified_v1(&source, &body)
+                            .map_err(shared_ids_auth_fault_v2)?
+                    } else {
+                        crate::palw_court_shared_tir_stream_state_v1::decode_ids_body(&source, &body).map_err(refused)?
+                    };
                     super::palw_court_shared_tir_fold_v1::share_ids(b, ctx, s.claim, ids.rows_root_v1(), ids.ids_v1())?;
                 }
                 target => {
                     let leaves = match target {
-                        m::MaterialTargetV1::Parameter { .. } => {
+                        m::MaterialTargetV1::Parameter { .. } if !booked_batch => {
                             Some(m::required_parameter_leaves_v1(&b.state, s.claim, schedule.cover).map_err(refused)?)
                         }
                         _ => None,
@@ -245,25 +424,49 @@ fn material_intake_inner(
     }
 }
 
-fn own_draft(
-    b: &TransitionBuilder<'_>,
+fn own_draft<'a>(
+    state: &'a PalwChainStateV2,
     s: &m::SignedMaterialIntakeV1,
     draft_id: Hash64,
-) -> Result<m::MaterialDraftV1, PalwStateV2Error> {
-    let Some(Row::CourtMaterialDraft(draft)) = b.state.staged_court_row_v1(&Key::CourtMaterialDraft(s.claim, draft_id)) else {
+    request_root: Option<Hash64>,
+) -> Result<&'a m::MaterialDraftV1, PalwStateV2Error> {
+    let Some(Row::CourtMaterialDraft(draft)) = state.staged_court_row_v1(&Key::CourtMaterialDraft(s.claim, draft_id)) else {
         return Err(refused("material draft missing"));
     };
-    if draft.submitter != s.submitter || draft.target != s.target || draft.scope_id != s.scope_id {
+    if draft.version != s.version
+        || draft.submitter != s.submitter
+        || draft.target != s.target
+        || draft.scope_id != s.scope_id
+        || request_root.is_some_and(|root| draft.head != root)
+    {
         return Err(refused("material draft belongs to another submitter/target"));
     }
-    Ok((**draft).clone())
+    Ok(draft.as_ref())
 }
 
 /// Removes a draft and its parts and returns its reservation. The ledger's
-/// accounting of the charged schedule price is kept (always 0 since audit B-09 fix-b: a non-zero fee refuses the intake).
+/// accounting of the charged schedule price is kept.
 pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDraftV1) -> Result<(), PalwStateV2Error> {
+    let lkey = Key::CourtMaterialLedger(draft.claim, draft.submitter);
+    let next_ledger = match b.state.staged_court_row_v1(&lkey) {
+        Some(Row::CourtMaterialLedger(ledger)) => {
+            let mut ledger = (**ledger).clone();
+            ledger.reserved_bytes = if draft.pipelined() {
+                ledger
+                    .reserved_bytes
+                    .checked_sub(draft.total_bytes)
+                    .ok_or_else(|| refused("pipelined material reservation missing"))?
+            } else {
+                ledger.reserved_bytes.saturating_sub(draft.total_bytes)
+            };
+            Some(ledger)
+        }
+        _ if draft.pipelined() => return Err(refused("pipelined material ledger missing")),
+        _ => None,
+    };
     let mut at = 0u64;
-    while at < draft.accepted_bytes {
+    let end = if draft.pipelined() { draft.total_bytes } else { draft.accepted_bytes };
+    while at < end {
         let key = Key::CourtMaterialPart(draft.draft_id, at);
         if b.state.staged_court_row_v1(&key).is_some() {
             b.write_staged_row_v1(key, None)?;
@@ -274,11 +477,8 @@ pub(super) fn release_draft(b: &mut TransitionBuilder<'_>, draft: &m::MaterialDr
     if b.state.staged_court_row_v1(&dkey).is_some() {
         b.write_staged_row_v1(dkey, None)?;
     }
-    let lkey = Key::CourtMaterialLedger(draft.claim, draft.submitter);
-    if let Some(Row::CourtMaterialLedger(l)) = b.state.staged_court_row_v1(&lkey) {
-        let mut l = (**l).clone();
-        l.reserved_bytes = l.reserved_bytes.saturating_sub(draft.total_bytes);
-        b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(l))))?;
+    if let Some(ledger) = next_ledger {
+        b.write_staged_row_v1(lkey, Some(Row::CourtMaterialLedger(Box::new(ledger))))?;
     }
     Ok(())
 }
@@ -333,8 +533,8 @@ impl TransitionBuilder<'_> {
             }
             (Row::CourtMaterial(m), None) => m.check_context(&self.state).map_err(refused),
             (Row::CourtMaterialDraft(d), Some(Row::CourtMaterialDraft(o))) => {
-                if (d.claim, d.target, d.submitter, d.total_bytes, d.body_hash, d.begun_daa, d.expires_daa)
-                    != (o.claim, o.target, o.submitter, o.total_bytes, o.body_hash, o.begun_daa, o.expires_daa)
+                if (d.version, d.claim, d.target, d.submitter, d.total_bytes, d.body_hash, d.begun_daa, d.expires_daa)
+                    != (o.version, o.claim, o.target, o.submitter, o.total_bytes, o.body_hash, o.begun_daa, o.expires_daa)
                     || d.accepted_bytes < o.accepted_bytes
                     || d.last_daa < o.last_daa
                 {

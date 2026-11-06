@@ -14,6 +14,15 @@ pub struct BlockTransactionsV3 {
     allocation: Option<Arc<CoinbaseAllocationV2>>,
 }
 
+impl crate::palw_native_resource_v1::NativeHeapV1 for BlockTransactionsV3 {
+    fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
+        let Self { transactions, allocation } = self;
+        // Tickets own no variable buffers; retain their Arc/object allocation.
+        let owner = if allocation.is_some() { (size_of::<CoinbaseAllocationV2>() + 2 * size_of::<usize>()) as u64 } else { 0 };
+        transactions.native_heap_v1(path).add::<Self>(NativeCoverageV1::Bounded { bytes: owner }, path)
+    }
+}
+
 impl Default for BlockTransactionsV3 {
     fn default() -> Self {
         Vec::new().into()

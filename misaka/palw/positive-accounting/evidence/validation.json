@@ -1,0 +1,44 @@
+{
+  "base_commit": "a85152edcbb3b41b6bd16bb1c83dacb6a425167c",
+  "contract_version": 2,
+  "contract_revision": 1,
+  "checks": [
+    {
+      "command": [
+        "scripts/ci/positive-accounting-ci.sh"
+      ],
+      "exit_code": 0,
+      "raw_log": "a5-unit-tests.log"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract"
+      ],
+      "exit_code": 0,
+      "raw_log": "a0-contract-tests.log"
+    }
+  ],
+  "source_sha256": {
+    "misaka/palw/positive-accounting/src/credit/tests.rs": "10b6e425933aa5c74dfc247e211297b602db9e9104f48bd6272282e0a9d64cc6",
+    "misaka/palw/positive-accounting/src/credit.rs": "afcbe2f744effa515fc77d1dbb0e5a49e9d4970518e9f847fc4a26278bc140e8",
+    "misaka/palw/positive-accounting/src/fees/tests.rs": "04d1b8a80f7bb49ec2b05139b4523b927576ca4ac5ddb91855bd6481beb76c74",
+    "misaka/palw/positive-accounting/src/fees.rs": "8ed952af9d65b5d179ad0840728777793f3ddb7b7eff2da43d1a7169988ce0b3",
+    "misaka/palw/positive-accounting/src/lib.rs": "5e9de0d6b3211b4129e24fc5c81f25214ed30ba7caf81a5dc55df72c26e23cb3",
+    "misaka/palw/positive-accounting/Cargo.toml": "c4f3ea3b8a5dc04d1e34def6dfc20c391d5b6e9e70c0f9a7c34232bdb512ea4e",
+    "scripts/ci/positive-accounting-ci.sh": "518e1e2d333fa497b1fde21aea45ecbf9e7a284813f283b955538819605595dd"
+  },
+  "native_activation": "unchanged / disabled",
+  "not_verified": [
+    "native money engine integration",
+    "actual Court adapters",
+    "all legacy G14 regressions",
+    "real processes",
+    "restart/reorg/IBD",
+    "performance"
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "scope": "startup scope metadata/static review/input dry-run; no runtime or RSS measurements",
+  "source_commit": "e328aae6273589b06a8a6daca88ce9499e02f5f5",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 1317,
+      "sha256": "a8826d02c192354f9a9b1dd43a666aae00b3efcf88ea0237590a615b3d5b606a"
+    },
+    {
+      "path": "preflight/manifest.json",
+      "bytes": 2033711,
+      "sha256": "50fee33d16f6fb1a17d4e3a644029795baee270be6ede0c3cdd262bf4905f593"
+    },
+    {
+      "path": "report.json",
+      "bytes": 2397,
+      "sha256": "442fe7e32fe718da369768971a98607f38d3f506698c784ca4b0ca45c4def10e"
+    },
+    {
+      "path": "stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "stdout.log",
+      "bytes": 221,
+      "sha256": "f579a0446a59f4693cd0561be75368015b0e334a015a2bba767f8813695e80de"
+    }
+  ]
+}

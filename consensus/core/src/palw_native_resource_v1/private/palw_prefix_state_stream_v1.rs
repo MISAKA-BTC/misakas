@@ -5,6 +5,10 @@ native_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixStateStreamV1; cont
 native_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixStreamCheckpointV1; context, next_tile, value_bytes, digest, pending);
 native_struct!(crate::palw_prefix_state_stream_v1::PalwPrefixTileStreamV1; length, offset, expected, hash);
 
+// Reflected owner-local layouts may require parent-private names; this import
+// is intentionally conditional on that layout, like the visitor imports below.
+#[allow(unused_imports)]
+use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]
 use crate::palw_native_resource_v1::{NativeWireReaderV1, NativeWireScanV1, NativeWireShapeV1};

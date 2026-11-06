@@ -144,7 +144,12 @@ fn provider_publication_after_rename_failure_requires_reopen_for_both_snapshot_p
 #[cfg(unix)]
 fn wait_for_kill(stage: u8) -> io::Result<()> {
     if stage.to_string() == std::env::var("MISAKA_PROVIDER_KILL_STAGE_V4").unwrap() {
-        fs::write(std::env::var_os("MISAKA_PROVIDER_KILL_READY_V4").unwrap(), stage.to_string())?;
+        let ready = PathBuf::from(std::env::var_os("MISAKA_PROVIDER_KILL_READY_V4").unwrap());
+        let pending = ready.with_extension("pending");
+        // The parent waits for existence. Publish only the complete signal so
+        // it cannot observe the create-before-write window of fs::write.
+        fs::write(&pending, stage.to_string())?;
+        fs::rename(pending, ready)?;
         loop {
             std::thread::park_timeout(std::time::Duration::from_secs(1));
         }

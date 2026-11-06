@@ -1,0 +1,273 @@
+{
+  "source_head_observed": "9795a6038c1edff2ccaa86d7ca9b4a6876830d1d",
+  "review_mode": "Read-only source signatures; no Cargo, Root/index/artifact patch edits.",
+  "known_compile_error": {
+    "symbol": "palw_tir_public_frame_fixture_v1",
+    "old_call": "palw_tir_public_frame_fixture_v1(2)",
+    "correct_call": "palw_tir_public_frame_fixture_v1(None, 2)",
+    "root_owner_applying_fix": true,
+    "acknowledgement": "Author static review missed the Option<forge> argument; formatting/apply checks did not establish type correctness."
+  },
+  "additional_signature_mismatches_found": [],
+  "checked_headers": [
+    {
+      "file": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "symbol": "palw_tir_public_frame_fixture_v1",
+      "line": 597,
+      "header": "fn palw_tir_public_frame_fixture_v1(forge: Option<(usize, usize)>, maximum_custodians: u64) -> PalwTirPublicFrameFixtureV1"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_claim_v1.rs",
+      "symbol": "palw_tir_public_frame_fixture_ruled_v1",
+      "line": 694,
+      "header": "fn palw_tir_public_frame_fixture_ruled_v1(\n    maximum_custodians: u64,\n    edit_job: impl FnOnce(&mut crate::palw_freeprompt_v3::PalwFreePromptJobV3),\n    wrong_at: Option<u32>,\n) -> PalwTirPublicFrameFixtureV1"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_fold_v1.rs",
+      "symbol": "original_plan_v1",
+      "line": 401,
+      "header": "fn original_plan_v1(\n    b: &TransitionBuilder<'_>,\n    now_daa: u64,\n    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,\n    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,\n) -> Result<\n    (\n        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationPlanV1,\n        crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1,\n        u64,\n        crate::palw_staged_preclaim_v1::PalwStagedClaimGeometryV1,\n    ),\n    PalwStateV2Error,\n>"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_fold_v1.rs",
+      "symbol": "prepare_original_v1",
+      "line": 622,
+      "header": "fn prepare_original_v1(\n    b: &TransitionBuilder<'_>,\n    ctx: &PalwBlockContextV2,\n    object: &PalwConsensusObjectV2,\n    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,\n    header: &crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1,\n    pledge: &crate::palw_tir_public_custody_v1::PalwTirPublicCustodyPledgeV1,\n) -> Result<Frame, PalwStateV2Error>"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_fold_v1.rs",
+      "symbol": "world",
+      "line": 2070,
+      "header": "fn world(fx: &PalwTirPublicFrameFixtureV1, frame: &Frame) -> (PalwChainStateV2, PalwStateParamsV2, PalwTransitionExtrasV1)"
+    },
+    {
+      "file": "consensus/core/src/palw_tir_public_fp_envelope_v1.rs",
+      "symbol": "new_v1",
+      "line": 72,
+      "header": "fn new_v1(\n        original_payload: Vec<u8>,\n        header: PalwPublicTirBindingHeaderV1,\n        pledge: PalwTirPublicCustodyPledgeV1,\n        declared_rent_sompi: u64,\n    ) -> Result<Self, String>"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/transition_builder.rs",
+      "symbol": "try_new",
+      "line": 34,
+      "header": "fn try_new(\n        parent: &PalwChainStateV2,\n        params: &'a PalwStateParamsV2,\n        unavailable_abstains: bool,\n        capability_bound: bool,\n        uncertified_weightless: bool,\n        da_court: bool,\n        extras: &'a PalwTransitionExtrasV1,\n    ) -> Result<Self, PalwStateV2Error>"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/transition_builder.rs",
+      "symbol": "gate_room",
+      "line": 4015,
+      "header": "fn gate_room(&self, bond: &PalwBondKeyV2, now_daa: u64, gate: PalwRcoreGateV1) -> u128"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/objects.rs",
+      "symbol": "apply_object",
+      "line": 5,
+      "header": "fn apply_object(\n    builder: &mut TransitionBuilder<'_>,\n    ctx: &PalwBlockContextV2,\n    object: &PalwConsensusObjectV2,\n) -> Result<(), PalwStateV2Error>"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/state_params.rs",
+      "symbol": "with_fp_quanta",
+      "line": 1387,
+      "header": "fn with_fp_quanta(mut self, quanta_per_canonical_job: u32, max_quanta_per_receipt: u32) -> Result<Self, PalwStateV2Error>"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/state_params.rs",
+      "symbol": "with_fp_exposure_ceiling",
+      "line": 1417,
+      "header": "fn with_fp_exposure_ceiling(mut self, ratio_permille: u32) -> Result<Self, PalwStateV2Error>"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/state_params.rs",
+      "symbol": "with_panel_v3",
+      "line": 939,
+      "header": "fn with_panel_v3(mut self, mirror: Option<crate::palw_permissionless_panel_v1::PalwPanelV3ParamsV1>) -> Self"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/state_params.rs",
+      "symbol": "with_panel_lifetime_v2",
+      "line": 2311,
+      "header": "fn with_panel_lifetime_v2(mut self, mirror: Option<crate::palw_panel_lifetime_v2::PalwPanelLifetimeMirrorV2>) -> Self"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/state_params.rs",
+      "symbol": "window_court",
+      "line": 2150,
+      "header": "fn window_court(&self) -> u64"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/state_params.rs",
+      "symbol": "window_challenge",
+      "line": 1637,
+      "header": "fn window_challenge(&self) -> u64"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/chain_state.rs",
+      "symbol": "claim",
+      "line": 1738,
+      "header": "fn claim(&self, id: &Hash64) -> Option<&PalwClaimStateV2>"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/chain_state.rs",
+      "symbol": "reserved_exposure",
+      "line": 2061,
+      "header": "fn reserved_exposure(&self, key: &PalwBondKeyV2) -> u128"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2/chain_state.rs",
+      "symbol": "state_root",
+      "line": 2828,
+      "header": "fn state_root(&self) -> Hash64"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2.rs",
+      "symbol": "palw_claim_commitment_v1",
+      "line": 2760,
+      "header": "fn palw_claim_commitment_v1(params: &PalwStateParamsV2, claim: &PalwClaimStateV2, now_daa: u64) -> Option<u128>"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2.rs",
+      "symbol": "palw_operator_id_v2",
+      "line": 1106,
+      "header": "fn palw_operator_id_v2(operator_pubkey: &[u8]) -> Hash64"
+    },
+    {
+      "file": "consensus/core/src/palw_state_v2.rs",
+      "symbol": "from_state",
+      "line": 25151,
+      "header": "fn from_state(state: &PalwChainStateV2) -> Self"
+    },
+    {
+      "file": "consensus/core/src/palw_fp_execution_v3.rs",
+      "symbol": "palw_fp_job_pin_v1",
+      "line": 369,
+      "header": "fn palw_fp_job_pin_v1(commitment: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3) -> Hash64"
+    },
+    {
+      "file": "consensus/core/src/palw_fp_execution_v3.rs",
+      "symbol": "palw_fp_job_pin_of_context_v1",
+      "line": 385,
+      "header": "fn palw_fp_job_pin_of_context_v1(ctx: &PalwJobContextV2) -> Hash64"
+    },
+    {
+      "file": "consensus/core/src/palw_permissionless_panel_v1.rs",
+      "symbol": "panel_admitted_claim_v1",
+      "line": 232,
+      "header": "fn panel_admitted_claim_v1(\n    state: &PalwChainStateV2,\n    claim_id: Hash64,\n    required_exposure: u64,\n) -> Result<AdmittedClaimV1, PanelErrorV1>"
+    },
+    {
+      "file": "consensus/core/src/palw_panel_lifetime_v2.rs",
+      "symbol": "panel_lifetime_claim_v2",
+      "line": 196,
+      "header": "fn panel_lifetime_claim_v2(\n    state: &crate::palw_state_v2::PalwChainStateV2,\n    params: &crate::palw_state_v2::PalwStateParamsV2,\n    id: &Hash64,\n    claim: &PalwClaimStateV2,\n) -> Result<Option<PalwPanelLifetimeEnrollmentV2>, String>"
+    },
+    {
+      "file": "consensus/core/src/palw_panel_lifetime_v2.rs",
+      "symbol": "panel_authorization_key_v2",
+      "line": 16,
+      "header": "fn panel_authorization_key_v2(id: &[u8; 64]) -> Vec<u8>"
+    },
+    {
+      "file": "consensus/core/src/palw_panel_lifetime_v2.rs",
+      "symbol": "panel_capture_key_v2",
+      "line": 19,
+      "header": "fn panel_capture_key_v2(id: &Hash64) -> Vec<u8>"
+    },
+    {
+      "file": "consensus/core/src/palw_panel_lifetime_v2.rs",
+      "symbol": "unapproved_probe_at",
+      "line": 78,
+      "header": "fn unapproved_probe_at(activation: ForkActivation) -> Self"
+    },
+    {
+      "file": "consensus/core/src/palw_kernel_route_v1.rs",
+      "symbol": "palw_kernel_route_policy_v1",
+      "line": 281,
+      "header": "fn palw_kernel_route_policy_v1(network_domain: Hash64, ruleset_digest: Hash64) -> LedgerPolicyV1"
+    },
+    {
+      "file": "consensus/core/src/palw_kernel_route_v1.rs",
+      "symbol": "palw_kernel_bond_id_v1",
+      "line": 145,
+      "header": "fn palw_kernel_bond_id_v1(bond: &PalwBondKeyV2) -> Digest"
+    },
+    {
+      "file": "consensus/core/src/palw_kernel_route_v1.rs",
+      "symbol": "new",
+      "line": 539,
+      "header": "fn new(policy: LedgerPolicyV1, opv: Option<OpvPolicyV1>, scalars: LedgerScalarsV1) -> Self"
+    },
+    {
+      "file": "consensus/core/src/palw_staged_court_fold_v1.rs",
+      "symbol": "rebuild_indices",
+      "line": 3799,
+      "header": "fn rebuild_indices(state: &mut PalwChainStateV2)"
+    },
+    {
+      "file": "consensus/core/src/palw_panel_v2.rs",
+      "symbol": "palw_receipt_message_v2",
+      "line": 2958,
+      "header": "fn palw_receipt_message_v2(network_domain: Hash64, claim: Hash64, verdict: PalwReceiptVerdictV2, signed_daa: u64) -> Hash64"
+    },
+    {
+      "file": "consensus/core/src/palw_constraint_stream_carriage_v1.rs",
+      "symbol": "palw_staged_verify_mldsa87_v1",
+      "line": 780,
+      "header": "fn palw_staged_verify_mldsa87_v1(key: &[u8], message: &[u8], signature: &[u8], context: &[u8]) -> bool"
+    },
+    {
+      "file": "crypto/hashes/src/lib.rs",
+      "symbol": "blake2b_512_address_payload",
+      "line": 56,
+      "header": "fn blake2b_512_address_payload(data: &[u8]) -> Hash64"
+    },
+    {
+      "file": "misaka/palw/kernel/src/panel_lifetime_v2.rs",
+      "symbol": "validate",
+      "line": 33,
+      "header": "fn validate(&self) -> Result<(), &'static str>"
+    },
+    {
+      "file": "misaka/palw/kernel/src/panel_lifetime_v2.rs",
+      "symbol": "id",
+      "line": 30,
+      "header": "fn id(&self) -> Digest"
+    },
+    {
+      "file": "misaka/palw/panel/src/types.rs",
+      "symbol": "validate",
+      "line": 62,
+      "header": "fn validate(&self) -> Result<(), PanelErrorV1>"
+    },
+    {
+      "file": "consensus/core/src/config/params.rs",
+      "symbol": "new",
+      "line": 37,
+      "header": "fn new(daa_score: u64) -> Self"
+    },
+    {
+      "file": "/Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libcrux-ml-dsa-0.0.10/src/ml_dsa_87.rs",
+      "symbol": "generate_key_pair",
+      "line": 183,
+      "header": "pub fn generate_key_pair(randomness: [u8; KEY_GENERATION_RANDOMNESS_SIZE]) -> MLDSA87KeyPair"
+    },
+    {
+      "file": "/Users/wata/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libcrux-ml-dsa-0.0.10/src/ml_dsa_87.rs",
+      "symbol": "sign",
+      "line": 208,
+      "header": "pub fn sign(\n    signing_key: &MLDSA87SigningKey,\n    message: &[u8],\n    context: &[u8],\n    randomness: [u8; SIGNING_RANDOMNESS_SIZE],\n) -> Result<MLDSA87Signature, SigningError>"
+    }
+  ],
+  "other_manual_checks": [
+    "FreePromptCommitment payload validate_signature_v3 takes one Fn(&[u8], &[u8], &[u8], &[u8])->bool and uses the fixed existing signing context.",
+    "Source pledge id_v1 receiver-only method; signing call matches existing real-key fixture pattern.",
+    "PalwPanelDutyRowV1, PalwPanelV3ParamsV1, PanelLifetimeAuthorizationV2, PanelConsumerLifetimeTermsV2, authorization/capture/enrollment row fields were checked against actual structs.",
+    "Panel V3 WIRE_VERSION_V2 is 2.",
+    "Hash64 as_bytes yields the expected [u8;64] values used by row DTOs; key helpers expect &[u8;64] or &Hash64 as supplied.",
+    "world/frame, claim/phase, ordinary reservation and actual receipt handler assumptions remain runtime-unverified."
+  ],
+  "runtime_status": "New three tests not verified by this agent; do not infer runtime success from signature review.",
+  "preserved_artifacts": {
+    "r1_patch_sha256": "62f7325936831894ff70f705902d87e437ac82e87f253f894c33d68138f62979",
+    "r2_patch_sha256": "70958f066b8aba41fdf717aaa393cc0335b1659f45e95a37627c256873da8d76"
+  }
+}

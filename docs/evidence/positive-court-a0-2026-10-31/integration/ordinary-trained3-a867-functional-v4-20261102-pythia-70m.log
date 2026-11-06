@@ -1,0 +1,7 @@
+
+running 1 test
+test ordinary_trained_pythia_70m ... ORDINARY_LOCAL_SELF_CONSISTENCY_ONLY model=EleutherAI/pythia-70m REQUESTED_BYTES_CAP=8589934592 physical_rss_quota=UNSUPPORTED outer_monitor=EXTERNAL_NOT_ATTESTED outer_monitor_semantics=sampled_pg_kill_after_sample_only cpu_limit_process_seconds=120 context_max=2048 prefill=16 decode=1 metadata_allowance=536870912 earlier_E=2173892 peak_requested=2992009523 cumulative_requested=5336633933 ordinary_no_trace=1 dense_comparison_has_trace=1 node_claim=0 native_authority=0 public_P=0 full_context_inference=0 independent_HF_expected=0 load_ns=9457054625 ordinary_ns=1506538750 dense_prepare_ns=907625 dense_ns=1566248750 generated=273, output_hash=282a19435f7e3884a8b5ab062580cddf53175ad6701e7bc7022cf33f153d652fcbf9893b2635088bb83fd54fcb49855ecf3e5d565e17cf47a170cfaf6f33ca6d
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 12.54s
+

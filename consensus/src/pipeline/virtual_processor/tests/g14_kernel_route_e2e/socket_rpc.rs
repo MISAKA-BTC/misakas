@@ -24,10 +24,10 @@ fn unhex(text: &str) -> Vec<u8> {
 
 /// **Op 211 over the socket, paged to the end**, reassembled and checked against the served roots (one snapshot across pages).
 async fn route_over(client: &KaspaRpcClient) -> (PalwKernelRouteStateV1, Hash64) {
-    use kaspa_consensus_core::palw_kernel_route_v1::{PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1, PalwKernelRouteHeaderV1};
+    use kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteHeaderV1;
     let mut request = GetPalwKernelRowsRequest { has_cursor: false, after_table: 0, after_key: String::new(), max_bytes: 16 << 10 };
     let (mut header, mut roots): (Option<PalwKernelRouteHeaderV1>, Option<(String, String)>) = (None, None);
-    let (mut rows, mut aux) = (misaka_palw_kernel::rows::LedgerRowsV1::new(), BTreeMap::new());
+    let mut rows = Vec::new();
     let mut seen = 0u64;
     let mut total: Option<u64>;
     loop {
@@ -43,11 +43,7 @@ async fn route_over(client: &KaspaRpcClient) -> (PalwKernelRouteStateV1, Hash64)
         for row in &page.rows {
             seen += 1;
             let table = u8::try_from(row.table).expect("a table fits a u8");
-            if table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1 {
-                rows.insert((table, unhex(&row.key)), unhex(&row.row));
-            } else {
-                aux.insert((table, unhex(&row.key)), unhex(&row.row));
-            }
+            rows.push((table, unhex(&row.key), unhex(&row.row)));
         }
         if !page.more {
             break;
@@ -60,11 +56,15 @@ async fn route_over(client: &KaspaRpcClient) -> (PalwKernelRouteStateV1, Hash64)
         };
     }
     assert_eq!(Some(seen), total, "every row exactly once");
-    let state = PalwKernelRouteStateV1 { header: header.unwrap(), rows, aux, ledger_cache: Default::default() };
-    let (ledger_root, aux_root) = roots.unwrap();
-    assert_eq!(state.ledger_root().to_string(), ledger_root, "the rows root to the served ledger root");
-    assert_eq!(state.aux_root().to_string(), aux_root, "the aux rows to the served aux root");
-    (state, ledger_root.parse().expect("a Hash64"))
+    let header = borsh::to_vec(&header.expect("a first page")).expect("a canonical header");
+    let (ledger_root, aux_root) = roots.expect("a first page");
+    let ledger_root: Hash64 = ledger_root.parse().expect("a ledger Hash64");
+    let aux_root: Hash64 = aux_root.parse().expect("an aux Hash64");
+    let state = PalwKernelRouteStateV1::from_served_rows_v1(&header, rows, &ledger_root, &aux_root)
+        .expect("every served row reconstructs the two roots");
+    assert_eq!(state.ledger_root(), ledger_root);
+    assert_eq!(state.aux_root(), aux_root);
+    (state, ledger_root)
 }
 
 /// **A verifier that holds no state and talks to its node only through `client`.** `node` is the node behind the socket (its funding

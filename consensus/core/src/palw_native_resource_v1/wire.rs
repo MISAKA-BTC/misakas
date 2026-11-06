@@ -54,6 +54,11 @@ impl<R: Read> NativeWireReaderV1<R> {
     pub fn remaining(&self) -> u64 {
         self.remaining
     }
+    /// Owner-local observation only. The legacy increment-before-refusal rule
+    /// and intrinsic limit are unchanged; a failed step may report limit + 1.
+    pub(crate) fn observed_steps_v1(&self) -> u64 {
+        self.steps
+    }
     pub fn into_inner(self) -> R {
         self.inner
     }
@@ -593,5 +598,18 @@ impl NativeWireScanV1 for crate::palw_court_shared_tir_bottom_v1::SharedTirBotto
             sum = sum.merge(u8::scan_native_wire_v1(reader)?)?;
         }
         Ok(sum)
+    }
+}
+
+// The atomic mass is serialized as one little-endian u64.
+impl NativeWireScanV1 for crate::tx::TransactionMass {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        u64::scan_native_wire_v1(reader)
+    }
+}
+
+impl NativeWireScanV1 for crate::tx::ScriptPublicKey {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        u16::scan_native_wire_v1(reader)?.merge(Vec::<u8>::scan_native_wire_v1(reader)?)
     }
 }

@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-31",
+  "candidate_commit": "b3a61454c7cbaa68f405418e61d9b0a0cca6f463",
+  "common_contract": "a85152edc",
+  "common_tir_annex": "d615f62b6",
+  "feature": "positive-contract",
+  "core_test_optimization": 0,
+  "native_activation": "unchanged/closed",
+  "files": {
+    "Cargo.toml": "7b26aaa66e011be4e2f7795436f637f3b8d56568f54ac907eec7cf894b39e266",
+    "Cargo.lock": "15ff7d34ed13b4a37194ab79c5ba57e12aed3cb362fdd140aa432b7d499569b5",
+    "misaka/palw/tir/exec/Cargo.toml": "90039d68f73d1810af7c4e863df0bfd69cbaae9668591baa061b5106a7527926",
+    "misaka/palw/tir/exec/src/node/mod.rs": "ce14a5608e8eeb077266b623f11748662f2031468e89711ad0bbb25d9db03420",
+    "misaka/palw/tir/exec/src/node/positive_check.rs": "51053e8003a490e6085f7b6b7cc7e890d9548464cd6680fe52f93c17a7f4ed90",
+    "misaka/palw/tir/exec/src/node/positive_contract.rs": "2bbae61c218644c569f1a71ac2e9b8372eda0571f06f7e2be29988385c97e5cb",
+    "misaka/palw/tir/exec/tests/positive_check.rs": "a9fee58570e9a10709ce685e0ddac62c09f36592c0be8fa63a6663e8c26f8004",
+    "misaka/palw/tir/exec/tests/positive_check_hardening.rs": "f753a6150d941b51a40a1abf2a9bc0825434c7622d4411882749559ee5eb157f",
+    "misaka/palw/tir/exec/tests/positive_contract.rs": "4d69ea5d6107737a87106dc8366187b01e1f44fb576cc5c38fce8075dcf64e13",
+    "misaka/palw/positive-contract/src/identity.rs": "90336c4e70a9b09e6142f37af579609fb2575d223882f0d0916e31398f01b9ca",
+    "misaka/palw/positive-contract/src/lib.rs": "15865f2ed315051cd450d34061ac5015e0d45d3ee396b053279bf0b69ec50463",
+    "misaka/palw/positive-contract/src/messages.rs": "68b06aa73de26da938333697cf02b4cf832046369598ae83c94a4cf18a3f840b",
+    "misaka/palw/positive-contract/src/ports.rs": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4",
+    "misaka/palw/positive-contract/src/tir.rs": "d43d1d1d051997a5f2bdb760313cb3c670f867dc138e84c2e6a7ed72b0ab59b0",
+    "misaka/palw/positive-contract/src/wire.rs": "d3c7ab58dfaea482243cbe06a0f6fdbc136ffc5c74ee659c7d1c2d3c67226555"
+  }
+}

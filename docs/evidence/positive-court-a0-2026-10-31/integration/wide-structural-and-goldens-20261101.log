@@ -1,0 +1,62 @@
+   Compiling syn v2.0.110
+   Compiling libc v0.2.186
+   Compiling byteorder v1.5.0
+   Compiling serde_core v1.0.228
+   Compiling cfg-if v1.0.0
+   Compiling getrandom v0.2.15
+   Compiling thiserror v1.0.64
+   Compiling zerocopy-derive v0.7.35
+   Compiling syn_derive v0.1.8
+   Compiling borsh-derive v1.5.1
+   Compiling zerocopy v0.7.35
+   Compiling borsh v1.5.1
+   Compiling ppv-lite86 v0.2.20
+   Compiling thiserror-impl v1.0.64
+   Compiling rand_core v0.6.4
+   Compiling serde v1.0.228
+   Compiling rand_chacha v0.3.1
+   Compiling serde_derive v1.0.228
+   Compiling serde_json v1.0.151
+   Compiling misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/core)
+   Compiling rand v0.8.6
+   Compiling misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/gen)
+    Finished `test` profile [unoptimized] target(s) in 10.46s
+     Running tests/golden.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden-1488ba94938d7e5c)
+
+running 3 tests
+test prim_set_id_is_the_keyed_hash_of_the_descriptor ... ok
+test every_primitive_has_vectors_including_its_edges ... ok
+test the_golden_vectors_are_reproduced_byte_for_byte ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/golden_v2.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/golden_v2-301bbe67ecfa36c3)
+
+running 11 tests
+test vision_pipeline_vector ... ok
+test bidirectional_pipeline_vector ... ok
+test encdec_pipeline_vector ... ok
+test pipelines ... ok
+test encoding ... ok
+test vlm_pipeline_vector ... ok
+test programs ... ok
+test demand ... ok
+test eval_pipeline_vectors ... ok
+test admission ... ok
+test scoring_vectors ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/wide_logits_structural.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_logits_structural-e061a44b14c29965)
+
+running 7 tests
+test wide_scheme_matches_the_adopted_independent_keyed_hash_vector ... ok
+test old_i32_and_nonfinal_logits_remain_structurally_valid_and_round_trip ... ok
+test i64_logits_under_the_old_scheme_remain_rejected ... ok
+test extra_i64_commit_points_in_post_or_other_blocks_remain_rejected ... ok
+test wide_scheme_does_not_relax_carry_or_state_dtypes ... ok
+test only_the_final_post_i64_logits_round_trip_and_keep_wide_values ... ok
+test wide_scheme_requires_i64_and_a_committed_final_post_node ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

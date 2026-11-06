@@ -39,7 +39,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub const PALW_TIR_PREFIX_STATE_DIGEST_DOMAIN_V1: &[u8] = b"misaka-palw/tir-prefix-state/v1";
 
 /// The digest bytes one boundary leaf contributes ahead of its lanes.
-fn leaf_prelude_v1(leaf: &crate::palw_tir_step_v1::PalwTirLeafV1) -> Result<Vec<u8>, String> {
+pub(crate) fn leaf_prelude_v1(leaf: &crate::palw_tir_step_v1::PalwTirLeafV1) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(32);
     let (kind, state, layer, first, position) = match leaf.kind {
         PalwTirLeafKindV1::State { state, layer, first_element, .. } => (0u8, state, layer, first_element, 0u32),

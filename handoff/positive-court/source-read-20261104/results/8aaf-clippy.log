@@ -1,0 +1,216 @@
+   Compiling serde_core v1.0.228
+    Checking zeroize v1.9.0
+    Checking serde v1.0.228
+    Checking generic-array v0.14.7
+    Checking crypto-common v0.1.6
+    Checking block-buffer v0.10.4
+    Checking byteorder v1.5.0
+    Checking digest v0.10.7
+    Checking zerocopy v0.7.35
+   Compiling num-traits v0.2.19
+   Compiling memchr v2.7.4
+   Compiling log v0.4.22
+   Compiling wasm-bindgen-backend v0.2.100
+    Checking futures-core v0.3.31
+   Compiling wasm-bindgen-macro-support v0.2.100
+   Compiling wasm-bindgen-macro v0.2.100
+    Checking serde_json v1.0.151
+   Compiling aho-corasick v1.1.3
+    Checking ppv-lite86 v0.2.20
+    Checking futures-io v0.3.31
+   Compiling regex-automata v0.4.8
+    Checking sha2 v0.10.8
+   Compiling regex v1.11.0
+    Checking wasm-bindgen v0.2.100
+    Checking tracing v0.1.44
+    Checking futures-lite v2.3.0
+    Checking smallvec v1.13.2
+    Checking futures-sink v0.3.31
+    Checking futures-channel v0.3.31
+    Checking async-channel v2.3.1
+    Checking js-sys v0.3.77
+    Checking rand_chacha v0.3.1
+    Checking futures-task v0.3.31
+    Checking futures-util v0.3.31
+    Checking piper v0.2.4
+   Compiling cargo_metadata v0.18.1
+    Checking rand v0.8.6
+    Checking polling v3.7.3
+    Checking chrono v0.4.38
+   Compiling vergen v8.3.2
+    Checking async-io v2.3.4
+    Checking blocking v1.6.1
+    Checking async-executor v1.13.1
+    Checking workflow-log v0.18.0
+    Checking async-global-executor v2.4.1
+    Checking rand_chacha v0.9.0
+   Compiling workflow-core v0.18.0
+    Checking tokio v1.54.1
+    Checking async-channel v1.9.0
+    Checking futures-executor v0.3.31
+    Checking web-sys v0.3.77
+    Checking kv-log-macro v1.0.7
+    Checking async-std v1.13.0
+    Checking futures v0.3.31
+    Checking rand v0.9.4
+   Compiling workflow-core-macros v0.18.0
+    Checking parking_lot_core v0.9.10
+    Checking serde-wasm-bindgen v0.6.5
+    Checking hash32 v0.3.1
+    Checking faster-hex v0.9.0
+    Checking heapless v0.8.0
+    Checking parking_lot v0.12.3
+   Compiling workflow-wasm-macros v0.18.0
+    Checking workflow-panic-hook v0.18.0
+    Checking wasm-bindgen-futures v0.4.50
+    Checking workflow-wasm v0.18.0
+   Compiling kaspa-utils v1.1.0 (/dev/shm/misaka-oom-positive-next/utils)
+    Checking faster-hex v0.10.1
+    Checking der v0.7.10
+    Checking uuid v1.18.1
+    Checking sec1 v0.7.3
+   Compiling kaspa-hashes v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/hashes)
+    Checking hmac v0.12.1
+    Checking crypto-bigint v0.5.5
+    Checking elliptic-curve v0.13.8
+    Checking rfc6979 v0.4.0
+    Checking ahash v0.8.11
+    Checking spki v0.7.3
+    Checking signature v2.2.0
+   Compiling libm v0.2.8
+    Checking rand v0.10.1
+    Checking ecdsa v0.16.9
+    Checking libcrux-traits v0.0.8
+    Checking k256 v0.13.4
+    Checking hashbrown v0.14.5
+    Checking ordered-float v2.10.1
+    Checking serde_yaml v0.9.34+deprecated
+    Checking libcrux-sha3 v0.0.10
+    Checking serde-value v0.7.0
+    Checking malachite-base v0.4.16
+    Checking alloy-primitives v0.8.26
+    Checking misaka-palw-tir v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/core)
+    Checking log4rs v1.4.0
+    Checking libcrux-ml-dsa v0.0.10
+    Checking malachite-nz v0.4.16
+    Checking misaka-palw-challenge v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/challenge)
+    Checking misaka-palw-gen v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/gen)
+    Checking blake2 v0.10.6
+   Compiling kaspa-consensus-core v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/core)
+    Checking sha3 v0.10.8
+    Checking argon2 v0.5.3
+    Checking misaka-palw-kernel v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/kernel)
+    Checking kaspa-math v1.1.0 (/dev/shm/misaka-oom-positive-next/math)
+    Checking kaspa-core v1.1.0 (/dev/shm/misaka-oom-positive-next/core)
+    Checking misaka-palw-positive-contract v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/positive-contract)
+    Checking kaspa-addresses v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/addresses)
+    Checking kaspa-merkle v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/muhash)
+    Checking misaka-palw-panel v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/panel)
+    Checking workflow-serializer v0.18.0
+    Checking kaspa-txscript-errors v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/txscript/errors)
+    Checking num-integer v0.1.46
+error: using `clone` on type `AssignmentFundingRelayProfileV2` which implements the `Copy` trait
+   --> consensus/core/src/palw_positive_assignment_material_v2.rs:312:28
+    |
+312 |             funding_relay: rules.funding_relay_profile().clone(),
+    |                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try dereferencing it: `*rules.funding_relay_profile()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#clone_on_copy
+    = note: `-D clippy::clone-on-copy` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::clone_on_copy)]`
+
+error: this boolean expression can be simplified
+   --> consensus/core/src/palw_court_service_lifecycle_fold_v1.rs:179:12
+    |
+179 |         || !book.causal.get(&terminal).is_some_and(|parents| parents.binary_search(&verification).is_ok())
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `book.causal.get(&terminal).is_none_or(|parents| parents.binary_search(&verification).is_err())`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#nonminimal_bool
+    = note: `-D clippy::nonminimal-bool` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::nonminimal_bool)]`
+
+error: this boolean expression can be simplified
+   --> consensus/core/src/palw_state_v2/positive_assignment_certification.rs:499:12
+    |
+499 |           if !self
+    |  ____________^
+500 | |             .state
+501 | |             .round_seed_anchor
+502 | |             .is_some_and(|a| earliest.is_some_and(|s| a.span >= s))
+    | |___________________________________________________________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#nonminimal_bool
+help: try
+    |
+499 ~         if self
+500 +             .state
+501 +             .round_seed_anchor.is_none_or(|a| earliest.is_none_or(|s| a.span < s))
+    |
+
+error: using `clone` on type `AssignmentAdmissionBundleV2` which implements the `Copy` trait
+   --> consensus/core/src/palw_state_v2/positive_assignment.rs:754:21
+    |
+754 |             bundle: bundle.clone(),
+    |                     ^^^^^^^^^^^^^^ help: try dereferencing it: `*bundle`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#clone_on_copy
+
+error: using `clone` on type `AssignmentSourceConsentV2` which implements the `Copy` trait
+   --> consensus/core/src/palw_state_v2/positive_assignment.rs:755:29
+    |
+755 |             source_consent: source.clone(),
+    |                             ^^^^^^^^^^^^^^ help: try dereferencing it: `*source`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#clone_on_copy
+
+error: using `clone` on type `AssignmentProverConsentV2` which implements the `Copy` trait
+   --> consensus/core/src/palw_state_v2/positive_assignment.rs:756:29
+    |
+756 |             prover_consent: prover.clone(),
+    |                             ^^^^^^^^^^^^^^ help: try dereferencing it: `*prover`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#clone_on_copy
+
+error: this boolean expression can be simplified
+   --> consensus/core/src/palw_batch_court_v1/rooted.rs:112:12
+    |
+112 |         || !service.causal.get(&terminal).is_some_and(|parents| parents.binary_search(&verification).is_ok())
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `service.causal.get(&terminal).is_none_or(|parents| parents.binary_search(&verification).is_err())`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#nonminimal_bool
+
+error: this `.filter_map(..)` can be written more simply using `.filter(..)`
+   --> consensus/core/src/palw_batch_court_v1.rs:491:22
+    |
+491 |                     .filter_map(|part| slots.next().expect("validated part count").is_none().then_some(part))
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#unnecessary_filter_map
+    = note: `-D clippy::unnecessary-filter-map` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::unnecessary_filter_map)]`
+
+error: this boolean expression can be simplified
+   --> consensus/core/src/palw_court_shared_material_intake_v1/batch/native_ranges.rs:466:12
+    |
+466 |         || !service.causal.get(&terminal).is_some_and(|ids| ids.binary_search(&verification).is_ok())
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `service.causal.get(&terminal).is_none_or(|ids| ids.binary_search(&verification).is_err())`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#nonminimal_bool
+
+error: needlessly taken reference of both operands
+   --> consensus/core/src/palw_court_shared_material_intake_v1/batch.rs:703:8
+    |
+703 |     if &service.book != &*book
+    |        ^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#op_ref
+    = note: `-D clippy::op-ref` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::op_ref)]`
+help: use the values directly
+    |
+703 -     if &service.book != &*book
+703 +     if service.book != *book
+    |
+
+error: could not compile `kaspa-consensus-core` (lib) due to 10 previous errors

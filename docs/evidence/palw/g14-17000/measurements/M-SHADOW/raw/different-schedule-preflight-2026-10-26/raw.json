@@ -1,0 +1,383 @@
+{
+  "build": {
+    "source_commit": "08a9cec0df7a21db792482bf21c0b9c8ec88c926",
+    "source_trees": "b91921321efe44e792d0631f72a31b62a7768aa78d43c9542bed6515491fa77c",
+    "command": [
+      "cargo",
+      "test",
+      "--offline",
+      "--release",
+      "-p",
+      "kaspa-consensus",
+      "--lib",
+      "--no-run",
+      "--message-format=json"
+    ],
+    "shared_slot": true,
+    "stage": "BUILT",
+    "features": "default",
+    "minimum_hardware": false,
+    "load_before": [
+      13.23388671875,
+      18.6748046875,
+      19.14697265625
+    ],
+    "hardware": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10\n",
+    "exit_code": 0,
+    "wall_seconds": 1.001657208,
+    "load_after": [
+      13.23388671875,
+      18.6748046875,
+      19.14697265625
+    ],
+    "binary": {
+      "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-verified-kaspa_consensus-d80b6d194a277fef",
+      "sha256": "1836a9060680d6938a72dc581a71c6e6b30cb686617b04f435a8eb70cfc956ea"
+    },
+    "source_unchanged": true
+  },
+  "minimum_hardware": false,
+  "arming_evidence": false,
+  "status": "MISMATCH",
+  "samples": [
+    {
+      "label": "honest-p3-n0-00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-verified-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::measurement::g14_native_panel_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_MEASURE_CASE": "honest",
+        "G14_MEASURE_N": "0",
+        "G14_MEASURE_SEATS": "3"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.084827125,
+      "load_before": [
+        7.72265625,
+        13.984375,
+        16.943359375
+      ],
+      "load_after": [
+        7.72265625,
+        13.984375,
+        16.943359375
+      ],
+      "under_load": true,
+      "stdout_sha256": "cb62348f82e509b40c65df4855896781ad4cb3b4c7d78bb31283a798d46c0ebe",
+      "stderr_sha256": "ecf80e154d099cd4c74c5a829718312860c3508f7892e6f4de4e78b6a11affa1",
+      "rss_bytes": 50954240.0,
+      "user_seconds": 0.02,
+      "sys_seconds": 0.02,
+      "measurement": {
+        "actual_seats": null,
+        "arming_evidence": false,
+        "case": "honest",
+        "challenge": null,
+        "claim": "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc",
+        "class": "6a85c5bded8e3ba3fd777d5f40b145397395bb07030cce4f90b8e502a0af8c22d7ac4f5383dbf529ef128b427d70e17feb1862f31818f14a1d2b59d4de34ec55",
+        "final_daa": null,
+        "fixture_only": true,
+        "gate_c_certification_measured": false,
+        "job": "7ad6befa35d6b2a4f196683abecf1609828c2f1f00cb2d136ade7c0568bfc9f3492ea0d5e1e78b23c893677641946fc2d93af4d4fcaa597c8e709246565a4d78",
+        "legacy_model_route_compared": false,
+        "n": 0,
+        "phases": [],
+        "post_commit_beacon_measured": false,
+        "randomness_withholding_measured": false,
+        "requested_seats": 3,
+        "schema": 1,
+        "scope": "native_kernel_interim_panel3_vs_panel1",
+        "verdict": "SETUP_ONLY"
+      }
+    },
+    {
+      "label": "honest-p3-n1-00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-verified-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::measurement::g14_native_panel_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_MEASURE_CASE": "honest",
+        "G14_MEASURE_N": "1",
+        "G14_MEASURE_SEATS": "3"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.26870645800000004,
+      "load_before": [
+        7.72265625,
+        13.984375,
+        16.943359375
+      ],
+      "load_after": [
+        7.72265625,
+        13.984375,
+        16.943359375
+      ],
+      "under_load": true,
+      "stdout_sha256": "a6d658d72444925f7c9379e7767472834ba38684670448a41895d5e903ee831d",
+      "stderr_sha256": "ed3c6e4f3d41fa216dd5ed2825052347e61aa1ff7321da38e706780cef029d01",
+      "rss_bytes": 66437120.0,
+      "user_seconds": 0.19,
+      "sys_seconds": 0.09,
+      "measurement": {
+        "actual_seats": 3,
+        "arming_evidence": false,
+        "case": "honest",
+        "challenge": {
+          "anchor": "[107, 34, 131, 89, 146, 211, 12, 187, 148, 191, 111, 63, 49, 218, 185, 33, 98, 166, 113, 230, 217, 188, 166, 26, 145, 156, 18, 173, 236, 198, 112, 101, 118, 16, 82, 97, 52, 158, 240, 198, 162, 59, 245, 8, 146, 160, 91, 47, 212, 51, 194, 219, 120, 134, 188, 160, 185, 248, 123, 208, 49, 195, 217, 232]",
+          "kind": "interim_claim_derived_not_post_commit_beacon",
+          "seed": "[122, 1, 17, 200, 38, 246, 112, 146, 27, 79, 236, 67, 156, 100, 33, 200, 78, 102, 104, 65, 236, 62, 126, 131, 198, 213, 176, 44, 229, 221, 79, 58, 95, 209, 88, 245, 25, 1, 98, 161, 230, 143, 43, 49, 119, 227, 29, 36, 65, 31, 84, 23, 21, 104, 1, 88, 33, 73, 81, 118, 135, 245, 149, 211]"
+        },
+        "claim": "ead22b800649982dc8d27466b6fd88ddcadbc1b5f5c99f5da215eea4e71cb7d519d40b0c1412a4b6a56d8c99570008a6a77fb23014e2dd1a85c3ef31a1c6a7dc",
+        "class": "6a85c5bded8e3ba3fd777d5f40b145397395bb07030cce4f90b8e502a0af8c22d7ac4f5383dbf529ef128b427d70e17feb1862f31818f14a1d2b59d4de34ec55",
+        "final_daa": 54,
+        "fixture_only": true,
+        "gate_c_certification_measured": false,
+        "job": "7ad6befa35d6b2a4f196683abecf1609828c2f1f00cb2d136ade7c0568bfc9f3492ea0d5e1e78b23c893677641946fc2d93af4d4fcaa597c8e709246565a4d78",
+        "legacy_model_route_compared": false,
+        "n": 1,
+        "phases": [
+          {
+            "daa_after": 2,
+            "daa_before": 1,
+            "object_bytes": 4898,
+            "phase": "claim_seal",
+            "wall_ns": 3704667
+          },
+          {
+            "daa_after": 3,
+            "daa_before": 2,
+            "object_bytes": 9717,
+            "phase": "claim_reveal_and_assignment",
+            "wall_ns": 4620416
+          },
+          {
+            "daa_after": 3,
+            "daa_before": 3,
+            "object_bytes": 16341,
+            "phase": "receipt_construct_and_sign",
+            "wall_ns": 1287917
+          },
+          {
+            "daa_after": 4,
+            "daa_before": 3,
+            "object_bytes": 16341,
+            "phase": "constraint_receipt_accept",
+            "wall_ns": 7044792
+          },
+          {
+            "daa_after": 4,
+            "daa_before": 4,
+            "object_bytes": 0,
+            "phase": "outsider_local_check",
+            "wall_ns": 2553042
+          },
+          {
+            "daa_after": 54,
+            "daa_before": 4,
+            "object_bytes": 0,
+            "phase": "advance_to_final",
+            "wall_ns": 157624500
+          }
+        ],
+        "post_commit_beacon_measured": false,
+        "randomness_withholding_measured": false,
+        "requested_seats": 3,
+        "schema": 1,
+        "scope": "native_kernel_interim_panel3_vs_panel1",
+        "verdict": "FINAL"
+      }
+    },
+    {
+      "label": "honest-p1-n0-00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-verified-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::measurement::g14_native_panel_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_MEASURE_CASE": "honest",
+        "G14_MEASURE_N": "0",
+        "G14_MEASURE_SEATS": "1"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.04840049999999996,
+      "load_before": [
+        7.72265625,
+        13.984375,
+        16.943359375
+      ],
+      "load_after": [
+        7.74462890625,
+        13.884765625,
+        16.890625
+      ],
+      "under_load": true,
+      "stdout_sha256": "704b05ba56c2b7102e1df9870ff54a47faa63e9de6dfe96161fe5a02e6a602a2",
+      "stderr_sha256": "5583596c2f4523378bec24c9b9b5780bc3e489de69991a1cb182c8d4894b0f4d",
+      "rss_bytes": 51281920.0,
+      "user_seconds": 0.02,
+      "sys_seconds": 0.01,
+      "measurement": {
+        "actual_seats": null,
+        "arming_evidence": false,
+        "case": "honest",
+        "challenge": null,
+        "claim": "15bcb669e617f0812d60b5ba66312f048c2096160a8d6ad061ae525ad1a74a8e11f2c7ec495d5ed6b96696cac8de1b7c9cabbc9f258589588981bdcebea01baf",
+        "class": "6a85c5bded8e3ba3fd777d5f40b145397395bb07030cce4f90b8e502a0af8c22d7ac4f5383dbf529ef128b427d70e17feb1862f31818f14a1d2b59d4de34ec55",
+        "final_daa": null,
+        "fixture_only": true,
+        "gate_c_certification_measured": false,
+        "job": "7ad6befa35d6b2a4f196683abecf1609828c2f1f00cb2d136ade7c0568bfc9f3492ea0d5e1e78b23c893677641946fc2d93af4d4fcaa597c8e709246565a4d78",
+        "legacy_model_route_compared": false,
+        "n": 0,
+        "phases": [],
+        "post_commit_beacon_measured": false,
+        "randomness_withholding_measured": false,
+        "requested_seats": 1,
+        "schema": 1,
+        "scope": "native_kernel_interim_panel3_vs_panel1",
+        "verdict": "SETUP_ONLY"
+      }
+    },
+    {
+      "label": "honest-p1-n1-00",
+      "command": [
+        "/usr/bin/time",
+        "-l",
+        "/Users/wata/.codex/artifacts/g14-17000-measure/pins/native-verified-kaspa_consensus-d80b6d194a277fef",
+        "pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::measurement::g14_native_panel_measure",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "env": {
+        "TMPDIR": "/private/tmp",
+        "G14_MEASURE_CASE": "honest",
+        "G14_MEASURE_N": "1",
+        "G14_MEASURE_SEATS": "1"
+      },
+      "exit_code": 0,
+      "wall_seconds": 0.2615130419999999,
+      "load_before": [
+        7.74462890625,
+        13.884765625,
+        16.890625
+      ],
+      "load_after": [
+        7.74462890625,
+        13.884765625,
+        16.890625
+      ],
+      "under_load": true,
+      "stdout_sha256": "874c500f5f374ee00103f37a0439b6bc003f28722bb9e6427f6a62b2b4393475",
+      "stderr_sha256": "7f195e7f7dee2208a215133e4c36e460ff09e304e9ee180a963e134067f22af0",
+      "rss_bytes": 66076672.0,
+      "user_seconds": 0.18,
+      "sys_seconds": 0.07,
+      "measurement": {
+        "actual_seats": 1,
+        "arming_evidence": false,
+        "case": "honest",
+        "challenge": {
+          "anchor": "[204, 111, 228, 204, 141, 155, 241, 173, 239, 9, 180, 172, 141, 139, 209, 7, 162, 112, 237, 122, 176, 69, 45, 35, 161, 14, 97, 200, 248, 91, 32, 143, 142, 190, 2, 183, 20, 58, 32, 54, 205, 116, 68, 54, 26, 125, 240, 56, 228, 75, 33, 141, 241, 39, 243, 96, 56, 77, 65, 163, 13, 94, 92, 3]",
+          "kind": "interim_claim_derived_not_post_commit_beacon",
+          "seed": "[76, 152, 31, 110, 146, 255, 58, 149, 240, 37, 106, 97, 145, 194, 237, 38, 222, 51, 12, 101, 34, 59, 100, 128, 78, 168, 196, 1, 138, 81, 67, 60, 194, 112, 212, 148, 254, 57, 233, 129, 105, 225, 148, 165, 24, 38, 86, 23, 54, 178, 93, 247, 183, 243, 184, 160, 250, 60, 203, 213, 214, 7, 240, 212]"
+        },
+        "claim": "15bcb669e617f0812d60b5ba66312f048c2096160a8d6ad061ae525ad1a74a8e11f2c7ec495d5ed6b96696cac8de1b7c9cabbc9f258589588981bdcebea01baf",
+        "class": "6a85c5bded8e3ba3fd777d5f40b145397395bb07030cce4f90b8e502a0af8c22d7ac4f5383dbf529ef128b427d70e17feb1862f31818f14a1d2b59d4de34ec55",
+        "final_daa": 54,
+        "fixture_only": true,
+        "gate_c_certification_measured": false,
+        "job": "7ad6befa35d6b2a4f196683abecf1609828c2f1f00cb2d136ade7c0568bfc9f3492ea0d5e1e78b23c893677641946fc2d93af4d4fcaa597c8e709246565a4d78",
+        "legacy_model_route_compared": false,
+        "n": 1,
+        "phases": [
+          {
+            "daa_after": 2,
+            "daa_before": 1,
+            "object_bytes": 4898,
+            "phase": "claim_seal",
+            "wall_ns": 4325708
+          },
+          {
+            "daa_after": 3,
+            "daa_before": 2,
+            "object_bytes": 9717,
+            "phase": "claim_reveal_and_assignment",
+            "wall_ns": 3875792
+          },
+          {
+            "daa_after": 3,
+            "daa_before": 3,
+            "object_bytes": 5447,
+            "phase": "receipt_construct_and_sign",
+            "wall_ns": 365000
+          },
+          {
+            "daa_after": 4,
+            "daa_before": 3,
+            "object_bytes": 5447,
+            "phase": "constraint_receipt_accept",
+            "wall_ns": 4303667
+          },
+          {
+            "daa_after": 4,
+            "daa_before": 4,
+            "object_bytes": 0,
+            "phase": "outsider_local_check",
+            "wall_ns": 2240583
+          },
+          {
+            "daa_after": 54,
+            "daa_before": 4,
+            "object_bytes": 0,
+            "phase": "advance_to_final",
+            "wall_ns": 168950000
+          }
+        ],
+        "post_commit_beacon_measured": false,
+        "randomness_withholding_measured": false,
+        "requested_seats": 1,
+        "schema": 1,
+        "scope": "native_kernel_interim_panel3_vs_panel1",
+        "verdict": "FINAL"
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "case": "honest",
+      "ordinal": 0,
+      "equal": {
+        "class": true,
+        "job": true,
+        "claim": false,
+        "verdict": true,
+        "final_daa": true
+      }
+    }
+  ]
+}

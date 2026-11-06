@@ -1,0 +1,49 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "misaka-palw-positive-accounting"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "base_commit": "dd8efe1ab1034555e30b828d9471b7e2503e1dcd",
+  "source_sha256": {
+    "misaka/palw/positive-accounting-node/src/dues.rs": "0f3f234a040451c7ba72a9b607f4e78ba32b9de6048183b2954eb120c8df677e",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8a65e986230dbbc5854dd2bb6242ae51c6faa0a7166e54b8a720564863d91bb3",
+    "misaka/palw/positive-accounting-node/src/lib.rs": "62657713cd3311968ca27ffc5bbefdd768593e5fb387451478f3005ee5d47c49",
+    "misaka/palw/positive-accounting-node/src/native.rs": "27011bd251f0496a26d4279e56682dbdc5f03b82697034e402aec3d11b41277c",
+    "misaka/palw/positive-accounting-node/src/native/tests.rs": "f96ea0bec32adfbed4d9d8c1ae6ef7fb11866277829bd5df192ae3e3db1ffcc6",
+    "misaka/palw/positive-accounting-node/src/native_funds.rs": "53800ab7889605d141407e588e9d51d384f023ca483c1c4506ef54fe2e1fdb0a",
+    "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": "ce6f998ee72d35c7737b207e0a0818db6cccf4ec7eeb182bf998bdd8ce31b99c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "5a5ce36c9e700ae5f55dc99cd392e68fb1cabaf4f139084d8c0a630b597219ef",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "ce528f97377ddae2610b753b7d1b04c9fdabc8705943f932b182b4a4c55f9d7c",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "ab3cc96ff4e8ce39a69920e2f3b5947a3e8e6602c52eb04847f21fcd98810bd0",
+    "misaka/palw/positive-accounting/src/credit.rs": "0f874c66521a83903ac2fe717902e1849c3478622184fa62393294528510b633",
+    "misaka/palw/positive-accounting/src/credit/consumers.rs": "6a509566121166e67e63c5e58ef853ed0cc4cff6362555cc52845a680b3d0289",
+    "misaka/palw/positive-accounting/src/credit/tests.rs": "6127981562ff096ceeb3ae944e1aaee00e251ad0dc2d0c97cf909b3e5f025caf",
+    "misaka/palw/positive-accounting/src/fees.rs": "fe7b3e59121b92a2fe406137b66a4f89ebb1ae48e85981e42e51d1c84fa312f7",
+    "misaka/palw/positive-accounting/src/fees/tests.rs": "c85c2595c9888abc3a64dde12bdb4b9b68b56954970e56d1f61ff7f8a894201e",
+    "misaka/palw/positive-accounting/src/lib.rs": "5e9de0d6b3211b4129e24fc5c81f25214ed30ba7caf81a5dc55df72c26e23cb3",
+    "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs": "668c2d6a00df7667dc450e1f74997dafbb320b642e9031f13655dfd865f06bc7",
+    "misaka/palw/positive-accounting/tests/independent_credit_graph.rs": "7db4035cb1004e968c06417cca13d22712bd1ae853232517456b4131942698a5",
+    "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs": "d12221758134ada0cd64b4ffe74921a2d47f996202adee14ecc58644190fef84",
+    "misaka/palw/positive-accounting-node/Cargo.toml": "15e519598233cc4b10d90371f28c824def40726a6c4149d34b2f1aeebccf1515",
+    "misaka/palw/positive-accounting/Cargo.toml": "c4f3ea3b8a5dc04d1e34def6dfc20c391d5b6e9e70c0f9a7c34232bdb512ea4e",
+    "misaka/palw/positive-contract/src/ports.rs": "3a91a53bb431c031ca8f45db8bc2d5650f0688025186822dcb0cdae854f96475",
+    "misaka/palw/positive-contract/src/rows.rs": "53d42d3a6f65af575eaf3ccebc16e63155501bb9128ae6c934994b5a683be7d4",
+    "misaka/palw/positive-contract/src/funding.rs": "0996296c8d2b114e099133d46b16814ae13e02acf177acee16246fb4163162a9"
+  },
+  "exit_code": 0,
+  "raw_log": "leaf-all.log",
+  "scope": "pure appended WorkerPayment purpose separate from primary Reward; private money independence; not native origin/UTXO/process integration",
+  "source_unchanged_during_run": true
+}

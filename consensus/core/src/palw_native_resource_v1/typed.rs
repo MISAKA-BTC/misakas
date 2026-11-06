@@ -101,7 +101,8 @@ fixed_native!(
     crate::Hash64,
     kaspa_hashes::Hash,
     kaspa_math::Uint512,
-    kaspa_math::Uint576
+    kaspa_math::Uint576,
+    crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1
 );
 impl<T: NativeHeapV1, const N: usize> NativeHeapV1 for [T; N] {
     fn native_members_v1(&self) -> Option<u64> {
@@ -375,14 +376,16 @@ impl NativeHeapV1 for misaka_palw_panel::PermissionlessPanelStateV1 {
 }
 impl NativeHeapV1 for crate::palw_kernel_route_v1::KernelLedgerCacheV1 {
     fn native_heap_v1(&self, path: &str) -> NativeCoverageV1 {
-        self.native_ledger_ref_v1().map_or_else(NativeCoverageV1::zero, |ledger| {
-            ledger.native_heap_v1(path).add::<Self>(
-                NativeCoverageV1::Bounded {
-                    bytes: (size_of::<crate::palw_native_resource_v1::ReservedKernelLedgerV1>() + size_of::<[usize; 3]>()) as u64,
-                },
-                path,
-            )
-        })
+        self.native_ledger_ref_v1()
+            .map_or_else(NativeCoverageV1::zero, |ledger| {
+                ledger.native_heap_v1(path).add::<Self>(
+                    NativeCoverageV1::Bounded {
+                        bytes: (size_of::<crate::palw_native_resource_v1::ReservedKernelLedgerV1>() + size_of::<[usize; 3]>()) as u64,
+                    },
+                    path,
+                )
+            })
+            .add::<Self>(NativeCoverageV1::Bounded { bytes: self.case_alias_heap_v2() }, path)
     }
 }
 
@@ -447,6 +450,19 @@ impl NativeHeapV1 for misaka_palw_kernel::flat_quota11::stage14::source26::Stage
         self.native_inventory_parts_v1().native_heap_v1(path)
     }
 }
+// Exact owned transport DTO inventory. These exhaustive field visitors account
+// the envelope alone; a readonly archive quote must not substitute the entire
+// carrier Transaction. Terms are visited structurally, so a future owned field
+// cannot silently inherit the current fixed-width terms' zero heap.
+native_struct!(crate::palw_court_original_escrow_v1::FundingTermsV1;
+    version, network_domain, claim, job_identity, execution_root, source_id,
+    relative_graph_id, fee_profile_id, capital_profile_id, retention_profile_id,
+    settlement_policy_id, accept_from_daa, accept_until_daa, material_until_daa,
+    funding_output_index, funding_amount_sompi, payer_key_id, refund_payload, nonce);
+native_struct!(crate::palw_court_original_escrow_v1::FundingConsentV1; terms, signature);
+native_struct!(crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1;
+    version, original_envelope, funding, payer_pubkey);
+
 /// G14 int: the funded-original pairing holds a whole carrier `Transaction` (whose private `TransactionMass`/`SmallVec` script
 /// layouts the generator cannot visit), so its heap is hand-counted: input/output vector capacities, each input's signature
 /// script, each output's script bytes (conservatively counted as heap whether or not the SmallVec spilled), the payload, and the
@@ -461,6 +477,13 @@ impl NativeHeapV1 for crate::palw_funded_original_coordinator_v1::PalwFundedOrig
             .add::<Self>(allocation::<u8>(env.original_envelope.capacity(), path), path)
             .add::<Self>(allocation::<u8>(env.payer_pubkey.capacity(), path), path)
             .add::<Self>(allocation::<u8>(env.funding.signature.capacity(), path), path);
+        heap = heap.add::<Self>(
+            allocation::<crate::palw_court_family_supplier_v1::SignedFamilySupplierV1>(self.suppliers_v2().len(), path),
+            path,
+        );
+        for supplier in self.suppliers_v2() {
+            heap = heap.add::<Self>(supplier.native_heap_v1(path), path);
+        }
         for input in &tx.inputs {
             heap = heap.add::<Self>(allocation::<u8>(input.signature_script.capacity(), path), path);
         }

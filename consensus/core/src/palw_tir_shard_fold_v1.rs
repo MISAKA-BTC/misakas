@@ -317,7 +317,7 @@ pub(super) fn apply_part_v1(
         // each later shard's price is an increment that needs its own room.
         let held = builder.state.slashable_locks.contains_key(&(*bond, claim_id));
         let owed = if held { price } else { price.saturating_sub(palw_seat_duty_of_v1(&builder.state, &claim_id, bond)) };
-        if owed > builder.gate_room(bond, now, PalwRcoreGateV1::Work) {
+        if owed > builder.gate_room(bond, now, PalwRcoreGateV1::Work)? {
             return Ok(());
         }
     }
@@ -338,7 +338,7 @@ pub(super) fn apply_part_v1(
                     ..lock
                 }),
             )?,
-            None => builder.lock_valid_seat_rcore(*bond, claim_id, price, *mask, record.s_p.max(1), now)?,
+            None => builder.lock_valid_seat_rcore(*bond, claim_id, &claim, price, *mask, record.s_p.max(1), now)?,
         }
     }
     // Land the part: the shard's cell counts, the counted signers, the abstention latch, the progress.

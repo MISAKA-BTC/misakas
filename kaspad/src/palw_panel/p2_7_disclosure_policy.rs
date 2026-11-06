@@ -460,6 +460,78 @@ fn an_attempt_claims_capture_is_kept_verified_or_re_made_from_its_block() {
     facts.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: None };
     let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec()], &event, false);
     assert!(built.is_err() && kept.is_none(), "no block in this store: nothing to re-make from");
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &facts, run.output_root, &run.material));
+}
+
+#[test]
+fn a_provider_capture_binds_the_core_v1_attempt_output() {
+    use kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1;
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    let backend = super::seat_s_tests::floor_backend().with_attempt_rules(PalwAttemptRulesV1::CoreV1);
+    let anchor = Hash64::from_u64_word(0x00C0_FFEE);
+    let (job, prompt) = backend.job_for_anchor(anchor).expect("job");
+    let job = kaspa_consensus_core::palw_attempt_v2::palw_attempt_job_v1(job, true);
+    let run = backend.execute(&job, &prompt).expect("the producer's run");
+    let facts = PalwDaClaimFactsV1 {
+        claim_id: Hash64::from_u64_word(0xC2),
+        class_id: backend.profile().shape_profile_id(),
+        executor_bond: PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(9), 0)),
+        execution_root: run.execution_root,
+        trace_root: run.trace_root,
+        work_leaves: 0,
+        form: backend.prompt_ids_form(),
+        lane: PalwDaLaneV1::Attempt { anchor, attempt_draw: Some(true), job: None },
+        job_pin: None,
+    };
+    // A provider's matching manifest is insufficient: the original bytes
+    // must also reproduce the current carrier's job and signed output root.
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &facts, Hash64::default(), &run.material));
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &facts, run.output_root, b"garbage"));
+    let mut no_anchor = facts.clone();
+    no_anchor.lane = PalwDaLaneV1::Attempt { anchor: Hash64::default(), attempt_draw: Some(true), job: None };
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &no_anchor, run.output_root, &run.material));
+    let mut no_draw = facts.clone();
+    no_draw.lane = PalwDaLaneV1::Attempt { anchor, attempt_draw: None, job: None };
+    assert!(!palw_da_verify_provider_attempt_v1(&backend, &no_draw, run.output_root, &run.material));
+    assert!(palw_da_verify_provider_attempt_v1(&backend, &facts, run.output_root, &run.material));
+    let event = [PalwDaUnitV1::Event { row: 0, tile: 0 }];
+    let (built, kept) = answer(&backend, &facts, vec![b"garbage".to_vec(), run.material], &event, false);
+    let built = built.expect("provider material answers even when the local replay cannot run");
+    assert!(matches!(built.answers.as_slice(), [Some(Ok(_))]) && !built.remade && kept.is_none());
+}
+
+#[test]
+fn provider_court_slot_is_carrier_scoped_and_expires_after_one_full_pass() {
+    let claim = Hash64::from_u64_word(1);
+    let carrier = Hash64::from_u64_word(2);
+    let other = Hash64::from_u64_word(3);
+    let tick = std::time::Instant::now();
+    let mut ready = PendingProviderMaterialV1 {
+        claim,
+        roots: misaka_palw_remote::evidence::ClaimRoots {
+            network_domain: other,
+            trace_root: other,
+            output_root: other,
+            execution_root: other,
+            trace_chunk_count: 1,
+            retention_deadline: 20_100,
+        },
+        material: FetchedProviderMaterialV1 {
+            bytes: vec![1],
+            report: misaka_palw_remote::evidence::FetchReport { served_by: vec![], failures: vec![] },
+            http_admission: None,
+        },
+        court_carrier: Some(carrier),
+        ready_at: tick + std::time::Duration::from_secs(1),
+    };
+    assert!(ready.matches_court(claim, carrier));
+    assert!(!ready.matches_court(other, carrier));
+    assert!(!ready.matches_court(claim, other));
+    assert!(!ready.unused_after_court_pass(tick), "a late fetch gets the next Court pass");
+    assert!(ready.unused_after_court_pass(ready.ready_at), "no matching duty relinquishes the slot");
+    ready.court_carrier = None;
+    assert!(!ready.matches_court(claim, carrier));
+    assert!(!ready.unused_after_court_pass(ready.ready_at), "seat fetches keep their own admission path");
 }
 
 /// **The tick runs R-core's loop, and it runs before the seat's duties** (the P2-7 review's
@@ -486,6 +558,10 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     assert!(read < pinned && pinned < built && built < queued, "read, pin, build, queue");
     let court_call = worker.find(".court_progress_tick_v1(").expect("court stage");
     assert!(court_call < seats, "court/DA progression precedes the seat duty read");
+    let seat_progress = worker.find_code("self.seat_progress_tick_v1(").expect("the seat pass");
+    let provider_dispatch =
+        worker.find_code("let court_request = self.provider_court_request.lock().unwrap().take();").expect("deferred Court fetch");
+    assert!(seat_progress < provider_dispatch, "the seat's existing HTTP fallback gets first use of the slot");
     let fp = &source[source.find_code("    async fn fp_seat_replay_pass_v1(").expect("the FP replay")..];
     let fp = &fp[..fp.find("\n    }\n").expect("its end")];
     assert!(
@@ -502,8 +578,10 @@ fn the_tick_answers_da_sessions_and_keeps_what_it_answers_from() {
     let gate = &source[source.find_code("    fn licensed_job_kept_v1(").expect("the gate")..];
     let gate = &gate[..gate.find("\n    }\n").expect("its end")];
     assert!(
-        gate.contains_code("bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes))")
-            && gate.contains_code("if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {"),
+        gate.contains_code("bytes.is_some_and(|bytes| {")
+            && gate.contains_code("let path = self.fp_retained_replay_path(claim);")
+            && gate.contains_code("crate::palw_retention::ensure_retained_replay(&path, &bytes, || {")
+            && gate.contains_code("if !kept {"),
         "the job is kept, or past the fence the licence is not signed"
     );
 }

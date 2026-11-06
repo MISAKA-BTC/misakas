@@ -139,6 +139,7 @@ impl VirtualStateProcessor {
                 | Obj::SeatReadinessDemandedV1 { .. }
                 | Obj::SeatReadinessAnsweredV1 { .. }
                 | Obj::MaterialIntakeV1 { .. }
+                | Obj::CourtFamilyMaterialV1 { .. }
                 | Obj::PanelDaPromptDisclosedV1 { .. }
                 | Obj::TirPositionDissectedV2 { .. }
                 | Obj::TirPositionClosedV2 { .. }

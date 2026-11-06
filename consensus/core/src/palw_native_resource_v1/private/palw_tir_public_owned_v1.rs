@@ -6,6 +6,9 @@ native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicPreparationV1; cont
 native_struct!(crate::palw_tir_public_owned_v1::History; count, peaks);
 native_struct!(crate::palw_tir_public_owned_v1::PalwTirPublicSlotV1; body_hash, total_bytes, accepted_offset, head, finished, hash);
 
+// Reflected owner-local layouts may require parent-private names; this import
+// is intentionally conditional on that layout, like the visitor imports below.
+#[allow(unused_imports)]
 use super::*;
 use crate::palw_native_resource_v1::wire::wire_struct;
 #[allow(unused_imports)]

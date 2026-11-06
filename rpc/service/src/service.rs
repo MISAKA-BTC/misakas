@@ -33,10 +33,7 @@ use kaspa_core::{
     trace, warn,
 };
 use kaspa_index_core::indexed_utxos::BalanceByScriptPublicKey;
-use kaspa_index_core::{
-    connection::IndexChannelConnection, indexed_utxos::UtxoSetByScriptPublicKey, notification::Notification as IndexNotification,
-    notifier::IndexNotifier,
-};
+use kaspa_index_core::{connection::IndexChannelConnection, notification::Notification as IndexNotification, notifier::IndexNotifier};
 use kaspa_mining::feerate::FeeEstimateVerbose;
 use kaspa_mining::model::tx_query::TransactionQuery;
 use kaspa_mining::{manager::MiningManagerProxy, mempool::tx::Orphan};
@@ -57,7 +54,7 @@ use kaspa_p2p_lib::common::ProtocolError;
 use kaspa_p2p_mining::rule_engine::MiningRuleEngine;
 use kaspa_perf_monitor::{Monitor as PerfMonitor, counters::CountersSnapshot};
 use kaspa_rpc_core::{
-    Notification, RpcError, RpcResult,
+    Notification, RetainedRpcReply, RpcError, RpcResult,
     api::{
         connection::DynRpcConnection,
         ops::{RPC_API_REVISION, RPC_API_VERSION},
@@ -512,6 +509,7 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
                 R::WorkSliceDefaulted => "work_slice_defaulted",
                 // ADR-0206: a PanelDa prompt not disclosed by its deadline (a default, not a conviction).
                 R::PanelDaDisclosureDefault => "panel_da_disclosure_default",
+                R::PrefixExportFraud => "prefix_export_fraud",
             };
             ("voided".to_string(), reason.to_string(), *voided_daa)
         }
@@ -527,6 +525,15 @@ fn parse_evm_tx_hash(s: &str) -> RpcResult<kaspa_hashes::EvmH256> {
     let mut bytes = [0u8; 32];
     faster_hex::hex_decode(h.as_bytes(), &mut bytes).map_err(|e| RpcError::RpcSubsystem(format!("malformed evm tx hash: {e}")))?;
     Ok(kaspa_hashes::EvmH256::from_bytes(bytes))
+}
+
+// Preserve shutdown as a local RPC error rather than a verdict on this block.
+fn submit_block_report(result: Result<(), ProtocolError>) -> RpcResult<SubmitBlockResponse> {
+    match result {
+        Ok(()) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Success }),
+        Err(error) if error.is_local_consensus_exiting() => Err(RpcError::General(error.to_string())),
+        Err(_) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) }),
+    }
 }
 
 pub struct RpcCoreService {
@@ -938,18 +945,6 @@ impl RpcCoreService {
         self.core_shutdown_request.listener.clone()
     }
 
-    async fn get_utxo_set_by_script_public_key<'a>(
-        &self,
-        addresses: impl Iterator<Item = &'a RpcAddress>,
-    ) -> UtxoSetByScriptPublicKey {
-        self.utxoindex
-            .clone()
-            .unwrap()
-            .get_utxos_by_script_public_keys(addresses.map(pay_to_address_script).collect())
-            .await
-            .unwrap_or_default()
-    }
-
     async fn get_balance_by_script_public_key<'a>(&self, addresses: impl Iterator<Item = &'a RpcAddress>) -> BalanceByScriptPublicKey {
         self.utxoindex
             .clone()
@@ -1027,26 +1022,29 @@ impl RpcApi for RpcCoreService {
         }
 
         trace!("incoming SubmitBlockRequest for block {}", hash);
-        match self.flow_context.submit_rpc_block(&session, block.clone()).await {
-            Ok(_) => Ok(SubmitBlockResponse { report: SubmitBlockReport::Success }),
+        let result = self.flow_context.submit_rpc_block(&session, block.clone()).await;
+        match &result {
+            Ok(_) => {}
+            Err(error) if error.is_local_consensus_exiting() => {
+                debug!("RPC block {hash} virtual processing stopped locally: {error}");
+            }
             Err(ProtocolError::RuleError(RuleError::BadMerkleRoot(h1, h2))) => {
                 warn!(
                     "The RPC submitted block {} triggered a {} error: {}.
 NOTE: This error usually indicates an RPC conversion error between the node and the miner. This is likely to reflect using a NON-SUPPORTED miner.",
                     hash,
                     stringify!(RuleError::BadMerkleRoot),
-                    RuleError::BadMerkleRoot(h1, h2)
+                    RuleError::BadMerkleRoot(*h1, *h2)
                 );
                 if self.config.net.is_mainnet() {
                     warn!("Printing the full block for debug purposes:\n{:?}", block);
                 }
-                Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
             }
             Err(err) => {
                 warn!("The RPC submitted block triggered an error: {}\nPrinting the full block for debug purposes:\n{:?}", err, block);
-                Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
             }
         }
+        submit_block_report(result)
     }
 
     async fn get_block_template_call(
@@ -1145,6 +1143,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         _connection: Option<&DynRpcConnection>,
         request: GetBlocksRequest,
     ) -> RpcResult<GetBlocksResponse> {
+        self.get_blocks_retained_call(_connection, request).await.map(RetainedRpcReply::into_response)
+    }
+
+    async fn get_blocks_retained_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetBlocksRequest,
+    ) -> RpcResult<RetainedRpcReply<GetBlocksResponse>> {
         // Validate that user didn't set include_transactions without setting include_blocks
         if !request.include_blocks && request.include_transactions {
             return Err(RpcError::InvalidGetBlocksRequest);
@@ -1185,21 +1191,45 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
         // Prepend low hash to make it inclusive and append the filtered sink anticone
         let block_hashes = once(low_hash).chain(block_hashes).chain(filtered_sink_anticone).collect::<Vec<_>>();
-        let blocks = if request.include_blocks {
-            let mut blocks = Vec::with_capacity(block_hashes.len());
-            for hash in block_hashes.iter().copied() {
-                let block = session.async_get_block_even_if_header_only(hash).await?;
-                let rpc_block = self
-                    .consensus_converter
-                    .get_block(&session, &block, request.include_transactions, request.include_transactions)
-                    .await?;
-                blocks.push(rpc_block)
+        // The response owns each projected ID vector before its reservation.
+        // This also keeps both alive through error/cancellation after any block.
+        let mut reply = RetainedRpcReply::untracked(GetBlocksResponse { block_hashes, blocks: Vec::new() });
+        if request.include_blocks {
+            // Aggregate/header/metadata/EVM allocations remain separate open
+            // boundaries. Only source-body avoidance and ID ownership are fixed.
+            reply.response.blocks.reserve_exact(reply.response.block_hashes.len());
+            for hash in reply.response.block_hashes.iter().copied() {
+                if request.include_transactions {
+                    let block = session.async_get_block_even_if_header_only(hash).await?;
+                    let rpc_block = self.consensus_converter.get_block(&session, &block, true, true).await?;
+                    reply.response.blocks.push(rpc_block);
+                } else {
+                    let mut source = session.clone().spawn_blocking(move |c| c.get_block_rpc_projection_v1(hash)).await?;
+                    let ids = std::mem::take(&mut source.transaction_ids.ids);
+                    let block =
+                        self.consensus_converter.get_block_with_ids_v1(&session, &source.block, false, false, Some(ids)).await?;
+                    let mut produced =
+                        RetainedRpcReply { response: block, retained: source.transaction_ids.memory.take(), conversion: None };
+                    if let Some(memory) = produced.retained.take() {
+                        if let Some(retained) = reply.retained.as_mut() {
+                            if let Err(memory) = retained.merge(memory) {
+                                // Failed transfers return their ticket to its data
+                                // owner before unwinding, never before data drop.
+                                produced.retained = Some(memory);
+                                return Err(RpcError::General("incompatible projected transaction ID owners".into()));
+                            }
+                        } else {
+                            reply.retained = Some(memory);
+                        }
+                    }
+                    reply.response.blocks.push(produced.response);
+                }
             }
-            blocks
-        } else {
-            Vec::new()
-        };
-        Ok(GetBlocksResponse { block_hashes, blocks })
+        }
+        // A full response/protobuf quote is deliberately not invented here.
+        // gRPC preserves this partial Rust owner through conversion; legacy
+        // wRPC into_response remains a separately unclosed serializer boundary.
+        Ok(reply)
     }
 
     async fn get_info_call(&self, _connection: Option<&DynRpcConnection>, _request: GetInfoRequest) -> RpcResult<GetInfoResponse> {
@@ -1970,9 +2000,14 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => bundle.base_class_id.to_string(),
             _ => return Ok(GetPalwRegistrationTermsResponse::default()),
         };
+        // One owned session. The virtual DAA is read before the await and again with the terms,
+        // on that same session. Mempool contents are not part of this answer.
         let session = self.consensus_manager.consensus().unguarded_session();
-        let tip_daa = session.get_virtual_daa_score();
-        let (terms, families) = session.spawn_blocking(|c| (c.palw_v2_registration_terms(), c.palw_certified_families_v1())).await;
+        let read = PalwRegistrationReadV1::open(session.get_virtual_daa_score());
+        let (tip_with_terms, terms, families) = session
+            .spawn_blocking(|c| (c.get_virtual_daa_score(), c.palw_v2_registration_terms(), c.palw_certified_families_v1()))
+            .await;
+        let tip_daa = read.finish(tip_with_terms).map_err(|why| RpcError::General(why.into()))?;
         let Some(terms) = terms else {
             return Ok(GetPalwRegistrationTermsResponse { base_class_id, tip_daa, ..Default::default() });
         };
@@ -3793,6 +3828,30 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         }
     }
 
+    async fn get_palw_memory_routing_outcome_v1_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwMemoryRoutingOutcomeV1Request,
+    ) -> RpcResult<GetPalwMemoryRoutingOutcomeV1Response> {
+        if request.block_hash.len() != 128 || request.claim_id.len() != 128 {
+            return Err(RpcError::General("court outcome block and claim must be exact 128-hex identities".into()));
+        }
+        let block = parse_hash64(&request.block_hash, "blockHash")?;
+        let claim = parse_hash64(&request.claim_id, "claimId")?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let result = session.spawn_blocking(move |c| c.palw_memory_routing_outcome_v1(block, claim)).await;
+        Ok(match result {
+            Ok(Some(observation_json)) => {
+                GetPalwMemoryRoutingOutcomeV1Response { available: true, observation_json, reason: String::new() }
+            }
+            Ok(None) => GetPalwMemoryRoutingOutcomeV1Response {
+                reason: "native committed outcome not retained (restart/eviction/unobserved); UNKNOWN".into(),
+                ..Default::default()
+            },
+            Err(reason) => GetPalwMemoryRoutingOutcomeV1Response { reason, ..Default::default() },
+        })
+    }
+
     async fn get_palw_router_binding_v2_call(
         &self,
         _connection: Option<&DynRpcConnection>,
@@ -3971,16 +4030,48 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         request: GetPalwCourtStateRequest,
     ) -> RpcResult<GetPalwCourtStateResponse> {
         use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1;
-        let target = match (request.claim_hex.is_empty(), request.session_hex.is_empty()) {
-            (false, true) => PalwCourtTargetV1::Claim(palw_user_view_hash64("claim", &request.claim_hex)?),
-            (true, false) => PalwCourtTargetV1::Session(palw_user_view_hash64("session", &request.session_hex)?),
-            _ => return Err(RpcError::General("name exactly one of a claim id or a court session id".into())),
+        // Root enumeration is a bounded operator/Panel read, with one in
+        // flight across connections even if the initiating client disconnects.
+        static BATCH_QUOTE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let (target, permit) = if !request.batch_open.is_empty() {
+            if !self.config.unsafe_rpc {
+                return Err(RpcError::General("Batch Court quotes require operator RPC".into()));
+            }
+            let target = palw_batch_quote_target(&request)?;
+            let permit = BATCH_QUOTE
+                .try_acquire()
+                .map_err(|_| RpcError::General("Batch Court quote is busy".into()))?;
+            (target, Some(permit))
+        } else {
+            let target = match (
+                request.claim_hex.is_empty(), request.session_hex.is_empty(),
+                request.batch_ordinal.is_empty(), request.batch_target.is_empty(),
+            ) {
+                (false, true, true, true) => PalwCourtTargetV1::Claim(palw_user_view_hash64("claim", &request.claim_hex)?),
+                (true, false, true, true) => PalwCourtTargetV1::Session(palw_user_view_hash64("session", &request.session_hex)?),
+                (false, true, false, false) => PalwCourtTargetV1::BatchResponse {
+                    claim: palw_user_view_hash64("claim", &request.claim_hex)?,
+                    ordinal: palw_batch_view_ordinal(&request.batch_ordinal)?,
+                    target: palw_batch_view_target(&request.batch_target)?,
+                },
+                (_, _, false, _) | (_, _, _, false) => {
+                    return Err(RpcError::General("a Batch response needs a claim, batch ordinal and material target".into()));
+                }
+                _ => return Err(RpcError::General("name exactly one of a claim id or a court session id".into())),
+            };
+            (target, None)
         };
         if palw_v2_bundle(&self.config.params).is_none() {
             return Ok(GetPalwCourtStateResponse::default());
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_court_state_v1(target)).await.map_err(RpcError::General)?;
+        let answer = session
+            .spawn_blocking(move |c| {
+                let _permit = permit;
+                c.palw_court_state_v1(target)
+            })
+            .await
+            .map_err(RpcError::General)?;
         let (available, found, now_daa, view_json) = palw_user_view_answer(answer);
         Ok(GetPalwCourtStateResponse { available, found, now_daa, view_json })
     }
@@ -4175,7 +4266,13 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Ok(GetPalwTirOriginalQuoteResponse::default());
         }
         let session = self.consensus_manager.consensus().unguarded_session();
-        let answer = session.spawn_blocking(move |c| c.palw_tir_public_original_quote_v1(commitment, header)).await;
+        let (answer, door_diagnostics) = session
+            .spawn_blocking(move |c| {
+                let mut diagnostics = None;
+                let answer = c.palw_tir_public_original_quote_with_diagnostics_v1(commitment, header, &mut diagnostics);
+                (answer, diagnostics)
+            })
+            .await;
         Ok(match answer {
             Ok(Some((quote_daa, plan))) => GetPalwTirOriginalQuoteResponse {
                 available: true,
@@ -4183,10 +4280,11 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
                 refusal: String::new(),
                 quote_daa,
                 plan_hex: faster_hex::hex_string(&borsh::to_vec(&plan).map_err(|e| RpcError::General(e.to_string()))?),
+                door_diagnostics: None,
             },
             // Below the fence (the node's quote is `None` there) or an original the frame route does not admit.
             Ok(None) => GetPalwTirOriginalQuoteResponse::default(),
-            Err(refusal) => GetPalwTirOriginalQuoteResponse { available: true, refusal, ..Default::default() },
+            Err(refusal) => GetPalwTirOriginalQuoteResponse { available: true, refusal, door_diagnostics, ..Default::default() },
         })
     }
 
@@ -4327,15 +4425,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // built from two chain points costs — see `fp_decode_rules_armed` below.
         let session = self.consensus_manager.consensus().unguarded_session();
         let (locked_outpoints, facts, class_profile) = session
-            .spawn_blocking(move |c| {
-                let locked = c.palw_locked_bond_outpoints_v2();
+            .spawn_blocking(move |c| -> Result<_, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+                let locked = c.palw_locked_bond_outpoints_checked_v3()?;
                 let facts = class_id.and_then(|class_id| c.palw_producer_facts_v2(class_id, bond));
                 // ADR-0118 Decision 3: the class's registered profile says which form its jobs
                 // commit their prompt ids in (a held class: Merkle on every network).
                 let class_profile = class_id.and_then(|class_id| c.palw_registered_class_carriage_v1(class_id)).map(|(p, _)| p);
-                (locked, facts, class_profile)
+                Ok((locked, facts, class_profile))
             })
-            .await;
+            .await
+            .map_err(|e| RpcError::General(format!("native collateral state unavailable: {e}")))?;
         // Consensus-locked collateral AND this node's own reserved funding outpoints, in one list
         // (audit3 H3 + H12). A wallet that reads only the first spends the panel's fee outpoint.
         let locked_bond_outpoints: Vec<String> = locked_outpoints
@@ -5026,9 +5125,17 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
 
     async fn get_utxos_by_addresses_call(
         &self,
-        _connection: Option<&DynRpcConnection>,
+        connection: Option<&DynRpcConnection>,
         request: GetUtxosByAddressesRequest,
     ) -> RpcResult<GetUtxosByAddressesResponse> {
+        self.get_utxos_by_addresses_retained_call(connection, request).await.map(RetainedRpcReply::into_response)
+    }
+
+    async fn get_utxos_by_addresses_retained_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetUtxosByAddressesRequest,
+    ) -> RpcResult<RetainedRpcReply<GetUtxosByAddressesResponse>> {
         if !self.config.utxoindex {
             return Err(RpcError::NoUtxoIndex);
         }
@@ -5038,39 +5145,83 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             return Err(RpcError::ConsensusInTransitionalIbdState);
         }
 
-        // TODO: discuss if the entry order is part of the method requirements
-        //       (the current impl does not retain an entry order matching the request addresses order)
-        //
-        // NOTE (large-UTXO availability): this method is unbounded — it loads and serializes *every*
-        // UTXO of the requested addresses (see the pagination TODO in
-        // indexes/utxoindex/src/stores/indexed_utxos.rs). A heavily-fragmented address (e.g. a mining
-        // payout that is never consolidated) can hold hundreds of thousands of UTXOs, producing a
-        // response that exceeds the wRPC frame cap (MAX_WRPC_MESSAGE_SIZE = 128 MiB) or the client's
-        // own message-size / request timeout, which surfaces to the caller as "connection closed".
-        // The measurement below lets operators pinpoint such cases (entry count + scan/convert time +
-        // an estimated serialized size) instead of guessing at the disconnect cause.
+        // The legacy response keeps its existing 250k cap. Enforce it inside
+        // the DB scan, before the complete index map and RPC vector exist.
+        const LARGE_UTXO_HARD_CAP: usize = 250_000;
         let started = Instant::now();
         let num_addresses = request.addresses.len();
-        let entry_map = self.get_utxo_set_by_script_public_key(request.addresses.iter()).await;
-        let entries = self.index_converter.get_utxos_by_addresses_entries(&entry_map);
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        let overflow = || RpcError::General("UTXO response construction byte bound overflow".into());
+        // Admit the generated script set before pay_to_address_script/HashSet
+        // can duplicate a large address request. This is separate from the
+        // already-owned incoming request and from the response entry bytes.
+        let input_bytes = request
+            .addresses
+            .iter()
+            .try_fold(4096u64, |total, address| {
+                (address.payload.len() as u64).checked_mul(8).and_then(|n| n.checked_add(2048)).and_then(|n| total.checked_add(n))
+            })
+            .ok_or_else(overflow)?;
+        let input_memory =
+            global_memory_budget().try_reserve(MemoryClass::Snapshot, input_bytes).map_err(|e| RpcError::General(e.to_string()))?;
+        let scripts = request.addresses.iter().map(pay_to_address_script).collect::<kaspa_consensus_core::tx::ScriptPublicKeys>();
+        let max_payload = request.addresses.iter().map(|a| a.payload.len() as u64).max().unwrap_or(0);
+        let max_script = scripts.iter().map(|script| script.script().len() as u64).max().unwrap_or(0);
+        let dynamic =
+            max_payload.checked_mul(2).and_then(|n| max_script.checked_mul(2).and_then(|m| n.checked_add(m))).ok_or_else(overflow)?;
+        // Raw HashMap growth/reallocation, then an independent Rust Vec and
+        // its address/script clones. All coexist before map conversion ends.
+        let index_per_entry = 4
+            * ((std::mem::size_of::<kaspa_consensus_core::tx::TransactionOutpoint>()
+                + std::mem::size_of::<kaspa_index_core::indexed_utxos::CompactUtxoEntry>()
+                + 1) as u64);
+        let retained_per_entry = (std::mem::size_of::<RpcUtxosByAddressesEntry>() as u64)
+            .checked_mul(3)
+            .and_then(|n| n.checked_add(dynamic))
+            .and_then(|n| n.checked_add(128))
+            .ok_or_else(overflow)?;
+        // Protobuf owns independent address/base32, Hash64 hex and script hex
+        // strings. 512 bytes bounds each entry's inline+nested message layout;
+        // 3x covers Vec growth overlap. A verifies actual retained heap at the
+        // preallocated handoff. The 4KiB base also covers the outer response enum.
+        let conversion_per_entry =
+            kaspa_rpc_core::api::retained::utxo_memory::utxo_proto_per_entry_bytes(max_payload, max_script).ok_or_else(overflow)?;
+        let per_entry =
+            index_per_entry.checked_add(retained_per_entry).and_then(|n| n.checked_add(conversion_per_entry)).ok_or_else(overflow)?;
+        // Tuple fields drop in declaration order: map before its ticket. Keep
+        // them together across every fallible count/split below; unpacking to
+        // locals would return the later-declared ticket first on an error.
+        let mut generation_owner = self
+            .utxoindex
+            .clone()
+            .ok_or(RpcError::NoUtxoIndex)?
+            .get_utxos_by_script_public_keys_reserved(
+                (scripts, input_memory.clone()),
+                LARGE_UTXO_HARD_CAP,
+                per_entry,
+                4096 + 1024 + 1024,
+            )
+            .await
+            .map_err(|why| RpcError::General(why.to_string()))?;
+        input_memory.materialized();
+        let count = generation_owner.0.values().try_fold(0u64, |sum, rows| sum.checked_add(rows.len() as u64)).ok_or_else(overflow)?;
+        let retained_bytes = count.checked_mul(retained_per_entry).and_then(|n| n.checked_add(1024)).ok_or_else(overflow)?;
+        let conversion_bytes =
+            kaspa_rpc_core::api::retained::utxo_memory::utxo_proto_reservation_bytes(count, max_payload, max_script)
+                .ok_or_else(overflow)?;
+        let retained = generation_owner.1.split(retained_bytes).map_err(|why| RpcError::General(why.to_string()))?;
+        let conversion = generation_owner.1.split(conversion_bytes).map_err(|why| RpcError::General(why.to_string()))?;
+        let entries = self.index_converter.get_utxos_by_addresses_entries(&generation_owner.0);
         let num_entries = entries.len();
+        // Rust output now exists. Its ticket lives through protobuf conversion;
+        // the protobuf ticket stays pending until that independent copy exists.
+        retained.materialized();
+        drop(generation_owner);
+        drop(input_memory);
         let elapsed = started.elapsed();
         // ~200 bytes/entry is a conservative borsh estimate (outpoint 36 + compact utxo entry +
         // 64-byte PubKeyHashMlDsa87 script + repeated address); JSON is ~2.5x larger.
         let est_borsh_mib = (num_entries.saturating_mul(200)) as f64 / (1024.0 * 1024.0);
-        // Audit H-02: HARD CAP the legacy unbounded method. Past this the borsh
-        // response (~200 B/entry) approaches/exceeds the 128 MiB wRPC frame cap and
-        // the serialize+write would exhaust node memory/CPU/socket (the remote DoS
-        // the auditor describes). Return an explicit error BEFORE serializing and
-        // steer the caller to the paginated getUtxosByAddressPage or the
-        // balance-only getBalancesByAddresses, instead of silently continuing.
-        const LARGE_UTXO_HARD_CAP: usize = 250_000;
-        if num_entries > LARGE_UTXO_HARD_CAP {
-            return Err(RpcError::General(format!(
-                "getUtxosByAddresses: {num_entries} UTXOs across {num_addresses} address(es) exceeds the {LARGE_UTXO_HARD_CAP} hard cap \
-(~{est_borsh_mib:.0} MiB); use getUtxosByAddressPage (cursor-paginated) or getBalancesByAddresses (balance only)."
-            )));
-        }
         const LARGE_UTXO_RESPONSE_THRESHOLD: usize = 50_000;
         if num_entries >= LARGE_UTXO_RESPONSE_THRESHOLD {
             let msg = format!(
@@ -5106,7 +5257,11 @@ Use getBalancesByAddresses for balances, or consolidate the address's UTXOs.",
                 est_borsh_mib,
             );
         }
-        Ok(GetUtxosByAddressesResponse::new(entries))
+        Ok(RetainedRpcReply {
+            response: GetUtxosByAddressesResponse::new(entries),
+            retained: Some(retained),
+            conversion: Some(conversion),
+        })
     }
 
     async fn get_utxos_by_address_page_call(
@@ -6068,6 +6223,102 @@ fn palw_user_view_hash64(what: &str, hex: &str) -> RpcResult<kaspa_consensus_cor
     Ok(kaspa_consensus_core::Hash64::from_bytes(bytes))
 }
 
+fn palw_batch_view_ordinal(text: &str) -> RpcResult<u64> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(RpcError::General("Batch ordinal or target index must be decimal u64 text".into()));
+    }
+    text.parse().map_err(|_| RpcError::General("Batch ordinal or target index exceeds u64".into()))
+}
+
+fn palw_batch_view_target(text: &str) -> RpcResult<kaspa_consensus_core::palw_court_shared_material_intake_v1::MaterialTargetV1> {
+    text.parse().map_err(|why: &'static str| RpcError::General(why.into()))
+}
+
+fn palw_batch_quote_target(
+    request: &GetPalwCourtStateRequest,
+) -> RpcResult<kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1> {
+    use kaspa_consensus_core::{palw_batch_court_v1::MAX_BATCH_RANGES_V1, palw_user_views_v1::PalwCourtTargetV1};
+    use kaspa_consensus_core::palw_court_shared_material_intake_v1::BATCH_STOP_ORDINAL_V1;
+    let invalid = || RpcError::General("a Batch quote needs a claim and stop or verify-numerical, or a claim, ordinal and notice/leaf/target=bytes or notice/stop-full-ids".into());
+    if !request.session_hex.is_empty() || !request.batch_target.is_empty() || request.batch_open.len() > 4_096 {
+        return Err(invalid());
+    }
+    let claim = palw_user_view_hash64("claim", &request.claim_hex)?;
+    if request.batch_open == "stop" {
+        return request.batch_ordinal.is_empty().then_some(PalwCourtTargetV1::BatchStop { claim }).ok_or_else(invalid);
+    }
+    if request.batch_open == "verify-numerical" {
+        return request.batch_ordinal.is_empty().then_some(PalwCourtTargetV1::BatchVerifyNumerical { claim }).ok_or_else(invalid);
+    }
+    let ordinal = palw_batch_view_ordinal(&request.batch_ordinal)?;
+    let (notice, selection) = request.batch_open.split_once('/').ok_or_else(invalid)?;
+    let notice = palw_user_view_hash64("notice", notice)?;
+    if selection == "stop-full-ids" {
+        return (ordinal == BATCH_STOP_ORDINAL_V1)
+            .then_some(PalwCourtTargetV1::BatchStopFullIdsOpen { claim, notice })
+            .ok_or_else(invalid);
+    }
+    if ordinal == BATCH_STOP_ORDINAL_V1 {
+        return Err(invalid());
+    }
+    let ordinal = usize::try_from(ordinal).map_err(|_| invalid())?;
+    let (leaf, entries) = selection.split_once('/').ok_or_else(invalid)?;
+    let leaf = palw_batch_view_ordinal(leaf)?;
+    let mut lengths = Vec::new();
+    for entry in entries.split(',') {
+        if lengths.len() == MAX_BATCH_RANGES_V1 {
+            return Err(invalid());
+        }
+        let (target, bytes) = entry.split_once('=').ok_or_else(invalid)?;
+        let bytes = palw_batch_view_ordinal(bytes)?;
+        if !(1..=u64::from(u32::MAX)).contains(&bytes) {
+            return Err(invalid());
+        }
+        lengths.push((palw_batch_view_target(target)?, bytes));
+    }
+    Ok(PalwCourtTargetV1::NumericalBatchOpen { claim, ordinal, notice, leaf, lengths })
+}
+
+#[cfg(test)]
+#[test]
+fn numerical_batch_open_selector_is_bounded_and_exclusive() {
+    use kaspa_consensus_core::palw_user_views_v1::PalwCourtTargetV1;
+    let notice = "cd".repeat(64);
+    let mut request = GetPalwCourtStateRequest { claim_hex: "ab".repeat(64), batch_ordinal: "0".into(),
+        batch_open: format!("{notice}/18446744073709551615/unit:3=8,prompt-flat=4"), ..Default::default() };
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::NumericalBatchOpen {
+        ordinal: 0, leaf: u64::MAX, lengths, ..
+    }) if lengths.len() == 2 && lengths[0].1 == 8));
+    request.batch_target = "full-ids".into();
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_target.clear();
+    for entries in ["", "unit:1=0", "unit:1=4294967296", "unit:1=2,"] {
+        request.batch_open = format!("{notice}/1/{entries}");
+        assert!(palw_batch_quote_target(&request).is_err());
+    }
+    request.batch_open = format!("{notice}/1/{}unit:1=2", "unit:1=2,".repeat(64));
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_open = format!("{notice}/stop-full-ids");
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_ordinal = u64::MAX.to_string();
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchStopFullIdsOpen { .. })));
+    for selection in ["stop-full-ids/full-ids=1", "1/full-ids=1"] {
+        request.batch_open = format!("{notice}/{selection}");
+        assert!(palw_batch_quote_target(&request).is_err());
+    }
+    request.batch_open = "stop".into();
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_ordinal.clear();
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchStop { .. })));
+    request.batch_open = "verify-numerical".into();
+    assert!(matches!(palw_batch_quote_target(&request), Ok(PalwCourtTargetV1::BatchVerifyNumerical { .. })));
+    request.batch_ordinal = "0".into();
+    assert!(palw_batch_quote_target(&request).is_err());
+    request.batch_ordinal.clear();
+    request.batch_target = "full-ids".into();
+    assert!(palw_batch_quote_target(&request).is_err());
+}
+
 /// `(available, found, now_daa, view_json)` of a consensus user-view answer (`None`: no PALW tip).
 fn palw_user_view_answer(answer: Option<(u64, Option<String>)>) -> (bool, bool, u64, String) {
     match answer {
@@ -6577,6 +6828,27 @@ fn rpc_palw_model_version(
     }
 }
 
+/// One registration-terms read. It records the virtual DAA before the terms are read and
+/// refuses the answer if that DAA moved. Mempool contents are not part of the read. The same
+/// DAA does not freeze every virtual mutation.
+struct PalwRegistrationReadV1 {
+    virtual_daa: u64,
+}
+
+impl PalwRegistrationReadV1 {
+    fn open(virtual_daa: u64) -> Self {
+        Self { virtual_daa }
+    }
+
+    fn finish(&self, virtual_daa: u64) -> Result<u64, &'static str> {
+        if self.virtual_daa == virtual_daa {
+            Ok(virtual_daa)
+        } else {
+            Err("registration terms changed virtual state during the read; retry")
+        }
+    }
+}
+
 fn palw_settlement_read_agrees_v1(
     before_sink: kaspa_consensus_core::BlockHash,
     before_pruning: kaspa_consensus_core::BlockHash,
@@ -6714,6 +6986,13 @@ mod palw_settlement_read_tests {
             assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, sink, sink, &base, generation));
         }
         assert!(!palw_settlement_read_agrees_v1(sink, pruning, &base, sink, pruning, &base, Some(pruning)));
+    }
+
+    #[test]
+    fn registration_terms_refuse_a_virtual_daa_that_moved_during_the_read() {
+        let read = PalwRegistrationReadV1::open(10);
+        assert_eq!(read.finish(10), Ok(10));
+        assert!(read.finish(11).is_err());
     }
 }
 
@@ -7272,5 +7551,20 @@ mod complete_reward_cursor_tests {
         ] {
             assert!(parse_exec_reward_cursor(&bad).is_err(), "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod submit_block_shutdown_tests {
+    use super::*;
+    #[test]
+    fn local_shutdown_is_not_block_invalid_and_other_reports_are_preserved() {
+        let local = submit_block_report(Err(ProtocolError::RuleError(RuleError::ConsensusExiting)));
+        assert!(matches!(local, Err(RpcError::General(message)) if message.contains("exiting")));
+        assert!(matches!(submit_block_report(Ok(())), Ok(SubmitBlockResponse { report: SubmitBlockReport::Success })));
+        assert!(matches!(
+            submit_block_report(Err(ProtocolError::RuleError(RuleError::NoTransactions))),
+            Ok(SubmitBlockResponse { report: SubmitBlockReport::Reject(SubmitBlockRejectReason::BlockInvalid) })
+        ));
     }
 }

@@ -1,0 +1,28 @@
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+    Finished `test` profile [unoptimized] target(s) in 0.98s
+     Running tests/native_rows.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/native_rows-9e3f4079f3e67303)
+
+running 5 tests
+test balances_require_conservation_and_checked_arithmetic ... ok
+test fixed_rows_roundtrip_and_do_not_conflate_corruption_with_absence ... ok
+test no_saved_pass_or_union_summary_can_exceed_its_own_plan ... FAILED
+test large_signed_rows_and_all_optional_references_fit_the_fixed_codec ... ok
+test signed_bundles_bind_origin_plan_consent_and_do_not_require_panel_ack ... ok
+
+failures:
+
+---- no_saved_pass_or_union_summary_can_exceed_its_own_plan stdout ----
+
+thread 'no_saved_pass_or_union_summary_can_exceed_its_own_plan' (3023409) panicked at misaka/palw/positive-contract/tests/native_rows.rs:130:5:
+assertion `left == right` failed
+  left: Ok(NativeRowValue { version: 2, revision: 1, body: PacketReceipt(PacketReceiptRow { witness: WitnessId(Digest([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1])), first_relation: 0, frame: EvidencePartId(Digest([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])), author: PrincipalId(Digest([3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3])), signed_bytes: 4911, origin: AcceptedOrigin { accepting_block: NativeHash64([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]), carrier_block: NativeHash64([2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2]), carrier_transaction: NativeHash64([3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]), accepted_tx_ordinal: 4, event_ordinal: 5, accepted_daa: 6, accepted_blue_score: 7 } }) })
+ right: Err(Range)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    no_saved_pass_or_union_summary_can_exceed_its_own_plan
+
+test result: FAILED. 4 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p misaka-palw-positive-contract --test native_rows`

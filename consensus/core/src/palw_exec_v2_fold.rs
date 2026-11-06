@@ -57,6 +57,7 @@ impl PalwChainStateV2 {
         job: &Hash64,
     ) -> Result<(misaka_palw_tir::TirProgramV1, crate::palw_exec_work_plan_v1::PalwExecWorkCostV1, u32, u32, u32), String> {
         let tir = self.tir_class_v1(class).ok_or("the REAL job cannot be derived from registered IR")?;
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(tir).map_err(str::to_string)?;
         let registered = self.classes.get(class).ok_or("the registered class is missing")?;
         let program = misaka_palw_tir::TirProgramV1::decode_canonical(&tir.program).map_err(|e| e.to_string())?;
         let canonical = crate::palw_tir_attempt_v1::palw_tir_attempt_canonical_of_v1(tir.facts.max_context)
@@ -389,6 +390,7 @@ impl PalwChainStateV2 {
     /// **The consistency of the work-slice ledgers** against each other and against the claims, checked with the rest of
     /// `assert_internal_consistency`. Empty tables are consistent by construction.
     pub(super) fn assert_exec_v2_consistency_v1(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        super::palw_exec_v2_material_scope_v7::assert_consistent_v7(self)?;
         self.assert_exec_origins()?;
         super::palw_exec_v2_rewards_v1::consistent(self, params)?;
         let bad = |why: String| PalwStateV2Error::CarriageInconsistent(format!("exec v2: {why}"));
@@ -668,7 +670,11 @@ impl TransitionBuilder<'_> {
             self.admit_native_write_v1(q)?;
         }
         let previous = self.state.exec_v2.roots.get(&key).cloned();
+        let old_source = previous.as_ref().map(|r| r.prefix_claim);
+        let new_source = new.as_ref().map(|r| r.prefix_claim);
+        super::palw_exec_v2_material_scope_v7::admit_change_v7(self, key, old_source, new_source)?;
         self.write_exec_v2_row(PALW_EXEC_V2_TABLE_ROOTS_V1, key, new, |s| &mut s.exec_v2.roots)?;
+        super::palw_exec_v2_material_scope_v7::replace_v7(&mut self.state, key, old_source, new_source);
         if let Some(root) = previous {
             super::palw_exec_v2_history_v1::root_changed(&mut self.state, &root, false);
         }
@@ -680,7 +686,12 @@ impl TransitionBuilder<'_> {
 
     /// The one writer of `WorkSliceUse` rows.
     pub(super) fn write_exec_slice(&mut self, key: (Hash64, u32), new: Option<PalwWorkSliceRowV2>) -> Result<(), PalwStateV2Error> {
-        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_SLICES_V1, key, new, |s| &mut s.exec_v2.slices).map(drop)
+        let old_source = self.state.exec_v2.slices.get(&key).map(|r| r.evidence_root);
+        let new_source = new.as_ref().map(|r| r.evidence_root);
+        super::palw_exec_v2_material_scope_v7::admit_change_v7(self, key.0, old_source, new_source)?;
+        self.write_exec_v2_row(PALW_EXEC_V2_TABLE_SLICES_V1, key, new, |s| &mut s.exec_v2.slices)?;
+        super::palw_exec_v2_material_scope_v7::replace_v7(&mut self.state, key.0, old_source, new_source);
+        Ok(())
     }
 
     /// The one writer of `JobWorkUse` rows.
@@ -780,7 +791,7 @@ pub(super) fn apply_exec_v2_row_v1(
         PALW_EXEC_V2_TABLE_ROOTS_V1 => {
             let id: Hash64 = borsh::from_slice(key).map_err(|_| PalwStateV2Error::DeltaMismatch("EXEC root key does not decode"))?;
             let previous = state.exec_v2.roots.get(&id).cloned();
-            swap(&mut state.exec_v2.roots, key, old, new, revert)?;
+            super::palw_exec_v2_material_scope_v7::apply_root_delta_v7(state, key, old, new, revert)?;
             if let Some(root) = previous {
                 super::palw_exec_v2_history_v1::root_changed(state, &root, false);
             }
@@ -789,7 +800,7 @@ pub(super) fn apply_exec_v2_row_v1(
             }
             Ok(())
         }
-        PALW_EXEC_V2_TABLE_SLICES_V1 => swap(&mut state.exec_v2.slices, key, old, new, revert),
+        PALW_EXEC_V2_TABLE_SLICES_V1 => super::palw_exec_v2_material_scope_v7::apply_slice_delta_v7(state, key, old, new, revert),
         PALW_EXEC_V2_TABLE_JOBS_V1 => swap(&mut state.exec_v2.jobs, key, old, new, revert),
         PALW_EXEC_V2_TABLE_ANCHORED_V1 => swap(&mut state.exec_v2.anchored, key, old, new, revert),
         PALW_EXEC_V2_TABLE_REWARDS_V1 => {
@@ -843,6 +854,9 @@ pub(super) fn apply_root_declared_v2(
     {
         return Err(no(R::ClaimNotOpenable));
     }
+    if let Some(tir) = builder.state.tir_class_v1(&claim.class_id) {
+        crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(tir).map_err(refused)?;
+    }
     if builder.state.exec_v2.roots.contains_key(&claim_id) {
         return Err(no(R::RootExists));
     }
@@ -885,6 +899,7 @@ pub(super) fn apply_root_declared_v2(
         Some(kernel) => {
             let binding = kernel.kernel_binding_v1(&claim.class_id).ok_or_else(|| no(R::ClassNotKernelBound))?;
             let tir = builder.state.tir_class_v1(&claim.class_id).ok_or_else(|| no(R::PrefixNotDerivable))?;
+            crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(tir).map_err(refused)?;
             let (prompt, context) = palw_exec_v2_real_job_v1(&tir.facts, &claim.job_identity, builder.extras.prompt_ids_form_v1())
                 .ok_or_else(|| no(R::PrefixNotDerivable))?;
             if declaration.input_root != crate::palw_exec_v2_verify::palw_exec_v2_token_state_root_v1(&[&prompt]) {

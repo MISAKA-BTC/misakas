@@ -1,0 +1,123 @@
+    Checking serde_core v1.0.228
+    Checking byteorder v1.5.0
+    Checking zerocopy v0.7.35
+    Checking futures-core v0.3.31
+    Checking futures-io v0.3.31
+    Checking ppv-lite86 v0.2.20
+    Checking num-traits v0.2.19
+    Checking serde v1.0.228
+    Checking serde_json v1.0.151
+    Checking log v0.4.22
+    Checking futures-lite v2.3.0
+    Checking wasm-bindgen v0.2.100
+    Checking futures-sink v0.3.31
+    Checking tracing-core v0.1.36
+    Checking js-sys v0.3.77
+    Checking tracing v0.1.44
+    Checking futures-channel v0.3.31
+    Checking async-channel v2.3.1
+    Checking futures-task v0.3.31
+    Checking futures-util v0.3.31
+    Checking piper v0.2.4
+    Checking polling v3.7.3
+    Checking smallvec v1.13.2
+    Checking async-io v2.3.4
+    Checking chrono v0.4.38
+    Checking rand_chacha v0.9.0
+    Checking blocking v1.6.1
+    Checking async-executor v1.13.1
+    Checking rand_chacha v0.3.1
+    Checking tokio v1.54.1
+    Checking rand v0.8.6
+    Checking workflow-log v0.18.0
+    Checking async-global-executor v2.4.1
+    Checking rand v0.9.4
+    Checking futures-executor v0.3.31
+    Checking parking_lot_core v0.9.10
+    Checking async-channel v1.9.0
+    Checking web-sys v0.3.77
+    Checking kv-log-macro v1.0.7
+    Checking async-std v1.13.0
+    Checking parking_lot v0.12.3
+    Checking futures v0.3.31
+    Checking wasm-bindgen-futures v0.4.50
+    Checking serde-wasm-bindgen v0.6.5
+    Checking faster-hex v0.9.0
+    Checking hash32 v0.3.1
+    Checking heapless v0.8.0
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/utils)
+    Checking workflow-core v0.18.0
+    Checking workflow-panic-hook v0.18.0
+    Checking workflow-wasm v0.18.0
+    Checking faster-hex v0.10.1
+    Checking uuid v1.18.1
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/crypto/hashes)
+    Checking rand v0.10.1
+    Checking ahash v0.8.11
+    Checking libcrux-traits v0.0.8
+    Checking libcrux-sha3 v0.0.10
+    Checking libm v0.2.8
+    Checking hashbrown v0.14.5
+    Checking ordered-float v2.10.1
+    Checking misaka-palw-tir v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/tir/core)
+    Checking serde_yaml v0.9.34+deprecated
+    Checking libcrux-ml-dsa v0.0.10
+    Checking malachite-base v0.4.16
+    Checking serde-value v0.7.0
+    Checking libz-sys v1.1.31
+    Checking zstd-sys v2.1.2+zstd.1.5.7
+    Checking bzip2-sys v0.1.11+1.0.8
+    Checking lz4-sys v1.11.1+lz4-1.10.0
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking regex-syntax v0.8.5
+    Checking log4rs v1.4.0
+    Checking clap_builder v4.5.51
+    Checking regex-automata v0.4.8
+    Checking malachite-nz v0.4.16
+    Checking librocksdb-sys v0.17.3+10.4.2
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking misaka-palw-gen v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/gen)
+    Checking misaka-palw-challenge v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/challenge)
+    Checking misaka-palw-kernel v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/kernel)
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/math)
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/core)
+    Checking rocksdb v0.24.0
+    Checking regex v1.11.0
+    Checking ciborium v0.2.2
+    Checking clap v4.5.51
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/crypto/muhash)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/crypto/addresses)
+    Checking workflow-serializer v0.18.0
+    Checking tinytemplate v1.2.1
+    Checking bincode v1.3.3
+    Checking kaspa-txscript-errors v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/crypto/txscript/errors)
+    Checking criterion v0.5.1
+    Checking wasm-bindgen-test v0.3.50
+    Checking kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/database)
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/consensus/core)
+    Checking misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/a4-g14-court/MISAKA-testnet/misaka/palw/positive-accounting)
+error: this `if` statement can be collapsed
+   --> consensus/core/src/palw_tir_close_size_v2.rs:164:9
+    |
+164 | /         if let Self::Wide { allocation_cap, .. } = self {
+165 | |             if count > allocation_cap || count > u64::from(u32::MAX) || usize::try_from(count).is_err() {
+166 | |                 return Err(crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.into());
+167 | |             }
+168 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+164 ~         if let Self::Wide { allocation_cap, .. } = self
+165 ~             && (count > allocation_cap || count > u64::from(u32::MAX) || usize::try_from(count).is_err()) {
+166 |                 return Err(crate::palw_tir_close_size_v1::PALW_TIR_CLOSE_SIZING_OVER_CAP_V1.into());
+167 ~             }
+    |
+
+error: could not compile `kaspa-consensus-core` (lib) due to 1 previous error

@@ -97,7 +97,7 @@ pub(super) fn apply_artifact_bound_v1(
     }
     // The statement is bonded: a slice of the signer's FREE collateral is held until the refutation horizon ends.
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score));
+    let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?);
     if free < PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1 as u128 {
         return Err(refused("the signer's free collateral does not cover the binding's reservation"));
     }
@@ -160,7 +160,7 @@ pub(super) fn apply_artifact_challenged_v1(
             .ok_or_else(|| refused("the tile court work overflows"))?;
         let fee = route_ledger_policy_v1(builder)?.dismissal_fee_v1(work) as u128;
         let collateral = builder.state.bonds.get(challenger).map(|b| b.collateral as u128).unwrap_or(0);
-        if collateral.saturating_sub(builder.committed_at(challenger, ctx.daa_score)) < fee {
+        if collateral.saturating_sub(builder.committed_at(challenger, ctx.daa_score)?) < fee {
             return Err(refused("the refuter's free collateral does not cover the dismissed tile fee"));
         }
         if !charge_route_budget_v1(builder, ctx, work, true)? {
@@ -578,7 +578,7 @@ pub(super) fn apply_conformance_evidence_v1(
             // The fee a refutation that proves nothing pays, in free collateral (checked free, before any charge).
             let fee = route_ledger_policy_v1(builder)?.dismissed_proof_fee as u128;
             let collateral = refuter.collateral as u128;
-            if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+            if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < fee {
                 return Err(refused("the refuter's free collateral does not cover the dismissed-refutation fee"));
             }
         }
@@ -737,7 +737,7 @@ fn apply_complete_check_v1(
     let record = route.kernel_class_record_v1(&binding.kernel_class).ok_or_else(|| refused("the bound kernel class is gone"))?;
     let domain = palw_complete_check_domain_v1(&program, record.plan.max_positions).map_err(refused)?;
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < PALW_COMPLETE_CHECK_FEE_SOMPI_V1 as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < PALW_COMPLETE_CHECK_FEE_SOMPI_V1 as u128 {
         return Err(refused("the registrant's free collateral does not cover the complete check's fee"));
     }
     // ---- 2. the block's cap ----

@@ -1,0 +1,85 @@
+{
+  "status": "in_progress_completion_unproven",
+  "source_attachment": "/Users/wata/.codex/attachments/c0766707-5d4e-4d22-a511-d6483285af49/pasted-text-1.txt",
+  "scope_exclusions": [
+    "public deployment",
+    "long-running operational campaign",
+    "deferred image/video and model improvement",
+    "unadopted Account Bond RFC-0027"
+  ],
+  "requirements": [
+    {
+      "item": 1,
+      "name": "RFC-0039 verifier/provider finite fee consent",
+      "acceptance": "Genuine signatures; current authority and native scope; held full principal; timely conviction/default refund; fixed cutoff release; queue pressure; physical payment; once; restore/reorg.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 2,
+      "name": "Paid Court intake / escrow / settlement",
+      "acceptance": "Actual carrier output and payer signature; production funded constructor and schedules; ordinary and Prefix original acceptance; all-branch atomic install; payout/burn/refund/partial closure conservation.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 3,
+      "name": "Court material / storage charges",
+      "acceptance": "Positive storage debit from uncommitted real principal; bounded multipart authenticates real bodies; wrong scope/signature/retry fails atomically; physical provider payments and restart/undo.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 4,
+      "name": "Court all-branch resource / funding / supply reservation",
+      "acceptance": "Genuine TFO2 four-role full native candidate; parameter/prompt, semantic table, tokenizer raw and generated Prefix IDs/selection/stop; all service+retention nodes, all actor capital/funding and native allocation admission before fill; no legacy envelope bypass; actual materials used in live adjudication.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 5,
+      "name": "RFC-0023 independent progress and unresolved dependencies",
+      "acceptance": "Persisted actual provenance and namespaces; independent certified B proceeds while unresolved A holds dependent C; conviction denies downstream credit without innocent slash; all retained native/material state survives pruning/IBD/restart/reorg; stage2 acceptance drills, not only helper results.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 6,
+      "name": "RFC-0040 authenticated Prefix birth and dependencies",
+      "acceptance": "Native source matching exact admitted block/DAA/blue/authority; no future source; export reservations survive terminal until material release; native/current and historical dependency closure; restore/reorg.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 7,
+      "name": "RFC-0012 native39 to EVM settlement",
+      "acceptance": "Actual native issuance/spend produces unique W/PWU facts; authenticated maturity/anchor/operator/class; no legacy alias; receipt-specific fraud revocation; EVM Safe/Finalized consumer exercised end to end.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 8,
+      "name": "RFC-0037 IBD rows to P2P and full import",
+      "acceptance": "Protocol109 opt-in negotiation; bounded actual peer transfer; pinned source canonical export; incremental authenticated collection checks; exact selected-chain witness; complete inventory; native admitted suffix; ordinary atomic full import; local capacity/disk vs peer failures; fallback only explicit unavailable.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 9,
+      "name": "RFC-0038 winning carrier accounting",
+      "acceptance": "Actual accepted first tx ID persists in kernel aux; exact winner used by seat; malformed stored index fails; missing index unique fallback only; ambiguity refused; restored/reorg accounting consistency.",
+      "current_candidate_evidence": "pending"
+    },
+    {
+      "item": 10,
+      "name": "RFC-0041 zero-genesis-bond startup",
+      "acceptance": "Real zero-bond node BASE recovery; spendable funds; ordinary signed bond registration/maturity; first PALW and selected verifier authentication; no artifact/PWU/class-gate bypass; reorg/restart.",
+      "current_candidate_evidence": "C10 PASS: 7-package EVM build, RFC0041 core 3, exact node 1, related Prefix regressions 11; immutable executable copies and source inventories recorded. Later edits are separate.",
+      "verified_candidate": {
+        "id": "C10",
+        "result": "PASS",
+        "record": "docs/evidence/palw/rfc0041-bond-free-bootstrap-2026-10-31/candidate-c10/verification.json",
+        "previous_verified_candidate": "C7",
+        "resolved_failure": "C9 missing Prefix conviction helper resolved and revalidated"
+      }
+    },
+    {
+      "item": 11,
+      "name": "Same-candidate build / all required tests and E2E",
+      "acceptance": "All production and test sources frozen and hashed before/after; unified default-feature build including EVM/SDK/P2P/node; targeted suites run against exact produced binaries, zero-match filters rejected; production node binary built; all new compile/runtime failures resolved; documented authoritative logs and limits.",
+      "current_candidate_evidence": "pending"
+    }
+  ]
+}

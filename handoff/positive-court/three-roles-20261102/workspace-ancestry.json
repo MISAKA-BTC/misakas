@@ -1,0 +1,70 @@
+{
+  "head": "723cfd79d5934a6e250babdfe0d9fab808cd2ecf",
+  "all_eight_original_and_current_tips_are_ancestors": true,
+  "workspaces": [
+    {
+      "role": "A0",
+      "branch": "codex/positive-court-a0",
+      "original_integrated_tip": "9fc9a9cd90e8d527c2d079ab3db0754fd568585a",
+      "current_tip": "723cfd79d5934a6e250babdfe0d9fab808cd2ecf",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    },
+    {
+      "role": "A1",
+      "branch": "codex/a1-wide-native-registration",
+      "original_integrated_tip": "8c8e9ae991163cacf999c2ff3527b6b66dc87f4f",
+      "current_tip": "8c8e9ae991163cacf999c2ff3527b6b66dc87f4f",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    },
+    {
+      "role": "A2",
+      "branch": "codex/positive-court-a2-miner",
+      "original_integrated_tip": "8354006fbb53c73688b900a95f9a20a9ff62dfa7",
+      "current_tip": "8354006fbb53c73688b900a95f9a20a9ff62dfa7",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    },
+    {
+      "role": "A3",
+      "branch": "codex/a3-final-positive-court-20261102",
+      "original_integrated_tip": "60273b84fe70c8bc124ef6cbf80874c995233d41",
+      "current_tip": "60273b84fe70c8bc124ef6cbf80874c995233d41",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    },
+    {
+      "role": "A4",
+      "branch": "codex/a4-wide-q24-sizing",
+      "original_integrated_tip": "b08ca43b9d1211f3f0f052237f62cbdf3cb5f8d5",
+      "current_tip": "b08ca43b9d1211f3f0f052237f62cbdf3cb5f8d5",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    },
+    {
+      "role": "A5",
+      "branch": "codex/a5-row-restore-fixtures",
+      "original_integrated_tip": "fd315fc507adab6cc3af7da8675376bd0b9dd3f4",
+      "current_tip": "fd315fc507adab6cc3af7da8675376bd0b9dd3f4",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    },
+    {
+      "role": "A6",
+      "branch": "codex/positive-court-native-validation-f7bf",
+      "original_integrated_tip": "9fc9a9cd90e8d527c2d079ab3db0754fd568585a",
+      "current_tip": "9fc9a9cd90e8d527c2d079ab3db0754fd568585a",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    },
+    {
+      "role": "A7",
+      "branch": "codex/a7-class-only-07d7",
+      "original_integrated_tip": "4416588f584ac45ec931690230948f2e1c1388e2",
+      "current_tip": "4416588f584ac45ec931690230948f2e1c1388e2",
+      "original_is_ancestor": true,
+      "current_is_ancestor": true
+    }
+  ]
+}

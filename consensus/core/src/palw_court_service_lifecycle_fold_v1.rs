@@ -38,6 +38,16 @@ pub(super) fn install_court_service_binding_v1(
     if !court_service_f02_active_v1(b) {
         return Ok(false);
     }
+    if b.params.family_supplier_active_at(ctx.daa_score) {
+        let profile2 = super::palw_court_family_supplier_fold_v1::family_supplier_profiles_v2()?[0];
+        let profile3 = super::palw_court_family_supplier_fold_v1::family_supplier_profiles_v3()?[0];
+        if b.extras.tir_funded_originals.get(&claim).is_some_and(|p| {
+            !p.suppliers_v2().is_empty()
+                && p.suppliers_v2().iter().all(|c| c.terms.fee_profile == profile2 || c.terms.fee_profile == profile3)
+        }) {
+            return Ok(false);
+        }
+    }
     let Some(profile) = crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1 else { return Ok(false) };
     install_court_service_binding_with_profile_v1(b, ctx, claim, &profile).map(|()| true)
 }
@@ -92,13 +102,15 @@ pub(super) fn install_shared_frontier_context_v1(
         .map_err(|e| refused(format!("shared frontier install refused: {e}")))?;
     // F03b2 (provisional): Q (in packets, every coordinate at its maximum size) <= c * W, so the schedule serves every coordinate
     // before hard. Over capacity is a production error at original acceptance: the admission is refused (checkpoint restores).
-    let universe_packets = crate::palw_court_shared_tir_state_v1::shared_frontier_universe_packets_v1(&b.state, &derived)
-        .map_err(|e| refused(format!("shared frontier packets: {e}")))?;
-    if !crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
-        universe_packets,
-        crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
+    let fits = |packets| crate::palw_court_shared_frontier_budget_v1::shared_frontier_capacity_admits_v1(
+        packets, crate::palw_g14_values_v1::PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1,
         derived.hard_daa.saturating_sub(derived.original_accepted_daa),
-    ) {
+    );
+    // Every legal coordinate requires at least one packet.
+    if !fits(derived.queries)
+        || !fits(crate::palw_court_shared_tir_state_v1::shared_frontier_universe_packets_v1(&b.state, &derived)
+            .map_err(|e| refused(format!("shared frontier packets: {e}")))?)
+    {
         return Err(refused("shared frontier universe exceeds the reserved service capacity of the hard window"));
     }
     if derived.original_accepted_daa != ctx.daa_score {
@@ -112,6 +124,76 @@ pub(super) fn install_shared_frontier_context_v1(
     }
     b.write_staged_row_v1(key, Some(Row::CourtSharedContext(Box::new(derived))))?;
     Ok(true)
+}
+
+/// Install the prepared native book and its Batch-only frontier together.
+/// The original coordinator owns the paired transaction and funding checks.
+pub(super) fn install_prepared_batch_frontier_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    before: Option<&Row>,
+    book: crate::palw_court_service_release_v1::CourtServiceRowV3,
+    quote: &crate::palw_court_shared_material_intake_v1::batch::admission::BatchAdmissionQuoteV1,
+) -> Result<(), PalwStateV2Error> {
+    use crate::palw_court_shared_material_intake_v1::batch::admission::batch_numerical_service_ids_v1;
+    use crate::palw_court_shared_tir_state_v1::SharedTirContextV1;
+    let claim = quote.claim;
+    let key = Key::CourtSharedContext(claim);
+    if !b.extras.batch_court_active_v1
+        || b.state.staged_court_row_v1(&Key::CourtService) != before
+        || b.state.staged_court_row_v1(&key).is_some()
+    {
+        return Err(refused("Batch frontier requires the original's unchanged admission state"));
+    }
+    let profile = b.extras.batch_numerical_profile_v1.filter(|profile| profile.service_profile == book.state.profile_id)
+        .ok_or_else(|| refused("Batch frontier has no matching native profile"))?;
+    let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim)
+        .ok_or_else(|| refused("Batch frontier has no accepted original frame"))?;
+    let binding = book.state.claims.get(&claim).ok_or_else(|| refused("Batch frontier has no original service binding"))?;
+    let plan = frame.plan_v1();
+    if (binding.allocation_id, binding.source_id, binding.original_accepted_daa) != (plan.allocation_id, plan.source_id, ctx.daa_score)
+        || plan.terms.accepted_daa != ctx.daa_score
+        || b.state.claim(&claim).is_none_or(|claim| claim.accepted_daa != ctx.daa_score)
+        || quote.material_until_daa != plan.terms.material_until_daa
+        || quote.relative_graph_id == Hash64::default()
+        || quote.retained_numerical_fault_bytes != profile.budget.max_fault_bytes
+    {
+        return Err(refused("Batch frontier substitutes original identity, clock or retention"));
+    }
+    let (verification, terminal) = batch_numerical_service_ids_v1(claim, quote.scope).map_err(|why| refused(format!("{why:?}")))?;
+    let first_open = crate::palw_batch_court_v1::rooted::batch_open_packet_v1(claim, quote.scope, 0).map_err(refused)?.as_bytes();
+    let booked = |id: &[u8; 64]| binding.packet_ids.contains(id).then(|| book.state.book.assigned_daa(id)).flatten();
+    let (Some(open_at), Some(verify_at), Some(terminal_at)) = (booked(&first_open), booked(&verification), booked(&terminal)) else {
+        return Err(refused("Batch frontier is missing a required service slot"));
+    };
+    let service = profile.budget.service_cost_v1().ok_or_else(|| refused("Batch frontier replay budget is invalid"))?;
+    let first = ctx.daa_score.checked_add(crate::palw_court_policy_v1::NOTICE_WINDOW_DAA + 1)
+        .ok_or_else(|| refused("Batch frontier notice clock overflows"))?;
+    if open_at < first
+        || open_at >= verify_at || verify_at >= terminal_at
+        || terminal_at >= binding.hard_deadline_daa
+        || terminal_at.checked_sub(ctx.daa_score).is_none_or(|elapsed| elapsed >= quote.required_daa)
+        || quote.required_daa > crate::palw_court_policy_v1::DISPUTE_WINDOW_DAA
+        || book.state.book.packet(&verification).is_none_or(|packet| packet.cost != service)
+        || book.state.book.packet(&terminal).is_none_or(|packet| !profile.budget.covers_terminal_recheck_v1(packet.cost))
+        || book.causal.get(&terminal).is_none_or(|parents| parents.binary_search(&verification).is_err())
+    {
+        return Err(refused("Batch frontier slots differ from the original reservation"));
+    }
+    let saved = b.try_checkpoint()?;
+    let result = (|| {
+        b.write_staged_row_v1(Key::CourtService, Some(Row::CourtServiceV3(Box::new(book).into())))?;
+        let mut context = crate::palw_court_shared_tir_state_v1::derive_shared_tir_context_v1(&b.state, claim).map_err(refused)?;
+        if context.scope_id != quote.scope {
+            return Err(refused("Batch frontier scope differs from the prepared reservation"));
+        }
+        context.version = SharedTirContextV1::BATCH_NOTICE_ONLY_VERSION_V1;
+        b.write_staged_row_v1(key, Some(Row::CourtSharedContext(Box::new(context))))
+    })();
+    if result.is_err() {
+        b.restore(saved);
+    }
+    result
 }
 
 /// **ADR-0192 A: record this accepting block's actual reserved service supply.** Called once per block after every object. The
@@ -136,7 +218,22 @@ pub(super) fn observe_court_service_block_v1(b: &mut TransitionBuilder<'_>, ctx:
         return Ok(());
     }
     let spent = b.court_cost_spent;
-    let unreserved = crate::palw_court_service_v1::ServiceCost { bytes: spent.bytes, work: spent.work, io: 0, controls: 0 };
+    let family = b.court_family_packing_spent_v2;
+    let source = b.court_family_unreserved_service_spent_v2;
+    let unreserved = crate::palw_court_service_v1::ServiceCost {
+        bytes: spent
+            .bytes
+            .checked_sub(family.bytes)
+            .and_then(|n| n.checked_add(source.bytes))
+            .ok_or_else(|| refused("family physical byte packing sum"))?,
+        work: spent
+            .work
+            .checked_sub(family.work)
+            .and_then(|n| n.checked_add(source.work))
+            .ok_or_else(|| refused("family physical work packing sum"))?,
+        io: source.io,
+        controls: source.controls,
+    };
     let block: [u8; 64] = *ctx.block.as_byte_slice();
     let mut next = old.clone();
     match next.book.observe_block(ctx.daa_score, block, unreserved) {
@@ -302,6 +399,17 @@ pub(super) fn apply_shared_court_op_v1(
     if !shared_court_lifecycle_active_v1(b, ctx.daa_score) {
         return Err(PalwStateV2Error::ObjectiveOffenceDormant);
     }
+    let delivery_claim = match &op {
+        SharedCourtOpV1::Request { .. } => None,
+        SharedCourtOpV1::Body { claim, .. } | SharedCourtOpV1::Ids { claim, .. } => Some(*claim),
+        SharedCourtOpV1::Numerical { manifest, .. } => Some(manifest.claim),
+        SharedCourtOpV1::PositionBottom { control } => Some(control.control.claim),
+    };
+    if delivery_claim.is_some_and(|claim| {
+        crate::palw_court_shared_tir_state_v1::context(&b.state, claim).is_ok_and(|c| c.batch_notice_only_v1())
+    }) {
+        return Err(refused("Batch original requires its reserved delivery or terminal route"));
+    }
     let saved = b.try_checkpoint()?;
     let result = (|| match op {
         SharedCourtOpV1::Request { claim, intent } => fold::request(b, ctx, claim, intent).map(SharedCourtOpEffectV1::Request),
@@ -394,6 +502,27 @@ pub(super) fn apply_shared_bottom_conviction_v1(
     claim_id: Hash64,
     filer: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
+    apply_shared_claim_conviction_v1(b, ctx, claim_id, filer, PalwVoidReasonV2::CourtHeldVerdict)
+}
+
+/// Called only after the signed Stop operands independently produced a fault at this point.
+pub(super) fn apply_batch_stop_conviction_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    filer: PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    // This ruling judges the original claim's Stop statement. It does not adjudicate a sibling claim.
+    apply_shared_claim_conviction_v1(b, ctx, claim_id, filer, PalwVoidReasonV2::CourtFraud)
+}
+
+fn apply_shared_claim_conviction_v1(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    filer: PalwBondKeyV2,
+    reason: PalwVoidReasonV2,
+) -> Result<(), PalwStateV2Error> {
     let frame = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&b.state, claim_id)
         .ok_or_else(|| refused("shared bottom conviction has no original frame"))?
         .clone();
@@ -439,11 +568,11 @@ pub(super) fn apply_shared_bottom_conviction_v1(
         }
     }
     if !credited.is_empty() {
-        let conv = b.open_conviction_v1(&credited, ctx.daa_score);
+        let conv = b.open_conviction_v1(&credited, ctx.daa_score)?;
         let g = b.claim_g_v1(&claim_id).map(|gains| gains.g()).unwrap_or(0);
         b.charge_covering_signers_v1(&conv, claim_id, &credited, g)?;
     }
-    b.convict_by_court_verdict_as_v1(ctx, claim_id, &claim, filer, None, PalwVoidReasonV2::CourtHeldVerdict)
+    b.convict_by_court_verdict_as_v1(ctx, claim_id, &claim, filer, None, reason)
 }
 
 #[cfg(test)]

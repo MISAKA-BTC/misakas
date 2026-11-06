@@ -17,6 +17,19 @@ fn encoded<T: borsh::BorshSerialize>(q: &mut TirNativeRequestsV1, value: &T) -> 
     q.vec_v1::<u8>(n.max(1024)).map_err(PalwStateV2Error::NativeResource)
 }
 impl<'a> TransitionBuilder<'a> {
+    pub(super) fn reserve_final_journal_v1(&mut self, slots: usize) -> Result<(), PalwStateV2Error> {
+        if !self.native_writers_tracking_v1() {
+            return Ok(());
+        }
+        let overflow = || PalwStateV2Error::NativeResource(NativeCoverageV1::overflow::<PalwDeltaEntryV2>("final journal"));
+        let len = self.entries.len().checked_add(slots).ok_or_else(overflow)?;
+        // Retained Vec accounting also covers the pinned Borsh growth bound.
+        // Reserve its excess over the actual allocation before adding entries.
+        let growth = len.checked_mul(2).ok_or_else(overflow)?;
+        let spare = growth.saturating_sub(self.entries.capacity().max(len));
+        let extra = spare.checked_mul(std::mem::size_of::<PalwDeltaEntryV2>()).ok_or_else(overflow)?;
+        self.reserve_mutation_sequence_v1(extra as u64, slots)
+    }
     /// Reserve a whole dependent-writer sequence before its first mutation.
     /// Existing and replacement journal frames coexist through realloc.
     pub(super) fn reserve_mutation_sequence_v1(&mut self, bytes: u64, slots: usize) -> Result<(), PalwStateV2Error> {

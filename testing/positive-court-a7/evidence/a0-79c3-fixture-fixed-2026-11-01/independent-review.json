@@ -1,0 +1,20 @@
+{
+  "candidate": "c2e4226253900c3711ec2a4ee7d2ec8b548e57c5",
+  "reviewers": [
+    "/root/process_measurement",
+    "/root/adversarial_tests",
+    "/root/integration_audit"
+  ],
+  "counts": {
+    "passed": 667,
+    "failed": 0,
+    "ignored_worker": 1
+  },
+  "required_pipeline_and_fence_names": "each 8 successful",
+  "source_locks_native_binary_log_fixture_identity": "matched",
+  "live_completed_groups": [],
+  "live_roles": [],
+  "fixture_only_fix": "7463c2f69",
+  "scope": "same candidate private tests; no native activation, job authority, real LLM, or production performance certification",
+  "old_failed_record_unchanged": true
+}

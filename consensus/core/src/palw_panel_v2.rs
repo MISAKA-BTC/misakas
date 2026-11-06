@@ -257,25 +257,42 @@ impl PalwPanelValidLockV1 {
     /// what it has free is at most what it posted, so no lock can change the answer, and the draw
     /// asks this of every eligible bond of every pending claim (the route-matrix re-audit's #3).
     pub fn admits(&self, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> bool {
+        self.admits_checked_v2(state, bond).unwrap_or(false)
+    }
+    /// Actual draws preserve local capacity and malformed committed accounting.
+    pub fn admits_checked_v2(
+        &self,
+        state: &PalwChainStateV2,
+        bond: &PalwBondKeyV2,
+    ) -> Result<bool, crate::palw_state_v2::PalwStateV2Error> {
         if let Some(filter) = self.rcore {
-            // The one invariant's work gate (the S review's M1): the room is the 500‰ ceiling less
-            // `committed`, never past `collateral − committed − accuser`, as the bind measures it.
-            return self.rcore_room_v1(&filter, state, bond).is_some_and(|room| filter.eligibility <= room);
+            return Ok(self.rcore_room_checked_v2(&filter, state, bond)?.is_some_and(|room| filter.eligibility <= room));
         }
         let posted = state.bond(bond).map(|b| b.collateral as u128).unwrap_or(0);
         if posted < self.required {
-            return false;
+            return Ok(false);
         }
-        state.palw_slashable_available_v1(bond, self.now_daa, self.settled_anchor_depth, self.window_court) >= self.required
+        Ok(state.palw_slashable_available_checked_v2(bond, self.now_daa, self.settled_anchor_depth, self.window_court)?
+            >= self.required)
     }
 
     /// The one-ledger seat filter's work room for `bond` (`None` for a bond the state does not hold) —
     /// [`Self::admits`]'s measure under `filter`, which reads nothing of the claim but
     /// `filter.eligibility`.
-    fn rcore_room_v1(&self, filter: &PalwRcoreSeatFilterV1, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> Option<u128> {
-        let record = state.bond(bond)?;
-        let committed =
-            crate::palw_state_v2::palw_bond_committed_v1(state, bond, self.now_daa, self.settled_anchor_depth, self.window_court);
+    fn rcore_room_checked_v2(
+        &self,
+        filter: &PalwRcoreSeatFilterV1,
+        state: &PalwChainStateV2,
+        bond: &PalwBondKeyV2,
+    ) -> Result<Option<u128>, crate::palw_state_v2::PalwStateV2Error> {
+        let Some(record) = state.bond(bond) else { return Ok(None) };
+        let committed = crate::palw_state_v2::palw_bond_committed_checked_v2(
+            state,
+            bond,
+            self.now_daa,
+            self.settled_anchor_depth,
+            self.window_court,
+        )?;
         // Lane V02: past `palw_final_lock_full_collateral` the resolved locks leave the ceiling,
         // exactly as the bind's `gate_room` reads them (same DAA, same escaped depth).
         let off_ceiling = if filter.resolved_locks_off_ceiling {
@@ -283,7 +300,7 @@ impl PalwPanelValidLockV1 {
         } else {
             0
         };
-        Some(crate::palw_state_v2::palw_rcore_gate_room_split_of_v1(
+        Ok(Some(crate::palw_state_v2::palw_rcore_gate_room_split_of_v1(
             record.collateral,
             filter.ceiling_permille,
             committed,
@@ -292,7 +309,7 @@ impl PalwPanelValidLockV1 {
             // Lane V02: past the fence the fold's accuser ledger (held dissections at their charge).
             crate::palw_state_v2::palw_accuser_ledger_v1(state, &filter.gain_scale, bond, filter.held_charge_floor),
             crate::palw_state_v2::PalwRcoreGateV1::Work,
-        ))
+        )))
     }
 
     /// **Lane F2: the lock's claim-independent half** — this lock with its two per-claim prices
@@ -315,11 +332,47 @@ impl PalwPanelValidLockV1 {
     /// lesser of its posted collateral and its slashable-available amount. Computed once per bond
     /// and anchor block by [`PalwStakeDrawCensusV1`], never per claim.
     pub fn room_v1(&self, state: &PalwChainStateV2, bond: &PalwBondKeyV2) -> Option<u128> {
+        self.room_checked_v2(state, bond).ok().flatten()
+    }
+    pub fn room_checked_v2(
+        &self,
+        state: &PalwChainStateV2,
+        bond: &PalwBondKeyV2,
+    ) -> Result<Option<u128>, crate::palw_state_v2::PalwStateV2Error> {
         if let Some(filter) = self.rcore {
-            return self.rcore_room_v1(&filter, state, bond);
+            return self.rcore_room_checked_v2(&filter, state, bond);
         }
         let posted = state.bond(bond).map(|b| b.collateral as u128).unwrap_or(0);
-        Some(posted.min(state.palw_slashable_available_v1(bond, self.now_daa, self.settled_anchor_depth, self.window_court)))
+        Ok(Some(posted.min(state.palw_slashable_available_checked_v2(
+            bond,
+            self.now_daa,
+            self.settled_anchor_depth,
+            self.window_court,
+        )?)))
+    }
+}
+
+fn retain_checked_lock_v2(
+    population: &mut Vec<(&PalwBondKeyV2, &PalwBondStateV2)>,
+    lock: &PalwPanelValidLockV1,
+    state: &PalwChainStateV2,
+) -> Result<(), PalwPanelV2Error> {
+    let mut fault = None;
+    population.retain(|(key, _)| {
+        if fault.is_some() {
+            return false;
+        }
+        match lock.admits_checked_v2(state, key) {
+            Ok(admits) => admits,
+            Err(error) => {
+                fault = Some(error);
+                false
+            }
+        }
+    });
+    match fault {
+        Some(error) => Err(PalwPanelV2Error::CollateralState(error)),
+        None => Ok(()),
     }
 }
 
@@ -344,6 +397,7 @@ impl PalwPanelValidLockV1 {
 ///    network's base-class population — every bond eligible to judge the liveness floor — under
 ///    [`PALW_PANEL_V2_DOMAIN_OUTSIDER_TICKET`], and the remaining `seat_count - 1` from the class's
 ///    own population as before, without the outsider's operator.
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PalwPanelIndependenceV1 {
     /// `Params::palw_admission_independence`'s height.
@@ -467,6 +521,8 @@ impl PalwPanelParamsV2 {
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwPanelV2Error {
+    #[error("native collateral accounting failed: {0}")]
+    CollateralState(crate::palw_state_v2::PalwStateV2Error),
     #[error("invalid panel params: {0}")]
     InvalidParams(&'static str),
     // ADR-0124 Decision 2 — the supplementary door's refusals, by name.
@@ -1479,7 +1535,11 @@ pub fn derive_panel_v2_with_policy_judged_v1(
     // The 2026-09-23 route-matrix audit's #3: a bond that cannot post the bind's Valid lock is not
     // a candidate — drawn, it failed the bind and held the claim unbound.
     let eligible: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = match policy.valid_lock {
-        Some(lock) => eligible.into_iter().filter(|(key, _)| lock.admits(state, key)).collect(),
+        Some(lock) => {
+            let mut eligible = eligible;
+            retain_checked_lock_v2(&mut eligible, &lock, state)?;
+            eligible
+        }
         None => eligible,
     };
     // RFC-0006: a bond already seated in an earlier shard of this claim is not a candidate of this one.
@@ -1738,12 +1798,11 @@ fn palw_panel_outsider_draw_excluding_v1(
             && !excluded_operators.contains(&bond.operator_id)
             && !excluded_bonds.contains(*key)
     };
-    let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = population
-        .into_iter()
-        .filter(not_registrant)
-        // The route-matrix audit's #3, for the outsider too: its seat is bound like every other.
-        .filter(|(key, _)| policy.valid_lock.is_none_or(|lock| lock.admits(state, key)))
-        .collect();
+    let population: Vec<(&PalwBondKeyV2, &PalwBondStateV2)> = population.into_iter().filter(not_registrant).collect();
+    let mut population = population;
+    if let Some(lock) = policy.valid_lock {
+        retain_checked_lock_v2(&mut population, &lock, state)?;
+    }
     let Some(stake) = policy.stake else {
         return palw_panel_operator_entries_under_v1(claim_id, anchor_block, &population, palw_panel_outsider_ticket_v1)
             .into_iter()
@@ -2355,6 +2414,8 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
     /// The census of `state` for a draw at `point`: `maturity_floor` is the draw's
     /// `palw_seat_maturity_floor_v1(point.draw_daa, window)` on `state`, and `frame` the binding block's
     /// lock with its prices zeroed ([`PalwPanelValidLockV1::frame_v1`]; `None` where no lock is armed).
+    /// Conservative compatibility census for diagnostics. Actual admission uses
+    /// `new_checked_v2`, so local capacity never changes the eligible set.
     pub fn new(
         state: &'a PalwChainStateV2,
         seat_count: u16,
@@ -2363,6 +2424,28 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
         maturity_floor: Option<u64>,
         frame: Option<PalwPanelValidLockV1>,
     ) -> Self {
+        Self::new_checked_v2(state, seat_count, min_collateral_sompi, point, maturity_floor, frame).unwrap_or_else(|_| Self {
+            state,
+            seat_count,
+            policy: PalwPanelDrawPolicyV1 { valid_lock: None, ..point.policy },
+            maturity_floor,
+            capability_proof: point.capability_proof,
+            shard_licensing: point.shard_licensing,
+            frame: frame.map(|lock| lock.frame_v1()),
+            bonds: Vec::new(),
+            judges: std::collections::BTreeMap::new(),
+            verdicts: std::collections::BTreeMap::new(),
+        })
+    }
+
+    pub fn new_checked_v2(
+        state: &'a PalwChainStateV2,
+        seat_count: u16,
+        min_collateral_sompi: u64,
+        point: &PalwSw8DrawPointV1,
+        maturity_floor: Option<u64>,
+        frame: Option<PalwPanelValidLockV1>,
+    ) -> Result<Self, crate::palw_state_v2::PalwStateV2Error> {
         let policy = PalwPanelDrawPolicyV1 { valid_lock: None, ..point.policy };
         // The seat floor every list asks first (`palw_panel_bonds_judging_v1`): the panel's past the
         // economy, the registry's below it.
@@ -2370,14 +2453,19 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
         let bonds = state
             .bonds_iter()
             .filter(|(_, bond)| crate::palw_state_v2::palw_bond_may_take_work_v2(bond, floor))
-            .map(|(key, bond)| PalwStakeCensusBondV1 {
-                key,
-                bond,
-                backed: state.reserved_exposure(key).saturating_add(state.registration_exposure(key)),
-                room: frame.and_then(|lock| lock.room_v1(state, key)),
+            .map(|(key, bond)| {
+                Ok(PalwStakeCensusBondV1 {
+                    key,
+                    bond,
+                    backed: state.reserved_exposure(key).saturating_add(state.registration_exposure(key)),
+                    room: match frame {
+                        Some(lock) => lock.room_checked_v2(state, key)?,
+                        None => None,
+                    },
+                })
             })
-            .collect();
-        Self {
+            .collect::<Result<Vec<_>, crate::palw_state_v2::PalwStateV2Error>>()?;
+        Ok(Self {
             state,
             seat_count,
             policy,
@@ -2388,7 +2476,7 @@ impl<'a> PalwStakeDrawCensusV1<'a> {
             bonds,
             judges: std::collections::BTreeMap::new(),
             verdicts: std::collections::BTreeMap::new(),
-        }
+        })
     }
 
     /// Each census bond's seat predicate for `class_id`, taken once.

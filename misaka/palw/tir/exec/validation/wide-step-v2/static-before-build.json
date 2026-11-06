@@ -1,0 +1,14 @@
+{
+  "base": "e5e7ec22ecf3a87c4f45602e258dececda0f7714",
+  "unchanged_function_bodies": [
+    "palw_tir_lanes_le_v1",
+    "palw_tir_lanes_wire_v1",
+    "palw_tir_leaf_preimage_v1",
+    "palw_tir_execution_root_v1",
+    "verify_tir_binding_v1",
+    "step_tile_leaf_hash_v1"
+  ],
+  "valid_legacy_changes_note": "Shared private geometry plus extra wide exclusion at mutable V1builder/unsupported dtype reader; narrow encoders/hash/verifier bodies unchanged.",
+  "old_a1_branch": "eef290f1d2534b91563d08d7fd918eec27dabd05",
+  "build_started": false
+}

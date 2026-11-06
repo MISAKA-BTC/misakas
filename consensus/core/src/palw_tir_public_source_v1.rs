@@ -19,6 +19,15 @@ mod response_native_v2;
 
 pub const PALW_TIR_PUBLIC_FRONTIER_HASHES_V1: usize = 1024;
 pub const PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1: u32 = 1024;
+// Borsh response discriminant, rows root and ID vector length.
+const IDS_RESPONSE_HEADER_BYTES_V1: u64 = 1 + 64 + 4;
+
+/// The concatenated native response bodies through exact original EOF.
+/// Zero generated IDs have no FullIds stream.
+pub(crate) fn full_ids_wire_bytes_v1(count: u32) -> u64 {
+    u64::from(count.div_ceil(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1)) * IDS_RESPONSE_HEADER_BYTES_V1 + 4 * u64::from(count)
+}
+
 pub const PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1: u32 = crate::palw_tir_court_v1::PALW_TIR_STEP_RUN_MAX_LEAVES_V1;
 const PATH: usize = 64;
 const RUN: usize = PALW_TIR_PUBLIC_RUN_MAX_LEAVES_V1 as usize;
@@ -719,7 +728,7 @@ impl PalwTirPublicSourceV1 {
                     + 76
                     + tile_h * 64
             }
-            Ids { offset } => 1 + 64 + 4 + u64::from((self.decode_count_v1() - offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1)) * 4,
+            Ids { offset } => full_ids_wire_bytes_v1((self.decode_count_v1() - offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1)),
         };
         let work = bytes.checked_mul(16).and_then(|n| n.checked_add(65_536)).ok_or("TIR public unit work overflow")?;
         Ok(PalwTirPublicUnitBoundV1 {
@@ -733,6 +742,99 @@ impl PalwTirPublicSourceV1 {
                 .and_then(|n| n.checked_add(u64::from(self.decode_count_v1()) * 4 + 131_072))
                 .ok_or("TIR public unit RAM overflow")?,
         })
+    }
+
+    /// Split a legal original run into contiguous queries whose native
+    /// maximum response fits one prospective Batch demand each. Reserve every
+    /// returned demand, even when a particular honest response uses fewer
+    /// parts. Each query is authenticated against the same original root.
+    pub fn batch_step_run_partitions_v1(
+        &self,
+        first: u64,
+        count: u32,
+        max_parts_per_demand: usize,
+    ) -> Result<Vec<(PalwTirPublicRequestV1, PalwTirPublicUnitBoundV1)>, String> {
+        use crate::palw_batch_court_v1::MAX_BATCH_PARTS_V1;
+        use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1;
+        use PalwTirPublicRequestV1::StepRun;
+        self.check_request_v1(&StepRun { first, count })?;
+        if !(1..=MAX_BATCH_PARTS_V1).contains(&max_parts_per_demand) {
+            return Err("TIR Batch demand part count outside its profile".into());
+        }
+        let maximum_bytes = (max_parts_per_demand * PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1) as u64;
+
+        // StepRun's original native upper depends on its width, not the
+        // offset. Search the bounded legal widths once, then check each
+        // emitted query again under the actual native request geometry.
+        let mut width = count;
+        while self.unit_bound_v1(&StepRun { first, count: width })?.maximum_response_bytes > maximum_bytes {
+            width -= 1;
+            if width == 0 {
+                return Err("TIR Batch cannot reserve one StepRun leaf".into());
+            }
+        }
+        let mut partitions = Vec::with_capacity(count.div_ceil(width) as usize);
+        let (mut at, mut remaining) = (first, count);
+        while remaining > 0 {
+            let count = remaining.min(width);
+            let request = StepRun { first: at, count };
+            let bound = self.unit_bound_v1(&request)?;
+            if bound.maximum_response_bytes > maximum_bytes {
+                return Err("TIR Batch partition exceeds its native part budget".into());
+            }
+            partitions.push((request, bound));
+            at += u64::from(count); // original interval checked above
+            remaining -= count;
+        }
+        Ok(partitions)
+    }
+
+    /// Visit the bounded StepRun queries needed by one native numerical root.
+    /// The inputs come from the original-bound root input cover. Prompt and
+    /// generated IDs have their own material routes. Calls are provisional
+    /// until a successful return, and the caller owns any retained results.
+    pub fn visit_batch_step_material_cover_v1(
+        &self,
+        boundaries: &std::collections::BTreeSet<crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1>,
+        max_parts_per_demand: usize,
+        max_demands: usize,
+        mut visit: impl FnMut(PalwTirPublicRequestV1, PalwTirPublicUnitBoundV1) -> Result<(), String>,
+    ) -> Result<usize, String> {
+        use crate::palw_native_resource_v1::{TirNativeRequestsV1, reserve_native_requests_v1};
+        use crate::palw_tir_court_v1::parameter_cover::RootInputBoundaryV1::*;
+        let step_index = |boundary| match boundary {
+            CarryStepLeaf(index) | CommittedStepLeaf(index) | FixedCheckpointStepLeaf(index) | HistoryStepLeaf(index) => Some(index),
+            PromptPosition(_) | GeneratedId(_) => None,
+        };
+        let count = boundaries.iter().copied().filter_map(step_index).count();
+        if count == 0 {
+            return Ok(0);
+        }
+        let mut quote = TirNativeRequestsV1::new();
+        quote.exact_v1::<u64>(count as u64).map_err(|e| e.to_string())?;
+        quote.exact_v1::<(PalwTirPublicRequestV1, PalwTirPublicUnitBoundV1)>(RUN as u64).map_err(|e| e.to_string())?;
+        let _scratch = reserve_native_requests_v1(quote.bytes_v1()).map_err(|e| e.to_string())?;
+        let mut indices = Vec::new();
+        indices.try_reserve_exact(count).map_err(|_| "TIR Batch boundary allocation refused")?;
+        indices.extend(boundaries.iter().copied().filter_map(step_index));
+        indices.sort_unstable();
+        indices.dedup();
+
+        let (mut start, mut demands) = (0, 0usize);
+        while start < indices.len() {
+            let mut end = start + 1;
+            while end < indices.len() && end - start < RUN && indices[end - 1].checked_add(1) == Some(indices[end]) {
+                end += 1;
+            }
+            let partitions = self.batch_step_run_partitions_v1(indices[start], (end - start) as u32, max_parts_per_demand)?;
+            demands =
+                demands.checked_add(partitions.len()).filter(|n| *n <= max_demands).ok_or("TIR Batch demand budget exhausted")?;
+            for (request, bound) in partitions {
+                visit(request, bound)?;
+            }
+            start = end;
+        }
+        Ok(demands)
     }
 }
 
@@ -1276,6 +1378,20 @@ mod tests {
         let rows_root = Hash64::from_u64_word(27);
         let generated = vec![0; 2050];
         let (source, _) = geometry_with_trace(8, 2050, Some((rows_root, &generated)));
+        let body: Vec<_> = generated
+            .chunks(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize)
+            .flat_map(|ids| borsh::to_vec(&PalwTirPublicResponseV1::Ids { rows_root, ids: ids.to_vec() }).unwrap())
+            .collect();
+        let bound = crate::palw_tir_public_owned_v1::request_body_bound_v1(&source, PalwTirPublicRequestV1::Ids { offset: 0 })
+            .unwrap();
+        assert_eq!(bound.0, body.len() as u64);
+        let decode = crate::palw_court_shared_tir_stream_state_v1::decode_ids_body_classified_v1;
+        assert_eq!(decode(&source, &body).unwrap().ids_v1(), generated);
+        use crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode;
+        assert!(matches!(decode(&source, &body[..body.len() - 1]), Err(Decode(_))));
+        let mut changed = body;
+        *changed.last_mut().unwrap() = 1;
+        assert!(matches!(decode(&source, &changed), Err(Decode(_))));
         let mut intake = PalwTirPublicIdsAssemblerV1::default();
         intake.ids.try_reserve_exact(generated.len()).unwrap();
         let allocation = intake.ids.as_ptr();

@@ -42,6 +42,15 @@ pub const PALW_TIR_FRAME_CLOCK_VERSION_V1: u16 = 1;
 /// Proposed opt-in clock for the node's accepted-offset witness pipeline.
 /// V1 keeps its exact old derivation; no preset or reviewed record selects V2.
 pub const PALW_TIR_FRAME_CLOCK_VERSION_V2: u16 = 2;
+/// New family supplier contract only: native response-turn idle grace is
+/// separate from the unchanged material/reorg retention horizon.
+pub const PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3: u16 = 3;
+/// Same family owner3 grammar/rates, with the original's adopted maximal
+/// clock-v2 material floor fixed BEFORE initial signatures. No old3 rewrite.
+pub const PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4: u16 = 4;
+pub fn is_family_clock_v3(version: u16) -> bool {
+    matches!(version, PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4)
+}
 
 /// WorkDebits on a preparer's serial path per pass: ONE debit carries the whole pass (the fold counts grants, not slices; the
 /// preparer's own lane bounds its cumulative work). Then its Ready.
@@ -93,8 +102,13 @@ impl PalwTirFrameClockV1 {
         Ok(sum(&[product(moves, self.control_bytes)?, body])?.div_ceil(self.parallel_bytes_per_daa))
     }
     pub fn check_v1(&self) -> Result<(), String> {
-        if !matches!(self.version, PALW_TIR_FRAME_CLOCK_VERSION_V1 | PALW_TIR_FRAME_CLOCK_VERSION_V2)
-            || self.action_parser_steps == 0
+        if !matches!(
+            self.version,
+            PALW_TIR_FRAME_CLOCK_VERSION_V1
+                | PALW_TIR_FRAME_CLOCK_VERSION_V2
+                | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3
+                | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+        ) || self.action_parser_steps == 0
             || self.frame_passes_per_check == 0
             || self.control_bytes == 0
             || self.maximum_door_daa == 0
@@ -465,10 +479,37 @@ pub fn tir_public_owner_queue_wait_v1(
     clock: &PalwTirFrameClockV1,
 ) -> Result<u64, String> {
     clock.check_v1()?;
-    let k = PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
-    // The court-capacity lane's own rules (single source): its idle grace and its tenure.
+    // The historical lane retains its original material-retention grace.
     let grace = crate::palw_tir_public_owned_v1::palw_tir_owner_idle_grace_v1(config);
-    let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_of_window_v1(open_window, grace);
+    tir_public_owner_queue_wait_with_grace_v3(open_window, config, clock, grace, 0)
+}
+/// Explicit family owner policy; the opaque native acquisition plan supplies
+/// the exact same response-turn bound the runtime owner row reads.
+pub fn tir_public_owner_queue_wait_family_v3(
+    open_window: u64,
+    plan: &crate::palw_tir_public_owned_v1::PalwTirPublicOwnedPlanV1,
+) -> Result<u64, String> {
+    if !is_family_clock_v3(plan.clock.version) {
+        return Err("family owner queue requires its versioned native plan".into());
+    }
+    tir_public_owner_queue_wait_with_grace_v3(
+        open_window,
+        &plan.config,
+        &plan.clock,
+        plan.owner_idle_grace_family_v3()?,
+        plan.owner_tenure_family_v3()?,
+    )
+}
+fn tir_public_owner_queue_wait_with_grace_v3(
+    open_window: u64,
+    _config: &PalwStagedPublicCourtConfigV1,
+    clock: &PalwTirFrameClockV1,
+    grace: u64,
+    minimum_tenure: u64,
+) -> Result<u64, String> {
+    clock.check_v1()?;
+    let k = PALW_TIR_FRAME_CONCURRENT_OWNERS_V1;
+    let tenure = crate::palw_tir_public_claim_v1::palw_tir_owner_tenure_of_window_v1(open_window, grace).max(minimum_tenure);
     let ahead = product(open_window, clock.parallel_bytes_per_daa / clock.control_bytes)?;
     product(sum(&[ahead, 1])?.div_ceil(k), tenure)
 }
@@ -605,8 +646,8 @@ pub fn palw_tir_dispute_door_fit_v1(
     let span = PALW_TIR_DISPUTE_SPAN_INTERCEPT_DAA_V1.checked_add(block.div_ceil(PALW_TIR_DISPUTE_SPAN_BYTES_PER_DAA_V1))?;
     let rounds = rounds.checked_add(u64::from(levels))?.checked_mul(PALW_TIR_DISPUTE_ROUND_DAA_V1)?;
     let fixed = PALW_TIR_DISPUTE_PREP_DAA_V1.checked_add(PALW_TIR_DISPUTE_OUTPUT_DAA_V1)?;
-    let carriers = contenders.checked_add(1)?.checked_mul(span)?;
-    fixed.checked_add(rounds)?.checked_add(carriers)
+    let wait = crate::palw_tir_adjudication_slot_v1::palw_tir_adjudication_wait_v1(contenders, span)?;
+    fixed.checked_add(rounds)?.checked_add(wait)?.checked_add(span.checked_mul(2)?)
 }
 
 /// The extra levels in `0..=max_levels` that minimise the door, with the door (ties take the fewer levels).
@@ -643,7 +684,11 @@ pub fn tir_public_filing_daa_v1(
     // here. Original maximum_door still rejects a frame that no longer fits.
     let serial = match clock.version {
         PALW_TIR_FRAME_CLOCK_VERSION_V1 => 2,
-        PALW_TIR_FRAME_CLOCK_VERSION_V2 if witness_moves > 0 => witness_moves.max(2),
+        PALW_TIR_FRAME_CLOCK_VERSION_V2 | PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3 | PALW_TIR_FRAME_CLOCK_FAMILY_MATERIAL_V4
+            if witness_moves > 0 =>
+        {
+            witness_moves.max(2)
+        }
         _ => return Err("sequential filing needs at least one carried move".into()),
     };
     sum(&[product(serial, config.prices.inclusion_margin_daa)?, clock.inclusion_daa_v1(witness_moves, parts)?])
@@ -677,6 +722,19 @@ mod tests {
             palw_tir_frame_cost_record_admits_v1(Hash64::from_u64_word(1), 16_000, Some(&v2), PALW_TIR_FRAME_COST_RECORDS_V1),
             Err(PalwTirFrameCostRefusalV1::NoRecord)
         );
+    }
+
+    #[test]
+    fn family_clock_v3_keeps_sequential_filing_v2_and_material_retention() {
+        let mut cost = crate::palw_g14_values_v1::PALW_G14_TIR_FRAME_COST_ESTIMATE_V1;
+        let retention = cost.config.reorg_retention_daa;
+        cost.clock.version = PALW_TIR_FRAME_CLOCK_VERSION_V2;
+        let expected = tir_public_filing_daa_v1(24, &cost.config, &cost.clock).unwrap();
+        cost.clock.version = PALW_TIR_FRAME_CLOCK_FAMILY_VERSION_V3;
+        assert_eq!(tir_public_filing_daa_v1(24, &cost.config, &cost.clock).unwrap(), expected);
+        assert!(tir_public_filing_daa_v1(0, &cost.config, &cost.clock).is_err());
+        assert_eq!(cost.config.reorg_retention_daa, retention);
+        assert_eq!(cost.clock.maximum_door_daa, 3_120);
     }
 
     #[test]

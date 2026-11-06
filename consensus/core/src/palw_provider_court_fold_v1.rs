@@ -55,9 +55,9 @@ fn active_operator(builder: &TransitionBuilder<'_>, bond: &PalwBondKeyV2) -> Res
 }
 
 /// `bond`'s free collateral at `now`: what no V2 gate, kernel reservation, binding or lease already holds.
-fn free_collateral(builder: &TransitionBuilder<'_>, bond: &PalwBondKeyV2, now: u64) -> u128 {
+fn free_collateral(builder: &TransitionBuilder<'_>, bond: &PalwBondKeyV2, now: u64) -> Result<u128, PalwStateV2Error> {
     let collateral = builder.state.bonds.get(bond).map(|b| b.collateral as u128).unwrap_or(0);
-    collateral.saturating_sub(builder.committed_at(bond, now))
+    Ok(collateral.saturating_sub(builder.committed_at(bond, now)?))
 }
 
 /// A kernel claim's stored row (decoded alone, no ledger rebuild).
@@ -144,7 +144,7 @@ pub(super) fn apply_provider_lease_v1(
     if route.provider_subject_v1(subject).is_some_and(|row| row.charged.contains(provider)) {
         return Err(refused("a provider charged for this subject cannot lease it again"));
     }
-    if free_collateral(builder, provider, now) < reserved as u128 {
+    if free_collateral(builder, provider, now)? < reserved as u128 {
         return Err(refused("the provider's free collateral does not cover the lease's reservation"));
     }
     write_lease(builder, subject, provider, Some(&ProviderLeaseRowV1 { reserved, filed_daa: now, serve_until_daa, charged: false }))?;
@@ -208,7 +208,7 @@ pub(super) fn apply_provider_challenge_v1(
     if route.provider_open_challenges_by_v1(challenger) >= PALW_PROVIDER_MAX_OPEN_CHALLENGES_V1 {
         return Err(refused("the challenger holds the most open challenges a bond may"));
     }
-    if free_collateral(builder, challenger, now) < PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1 as u128 {
+    if free_collateral(builder, challenger, now)? < PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1 as u128 {
         return Err(refused("the challenger's free collateral does not cover the challenge bond"));
     }
     let row = ProviderChallengeRowV1 {

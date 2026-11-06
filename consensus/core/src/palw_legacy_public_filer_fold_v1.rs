@@ -254,6 +254,9 @@ impl TransitionBuilder<'_> {
 
     /// **The one writer of `legacy_disputes`** (delta 200): the record, its two indexes, journaled.
     pub(super) fn write_legacy_dispute(&mut self, claim_id: Hash64, new: Option<PalwDisputeClaimV1>) -> Result<(), PalwStateV2Error> {
+        if new.is_some() {
+            self.reject_positive_claim_alias_v2(claim_id)?;
+        }
         self.reserve_map_row_v1(&claim_id, &new, |s| &s.legacy_disputes, false, "native legacy_disputes writer")?;
         self.reserve_index_members_v1::<(u64, Hash64), ()>(u64::from(new.is_some()), "native legacy_dispute_deadlines index")?;
         self.reserve_index_members_v1::<(PalwBondKeyV2, Hash64), ()>(

@@ -1,8 +1,8 @@
 # RFC-0037 — IBD の有界 authenticated row stream と世代番号付き保存
 
-Status: **Proposed / Review Required** (2026-10-22)。[ADR-0204](../adr/0204-ibd-bounded-row-stream-and-storage-generations.md)。
+Status: **Adopted / 実装・検証中、配備未承認** (2026-10-30、ユーザー明示採択。初稿 2026-10-22)。[ADR-0204](../adr/0204-ibd-bounded-row-stream-and-storage-generations.md)。
 G14 storage(pruned node ≤ 30 GB)の IBD lane。**consensus は変えない**(state root の形式・header・fork choice・抽選は不変)。
-変わるのは P2P に見える転送形式だけで、新 message は登録しておらず休眠。採択・protocol version 割当・配備は未承認。
+変わるのは P2P の転送形式だけである。2026-10-30 のユーザー指示で本 RFC と新 protocol version の割当・実装が採択された。公開配備・既定有効化は別判断で、既定は引き続き off。
 設計の詳細と現状分析は [ibd-generations.md](../design/palw/storage/ibd-generations.md)。
 
 ## 1. 問題
@@ -30,12 +30,13 @@ root は「各 collection の 64 byte root を並べた preimage の hash」な�
    (`restore_native_carriage_v1(expected root)` = carriage 検査・index 再構築・`assert_internal_consistency*`・全 root
    再計算)を通す。名指しされなかった collection はここで落ちる。この段を通過して初めて「検証済み」。
 
-受信側の検証器は `consensus/core/src/palw_row_stream_v1.rs` に実装済み(wire には未接続)。
+初稿時点では、受信側の検証器 `consensus/core/src/palw_row_stream_v1.rs` だけが実装済みで、wire は未接続だった。
+2026-10-30 採択後の接続範囲は末尾の採択追記を参照する。
 
 2026-10-24 の補助実装として、同 module の `palw_visit_row_spill_v1` はローカル上限
 (`PalwRowSpillLimitsV1`: 総 bytes、collection 数、累積 row 数、label/key/value 長)を確保前に検査し、
 既存 spill を 1 row ごとの borrowed callback で読み戻す。呼出側が保持しなければ reader は全行を累積しない。
-これは framing の検査のみで、callback の途中結果は staging に留め、認証済み stream と既存の全体 import
+この2026-10-24時点の補助実装は framing の検査のみで、callback の途中結果は staging に留め、認証済み stream と既存の全体 import
 ゲートを通過するまで昇格しない。旧全量 reader の置換、全 collection codec、typed state 組立、公開 wire、
 NativeDemand による heap admission への接続は未完である。ローカル容量・allocation 拒否を peer の不正としない。
 
@@ -87,3 +88,30 @@ consensus にも見えないため本 RFC の決定対象ではないが、§2 �
   途中不一致での停止と非昇格、poison、cap 超過、whole-state 拒否、検証〜切替間の crash、projection)。
 - 採択後に必要: 実 PALW state の全 collection を serve → 受信 → 組立 → 既存ゲート、が現行 carriage import と同一の
   `PalwChainStateV2` を作ることの等価性テスト(t12 の pruning snapshot で)。
+
+
+## 2026-10-30 採択・実装接続
+
+ユーザーが RFC-0037 の採択、新 P2P version の割当てと実装を明示承認した。
+**protocol 109** を割り当てる。`--palw-row-stream-ibd` は既定 false で、既定の広告は 108 のまま。
+両端が opt-in して 109 を交渉した場合だけ、既存 request の `rowStreamGeneration=1` と
+`snapshotCodec=2` を使用する。106 の raw、107/108 の zlib 経路は維持する。
+
+- 一世代全体を一個の P2P message にしない。既存の最大 4 MiB の snapshot chunk、nonce・point・codec・total を
+  拘束した stream/chunk hash、順序、600 秒 lease と再開を用いる。世代全体は既存の **384 MiB** の範囲内。
+  P2P の 320 MiB 上限を引き上げない。row 世代の明示的な `found=false` には同じ peer へ新 nonce の
+  107 転送を一度だけ試す。資料の不在と不正を混同せず、root・framing・署名の不整合では fallback しない。
+- canonical state-root writer の同じ条件分岐・offset から全直接 collection を送出する。
+  kernel ledger は既存 root 組立て関数、aux は逐次 hash、Panel は既存 Borsh hash の有界 chunk、
+  bond budget は既存 header と全 table の root 規則を共有する。state root/version の意味は変更しない。
+- 受信 chunk を私有 spill に保存してから、完成した framing/row/collection まで検証を進める。
+  preimage 不一致は最初の完成時点、collection 不一致はその collection の完成時点で止め、次の chunk を要求しない。
+  部分 row は spill に残し、chunk をまたぐ全量 Vec を増やさない。
+- phase 1 の generation suffix は従来の native snapshot envelope と全 class declaration を同じ spill に運ぶ。
+  row 検証後、その suffix を構造 preflight → NativeDemand 予約 → typed reconstruction に通し、既存の
+  atomic snapshot import で全 root・index・資料の整合性を照合する。観測済み label/offset/行数の inventory を
+  復元した canonical state の inventory と照合し、正しい suffix で省略した collection を補う抜け道を拒否する。
+  row 検証だけで `VERIFIED` に昇格しない。
+- local capacity、worker 停止、spill I/O は local error として再試行可能に保つ。peer の不正な bytes と混同しない。
+
+この採択記録は実装・試験・公開配備の完了記録ではない。過去のログと digest は変更しない。

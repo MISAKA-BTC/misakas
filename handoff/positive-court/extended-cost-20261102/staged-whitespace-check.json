@@ -1,0 +1,26 @@
+{
+  "full_staged_check": {
+    "command": [
+      "git",
+      "diff",
+      "--cached",
+      "--check"
+    ],
+    "exit_code": 2,
+    "output": "handoff/positive-court/extended-cost-20261102/pythia-first.log:88: new blank line at EOF.\nhandoff/positive-court/extended-cost-20261102/runtime-first.log:491: new blank line at EOF.\nhandoff/positive-court/extended-cost-20261102/runtime-r2.log:491: new blank line at EOF.\nhandoff/positive-court/extended-cost-20261102/runtime-r3.log:491: new blank line at EOF.\n"
+  },
+  "non_raw_staged_check": {
+    "command": [
+      "git",
+      "diff",
+      "--cached",
+      "--check",
+      "--",
+      ".",
+      ":(exclude)**/*.log"
+    ],
+    "exit_code": 0,
+    "output": ""
+  },
+  "scope": "only unchanged raw tool-log terminal blank lines are excepted; bytes/digests are retained, not normalized"
+}

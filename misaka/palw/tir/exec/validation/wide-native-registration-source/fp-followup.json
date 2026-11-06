@@ -1,0 +1,30 @@
+{
+  "schema": "misaka.a1.wide-native-registration.fp-followup.v1",
+  "date": "2026-11-02",
+  "base": "0a5d835aa653f3cf4d0cc904bfccd0b3842c01dd",
+  "source_file_sha256": {
+    "consensus/core/src/palw_state_v2/objects.rs": "0b89cacda419128a0764a6198a15a73ac78ab10749fbfdbad6f8b257d5013b21",
+    "consensus/core/src/palw_state_v2/tests.rs": "9d7876ff2db38afa16235a51c8d8e816dfecb0d4c337adc60be137205567c9a7",
+    "consensus/core/src/palw_improve_eval_fold_v1.rs": "5958353be0bfb11b4a4c1d305df5ceecfd833b85654c154ec5a61b6968b6427b"
+  },
+  "discovery": "A0 review found ordinary FP could skip existing wide-denying helpers when original-frame and derived-work fences were off; A1 follow-up found evalSome separate GEN geometry path did not impose a width refusal",
+  "changes": [
+    "ordinary FP known-wide denial after class/Frozen lookup before all claim/reservation/prefix writes",
+    "eval keeps earlier dormant/layout/Frozen/lifecycle errors, then denies knownwide before row clone and legacy GEN context/count/writes",
+    "explicit full-layout wide SourceChecker untouched; no RFC0004 activation change"
+  ],
+  "new_test_source": {
+    "ordinary_fp": "rowless legacy success control; derived_work off/on x original_frame off/on; exact new guard versus earlier G03; direct state snapshots + full transition refusal",
+    "eval": "existing narrow success control; synthetic canonical wide has same layout/commit count and geometry leaf count; exact guard and root/exposure/claim/job invariance; dormant exact old firsterror"
+  },
+  "review": {
+    "contract_review": "implemented and reviewed consumer paths",
+    "review_core": "independent ordinary FP and eval source review: no remaining blocking finding statically",
+    "parent": "reviewed scope and regression assertions; preserved source-only evidence boundary"
+  },
+  "static_checks": {
+    "rustfmt": "PASS skip_children=true,reorder_modules=false",
+    "diff_check": "PASS"
+  },
+  "execution": "NOT_RUN; Cargo/rustc/Clippy/build/tests and target/cache/model payload access remain HOLD"
+}

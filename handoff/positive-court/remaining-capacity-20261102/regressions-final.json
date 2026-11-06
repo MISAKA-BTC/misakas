@@ -1,0 +1,238 @@
+{
+  "environment_overrides": {
+    "CARGO_TARGET_DIR": "/Users/wata/Downloads/MISAKA-testnet/target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CXX": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/plain-clippy4-7a0-20261102-forbid-cxx.py",
+    "ROCKSDB_COMPILE": "0",
+    "SNAPPY_COMPILE": "0"
+  },
+  "records": [
+    {
+      "name": "source-and-old-fences",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "kaspa-consensus-core",
+        "--test",
+        "positive_source_v2",
+        "--test",
+        "positive_court_fence_v2",
+        "--test",
+        "palw_tir_v1_fence",
+        "--config",
+        "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "--",
+        "--test-threads=1"
+      ],
+      "exit_code": 0,
+      "stop_reason": null,
+      "elapsed_seconds": 8.759,
+      "log": "source-and-old-fences-final.log",
+      "sha256": "7dd2afb46fea9a6c62cc6373ab7cd133c655ecbc794dd18cc9c5c43b83c604e2",
+      "test_summaries": [
+        [
+          9,
+          0,
+          0
+        ],
+        [
+          8,
+          0,
+          0
+        ],
+        [
+          40,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "contract-accounting",
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract",
+        "-p",
+        "misaka-palw-positive-accounting"
+      ],
+      "exit_code": 0,
+      "stop_reason": null,
+      "elapsed_seconds": 14.727,
+      "log": "contract-accounting-final.log",
+      "sha256": "2a9e4997fca90568764503d1999519d1c5415b352f4763bd27ca2b88f2d3dde1",
+      "test_summaries": [
+        [
+          42,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          8,
+          0,
+          0
+        ],
+        [
+          2,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          9,
+          0,
+          0
+        ],
+        [
+          6,
+          0,
+          0
+        ],
+        [
+          14,
+          0,
+          0
+        ],
+        [
+          6,
+          0,
+          0
+        ],
+        [
+          5,
+          0,
+          0
+        ],
+        [
+          2,
+          0,
+          0
+        ],
+        [
+          1,
+          0,
+          0
+        ],
+        [
+          5,
+          0,
+          0
+        ],
+        [
+          4,
+          0,
+          0
+        ],
+        [
+          3,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ]
+    },
+    {
+      "name": "contract-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-positive-contract",
+        "--all-targets",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "stop_reason": null,
+      "elapsed_seconds": 3.634,
+      "log": "contract-clippy-final.log",
+      "sha256": "ba419242e89a9392ee84543fe00e5156cf67d1b95507c4ce38fd8b6fe7df4131",
+      "test_summaries": []
+    },
+    {
+      "name": "core-clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "--locked",
+        "-p",
+        "kaspa-consensus-core",
+        "--lib",
+        "--no-deps",
+        "--config",
+        "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.dev.package.kaspa-consensus.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.debug=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus.debug=0",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "stop_reason": null,
+      "elapsed_seconds": 65.887,
+      "log": "core-clippy-final.log",
+      "sha256": "9908ef6eafd9d605a12321ad6dcdd80133255fa254224c3c6da9a090f5e597c2",
+      "test_summaries": []
+    }
+  ]
+}

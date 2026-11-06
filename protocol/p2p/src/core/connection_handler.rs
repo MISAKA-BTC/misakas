@@ -7,6 +7,7 @@ use crate::{ConnectionInitializer, Router};
 use futures::FutureExt;
 use kaspa_core::{debug, info};
 use kaspa_utils::networking::NetAddress;
+use kaspa_utils_tower::transport::Outbound;
 use kaspa_utils_tower::{
     counters::TowerConnectionCounters,
     middleware::{CountBytesBody, MapRequestBodyLayer, MapResponseBodyLayer, ServiceBuilder},
@@ -190,7 +191,7 @@ impl ConnectionHandler {
     // TODO: revisit the below constants
     fn outgoing_network_channel_size() -> usize {
         // TODO: this number is taken from go-kaspad and should be re-evaluated
-        (1 << 17) + 256
+        1024
     }
 
     fn communication_timeout() -> u64 {
@@ -208,7 +209,7 @@ impl ConnectionHandler {
 
 #[tonic::async_trait]
 impl ProtoP2p for ConnectionHandler {
-    type MessageStreamStream = Pin<Box<dyn futures::Stream<Item = Result<KaspadMessage, TonicStatus>> + Send + 'static>>;
+    type MessageStreamStream = Pin<Box<dyn futures::Stream<Item = Result<Outbound<KaspadMessage>, TonicStatus>> + Send + 'static>>;
 
     /// Handle the new arriving **server** connections
     async fn message_stream(

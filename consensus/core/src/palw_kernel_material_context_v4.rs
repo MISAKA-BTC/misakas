@@ -30,7 +30,9 @@ pub struct PalwProspectiveKernelMaterialContextV4 {
     pub kernel_collateral: u64,
     pub request: Hash64,
 }
-fn heap(context: &PalwProspectiveKernelMaterialContextV4) -> Result<u64, String> {
+fn heap(
+    context: &PalwProspectiveKernelMaterialContextV4,
+) -> Result<u64, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
     let path = "kernel durable intrinsic metadata";
     let mut total = std::mem::size_of::<PalwProspectiveKernelMaterialContextV4>() as u64;
     for coverage in [
@@ -39,7 +41,7 @@ fn heap(context: &PalwProspectiveKernelMaterialContextV4) -> Result<u64, String>
         context.producer_signature.native_heap_v1(path),
         context.producer_pubkey.native_heap_v1(path),
     ] {
-        total = total.checked_add(coverage.bytes().ok_or_else(|| coverage.to_string())?).ok_or("kernel metadata heap overflow")?;
+        total = total.checked_add(coverage.bytes().ok_or(coverage)?).ok_or("kernel metadata heap overflow")?;
     }
     Ok(total)
 }
@@ -53,6 +55,17 @@ impl PalwProspectiveKernelMaterialOwnedV4 {
         request: &PalwProspectiveKernelMaterialRequestV4,
         limits: PalwKernelMaterialContextLimitsV4,
     ) -> Result<NativeRetainedV1<PalwProspectiveKernelMaterialContextV4>, String> {
+        self.export_context_checked_v4(state, request, limits).map_err(|error| error.to_string())
+    }
+    pub fn export_context_checked_v4(
+        &self,
+        state: &PalwChainStateV2,
+        request: &PalwProspectiveKernelMaterialRequestV4,
+        limits: PalwKernelMaterialContextLimitsV4,
+    ) -> Result<
+        NativeRetainedV1<PalwProspectiveKernelMaterialContextV4>,
+        crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4,
+    > {
         let route = state.kernel_route().ok_or("kernel metadata route absent")?;
         if request.id() != self.request_id()
             || route.ledger_root() != request.intent.ledger_root
@@ -64,26 +77,38 @@ impl PalwProspectiveKernelMaterialOwnedV4 {
         let actor = palw_kernel_bond_id_v1(&request.intent.producer);
         let collateral = self.candidate_ledger().bonds.get(&actor).ok_or("candidate producer absent")?.collateral;
         let encoded = 2u64
-            .checked_add(borsh::object_length(route).map_err(|e| e.to_string())? as u64)
+            .checked_add(
+                borsh::object_length(route).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?
+                    as u64,
+            )
             .and_then(|n| n.checked_add(borsh::object_length(&request.intent).ok()? as u64))
             .and_then(|n| n.checked_add(4 + request.producer_signature.len() as u64))
             .and_then(|n| n.checked_add(4 + self.producer_pubkey().len() as u64 + 8 + 64))
             .ok_or("durable context encoded length overflow")?;
         if encoded > limits.max_encoded_bytes {
-            return Err("kernel metadata exceeds explicit DB cap".into());
+            return Err(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwProspectiveKernelMaterialContextV4>(
+                "durable material context",
+                "explicit local DB cap",
+            )
+            .into());
         }
         let path = "kernel durable intrinsic metadata construction";
         let mut total = std::mem::size_of::<PalwProspectiveKernelMaterialContextV4>() as u64;
         for coverage in
             [route.native_heap_v1(path), request.intent.native_heap_v1(path), request.producer_signature.native_heap_v1(path)]
         {
-            total = total.checked_add(coverage.bytes().ok_or_else(|| coverage.to_string())?).ok_or("metadata copy heap overflow")?;
+            total = total.checked_add(coverage.bytes().ok_or(coverage)?).ok_or("metadata copy heap overflow")?;
         }
         total = total.checked_add(self.producer_pubkey().len() as u64).ok_or("metadata key heap overflow")?;
         if total > limits.max_heap_bytes {
-            return Err("kernel metadata exceeds explicit RAM cap".into());
+            return Err(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwProspectiveKernelMaterialContextV4>(
+                "durable material context",
+                "explicit local RAM cap",
+            )
+            .into());
         }
-        let lease = reserve_native_requests_v1(total).map_err(|e| e.to_string())?;
+        let lease =
+            reserve_native_requests_v1(total).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
         let context = PalwProspectiveKernelMaterialContextV4 {
             version: 4,
             prior_route: route.clone(),
@@ -129,10 +154,28 @@ pub(crate) fn restore_kernel_material_identity_v4(
     max_material_bytes: u64,
     verify_mldsa: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> Result<ReservedKernelLedgerV1, String> {
+    restore_kernel_material_identity_checked_v4(context, bundle, limits, max_material_bytes, verify_mldsa)
+        .map_err(|error| error.to_string())
+}
+pub(crate) fn restore_kernel_material_identity_checked_v4(
+    context: &PalwProspectiveKernelMaterialContextV4,
+    bundle: &PalwProspectiveKernelBundleV4,
+    limits: PalwKernelMaterialContextLimitsV4,
+    max_material_bytes: u64,
+    verify_mldsa: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+) -> Result<ReservedKernelLedgerV1, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
+    if borsh::object_length(context).map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)? as u64
+        > limits.max_encoded_bytes
+        || heap(context)? > limits.max_heap_bytes
+    {
+        return Err(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwProspectiveKernelMaterialContextV4>(
+            "durable material context",
+            "explicit local RAM/DB cap",
+        )
+        .into());
+    }
     if context.version != 4
         || context.intent.version != 4
-        || borsh::object_length(context).map_err(|e| e.to_string())? as u64 > limits.max_encoded_bytes
-        || heap(context)? > limits.max_heap_bytes
         || context.prior_route.ledger_root() != context.intent.ledger_root
         || context.prior_route.aux_root() != context.intent.aux_root
         || !matches!(bundle, PalwProspectiveKernelBundleV4::TypedKernelV4(_))
@@ -158,18 +201,26 @@ pub(crate) fn restore_kernel_material_identity_v4(
     ) {
         return Err("durable context producer signature invalid".into());
     }
-    let mut candidate = context.prior_route.ledger()?;
+    let mut candidate = context.prior_route.ledger_checked_v1()?;
     if candidate.claims.contains_key(&claim) {
         return Err("durable prior route already contains prospective claim".into());
     }
-    candidate.try_sync_bond_v1(actor, context.kernel_collateral).map_err(|e| e.to_string())?;
-    candidate.try_replay_salted_claim_v4(&context.intent.commit, &context.intent.salt, actor, context.intent.commit_daa)?;
-    candidate.try_reserve_kernel_material_v4(&claim).map_err(|e| e.to_string())?;
+    candidate
+        .try_sync_bond_v1(actor, context.kernel_collateral)
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+    candidate.try_replay_salted_claim_checked_v4(&context.intent.commit, &context.intent.salt, actor, context.intent.commit_daa)?;
+    candidate
+        .try_reserve_kernel_material_v4(&claim)
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
     let coverage = crate::palw_material_capacity_v1::prospective_kernel_bundle_requests_v4(bundle)?;
-    let _inner = reserve_native_requests_v1(coverage.bytes().ok_or_else(|| coverage.to_string())?).map_err(|e| e.to_string())?;
+    let _inner = reserve_native_requests_v1(coverage.bytes().ok_or(coverage)?)
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
     let auth = crate::palw_material_capacity_v1::prospective_kernel_bundle_auth_requests_v4(bundle, &candidate)?;
-    let _auth = reserve_native_requests_v1(auth.bytes().ok_or_else(|| auth.to_string())?).map_err(|e| e.to_string())?;
-    let scope = bundle.verify(&candidate, max_material_bytes).map_err(|e| e.to_string())?;
+    let _auth = reserve_native_requests_v1(auth.bytes().ok_or(auth)?)
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
+    let scope = bundle
+        .verify(&candidate, max_material_bytes)
+        .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
     if context.intent.manifest.scopes.len() != 1 || context.intent.manifest.scopes.first() != Some(&scope) {
         return Err("restored material differs from exact enrolled manifest".into());
     }

@@ -29,7 +29,7 @@ pub(super) fn charge(
 ) -> Result<Option<u128>, PalwStateV2Error> {
     let fee = route_ledger_policy_v1(builder)?.dismissal_fee_v1(work) as u128;
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < fee {
         return Err(refused("flat vector actor cannot cover its dismissal fee"));
     }
     Ok(charge_route_budget_v1(builder, ctx, work, court)?.then_some(fee))
@@ -160,7 +160,7 @@ fn post_inner(
         return Ok(());
     }
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1 as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1 as u128 {
         return Ok(());
     }
     let h = FlatModelVectorHeaderV3 {
@@ -355,7 +355,7 @@ pub(super) fn demand(
     let answer_work = crate::palw_model_artifact_v2::model_artifact_work_v2(0, FLAT_VECTOR_ANSWER_MAX_BYTES_V3).unwrap();
     let bond = policy.demand_bond.max(policy.dismissal_fee_v1(answer_work));
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Ok(());
     }
     let row = FlatVectorDemandV3 {
@@ -435,7 +435,7 @@ pub(super) fn answer(
     let work = crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.len().min(FLAT_VECTOR_ANSWER_MAX_BYTES_V3)).unwrap();
     let fee = route_ledger_policy_v1(builder)?.dismissal_fee_v1(work) as u128;
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < fee {
         return Err(refused("flat answer actor cannot cover invalid fee"));
     }
     if !decode_flat_vector_answer_v3(bytes).is_ok_and(|a| a.authenticates(&d)) {

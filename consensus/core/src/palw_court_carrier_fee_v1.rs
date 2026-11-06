@@ -4,8 +4,8 @@
 //! ordinary script validation. In particular an escrow output is already in
 //! `total_outputs`; it cannot also increase the available fee.
 
-use crate::tx::{PopulatedTransaction, TransactionOutpoint};
-use std::collections::BTreeMap;
+use crate::tx::{PopulatedTransaction, Transaction, UtxoEntry, ValidatedTransaction};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CarrierFeeRefusalV1 {
@@ -16,11 +16,12 @@ pub enum CarrierFeeRefusalV1 {
     OutputsExceedInputs,
     DuplicateAllocation,
     InsufficientFee,
+    ValidatedFeeMismatch,
 }
 
 /// Local prepare result only. It never authorizes a spend or establishes that
 /// the transaction was accepted. No persisted caller-supplied `paid` flag exists.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CarrierFeeBudgetV1 {
     carrier: crate::TransactionId,
     actual_fee: u64,
@@ -28,26 +29,41 @@ pub struct CarrierFeeBudgetV1 {
     allocations: BTreeMap<[u8; 64], u64>,
 }
 
+crate::palw_native_resource_v1::native_struct!(CarrierFeeBudgetV1; carrier, actual_fee, remaining, allocations);
+
 impl CarrierFeeBudgetV1 {
     pub fn from_populated_v1(tx: &PopulatedTransaction<'_>) -> Result<Self, CarrierFeeRefusalV1> {
-        if !tx.tx.id_is_current() {
+        Self::from_entries(tx.tx, &tx.entries)
+    }
+
+    /// Reconcile the native validator's fee with the very same UTXO entries.
+    pub(crate) fn from_validated_v1(tx: &ValidatedTransaction<'_>) -> Result<Self, CarrierFeeRefusalV1> {
+        let budget = Self::from_entries(tx.tx, &tx.entries)?;
+        if budget.actual_fee != tx.calculated_fee {
+            return Err(CarrierFeeRefusalV1::ValidatedFeeMismatch);
+        }
+        Ok(budget)
+    }
+
+    fn from_entries(tx: &Transaction, entries: &[UtxoEntry]) -> Result<Self, CarrierFeeRefusalV1> {
+        if !tx.id_is_current() {
             return Err(CarrierFeeRefusalV1::StaleTransactionId);
         }
-        if tx.entries.len() != tx.tx.inputs.len() {
+        if entries.len() != tx.inputs.len() {
             return Err(CarrierFeeRefusalV1::MissingEntries);
         }
-        let mut inputs = std::collections::HashSet::<TransactionOutpoint>::new();
+        let mut inputs = BTreeSet::new();
         let mut total_in = 0u64;
-        for (input, entry) in tx.tx.inputs.iter().zip(&tx.entries) {
-            if !inputs.insert(input.previous_outpoint) {
+        for (input, entry) in tx.inputs.iter().zip(entries) {
+            if !inputs.insert((input.previous_outpoint.transaction_id, input.previous_outpoint.index)) {
                 return Err(CarrierFeeRefusalV1::DuplicateInput);
             }
             total_in = total_in.checked_add(entry.amount).ok_or(CarrierFeeRefusalV1::Overflow)?;
         }
         let total_out =
-            tx.tx.outputs.iter().try_fold(0u64, |sum, output| sum.checked_add(output.value).ok_or(CarrierFeeRefusalV1::Overflow))?;
+            tx.outputs.iter().try_fold(0u64, |sum, output| sum.checked_add(output.value).ok_or(CarrierFeeRefusalV1::Overflow))?;
         let actual_fee = total_in.checked_sub(total_out).ok_or(CarrierFeeRefusalV1::OutputsExceedInputs)?;
-        Ok(Self { carrier: tx.tx.id(), actual_fee, remaining: actual_fee, allocations: BTreeMap::new() })
+        Ok(Self { carrier: tx.id(), actual_fee, remaining: actual_fee, allocations: BTreeMap::new() })
     }
 
     /// Allocation identities must be derived from the native contract/operation
@@ -77,7 +93,7 @@ impl CarrierFeeBudgetV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tx::{ScriptPublicKey, Transaction, TransactionInput, TransactionOutput, UtxoEntry};
+    use crate::tx::{ScriptPublicKey, TransactionInput, TransactionOutpoint, TransactionOutput};
 
     fn tx(amounts: &[u64], outputs: &[u64]) -> (Transaction, Vec<UtxoEntry>) {
         let inputs = amounts
@@ -104,6 +120,15 @@ mod tests {
         assert_eq!(budget.allocate_v1([1; 64], 1), Err(CarrierFeeRefusalV1::DuplicateAllocation));
         budget.allocate_v1([2; 64], 8).unwrap();
         assert_eq!(budget.remaining_v1(), 0);
+    }
+
+    #[test]
+    fn carrier_fee_requires_the_native_validated_difference() {
+        let (tx, entries) = tx(&[100], &[80]);
+        let mut validated = ValidatedTransaction::new(PopulatedTransaction::new(&tx, entries), 20);
+        assert_eq!(CarrierFeeBudgetV1::from_validated_v1(&validated).unwrap().actual_fee_v1(), 20);
+        validated.calculated_fee += 1;
+        assert_eq!(CarrierFeeBudgetV1::from_validated_v1(&validated).unwrap_err(), CarrierFeeRefusalV1::ValidatedFeeMismatch);
     }
 
     #[test]

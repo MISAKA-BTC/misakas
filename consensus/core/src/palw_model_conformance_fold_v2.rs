@@ -57,7 +57,7 @@ pub(super) fn complete(
         .ok_or_else(|| refused("model conformance work overflows"))?;
     let fee = route_ledger_policy_v1(builder)?.dismissal_fee_v1(work) as u128;
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < fee {
         return Err(refused("model conformance actor has insufficient free collateral"));
     }
     if !charge_route_budget_v1(builder, ctx, work, false)? {

@@ -1,0 +1,62 @@
+[
+  {
+    "original_path": "/tmp/misaka-evaluation-cache-cleanup-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-cache-cleanup-20261102.py",
+    "sha256": "211482e566da2bbf1791bb55c4874e14fd84a198101302af4ab88ae0a3e79782"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-clippy-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-clippy-20261102.py",
+    "sha256": "9c02dee3870b40d8f2f99bed2dc514dc2b2a570fdb443ceea465141d653efbc3"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-clippy-base-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-clippy-base-20261102.py",
+    "sha256": "9975d25ac3d8088dd2a3535daaade4895729d91b3452f9d4e7f769a2ab1ffca8"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-compress-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-compress-20261102.py",
+    "sha256": "7ee7362ef0b74581bc1bd77774d3a032d14ad7c5ef1b52ad9bfb240a0974533f"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-compress-runtime-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-compress-runtime-20261102.py",
+    "sha256": "f563da0252ea7f504196ba9ce8a8980b9da62332b4d5ed95692c1829f020f6ae"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-measured-terms-clippy-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-measured-terms-clippy-20261102.py",
+    "sha256": "25bd4fef7c67b1530967d94c65a13f194f25e981b6594ce0d0eb4bb90b863588"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-measured-terms-model-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-measured-terms-model-20261102.py",
+    "sha256": "01395053187904f519bde31fce6a0979063b14c3a2efd29f9a6179912199feaf"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-measured-terms-tests-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-measured-terms-tests-20261102.py",
+    "sha256": "379820feccc806beafa82a061f63386d042fe249d607541e1d86d8d27b6ebd7e"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-model-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-model-20261102.py",
+    "sha256": "98ec53835f4521b534e79f9dca99d9bb7216372142929eb444887f89203887ad"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-validation-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-validation-20261102.py",
+    "sha256": "9c8d4b0a3e32c5bdfabebe3014c3255a6d14d12b36ea6180ed174b2e6e00a602"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-validation-r2-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-validation-r2-20261102.py",
+    "sha256": "e0f192fb8be14cb3d1c97463faad58b2f1ea1269aebbcab09eccc39b9e89840b"
+  },
+  {
+    "original_path": "/tmp/misaka-evaluation-validation-r3-20261102.py",
+    "preserved_path": "handoff/positive-court/evaluation-diagnostics-20261102/operator-scripts/misaka-evaluation-validation-r3-20261102.py",
+    "sha256": "40217f0595a8ff4c701acdb30da7dd2785b6bdcb9c7f6d5ebb7cdaaebc3a66d2"
+  }
+]

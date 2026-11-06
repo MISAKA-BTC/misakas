@@ -300,13 +300,21 @@ impl VirtualStateProcessor {
             .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
         // ADR-0139: the template's accepted-user-gas cap is what validation will compute for it —
         // one round budget per DISTINCT permitted round among the round blocks the template merges.
-        let user_gas_cap = kaspa_consensus_core::evm::evm_user_gas_cap_v1(self.palw_execution_lane_at(header.daa_score).map(|_| {
-            template_palw_state
-                .as_ref()
-                .and_then(|state| self.palw_round_verdicts_v1(state, &virtual_state.ghostdag_data, header.daa_score))
-                .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
-                .unwrap_or(0)
-        }));
+        let permitted_rounds = if self.palw_execution_lane_at(header.daa_score).is_some() {
+            Some(
+                template_palw_state
+                    .as_ref()
+                    .map(|state| self.palw_round_verdicts_v1(state, &virtual_state.ghostdag_data, header.daa_score))
+                    .transpose()
+                    .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
+                    .flatten()
+                    .map(|v| kaspa_consensus_core::evm::evm_distinct_permitted_rounds_v1(&v.uses))
+                    .unwrap_or(0),
+            )
+        } else {
+            None
+        };
+        let user_gas_cap = kaspa_consensus_core::evm::evm_user_gas_cap_v1(permitted_rounds);
 
         let market_context = self
             .evm_market_context_owned_v2(template_palw_state.as_ref(), template_selected_parent, header.daa_score)
@@ -573,6 +581,8 @@ impl VirtualStateProcessor {
             };
             let mut budget = state
                 .round_fee_admission_v1(params, &point, self.palw_escrow_carve_at(point.daa_score, point.daa_score))
+                .map_err(Self::palw_round_fee_admission_fault_v1)
+                .map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?
                 .ok_or_else(|| RuleError::RoundFeeBudgetRefused("the recipient budget is unavailable".into()))?;
             let view = self
                 .palw_round_view_v1(round)
@@ -593,7 +603,8 @@ impl VirtualStateProcessor {
                     "an unambiguous bonded permit and validated transaction fees are required".into(),
                 ));
             }
-            let burned = self.palw_v2_bond_burn_obligations(&state, point.daa_score);
+            let burned =
+                self.palw_v2_bond_burn_obligations(&state, point.daa_score).map_err(PalwLocalTransitionFaultV1::into_rule_error_v1)?;
             let maximum_sompi = template
                 .block
                 .transactions

@@ -102,7 +102,13 @@ fn validate_refuses_every_value_this_build_cannot_run() {
         p.validate_palw_tir_v1()
     };
     assert!(with(&|f| f.prim_set_id = kaspa_consensus_core::Hash64::from_bytes([7u8; 64])).is_err(), "another primitive set");
-    assert!(with(&|f| f.court_version = PALW_TIR_COURT_VERSION_V1 + 1).is_err(), "another court");
+    // RFC-0043 explicitly adds private wide court2. It is supported syntax,
+    // rather than the old assumption that every successor to court1 is unknown.
+    // This does not arm a public preset or alter any published identity.
+    assert!(with(&|f| f.court_version = 2).is_ok(), "the explicit private wide court is supported");
+    for version in [0, 3, u16::MAX] {
+        assert!(with(&|f| f.court_version = version).is_err(), "unsupported court version {version}");
+    }
     assert!(with(&|f| f.ceilings.max_program_bytes = 262_145).is_err(), "past the decoder's byte cap");
     assert!(with(&|f| f.ceilings.max_program_bytes = 0).is_err(), "a zero byte cap admits nothing");
     assert!(with(&|f| f.ceilings.max_context = (1 << 21) + 1).is_err(), "past history_bound");

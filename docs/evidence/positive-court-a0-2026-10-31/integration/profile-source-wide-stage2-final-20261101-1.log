@@ -1,0 +1,9 @@
+    Finished `test` profile [unoptimized] target(s) in 0.39s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 2 tests
+test palw_positive_common_source_replay_v2::tests::counter_rewind_and_overflow_are_refused ... ok
+test palw_positive_common_source_replay_v2::tests::only_delta_is_added_and_receipt_capacity_is_not_retention ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 5449 filtered out; finished in 0.00s
+

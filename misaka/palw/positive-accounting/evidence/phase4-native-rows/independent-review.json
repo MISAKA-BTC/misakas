@@ -1,0 +1,54 @@
+{
+  "reviewed_base_commit": "9fd78d4e36083ade8a41f12266b97f1dc6c2e421",
+  "scope": "Independent read-only review of the actual aux151 typed reader and A5 denial-only wrapper.",
+  "actions": {
+    "read_only_source_review": true,
+    "builds_run": false,
+    "tests_run": false,
+    "source_code_edited": false,
+    "git_commits_created": false
+  },
+  "source_sha256": {
+    "misaka/palw/positive-accounting-node/src/lib.rs": "23731ca078c860da3cbbb5f96839e8ac298cd9151997c621587bcc18d31eb60c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "a78a2a6aa0148874ee0f6a354b1c24b8f11a7d1cb1ce855a41dc6e1b3b035807",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+    "consensus/core/src/palw_positive_rows_v2.rs": "cc58702e34c6eccd9bb04bb09c55fe5db8a7e03e2a720aae5c80f9dbed8e5cfe",
+    "misaka/palw/positive-contract/src/rows.rs": "917cf67e5ef6f0e75ac36c1d1e9cebbbe81e3bf67722b57f6236467bd2dfef89"
+  },
+  "findings": [],
+  "denial_bypass": {
+    "found": false,
+    "basis": [
+      "NativeRowCreditGate Authorization is Infallible and authorize has no success branch.",
+      "Every CreditUse resolves the same typed rows then returns a typed Rows failure or MissingOwner.",
+      "No legacy S/K/V certification lookup or fallback is present.",
+      "SignedCreditInputs has private construction, borrows the actual state and remains a data bundle, not native authority."
+    ]
+  },
+  "classification_review": {
+    "missing_route": "PositiveRowErrorV2::MissingKernelRoute remains distinct from an absent aux151 row.",
+    "missing_row": "An absent required key is reported with its exact NativeRowKey.",
+    "malformed_row": "Bounded decode, version, shape and key/body identity failures remain MalformedRow with the original ContractError.",
+    "signature": "ContractError::Signature at bundle validation becomes Authentication with ResultAndFunding or Witness stage.",
+    "bundle_links": "Other cross-row signed bundle/plan identity failures remain BundleLinks rather than absent rows.",
+    "other_core_errors": "Remain typed Core denials; never successful or empty fallbacks."
+  },
+  "existing_test_evidence": {
+    "record": "credit-rows-tests-result.json",
+    "raw_log": "credit-rows-tests.log",
+    "recorded_exit_code": 0,
+    "recorded_passed": 7,
+    "raw_output_matches_recorded_seven_passes": true,
+    "all_recorded_source_hashes_match_current_bytes": true,
+    "reviewer_did_not_rerun_tests": true
+  },
+  "clippy_evidence_note": "The existing rows-clippy-initial exit-zero execution is not a new review execution. Parent/credit owner may append the known original environment/base/source metadata without relabeling it as another run.",
+  "limits": [
+    "AcceptedOrigin and its recorded admission clock remain untrusted row data until the native acceptance/lineage owner authenticates them.",
+    "Signature and snapshot membership do not establish local arithmetic replay, real coin locks, resources, dependency exports or actual drawn-P Certified approval.",
+    "Serialized PositivePassed/Matched and P statements cannot construct missing owner capabilities.",
+    "The static missing-owner set deliberately denies all credit even for a well-formed signed row bundle.",
+    "The existing tests import already-owned DTO rows through public carriage surfaces; they are not native admission, peer IBD validation, live UTXO locking or multi-node/reorg tests.",
+    "The common-native-rows log at its earlier recorded base is evidence for those recorded row-codec tests, not a claim that later certification-module tests were rerun."
+  ]
+}

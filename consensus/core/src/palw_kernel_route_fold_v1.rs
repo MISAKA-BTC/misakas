@@ -216,6 +216,32 @@ impl PalwChainStateV2 {
     }
 }
 
+fn legacy_kernel_claim_alias_v2(table: u8, key: &[u8], value: &[u8]) -> Option<Hash64> {
+    use misaka_palw_kernel::rows::{TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_OPV_CLAIMS_V1, TABLE_PROOF_SEALS_V1};
+    let subject = match table {
+        TABLE_CLAIMS_V1 | TABLE_OPV_CLAIMS_V1 => key,
+        TABLE_JOB_CLAIMS_V1 => value,
+        TABLE_PROOF_SEALS_V1 => key.get(..64)?,
+        _ => return None,
+    };
+    subject.try_into().ok().map(Hash64::from_bytes)
+}
+
+fn legacy_kernel_job_alias_v2(table: u8, key: &[u8], value: &[u8]) -> Option<Hash64> {
+    use misaka_palw_kernel::rows::{
+        TABLE_CLAIMS_V1, TABLE_JOB_CLAIMS_V1, TABLE_JOB_ESCROWS_V1, TABLE_JOBS_V1, TABLE_PIPELINE_JOBS_V1, TABLE_SEALS_V1,
+    };
+    let subject = match table {
+        TABLE_JOBS_V1 | TABLE_PIPELINE_JOBS_V1 | TABLE_JOB_CLAIMS_V1 | TABLE_JOB_ESCROWS_V1 => key,
+        TABLE_SEALS_V1 => key.get(..64)?,
+        // ClaimRowV1 begins with producer, class_binding_id and job_id,
+        // three fixed 64-byte digests preceding the variable-sized body.
+        TABLE_CLAIMS_V1 => value.get(128..192)?,
+        _ => return None,
+    };
+    subject.try_into().ok().map(Hash64::from_bytes)
+}
+
 impl TransitionBuilder<'_> {
     /// **The one writer of the kernel route's rows**, journaled `KernelRouteRow` (the ledger's tables below 32, the consensus tables
     /// from 32). The route's header must exist.
@@ -225,8 +251,7 @@ impl TransitionBuilder<'_> {
     /// retryable) and leaves the rows and the journal unchanged.
     pub(super) fn write_kernel_row(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
         self.reserve_kernel_row_write_v1(table, &key, &new, true)?;
-        self.apply_kernel_row_v1(table, key, new);
-        Ok(())
+        self.apply_kernel_row_v1(table, key, new)
     }
 
     /// [`Self::write_kernel_row`] for a key/row whose buffers the caller already admitted before encoding
@@ -238,25 +263,55 @@ impl TransitionBuilder<'_> {
         new: Option<Vec<u8>>,
     ) -> Result<(), PalwStateV2Error> {
         self.reserve_kernel_row_write_v1(table, &key, &new, false)?;
-        self.apply_kernel_row_v1(table, key, new);
-        Ok(())
+        self.apply_kernel_row_v1(table, key, new)
     }
 
-    fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) {
-        let Some(kernel) = self.state.kernel_route.as_mut() else { return };
+    fn apply_kernel_row_v1(&mut self, table: u8, key: Vec<u8>, new: Option<Vec<u8>>) -> Result<(), PalwStateV2Error> {
+        if let Some(value) = new.as_deref() {
+            if let Some(claim) = legacy_kernel_claim_alias_v2(table, &key, value) {
+                self.reject_positive_claim_alias_v2(claim)?;
+            }
+            if let Some(job) = legacy_kernel_job_alias_v2(table, &key, value) {
+                self.reject_positive_job_alias_v2(job)?;
+            }
+        }
+        let cohort_update =
+            super::palw_claim_local_execution_cohort_census_v15::prepare_writer_v15(self, table, &key, new.as_deref())?;
+        let compact_update =
+            super::palw_claim_local_execution_cohort_census_v15::prepare_compact_writer_v15(self, table, &key, new.as_deref())?;
+        let gc_update = super::palw_claim_local_context_gc_v3::prepare_writer_v3(self, table, &key, &new)?;
+        let member_update = super::palw_monetary_material_scope_v8::prepare_writer_v8(self, table, &key, &new)?;
+        let Some(kernel) = self.state.kernel_route.as_mut() else { return Ok(()) };
         let ledger_table = table < PALW_KERNEL_ROUTE_TABLE_BOND_KEYS_V1;
         if ledger_table {
             // A ledger row changes: the cached ledger is no longer the rows' (the flush sets it again once it has written them).
             kernel.ledger_cache.clear();
         }
+        let map_key = (table, key.clone());
+        kernel.update_positive_aux_indexes_v2(&map_key, new.as_deref())
+            .map_err(|error| PalwStateV2Error::KernelRouteRefused(format!("invalid Positive indexed row: {error:?}")))?;
         let map = if ledger_table { &mut kernel.rows } else { &mut kernel.aux };
         let old = match &new {
-            Some(bytes) => map.insert((table, key.clone()), bytes.clone()),
-            None => map.remove(&(table, key.clone())),
+            Some(bytes) => map.insert(map_key, bytes.clone()),
+            None => map.remove(&map_key),
         };
-        if old != new {
+        let compact_native_changed = old != new;
+        if compact_native_changed {
             self.entries.push(PalwDeltaEntryV2::KernelRouteRow { table, key, old, new });
         }
+        if let Some(plan) = member_update {
+            super::palw_monetary_material_scope_v8::apply_v8(&mut self.state, &plan);
+        }
+        if let Some(plan) = cohort_update {
+            super::palw_claim_local_execution_cohort_census_v15::commit_frame_change_v15(&mut self.state, plan);
+        }
+        if let Some(plan) = compact_update {
+            super::palw_claim_local_execution_cohort_census_v15::commit_compact_writer_v15(self, &plan, compact_native_changed);
+        }
+        if let Some(plan) = gc_update {
+            super::palw_claim_local_context_gc_v3::commit_writer_v3(self, plan);
+        }
+        Ok(())
     }
 
     /// **The one writer of the kernel route's header**, journaled `KernelRouteHeader`.
@@ -301,15 +356,15 @@ impl TransitionBuilder<'_> {
 
     /// **The collateral the kernel is told a bond has**: the real collateral net of every non-kernel reservation, never below the
     /// kernel's own reservation and never above the collateral (module doc).
-    fn kernel_synced_collateral(&self, bond: &PalwBondKeyV2, now_daa: u64) -> u64 {
-        let Some(record) = self.state.bonds.get(bond) else { return 0 };
+    fn kernel_synced_collateral(&self, bond: &PalwBondKeyV2, now_daa: u64) -> Result<u64, PalwStateV2Error> {
+        let Some(record) = self.state.bonds.get(bond) else { return Ok(0) };
         // The LEDGER's own reservation: a chunk group's deposit (also the route's, also in `committed`) is outside the ledger, so the
         // ledger is synced net of it like any other non-kernel reservation and never lends it to a claim.
         let kernel = self.state.kernel_route.as_ref().map(|k| k.ledger_reserved_of(bond) as u128).unwrap_or(0);
-        let committed = self.committed_at(bond, now_daa);
+        let committed = self.committed_at(bond, now_daa)?;
         let non_kernel = committed.saturating_sub(kernel);
         let free = (record.collateral as u128).saturating_sub(non_kernel);
-        u64::try_from(free.max(kernel).min(record.collateral as u128)).expect("bounded by a u64 collateral")
+        Ok(u64::try_from(free.max(kernel).min(record.collateral as u128)).expect("bounded by a u64 collateral"))
     }
 
     /// Record that the route has seen `bond` (its kernel digest maps back to it).
@@ -922,6 +977,7 @@ pub(super) fn flush(
 ) -> Result<(), PalwStateV2Error> {
     // RFC-0006 (RFC06-1): the to_rows map, the diff and the removed v9 keys are admitted before any of them exists.
     reserve_flush_scratch_v1(builder, ledger, before)?;
+    super::palw_verifier_fee_consent_fold_v1::reconcile_closed_draws(builder, ledger)?;
     let ledger: &KernelLedgerV1 = ledger;
     for ((table, key), old_new) in diff_rows(before, &ledger.to_rows()).into_iter().map(|(k, _old, new)| (k, new)) {
         builder.write_kernel_row(table, key, old_new)?;
@@ -1067,7 +1123,7 @@ pub(super) fn finish_exec_rewards_v1(
     let ids: Vec<_> = ledger.bonds.keys().copied().collect();
     for id in ids {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|r| r.bond_key_of(&id)) {
-            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)).map_err(PalwStateV2Error::NativeResource)?;
+            ledger.try_sync_bond_v1(id, builder.kernel_synced_collateral(&key, daa)?).map_err(PalwStateV2Error::NativeResource)?;
         }
     }
     let mut events = Vec::new();
@@ -1164,6 +1220,7 @@ fn apply_settlements_to_exec_vesting(
     // GAP-5: what this batch actually debited from posters' escrows — the only source a Final reward is paid from. A `FinalReward`
     // with no spent escrow behind it is never paid (there is no unfunded reward path).
     let mut escrow_debited: std::collections::BTreeMap<Option<misaka_palw_kernel::hash::Digest>, u64> = Default::default();
+    let mut fate_fees = std::collections::BTreeMap::new();
     // Persistent source escrows were debited in an earlier fold. Their backing is the rooted funding row, never a later
     // sponsor balance or this batch's job escrow. All fee instructions are strict, including sweeps.
     let fee_ledger = if events.iter().any(|e| {
@@ -1206,6 +1263,8 @@ fn apply_settlements_to_exec_vesting(
     let mut already_settled: std::collections::BTreeSet<usize> = Default::default();
     // RFC-0008 (RFC08-1): the next slot ordinal of each `(claim, verifier)` check fee in this batch (the kernel pays every unpaid slot
     // of one verifier in one batch, so the occurrence order is the slot order).
+    let mut ordinary_held: std::collections::BTreeMap<usize, crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1> =
+        Default::default();
     let mut check_fee_slots: std::collections::BTreeMap<([u8; 64], [u8; 64]), u64> = Default::default();
     // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): the check fees of paid V2 claims this batch HOLDS, by the ordinal of
     // their poster debit (the held row records what that debit actually took). Empty below the fence.
@@ -1234,10 +1293,12 @@ fn apply_settlements_to_exec_vesting(
                 (false, false) => C::KernelTick,
             };
             let slot = check_fee_slots.entry((claim, verifier)).or_insert(0);
-            let slot_ordinal = *slot;
+            let occurrence = *slot;
+            *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
+            let slot_ordinal = super::palw_verifier_fee_consent_fold_v1::actual_slot(builder, claim, verifier, occurrence, now)?
+                .unwrap_or(occurrence);
             let obligation =
                 PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot_ordinal);
-            *slot = slot.checked_add(1).ok_or(PalwStateV2Error::Overflow("check fee slot ordinal"))?;
             if let Some(release_after_daa) =
                 super::palw_paid_claim_trap_fold_v1::check_fee_hold_until_checked_v1(builder, &claim, now)?
             {
@@ -1265,27 +1326,44 @@ fn apply_settlements_to_exec_vesting(
                 );
                 already_settled.insert(ordinal + 2);
             } else {
-                // RFC08-2: outside a paid V2 claim past the trap fence a drawn verifier stands behind no claim of its own for its
-                // attestation, so its fee has no liability terms to source — refused past the fence, never defaulted.
-                let once = builder.settle_once_liable_v1(
-                    now,
-                    obligation,
-                    consumer,
-                    fee,
-                    PalwSettlementDebitV1::Escrow { poster, amount: fee },
-                    super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                        "RFC07-5: a drawn verifier's own liability horizon for its attestation is undefined",
-                    ),
-                )?;
-                if !once.pays() {
-                    if strict {
-                        return Err(refused(match once {
-                            super::palw_settlement_once_fold_v1::PalwSettleOnceV1::Refused(why) => why.name(),
-                            _ => "the verifier's check fee for this slot was already settled by another consumer",
-                        }));
+                use super::palw_verifier_fee_consent_fold_v1::{FeeDisposition, prepare_hold};
+                match prepare_hold(builder, claim, verifier, occurrence, poster, fee, now, strict, events)? {
+                    FeeDisposition::Held(held) => {
+                        ordinary_held.insert(ordinal, held);
+                        already_settled.insert(ordinal + 2);
                     }
-                    already_settled.extend([ordinal + 1, ordinal + 2]);
-                    continue;
+                    disposition => {
+                        let fate_slot = match &disposition {
+                            FeeDisposition::Fate(slot) => Some(*slot),
+                            _ => None,
+                        };
+                        let (fee_obligation, reason) = match disposition {
+                            FeeDisposition::Fate(slot) => (
+                                PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, claim, verifier, slot),
+                                "objective timely fate compensation without a Clean attestation",
+                            ),
+                            FeeDisposition::Legacy => (obligation, "fee of a claim accepted before the consent fence"),
+                            FeeDisposition::Held(_) => unreachable!(),
+                        };
+                        if let Some(slot) = fate_slot {
+                            fate_fees.insert(ordinal + 2, (claim, verifier, slot));
+                        }
+                        let once = builder.settle_once_liable_v1(
+                            now,
+                            fee_obligation,
+                            consumer,
+                            fee,
+                            PalwSettlementDebitV1::Escrow { poster, amount: fee },
+                            super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(reason),
+                        )?;
+                        if !once.pays() {
+                            if strict {
+                                return Err(refused("check fee slot already settled"));
+                            }
+                            already_settled.extend([ordinal + 1, ordinal + 2]);
+                            continue;
+                        }
+                    }
                 }
             }
         }
@@ -1382,10 +1460,9 @@ fn apply_settlements_to_exec_vesting(
                     }
                     // **RFC-0008 once-only settlement (RFC08-1; dormant `palw_settlement_once_v1`)**: the promise `(context,
                     // producer)` is paid once across every consumer and batch, not only within this batch (`fee_paid`). Every fee
-                    // instruction is strict, so a repeat or a refusal refuses the batch. RFC08-2: the sponsor-signed terms carry a
-                    // hold and a final-by DAA but a beacon source has no claim reservation, X3 deadline or material TTL — no
-                    // authentic source for the predicate's terms, so past the fence the payout is refused, never defaulted.
-                    let once = builder.settle_once_liable_v1(
+                    // instruction is strict. RFC08-2 reads the producer-signed source hold/deposit, sponsor's prepaid promise
+                    // and the actual source claim's material covenant from the checked pre-transition ledger.
+                    let once = builder.settle_once_beacon_source_fee_v1(
                         now,
                         crate::palw_settlement_once_v1::PalwSettlementObligationV1::with_party(
                             crate::palw_settlement_once_v1::PalwSettlementLegV1::SourceFeePromise,
@@ -1403,9 +1480,9 @@ fn apply_settlements_to_exec_vesting(
                             sponsor: funding.terms.sponsor,
                             amount: s.amount,
                         },
-                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                            "a beacon source's fee: no claim reservation, X3 deadline or material TTL backs the source",
-                        ),
+                        l,
+                        context,
+                        s.bond,
                     )?;
                     match once {
                         // Withheld by the predicate (a policy outcome, not an inconsistency): the producer is not paid and the
@@ -1467,10 +1544,15 @@ fn apply_settlements_to_exec_vesting(
                     *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("reporter collateral debit"))?;
                 }
                 if s.kind == SettlementKindV1::PayJobEscrow {
-                    if let Some(mut held) = held_fees.remove(&ordinal) {
+                    if let Some(mut held) = ordinary_held.remove(&ordinal) {
+                        held.amount = debit;
+                        super::palw_verifier_fee_consent_fold_v1::write_hold(builder, &held)?;
+                    } else if let Some(mut held) = held_fees.remove(&ordinal) {
                         // RFC-0007 §4.1 T6: a held check fee's debit is the held row, never any Final reward's funding.
                         held.fee = debit;
+                        super::palw_paid_claim_trap_fold_v1::validate_held_check_fee_income_v1(builder, &held, now)?;
                         super::palw_paid_claim_trap_fold_v1::write_held_check_fee_v1(builder, &held)?;
+                        builder.hold_verifier_fee_material_v1(now, held.claim, held.verifier, held.slot, held.fee)?;
                     } else {
                         let funded = escrow_debited.entry(s.claim).or_default();
                         *funded = funded.checked_add(debit).ok_or(PalwStateV2Error::Overflow("kernel escrow debit"))?;
@@ -1522,6 +1604,10 @@ fn apply_settlements_to_exec_vesting(
                     hash.update(batch.as_byte_slice());
                     hash.update(&(ordinal as u64).to_le_bytes());
                     builder.stage_reporter_recipient_v1(finish(hash), bond, now, amount, Hash64::from_bytes(claim))?;
+                    continue;
+                }
+                if let Some((claim, verifier, slot)) = fate_fees.get(&ordinal).copied() {
+                    super::palw_verifier_fee_consent_fold_v1::queue_fate_fee(builder, claim, verifier, slot, amount, now)?;
                     continue;
                 }
                 if s.kind == SettlementKindV1::FinalReward
@@ -1584,6 +1670,7 @@ fn apply_settlements_to_exec_vesting(
     // RFC-0007 §4.1 T6 (dormant `palw_paid_claim_trap_v1`): a paid V2 claim's conviction in this batch is recorded once and its
     // Clean receipt signers are charged their liability. A no-op below the fence.
     super::palw_paid_claim_trap_fold_v1::on_paid_claim_convictions_v1(builder, events, now)?;
+    super::palw_verifier_fee_consent_fold_v1::convictions(builder, events, now)?;
     // G14 lane closure G-K1: every conviction in this batch charges the claim's receipt signers' liability locks.
     super::palw_g14_lane_closure_fold_v1::charge_kernel_signers_on_conviction_v1(builder, events)?;
     Ok(())
@@ -1749,7 +1836,7 @@ pub(super) fn kernel_court_admissions_v1(
             })
             .sum::<u128>()
             .saturating_add(out.iter().map(|a| a.capital).sum::<u128>());
-        let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)).saturating_sub(pending);
+        let free = collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?).saturating_sub(pending);
         let existing = out.last().map(|a| &a.book).or(builder.state.court_service_state_v1());
         match crate::palw_kernel_court_admission_v1::kernel_court_admission_candidate_v1(
             existing,
@@ -1955,6 +2042,12 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         // RFC07/RFC08 signed economic contracts (inner 67–69): consumer-owned, each past its own dormant fence.
         KernelRouteObjectV1::AttestModelVerificationV1 { attestation } => {
             return super::palw_econ_contracts_fold_v1::attest_model_verification_v1(builder, ctx, signer, attestation);
+        }
+        KernelRouteObjectV1::WatchVerifierPoolV1 { terms } => {
+            return super::palw_verifier_watch_fold_v1::apply(builder, ctx, signer, terms);
+        }
+        KernelRouteObjectV1::ConsentVerifierFeeV1 { terms } => {
+            return super::palw_verifier_fee_consent_fold_v1::apply(builder, ctx, signer, terms);
         }
         KernelRouteObjectV1::ConsentHorizonExtensionV1 { terms } => {
             return super::palw_econ_contracts_fold_v1::consent_horizon_extension_v1(builder, ctx, signer, terms);
@@ -2264,7 +2357,9 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         palw_source_order_admits_v1(live, &new).map_err(|why| refused(why.reason()))?;
     }
     let kid = palw_kernel_bond_id_v1(signer);
-    ledger.try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)).map_err(PalwStateV2Error::NativeResource)?;
+    ledger
+        .try_sync_bond_v1(kid, builder.kernel_synced_collateral(signer, ctx.daa_score)?)
+        .map_err(PalwStateV2Error::NativeResource)?;
     // The other bond a slash can land on is the producer of the claim the object names: its collateral is brought up to date too, so
     // an earlier object of this block (or another lane's slash) can never leave the ledger believing the bond holds more than it does.
     if let KernelRouteObjectV1::FileProof { claim, .. }
@@ -2274,7 +2369,7 @@ pub(super) fn apply_kernel_route_object_authorized_v2(
         && let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&producer))
     {
         ledger
-            .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score))
+            .try_sync_bond_v1(producer, builder.kernel_synced_collateral(&key, ctx.daa_score)?)
             .map_err(PalwStateV2Error::NativeResource)?;
     }
     // DA16 / ADR-0177 D2: past `palw_provider_court_v1` a demand names a claim-specific unit or nothing, within its requester's tally.
@@ -2747,9 +2842,15 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     // RFC-0018 Gate C: certifications are drawn, decided and — when certified — credited (safe weight, settled anchor, the held
     // issuance-funded reward). A no-op below `palw_independently_work_certified_v1`.
     super::palw_security_certification_fold_v1::sweep_security_certification_v1(builder, ctx)?;
+    builder.decide_due_positive_certification_failures_v2(ctx)?;
+    for history in &builder.extras.positive_decision_histories {
+        builder.process_positive_certification_history_v2(ctx, &history.0)?;
+    }
     // RFC-0007 §4.1 T6: held check fees past their trap reveal window (claim terminal) are released once; conviction rows past
     // their window are forgotten. A no-op below `palw_paid_claim_trap_v1`.
     super::palw_paid_claim_trap_fold_v1::release_held_check_fees_v1(builder, ctx.daa_score)?;
+    super::palw_verifier_fee_consent_fold_v1::release(builder, ctx)?;
+    super::palw_verifier_watch_fold_v1::sweep(builder, ctx)?;
     // G14 lane r5-f02-wire (RFC-0026 F02 × ADR-0184 §1): before release, held text29 / funded v11 fees whose no-slash hold has been
     // recovered (supply now recorded, actor silent) are defaulted — refund + slash. A no-op unless the hold, F02 and the slash amount
     // are all in force; a row still past H is released below without a slash.
@@ -2784,6 +2885,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     if !busy {
         return Ok(());
     }
+    super::palw_verifier_watch_draw_v1::tick(builder, ctx)?;
     let mut ledger = load_ledger(builder, ctx)?;
     let before = loaded_rows(builder, &ledger)?;
     // Every bond the ledger holds is re-synced from the real chain before it is settled against.
@@ -2791,7 +2893,7 @@ pub(super) fn tick_kernel_route_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pa
     for kid in held {
         if let Some(key) = builder.state.kernel_route.as_ref().and_then(|k| k.bond_key_of(&kid)) {
             ledger
-                .try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score))
+                .try_sync_bond_v1(kid, builder.kernel_synced_collateral(&key, ctx.daa_score)?)
                 .map_err(PalwStateV2Error::NativeResource)?;
         }
     }
@@ -3043,7 +3145,7 @@ pub(super) fn apply_kernel_route_chunk_v1(
             };
             let deposit = PALW_KERNEL_CHUNK_DEPOSIT_PER_PART_SOMPI_V1.saturating_mul(u64::from(chunk.count));
             let collateral = builder.state.bonds.get(&chunk.opener).map(|b| b.collateral as u128).unwrap_or(0);
-            if collateral.saturating_sub(builder.committed_at(&chunk.opener, ctx.daa_score)) < deposit as u128 {
+            if collateral.saturating_sub(builder.committed_at(&chunk.opener, ctx.daa_score)?) < deposit as u128 {
                 return Err(refused("the opener's free collateral does not cover the kernel chunk group's deposit"));
             }
             PalwKernelChunkGroupV1 {

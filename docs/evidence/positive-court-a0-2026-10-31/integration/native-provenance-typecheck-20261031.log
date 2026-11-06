@@ -1,0 +1,318 @@
+   Compiling serde_core v1.0.228
+    Checking futures-core v0.3.31
+   Compiling jobserver v0.1.32
+   Compiling cc v1.2.61
+    Checking futures-io v0.3.31
+   Compiling log v0.4.22
+   Compiling aho-corasick v1.1.3
+    Checking serde v1.0.228
+    Checking futures-sink v0.3.31
+   Compiling regex-automata v0.4.8
+    Checking byteorder v1.5.0
+    Checking futures-channel v0.3.31
+    Checking futures-task v0.3.31
+    Checking futures-util v0.3.31
+   Compiling regex v1.11.0
+    Checking mio v1.2.4
+    Checking socket2 v0.6.3
+    Checking signal-hook-registry v1.4.2
+   Compiling libm v0.2.8
+    Checking tokio v1.54.1
+    Checking zerocopy v0.7.35
+    Checking tracing-core v0.1.36
+   Compiling tracing-attributes v0.1.31
+   Compiling num-traits v0.2.19
+   Compiling wasm-bindgen-backend v0.2.100
+    Checking tracing v0.1.44
+    Checking serde_json v1.0.151
+   Compiling wasm-bindgen-macro-support v0.2.100
+    Checking smallvec v1.13.2
+    Checking ppv-lite86 v0.2.20
+    Checking futures-lite v2.3.0
+   Compiling wasm-bindgen-macro v0.2.100
+    Checking wasm-bindgen v0.2.100
+    Checking rand_chacha v0.3.1
+    Checking async-channel v2.3.1
+    Checking futures-executor v0.3.31
+   Compiling num_threads v0.1.7
+   Compiling time v0.3.47
+    Checking js-sys v0.3.77
+    Checking futures v0.3.31
+   Compiling cargo_metadata v0.18.1
+    Checking chrono v0.4.38
+    Checking rand v0.8.6
+    Checking polling v3.7.3
+    Checking piper v0.2.4
+    Checking workflow-log v0.18.0
+   Compiling sha2 v0.10.8
+    Checking blocking v1.6.1
+    Checking async-io v2.3.4
+   Compiling vergen v8.3.2
+    Checking async-executor v1.13.1
+    Checking async-global-executor v2.4.1
+    Checking async-channel v1.9.0
+   Compiling workflow-core v0.18.0
+    Checking web-sys v0.3.77
+    Checking kv-log-macro v1.0.7
+    Checking async-std v1.13.0
+   Compiling workflow-core-macros v0.18.0
+    Checking serde-wasm-bindgen v0.6.5
+    Checking faster-hex v0.9.0
+    Checking rand_chacha v0.9.0
+    Checking parking_lot_core v0.9.10
+    Checking workflow-panic-hook v0.18.0
+    Checking wasm-bindgen-futures v0.4.50
+    Checking parking_lot v0.12.3
+    Checking rand v0.9.4
+    Checking hash32 v0.3.1
+   Compiling shared_child v1.0.1
+   Compiling os_pipe v1.2.1
+   Compiling duct v0.13.7
+   Compiling workflow-wasm-macros v0.18.0
+    Checking heapless v0.8.0
+    Checking workflow-wasm v0.18.0
+    Checking faster-hex v0.10.1
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/utils)
+   Compiling getrandom v0.4.2
+    Checking ahash v0.8.11
+    Checking uuid v1.18.1
+    Checking chacha20 v0.10.2
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/hashes)
+    Checking rand v0.10.1
+    Checking ordered-float v2.10.1
+   Compiling either v1.13.0
+    Checking serde_yaml v0.9.34+deprecated
+    Checking serde-value v0.7.0
+    Checking libcrux-traits v0.0.8
+    Checking hashbrown v0.14.5
+    Checking log4rs v1.4.0
+    Checking malachite-base v0.4.16
+    Checking libcrux-sha3 v0.0.10
+    Checking libcrux-ml-dsa v0.0.10
+    Checking kaspa-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/core)
+    Checking misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/positive-contract)
+    Checking kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/merkle)
+    Checking kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/muhash)
+    Checking misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/panel)
+    Checking kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/addresses)
+    Checking workflow-serializer v0.18.0
+    Checking http v1.1.0
+    Checking malachite-nz v0.4.16
+   Compiling synstructure v0.13.2
+   Compiling httparse v1.9.5
+    Checking zeroize v1.9.0
+    Checking rustls-pki-types v1.14.1
+   Compiling zerofrom-derive v0.1.6
+    Checking http-body v1.0.1
+   Compiling ring v0.17.14
+    Checking kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/math)
+    Checking kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+    Checking zerofrom v0.1.7
+   Compiling yoke-derive v0.8.1
+    Checking tokio-util v0.7.12
+   Compiling rustix v0.38.37
+    Checking tower-service v0.3.3
+    Checking yoke v0.8.1
+    Checking kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/wasm/core)
+    Checking untrusted v0.9.0
+   Compiling zerovec-derive v0.11.2
+   Compiling rustls v0.23.46
+    Checking zerovec v0.11.5
+    Checking rustls-webpki v0.103.16
+   Compiling displaydoc v0.2.5
+    Checking try-lock v0.2.5
+    Checking percent-encoding v2.3.1
+   Compiling nom v7.1.3
+    Checking want v0.3.1
+    Checking h2 v0.4.19
+    Checking http-body-util v0.1.2
+   Compiling itertools v0.14.0
+   Compiling heck v0.5.0
+    Checking httpdate v1.0.3
+    Checking hyper v1.9.0
+   Compiling clang-sys v1.8.1
+   Compiling prost-derive v0.14.3
+   Compiling cexpr v0.6.0
+    Checking webpki-roots v1.0.11
+    Checking hyper-util v0.1.20
+    Checking tokio-rustls v0.26.4
+    Checking tinystr v0.8.2
+    Checking sync_wrapper v1.0.2
+   Compiling pulldown-cmark v0.13.5
+    Checking writeable v0.6.3
+   Compiling prettyplease v0.2.22
+    Checking litemap v0.8.2
+    Checking icu_locale_core v2.1.1
+    Checking zerotrie v0.2.3
+    Checking potential_utf v0.1.4
+   Compiling icu_normalizer_data v2.1.1
+    Checking base64 v0.22.1
+   Compiling icu_properties_data v2.1.2
+   Compiling bytes v1.11.1
+   Compiling foldhash v0.1.5
+   Compiling unicase v2.9.0
+   Compiling hashbrown v0.15.5
+   Compiling prost v0.14.3
+    Checking icu_collections v2.1.1
+    Checking icu_provider v2.1.1
+    Checking mime v0.3.17
+   Compiling fixedbitset v0.5.7
+    Checking tower-layer v0.3.3
+   Compiling petgraph v0.8.3
+   Compiling tempfile v3.13.0
+   Compiling prost-types v0.14.3
+   Compiling pulldown-cmark-to-cmark v22.0.0
+   Compiling multimap v0.10.1
+   Compiling prost-build v0.14.3
+   Compiling libz-sys v1.1.31
+    Checking icu_properties v2.1.2
+    Checking icu_normalizer v2.1.1
+   Compiling tonic-build v0.14.5
+   Compiling bzip2-sys v0.1.11+1.0.8
+   Compiling zstd-sys v2.1.2+zstd.1.5.7
+   Compiling itertools v0.13.0
+   Compiling lz4-sys v1.11.1+lz4-1.10.0
+   Compiling bindgen v0.72.1
+    Checking kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/txscript)
+    Checking kaspa-notify v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/notify)
+    Checking kaspa-consensus-notify v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/notify)
+   Compiling tonic-prost-build v0.14.5
+    Checking idna_adapter v1.2.1
+    Checking tower v0.5.3
+    Checking form_urlencoded v1.2.1
+    Checking utf8_iter v1.0.4
+    Checking idna v1.1.0
+    Checking kaspa-mining-errors v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/mining/errors)
+   Compiling librocksdb-sys v0.17.3+10.4.2
+    Checking axum-core v0.5.6
+   Compiling pin-project-internal v1.1.6
+    Checking matchit v0.8.4
+    Checking axum v0.8.9
+    Checking pin-project v1.1.6
+    Checking url v2.5.4
+    Checking hyper-timeout v0.5.1
+    Checking tokio-stream v0.1.16
+    Checking tonic v0.14.5
+    Checking webpki-roots v0.26.11
+    Checking num-integer v0.1.46
+   Compiling textwrap v0.11.0
+    Checking tonic-prost v0.14.5
+    Checking tower-http v0.5.2
+    Checking hex v0.4.3
+    Checking bincode v1.3.3
+   Compiling ansi_term v0.12.1
+    Checking regex-syntax v0.8.5
+   Compiling bitflags v1.3.2
+   Compiling home v0.5.9
+   Compiling bindgen v0.59.2
+   Compiling strsim v0.8.0
+   Compiling vec_map v0.8.2
+   Compiling clap v2.34.0
+   Compiling env_logger v0.9.3
+   Compiling which v4.4.2
+    Checking kaspa-consensus-client v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/client)
+    Checking kaspa-utils-tower v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/utils/tower)
+    Checking kaspa-consensusmanager v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/components/consensusmanager)
+    Checking num-bigint v0.4.6
+   Compiling kaspa-p2p-lib v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/protocol/p2p)
+    Checking kaspa-index-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/indexes/core)
+    Checking sha1 v0.10.6
+    Checking data-encoding v2.6.0
+    Checking utf-8 v0.7.6
+   Compiling lazycell v1.3.0
+   Compiling peeking_take_while v0.1.2
+   Compiling rustc-hash v1.1.0
+    Checking xml-rs v0.8.22
+    Checking xmltree v0.10.3
+    Checking tungstenite v0.23.0
+    Checking num-rational v0.4.2
+    Checking kaspa-consensus-wasm v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/wasm)
+    Checking num-iter v0.1.45
+    Checking attohttpc v0.30.1
+    Checking misaka-palw-tir-artifact v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/artifact)
+    Checking seqlock v0.2.0
+   Compiling workflow-task-macros v0.18.0
+   Compiling kaspa-rpc-macros v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/macros)
+    Checking num-complex v0.4.6
+   Compiling protoc-bin-vendored-linux-aarch_64 v3.2.0
+   Compiling protoc-bin-vendored-win32 v3.2.0
+   Compiling protoc-bin-vendored-macos-aarch_64 v3.2.0
+   Compiling protoc-bin-vendored-macos-x86_64 v3.2.0
+   Compiling protoc-bin-vendored-linux-s390_64 v3.2.0
+   Compiling protoc-bin-vendored-linux-x86_32 v3.2.0
+   Compiling protoc-bin-vendored-linux-x86_64 v3.2.0
+   Compiling protoc-bin-vendored-linux-ppcle_64 v3.2.0
+    Checking utf8parse v0.2.2
+    Checking anstyle-parse v0.2.5
+   Compiling protoc-bin-vendored v3.2.0
+    Checking num v0.4.3
+    Checking kaspa-rpc-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/core)
+    Checking workflow-task v0.18.0
+    Checking igd-next v0.17.0
+    Checking tokio-tungstenite v0.23.1
+   Compiling workflow-perf-monitor v0.0.2
+    Checking local-ip-address v0.6.3
+    Checking is_terminal_polyfill v1.70.1
+   Compiling portable-atomic v1.9.0
+    Checking downcast-rs v1.2.1
+   Compiling system-configuration-sys v0.6.0
+    Checking colorchoice v1.0.2
+    Checking anstyle-query v1.1.1
+    Checking anstream v0.6.15
+    Checking workflow-websocket v0.18.0
+    Checking kaspa-pow v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/pow)
+   Compiling kaspa-grpc-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/grpc/core)
+    Checking manual_future v0.1.1
+   Compiling workflow-rpc-macros v0.18.0
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec)
+    Checking mach v0.3.2
+   Compiling async-stream-impl v0.3.6
+    Checking strsim v0.11.1
+    Checking sweep-bptree v0.4.1
+    Checking kaspa-mining v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/mining)
+    Checking clap_builder v4.5.51
+    Checking async-stream v0.3.6
+    Checking workflow-rpc v0.18.0
+    Checking kaspa-p2p-mining v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/protocol/mining)
+   Compiling clap_derive v4.5.49
+    Checking core-foundation v0.9.4
+    Checking system-configuration v0.6.1
+    Checking clap v4.5.51
+    Checking kaspa-perf-monitor v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/metrics/perf_monitor)
+    Checking hyper-rustls v0.27.3
+    Checking serde_urlencoded v0.7.1
+    Checking kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/pq/validator-core)
+    Checking rustls-pemfile v2.2.0
+    Checking serde_spanned v0.6.8
+    Checking toml_datetime v0.6.8
+    Checking encoding_rs v0.8.34
+    Checking winnow v0.6.20
+    Checking misaka-palw-base0 v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/base0)
+    Checking toml_edit v0.22.22
+    Checking reqwest v0.12.8
+   Compiling misaka-palw-sdk v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/sdk)
+    Checking workflow-http v0.18.0
+    Checking toml v0.8.19
+    Checking ciborium v0.2.2
+    Checking misaka-palw-tir-lower v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/lower)
+    Checking kaspa-grpc-client v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/grpc/client)
+    Checking workflow-dom v0.18.0
+    Checking misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/endpoints)
+    Checking tinytemplate v1.2.1
+    Checking misaka-palw-tir-ref2 v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/testing/reference/palw-tir-ref2)
+    Checking criterion v0.5.1
+    Checking misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/remote)
+    Checking kaspa-wrpc-client v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/wrpc/client)
+    Checking misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/sketch)
+    Checking rand_distr v0.4.3
+    Checking rocksdb v0.24.0
+    Checking kaspa-database v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/database)
+    Checking kaspa-addressmanager v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/components/addressmanager)
+    Checking kaspa-utxoindex v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/indexes/utxoindex)
+    Checking kaspa-consensus v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus)
+    Checking kaspa-connectionmanager v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/components/connectionmanager)
+    Checking kaspa-p2p-flows v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/protocol/flows)
+    Checking kaspa-rpc-service v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/service)
+    Checking kaspa-wrpc-server v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/wrpc/server)
+    Checking kaspa-grpc-server v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/rpc/grpc/server)
+    Finished `dev` profile [unoptimized] target(s) in 6m 04s

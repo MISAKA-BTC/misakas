@@ -3255,7 +3255,7 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     // EVERY Active bond's collateral is locked at every score — the panel's seats included, since
     // a seat that could spend its stake out from under a claim is a seat with nothing at risk.
     for daa in [0, 1, 1_000_000, u64::MAX] {
-        let locked = vp.palw_v2_locked_bond_outpoints(&state, daa);
+        let locked = vp.palw_v2_locked_bond_outpoints(&state, daa).unwrap();
         for outpoint in &registered {
             assert!(locked.contains(outpoint), "an Active bond's collateral must be locked at daa {daa}");
         }
@@ -3267,7 +3267,7 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     let plain_consensus = TestConsensus::new(&plain);
     let _lt = plain_consensus.init();
     assert!(
-        plain_consensus.virtual_processor().palw_v2_locked_bond_outpoints(&state, 0).is_empty(),
+        plain_consensus.virtual_processor().palw_v2_locked_bond_outpoints(&state, 0).unwrap().is_empty(),
         "no bundle, no bond policy, nothing locked — every shipped preset is unchanged"
     );
 }
@@ -13361,7 +13361,7 @@ async fn palw_v2_no_read_side_impl_takes_an_uncached_tip_materialization() {
     let _ = vp.palw_adopt_class_carriage_v1_impl(class_id, &[]);
     let _ = vp.palw_seat_duties_v2_impl(&mine);
     let _ = vp.palw_producer_facts_v2_impl(class_id, Some(bond_key.0));
-    let _ = vp.palw_fp_spendable_v3_impl(bond_key.0);
+    let _ = vp.palw_fp_spendable_with_parent_v3_impl(bond_key.0);
     let _ = vp.palw_locked_bond_outpoints_v2_impl();
     let _ = vp.palw_v2_receipt_quorum_assemble_impl(kaspa_hashes::Hash64::from_u64_word(0xC1A1), &[]);
     // ADR-0152 P2-10: claim row v3 and `getPalwVesting` (op 199) — every query shape, each a read
@@ -15479,7 +15479,10 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
         assert!(merged.contains(&round_block), "virtual merges every round tip's chain of round blocks");
     }
     let daa = virtual_state.daa_score;
-    let none = vp.palw_round_verdicts_v1(&state, &virtual_state.ghostdag_data, daa).expect("the lane is open");
+    let none = vp
+        .palw_round_verdicts_v1(&state, &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("the lane is open");
     assert_eq!(none.round_blocks.len(), 3);
     assert!(none.permitted.is_empty(), "no schedule, no permit");
     // Lane SCAN: the verdict's named reasons are the SAME decision as `permitted`, block for block.
@@ -15516,7 +15519,10 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
         carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
     };
     let scheduled = with_schedule(&[]);
-    let verdicts = vp.palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, daa).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(verdicts.permitted.contains(&e1_hash) && verdicts.permitted.contains(&e2_hash), "both even-round permits are granted");
     assert!(!verdicts.permitted.contains(&e3_hash), "a round block paying a stranger is not its bond's");
     assert_eq!(verdicts.uses.len(), 2);
@@ -15525,7 +15531,10 @@ async fn adr0125_a_merging_block_grants_exactly_the_permits_its_parent_state_sch
     assert!(verdicts.uses.iter().all(|u| u.span == 0 && u.permit_index == 0));
 
     let spent = with_schedule(&[(0, first_round)]);
-    let verdicts = vp.palw_round_verdicts_v1(&spent, &virtual_state.ghostdag_data, daa).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&spent, &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(!verdicts.permitted.contains(&e1_hash), "a permit in the ledger is not granted again");
     agrees(&verdicts);
     assert_eq!(reason_of(&verdicts, e1_hash), Some(kaspa_consensus_core::palw_exec_view_v1::PalwRoundRefusalV1::PermitAlreadyUsed));
@@ -15629,7 +15638,10 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
     assert!(vp.palw_v2_validate_objects(&scheduled, &bundle.state, &point, &[object(renamed)]).is_err(), "a permit it did not sign");
 
     // Before the burn the merging block would grant the permit to one of the two; after it, to neither.
-    let verdicts = vp.palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&scheduled, &virtual_state.ghostdag_data, virtual_state.daa_score)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(verdicts.permitted.contains(&first_hash) || verdicts.permitted.contains(&second_hash), "an unburned permit is granted");
     let (burned, _) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_extras(
         &scheduled,
@@ -15655,7 +15667,10 @@ async fn adr0125_a_permit_signed_twice_is_evidence_the_chain_accepts_once() {
         burned.bond(&adr0125_harness_bond()).unwrap().slashed > bond.slashed,
         "the bond paid for signing two blocks for one permit"
     );
-    let verdicts = vp.palw_round_verdicts_v1(&burned, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&burned, &virtual_state.ghostdag_data, virtual_state.daa_score)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(
         !verdicts.permitted.contains(&first_hash) && !verdicts.permitted.contains(&second_hash),
         "a burned permit is granted to neither"
@@ -16030,13 +16045,19 @@ async fn adr0130_a_round_block_whose_permit_the_previous_round_held_is_not_grant
         carriage.round_schedules.insert(0, schedule.clone());
         carriage.into_state(&bundle.state, None).expect("a carriage with a schedule rebuilds")
     };
-    let verdicts = vp.palw_round_verdicts_v1(&with(&schedule), &virtual_state.ghostdag_data, daa).expect("the lane is open");
+    let verdicts = vp
+        .palw_round_verdicts_v1(&with(&schedule), &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("the lane is open");
     assert!(verdicts.permitted.contains(&e_held_hash), "the round its parity holds is granted");
     assert!(
         !verdicts.permitted.contains(&e_missed_hash),
         "and the round before or after it is not — the operator does not hold two in a row"
     );
-    let relaxed = vp.palw_round_verdicts_v1(&with(&both_parities), &virtual_state.ghostdag_data, daa).expect("open");
+    let relaxed = vp
+        .palw_round_verdicts_v1(&with(&both_parities), &virtual_state.ghostdag_data, daa)
+        .expect("Round fee budget preparation succeeds")
+        .expect("open");
     assert!(
         relaxed.permitted.contains(&e_held_hash) && relaxed.permitted.contains(&e_missed_hash),
         "the schedule the rule replaced grants both"
@@ -16875,6 +16896,7 @@ mod t12_tir_registration_cap;
 // G14 lane D: a model registration on the REAL consensus path against the offline gate (preflight parity, adversarial
 // registrations, mempool -> template -> fold -> persisted tip -> ConsensusApi reads, replay and reorg).
 mod g14_registration_e2e;
+mod tir_wide_registration_e2e;
 // G14 lane D phase 2: the kernel route folded into PalwChainStateV2 -- a covered lie convicted by a fresh outsider through the real node path.
 mod g14_kernel_route_e2e;
 // Lane LG14-A: the legacy V2 route under G14 -- a bond registered after genesis reserves, localizes and convicts a lie every seat
@@ -17663,6 +17685,7 @@ mod rfc12_reserve_settlement;
 
 mod carrier_bond_rent_conservation;
 
+mod family_supplier_node_candidate;
 mod funded_original_native_candidate;
 
 mod pruning_snapshot_readiness_v1;
@@ -17671,3 +17694,81 @@ mod evm_asof_owned_v2;
 
 #[cfg(feature = "evm")]
 mod evm_view_vertical_v2;
+
+#[path = "tests/native_bond_exit_capacity_v3.rs"]
+mod native_bond_exit_capacity_v3;
+
+/// Actual TestConsensus -> checked ConsensusApi -> selected-sink reader -> cold
+/// DbPalwStateV2Store. Reuse the existing accepted-block/private-class fixture;
+/// no synthetic state, native paid authority, claim, or reader Result is installed.
+#[tokio::test]
+async fn rfc0038_checked_winner_api_actual_cold_tip_corruption_and_missing_state_refuse() {
+    use kaspa_consensus_core::{palw_mode_v2::PalwConsensusMode, palw_native_resource_v1::NativeDecodeErrorV1};
+    use kaspa_database::{
+        create_temp_db,
+        prelude::{CachePolicy, ConnBuilder},
+        registry::DatabaseStorePrefixes,
+    };
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let (_life, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (tx, _rx) = async_channel::unbounded();
+    let mut ctx = TestContext::new(TestConsensus::with_db(db.clone(), &config, tx));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let claim = kaspa_hashes::Hash64::from_u64_word(0x38_0001);
+    let vp = ctx.consensus.virtual_processor();
+    let cold = || {
+        // Both caches are actual production caches. Reopen them rather than
+        // allowing a previously authenticated Arc to hide newly corrupted disk.
+        let reopened = vp.palw_state_v2_store.read().clone_with_new_cache(CachePolicy::Empty);
+        *vp.palw_state_v2_store.write() = reopened;
+        *vp.palw_reader_snapshot.lock() = None;
+    };
+    cold();
+    let (tip, state) = vp.palw_v2_reader_state(&bundle.state).unwrap().expect("real accepted state exists");
+    assert_eq!(tip, vp.lkg_virtual_state.load().ghostdag_data.selected_parent);
+    assert_eq!(state.last_point().unwrap().block, tip);
+    drop(state);
+    assert_eq!(
+        ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim).unwrap(),
+        None,
+        "successful materialized state without this index permits legacy unique fallback, not reader failure"
+    );
+    let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Tip.into();
+    let original = db.get(&prefix).unwrap().expect("actual native tip writer persisted its row");
+    assert!(original.len() > 1);
+
+    // Preserve the real identity row and corrupt ONLY the actual serialized tip.
+    // Its stored native root/accepted point are never fabricated or recomputed.
+    db.put(&prefix, [0xff]).unwrap();
+    cold();
+    assert!(matches!(vp.palw_v2_reader_state(&bundle.state), Err(_)), "cold native store must reject the actual corrupt row");
+    assert!(ctx.consensus.palw_kernel_route_v1().is_none(), "legacy Option reader loses this failure");
+    assert!(
+        matches!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim), Err(NativeDecodeErrorV1::Decode(_))),
+        "checked API must refuse, never return Ok(None) and enable unique fallback"
+    );
+
+    // Exact original bytes restore the original accepted state through a cold
+    // production read; no test-created state is substituted for the old root.
+    db.put(&prefix, original).unwrap();
+    cold();
+    assert_eq!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim).unwrap(), None);
+    vp.palw_state_v2_store.write().delete_tip_for_tests().unwrap();
+    cold();
+    assert!(matches!(vp.palw_v2_reader_state(&bundle.state), Ok(None)));
+    assert!(
+        matches!(ctx.consensus.palw_fp_accounting_winning_carrier_v1(claim), Err(NativeDecodeErrorV1::Decode(_))),
+        "even genuine missing state must not become a successfully absent index"
+    );
+}

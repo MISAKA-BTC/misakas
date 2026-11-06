@@ -120,6 +120,28 @@ pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS: u32 = 106;
 pub(crate) const PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED: u32 = 107;
 /// G14 public prefix-history pages; separated from 107 at the RFC06 + G14 integration merge.
 pub(crate) const PROTOCOL_VERSION_PALW_PREFIX_HISTORY: u32 = 108;
+/// RFC0037 adopted protocol assignment. Advertising it requires the explicit
+/// local --palw-row-stream-ibd opt-in; deployment defaults remain version108.
+pub(crate) const PROTOCOL_VERSION_PALW_ROW_STREAM: u32 = 109;
+pub(crate) fn palw_row_stream_negotiated_v1(version: u32) -> bool {
+    version >= PROTOCOL_VERSION_PALW_ROW_STREAM
+}
+fn local_protocol_version_v1(enabled: bool) -> u32 {
+    if enabled { PROTOCOL_VERSION_PALW_ROW_STREAM } else { PROTOCOL_VERSION }
+}
+#[cfg(test)]
+mod row_stream_protocol_tests {
+    use super::*;
+    #[test]
+    fn row_stream_protocol_assignment_requires_explicit_local_opt_in() {
+        assert_eq!(local_protocol_version_v1(false), 108);
+        assert_eq!(local_protocol_version_v1(true), 109);
+        for peer in [106, 107, 108, 109, u32::MAX] {
+            assert!(!palw_row_stream_negotiated_v1(local_protocol_version_v1(false).min(peer)));
+            assert_eq!(palw_row_stream_negotiated_v1(local_protocol_version_v1(true).min(peer)), peer >= 109);
+        }
+    }
+}
 
 /// Read-only dialect metadata from the same constants used by handshake and
 /// snapshot/history route registration: current, complete snapshot, history pages.
@@ -1900,7 +1922,7 @@ impl FlowContext {
             self.hub.broadcast(make_message!(Payload::InvRelayBlock, InvRelayBlockMessage { hash: Some(hash.into()) }), None).await;
         }
 
-        self.on_new_block(consensus, Default::default(), block, virtual_state_task).await;
+        self.on_new_block(consensus, Default::default(), block, virtual_state_task).await?;
         self.log_block_event(BlockLogEvent::Submit(hash));
 
         Ok(())
@@ -1931,7 +1953,7 @@ impl FlowContext {
         ancestor_batch: BlockProcessingBatch,
         block: Block,
         virtual_state_task: BlockValidationFuture,
-    ) {
+    ) -> Result<(), ProtocolError> {
         let hash = block.hash();
         let mut blocks = self.unorphan_blocks(consensus, hash).await;
 
@@ -1951,6 +1973,10 @@ impl FlowContext {
             // finish virtual resolution. Keep the mempool intact on that
             // retryable local refusal; it is not peer or block invalidity.
             match virtual_state_task.await {
+                Err(RuleError::ConsensusExiting) => {
+                    debug!("block {} virtual work stopped locally; mempool post-processing deferred", block.hash());
+                    return Err(RuleError::ConsensusExiting.into());
+                }
                 Err(RuleError::LocalNativeCapacityUnavailable(unavailable)) => {
                     warn!("block {} awaits local native capacity; mempool post-processing deferred: {unavailable}", block.hash());
                     continue;
@@ -1978,7 +2004,7 @@ impl FlowContext {
 
         // Transaction relay is disabled if the node is out of sync
         if !self.is_nearly_synced(consensus).await {
-            return;
+            return Ok(());
         }
 
         // TODO: Throttle these transactions as well if needed
@@ -2022,6 +2048,7 @@ impl FlowContext {
                 debug!("<> Mempool scanning task is done");
             });
         }
+        Ok(())
     }
 
     pub async fn is_nearly_synced(&self, session: &ConsensusSessionOwned) -> bool {
@@ -2297,6 +2324,26 @@ impl FlowContext {
         ))
     }
 
+    /// The locally authorized carrier path checks its guard in the actual worker.
+    /// Successful insertions follow the ordinary RPC priority and broadcast policy.
+    pub async fn submit_rpc_transaction_guarded(
+        &self,
+        consensus: &ConsensusProxy,
+        transaction: Transaction,
+        rbf_policy: RbfPolicy,
+        guard: kaspa_mining::manager::LocalTransactionSubmissionGuard,
+    ) -> Result<Option<Arc<Transaction>>, ProtocolError> {
+        let priority = rpc_transaction_priority(&transaction);
+        let insertion = self
+            .mining_manager()
+            .clone()
+            .validate_and_insert_transaction_guarded(consensus, transaction, priority, Orphan::Forbidden, rbf_policy, guard)
+            .await?;
+        self.broadcast_transactions(insertion.accepted.iter().map(|tx| tx.id()), rpc_transaction_should_throttle_broadcast(priority))
+            .await;
+        Ok(insertion.removed)
+    }
+
     /// Returns true if the time has come for running the task cleaning mempool transactions.
     async fn should_run_mempool_scanning_task(&self) -> bool {
         self.transactions_spread.write().await.should_run_mempool_scanning_task()
@@ -2500,6 +2547,7 @@ impl ConnectionInitializer for FlowContext {
         let local_daa_score = self.consensus().unguarded_session().get_virtual_daa_score();
         let local_fork_id = kaspa_consensus_core::fork_id_v1::fork_id_v1(&self.config.params, local_daa_score);
 
+        let local_protocol_version = local_protocol_version_v1(self.config.palw_row_stream_ibd);
         // Build the local version message
         // Subnets are not currently supported
         let mut self_version_message = Version::new(
@@ -2507,7 +2555,7 @@ impl ConnectionInitializer for FlowContext {
             self.node_id,
             network_name.clone(),
             None,
-            PROTOCOL_VERSION,
+            local_protocol_version,
             self.config.genesis.hash.as_bytes().to_vec(),
             self.boot_consensus_ids().params.as_bytes().to_vec(),
             self.boot_consensus_ids().identity.as_bytes().to_vec(),
@@ -2619,11 +2667,18 @@ impl ConnectionInitializer for FlowContext {
             }
         }
 
-        debug!("protocol versions - self: {}, peer: {}", PROTOCOL_VERSION, peer_version.protocol_version);
+        debug!("protocol versions - self: {}, peer: {}", local_protocol_version, peer_version.protocol_version);
 
         // Register all flows according to version
-        let (flows, applied_protocol_version) = match peer_version.protocol_version {
-            v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+        let (flows, applied_protocol_version) = match peer_version.protocol_version.min(local_protocol_version) {
+            PROTOCOL_VERSION_PALW_ROW_STREAM => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_ROW_STREAM), PROTOCOL_VERSION_PALW_ROW_STREAM)
+            }
+            PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED => (
+                v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED),
+                PROTOCOL_VERSION_PALW_SNAPSHOT_COMPRESSED,
+            ),
             PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS => (
                 v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS),
                 PROTOCOL_VERSION_PALW_SNAPSHOT_CHUNKS,
@@ -2659,7 +2714,7 @@ impl ConnectionInitializer for FlowContext {
             }
             8 => (v8::register(self.clone(), router.clone(), 8), 8),
             7 => (v7::register(self.clone(), router.clone()), 7),
-            v => return Err(ProtocolError::VersionMismatch(PROTOCOL_VERSION, v)),
+            v => return Err(ProtocolError::VersionMismatch(local_protocol_version, v)),
         };
 
         // Build and register the peer properties

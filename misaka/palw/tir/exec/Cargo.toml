@@ -14,6 +14,14 @@ repository.workspace = true
 name = "tir-exec-bench"
 path = "src/bin/tir-exec-bench.rs"
 
+# Actual stdio child integration needs OS-main dispatch: libtest would write
+# its preamble/footer into the protocol. This is TEST ONLY, not an SDK backend.
+[[test]]
+name = "loaded-wide-process-v2"
+path = "tests/loaded_wide_process_v2.rs"
+harness = false
+required-features = ["node"]
+
 # The IR itself (a leaf crate) and a thread pool. Nothing of consensus: this crate is a fast
 # implementation of the reference evaluator's function, and `kaspa-consensus-core` must never
 # depend on it — the court runs the reference, a node runs this, and the tests hold them equal.
@@ -25,6 +33,7 @@ rayon.workspace = true
 # types those are defined in; the executor itself does not, so it stays a feature.
 kaspa-consensus-core = { workspace = true, optional = true }
 misaka-palw-tir-artifact = { path = "../artifact", optional = true }
+misaka-palw-positive-contract = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 # The node-side bisection prefix state is a keyed BLAKE2b-512 (as the legacy families' is).
@@ -37,7 +46,9 @@ misaka-palw-base0 = { workspace = true, optional = true }
 [features]
 # The fused unit-row kernels on the GPU (macOS): bit-identical to the CPU kernels, behind a node flag.
 metal = []
-node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:libc", "dep:borsh", "dep:blake2b_simd", "dep:tempfile"]
+node = ["dep:kaspa-consensus-core", "dep:misaka-palw-tir-artifact", "dep:misaka-palw-positive-contract", "dep:libc", "dep:borsh", "dep:blake2b_simd", "dep:tempfile"]
+positive-contract = ["node"]
+positive-panel = ["positive-contract"]
 legacy-bench = ["node", "dep:misaka-palw-base0"]
 
 # The Metal bridge is compiled by the build script on macOS (feature `metal`); a build script cannot be feature-gated, so the compiler
@@ -46,11 +57,20 @@ legacy-bench = ["node", "dep:misaka-palw-base0"]
 cc.workspace = true
 
 [dev-dependencies]
+misaka-palw-positive-accounting.workspace = true
 # The golden vectors carry each primitive as its canonical Borsh encoding.
 borsh.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 serde_json.workspace = true
+libcrux-ml-dsa.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Real native journal-store restart fixtures only; no consensus dependency is
+# added to the executor library or to the consensus computation checker.
+kaspa-consensus.workspace = true
+kaspa-database.workspace = true
+rocksdb.workspace = true
 
 [lints]
 workspace = true

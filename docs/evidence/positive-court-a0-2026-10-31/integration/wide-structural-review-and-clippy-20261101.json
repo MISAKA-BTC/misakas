@@ -1,0 +1,52 @@
+{
+  "source_commit": "50339b43a",
+  "prepared_patch": "wide-structural-reviewed-prepared.patch",
+  "prepared_patch_sha256": "badd5b7686b0921634a1f201f684e9f149be272dcfada662b61a0b519f6bd2f9",
+  "applied_difference": "Test name corrected to current canonical roundtrip; not claimed as pre/post golden proof. Existing golden and golden_v2 separately executed.",
+  "reviewers": [
+    {
+      "agent": "positive_g14",
+      "scope": "adopted specification/source selection and patch preparation; no build",
+      "result": "structural scope only; no activation/admission/runtime/court claim"
+    },
+    {
+      "agent": "positive_tests",
+      "scope": "independent static source/context/API/fixture/schedule/state/carry review and Python hash vector",
+      "result": "no blocker; legacy roundtrip limitation clarified"
+    }
+  ],
+  "clippy": {
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "misaka-palw-tir",
+      "--test",
+      "wide_logits_structural",
+      "--offline",
+      "--locked",
+      "--no-deps",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "environment_overrides": {
+      "CARGO_TARGET_DIR": "/Users/wata/.codex/worktrees/positive-court-a0/target",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "exit_code": 0,
+    "log": "wide-structural-clippy-20261101.log",
+    "sha256": "4e8e40a72c5b5eed5fea223ddaedfcb51f6249e1143bcfdc6ce1637bd0005a9a"
+  },
+  "runtime_evidence": "wide-structural-and-goldens-20261101.json",
+  "counts": {
+    "golden": 3,
+    "golden_v2": 11,
+    "wide_structural": 7
+  },
+  "native_whitelist_changed": false,
+  "public_activation_changed": false,
+  "full_goal_complete": false
+}

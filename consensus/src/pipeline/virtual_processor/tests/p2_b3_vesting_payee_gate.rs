@@ -266,8 +266,8 @@ impl Gate {
         let vp = self.chain.vp();
 
         // The block path's set, and the burn obligations beside it: the same predicate, negated.
-        let locked = vp.palw_v2_locked_bond_outpoints(state, now);
-        let burns = vp.palw_v2_bond_burn_obligations(state, now);
+        let locked = vp.palw_v2_locked_bond_outpoints(state, now).unwrap();
+        let burns = vp.palw_v2_bond_burn_obligations(state, now).unwrap();
         for card in PAYEES {
             let outpoint = self.bond(card).0;
             assert_eq!(locked.contains(&outpoint), want, "{name}: card {card} in the block path's locked set");

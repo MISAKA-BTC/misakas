@@ -72,7 +72,7 @@ pub(super) fn post_seal(
     let Some(fee) = charge(builder, ctx, signer, metadata_work(130).unwrap(), false)? else { return Ok(()) };
     builder.slash_bond(*signer, fee)?;
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < deposit as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < deposit as u128 {
         return Ok(());
     }
     let row = FlatNativeSealRowV9 {
@@ -285,7 +285,7 @@ pub(super) fn post(
     }
     let reserve = crate::palw_onboarding_v1::PALW_ONBOARDING_BINDING_RESERVATION_SOMPI_V1;
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < reserve as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < reserve as u128 {
         return Ok(());
     }
     let h = FlatModelVectorHeaderV3 {

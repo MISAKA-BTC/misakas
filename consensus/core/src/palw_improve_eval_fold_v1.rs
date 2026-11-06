@@ -571,7 +571,7 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     }
     // The executed class is an IR class, its layout the one its id binds, and the claim's leaves the chain's
     // count of the derived context.
-    let record = builder.state.tir_classes.get(c.class_id).cloned().ok_or_else(|| refused("the executed class is not an IR class"))?;
+    let record = builder.state.tir_classes.get(c.class_id).ok_or_else(|| refused("the executed class is not an IR class"))?;
     if palw_improve_eval_layout_digest_v1(&tail.subject_layout) != record.layout_digest {
         return Err(refused("the carried layout is not the executed class's"));
     }
@@ -585,6 +585,12 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     if let Some(state) = builder.read().class_lifecycle_refusal(c.class_id) {
         return Err(PalwStateV2Error::ClassNotAdmitting { class: *c.class_id, state });
     }
+    // The dormant evaluation lane still uses legacy GEN/step widths. Its
+    // geometry can count a lifted wide program, which is not reader/court
+    // support. Keep all earlier disabled/status refusals, then deny before the
+    // TIR row clone, legacy context derivation or any claim/reservation write.
+    crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
+    let record = record.clone();
     // **RFC-0017 GAP-E4 (`palw_model_eligibility_v1`)**: an evaluation claim on a class whose eligibility stage carries no
     // reward-bearing right (`Registered`, `Lapsed`) is refused on EVERY network that arms the fence — asked here unconditionally, not
     // only past `palw_audit_2026_09_23` where `check_class_admits_claim` below asks it again. Below the fence `None`.
@@ -673,7 +679,7 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     // The free-prompt arm's exposure ceiling, as it asks it.
     let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(&bond_record) } else { 0 };
     let own = if builder.params.rcore_plus_active_at(daa) {
-        builder.committed_at(c.bond, daa)
+        builder.committed_at(c.bond, daa)?
     } else {
         builder
             .state
@@ -683,7 +689,7 @@ pub(super) fn apply_improvement_eval_commitment_v1(
     };
     let backed = own.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
     let ceiling = if builder.params.rcore_plus_active_at(daa) {
-        own.saturating_add(builder.gate_room(c.bond, daa, PalwRcoreGateV1::Work))
+        own.saturating_add(builder.gate_room(c.bond, daa, PalwRcoreGateV1::Work)?)
     } else {
         (bond_record.collateral as u128)
             .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
@@ -1603,6 +1609,75 @@ mod tests {
     fn generated_of(object: &PalwConsensusObjectV2) -> Vec<u32> {
         let PalwConsensusObjectV2::FreePromptCommitted { eval: Some(eval), .. } = object else { panic!("an evaluation claim") };
         eval.tail.generated.clone()
+    }
+
+    #[test]
+    fn legacy_eval_denies_wide_before_row_clone_and_keeps_dormant_refusal_first() {
+        let p = params();
+        let mut state = evaluating();
+        let object = claim(&state, 0, PalwEvalSubjectV1::Parent, CAROL, 0xA0);
+        let extras = PalwTransitionExtrasV1::default();
+        let mut control = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        apply_object(&mut control, &ctx(1_600), &object).expect("the original narrow evaluation fixture applies");
+        assert!(control.state.claim(&h(0xA0)).is_some());
+
+        // Replace the final commit with an explicit wide cast, keeping the
+        // number of commits and the original layout unchanged. The fixture's
+        // class keys are test identifiers, not authenticated registration IDs.
+        let mut wide = program();
+        let post = &mut wide.blocks[wide.schedule.post as usize];
+        post.nodes[wide.logits as usize].commit = false;
+        let mut out = post.nodes[wide.logits as usize].out.clone();
+        out.dtype = DType::I64;
+        post.nodes.push(misaka_palw_tir::Node {
+            prim: misaka_palw_tir::Prim::Cast,
+            inputs: vec![Ref::Node(wide.logits)],
+            out,
+            commit: true,
+        });
+        wide.logits = (post.nodes.len() - 1) as u16;
+        wide.logits_scheme_id = misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2;
+        let bytes = wide.encode();
+        TirProgramV1::decode_canonical(&bytes).expect("the explicit wide program is structurally valid");
+        let PalwConsensusObjectV2::FreePromptCommitted { prompt_token_ids, work_leaves, eval: Some(eval), .. } = &object else {
+            unreachable!()
+        };
+        let subject =
+            PalwEvalSubjectClassV1 { class_id: h(LINE), artifact_root: h(LINE), program: &wide, layout: &eval.tail.subject_layout };
+        let context = palw_improve_eval_context_v1(&eval.job, &subject, eval.tail.params).unwrap();
+        assert_eq!(
+            palw_improve_eval_step_leaves_v1(&context, prompt_token_ids, &eval.tail.generated, &[]).unwrap(),
+            *work_leaves as u128,
+            "legacy context/count derivation alone is not a width refusal",
+        );
+        let row = state.tir_classes.get_mut(&h(LINE)).unwrap();
+        row.program_bytes = bytes.len() as u32;
+        row.graph_ir_root = crate::palw_tir_artifact_v1::palw_tir_graph_ir_root_v1(&bytes);
+        row.program = std::sync::Arc::new(bytes);
+        row.facts.tiled = false;
+
+        let mut builder = TransitionBuilder::new(&state, &p, false, false, false, false, &extras);
+        let before = builder.state.state_root();
+        let exposure = builder.state.reserved_exposure(&bond(CAROL));
+        let before_job =
+            builder.state.improvement_eval_job(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0).cloned();
+        assert!(matches!(apply_object(&mut builder, &ctx(1_600), &object),
+            Err(PalwStateV2Error::TirFence2Refused(message)) if message.contains("wide Q24")));
+        assert_eq!(builder.state.state_root(), before);
+        assert_eq!(builder.state.reserved_exposure(&bond(CAROL)), exposure);
+        assert!(builder.state.claim(&h(0xA0)).is_none());
+        assert_eq!(
+            builder.state.improvement_eval_job(&h(LINE), 1, 0, &PalwEvalSubjectV1::Parent, PalwScoringKindV1::ExactMatch, 0).cloned(),
+            before_job
+        );
+
+        let disabled = p.with_improve_from_daa(None);
+        let mut builder = TransitionBuilder::new(&state, &disabled, false, false, false, false, &extras);
+        assert_eq!(
+            apply_object(&mut builder, &ctx(1_600), &object),
+            Err(PalwStateV2Error::ImprovementRefused("an evaluation claim below palw_improvement_v1"))
+        );
+        assert_eq!(builder.state.state_root(), before);
     }
 
     #[test]

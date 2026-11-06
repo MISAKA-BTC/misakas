@@ -7,6 +7,12 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum TxRuleError {
+    /// This node could not evaluate a bond's actual collateral. Retry locally;
+    /// this is neither an invalid transaction nor a peer offence.
+    #[error("local native collateral capacity unavailable: {0}")]
+    LocalNativeCapacityUnavailable(crate::palw_native_resource_v1::NativeCoverageV1),
+    #[error("local native collateral context unavailable: {0}")]
+    LocalNativeStateContextUnavailable(crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1),
     #[error("transaction has no inputs")]
     NoTxInputs,
 
@@ -324,3 +330,9 @@ pub enum TxRuleError {
 }
 
 pub type TxResult<T> = std::result::Result<T, TxRuleError>;
+
+impl TxRuleError {
+    pub fn is_local_native_retry_v1(&self) -> bool {
+        matches!(self, Self::LocalNativeCapacityUnavailable(_) | Self::LocalNativeStateContextUnavailable(_))
+    }
+}

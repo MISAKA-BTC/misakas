@@ -142,10 +142,10 @@ impl MaterialProvider for crate::evidence::fs::FsProvider {
         if !is_material_path(path) {
             return Err(ProviderError(format!("{path:?} is not a material path")));
         }
-        match std::fs::read(self.root.join(path)) {
-            Ok(bytes) if bytes.len() > max => Err(ProviderError(format!("{path}: {} bytes, more than asked for", bytes.len()))),
+        use crate::evidence::fs::{BoundedFileError, read_bounded_file};
+        match read_bounded_file(&self.root.join(path), max) {
             Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(BoundedFileError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(ProviderError(e.to_string())),
         }
     }
@@ -818,6 +818,18 @@ pub fn leaf_hashes_v1(leaves: &[PalwArtifactOperandV1]) -> Vec<Hash64> {
 /// its hashes root there) AND every leaf it names is already stored and checks; a claim-material manifest only if every unit it lists is
 /// already stored with that hash. The server has no chain: this is "never serve a manifest you cannot back", not a verdict.
 pub fn server_accepts_material_v1(root: &Path, path: &str, body: &[u8]) -> Result<(), String> {
+    server_accepts_material_while_v1(root, path, body, || Ok(()))
+}
+
+pub(crate) fn server_accepts_material_while_v1(
+    root: &Path,
+    path: &str,
+    body: &[u8],
+    check: impl Fn() -> Result<(), String>,
+) -> Result<(), String> {
+    use crate::evidence::fs::read_bounded_file;
+
+    check()?;
     let parts: Vec<&str> = path.split('/').collect();
     match parts.as_slice() {
         ["artifacts", class, file] if file.ends_with(".manifest") => {
@@ -827,8 +839,10 @@ pub fn server_accepts_material_v1(root: &Path, path: &str, body: &[u8]) -> Resul
             let program = m.check_against_chain(m.network_domain, class, artifact_root, None)?;
             let rows = canonical_leaf_rows_v1(&program)?;
             for (i, row) in rows.iter().enumerate() {
-                let bytes = std::fs::read(root.join(artifact_leaf_path(&artifact_root, i as u32)))
-                    .map_err(|_| format!("leaf {i} is not stored here"))?;
+                check()?;
+                let file = root.join(artifact_leaf_path(&artifact_root, i as u32));
+                let bytes = read_bounded_file(&file, MATERIAL_UNIT_MAX_BYTES)
+                    .map_err(|_| format!("leaf {i} is missing or above the provider unit limit"))?;
                 let operand = decode_exact::<PalwArtifactOperandV1>(&bytes)?;
                 m.verify_leaf(&program, row, i as u32, &operand)?;
             }
@@ -844,8 +858,13 @@ pub fn server_accepts_material_v1(root: &Path, path: &str, body: &[u8]) -> Resul
                 MaterialManifestV1::KernelClaim { entries, .. } | MaterialManifestV1::HeldClaim { entries, .. } => entries,
             };
             for e in entries {
-                let bytes = std::fs::read(root.join(material_unit_path(&claim, &e.stem)))
-                    .map_err(|_| format!("{} is not stored here", e.stem))?;
+                check()?;
+                if !is_stem(&e.stem) || e.len as usize > MATERIAL_UNIT_MAX_BYTES {
+                    return Err("invalid claim-material manifest entry".into());
+                }
+                let file = root.join(material_unit_path(&claim, &e.stem));
+                let bytes = read_bounded_file(&file, e.len as usize)
+                    .map_err(|_| format!("{} is missing or above its manifest length", e.stem))?;
                 if bytes.len() != e.len as usize || unit_hash_v1(&bytes) != e.hash {
                     return Err(format!("{} does not match the manifest", e.stem));
                 }

@@ -1,0 +1,78 @@
+{
+  "tested_source_commit": "13e1fe21337a81fedfc4353e1066fae3d0583c58",
+  "tested_source_tree": "9bc69b389b4d453800c8aaf0ccd54df13689c09d",
+  "owner_style_fix_commit": "1a23ce8f25f5eb522e56c5cb7433915ad1fd1721",
+  "owner_style_fix_runtime_or_clippy_retested": false,
+  "pass_counts": {
+    "wide_integration": 13,
+    "wide_scalar": 2,
+    "compile_fail_doctest": 1,
+    "legacy_close_size": 1,
+    "legacy_close_range": 3,
+    "legacy_gen_close": 5,
+    "legacy_gen_price_default_nonparams_subset": 12
+  },
+  "default_stack_full_gen_price": {
+    "started": 14,
+    "completed_passes_before_abort": 0,
+    "exit_code": 101,
+    "signal": "SIGABRT",
+    "reason": "stack overflow in existing Params-based a_decode_close_past_what_can_be_carried_is_refused_by_name_and_the_catalog_records_the_one_it_admits",
+    "full_target_pass": false
+  },
+  "gen_price_subset_skipped": [
+    "a_decode_close_past_what_can_be_carried_is_refused_by_name_and_the_catalog_records_the_one_it_admits",
+    "the_registrable_real_vocabulary_classes_are_where_the_regime_carries_their_decode_close"
+  ],
+  "strict_clippy_tested_source": {
+    "exit_code": 101,
+    "diagnostic": "clippy::collapsible_if at palw_tir_close_size_v2.rs:164",
+    "sole_diagnostic": true,
+    "test_target_lint_completion_confirmed": false
+  },
+  "docs_runner_phase": "not executed after Clippy failure; separate lightweight check recorded below",
+  "native_archive_sha256_before_after": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2",
+  "historical_manifest_sha256": "45676677b0780e7a63a1298e5c2b5fd698fc16ab72ee29349850deb604ed270e",
+  "copied_files_sha256": {
+    "first-default/01-wide-integration.log": "b75205d6e9f900cb56d895ff5879a3ddb3fb5de569bed9078dd6dede1370e2a2",
+    "first-default/02-wide-scalar.log": "b066a91766ed13242cd639d374bcbd839c5a953b73677f9abd4f2923d48fca40",
+    "first-default/03-v2-compile-fail-doc.log": "3726d0da604f7c773da5bfca8d83292fc938568e2e338cee1ece21670fc12f6d",
+    "first-default/04-legacy-close-size.log": "154b2a44ebcfc6204d17d7021b31d006f129930376111b06ec86a79fce4f64cf",
+    "first-default/05-legacy-close-range.log": "9818fa8dffc799bc17807c91283ed9b740509dbe4005eed78ba56acd28b11925",
+    "first-default/06-legacy-gen-close.log": "324c3d30f3df238fabf04859ee7557d2e722b07e25d3a7ca50c09a04f5ab0e6f",
+    "first-default/07-legacy-gen-close-price.log": "506db4f2d955f10401257e46adcf50c054d4f544fffa3dbfcc13d87d3f6a7498",
+    "first-default/validation.json": "d2cb9c41b7b68cec084a020a46eae8b5861adc22d48379749decde1516b5d859",
+    "first-default/runner.py": "d6d47c58ae7b11a0a640edd0f30aeaa71268dbf78aea1eb7e2dd23eda966a7cf",
+    "nonparams-clippy/01-gen-price-default-nonparams.log": "c38e96319e99c16e61172fe6d3a3fcd0655c3b15ec3dbbcc394b5ee0a5921a88",
+    "nonparams-clippy/02-strict-core-new-target-clippy.log": "1204d0d82244a577fa0e501c1945318e314da81f1929d45890e1f4963556236d",
+    "nonparams-clippy/validation.json": "a4c48f98deaccf1d102edd899c51d69ecb5a1b72b3445b11cca7aa262e359118",
+    "nonparams-clippy/runner.py": "6fcdc5b3041a66ef070d55f3422a69b90d8adba84a680508f07218c4e51e07b0",
+    "binary-artifacts.json": "89b243d115d9c1b6d6cf382ae801fcd231c151aa1e71b7096ac2e07d1aa017a5",
+    "historical-preservation.json": "45676677b0780e7a63a1298e5c2b5fd698fc16ab72ee29349850deb604ed270e",
+    "docs-check-after-style-fix.log": "34f332e2601588eb00707a2a58de66d7a859cda8aa08d29f398b0752447019c0",
+    "docs-check-final-evidence.log": "fbe0f576d82fffa39f3a9c7e4eb4c6d376da73d2451f4a5eff909f6059445e8f"
+  },
+  "limits": [
+    "Runtime results describe only tested 13e source, not the style-fix source or Root integration candidate",
+    "Full GEN price default-stack target is incomplete; the 12-test subset is not all 14 tests",
+    "No counts from historical c129 or other candidates are combined",
+    "TIR local sizing and legacy DATA entry checks do not establish native admission/activation or complete wide-Court carriage"
+  ],
+  "independent_review": "Completed-source/env/raw/archive hash and counts checked read-only by independent_validation; style fix requires Root combined candidate validation",
+  "docs_after_owner_style_fix": {
+    "source_head": "1a23ce8f25f5eb522e56c5cb7433915ad1fd1721",
+    "argv": [
+      "python3",
+      "docs/maintenance/check_docs.py"
+    ],
+    "exit_code": 0,
+    "raw_log_sha256": "34f332e2601588eb00707a2a58de66d7a859cda8aa08d29f398b0752447019c0",
+    "scope": "Documentation/link validation only; not runtime or Clippy on style-fix source"
+  },
+  "docs_final_evidence": {
+    "exit_code": 0,
+    "source_head": "1a23ce8f25f5eb522e56c5cb7433915ad1fd1721",
+    "report_sha256": "39c9b8450d3de2c4b121ece1047a99f7cbf44cd844393d4a0fc837bcc27a9b1d",
+    "raw_log_sha256": "fbe0f576d82fffa39f3a9c7e4eb4c6d376da73d2451f4a5eff909f6059445e8f"
+  }
+}

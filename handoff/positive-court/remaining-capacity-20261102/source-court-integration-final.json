@@ -1,0 +1,80 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "misaka-palw-tir-exec",
+    "--features",
+    "positive-panel",
+    "--test",
+    "positive_court_a4_integration",
+    "--config",
+    "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/native-links-r2-reference-20261102.toml",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.debug=0",
+    "--config",
+    "profile.dev.package.kaspa-consensus.opt-level=0",
+    "--config",
+    "profile.dev.package.kaspa-consensus.debug=0",
+    "--config",
+    "profile.test.package.kaspa-consensus-core.opt-level=0",
+    "--config",
+    "profile.test.package.kaspa-consensus-core.debug=0",
+    "--config",
+    "profile.test.package.kaspa-consensus.opt-level=0",
+    "--config",
+    "profile.test.package.kaspa-consensus.debug=0",
+    "--",
+    "--nocapture",
+    "--test-threads=1"
+  ],
+  "exit_code": 0,
+  "stop_reason": null,
+  "elapsed_seconds": 149.805,
+  "source_before": {
+    "misaka/palw/positive-contract/src/lib.rs": "ee8ac9a0559ad753feafe1989830456c218246332824a316d7e61f84973cfacb",
+    "misaka/palw/positive-contract/src/reservations.rs": "d2300eb3e53d20238a0a11ff4537874d984119ef3de0829fbfe133624291010f",
+    "misaka/palw/positive-contract/tests/remaining_capacity.rs": "9b26f2fe98e1abaee05c8ff859b3d58fe881645124ef7a40a83583cd5be75ac6",
+    "consensus/core/src/palw_positive_common_source_replay_v2.rs": "5f1d8eb7995c248aaff0b8709435778a0e80a920d09a65545e9510479ae06512",
+    "misaka/palw/tir/exec/tests/positive_court_a4_integration/positive_court_a6_source.rs": "057f92d59e592578315f08bb017dee4b95de494be212016b86e9552838bcb2e7",
+    "Cargo.lock": "be8260757d300e4284286e6771e82631aeb08396f7a1cd258b742fbf1215cc51"
+  },
+  "source_after": {
+    "misaka/palw/positive-contract/src/lib.rs": "ee8ac9a0559ad753feafe1989830456c218246332824a316d7e61f84973cfacb",
+    "misaka/palw/positive-contract/src/reservations.rs": "d2300eb3e53d20238a0a11ff4537874d984119ef3de0829fbfe133624291010f",
+    "misaka/palw/positive-contract/tests/remaining_capacity.rs": "9b26f2fe98e1abaee05c8ff859b3d58fe881645124ef7a40a83583cd5be75ac6",
+    "consensus/core/src/palw_positive_common_source_replay_v2.rs": "5f1d8eb7995c248aaff0b8709435778a0e80a920d09a65545e9510479ae06512",
+    "misaka/palw/tir/exec/tests/positive_court_a4_integration/positive_court_a6_source.rs": "057f92d59e592578315f08bb017dee4b95de494be212016b86e9552838bcb2e7",
+    "Cargo.lock": "be8260757d300e4284286e6771e82631aeb08396f7a1cd258b742fbf1215cc51"
+  },
+  "environment_overrides": {
+    "CARGO_TARGET_DIR": "/Users/wata/Downloads/MISAKA-testnet/target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_INCREMENTAL": "0",
+    "CXX": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/plain-clippy4-7a0-20261102-forbid-cxx.py",
+    "ROCKSDB_COMPILE": "0",
+    "SNAPPY_COMPILE": "0"
+  },
+  "RUST_MIN_STACK": null,
+  "RUSTFLAGS": null,
+  "minimum_free_bytes": 548253696,
+  "test_summaries": [
+    [
+      40,
+      0,
+      0
+    ]
+  ],
+  "log": "source-court-integration-final.log",
+  "log_sha256": "6b4d2c04ccfd35562e843d4af3eebd1605937a1752453bc8ec45b2d4f1e23846",
+  "binary": {
+    "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_court_a4_integration-b0b7dbbb6d304557",
+    "bytes": 61064624,
+    "sha256": "56b49be31c315aad0432e74d0a84b34175c990652ecf29e6de0431d7a600b803"
+  },
+  "remaining_process_group_members": []
+}

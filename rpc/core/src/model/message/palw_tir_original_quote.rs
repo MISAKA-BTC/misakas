@@ -49,6 +49,10 @@ pub struct GetPalwTirOriginalQuoteResponse {
     pub quote_daa: u64,
     /// Borsh hex of `PalwTirPublicAllocationPlanV1`; empty unless `quoted`.
     pub plan_hex: String,
+    /// Optional JSON diagnostics for an over-horizon refusal. Borsh plan,
+    /// binary RPC v1 and protobuf encodings carry their existing fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub door_diagnostics: Option<Box<kaspa_consensus_core::palw_tir_public_allocation_v1::PalwTirDoorDiagnosticsV1>>,
 }
 
 impl Serializer for GetPalwTirOriginalQuoteResponse {
@@ -74,7 +78,7 @@ impl Deserializer for GetPalwTirOriginalQuoteResponse {
         let refusal = load!(String, reader)?;
         let quote_daa = load!(u64, reader)?;
         let plan_hex = load!(String, reader)?;
-        Ok(Self { available, quoted, refusal, quote_daa, plan_hex })
+        Ok(Self { available, quoted, refusal, quote_daa, plan_hex, door_diagnostics: None })
     }
 }
 
@@ -95,7 +99,11 @@ mod tests {
             refusal: String::new(),
             quote_daa: 17_001,
             plan_hex: "00ff".into(),
+            door_diagnostics: None,
         };
+        let old_json = serde_json::to_value(&response).unwrap();
+        assert!(old_json.get("doorDiagnostics").is_none());
+        assert!(serde_json::from_value::<GetPalwTirOriginalQuoteResponse>(old_json).unwrap().door_diagnostics.is_none());
         let mut bytes = Vec::new();
         Serializer::serialize(&response, &mut bytes).unwrap();
         let back = <GetPalwTirOriginalQuoteResponse as Deserializer>::deserialize(&mut &bytes[..]).unwrap();

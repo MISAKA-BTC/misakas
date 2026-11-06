@@ -1,0 +1,8 @@
+test_normal_exit (test_process_control.ProcessGroups) ... ok
+test_successful_parent_must_not_leave_a_log_writer (test_process_control.ProcessGroups) ... ok
+test_timeout_kills_term_ignoring_parent_and_grandchild (test_process_control.ProcessGroups) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 2.815s
+
+OK

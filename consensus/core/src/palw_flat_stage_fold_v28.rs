@@ -503,8 +503,8 @@ fn fund_impl(
     }
     let requester_payout = requester.payout_payload;
     let producer_payout = producer.payout_payload;
-    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < request.reward as u128
-        || (producer.collateral as u128).saturating_sub(builder.committed_at(&request.producer, ctx.daa_score))
+    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < request.reward as u128
+        || (producer.collateral as u128).saturating_sub(builder.committed_at(&request.producer, ctx.daa_score)?)
             < m.final_basis.original_producer_reserve_sompi as u128
     {
         return Err(refused("stage28 actual original requester escrow or whole-claim collectible producer reserve unavailable"));
@@ -1216,7 +1216,7 @@ fn owner(
     }
     let ledger = super::super::palw_kernel_route_fold_v1::route_ledger_policy_v1(builder)?;
     let fee = ledger.job_fee.max(1);
-    let free = (bond.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score));
+    let free = (bond.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?);
     if free < fee as u128 {
         return Err(refused("stage28 actual paid owner fee unavailable"));
     }

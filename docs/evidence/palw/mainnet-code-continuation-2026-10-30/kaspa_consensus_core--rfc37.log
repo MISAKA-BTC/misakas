@@ -1,0 +1,11 @@
+
+running 6 tests
+test palw_nested_row_stream_v1::tests::rfc37_native_aux_stream_matches_existing_root_without_collection_buffer ... ok
+test palw_nested_row_stream_v1::tests::rfc37_nested_panel_chunks_preserve_exact_frozen_digest_and_reject_missing_chunks ... ok
+test palw_nested_row_stream_v1::tests::rfc37_nested_kernel_stream_matches_independent_ledger_and_rejects_numeric_reordering ... ok
+test palw_state_v2::tests::bond_budget_fold_v1::rfc37_budget_generation_roundtrips_an_actual_paid_consumer_fold_snapshot ... ok
+test palw_state_v2::tests::bond_budget_fold_v1::rfc37_budget_all_tables_and_income_tails_match_frozen_header_grammar ... ok
+test palw_state_v2::tests::claim_local_rewards_v1::rfc37_nested_kernel_generation_exports_the_exact_committed_state ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 5334 filtered out; finished in 0.03s
+

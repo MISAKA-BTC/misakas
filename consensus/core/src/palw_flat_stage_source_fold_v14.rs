@@ -234,7 +234,7 @@ pub(super) fn request(
     }
     let bond = fee.plan.source_unit_fee;
     let payer = builder.state.bonds.get(signer).unwrap();
-    if bond == 0 || (payer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if bond == 0 || (payer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Err(refused("stage source original requester delivery bond unavailable"));
     }
     let mut shape = [0; 4];

@@ -2,8 +2,10 @@
 //!
 //! This module supplies the deterministic checkpoint checks. Runtime admission must derive the
 //! records from committed inputs and reservations; a producer's list is never the authority.
-//! Integration status: dependency/checkpoint foundations and the dormant fence only. Runtime
-//! admission, reward/credit folding, native lifecycle, pruning and IBD are not connected yet.
+//! Integration status: checkpoint records, the reward reader and the dependency closure read the
+//! same retained provenance (committed claim, execution-root and prefix-envelope edges). Arming
+//! still waits on measured material-retention drills. Native lifecycle, pruning and IBD drills
+//! are not that measurement.
 //! Hashes below authenticate bytes only. Certification remains the selected validators' approval
 //! under Gate C's stated honest-fraction premise; no computation-validity proof is introduced.
 use crate::palw_state_v2::PalwBlockContextV2;
@@ -14,6 +16,16 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 #[path = "palw_claim_local_origins_v1.rs"]
 mod origins_v1;
 pub use origins_v1::*;
+
+#[path = "palw_claim_local_native_events_v1.rs"]
+mod native_events_v1;
+pub use native_events_v1::*;
+
+#[path = "palw_claim_local_prefix_v1.rs"]
+pub mod prefix_v1;
+
+#[path = "palw_claim_local_readiness_v1.rs"]
+pub mod readiness_v1;
 
 pub const PALW_CLAIM_LOCAL_TABLE_V1: u8 = 144;
 
@@ -53,6 +65,17 @@ pub enum PalwClaimLocalInputV1 {
         job_pin: Hash64,
         public_job: Option<Box<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3>>,
         eval: Option<Box<(crate::palw_improve_eval_v1::PalwEvalJobV1, crate::palw_improve_eval_v1::PalwEvalClaimTailV1)>>,
+    },
+    /// RFC0040 appended tag: the same accepted carrier's signed provenance.
+    PrefixDependency {
+        claim: Hash64,
+        envelope: Box<prefix_v1::PalwPrefixDependencyEnvelopeV1>,
+    },
+    /// The consumer claim spent an output of the transaction that settled `source`.
+    /// The outpoint is not guessed: the source is the stored winning-carrier row.
+    ConsumedCarrier {
+        consumer: Hash64,
+        source: Hash64,
     },
 }
 
@@ -1008,10 +1031,18 @@ impl crate::config::params::Params {
         if from != mirror {
             return Err(PalwModeV2Error::Invalid("claim-local settlement fence disagrees with its state mirror"));
         }
-        if from.is_some() {
-            return Err(PalwModeV2Error::Invalid(
-                "RFC-0023 stage 2 cannot arm: runtime integration is incomplete and material retention / transition drills are unmeasured",
-            ));
+        if let Some(activation) = from {
+            // Fixed reviewed implementation/profile evidence, analogous to
+            // frame-cost records. Historical measured artifact provenance is
+            // not a self-hash check of this executable. Registry stays empty
+            // until genuine reviewed campaign/drill/resource evidence exists.
+            readiness_v1::claim_local_readiness_record_admits_v1(
+                self.genesis.hash,
+                activation,
+                self.consensus_params_id(),
+                readiness_v1::PALW_CLAIM_LOCAL_READINESS_RECORDS_V1,
+            )
+            .map_err(|why| PalwModeV2Error::Invalid(why.reason_v1()))?;
         }
         Ok(())
     }
@@ -1022,6 +1053,22 @@ mod fence_tests {
     use crate::config::params::{
         DEVNET_PARAMS, ForkActivation, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_t12_shipped_params,
     };
+    #[test]
+    fn rfc23s2_reviewed_readiness_retains_mirror_refusal_before_record_lookup() {
+        let mut p = palw_t12_shipped_params();
+        p.palw_claim_local_settlement_v1 = Some(ForkActivation::new(100));
+        assert!(matches!(
+            p.validate_palw_claim_local_settlement_v1(),
+            Err(crate::palw_mode_v2::PalwModeV2Error::Invalid("claim-local settlement fence disagrees with its state mirror"))
+        ));
+        p.sync_palw_claim_local_settlement_v1();
+        assert!(matches!(
+            p.validate_palw_claim_local_settlement_v1(),
+            Err(crate::palw_mode_v2::PalwModeV2Error::Invalid(
+                "RFC-0023 stage 2 cannot arm: no pinned measured readiness record for this genesis and activation"
+            ))
+        ));
+    }
     #[test]
     fn rfc23s2_fence_is_dormant_some_only_and_never_armable_without_measurements() {
         for mut p in [MAINNET_PARAMS, TESTNET_PARAMS, SIMNET_PARAMS, DEVNET_PARAMS, palw_t12_shipped_params()] {
@@ -1067,5 +1114,75 @@ mod local_capacity_classification_tests {
                 PalwClaimCheckpointErrorV1::Semantic("malformed")
             ));
         }
+    }
+}
+
+/// Owned counterpart of the checked checkpoint reader for native settlement.
+/// No decoder/Clone/serialization or public constructor can mint this capability.
+/// Mutable graph reads serialize use of the retained workspace reservation.
+pub struct PalwOwnedValidatedClaimCheckpointV1 {
+    checkpoint: crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>,
+    _workspace: Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>,
+}
+impl PalwOwnedValidatedClaimCheckpointV1 {
+    pub(crate) fn from_expected_native_v1(
+        checkpoint: crate::palw_native_resource_v1::NativeRetainedV1<PalwClaimLocalCheckpointV1>,
+    ) -> Result<Self, PalwClaimCheckpointErrorV1> {
+        let workspace = {
+            let checked = checkpoint.validate(&checkpoint.point, &checkpoint.records, &checkpoint.liability_state)?;
+            checked._workspace
+        };
+        Ok(Self { checkpoint, _workspace: workspace })
+    }
+    pub fn contains_v1(&self, work: PalwClaimLocalWorkRefV1) -> bool {
+        self.checkpoint.records.contains_key(&work)
+    }
+    pub fn credit_eligible_v1(&mut self, work: PalwClaimLocalWorkRefV1) -> bool {
+        self.checkpoint.credit_eligible(work)
+    }
+    pub fn irreversible_eligible_v1(&mut self, work: PalwClaimLocalWorkRefV1) -> bool {
+        self.checkpoint.irreversible_eligible(work)
+    }
+    pub fn lifecycle_preserved_through_v1(&self, blue: u64) -> bool {
+        PalwValidatedClaimCheckpointV1 { checkpoint: &self.checkpoint, _workspace: None }.lifecycle_preserved_through(blue)
+    }
+}
+
+/// Read-only allocation facts of the actually returned owned checkpoint. Output
+/// fit is a necessary check, not a proof of the complete construction peak.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwCheckpointOwnedFootprintV20 {
+    pub heap_bytes: u64,
+    pub canonical_bytes: u64,
+    pub records: u64,
+    pub material_rows: u64,
+    pub material_bytes: u64,
+    pub input_references: u64,
+    pub material_references: u64,
+}
+impl PalwOwnedValidatedClaimCheckpointV1 {
+    pub fn allocation_footprint_v20(
+        &self,
+    ) -> Result<PalwCheckpointOwnedFootprintV20, crate::palw_native_resource_v1::NativeCoverageV1> {
+        use crate::palw_native_resource_v1::{NativeCoverageV1, NativeHeapV1};
+        let overflow = || NativeCoverageV1::overflow::<PalwClaimLocalCheckpointV1>("owned checkpoint footprint");
+        let heap = self.checkpoint.native_heap_v1("actual owned checkpoint data");
+        let heap_bytes = heap.bytes().ok_or(heap)?;
+        let canonical_bytes = borsh::object_length(&*self.checkpoint).map_err(|_| overflow())? as u64;
+        let material_bytes =
+            self.checkpoint.material.values().try_fold(0u64, |n, raw| n.checked_add(raw.len() as u64).ok_or_else(overflow))?;
+        let input_references =
+            self.checkpoint.records.values().try_fold(0u64, |n, r| n.checked_add(r.inputs.len() as u64).ok_or_else(overflow))?;
+        let material_references =
+            self.checkpoint.records.values().try_fold(0u64, |n, r| n.checked_add(r.material.len() as u64).ok_or_else(overflow))?;
+        Ok(PalwCheckpointOwnedFootprintV20 {
+            heap_bytes,
+            canonical_bytes,
+            records: self.checkpoint.records.len() as u64,
+            material_rows: self.checkpoint.material.len() as u64,
+            material_bytes,
+            input_references,
+            material_references,
+        })
     }
 }

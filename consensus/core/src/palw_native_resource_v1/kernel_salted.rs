@@ -517,17 +517,29 @@ impl ReservedKernelLedgerV1 {
         producer: Digest,
         commit_daa: u64,
     ) -> Result<(), String> {
+        self.try_replay_salted_claim_checked_v4(commit, salt, producer, commit_daa).map_err(|error| error.to_string())
+    }
+    pub fn try_replay_salted_claim_checked_v4(
+        &mut self,
+        commit: &SaltedCommitV1,
+        salt: &Digest,
+        producer: Digest,
+        commit_daa: u64,
+    ) -> Result<(), super::NativeDecodeErrorV1<String>> {
         if self.lease.is_some() || native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1() {
-            let requests = replay_requests_v4(&self.ledger, commit).map_err(|e| format!("local native capacity: {e}"))?;
+            let requests = replay_requests_v4(&self.ledger, commit).map_err(super::NativeDecodeErrorV1::Resource)?;
             if let Some(lease) = &mut self.lease {
-                lease.grow_memory_v1(requests).map_err(|e| format!("local native capacity: {e}"))?;
+                lease.grow_memory_v1(requests).map_err(super::NativeDecodeErrorV1::Resource)?;
             } else {
-                self.lease = reserve_native_requests_v1(requests).map_err(|e| format!("local native capacity: {e}"))?;
+                self.lease = reserve_native_requests_v1(requests).map_err(super::NativeDecodeErrorV1::Resource)?;
             }
         }
-        self.ledger.begin_block(commit_daa).map_err(|e| e.to_string())?;
+        self.ledger.begin_block(commit_daa).map_err(|e| super::NativeDecodeErrorV1::Decode(e.to_string()))?;
         let object = KernelRouteObjectV1::CommitClaimSalted { salt: *salt, commit: commit.clone() };
-        let events = self.ledger.apply_object(&object, &AuthV1 { signer_bond: producer }).map_err(|e| e.to_string())?;
+        let events = self
+            .ledger
+            .apply_object(&object, &AuthV1 { signer_bond: producer })
+            .map_err(|e| super::NativeDecodeErrorV1::Decode(e.to_string()))?;
         drop(events);
         Ok(())
     }
@@ -591,6 +603,13 @@ mod tests {
             segment_roots: vec![[13; 64]],
         };
         assert!(candidate.try_replay_salted_claim_v4(&commit, &[14; 64], [11; 64], before + 1).is_err());
+        assert!(
+            matches!(
+                candidate.try_replay_salted_claim_checked_v4(&commit, &[14; 64], [11; 64], before + 1),
+                Err(super::super::NativeDecodeErrorV1::Resource(_))
+            ),
+            "the classified quote path preserves unavailable native source shape before advancing the candidate"
+        );
         assert_eq!(candidate.daa, before);
         assert!(candidate.claims.is_empty());
         assert_eq!(checker.outstanding(), (0, 0));

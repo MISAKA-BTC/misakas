@@ -3,6 +3,32 @@
 use super::*;
 
 impl PalwChainStateV2 {
+    pub(super) fn has_claim_for_job_v2(&self, job: Hash64) -> bool {
+        if job == ZERO_HASH64 {
+            return self.claims.len() > self.claims_by_job.len();
+        }
+        let last = Hash64::from_bytes([u8::MAX; 64]);
+        self.claims_by_job.range((job, ZERO_HASH64)..=(job, last)).next().is_some()
+    }
+
+    pub(super) fn replace_claim_row_v2(&mut self, key: Hash64, new: Option<PalwClaimStateV2>) -> Option<PalwClaimStateV2> {
+        let new_job = new.as_ref().map(|row| row.job_identity).filter(|job| *job != ZERO_HASH64);
+        let old = match new {
+            Some(row) => self.claims.insert(key, row),
+            None => self.claims.remove(&key),
+        };
+        let old_job = old.as_ref().map(|row| row.job_identity).filter(|job| *job != ZERO_HASH64);
+        if old_job != new_job {
+            if let Some(job) = old_job {
+                self.claims_by_job.remove(&(job, key));
+            }
+            if let Some(job) = new_job {
+                self.claims_by_job.insert((job, key));
+            }
+        }
+        old
+    }
+
     /// The empty state a V2 network boots from. No bonds, no classes, no weight, frontier at the
     /// zero point.
     pub fn genesis() -> Self {
@@ -17,6 +43,7 @@ impl PalwChainStateV2 {
             capabilities: BTreeMap::new(),
             pending_payouts: BTreeMap::new(),
             claims: BTreeMap::new(),
+            claims_by_job: BTreeSet::new(),
             panels: BTreeMap::new(),
             court_sessions: BTreeMap::new(),
             epoch_counters: BTreeMap::new(),
@@ -40,6 +67,10 @@ impl PalwChainStateV2 {
             class_court_windows: BTreeMap::new(),
             vertex: crate::palw_vertex_v1::PalwVertexStateV1::default(),
             exec_v2: crate::palw_work_slice_v2::PalwExecV2StateV1::default(),
+            exec_v2_source_roots: BTreeMap::new(),
+            claim_local_legacy_carriers_v9: BTreeSet::new(),
+            claim_local_legacy_carriers_ready_v9: true,
+            execution_cohort_census_v15: palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15::genesis_v15(),
             exec_v2_rewards: BTreeMap::new(),
             exec_v2_reward_holds: BTreeMap::new(),
             exec_v2_origins: BTreeMap::new(),
@@ -52,6 +83,7 @@ impl PalwChainStateV2 {
             seat_availability: BTreeMap::new(),
             seat_root_readiness: BTreeMap::new(),
             kernel_route: None,
+            claim_local_gc_v3: Default::default(),
             bond_budget: None,
             panel_duties: BTreeMap::new(),
             panel_reserve_sompi: 0,
@@ -140,6 +172,7 @@ impl PalwChainStateV2 {
             legacy_disputes: BTreeMap::new(),
             tir_designated: Default::default(),
             funded_escrows: BTreeMap::new(),
+            funded_escrows_by_claim: BTreeSet::new(),
             d2_readiness: BTreeMap::new(),
             fp_public_jobs: BTreeMap::new(),
             panel_da_disclosures: BTreeMap::new(),
@@ -154,6 +187,7 @@ impl PalwChainStateV2 {
             staged_inventory_by_owner: BTreeSet::new(),
             staged_tir_by_owner: BTreeSet::new(),
             staged_tir_by_claim: BTreeMap::new(),
+            material_contracts_by_member_v8: BTreeSet::new(),
             staged_court_service_by_claim: BTreeMap::new(),
             staged_tir_claims_by_producer: BTreeSet::new(),
             staged_tir_responders: BTreeSet::new(),
@@ -1965,10 +1999,7 @@ impl PalwChainStateV2 {
         liability: Option<crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>,
         open_courts: u32,
     ) {
-        match claim {
-            Some(claim) => self.claims.insert(claim_id, claim),
-            None => self.claims.remove(&claim_id),
-        };
+        self.replace_claim_row_v2(claim_id, claim);
         match panel {
             Some(panel) => self.panels.insert(claim_id, panel),
             None => self.panels.remove(&claim_id),
@@ -1994,7 +2025,7 @@ impl PalwChainStateV2 {
     /// Tests only (G14 r6): replace a claim row in place (e.g. voided by a conviction the test does not fold).
     #[cfg(test)]
     pub(crate) fn set_claim_for_tests(&mut self, claim_id: Hash64, claim: PalwClaimStateV2) {
-        self.claims.insert(claim_id, claim);
+        self.replace_claim_row_v2(claim_id, Some(claim));
     }
 
     /// **What `bond` can still lock for a `Valid` signature at `now_daa`**: its posted collateral
@@ -2023,6 +2054,21 @@ impl PalwChainStateV2 {
             .map(|(_, lock)| lock.amount)
             .fold(0u128, u128::saturating_add);
         crate::palw_panel_var_v1::palw_available_slashable_v1(posted, locked)
+    }
+
+    /// The legacy lock-only room with exact additional native budget duties.
+    /// Unlike the full committed ledger, this path has not counted a native
+    /// job's original reserve, so it subtracts the whole held native liability.
+    pub fn palw_slashable_available_checked_v2(
+        &self,
+        bond: &PalwBondKeyV2,
+        now_daa: u64,
+        settled_anchor_depth: Option<u64>,
+        window_court: u64,
+    ) -> Result<u128, PalwStateV2Error> {
+        let legacy = self.palw_slashable_available_v1(bond, now_daa, settled_anchor_depth, window_court);
+        let held = crate::palw_native_budget_binding_v1::native_budget_held_for_bond_v1(self, bond, now_daa)?;
+        Ok(legacy.saturating_sub(held))
     }
 
     /// **The `Valid` locks on `bond` the fold counts as live at `now_daa`, by claim** — the filter
@@ -2496,11 +2542,18 @@ impl PalwChainStateV2 {
     /// (`CourtSharedQuery`) recorded for it, if any. Rooted: the rows come and go with the staged-court delta on reorg.
     /// G14 lane r5-f02-wire: the index's first kind-0 entry is the earliest notice (entries sort by `(kind, daa, key)`).
     pub fn court_shared_initial_notice_daa_v1(&self, claim: Hash64) -> Option<u64> {
+        self.court_shared_initial_notice_v1(claim).map(|(daa, _)| daa)
+    }
+
+    pub(crate) fn court_shared_initial_notice_v1(
+        &self,
+        claim: Hash64,
+    ) -> Option<(u64, &crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)> {
         self.staged_court_service_by_claim
             .get(&claim)?
             .iter()
             .find(|(kind, _, _)| *kind == crate::palw_staged_court_state_v1::COURT_INDEX_SHARED_NOTICE_V1)
-            .map(|(_, daa, _)| *daa)
+            .map(|(_, daa, key)| (*daa, key))
     }
 
     /// Ordered read of staged rows in `[from, to]` (RFC-0032 A material intake).
@@ -2515,6 +2568,19 @@ impl PalwChainStateV2 {
         ),
     > + 'a {
         self.staged_courts.range(*from..=*to)
+    }
+
+    /// Borrow every indexed native acquisition for the candidate frame.
+    pub(crate) fn tir_owner_schedule_acquisitions_v2(
+        &self,
+        claim: Hash64,
+    ) -> impl Iterator<Item = crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1> + '_ {
+        use crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1 as Key;
+        self.staged_tir_by_claim
+            .get(&claim)
+            .into_iter()
+            .flatten()
+            .filter_map(|(_, key)| matches!(key, Key::TirAcquisition(..)).then_some(*key))
     }
 
     /// Derived lifecycle consistency only, not proof of a new paid acquisition
@@ -2539,6 +2605,7 @@ impl PalwChainStateV2 {
                     | Key::TirPreparation(..)
                     | Key::TirClaim(_)
                     | Key::TirWitness(..)
+                    | Key::TirOwnerSchedule(_)
             ) {
                 let (at, row_holds) = palw_staged_court_fold_v1::index_rows(*key, row);
                 due.insert((at, *key));
@@ -2588,6 +2655,7 @@ impl PalwChainStateV2 {
                         | Key::TirPreparation(..)
                         | Key::TirClaim(_)
                         | Key::TirWitness(..)
+                        | Key::TirOwnerSchedule(_)
                 )
             })
             .copied()
@@ -2844,17 +2912,66 @@ impl PalwChainStateV2 {
     /// (`kernel_route_offset`); a client never trusts it, but compares it with what
     /// [`Self::kernel_route_offset_of_preimage_v1`] derives from the authenticated preimage alone.
     pub fn state_root_preimage_located_v1(&self) -> (Vec<u8>, Option<usize>) {
-        let mut kernel_route_offset = None;
+        self.visit_direct_state_root_collections_v1(|_, _, _, _| Ok(())).expect("the root-only visitor performs no fallible I/O")
+    }
+
+    /// Export refuses unallocated nested ledger tables before any output.
+    pub fn require_direct_row_export_v1(&self) -> std::io::Result<()> {
+        if self.kernel_route.as_ref().is_some_and(|route| route.rows.keys().any(|(table, _)| *table >= 32)) {
+            return Err(std::io::Error::other("unknown nested ledger table"));
+        }
+        Ok(())
+    }
+
+    /// Visit every direct collection at the exact offset where this root writer
+    /// commits it. The row emitter serializes borrowed keys and full values to
+    /// the supplied writer, one at a time, without a collection-sized buffer.
+    /// Nested kernel, panel and budget engines expose explicit streaming
+    /// adapters for their frozen hash grammars. Scalars remain in the returned
+    /// canonical preimage. The older method name remains source-compatible.
+    pub fn visit_direct_state_root_collections_v1(
+        &self,
+        mut visit: impl FnMut(&[u8], usize, u64, &mut dyn FnMut(&mut dyn std::io::Write) -> std::io::Result<()>) -> std::io::Result<()>,
+    ) -> std::io::Result<(Vec<u8>, Option<usize>)> {
         let mut state = RootPreimageV1::default();
+        macro_rules! direct_collection {
+            ($label:expr, $map:expr, $root:expr) => {{
+                let map = $map;
+                let mut emit = |mut writer: &mut dyn std::io::Write| -> std::io::Result<()> {
+                    for (key, value) in map {
+                        let key_len =
+                            u32::try_from(borsh::object_length(key)?).map_err(|_| std::io::Error::other("row key exceeds u32"))?;
+                        let value_len =
+                            u32::try_from(borsh::object_length(value)?).map_err(|_| std::io::Error::other("row value exceeds u32"))?;
+                        writer.write_all(&key_len.to_le_bytes())?;
+                        borsh::BorshSerialize::serialize(key, &mut writer)?;
+                        writer.write_all(&value_len.to_le_bytes())?;
+                        borsh::BorshSerialize::serialize(value, &mut writer)?;
+                    }
+                    Ok(())
+                };
+                visit($label, state.0.len(), map.len() as u64, &mut emit)?;
+                state.update($root.as_byte_slice());
+            }};
+        }
+        let mut kernel_route_offset = None;
         state.update(&PALW_STATE_V2_VERSION.to_le_bytes());
-        state.update(collection_root(b"bonds", &self.bonds).as_byte_slice());
-        state.update(collection_root(b"reserved_exposure", &self.reserved_exposure).as_byte_slice());
-        state.update(collection_root(b"classes", &self.classes).as_byte_slice());
-        state.update(collection_root(b"class_targets", &self.class_targets).as_byte_slice());
-        state.update(collection_root(b"class_shares", &self.class_shares).as_byte_slice());
+        direct_collection!(b"bonds", &self.bonds, collection_root(b"bonds", &self.bonds));
+        direct_collection!(
+            b"reserved_exposure",
+            &self.reserved_exposure,
+            collection_root(b"reserved_exposure", &self.reserved_exposure)
+        );
+        direct_collection!(b"classes", &self.classes, collection_root(b"classes", &self.classes));
+        direct_collection!(b"class_targets", &self.class_targets, collection_root(b"class_targets", &self.class_targets));
+        direct_collection!(b"class_shares", &self.class_shares, collection_root(b"class_shares", &self.class_shares));
         // ADR-0056 Decisions 3 and 5. Rooted here, after the share table they are the economics of.
-        state.update(collection_root(b"registration_exposure", &self.registration_exposure).as_byte_slice());
-        state.update(collection_root(b"class_walks", &self.class_walks).as_byte_slice());
+        direct_collection!(
+            b"registration_exposure",
+            &self.registration_exposure,
+            collection_root(b"registration_exposure", &self.registration_exposure)
+        );
+        direct_collection!(b"class_walks", &self.class_walks, collection_root(b"class_walks", &self.class_walks));
         match &self.epoch_budgets {
             None => {
                 state.update(&[0u8]);
@@ -2864,28 +2981,52 @@ impl PalwChainStateV2 {
                 state.update(&borsh::to_vec(budgets).expect("PalwEpochBudgetsV2 is borsh-serializable"));
             }
         }
-        state.update(collection_root(b"receipt_targets", &self.receipt_targets).as_byte_slice());
-        state.update(collection_root(b"capabilities", &self.capabilities).as_byte_slice());
-        state.update(collection_root(b"claims", &self.claims).as_byte_slice());
-        state.update(collection_root(b"pending_payouts", &self.pending_payouts).as_byte_slice());
-        state.update(collection_root(b"certified_families", &self.certified_families).as_byte_slice());
-        state.update(collection_root(b"fp_certified_families", &self.fp_certified_families).as_byte_slice());
-        state.update(collection_root(b"fp_certified_classes", &self.fp_certified_classes).as_byte_slice());
-        state.update(collection_root(b"pending_chunks", &self.pending_chunks).as_byte_slice());
+        direct_collection!(b"receipt_targets", &self.receipt_targets, collection_root(b"receipt_targets", &self.receipt_targets));
+        direct_collection!(b"capabilities", &self.capabilities, collection_root(b"capabilities", &self.capabilities));
+        direct_collection!(b"claims", &self.claims, collection_root(b"claims", &self.claims));
+        direct_collection!(b"pending_payouts", &self.pending_payouts, collection_root(b"pending_payouts", &self.pending_payouts));
+        direct_collection!(
+            b"certified_families",
+            &self.certified_families,
+            collection_root(b"certified_families", &self.certified_families)
+        );
+        direct_collection!(
+            b"fp_certified_families",
+            &self.fp_certified_families,
+            collection_root(b"fp_certified_families", &self.fp_certified_families)
+        );
+        direct_collection!(
+            b"fp_certified_classes",
+            &self.fp_certified_classes,
+            collection_root(b"fp_certified_classes", &self.fp_certified_classes)
+        );
+        direct_collection!(b"pending_chunks", &self.pending_chunks, collection_root(b"pending_chunks", &self.pending_chunks));
         // ADR-0080 design A, rooted immediately after the chunk table it deliberately is not.
-        state.update(collection_root(b"court_close_groups", &self.court_close_groups).as_byte_slice());
+        direct_collection!(
+            b"court_close_groups",
+            &self.court_close_groups,
+            collection_root(b"court_close_groups", &self.court_close_groups)
+        );
         // ADR-0078 Decision 4, rooted after the certification tables it is the layer above.
-        state.update(collection_root(b"derived_artifacts", &self.derived_artifacts).as_byte_slice());
-        state.update(collection_root(b"panels", &self.panels).as_byte_slice());
-        state.update(collection_root(b"court_sessions", &self.court_sessions).as_byte_slice());
-        state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
-        state.update(collection_root(b"receipt_epoch_counters", &self.receipt_epoch_counters).as_byte_slice());
+        direct_collection!(
+            b"derived_artifacts",
+            &self.derived_artifacts,
+            collection_root(b"derived_artifacts", &self.derived_artifacts)
+        );
+        direct_collection!(b"panels", &self.panels, collection_root(b"panels", &self.panels));
+        direct_collection!(b"court_sessions", &self.court_sessions, collection_root(b"court_sessions", &self.court_sessions));
+        direct_collection!(b"epoch_counters", &self.epoch_counters, collection_root(b"epoch_counters", &self.epoch_counters));
+        direct_collection!(
+            b"receipt_epoch_counters",
+            &self.receipt_epoch_counters,
+            collection_root(b"receipt_epoch_counters", &self.receipt_epoch_counters)
+        );
         // ADR-0087 M7: the market collections enter the root only once a move has been folded,
         // which cannot happen below `Params::palw_model_market`; before that the root is the one a
         // build without the fields computes, header for header.
         if !self.model_markets.is_empty() || !self.model_positions.is_empty() {
-            state.update(collection_root(b"model_markets", &self.model_markets).as_byte_slice());
-            state.update(collection_root(b"model_positions", &self.model_positions).as_byte_slice());
+            direct_collection!(b"model_markets", &self.model_markets, collection_root(b"model_markets", &self.model_markets));
+            direct_collection!(b"model_positions", &self.model_positions, collection_root(b"model_positions", &self.model_positions));
         }
         // ADR-0088 Decision 10: the registry's collections enter the root only once a line row,
         // a version, a proposal, an evaluation or a claim root has been written, which cannot
@@ -2896,58 +3037,86 @@ impl PalwChainStateV2 {
             || !self.model_evaluations.is_empty()
             || !self.claim_roots.is_empty()
         {
-            state.update(collection_root(b"model_lines", &self.model_lines).as_byte_slice());
-            state.update(collection_root(b"model_versions", &self.model_versions).as_byte_slice());
-            state.update(collection_root(b"model_proposals", &self.model_proposals).as_byte_slice());
-            state.update(collection_root(b"model_evaluations", &self.model_evaluations).as_byte_slice());
-            state.update(collection_root(b"claim_roots", &self.claim_roots).as_byte_slice());
+            direct_collection!(b"model_lines", &self.model_lines, collection_root(b"model_lines", &self.model_lines));
+            direct_collection!(b"model_versions", &self.model_versions, collection_root(b"model_versions", &self.model_versions));
+            direct_collection!(b"model_proposals", &self.model_proposals, collection_root(b"model_proposals", &self.model_proposals));
+            direct_collection!(
+                b"model_evaluations",
+                &self.model_evaluations,
+                collection_root(b"model_evaluations", &self.model_evaluations)
+            );
+            direct_collection!(b"claim_roots", &self.claim_roots, collection_root(b"claim_roots", &self.claim_roots));
         }
         // **ADR-0095 §4.11 as corrected.** Its own block, NOT folded into the registry's above:
         // on a chain where the registry is already live, adding these to that block would move the
         // root the moment the code shipped. Empty until something is declared, and nothing can be
         // declared below `Params::palw_model_benefits`.
         if !self.model_benefits.is_empty() || !self.model_position_since.is_empty() {
-            state.update(collection_root(b"model_benefits", &self.model_benefits).as_byte_slice());
-            state.update(collection_root(b"model_position_since", &self.model_position_since).as_byte_slice());
+            direct_collection!(b"model_benefits", &self.model_benefits, collection_root(b"model_benefits", &self.model_benefits));
+            direct_collection!(
+                b"model_position_since",
+                &self.model_position_since,
+                collection_root(b"model_position_since", &self.model_position_since)
+            );
         }
         // ADR-0089 Decision 6: the settlement list is in the root while it waits for the child,
         // and only then.
         if !self.evm_settlements.is_empty() {
-            state.update(collection_root(b"evm_settlements", &self.evm_settlements).as_byte_slice());
+            direct_collection!(b"evm_settlements", &self.evm_settlements, collection_root(b"evm_settlements", &self.evm_settlements));
         }
         // **ADR-0100 Decision 4.** Its own block, for ADR-0095's reason: on a chain where the
         // blocks above are live, joining one of them would move the root the moment the code
         // shipped. Empty until a plan is declared, and nothing can be declared below
         // `Params::palw_shard_licensing`.
         if !self.class_shard_plans.is_empty() || !self.bond_shards.is_empty() || !self.shard_licensing.is_empty() {
-            state.update(collection_root(b"class_shard_plans", &self.class_shard_plans).as_byte_slice());
-            state.update(collection_root(b"bond_shards", &self.bond_shards).as_byte_slice());
-            state.update(collection_root(b"shard_licensing", &self.shard_licensing).as_byte_slice());
+            direct_collection!(
+                b"class_shard_plans",
+                &self.class_shard_plans,
+                collection_root(b"class_shard_plans", &self.class_shard_plans)
+            );
+            direct_collection!(b"bond_shards", &self.bond_shards, collection_root(b"bond_shards", &self.bond_shards));
+            direct_collection!(b"shard_licensing", &self.shard_licensing, collection_root(b"shard_licensing", &self.shard_licensing));
         }
         // **ADR-0103 Decision 4.** Its own block, for ADR-0095's reason: empty until a held
         // accusation is accepted, which nothing below `Params::palw_held_context` can do.
         if !self.held_da_missing.is_empty() {
-            state.update(collection_root(b"held_da_missing", &self.held_da_missing).as_byte_slice());
+            direct_collection!(b"held_da_missing", &self.held_da_missing, collection_root(b"held_da_missing", &self.held_da_missing));
         }
         // **ADR-0111 Decision 3.** Its own block, for the same reason: empty until a seat demands a
         // leaf's evidence, which nothing below `Params::palw_held_context` can do.
         if !self.held_leaf_demands.is_empty() {
-            state.update(collection_root(b"held_leaf_demands", &self.held_leaf_demands).as_byte_slice());
+            direct_collection!(
+                b"held_leaf_demands",
+                &self.held_leaf_demands,
+                collection_root(b"held_leaf_demands", &self.held_leaf_demands)
+            );
         }
         // **ADR-0119 Decision 2.** Its own block, for the same reason: empty until a held class
         // registers, which nothing below `Params::palw_held_context` can do.
         if !self.class_step_ladders.is_empty() {
-            state.update(collection_root(b"class_step_ladders", &self.class_step_ladders).as_byte_slice());
+            direct_collection!(
+                b"class_step_ladders",
+                &self.class_step_ladders,
+                collection_root(b"class_step_ladders", &self.class_step_ladders)
+            );
         }
         if !self.class_court_windows.is_empty() {
-            state.update(collection_root(b"class_court_windows", &self.class_court_windows).as_byte_slice());
+            direct_collection!(
+                b"class_court_windows",
+                &self.class_court_windows,
+                collection_root(b"class_court_windows", &self.class_court_windows)
+            );
         }
         // **RFC-0006.** Its own block, for ADR-0095's reason: empty until a plan is declared, and nothing can be declared
         // below `Params::palw_tir_shard_v1`, so a network that never armed it roots as before.
         if !self.tir_shard_plans.is_empty() || !self.tir_shard_claims.is_empty() {
             state.update(b"tir_shard/v1");
-            state.update(collection_root(b"tir_shard_plans", &self.tir_shard_plans).as_byte_slice());
-            state.update(collection_root(b"tir_shard_claims", &self.tir_shard_claims).as_byte_slice());
+            direct_collection!(b"tir_shard_plans", &self.tir_shard_plans, collection_root(b"tir_shard_plans", &self.tir_shard_plans));
+            direct_collection!(
+                b"tir_shard_claims",
+                &self.tir_shard_claims,
+                collection_root(b"tir_shard_claims", &self.tir_shard_claims)
+            );
         }
         // **ADR-0165.** Its own block, for the same reason: `None` until a REAL attempt is accepted past
         // `Params::palw_floor_reserve_v1`, which nothing below the fence can do.
@@ -2956,71 +3125,104 @@ impl PalwChainStateV2 {
             state.update(&borsh::to_vec(floor).expect("a floor state is borsh-serializable"));
         }
         if !self.seat_availability.is_empty() {
-            state.update(collection_root(b"seat_availability", &self.seat_availability).as_byte_slice());
+            direct_collection!(
+                b"seat_availability",
+                &self.seat_availability,
+                collection_root(b"seat_availability", &self.seat_availability)
+            );
         }
         if !self.seat_root_readiness.is_empty() {
-            state.update(collection_root(b"seat_root_readiness", &self.seat_root_readiness).as_byte_slice());
+            direct_collection!(
+                b"seat_root_readiness",
+                &self.seat_root_readiness,
+                collection_root(b"seat_root_readiness", &self.seat_root_readiness)
+            );
         }
         // **G14 lane D.** Its own block, Some-only: `None` until the first block at or past the fence nobody can arm.
         if let Some(kernel) = &self.kernel_route {
             kernel_route_offset = Some(state.0.len());
             state.update(b"kernel-route/v1");
+            let mut emit = |out: &mut dyn std::io::Write| crate::palw_nested_row_stream_v1::write_kernel_rows(kernel, out);
+            visit(crate::palw_nested_row_stream_v1::KERNEL_LEDGER, state.0.len(), 33 + kernel.rows.len() as u64, &mut emit)?;
             state.update(kernel.ledger_root().as_byte_slice());
+            let mut emit = |out: &mut dyn std::io::Write| -> std::io::Result<()> {
+                for (key, value) in &kernel.aux {
+                    crate::palw_nested_row_stream_v1::write_row(out, key, &crate::palw_nested_row_stream_v1::RawBytes(value))?;
+                }
+                Ok(())
+            };
+            visit(crate::palw_native_audit_proof_v32::NATIVE_AUX_LABEL_V32, state.0.len(), kernel.aux.len() as u64, &mut emit)?;
             state.update(kernel.aux_root().as_byte_slice());
         }
         // **Lane LG14-A.** Its own block, Some-only: empty until the first reservation past `palw_legacy_public_filer_v1`, which no
         // network can arm, so a dormant network roots exactly as before.
         if !self.staged_courts.is_empty() {
             state.update(b"staged_public_courts/v1");
-            state.update(collection_root(b"staged_public_courts", &self.staged_courts).as_byte_slice());
+            direct_collection!(
+                b"staged_public_courts",
+                &self.staged_courts,
+                collection_root(b"staged_public_courts", &self.staged_courts)
+            );
         }
         if !self.terminal_evidence.is_empty() {
             state.update(b"terminal_evidence/v1");
-            state.update(collection_root(b"terminal_evidence", &self.terminal_evidence).as_byte_slice());
+            direct_collection!(
+                b"terminal_evidence",
+                &self.terminal_evidence,
+                collection_root(b"terminal_evidence", &self.terminal_evidence)
+            );
         }
         if !self.legacy_answers.is_empty() {
             state.update(b"legacy_answers/v2");
-            state.update(collection_root(b"legacy_answers", &self.legacy_answers).as_byte_slice());
+            direct_collection!(b"legacy_answers", &self.legacy_answers, collection_root(b"legacy_answers", &self.legacy_answers));
         }
         if !self.fp_public_jobs.is_empty() {
             state.update(b"public_fp_jobs/v1");
-            state.update(collection_root(b"public_fp_jobs", &self.fp_public_jobs).as_byte_slice());
+            direct_collection!(b"public_fp_jobs", &self.fp_public_jobs, collection_root(b"public_fp_jobs", &self.fp_public_jobs));
         }
         // Lane g14-fam-panelda (ADR-0206): its own block, empty on every network below `palw_panel_da_disclosure_v1`.
         if !self.panel_da_disclosures.is_empty() {
             state.update(b"panel_da_disclosures/v1");
-            state.update(collection_root(b"panel_da_disclosures", &self.panel_da_disclosures).as_byte_slice());
+            direct_collection!(
+                b"panel_da_disclosures",
+                &self.panel_da_disclosures,
+                collection_root(b"panel_da_disclosures", &self.panel_da_disclosures)
+            );
         }
         if !self.class_semantics.is_empty() {
             state.update(b"class_semantics/v1");
-            state.update(collection_root(b"class_semantics", &self.class_semantics).as_byte_slice());
-            state.update(collection_root(b"claim_semantics", &self.claim_semantics).as_byte_slice());
+            direct_collection!(b"class_semantics", &self.class_semantics, collection_root(b"class_semantics", &self.class_semantics));
+            direct_collection!(b"claim_semantics", &self.claim_semantics, collection_root(b"claim_semantics", &self.claim_semantics));
         }
         if !self.legacy_disputes.is_empty() {
             state.update(b"legacy_disputes/v1");
-            state.update(collection_root(b"legacy_disputes", &self.legacy_disputes).as_byte_slice());
+            direct_collection!(b"legacy_disputes", &self.legacy_disputes, collection_root(b"legacy_disputes", &self.legacy_disputes));
         }
         // **ADR-0191 step B.** Its own block: empty until a designated event is folded past its fence, which nothing below it can do.
         if !self.tir_designated.records.is_empty() {
             state.update(b"tir_designated/v1");
-            state.update(collection_root(b"tir_designated", &self.tir_designated.records).as_byte_slice());
+            direct_collection!(
+                b"tir_designated",
+                &self.tir_designated.records,
+                collection_root(b"tir_designated", &self.tir_designated.records)
+            );
         }
         // **G14 lane escrow-rfc08 (RFC-0035 A).** Its own block: empty until a funded original installs a row, which nothing can yet.
         if !self.funded_escrows.is_empty() {
             state.update(b"funded_escrow/v1");
-            state.update(collection_root(b"funded_escrow", &self.funded_escrows).as_byte_slice());
+            direct_collection!(b"funded_escrow", &self.funded_escrows, collection_root(b"funded_escrow", &self.funded_escrows));
         }
         // **G14 item 6 (ADR-0200 C1).** Its own block: empty until a root is recorded with an adopted draw cap, which nothing can yet.
         if !self.d2_readiness.is_empty() {
             state.update(b"d2_readiness/v1");
-            state.update(collection_root(b"d2_readiness", &self.d2_readiness).as_byte_slice());
+            direct_collection!(b"d2_readiness", &self.d2_readiness, collection_root(b"d2_readiness", &self.d2_readiness));
         }
         // **ADR-0124 Decisions 2 and 3.** Its own block, for the same reason: empty until a panel
         // is bound past `Params::palw_panel_economy`, and the reserve is zero until a pool leaves a
         // share unpaid, which only such a panel can do. Below the fence the root is the one a
         // build without the fields computes, header for header.
         if !self.panel_duties.is_empty() || self.panel_reserve_sompi != 0 {
-            state.update(collection_root(b"panel_duties", &self.panel_duties).as_byte_slice());
+            direct_collection!(b"panel_duties", &self.panel_duties, collection_root(b"panel_duties", &self.panel_duties));
             state.update(&self.panel_reserve_sompi.to_le_bytes());
         }
         // **ADR-0125.** Its own block, for the same reason: empty until an attempt is finalized past
@@ -3028,17 +3230,25 @@ impl PalwChainStateV2 {
         if self.round_lane_is_written() {
             state.update(b"round_lane/v1");
             state.update(&self.round_span.to_le_bytes());
-            state.update(collection_root(b"round_finals", &self.round_finals).as_byte_slice());
-            state.update(collection_root(b"round_schedules", &self.round_schedules).as_byte_slice());
-            state.update(collection_root(b"round_permits_used", &self.round_permits_used).as_byte_slice());
+            direct_collection!(b"round_finals", &self.round_finals, collection_root(b"round_finals", &self.round_finals));
+            direct_collection!(b"round_schedules", &self.round_schedules, collection_root(b"round_schedules", &self.round_schedules));
+            direct_collection!(
+                b"round_permits_used",
+                &self.round_permits_used,
+                collection_root(b"round_permits_used", &self.round_permits_used)
+            );
             // §7.3: only once a permit was burned, so a lane without an equivocation roots as before.
             if !self.round_equivocations.is_empty() {
-                state.update(collection_root(b"round_equivocations", &self.round_equivocations).as_byte_slice());
+                direct_collection!(
+                    b"round_equivocations",
+                    &self.round_equivocations,
+                    collection_root(b"round_equivocations", &self.round_equivocations)
+                );
             }
             // ADR-0130: the snapshot waiting for its seed and the seed anchor, named, once either exists.
             if self.round_scheduler_is_written() {
                 state.update(b"round_scheduler/v2");
-                state.update(collection_root(b"round_pending", &self.round_pending).as_byte_slice());
+                direct_collection!(b"round_pending", &self.round_pending, collection_root(b"round_pending", &self.round_pending));
                 match &self.round_seed_anchor {
                     None => state.update(&[0u8]),
                     Some(anchor) => {
@@ -3052,13 +3262,17 @@ impl PalwChainStateV2 {
         // byte-identical to a state before the field.
         if self.model_registry_is_written() {
             state.update(b"model_registry/v1");
-            state.update(collection_root(b"model_lifecycles", &self.model_lifecycles).as_byte_slice());
-            state.update(collection_root(b"seat_readiness", &self.seat_readiness).as_byte_slice());
+            direct_collection!(
+                b"model_lifecycles",
+                &self.model_lifecycles,
+                collection_root(b"model_lifecycles", &self.model_lifecycles)
+            );
+            direct_collection!(b"seat_readiness", &self.seat_readiness, collection_root(b"seat_readiness", &self.seat_readiness));
         }
         // ADR-0132 Upgrade C: the claims' economics rows, named, once any exists.
         if !self.claim_economics.is_empty() {
             state.update(b"claim_economics/v1");
-            state.update(collection_root(b"claim_economics", &self.claim_economics).as_byte_slice());
+            direct_collection!(b"claim_economics", &self.claim_economics, collection_root(b"claim_economics", &self.claim_economics));
         }
         // ADR-0137 / ADR-0132 S: the work target, named, once it exists (past its fence).
         if let Some(target) = &self.work_target {
@@ -3069,7 +3283,7 @@ impl PalwChainStateV2 {
         // hashes as nothing, so a chain with the fence dormant commits the root it always did.
         if !self.artifact_owners.is_empty() {
             state.update(b"artifact_owners/v1");
-            state.update(collection_root(b"artifact_owners", &self.artifact_owners).as_byte_slice());
+            direct_collection!(b"artifact_owners", &self.artifact_owners, collection_root(b"artifact_owners", &self.artifact_owners));
         }
         // ADR-0145 §5/§6: the class graphs the derivation reads and the live claims' prompts the
         // cache rule reads, named, once they exist (past `Params::palw_fp_derived_work`). Empty
@@ -3077,25 +3291,41 @@ impl PalwChainStateV2 {
         // which is the property `a_dormant_derived_work_fence_moves_no_state_root` asserts.
         if !self.fp_work_profiles.is_empty() {
             state.update(b"fp_work_profiles/v1");
-            state.update(collection_root(b"fp_work_profiles", &self.fp_work_profiles).as_byte_slice());
+            direct_collection!(
+                b"fp_work_profiles",
+                &self.fp_work_profiles,
+                collection_root(b"fp_work_profiles", &self.fp_work_profiles)
+            );
         }
         if !self.fp_claim_prompts.is_empty() {
             state.update(b"fp_claim_prompts/v1");
-            state.update(collection_root(b"fp_claim_prompts", &self.fp_claim_prompts).as_byte_slice());
+            direct_collection!(
+                b"fp_claim_prompts",
+                &self.fp_claim_prompts,
+                collection_root(b"fp_claim_prompts", &self.fp_claim_prompts)
+            );
         }
         // ADR-0144 §9: consumed offences, live locks and post-Final liability. Empty hashes as
         // nothing, so a chain with the fence dormant commits the root it always did.
         if !self.consumed_offences.is_empty() {
             state.update(b"consumed_offences/v1");
-            state.update(collection_root(b"consumed_offences", &self.consumed_offences).as_byte_slice());
+            direct_collection!(
+                b"consumed_offences",
+                &self.consumed_offences,
+                collection_root(b"consumed_offences", &self.consumed_offences)
+            );
         }
         if !self.slashable_locks.is_empty() {
             state.update(b"slashable_locks/v1");
-            state.update(collection_root(b"slashable_locks", &self.slashable_locks).as_byte_slice());
+            direct_collection!(b"slashable_locks", &self.slashable_locks, collection_root(b"slashable_locks", &self.slashable_locks));
         }
         if !self.panel_liabilities.is_empty() {
             state.update(b"panel_liabilities/v1");
-            state.update(collection_root(b"panel_liabilities", &self.panel_liabilities).as_byte_slice());
+            direct_collection!(
+                b"panel_liabilities",
+                &self.panel_liabilities,
+                collection_root(b"panel_liabilities", &self.panel_liabilities)
+            );
         }
         // **ADR-0152 v3.1 R-core+ (the v22 skeleton): ONE block, after the last collection block,
         // hashed only when any of its items is non-empty or non-zero** — so a state holding none of
@@ -3104,40 +3334,68 @@ impl PalwChainStateV2 {
         // order: S's five, then the vesting map and counters; M3 appends its two here.
         if self.has_rcore_plus_data() {
             state.update(b"rcore_plus/v1");
-            state.update(collection_root(b"withholding_strikes", &self.withholding_strikes).as_byte_slice());
-            state.update(collection_root(b"reward_pending", &self.reward_pending).as_byte_slice());
-            state.update(collection_root(b"reporter_commitments", &self.reporter_commitments).as_byte_slice());
-            state.update(collection_root(b"reporter_rewards", &self.reporter_rewards).as_byte_slice());
+            direct_collection!(
+                b"withholding_strikes",
+                &self.withholding_strikes,
+                collection_root(b"withholding_strikes", &self.withholding_strikes)
+            );
+            direct_collection!(b"reward_pending", &self.reward_pending, collection_root(b"reward_pending", &self.reward_pending));
+            direct_collection!(
+                b"reporter_commitments",
+                &self.reporter_commitments,
+                collection_root(b"reporter_commitments", &self.reporter_commitments)
+            );
+            direct_collection!(
+                b"reporter_rewards",
+                &self.reporter_rewards,
+                collection_root(b"reporter_rewards", &self.reporter_rewards)
+            );
             state.update(&borsh::to_vec(&self.reporter_counters).expect("PalwReporterCountersV1 is borsh-serializable"));
-            state.update(collection_root(b"vesting", &self.vesting).as_byte_slice());
+            direct_collection!(b"vesting", &self.vesting, collection_root(b"vesting", &self.vesting));
             state.update(&borsh::to_vec(&self.vesting_counters).expect("PalwVestingCountersV1 is borsh-serializable"));
             // M3 (DA-2, §6 rows 14–15), appended in landing order.
-            state.update(collection_root(b"da_sessions", &self.da_sessions).as_byte_slice());
-            state.update(collection_root(b"da_claims", &self.da_claims).as_byte_slice());
+            direct_collection!(b"da_sessions", &self.da_sessions, collection_root(b"da_sessions", &self.da_sessions));
+            direct_collection!(b"da_claims", &self.da_claims, collection_root(b"da_claims", &self.da_claims));
         }
         // **ADR-0152-adjacent: the Activation Pool, ONE Some-only block after R-core+'s** — hashed only
         // when a row exists or a counter is non-zero, so every state without a pool (every network
         // but testnet-12, and testnet-12's genesis) roots exactly as before; once present, both items.
         if self.has_activation_pool_data() {
             state.update(b"activation_pool/v1");
-            state.update(collection_root(b"activation_pools", &self.activation_pools).as_byte_slice());
+            direct_collection!(
+                b"activation_pools",
+                &self.activation_pools,
+                collection_root(b"activation_pools", &self.activation_pools)
+            );
             state.update(&borsh::to_vec(&self.activation_pool_counters).expect("PalwActivationPoolCountersV1 is borsh-serializable"));
-            state.update(collection_root(b"activation_pool_scheduled", &self.activation_pool_scheduled).as_byte_slice());
-            state.update(collection_root(b"activation_readiness_landed", &self.activation_readiness_landed).as_byte_slice());
+            direct_collection!(
+                b"activation_pool_scheduled",
+                &self.activation_pool_scheduled,
+                collection_root(b"activation_pool_scheduled", &self.activation_pool_scheduled)
+            );
+            direct_collection!(
+                b"activation_readiness_landed",
+                &self.activation_readiness_landed,
+                collection_root(b"activation_readiness_landed", &self.activation_readiness_landed)
+            );
         }
         // **ADR-0152 §4-ter.3 step 6: the held forfeits, ONE Some-only block** (after the Activation
         // Pool's `activation_pool/v1` where both branches meet) — hashed only when a record exists,
         // so every state without one roots exactly as before.
         if !self.held_forfeits.is_empty() {
             state.update(b"held_forfeits/v1");
-            state.update(collection_root(b"held_forfeits", &self.held_forfeits).as_byte_slice());
+            direct_collection!(b"held_forfeits", &self.held_forfeits, collection_root(b"held_forfeits", &self.held_forfeits));
         }
         // **The 2026-09-25 sweep's V03(2)/V05: the probation memory, ONE Some-only block** (after the
         // held forfeits') — hashed only when a row exists, so every state without one roots exactly as
         // before.
         if !self.probation_memory.is_empty() {
             state.update(b"registry_probation/v1");
-            state.update(collection_root(b"probation_memory", &self.probation_memory).as_byte_slice());
+            direct_collection!(
+                b"probation_memory",
+                &self.probation_memory,
+                collection_root(b"probation_memory", &self.probation_memory)
+            );
         }
         state.update(&self.safe_weight.to_le_bytes());
         state.update(&self.retired_safe_weight.to_le_bytes());
@@ -3156,100 +3414,196 @@ impl PalwChainStateV2 {
         // roots exactly as before.
         if !self.bond_freezes.is_empty() {
             state.update(b"bond_freezes/v1");
-            state.update(collection_root(b"bond_freezes", &self.bond_freezes).as_byte_slice());
+            direct_collection!(b"bond_freezes", &self.bond_freezes, collection_root(b"bond_freezes", &self.bond_freezes));
         }
         // **ADR-0160 stage 2 (F-Q, F-S): the receipts, the exclusions and the buckets, ONE Some-only
         // block** after the freezes' — hashed only when one of them holds a row, so every state below
         // both fences roots exactly as before.
         if !self.audit_receipts.is_empty() || !self.excluded_auditors.is_empty() || !self.issuance_buckets.is_empty() {
             state.update(b"capacity_qs/v1");
-            state.update(collection_root(b"audit_receipts", &self.audit_receipts).as_byte_slice());
-            state.update(collection_root(b"excluded_auditors", &self.excluded_auditors).as_byte_slice());
-            state.update(collection_root(b"issuance_buckets", &self.issuance_buckets).as_byte_slice());
+            direct_collection!(b"audit_receipts", &self.audit_receipts, collection_root(b"audit_receipts", &self.audit_receipts));
+            direct_collection!(
+                b"excluded_auditors",
+                &self.excluded_auditors,
+                collection_root(b"excluded_auditors", &self.excluded_auditors)
+            );
+            direct_collection!(
+                b"issuance_buckets",
+                &self.issuance_buckets,
+                collection_root(b"issuance_buckets", &self.issuance_buckets)
+            );
         }
         // **ADR-0160 stage 4 (F-N): the registered demand and the operator ring, ONE Some-only block.**
         if !self.network_demand.is_empty() || !self.operator_ring.is_empty() {
             state.update(b"capacity_n/v1");
-            state.update(collection_root(b"network_demand", &self.network_demand).as_byte_slice());
-            state.update(collection_root(b"operator_ring", &self.operator_ring).as_byte_slice());
+            direct_collection!(b"network_demand", &self.network_demand, collection_root(b"network_demand", &self.network_demand));
+            direct_collection!(b"operator_ring", &self.operator_ring, collection_root(b"operator_ring", &self.operator_ring));
         }
         // **ADR-0164 (F-EM, F-M1, F-K): the capacity ledger, ONE Some-only block** — hashed only when it holds a row, so every state
         // below the three fences roots exactly as before.
         if !self.capacity_ledger.is_empty() {
             state.update(b"capacity_s567/v1");
-            state.update(collection_root(b"capacity_ledger", &self.capacity_ledger).as_byte_slice());
+            direct_collection!(b"capacity_ledger", &self.capacity_ledger, collection_root(b"capacity_ledger", &self.capacity_ledger));
         }
         // **RFC-0002 Phase F (F6): the IR classes, ONE Some-only block** — empty until an IR class
         // registers, which nothing below `palw_tir_v1` can do.
         if !self.tir_classes.is_empty() {
             state.update(b"tir_classes/v1");
-            state.update(palw_tir_classes_root_v1(&self.tir_classes).as_byte_slice());
+            direct_collection!(b"tir_classes", &self.tir_classes, palw_tir_classes_root_v1(&self.tir_classes));
         }
         // **RFC-0002 Phase F (F7): the open IR dissections, ONE Some-only block** — empty until an IR
         // class's root claim is admitted.
         if !self.tir_dissections.is_empty() {
             state.update(b"tir_dissections/v1");
-            state.update(collection_root(b"tir_dissections", &self.tir_dissections).as_byte_slice());
+            direct_collection!(b"tir_dissections", &self.tir_dissections, collection_root(b"tir_dissections", &self.tir_dissections));
         }
         // **RFC-0003: the generative classes, ONE Some-only block** — empty until a generative class
         // registers, which nothing below `palw_gen_v1` can do.
         if !self.gen_classes.is_empty() {
             state.update(b"gen_classes/v1");
-            state.update(palw_gen_classes_root_v1(&self.gen_classes).as_byte_slice());
+            direct_collection!(b"gen_classes", &self.gen_classes, palw_gen_classes_root_v1(&self.gen_classes));
         }
         // **RFC-0004: the governed lines and their epochs, ONE Some-only block** — empty until a line
         // opts in, which nothing below `palw_improvement_v1` can do.
         if self.has_improvement_rows_v1() {
             state.update(b"improvement/v1");
-            state.update(collection_root(b"improvement_lines", &self.improvement_lines).as_byte_slice());
-            state.update(collection_root(b"improvement_epochs", &self.improvement_epochs).as_byte_slice());
-            state.update(collection_root(b"improvement_policies", &self.improvement_policies).as_byte_slice());
-            state.update(collection_root(b"improvement_usage", &self.improvement_usage).as_byte_slice());
-            state.update(collection_root(b"improvement_heads", &self.improvement_heads).as_byte_slice());
-            state.update(collection_root(b"improvement_pools", &self.improvement_pools).as_byte_slice());
-            state.update(collection_root(b"improvement_material", &self.improvement_material).as_byte_slice());
-            state.update(collection_root(b"improvement_candidates", &self.improvement_candidates).as_byte_slice());
-            state.update(collection_root(b"improvement_pool_entries", &self.improvement_pool_entries).as_byte_slice());
-            state.update(collection_root(b"improvement_items", &self.improvement_items).as_byte_slice());
-            state.update(collection_root(b"improvement_results", &self.improvement_results).as_byte_slice());
-            state.update(collection_root(b"improvement_grants", &self.improvement_grants).as_byte_slice());
-            state.update(collection_root(b"improvement_earnings", &self.improvement_earnings).as_byte_slice());
+            direct_collection!(
+                b"improvement_lines",
+                &self.improvement_lines,
+                collection_root(b"improvement_lines", &self.improvement_lines)
+            );
+            direct_collection!(
+                b"improvement_epochs",
+                &self.improvement_epochs,
+                collection_root(b"improvement_epochs", &self.improvement_epochs)
+            );
+            direct_collection!(
+                b"improvement_policies",
+                &self.improvement_policies,
+                collection_root(b"improvement_policies", &self.improvement_policies)
+            );
+            direct_collection!(
+                b"improvement_usage",
+                &self.improvement_usage,
+                collection_root(b"improvement_usage", &self.improvement_usage)
+            );
+            direct_collection!(
+                b"improvement_heads",
+                &self.improvement_heads,
+                collection_root(b"improvement_heads", &self.improvement_heads)
+            );
+            direct_collection!(
+                b"improvement_pools",
+                &self.improvement_pools,
+                collection_root(b"improvement_pools", &self.improvement_pools)
+            );
+            direct_collection!(
+                b"improvement_material",
+                &self.improvement_material,
+                collection_root(b"improvement_material", &self.improvement_material)
+            );
+            direct_collection!(
+                b"improvement_candidates",
+                &self.improvement_candidates,
+                collection_root(b"improvement_candidates", &self.improvement_candidates)
+            );
+            direct_collection!(
+                b"improvement_pool_entries",
+                &self.improvement_pool_entries,
+                collection_root(b"improvement_pool_entries", &self.improvement_pool_entries)
+            );
+            direct_collection!(
+                b"improvement_items",
+                &self.improvement_items,
+                collection_root(b"improvement_items", &self.improvement_items)
+            );
+            direct_collection!(
+                b"improvement_results",
+                &self.improvement_results,
+                collection_root(b"improvement_results", &self.improvement_results)
+            );
+            direct_collection!(
+                b"improvement_grants",
+                &self.improvement_grants,
+                collection_root(b"improvement_grants", &self.improvement_grants)
+            );
+            direct_collection!(
+                b"improvement_earnings",
+                &self.improvement_earnings,
+                collection_root(b"improvement_earnings", &self.improvement_earnings)
+            );
         }
         // **RFC-0004 A4/A5: the material and candidates lane's tables, ONE Some-only block** after
         // `improvement/v1` (spec 17 §17.0) — empty until a governed line takes material, a licence
         // registers or a composite candidate is admitted, which nothing below `palw_improvement_v1` can do.
         if self.has_improvement_material_rows_v1() {
             state.update(b"improvement-material/v1");
-            state.update(collection_root(b"improvement_cases", &self.improvement_cases).as_byte_slice());
-            state.update(collection_root(b"improvement_opt_ins", &self.improvement_opt_ins).as_byte_slice());
-            state.update(collection_root(b"improvement_setter_sets", &self.improvement_setter_sets).as_byte_slice());
-            state.update(collection_root(b"improvement_datasets", &self.improvement_datasets).as_byte_slice());
-            state.update(collection_root(b"improvement_artifacts", &self.improvement_artifacts).as_byte_slice());
-            state.update(collection_root(b"improvement_licences", &self.improvement_licences).as_byte_slice());
-            state.update(collection_root(b"improvement_composite_classes", &self.improvement_composite_classes).as_byte_slice());
+            direct_collection!(
+                b"improvement_cases",
+                &self.improvement_cases,
+                collection_root(b"improvement_cases", &self.improvement_cases)
+            );
+            direct_collection!(
+                b"improvement_opt_ins",
+                &self.improvement_opt_ins,
+                collection_root(b"improvement_opt_ins", &self.improvement_opt_ins)
+            );
+            direct_collection!(
+                b"improvement_setter_sets",
+                &self.improvement_setter_sets,
+                collection_root(b"improvement_setter_sets", &self.improvement_setter_sets)
+            );
+            direct_collection!(
+                b"improvement_datasets",
+                &self.improvement_datasets,
+                collection_root(b"improvement_datasets", &self.improvement_datasets)
+            );
+            direct_collection!(
+                b"improvement_artifacts",
+                &self.improvement_artifacts,
+                collection_root(b"improvement_artifacts", &self.improvement_artifacts)
+            );
+            direct_collection!(
+                b"improvement_licences",
+                &self.improvement_licences,
+                collection_root(b"improvement_licences", &self.improvement_licences)
+            );
+            direct_collection!(
+                b"improvement_composite_classes",
+                &self.improvement_composite_classes,
+                collection_root(b"improvement_composite_classes", &self.improvement_composite_classes)
+            );
         }
         // **RFC-0004 A6: the evaluation jobs, ONE Some-only block** (after the material lane's
         // `improvement-material/v1`) — empty until a job's first claim, which nothing below
         // `palw_improvement_v1` can make.
         if !self.improvement_eval_jobs.is_empty() {
             state.update(b"improvement-eval/v1");
-            state.update(collection_root(b"improvement_eval_jobs", &self.improvement_eval_jobs).as_byte_slice());
+            direct_collection!(
+                b"improvement_eval_jobs",
+                &self.improvement_eval_jobs,
+                collection_root(b"improvement_eval_jobs", &self.improvement_eval_jobs)
+            );
         }
         // **RFC-0007 Part I: the verification vertex's tables, ONE Some-only block** after `improvement-eval/v1` — empty until
         // a vertex is accepted, which nothing below `palw_verification_vertex_v1` can do.
         if !self.vertex.is_empty() {
             state.update(b"vertex/v1");
-            state.update(collection_root(b"vertex_rounds", &self.vertex.rounds).as_byte_slice());
-            state.update(collection_root(b"vertex_tallies", &self.vertex.tallies).as_byte_slice());
-            state.update(collection_root(b"vertex_held", &self.vertex.held).as_byte_slice());
+            direct_collection!(b"vertex_rounds", &self.vertex.rounds, collection_root(b"vertex_rounds", &self.vertex.rounds));
+            direct_collection!(b"vertex_tallies", &self.vertex.tallies, collection_root(b"vertex_tallies", &self.vertex.tallies));
+            direct_collection!(b"vertex_held", &self.vertex.held, collection_root(b"vertex_held", &self.vertex.held));
         }
         // **RFC-0007 Parts II and IV: the mesh's tables, ONE more Some-only block** — empty until a fence's first write.
         if !self.vertex.mesh.is_empty() {
             state.update(b"mesh/v1");
-            state.update(collection_root(b"mesh_witness", &self.vertex.mesh.witness).as_byte_slice());
-            state.update(collection_root(b"mesh_audits", &self.vertex.mesh.audits).as_byte_slice());
-            state.update(collection_root(b"mesh_traps", &self.vertex.mesh.traps).as_byte_slice());
-            state.update(collection_root(b"mesh_capped", &self.vertex.mesh.capped).as_byte_slice());
+            direct_collection!(
+                b"mesh_witness",
+                &self.vertex.mesh.witness,
+                collection_root(b"mesh_witness", &self.vertex.mesh.witness)
+            );
+            direct_collection!(b"mesh_audits", &self.vertex.mesh.audits, collection_root(b"mesh_audits", &self.vertex.mesh.audits));
+            direct_collection!(b"mesh_traps", &self.vertex.mesh.traps, collection_root(b"mesh_traps", &self.vertex.mesh.traps));
+            direct_collection!(b"mesh_capped", &self.vertex.mesh.capped, collection_root(b"mesh_capped", &self.vertex.mesh.capped));
         }
         // **RFC-0010: the permissionless Panel's engine, ONE Some-only block** after the mesh's — the engine exists only from the
         // first block at or past `palw_permissionless_panel_v1`, which no network can arm today, so a network that never arms it
@@ -3257,6 +3611,9 @@ impl PalwChainStateV2 {
         // reservations, frozen epoch source sets) under one root.
         if let Some(panel) = &self.panel_v3 {
             state.update(b"panel_v3/v1");
+            let rows = (borsh::object_length(panel)? as u64).div_ceil(crate::palw_nested_row_stream_v1::CHUNK_BYTES as u64);
+            let mut emit = |out: &mut dyn std::io::Write| crate::palw_nested_row_stream_v1::write_borsh_chunks(panel, out);
+            visit(crate::palw_nested_row_stream_v1::PANEL, state.0.len(), rows, &mut emit)?;
             state.update(panel.root().as_byte_slice());
         }
         // **Lane BUDGET (ADR-0176 / ADR-0177): the bond budget, ONE Some-only block** after the permissionless Panel's — the engine
@@ -3265,35 +3622,84 @@ impl PalwChainStateV2 {
         if let Some(budget) = &self.bond_budget {
             state.update(b"bond_budget/v1");
             let (header, tables) = budget.root_parts();
+            let counts =
+                [budget.reporter_income.len() as u64, budget.material_income.len() as u64, budget.consumer_contracts.len() as u64];
+            let mut emit = |out: &mut dyn std::io::Write| -> std::io::Result<()> {
+                crate::palw_nested_row_stream_v1::write_row(out, &[0u8], &(counts, &budget.header))?;
+                for (key, value) in &budget.reporter_income {
+                    crate::palw_nested_row_stream_v1::write_row(out, &(1u8, key), value)?;
+                }
+                for (key, value) in &budget.material_income {
+                    crate::palw_nested_row_stream_v1::write_row(out, &(2u8, key), value)?;
+                }
+                for (key, value) in &budget.consumer_contracts {
+                    crate::palw_nested_row_stream_v1::write_row(out, &(3u8, key), value)?;
+                }
+                Ok(())
+            };
+            visit(crate::palw_nested_row_stream_v1::BUDGET_HEADER, state.0.len(), 1 + counts.iter().sum::<u64>(), &mut emit)?;
             state.update(header.as_byte_slice());
-            for table in tables {
-                state.update(table.as_byte_slice());
-            }
+            direct_collection!(b"bond_budget_bonds", &budget.bonds, tables[0]);
+            direct_collection!(b"bond_budget_claims", &budget.claims, tables[1]);
+            let mut emit = |out: &mut dyn std::io::Write| -> std::io::Result<()> {
+                for key in &budget.releases {
+                    crate::palw_nested_row_stream_v1::write_row(out, key, &())?;
+                }
+                Ok(())
+            };
+            visit(b"bond_budget_releases", state.0.len(), budget.releases.len() as u64, &mut emit)?;
+            state.update(tables[2].as_byte_slice());
+            direct_collection!(b"bond_budget_assignments", &budget.assignments, tables[3]);
+            direct_collection!(b"bond_budget_models", &budget.models, tables[4]);
+            let mut emit = |out: &mut dyn std::io::Write| -> std::io::Result<()> {
+                for key in &budget.liability_releases {
+                    crate::palw_nested_row_stream_v1::write_row(out, key, &())?;
+                }
+                Ok(())
+            };
+            visit(b"bond_budget_liability_releases", state.0.len(), budget.liability_releases.len() as u64, &mut emit)?;
+            state.update(tables[5].as_byte_slice());
         }
         // **RFC-0008 v2: the work-slice ledgers, ONE Some-only block** — empty until a root is declared, which nothing below
         // `palw_exec_payload_v2` can do.
         if !self.exec_v2.is_empty() {
             state.update(b"exec_v2/v1");
-            state.update(collection_root(b"exec_v2_roots", &self.exec_v2.roots).as_byte_slice());
-            state.update(collection_root(b"exec_v2_slices", &self.exec_v2.slices).as_byte_slice());
-            state.update(collection_root(b"exec_v2_jobs", &self.exec_v2.jobs).as_byte_slice());
-            state.update(collection_root(b"exec_v2_anchored", &self.exec_v2.anchored).as_byte_slice());
+            direct_collection!(b"exec_v2_roots", &self.exec_v2.roots, collection_root(b"exec_v2_roots", &self.exec_v2.roots));
+            direct_collection!(b"exec_v2_slices", &self.exec_v2.slices, collection_root(b"exec_v2_slices", &self.exec_v2.slices));
+            direct_collection!(b"exec_v2_jobs", &self.exec_v2.jobs, collection_root(b"exec_v2_jobs", &self.exec_v2.jobs));
+            direct_collection!(
+                b"exec_v2_anchored",
+                &self.exec_v2.anchored,
+                collection_root(b"exec_v2_anchored", &self.exec_v2.anchored)
+            );
         }
         if !self.exec_v2_rewards.is_empty() {
             state.update(b"exec_v2_reward_vesting/v1");
-            state.update(collection_root(b"exec_v2_reward_vesting", &self.exec_v2_rewards).as_byte_slice());
+            direct_collection!(
+                b"exec_v2_reward_vesting",
+                &self.exec_v2_rewards,
+                collection_root(b"exec_v2_reward_vesting", &self.exec_v2_rewards)
+            );
         }
         if !self.exec_v2_reward_holds.is_empty() {
             state.update(b"exec_v2_reward_holds/v1");
-            state.update(collection_root(b"exec_v2_reward_holds", &self.exec_v2_reward_holds).as_byte_slice());
+            direct_collection!(
+                b"exec_v2_reward_holds",
+                &self.exec_v2_reward_holds,
+                collection_root(b"exec_v2_reward_holds", &self.exec_v2_reward_holds)
+            );
         }
         if !self.exec_v2_origins.is_empty() {
             state.update(b"exec_v2_origins/v1");
-            state.update(collection_root(b"exec_v2_origins", &self.exec_v2_origins).as_byte_slice());
+            direct_collection!(b"exec_v2_origins", &self.exec_v2_origins, collection_root(b"exec_v2_origins", &self.exec_v2_origins));
         }
         if !self.exec_v2_job_uses.is_empty() {
             state.update(b"exec_v2_job_uses/v1");
-            state.update(collection_root(b"exec_v2_job_uses", &self.exec_v2_job_uses).as_byte_slice());
+            direct_collection!(
+                b"exec_v2_job_uses",
+                &self.exec_v2_job_uses,
+                collection_root(b"exec_v2_job_uses", &self.exec_v2_job_uses)
+            );
         }
         state.update(&self.bounded_immature.to_le_bytes());
         state.update(&self.safe_frontier_blue_score.to_le_bytes());
@@ -3307,7 +3713,7 @@ impl PalwChainStateV2 {
                 state.update(&borsh::to_vec(p).expect("PalwBlockContextV2 is borsh-serializable"));
             }
         }
-        (state.0, kernel_route_offset)
+        Ok((state.0, kernel_route_offset))
     }
 
     /// **Where the `kernel-route/v1` block begins in an AUTHENTICATED state-root preimage — derived from the preimage alone, by walking
@@ -3446,9 +3852,20 @@ impl PalwChainStateV2 {
             }
         }
         self.assert_reader_router_consistency_v2()?;
+        if let Some(route) = self.kernel_route_state_v1() {
+            crate::palw_positive_rows_v2::restore::validate_positive_aux_restore_v2(&route.aux)
+                .map_err(|error| PalwStateV2Error::CarriageInconsistent(format!("inconsistent Positive aux rows: {error:?}")))?;
+        }
         self.assert_vertex_consistency_v1()?;
         self.assert_exec_v2_consistency_v1(params)?;
         self.assert_monetary_material_consistency_v1(params)?;
+        super::palw_monetary_material_scope_v8::validate_v8(self)?;
+        super::palw_court_family_supplier_fold_v1::validate_family_suppliers_v1(self, params)?;
+        super::palw_court_family_material_fold_v1::validate_family_material_rows_v1(self)?;
+        crate::palw_native39_frontier_v1::validate_native39_frontier_v1(self, params)?;
+        crate::palw_native_budget_binding_v1::validate_native_budget_bindings_v1(self, self.last_point.map_or(0, |p| p.daa_score))?;
+        crate::palw_native39_settlement_checkpoint_v1::read_native39_settlement_checkpoint_v1(self)?;
+        crate::palw_native_closed_facts_v1::read_native_closed_facts_v1(self)?;
         self.assert_claim_local_context_v1(params)?;
         self.assert_material_release_recovery_consistency_v2(params)?;
         self.assert_mesh_consistency_v1()?;
@@ -3462,6 +3879,8 @@ impl PalwChainStateV2 {
         self.assert_beacon_bootstrap_consistency_v1(params)?;
         self.assert_source_bootstrap_consistency_v1(params)?;
         self.assert_source_verifier_economics_consistency_v2(params)?;
+        self.assert_verifier_watch_consistency_v1(params)?;
+        self.assert_verifier_watch_draw_consistency_v1(params)?;
         self.assert_panel_source_fee_consistency_v2()?;
         // Lane BUDGET: the bond budget's own invariants (windows = Σ in-window reservations, open counts, releases, consumption within
         // reservation) — a carriage decodes whatever its tail holds, so an import is refused on a bent engine.
@@ -4054,6 +4473,30 @@ impl PalwChainStateV2 {
         self.assert_terminal_evidence_v1()?;
         for (key, row) in &self.staged_courts {
             row.check(key).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::VerifiedTokenizerRegistration(registration) = row {
+                registration.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchDemand(demand) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < demand.material_until()
+            {
+                demand.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchStopReceipt(receipt) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < receipt.material_until_daa
+            {
+                receipt.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::CourtBatchNumericalReceipt(receipt) = row {
+                let point = self.last_point().ok_or(PalwStateV2Error::DeltaMismatch("numerical Batch receipt has no snapshot point"))?;
+                if point.daa_score < receipt.material_until_daa {
+                    receipt.check_context(self, point).map_err(PalwStateV2Error::CarriageInconsistent)?;
+                }
+            }
+            if let crate::palw_staged_court_state_v1::PalwStagedCourtRowV1::TirOwnerSchedule(schedule) = row
+                && self.last_point().map_or(0, |point| point.daa_score) < schedule.material_until()
+            {
+                schedule.check_context(self).map_err(PalwStateV2Error::CarriageInconsistent)?;
+            }
         }
         let responders: BTreeSet<_> = self.staged_courts.values().flat_map(palw_staged_court_fold_v1::response_index_rows).collect();
         if responders != self.staged_prefix_responders {
@@ -4125,7 +4568,8 @@ impl PalwChainStateV2 {
                 R::CourtSharedBottom(r) => r.check_loaded_context(self),
                 R::CourtSharedStream(s) => s.check_context(self),
                 R::CourtSharedChunk(c) => c.check_context(self),
-                R::CourtMaterialDraft(d) => d.check_context(self),
+                R::CourtMaterialDraft(d) => d.check_loaded_context(self),
+                R::CourtMaterialPart(p) => p.check_loaded_context(self),
                 R::CourtMaterial(m) => m.check_context(self),
                 _ => Ok(()),
             }

@@ -75,7 +75,8 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
             | PalwOffenceKindV1::PanelFalseValidV2
             | PalwOffenceKindV1::ExecutorRefuted
             // RFC-0002 Phase F: the IR executor's identity conviction, kind 4's twin.
-            | PalwOffenceKindV1::TirIdentityMismatch => true,
+            | PalwOffenceKindV1::TirIdentityMismatch
+            | PalwOffenceKindV1::PrefixExportRefuted => true,
             PalwOffenceKindV1::PanelFalseValid
             | PalwOffenceKindV1::CourtExecutorGuilty
             | PalwOffenceKindV1::DaDefault
@@ -127,7 +128,7 @@ pub fn palw_h1_carrier_object_v1(object: &PalwConsensusObjectV2) -> bool {
         O::SeatReadinessRootV1 { .. } => false,
         O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => false,
         // RFC-0032 A material intake (tag 255): shared terminal material, not an H-1 obligation.
-        O::MaterialIntakeV1 { .. } => false,
+        O::MaterialIntakeV1 { .. } | O::CourtFamilyMaterialV1 { .. } => false,
         // ADR-0206 (tag 233): a PanelDa disclosure is public material, not an H-1 obligation.
         O::PanelDaPromptDisclosedV1 { .. } => false,
         // RFC-0024 (tags 201-204): the position terminal and lookahead are court moves, like tags 64-66.

@@ -43,6 +43,18 @@ use misaka_palw_tir::program::{Ref, StateKind, TirProgramV1};
 use misaka_palw_tir::types::{DType, Dim};
 use misaka_palw_tir::validate::ProgramInfo;
 
+/// Owner-local typed geometry request census; no binding or native authority.
+mod local_geometry_quote_v1;
+/// Explicit mixed-width step construction; legacy entry points remain four-byte-only.
+pub mod wide_v2;
+pub use local_geometry_quote_v1::quote_local_tir_step_space_additional_v1;
+mod local_space_diagnostics_v1;
+pub use local_space_diagnostics_v1::{LocalTirStepSpaceFixedRequestsV1, quote_local_tir_step_space_fixed_requests_v1};
+pub use wide_v2::{
+    PALW_TIR_STEP_LEAF_VERSION_V2, PalwTirStepLegBuilderV2, PalwTirStepSpaceV2, PalwTirVerifiedBindingV2, palw_tir_leaf_preimage_v2,
+    palw_tir_leaf_values_v2, verify_tir_binding_v2,
+};
+
 /// The version a TIR step leaf's preimage carries (the legacy tile leaf's field).
 pub const PALW_TIR_STEP_LEAF_VERSION_V1: u16 = 1;
 /// Key of [`palw_tir_execution_root_v1`] — its own, so an IR execution root never verifies as a
@@ -71,6 +83,15 @@ pub enum PalwTirStepError {
 
 fn layout_err<T>(msg: impl Into<String>) -> Result<T, PalwTirStepError> {
     Err(PalwTirStepError::Layout(msg.into()))
+}
+
+/// This geometry and its leaves are the legacy four-byte family. Recognizing
+/// the wide program structurally never authorizes reinterpretation here.
+fn require_legacy_step_width_v1(program: &TirProgramV1) -> Result<(), PalwTirStepError> {
+    if program.wide_logits_q24() {
+        return layout_err("wide Q24 requires an explicit v2 step space; legacy step leaves are four-byte lanes");
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -276,12 +297,20 @@ impl PalwTirStepSpaceV1 {
     /// Decode the class's program, validate it and check the layout against it.
     pub fn new(class: &PalwTirClassV1) -> Result<Self, PalwTirStepError> {
         let program = class.decode_program().map_err(|e| PalwTirStepError::Program(e.to_string()))?;
+        require_legacy_step_width_v1(&program)?;
         let info = misaka_palw_tir::validate::validate(&program).map_err(|e| PalwTirStepError::Program(e.to_string()))?;
         Self::from_program(program, info, class.layout.clone())
     }
 
     /// [`Self::new`] over an already-validated program.
     pub fn from_program(program: TirProgramV1, info: ProgramInfo, layout: PalwTirLayoutV1) -> Result<Self, PalwTirStepError> {
+        require_legacy_step_width_v1(&program)?;
+        Self::from_program_geometry(program, info, layout)
+    }
+
+    // Shared geometry only. The two public families independently validate their width profile
+    // before entering here; this is deliberately not a public width-selection switch.
+    fn from_program_geometry(program: TirProgramV1, info: ProgramInfo, layout: PalwTirLayoutV1) -> Result<Self, PalwTirStepError> {
         if layout.version != PALW_TIR_LAYOUT_VERSION_V1 {
             return layout_err(format!("layout version {} is not {PALW_TIR_LAYOUT_VERSION_V1}", layout.version));
         }
@@ -303,7 +332,8 @@ impl PalwTirStepSpaceV1 {
         let tile_ok = |t: u32| (PALW_STEP_MIN_TILE_LEN..=PALW_STEP_MAX_TILE_LEN).contains(&t);
         let mut tiles = layout.commit_tiles.iter();
         let mut blocks = Vec::with_capacity(program.blocks.len());
-        let tiled_scheme = crate::Hash64::from_bytes(program.logits_scheme_id) == crate::palw_step_refute::tiled_logits_scheme_id_v1();
+        let tiled_scheme = crate::Hash64::from_bytes(program.logits_scheme_id) == crate::palw_step_refute::tiled_logits_scheme_id_v1()
+            || program.wide_logits_q24();
         for (bi, b) in program.blocks.iter().enumerate() {
             let mut commits = Vec::new();
             for (ni, n) in b.nodes.iter().enumerate() {
@@ -657,8 +687,10 @@ impl PalwTirStepSpaceV1 {
         let a64 = a as u64;
         let post_occ = self.occurrences.len() - 1;
         let post_block = self.occurrences[post_occ].0;
-        // Occurrence multiplicity of every non-post block.
-        let mut mult = vec![0u128; self.blocks.len()];
+        // Validated programs have at most MAX_BLOCKS (16). Keep the existing
+        // linear counting algorithm in fixed 256-byte stack storage, so a
+        // leaf-count/quote caller needs no heap allocation before reservation.
+        let mut mult = [0u128; misaka_palw_tir::program::MAX_BLOCKS];
         for (i, (b, _)) in self.occurrences.iter().enumerate() {
             if i != post_occ {
                 mult[*b as usize] += 1;
@@ -881,7 +913,16 @@ impl PalwTirStepSpaceV1 {
     /// leaves: the `Fixed` checkpoints at position `k − 1` and every `Hist` chunk of rows `0..k`.
     pub fn prefix_state_leaf_count_v1(&self, ctx: &PalwJobContextV2, k: u32) -> Option<u64> {
         let job = self.job_shape(ctx).ok()?;
-        if k == 0 || k >= job.prefill || !k.is_multiple_of(self.layout.checkpoint_interval) || !k.is_multiple_of(self.layout.h_tile) {
+        (k < job.prefill).then_some(())?;
+        self.export_prefix_state_leaf_count_v2(ctx, k)
+    }
+
+    /// Source-export boundary only: includes any aligned, actually executed state.
+    /// Generated-token positions are committed by the same step tree as prefill.
+    /// This new entry point does not relax the V1 consumed-prefix relation.
+    pub fn export_prefix_state_leaf_count_v2(&self, ctx: &PalwJobContextV2, k: u32) -> Option<u64> {
+        let job = self.job_shape(ctx).ok()?;
+        if k == 0 || k > job.positions || !k.is_multiple_of(self.layout.checkpoint_interval) || !k.is_multiple_of(self.layout.h_tile) {
             return None;
         }
         let chunks = u64::from(k / self.layout.h_tile);
@@ -893,7 +934,13 @@ impl PalwTirStepSpaceV1 {
     /// checkpoint leaves at `k − 1` placed before that position's `Hist` leaves (their order in
     /// the step tree).
     pub fn prefix_state_leaf_v1(&self, ctx: &PalwJobContextV2, k: u32, ordinal: u64) -> Option<PalwTirLeafV1> {
-        let total = self.prefix_state_leaf_count_v1(ctx, k)?;
+        self.prefix_state_leaf_count_v1(ctx, k)?;
+        self.export_prefix_state_leaf_v2(ctx, k, ordinal)
+    }
+
+    /// The same canonical state-leaf order, with source-export boundary rules.
+    pub fn export_prefix_state_leaf_v2(&self, ctx: &PalwJobContextV2, k: u32, ordinal: u64) -> Option<PalwTirLeafV1> {
+        let total = self.export_prefix_state_leaf_count_v2(ctx, k)?;
         if ordinal >= total {
             return None;
         }
@@ -980,6 +1027,9 @@ pub fn palw_tir_lanes_wire_v1(dtype: DType, values: &[i128]) -> Result<Vec<u8>, 
 /// other dtype's as `i32`. Whether each value is one its node can produce is PALW-TIR-33's
 /// question, asked by the court against the node's proven interval (which lies inside the dtype).
 pub fn palw_tir_lane_values_v1(dtype: DType, bytes: &[u8]) -> Result<Vec<i128>, PalwTirStepError> {
+    if !dtype.committable() {
+        return Err(PalwTirStepError::NotCanonical(format!("{} is never committed in legacy leaves", dtype.name())));
+    }
     if !bytes.len().is_multiple_of(4) {
         return Err(PalwTirStepError::NotCanonical("a lane is four bytes".into()));
     }
@@ -1020,6 +1070,7 @@ pub struct PalwTirStepLegBuilderV1<'s> {
 
 impl<'s> PalwTirStepLegBuilderV1<'s> {
     pub fn new(space: &'s PalwTirStepSpaceV1, ctx: &PalwJobContextV2, class_id: Hash64, cap: u64) -> Result<Self, PalwTirStepError> {
+        require_legacy_step_width_v1(&space.program)?;
         let total = space.leaf_count_capped(ctx, cap)?;
         Ok(Self { space, ctx: ctx.clone(), context_hash: ctx.context_hash(), class_id, total, cap, leaf_hashes: Vec::new() })
     }
@@ -1138,6 +1189,99 @@ pub fn verify_tir_binding_v1(
 #[cfg(test)]
 mod native_step_space_inventory_tests_v1 {
     use super::*;
+    #[test]
+    fn rfc40_source_export_generated_boundary_uses_actual_committed_positions() {
+        let (name, program, params, tokens) =
+            crate::palw_tir_corpus_fixture_v1::programs().into_iter().find(|(name, ..)| name == "dense-gqa-2layer").unwrap();
+        let fixture = crate::palw_tir_corpus_fixture_v1::fixture_tiled(name, program, params, tokens, 4, 3, 64);
+        let execution = fixture.honest();
+        let context = &execution.binding.job_context;
+        let space = PalwTirStepSpaceV1::new(&execution.binding.class).unwrap();
+        let job = space.job_shape(context).unwrap();
+        assert_eq!((job.prefill, job.positions), (4, 6));
+        let k = job.positions;
+        assert!(space.prefix_state_leaf_count_v1(context, k).is_none());
+        assert!(space.prefix_state_leaf_v1(context, k, 0).is_none());
+        let count = space.export_prefix_state_leaf_count_v2(context, k).unwrap();
+        let mut previous = None;
+        let mut generated = false;
+        for ordinal in 0..count {
+            let leaf = space.export_prefix_state_leaf_v2(context, k, ordinal).unwrap();
+            let actual = &execution.preimages[leaf.index as usize];
+            assert_eq!(actual.coord, leaf.coord);
+            assert_eq!(actual.value_count, leaf.value_count);
+            assert_eq!(actual.values_le.len(), leaf.value_count as usize * 4);
+            assert!(previous.is_none_or(|index| index < leaf.index));
+            previous = Some(leaf.index);
+            generated |= leaf.position >= job.prefill;
+            assert!(leaf.position < job.positions);
+        }
+        assert!(generated, "the boundary must authenticate generated-position state too");
+        // Authenticate the same generated boundary one leaf at a time against
+        // the actual execution tree, including serialized continuation recovery.
+        use crate::palw_tir_prefix_export_relation_v2::{TirExportPrefixStreamV2, TirExportTargetV2};
+        use crate::palw_tir_prefix_state_v1::{PALW_TIR_PREFIX_STATE_DIGEST_DOMAIN_V1, PalwTirPrefixStateVerdictV1, leaf_prelude_v1};
+        let mut digest = crate::palw_rendering_stream_v1::LeafHashContinuationV1::new(PALW_TIR_PREFIX_STATE_DIGEST_DOMAIN_V1);
+        digest.update(&k.to_le_bytes());
+        for ordinal in 0..count {
+            let leaf = space.export_prefix_state_leaf_v2(context, k, ordinal).unwrap();
+            digest.update(&leaf_prelude_v1(&leaf).unwrap());
+            digest.update(&execution.preimages[leaf.index as usize].values_le);
+        }
+        let honest = crate::palw_fp_prefix_v1::palw_fp_prefix_state_root_v1(&context.shape_profile_id, k, &digest.finish());
+        let header = crate::palw_public_binding_v1::PalwPublicTirBindingHeaderV1::of_binding_v1(&execution.binding);
+        let other = Hash64::from_u64_word(9001);
+        assert_ne!(honest, other);
+        for declared in [honest, other] {
+            let target = TirExportTargetV2 {
+                version: 2,
+                source: crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1 {
+                    intent: Hash64::from_u64_word(1),
+                    source_claim: Hash64::from_u64_word(2),
+                    accepted_block: Hash64::from_u64_word(3),
+                    accepted_daa: 10,
+                    accepted_blue_score: 10,
+                },
+                export_ordinal: 0,
+                prefix: crate::palw_freeprompt_v3::PalwFpPrefixStateV1 {
+                    class_id: context.shape_profile_id,
+                    prefix_tokens: k,
+                    state_root: declared,
+                },
+                source_execution_root: header.committed_execution_root,
+                liability_until: 30,
+                material_until: 40,
+            };
+            let mut stream = TirExportPrefixStreamV2::from_authenticated_v2(&space, &header, target, 1 << 26).unwrap();
+            for ordinal in 0..count {
+                let leaf = space.export_prefix_state_leaf_v2(context, k, ordinal).unwrap();
+                let opening =
+                    crate::palw_step_leg::step_opening_from_leaf_source_capped_v1(header.step_leaf_count, leaf.index, 1 << 26, |i| {
+                        execution.hashes[i as usize]
+                    })
+                    .unwrap();
+                let values = &execution.preimages[leaf.index as usize].values_le;
+                let saved = stream.clone();
+                assert!(stream.leaf(&space, context, &values[..values.len() - 1], &opening, 80_000).is_err());
+                assert_eq!(stream, saved);
+                stream.leaf(&space, context, values, &opening, 80_000).unwrap();
+                let encoded = borsh::to_vec(&stream).unwrap();
+                stream = borsh::from_slice(&encoded).unwrap();
+                stream.check().unwrap();
+            }
+            assert_eq!(
+                stream.verdict(),
+                Some(if declared == honest {
+                    PalwTirPrefixStateVerdictV1::Honest
+                } else {
+                    PalwTirPrefixStateVerdictV1::StateRootMismatch { derived: honest }
+                })
+            );
+        }
+
+        assert!(space.export_prefix_state_leaf_v2(context, k, count).is_none());
+        assert!(space.export_prefix_state_leaf_count_v2(context, k + 2).is_none());
+    }
     #[test]
     fn actual_scanned_nonempty_step_space_vectors_fit_additional_quote() {
         let x = crate::palw_tir_court_v1::test_support::tiny_execution(None);

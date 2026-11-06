@@ -1,0 +1,74 @@
+[
+  {
+    "name": "final-tests",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "misaka-palw-tir-exec",
+      "--features",
+      "positive-contract",
+      "--test",
+      "positive_full_relation",
+      "--test",
+      "positive_check",
+      "--test",
+      "positive_check_hardening",
+      "--test",
+      "positive_contract",
+      "--test",
+      "positive_expanded_plan",
+      "--test",
+      "positive_production_port",
+      "--test",
+      "positive_record",
+      "--offline",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/misaka-a1-full-relation-final-tests-2026-10-31.log"
+  },
+  {
+    "name": "core-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "kaspa-consensus-core",
+      "--lib",
+      "--no-deps",
+      "--offline",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 101,
+    "log": "/tmp/misaka-a1-full-relation-core-clippy-2026-10-31.log"
+  },
+  {
+    "name": "package-clippy",
+    "command": [
+      "cargo",
+      "clippy",
+      "-p",
+      "misaka-palw-tir-exec",
+      "--features",
+      "positive-contract",
+      "--lib",
+      "--test",
+      "positive_full_relation",
+      "--no-deps",
+      "--offline",
+      "--config",
+      "profile.dev.package.kaspa-consensus-core.opt-level=0",
+      "--",
+      "-D",
+      "warnings"
+    ],
+    "exit_code": 0,
+    "log": "/tmp/misaka-a1-full-relation-package-clippy-2026-10-31.log"
+  }
+]

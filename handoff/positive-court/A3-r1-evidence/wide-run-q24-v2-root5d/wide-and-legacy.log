@@ -1,0 +1,224 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 5.12s
+     Running tests/capture_codec.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/capture_codec-3aaa65e22925c2a1)
+
+running 4 tests
+test every_capture_vector_refuses_a_truncated_hostile_length_before_allocation ... ok
+test framed_capture_preserves_dense_fold_and_false_value_wire_bytes ... ok
+test framed_capture_keeps_strict_eof_and_refuses_truncated_frames ... ok
+test nested_empty_rows_cannot_amplify_beyond_the_real_consumer_reservation ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/cell.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/cell-f224e21935b570c5)
+
+running 12 tests
+test malformed_public_cell_run_requests_refuse_before_indexing_or_demanding_unrestorable_material ... ok
+test the_cell_wire_round_trips_and_refuses_hostile_frames ... ok
+test a_wrong_generated_id_is_a_token_fault_and_a_missing_input_is_unavailable_and_runs_answer_like_a_capture ... ok
+dense-gqa-2layer: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+dense-gqa-2layer: mode 1: the holder opened leaf 1 for leaf 0
+dense-gqa-2layer: mode 2: the holder answered a different number of rows than asked
+gdn-k2-v4-grouped: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+gdn-k2-v4-grouped: mode 1: the holder opened leaf 1 for leaf 0
+gdn-k2-v4-grouped: mode 2: the holder answered a different number of rows than asked
+test a_capture_is_reassembled_from_answered_runs_and_refuses_a_false_leaf_or_a_gap ... ok
+moe-top2-shared: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+moe-top2-shared: mode 1: the holder opened leaf 1 for leaf 0
+moe-top2-shared: mode 2: the holder answered a different number of rows than asked
+6 classes lied at a boundary and were found upstream
+test the_drills_boundary_lie_is_found_upstream_and_passes_downstream ... ok
+test a_pipelined_producer_commits_what_the_whole_schedule_producer_commits ... ok
+3 lies inside a cell, 11 consistent boundary lies
+test a_lie_inside_a_cell_is_found_by_that_cell_at_that_leaf_and_a_consistent_boundary_lie_by_the_upstream_cell ... ok
+sliding-global: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+sliding-global: mode 1: the holder opened leaf 1 for leaf 0
+sliding-global: mode 2: the holder answered a different number of rows than asked
+corpus dense: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+corpus dense: mode 1: the holder opened leaf 1 for leaf 0
+corpus dense: mode 2: the holder answered a different number of rows than asked
+24 cells; 0 refused by an honest helper; 24 lies caught by the mirror
+test a_helper_process_device_answers_every_cell_as_the_cpu_does_and_a_lying_helper_is_caught_by_the_mirror ... ok
+corpus sliding: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+corpus sliding: mode 1: the holder opened leaf 1 for leaf 0
+corpus sliding: mode 2: the holder answered a different number of rows than asked
+corpus gdn: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+corpus gdn: mode 1: the holder opened leaf 1 for leaf 0
+corpus gdn: mode 2: the holder answered a different number of rows than asked
+corpus moe: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+corpus moe: mode 1: the holder opened leaf 1 for leaf 0
+corpus moe: mode 2: the holder answered a different number of rows than asked
+h-window-sum: mode 0: leaf 0 does not open the registered root: the opening does not reconstruct the registered artifact root
+h-window-sum: mode 1: the holder opened leaf 1 for leaf 0
+h-window-sum: mode 2: the holder answered a different number of rows than asked
+test a_shard_only_holder_fetches_its_rows_proves_each_and_verifies_its_cells ... ok
+387 cells verified, 37232 leaves recomputed
+test every_cell_of_every_partition_verifies_from_its_boundary_rows_and_its_shards_weights ... ok
+9 classes, 54 cells verified through the backend
+test a_seat_duty_verifies_its_shards_cells_over_a_backends_capture ... ok
+test a_row_pursuit_over_peers_refuses_liars_and_ends_with_the_mirrors_holding ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.85s
+
+     Running tests/executor_tree_memory.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/executor_tree_memory-e98b8d15b5504d15)
+
+running 1 test
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+
+thread 'actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models' (3516634) panicked at misaka/palw/tir/exec/tests/executor_tree_memory.rs:286:76:
+lease unwind probe
+22 executable corpus cases: maximum requested executor 24418112 B, full tree 114896 B, retained 17942244 B; native retained Vec capacities checked, not process RSS/fee approval
+test actual_executor_and_evidence_trees_reserve_refuse_and_release_for_all_models ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/node_leg.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/node_leg-3f1f1be9cbb099b3)
+
+running 3 tests
+test a_mapped_container_runs_like_the_params_it_holds ... ok
+52 jobs, 10167 leaves: node leg = reference leg
+test the_node_leg_equals_the_reference_through_the_consensus_builder ... ok
+416 resumed runs, 41566 leaves; 96 short points refused
+test a_run_resumed_at_any_checkpoint_continues_leaf_for_leaf ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.36s
+
+     Running tests/positive_typed_adapter.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_typed_adapter-985284a67a55320c)
+
+running 8 tests
+test legacy_hash_path_corruption_and_failed_proof_attempts_do_not_reset_session_meter ... ok
+test live_material_backing_is_reserved_during_claim_export_and_released_without_meter_reset ... ok
+test external_stage_reservations_and_live_material_are_additive_and_cannot_be_lowered_by_claims ... ok
+test original_sparse_declaration_without_static_range_guarantee_stays_unverified_at_source_authentication ... ok
+test original_sparse_capture_reconstructs_every_legacy_preimage_opening_range_and_expanded_lane ... ok
+test independent_expected_identity_and_simultaneous_backing_caps_fail_closed ... ok
+test author_signed_altered_wide_claim_is_rejected_by_actual_source_recomputation ... ok
+typed-adapter window=1: relations=361 capture=22984 index=4944 claims=21272 external_stage_envelope=1410334720 additional_peak=1410906658 total_live=1410931886 built_material_bytes=211268 peak_material_bytes=1308 peak_logical_auth_storage_bytes=45093888 meter=TypedAdapterMeter { lookup_visits: 6804105, proof_attempts: 415, proof_leaf_reads: 13695, hash_work: 33568, claim_bytes: 21272, material_bytes: 6056574976 }
+typed-adapter window=3: relations=370 capture=23044 index=4944 claims=22448 external_stage_envelope=1410334720 additional_peak=1410907402 total_live=1410932306 built_material_bytes=229954 peak_material_bytes=1498 peak_logical_auth_storage_bytes=45095312 meter=TypedAdapterMeter { lookup_visits: 7366053, proof_attempts: 523, proof_leaf_reads: 14121, hash_work: 35240, claim_bytes: 22448, material_bytes: 6207569920 }
+test range_admissible_class_fixture_streams_actual_a1_full_relation_materials ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.48s
+
+     Running tests/positive_typed_capture.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_typed_capture-46ee2b8528e6a716)
+
+running 9 tests
+test fallible_node_observer_stops_before_any_state_or_output_callback ... ok
+test observed_late_node_failure_rolls_back_pending_fixed_and_history_effects ... ok
+test independent_quote_refuses_each_capture_dimension_below_required_bound ... ok
+test original_context_and_flat_prompt_binding_refuse_corrupted_source_metadata ... ok
+test copied_capture_omission_reorder_coordinate_and_type_truncation_are_rejected ... ok
+test canonical_zero_job_tokenizer_is_independent_of_registration_and_expected_context_stays_fixed ... ok
+typed-capture window=1: positions=4 records=174 nodes=147 fixed=12 appended_rows=12 outputs=3 lanes=696 payload_bytes=4464 input_auth_heap_bytes=565712 peak_capture_heap_bytes=598032 local_storage_bytes=17388 geometry_visits=584
+test panel_source_replay_uses_ordinary_settings_without_inherited_selector_or_drill ... ok
+test borrowed_observation_matches_reference_wide_nodes_states_and_original_step_roots ... ok
+typed-capture window=3: positions=4 records=174 nodes=147 fixed=12 appended_rows=12 outputs=3 lanes=756 payload_bytes=4704 input_auth_heap_bytes=565712 peak_capture_heap_bytes=598272 local_storage_bytes=17628 geometry_visits=605
+test typed_prototype_preserves_sparse_registration_and_all_native_payloads_including_window_one ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/retention_memory.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/retention_memory-4465674f9416fb2a)
+
+running 1 test
+test retained_memo_reservation_lives_until_last_arc_even_after_replacement_and_eviction ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/run_wide_idx_history.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_idx_history-625b2f274777dd32)
+
+running 2 tests
+test idx_fixed_and_history_states_remain_structurally_forbidden_in_both_profiles ... ok
+test high_bit_idx_nodes_and_i32_state_keep_exact_legacy_words_in_wide_run ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_wide_memory.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_memory-3d007e6baf6f8ea7)
+
+running 1 test
+LOGICAL_HOST_LEASE requested_bytes=16961358 executor_bytes=16877696 retained_bytes=3048 scratch_bytes=80614 leaf_count=42 work=8192288 (logical request; not physical RSS)
+LOGICAL_HOST_LEASE active_on_return=1
+LOGICAL_HOST_LEASE active_after_drop=0
+LOGICAL_HOST_LEASE active_after_reject=0
+test wide_run_reserves_before_execution_and_retains_host_lease_until_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/run_wide_q24_v2.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/run_wide_q24_v2-b7b0acdbdd74363d)
+
+running 7 tests
+
+thread 'legacy_v1_cpu_process_and_ipc_entry_points_refuse_wide_before_execution_or_serialization' (3516792) panicked at misaka/palw/tir/exec/src/cellstep.rs:75:9:
+V1 cell logits cannot read wide Q24; an explicit V2 cell API is required
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test legacy_v1_cpu_process_and_ipc_entry_points_refuse_wide_before_execution_or_serialization ... ok
+test malformed_mixed_profiles_and_unpinned_inputs_fail_closed_without_execution ... ok
+test exact_quote_limits_fit_and_each_one_below_refuses_before_callbacks ... ok
+test observer_refusal_stops_before_its_leaf_and_any_later_state_or_output ... ok
+test paired_legacy_nodes_fixed_and_history_keep_exact_four_byte_preimages ... ok
+test borrowed_wide_observer_reports_each_executed_node_state_and_output_once ... ok
+test explicit_wide_run_preserves_original_context_and_exact_extreme_rows_with_canonical_roots ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+

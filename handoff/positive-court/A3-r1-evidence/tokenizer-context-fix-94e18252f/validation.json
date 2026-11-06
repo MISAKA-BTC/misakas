@@ -1,0 +1,328 @@
+{
+  "status": "PASS_CANONICAL_CONTEXT_TESTS_WITH_KNOWN_REMOTE_STRICT_CLIPPY_FAILURE",
+  "source_commit": "86932f2c728287adb9e793274e7d567549e07a28",
+  "source_tree": "53abf90ae4cb549f40fd4ef61fd0feeee1c7f03f",
+  "parent_evidence_commit": "211d70b6b11139827725d6c3f2d5bac74ed49128",
+  "started_utc": "2026-10-31T15:36:19.338883+00:00",
+  "build_settings": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a3-target",
+    "CARGO_BUILD_JOBS": "2",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0"
+  },
+  "checks": [
+    {
+      "name": "canonical-exec",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_check",
+        "--test",
+        "positive_check_hardening",
+        "--test",
+        "positive_contract",
+        "--test",
+        "positive_record",
+        "--test",
+        "positive_panel_r1",
+        "--test",
+        "positive_typed_capture",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 6.685,
+      "log": "canonical-exec.log",
+      "log_sha256": "ea3aa9a6996d9dd974b0110ef8b862bf50da1d76be68ab747b30358dd90bc4ca",
+      "top_level_results": [
+        {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 48,
+      "failed": 0
+    },
+    {
+      "name": "canonical-remote",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--locked",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--test",
+        "positive_panel_r1",
+        "--test",
+        "positive_panel_record_r1",
+        "--test",
+        "positive_panel_sources_r1",
+        "--",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "elapsed_seconds": 17.688,
+      "log": "canonical-remote.log",
+      "log_sha256": "a48768c7ca2ef95bc7d4a48c7f03446b56c7738c9147fbc711dd4d6cf034c852",
+      "top_level_results": [
+        {
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 15,
+      "failed": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "clippy",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "-p",
+        "misaka-palw-remote",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 101,
+      "elapsed_seconds": 64.624,
+      "log": "clippy.log",
+      "log_sha256": "8318247083afc6c2a178fff898881975bf560a87ee0b7400db2601b2a9688954",
+      "top_level_results": [],
+      "passed": 0,
+      "failed": 0
+    }
+  ],
+  "test_binaries": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_check-c457d5e0d942d40e",
+      "sha256": "6dea02c572b7a96f0e37890bc084d318aca075d808adc7d207e98022d5c237c5",
+      "bytes": 22103344
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_check_hardening-6b44e909405cf610",
+      "sha256": "4f1a4809b06afe11faaebb07f07740bb3a977e8cf18df8a37cf262241709c445",
+      "bytes": 21954896
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_contract-775969684eaea0db",
+      "sha256": "3210bf3b47b2498563647830788dca6dcff0b6cb5eb3bc559c9c09528bfb6cd8",
+      "bytes": 23326352
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_r1-e920f88cef0955ef",
+      "sha256": "f0f6d35cdc22b487d8100761215102049d078a1b5a3f115ba1c49247ccafe6c0",
+      "bytes": 23543376
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_record-e7482d1e637a5a1f",
+      "sha256": "0dced11a3ac76ce479b60efafc30d3487be3d32cb66c0ee21a548c40288c62cc",
+      "bytes": 23331952
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_typed_capture-46ee2b8528e6a716",
+      "sha256": "796ba492c84e512495b62f886a81c55842c3cea3a1332561cff8a87e540da1e3",
+      "bytes": 21101360
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_r1-79a64246e192c9c3",
+      "sha256": "9cf62ae4d3f94bcb87131d2ce94b1a971634af808219e48767bdd81320ae69f4",
+      "bytes": 23554800
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_record_r1-bc2a1fc867bfe448",
+      "sha256": "14b2454e69cd1673c9816982c4d61cf75cd283d220fe877c2071d86c5a300003",
+      "bytes": 23530224
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-a3-target/debug/deps/positive_panel_sources_r1-7bd9de6aee8ea30b",
+      "sha256": "4bbbad63519718bf419a0a994e77417ba9451eabb1d320adabae2a75ada22835",
+      "bytes": 25739520
+    }
+  ],
+  "count_policy": "Final outer summary per Cargo-launched binary; nested child summaries excluded.",
+  "passed": 63,
+  "failed_tests": 0,
+  "baseline_clippy": {
+    "file": "misaka/palw/remote/src/positive_miner_v2_recovery.rs",
+    "parent_commit": "211d70b6b",
+    "parent_blob": "a8ae4d8385611276493bfdbea6f745234bf0c6ba",
+    "tested_blob": "a8ae4d8385611276493bfdbea6f745234bf0c6ba",
+    "source_byte_identical": true,
+    "diagnostics": [
+      {
+        "line": 424,
+        "lint": "clippy::misnamed_getters"
+      },
+      {
+        "line": 442,
+        "lint": "clippy::collapsible_if"
+      }
+    ],
+    "strict_remote_pass_claimed": false
+  },
+  "additional_checks": [
+    {
+      "name": "exec-strict-clippy",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "clippy",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "positive-panel",
+        "--lib",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit_code": 0,
+      "log": "clippy-exec.log",
+      "log_sha256": "255437663bd3dac7dcf6f0852c8d0c939abdda4e6e972b65d8aee490b1752e3e"
+    },
+    {
+      "name": "docs-before-staging",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "log": "docs-check.log",
+      "log_sha256": "34bf1085a3e1d88fedbf298f1b9ce2bd4ef8d4a92e298bf3b8a2e5b5a8bd260e"
+    },
+    {
+      "name": "staged-docs-check",
+      "command": [
+        "python3",
+        "docs/maintenance/check_docs.py"
+      ],
+      "exit_code": 0,
+      "log": "docs-check-staged.log",
+      "log_sha256": "34bf1085a3e1d88fedbf298f1b9ce2bd4ef8d4a92e298bf3b8a2e5b5a8bd260e",
+      "known_issue_occurrences": 43,
+      "new_issue_occurrences": 0
+    }
+  ],
+  "preflight": {
+    "log": "preflight.log",
+    "log_sha256": "9423a76e610ae22b83ac34871ffcd01c6814702919d429561f41b62dc4a35c3d",
+    "source_state": "mutable before frozen source",
+    "exit_code": 0,
+    "passed": 16,
+    "included_in_total": false
+  },
+  "source_files": [
+    {
+      "path": "consensus/core/src/palw_positive_check_v2.rs",
+      "sha256": "91c33d4b62e607cbd574f79969c95313ac8b8fbae3f11474e50385c6b418e7e9"
+    },
+    {
+      "path": "misaka/palw/remote/src/positive_panel_sources.rs",
+      "sha256": "5216da8dc12805f84e8abaaab4025fd7ca1aa6a2c7ea0f611782f7b18edb2550"
+    },
+    {
+      "path": "misaka/palw/remote/tests/positive_panel_sources_r1.rs",
+      "sha256": "885f9cf0965acb235ddfae76da37fd431ce2b9187200cac65234dbd3ca4be7c9"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_panel.rs",
+      "sha256": "4421b6cf78a4ce267625239b50401e861b4c00ff056b93adcc72fcee1138466d"
+    },
+    {
+      "path": "misaka/palw/tir/exec/src/node/positive_typed_capture.rs",
+      "sha256": "7088ab8ab8590b843899a3860d6c7ebcf2b87e94a75155bce4d2506357404531"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_panel_r1.rs",
+      "sha256": "93096b7ed949cd30310c04837ed721b6b29faca564fbcebcae424902641af6a2"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_panel_r1_common/mod.rs",
+      "sha256": "3839af7bfcaf02ef1c49f43e87635ffab6fc41342b98c75f05a441f33739def3"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_typed_capture.rs",
+      "sha256": "828027405d9016643147318fc0c4a4143d6eca93dc1e87cf4de70f3bf39b9e6b"
+    },
+    {
+      "path": "misaka/palw/tir/exec/tests/positive_typed_capture_common/mod.rs",
+      "sha256": "a86474d1057643e5ee0d7c8b8799dfce8fa60f9c263bb49c310b510da1c2a79e"
+    }
+  ],
+  "invariants": [
+    "Registration tokenizer authenticated by unchanged class ID/artifact/program/layout.",
+    "Actual expected job and Result tokenizer, including zero, retained literally.",
+    "Prototype expected_execution is independently supplied and immutable under candidate changes.",
+    "Original r1 APIs and existing schemes/roots preserved for the same actual canonical context.",
+    "No historical 62/148/other-role totals added; no extra record/native activation claims."
+  ],
+  "owner_followups": [
+    "A1 ExpandedPlan still has its independent class-job tokenizer equality; reported to A0 for separate owner coordination.",
+    "No bulk import of A2 latest inference/native changes.",
+    "Typed\u2192legacy adapter is a later separate commit."
+  ],
+  "owner_update": "After this source was tested, A0 reported selecting A1 a527 and canonical owner correction 3b4; integrated ExpandedPlan fix is 4bf984f356333f256837bb982f459f1a0922477b. It is not included in these 86932f2c7 results.",
+  "integrity_verification": "Source files, all authoritative logs and nine current test binaries matched before evidence commit."
+}

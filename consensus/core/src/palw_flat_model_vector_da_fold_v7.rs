@@ -103,7 +103,7 @@ pub(super) fn demand(
     let answer_work = crate::palw_model_artifact_v2::model_artifact_work_v2(0, FLAT_VECTOR_ANSWER_MAX_BYTES_V7).unwrap();
     let bond = policy.demand_bond.max(policy.dismissal_fee_v1(answer_work));
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Ok(());
     }
     let row = FlatVectorDemandV7 {
@@ -183,7 +183,7 @@ pub(super) fn answer(
     let work = crate::palw_model_artifact_v2::model_artifact_work_v2(0, bytes.len().min(FLAT_VECTOR_ANSWER_MAX_BYTES_V7)).unwrap();
     let Some(fee) = charge(builder, ctx, signer, work, false)? else { return Ok(()) };
     let collateral = builder.state.bonds.get(signer).map(|b| b.collateral as u128).unwrap_or(0);
-    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee {
+    if collateral.saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < fee {
         return Err(refused("flat answer actor cannot cover invalid fee"));
     }
     if !decode_flat_vector_answer_v7(bytes).is_ok_and(|a| a.authenticates(&d)) {

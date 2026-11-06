@@ -118,6 +118,8 @@ pub enum FundedBranchV1 {
     SourceNode { logical: Hash64 },
     /// The original's retention / heap holding.
     Retention,
+    /// New family-contract projection only; never reuses a legacy holding ID.
+    RetentionSegmentV2 { ordinal: u64 },
 }
 
 /// Deterministic resource demand reserved with the claim (never measured runtime).
@@ -152,6 +154,8 @@ pub struct FundedAdmissionDerivationV1 {
     pub signer_packets: Vec<ServicePacket>,
     pub source_packets: Vec<ServicePacket>,
     pub retention_packet: ServicePacket,
+    /// Empty for unchanged historical V1 contracts.
+    pub retention_tail_v2: Vec<ServicePacket>,
     pub resources: FundedResourceDemandV1,
     /// Checked Σ of per-branch capital.
     pub capital_sompi: u64,
@@ -193,6 +197,19 @@ pub fn derive_funded_admission_v1(
     graph: &NativeSourceMaterialGraphV3,
     schedule: &FundedAdmissionScheduleV1,
 ) -> Result<FundedAdmissionDerivationV1, FundedAdmissionRefusalV1> {
+    derive_original_obligations_v1(claim, allocation, source, accepted_daa, signers, Some(graph), schedule)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn derive_original_obligations_v1(
+    claim: Hash64,
+    allocation: Hash64,
+    source: Hash64,
+    accepted_daa: u64,
+    signers: &BTreeSet<PalwBondKeyV2>,
+    graph: Option<&NativeSourceMaterialGraphV3>,
+    schedule: &FundedAdmissionScheduleV1,
+) -> Result<FundedAdmissionDerivationV1, FundedAdmissionRefusalV1> {
     use FundedAdmissionRefusalV1 as R;
     if schedule.heap_bytes_per_branch == 0
         || schedule.retention_bytes_per_branch == 0
@@ -202,9 +219,11 @@ pub fn derive_funded_admission_v1(
     {
         return Err(R::ScheduleInvalid);
     }
-    graph.check_v3().map_err(R::SourceGraph)?;
-    if graph.source_v3() != source {
-        return Err(R::SourceGraph("source graph names another source".into()));
+    if let Some(graph) = graph {
+        graph.check_v3().map_err(R::SourceGraph)?;
+        if graph.source_v3() != source {
+            return Err(R::SourceGraph("source graph names another source".into()));
+        }
     }
     let hard = accepted_daa.checked_add(DISPUTE_WINDOW_DAA).ok_or(R::Overflow)?;
     let first = accepted_daa.checked_add(1).ok_or(R::Overflow)?;
@@ -226,10 +245,12 @@ pub fn derive_funded_admission_v1(
     }
     // (2) Every node of the complete native source graph (all hostile source branches).
     let mut source_packets = Vec::new();
-    for node in graph.nodes_v3() {
-        let id = graph.absolute_packet_id_v3(node.id_v3());
-        source_packets.push(ServicePacket { id, release_daa: first, service_before: hard, cost: schedule.source_packet_cost });
-        branches.push((FundedBranchV1::SourceNode { logical: node.id_v3() }, id));
+    if let Some(graph) = graph {
+        for node in graph.nodes_v3() {
+            let id = graph.absolute_packet_id_v3(node.id_v3());
+            source_packets.push(ServicePacket { id, release_daa: first, service_before: hard, cost: schedule.source_packet_cost });
+            branches.push((FundedBranchV1::SourceNode { logical: node.id_v3() }, id));
+        }
     }
     let service_branches = branches.len() as u64;
     // Resources and capital, checked.
@@ -262,10 +283,84 @@ pub fn derive_funded_admission_v1(
         signer_packets,
         source_packets,
         retention_packet,
+        retention_tail_v2: Vec::new(),
         resources: r,
         capital_sompi,
         hard_daa: hard,
     })
+}
+
+/// New-contract-only projection. The old derivation is byte/ID identical; its
+/// total retained-resource estimate is partitioned under the unchanged per-DAA
+/// byte ceiling. These resource reservations are not supplier response duties.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn derive_funded_admission_family_v2(
+    claim: Hash64,
+    allocation: Hash64,
+    source: Hash64,
+    accepted_daa: u64,
+    signers: &BTreeSet<PalwBondKeyV2>,
+    graph: &NativeSourceMaterialGraphV3,
+    schedule: &FundedAdmissionScheduleV1,
+) -> Result<
+    (FundedAdmissionDerivationV1, Option<crate::palw_native_resource_v1::NativeDemandLeaseV1>),
+    crate::palw_native_resource_v1::NativeDecodeErrorV1<FundedAdmissionRefusalV1>,
+> {
+    use crate::palw_native_resource_v1::{NativeDecodeErrorV1 as E, TirNativeRequestsV1};
+    let source_count = graph.nodes_v3().count() as u64;
+    let signer_count = mul(signers.len() as u64, schedule.service.packets_per_signer).map_err(E::Decode)?;
+    let branches = add(source_count, signer_count).map_err(E::Decode)?;
+    let total = mul(branches, add(schedule.heap_bytes_per_branch, schedule.retention_bytes_per_branch).map_err(E::Decode)?)
+        .map_err(E::Decode)?;
+    let limit = schedule.service.budget.bytes;
+    if total == 0 || limit == 0 {
+        return Err(E::Decode(FundedAdmissionRefusalV1::ScheduleInvalid));
+    }
+    let count = total.div_ceil(limit);
+    if count > DISPUTE_WINDOW_DAA {
+        return Err(E::Decode(FundedAdmissionRefusalV1::ScheduleInvalid));
+    }
+    let universe = add(branches, count).map_err(E::Decode)?;
+    // Reserve the legacy arrays and uniqueness workspace BEFORE invoking their
+    // shared builder, together with the new segment projection. The returned
+    // owner holds this lease throughout quote/admission/install.
+    let mut q = TirNativeRequestsV1::new();
+    q.vec_v1::<ServicePacket>(add(universe, 1).map_err(E::Decode)?).map_err(E::Resource)?;
+    q.vec_v1::<(FundedBranchV1, [u8; 64])>(add(universe, 1).map_err(E::Decode)?).map_err(E::Resource)?;
+    q.exact_v1::<crate::palw_native_resource_v1::BTreeNodeEnvelopeV1<[u8; 64], ()>>(add(universe, 1).map_err(E::Decode)?)
+        .map_err(E::Resource)?;
+    let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(E::Resource)?;
+    let mut d = derive_funded_admission_v1(claim, allocation, source, accepted_daa, signers, graph, schedule).map_err(E::Decode)?;
+    if add(d.resources.heap_bytes, d.resources.retention_bytes).map_err(E::Decode)? != total {
+        return Err(E::Decode(FundedAdmissionRefusalV1::BranchMismatch));
+    }
+    d.branches.retain(|(branch, _)| !matches!(branch, FundedBranchV1::Retention));
+    d.retention_tail_v2 = Vec::with_capacity(usize::try_from(count - 1).map_err(|_| E::Decode(FundedAdmissionRefusalV1::Overflow))?);
+    for ordinal in 0..count {
+        let mut identity = [0u8; 200];
+        identity[..64].copy_from_slice(claim.as_byte_slice());
+        identity[64..128].copy_from_slice(allocation.as_byte_slice());
+        identity[128..192].copy_from_slice(source.as_byte_slice());
+        identity[192..].copy_from_slice(&ordinal.to_le_bytes());
+        let id = keyed(b"misaka-palw/funded-retention-segment/v2", &identity);
+        let consumed = ordinal.checked_mul(limit).ok_or(E::Decode(FundedAdmissionRefusalV1::Overflow))?;
+        let packet = ServicePacket {
+            id,
+            release_daa: d.retention_packet.release_daa,
+            service_before: d.hard_daa,
+            cost: ServiceCost { bytes: (total - consumed).min(limit), work: 1, io: 0, controls: 1 },
+        };
+        d.branches.push((FundedBranchV1::RetentionSegmentV2 { ordinal }, id));
+        if ordinal == 0 {
+            d.retention_packet = packet;
+        } else {
+            d.retention_tail_v2.push(packet);
+        }
+    }
+    d.resources.cpu_work = add(d.resources.cpu_work, count - 1).map_err(E::Decode)?;
+    d.capital_sompi =
+        add(d.capital_sompi, mul(count, schedule.capital_per_source_node_sompi).map_err(E::Decode)?).map_err(E::Decode)?;
+    Ok((d, lease))
 }
 
 /// **The escrow amount the payer must have signed for** (RFC-0035 §7.1 one fee allocation). `capital` = max(schedule floor,
@@ -292,24 +387,82 @@ pub fn funded_admission_book_candidate_v1(
     derivation: &FundedAdmissionDerivationV1,
     schedule: &FundedAdmissionScheduleV1,
 ) -> Result<(CourtServiceStateV2, CourtServiceStateV2), FundedAdmissionRefusalV1> {
+    let after_signer = court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service)
+        .map_err(FundedAdmissionRefusalV1::Binding)?;
+    let full = reserve_original_obligations_v1(after_signer.clone(), claim, Some(graph), derivation)?;
+    Ok((after_signer, full))
+}
+
+fn reserve_original_obligations_v1(
+    mut full: CourtServiceStateV2,
+    claim: Hash64,
+    graph: Option<&NativeSourceMaterialGraphV3>,
+    derivation: &FundedAdmissionDerivationV1,
+) -> Result<CourtServiceStateV2, FundedAdmissionRefusalV1> {
     use FundedAdmissionRefusalV1 as R;
-    let after_signer =
-        court_service_binding_candidate_v1(existing, claim, allocation, source, accepted_daa, signers, &schedule.service)
-            .map_err(R::Binding)?;
-    let mut full = after_signer.clone();
-    let projection = graph.bind_projection_v3(derivation.source_packets.clone()).map_err(R::SourceGraph)?;
-    projection.reserve_v3(&mut full.book, derivation.hard_daa).map_err(R::SourceGraph)?;
+    if let Some(graph) = graph {
+        let projection = graph.bind_projection_v3(derivation.source_packets.clone()).map_err(R::SourceGraph)?;
+        projection.reserve_v3(&mut full.book, derivation.hard_daa).map_err(R::SourceGraph)?;
+    } else if !derivation.source_packets.is_empty() {
+        return Err(R::BranchMismatch);
+    }
     full.book
         .reserve(std::slice::from_ref(&derivation.retention_packet), derivation.hard_daa)
+        .map_err(|e| R::Binding(CourtServiceBindingRefusalV1::Reservation(e)))?;
+    full.book
+        .reserve(&derivation.retention_tail_v2, derivation.hard_daa)
         .map_err(|e| R::Binding(CourtServiceBindingRefusalV1::Reservation(e)))?;
     let binding = full.claims.get_mut(&claim).ok_or(R::BranchMismatch)?;
     binding.packet_ids.extend(derivation.source_packets.iter().map(|p| p.id));
     binding.packet_ids.insert(derivation.retention_packet.id);
+    binding.packet_ids.extend(derivation.retention_tail_v2.iter().map(|p| p.id));
     if binding.packet_ids != derivation.packet_ids() || binding.packet_ids.len() as u64 != derivation.branch_count() {
         return Err(R::BranchMismatch);
     }
     full.check_live_v1().map_err(R::SourceGraph)?;
-    Ok((after_signer, full))
+    Ok(full)
+}
+
+/// Reserve only the original signer and holding duties. The caller must add
+/// the complete Batch material graph before any admission or escrow write.
+pub(crate) fn funded_batch_base_candidate_v1(
+    state: &crate::palw_state_v2::PalwChainStateV2,
+    frame: &crate::palw_tir_public_claim_v1::PalwTirPublicClaimV1,
+    schedule: &FundedAdmissionScheduleV1,
+) -> Result<(FundedAdmissionDerivationV1, crate::palw_court_service_release_v1::CourtServiceRowV3, Hash64), FundedAdmissionRefusalV1> {
+    use crate::palw_court_service_release_v1::{COURT_SERVICE_ROW_VERSION_V3, CourtServiceRowV3};
+    use FundedAdmissionRefusalV1 as R;
+    let plan = frame.plan_v1();
+    let (claim, allocation, source, accepted) = (plan.original_claim, plan.allocation_id, plan.source_id, plan.terms.accepted_daa);
+    let signers = frame.custody_v1().liable_signers_v1();
+    let base = derive_original_obligations_v1(claim, allocation, source, accepted, &signers, None, schedule)?;
+    let signer_book = court_service_binding_candidate_v1(
+        state.court_service_state_v1(), claim, allocation, source, accepted, &signers, &schedule.service,
+    ).map_err(R::Binding)?;
+    let mut book = reserve_original_obligations_v1(signer_book, claim, None, &base)?;
+    let previous = state.court_service_row_v3_v1();
+    book.version = COURT_SERVICE_ROW_VERSION_V3;
+    let row = CourtServiceRowV3 {
+        version: COURT_SERVICE_ROW_VERSION_V3,
+        state: book,
+        resolved: previous.map(|row| row.resolved.clone()).unwrap_or_default(),
+        causal: previous.map(|row| row.causal.clone()).unwrap_or_default(),
+    };
+    row.check().map_err(R::SourceGraph)?;
+    // The profile and sorted signers determine all relative turn windows and
+    // costs. Absolute packet IDs depend on the eventual accepting block.
+    let hold = &base.retention_packet;
+    let holding_terms = (
+        hold.release_daa.checked_sub(accepted).ok_or(R::Overflow)?,
+        hold.service_before.checked_sub(accepted).ok_or(R::Overflow)?,
+        hold.cost,
+    );
+    let scope = crate::palw_court_shared_tir_stream_v1::stream_digest(
+        b"misaka-palw/funded-batch-base/v1",
+        &(claim, source, schedule.service.id(), &signers, holding_terms, base.capital_sompi,
+            base.resources.heap_bytes, base.resources.retention_bytes),
+    ).map_err(|error| R::SourceGraph(error.to_string()))?;
+    Ok((base, row, scope))
 }
 
 /// **G14 lane r6-d1-release: the causal edges of the funded source branches** — recorded with the all-branch book (in its
@@ -390,5 +543,43 @@ mod tests {
         assert_eq!(funded_required_amount_v1(700, 300, 500, 200), Some(1_000));
         assert_eq!(funded_required_amount_v1(700, 300, 100, 1_000), Some(700), "deposit never refunds the fee");
         assert_eq!(funded_required_amount_v1(u64::MAX, 1, 1, 0), None);
+    }
+}
+
+/// Source-owned baseline packet geometry BEFORE funding/reservation. It mirrors
+/// the existing two actual derivation branches, not a new fee or service grant.
+/// The native PreparedOriginal owner supplies its actual signer/graph counts;
+/// complete supplier packet/actor facts remain a separate opaque native input.
+impl FundedAdmissionScheduleV1 {
+    pub(crate) fn native_archive_packet_geometry_v11(
+        &self,
+        signers: u64,
+        source_nodes: u64,
+        segmented: bool,
+    ) -> Result<u64, FundedAdmissionRefusalV1> {
+        use FundedAdmissionRefusalV1 as R;
+        if signers == 0
+            || self.heap_bytes_per_branch == 0
+            || self.retention_bytes_per_branch == 0
+            || self.source_packet_cost.controls != 1
+            || self.source_packet_cost.bytes == 0
+            || self.source_packet_cost.work == 0
+        {
+            return Err(R::ScheduleInvalid);
+        }
+        let signer_packets = mul(signers, self.service.packets_per_signer)?;
+        let branches = add(source_nodes, signer_packets)?;
+        if !segmented {
+            return add(branches, 1);
+        }
+        let total = mul(branches, add(self.heap_bytes_per_branch, self.retention_bytes_per_branch)?)?;
+        if total == 0 || self.service.budget.bytes == 0 {
+            return Err(R::ScheduleInvalid);
+        }
+        let count = total.div_ceil(self.service.budget.bytes);
+        if count > DISPUTE_WINDOW_DAA {
+            return Err(R::ScheduleInvalid);
+        }
+        add(branches, count)
     }
 }

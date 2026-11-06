@@ -350,7 +350,7 @@ pub(super) fn apply_commit_eligibility_exam_v1(
     let fee = policy.attempt_fee_sompi;
     let escrow = palw_eligibility_inspection_escrow_v1(&policy);
     let free = (collateral as u128)
-        .saturating_sub(builder.committed_at(signer, now))
+        .saturating_sub(builder.committed_at(signer, now)?)
         .saturating_sub(builder.read().accuser_ledger_v1(signer, now));
     if !palw_eligibility_attempt_cost_affordable_v1(free, &policy) {
         return Err(refuse("RFC-0017: the committing bond's free collateral does not cover the burn fee and the inspection escrow"));

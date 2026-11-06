@@ -5,7 +5,8 @@
 **misakas** is a post-quantum, **PQ-only** fork of [rusty-kaspa](https://github.com/kaspanet/rusty-kaspa). It replaces Kaspa's
 secp256k1/Schnorr transaction authorization with **ML-DSA-87** (FIPS 204, NIST category 5) and makes every non-PQ path
 unrepresentable at the consensus, mempool and wallet layers. Blocks are produced by **PALW** (proof of AI work): bonded producers run
-registered models, and a claim is paid only once it reaches `Final` under objective, publicly checkable rules. It is an independent
+registered models. At the G14 fence, payment requires both `Final` and claim-level `SecurityCertified` approval
+from selected validators under the stated honest-fraction assumption; local replay alone does not authorize credit. It is an independent
 network with its own genesis and is not compatible with Kaspa or any prior kaspa-pq chain state.
 
 The native token is **Misaka**, ticker **BILI** ([ADR-0174](docs/adr/0174-token-name-misaka-ticker-bili-address-prefix-unchanged.md)).
@@ -18,19 +19,23 @@ Addresses keep the `misaka` prefix (`misaka…` mainnet, `misakatest…` testnet
 kaspad --testnet --netsuffix=12
 ```
 
-The all-model G14 Panel=1 candidate in this checkout schedules its separate migration at **DAA 18,640**. Its fingerprint is
+The full-feature implementation is being integrated and is **not yet complete**. Completion requires executable normal paths, a coherent whole-candidate build, and the required tests. See the [implementation plan](docs/design/palw/integration/g14-17000/full-implementation-completion-2026-10-31.md) and [historical readiness record](docs/design/palw/integration/g14-17000/full-activation-17400-readiness-2026-10-28.md).
+
+The [published G14-only candidate](https://github.com/MISAKA-BTC/misakas/releases/tag/testnet12-g14-17400-655b6cf3a) is a separate, older artifact. The earlier G14 schedule is DAA **18,400**; full activation remains `None`. This working branch does not claim a new public deployment or advertise a verified full-candidate fingerprint.
+
+The upstream all-model G14 Panel=1 candidate schedules its separate migration at **DAA 18,640**. Its recorded fingerprint is
 **`edf472294c89dab0e64e625dbdfcd039b91081b05f89eacf8ba2aa25baa3a189`**, genesis
 `a27f8f44fe4d91a5…`, and schedule id `4024a6e74d7aeb170d99e67c6d8fbe7884d71a716ccb778cd1ee526d01781b04`.
 
-This candidate is under Linux build and deployment validation. Code and local tests do not establish live activation,
+The upstream candidate is under Linux build and deployment validation. Code and local tests do not establish live activation,
 Final or SecurityCertified. See [the migration and validation record](docs/evidence/palw/model-panel-one-2026-10-31/README.md),
-[RFC-0042](docs/rfc/0042-all-model-g14-panel-one.md) and the [retained earlier G14 release record](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md).
-Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
-**never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor.
+[RFC-0042 (AllModelG14PanelOne)](docs/rfc/0042-all-model-g14-panel-one.md) and the [retained earlier G14 release record](docs/design/palw/integration/g14-17000/release-17400-2026-10-28.md).
+These upstream candidate identities are retained history, not a verified fingerprint of this merged full-feature working tree. The separately adopted [RFC-0042 (CourtSupplierConsent)](docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md) retains its own content and status. Both original RFC-0042 / ADR-0210 allocations are preserved by full path; see the [parallel-allocation record](docs/maintenance/numbering.md#2026-11-02-並行割当衝突).
 
-New-genesis policy removes pre-registered genesis bonds. Participants wait for the intended public BASE recovery path and then fund
-ordinary bonds from BASE earnings or genesis UTXOs; implementation and startup verification remain separate. See
-[RFC-0041](docs/rfc/0041-genesis-bond-free-bootstrap.md).
+Read the [launch note](docs/history/networks/testnet-12/t12-launch-2026-09-25.md) before relying on the chain —
+**never count blocks, blue-score depth or DAA as finality on testnet-12**; use finality depth or a `Final` PALW anchor. Claim-level credit authorization remains a separate requirement.
+
+The adopted zero-genesis-bond startup path is described in [RFC-0041](docs/rfc/0041-genesis-bond-free-bootstrap.md); its final same-candidate validation is part of the implementation goal.
 
 ## Quick start
 

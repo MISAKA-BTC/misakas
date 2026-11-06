@@ -1,7 +1,9 @@
-# RFC-0042 — 全モデルの producer を G14 Panel=1 に統一する
+# RFC-0042 (AllModelG14PanelOne) — 全モデルの producer を G14 Panel=1 に統一する
+
+> **並行割当衝突:** 同番号の [RFC-0042 (CourtSupplierConsent)](0042-court-family-supplier-consent-and-native-reservation.md) は別の主文書です。両方の元番号・完全パス・採択内容・wire/署名domainを保持し、修飾名と完全パスで区別します。[番号台帳](../maintenance/numbering.md#2026-11-02-並行割当衝突)。
 
 Status: **ユーザー指定の移行方針 / 実装・検証中、未有効化**（2026-10-31）。
-[ADR-0210](../adr/0210-all-model-g14-panel-one.md)。
+[ADR-0210 (AllModelG14PanelOne)](../adr/0210-all-model-g14-panel-one.md)。
 
 ## 対象
 

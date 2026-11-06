@@ -15,6 +15,8 @@
 - [RFC-0036 — 認証付き PALW state map と行単位アクセス](0036-authenticated-palw-state-map-and-row-access.md)
 - [RFC-0038 — free-prompt の回答トークンを支払済み計算として記録する(FPA1 carriage)](0038-palw-fp-answer-accounting.md)
 - [RFC-0040 — 再利用 prefix の生成元を署名済み work identity で拘束する](0040-authenticated-prefix-work-dependencies.md)
+- [RFC-0043 — 学習済みLLMの広いQ24 logit表現](0043-wide-q24-llm-output.md)
+- [RFC-0046 — Positive native原資の先行relay資料と有限custody](0046-positive-native-funded-relay.md)
 
 ## EVM / wallet
 
@@ -43,7 +45,7 @@
 - [RFC-0019 — 年次モデル追加フォーク: 段階的ソフトウェア展開・年次モデルカタログ・合意は不変](0019-annual-model-upgrade.md)
 - [RFC-0020 — 長文脈の較正・変換・忠実度計測のメモリ: 32K の依存構造を保ち、同時に持たなくてよいものを持たない](0020-long-context-calibration-memory.md)
 - [RFC-0025 — モデルが増え、不正に対する court が大量発生しても処理を継続できる客観的 court](0025-scalable-objective-court-many-models-mass-disputes.md)
-- [RFC-0042 — 全モデルの producer を G14 Panel=1 に統一する](0042-all-model-g14-panel-one.md)
+- [RFC-0042 — (AllModelG14PanelOne) — 全モデルの producer を G14 Panel=1 に統一する](0042-all-model-g14-panel-one.md)
 
 ## Operations / interfaces / recovery
 
@@ -64,4 +66,7 @@
 - [RFC-0031 — 共有courtのinitial notice境界](0031-shared-court-initial-notice-boundary.md)
 - [RFC-0032 — 共有courtの終端materialと非独占提出](0032-shared-court-terminal-material-and-nonblocking-ingress.md)
 - [RFC-0035 — shared court originalの実原資と役割別同意](0035-court-original-funded-contract-and-role-consent.md)
+- [RFC-0042 — (CourtSupplierConsent) — Court全分岐の供給者同意・実原資・native予約](0042-court-family-supplier-consent-and-native-reservation.md)
+- [RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答](0044-positive-court-full-coverage.md)
+- [RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路](0045-positive-court-canonical-assignment.md)
 

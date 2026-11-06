@@ -334,6 +334,7 @@ struct FoldView<'a, 'b> {
     mirror: &'a PalwPanelV3ParamsV1,
     /// The engine's own live duties per bond, which V2's ledger already holds (see [`Self::available_collateral`]).
     duties: BTreeMap<BondIdV1, u128>,
+    available: crate::palw_native_resource_v1::NativeRetainedV1<Vec<(BondIdV1, u128)>>,
     tip_position: u64,
     retirement_parent_root: std::cell::OnceCell<Hash64>,
 }
@@ -362,7 +363,7 @@ impl<'a, 'b> FoldView<'a, 'b> {
         inputs: &'a PalwPanelV3InputsV1,
         ctx: &'a PalwBlockContextV2,
         mirror: &'a PalwPanelV3ParamsV1,
-    ) -> Self {
+    ) -> Result<Self, PalwStateV2Error> {
         let mut view = Self {
             builder,
             parent,
@@ -371,6 +372,7 @@ impl<'a, 'b> FoldView<'a, 'b> {
             ctx,
             mirror,
             duties: BTreeMap::new(),
+            available: crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(Vec::new(), None),
             tip_position: parent.last_point.map(|point| point.daa_score).unwrap_or(0),
             retirement_parent_root: std::cell::OnceCell::new(),
         };
@@ -389,7 +391,38 @@ impl<'a, 'b> FoldView<'a, 'b> {
             }
         }
         view.duties = duties;
-        view
+        let count = builder.state.bonds.len();
+        let mut requests = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        requests.exact_v1::<(BondIdV1, u128)>(count as u64).map_err(PalwStateV2Error::NativeResource)?;
+        let lease = crate::palw_native_resource_v1::reserve_native_requests_v1(requests.bytes_v1())
+            .map_err(PalwStateV2Error::NativeResource)?;
+        let mut available = Vec::new();
+        available.try_reserve_exact(count).map_err(|_| {
+            PalwStateV2Error::NativeResource(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<Vec<(BondIdV1, u128)>>(
+                "panel collateral snapshot",
+                "allocation refused",
+            ))
+        })?;
+        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
+            builder.params.min_collateral_sompi(),
+            builder.params.legacy_public_filer_active_at(ctx.daa_score),
+        );
+        for (key, record) in &builder.state.bonds {
+            let id: BondIdV1 = (*key).into();
+            let room = if palw_bond_may_take_work_v2(record, floor)
+                && !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(&builder.state, key)
+            {
+                builder
+                    .gate_room(key, ctx.daa_score, PalwRcoreGateV1::Work)?
+                    .saturating_add(view.duties.get(&id).copied().unwrap_or(0))
+            } else {
+                0
+            };
+            available.push((id, room));
+        }
+        available.sort_unstable_by_key(|(id, _)| *id);
+        view.available = crate::palw_native_resource_v1::NativeRetainedV1::from_owner_reserved_v1(available, lease);
+        Ok(view)
     }
 }
 
@@ -448,20 +481,7 @@ impl ConsensusViewV1 for FoldView<'_, '_> {
     /// (`gate_room(.., Work)`, the question `require_panel_lock_eligible` asks at a V2 bind), on the pre-object base, plus the
     /// duties of V3-bound claims V2's ledger already holds for it.
     fn available_collateral(&self, bond: &BondIdV1) -> u128 {
-        let key = panel_bond_key_v1(*bond);
-        let state = &self.builder.state;
-        let floor = crate::palw_panel_economy_v1::palw_panel_collateral_floor_at_v1(
-            self.builder.params.min_collateral_sompi(),
-            self.builder.params.legacy_public_filer_active_at(self.ctx.daa_score),
-        );
-        let may_work = state.bonds.get(&key).is_some_and(|record| palw_bond_may_take_work_v2(record, floor))
-            && !crate::palw_aggregate_liability_v1::palw_bond_is_frozen_v1(state, &key);
-        if !may_work {
-            return 0;
-        }
-        self.builder
-            .gate_room(&key, self.ctx.daa_score, PalwRcoreGateV1::Work)
-            .saturating_add(self.duties.get(bond).copied().unwrap_or(0))
+        self.available.binary_search_by_key(bond, |(id, _)| *id).ok().map(|index| self.available[index].1).unwrap_or(0)
     }
 
     fn verify_beacon(&self, request: &BeaconRequestV1, proof: &BeaconProofV1) -> Result<(), PanelErrorV1> {
@@ -617,7 +637,7 @@ pub(super) fn advance_v1(
         beacons: Vec::new(),
     };
     let advanced = {
-        let view = FoldView::new(builder, parent, &engine, &inputs, ctx, &mirror);
+        let view = FoldView::new(builder, parent, &engine, &inputs, ctx, &mirror)?;
         engine.advance(&step, &view)
     };
     let (next, events) = advanced.map_err(|e| inconsistent("advance", e))?;
@@ -995,7 +1015,7 @@ pub(super) fn take_block_v1(
     // Certified outputs: one at a time, and a proof that does not verify is dropped — the block stands.
     for proof in &proofs {
         let attempt = {
-            let view = FoldView::new(builder, parent, &engine, &inputs, ctx, &mirror);
+            let view = FoldView::new(builder, parent, &engine, &inputs, ctx, &mirror)?;
             engine.accept_beacon(proof, &view)
         };
         if let Ok(next) = attempt {

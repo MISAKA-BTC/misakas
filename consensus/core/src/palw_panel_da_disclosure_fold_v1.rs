@@ -87,7 +87,7 @@ pub(super) fn admit_panel_da_on_commit_v1(
     let deadline = palw_panel_da_disclosure_deadline_v1(claim.accepted_daa).ok_or_else(|| refused("deadline overflow"))?;
     let deposit = crate::palw_g14_values_v1::PALW_G14_PANEL_DA_DISCLOSURE_DEPOSIT_SOMPI_V1;
     let bond = builder.state.bonds.get(&claim.bond).ok_or(PalwStateV2Error::MissingBond(claim.bond))?;
-    let committed = palw_bond_committed_v1(&builder.state, &claim.bond, ctx.daa_score, None, builder.params.window_court());
+    let committed = palw_bond_committed_checked_v2(&builder.state, &claim.bond, ctx.daa_score, None, builder.params.window_court())?;
     if (bond.collateral as u128).saturating_sub(committed) < deposit as u128 {
         return Err(refused("the producer bond's free collateral cannot lock the PanelDa disclosure deposit"));
     }

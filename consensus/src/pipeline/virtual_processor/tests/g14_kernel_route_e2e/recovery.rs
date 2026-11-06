@@ -348,29 +348,36 @@ async fn g14r_kernel_v2_panel_the_pursuit_resumes_after_a_verifier_restart_at_ev
 /// off disk with the seal and the half-built group, and a verifier with no state finishes the same group.
 #[tokio::test]
 async fn g14r_kernel_v2_the_pursuit_resumes_after_a_node_restart_mid_filing() {
-    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
-    kaspa_core::log::try_init_logger("warn");
-    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
-    let (sender, receiver) = async_channel::unbounded();
-    let mut net = Net::over(|c| TestConsensus::with_db(db.clone(), c, sender));
-    net._keep.push(Box::new(receiver));
-    let mut w = World::on(net).await;
-    let (lie, card) = covered_lie(&mut w).await;
-    let da = lie.published(&w.fx, &[]);
-    let p = Pursuer::new(card, &w.fx.params, 3);
-    p.seal_and_wait(&mut w.net, &lie.id, &da).await;
-    let group = p.group(&w.net, &lie.id, &da);
-    p.tick(&mut w.net, &lie.id, &da, 1).await;
-    let (sink, root) = (w.net.chain.sink(), w.net.chain.tip_state().1.state_root());
+    pursuit_resumes_after_a_node_restart_mid_filing().await;
+}
 
-    let mut w = w.restart(db.clone());
-    assert_eq!((w.net.chain.sink(), w.net.chain.tip_state().1.state_root()), (sink, root), "the tip off disk");
-    let p = Pursuer::new(card, &w.fx.params, 3);
-    assert_eq!(missing_of(&p.plan(&w.net, &lie.id, &da)), vec![1, 2], "the half-built group off disk");
-    assert_eq!(p.run(&mut w.net, &lie.id, &da, 8).await, KernelPursuitStepV1::Done(KernelPursuitOutcomeV1::Convicted));
-    assert_convicted_once(&w.net, card, &lie.id, group, 3);
-    let z = w.net.replay().await;
-    w.net.assert_same(&z, "a node replaying across the restart");
+#[inline(never)]
+fn pursuit_resumes_after_a_node_restart_mid_filing() -> TestFuture<()> {
+    Box::pin(async move {
+        use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+        kaspa_core::log::try_init_logger("warn");
+        let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let (sender, receiver) = async_channel::unbounded();
+        let mut net = Net::over(|c| TestConsensus::with_db(db.clone(), c, sender));
+        net._keep.push(Box::new(receiver));
+        let mut w = World::on(net).await;
+        let (lie, card) = covered_lie(&mut w).await;
+        let da = lie.published(&w.fx, &[]);
+        let p = Pursuer::new(card, &w.fx.params, 3);
+        p.seal_and_wait(&mut w.net, &lie.id, &da).await;
+        let group = p.group(&w.net, &lie.id, &da);
+        p.tick(&mut w.net, &lie.id, &da, 1).await;
+        let (sink, root) = (w.net.chain.sink(), w.net.chain.tip_state().1.state_root());
+
+        let mut w = w.restart(db.clone());
+        assert_eq!((w.net.chain.sink(), w.net.chain.tip_state().1.state_root()), (sink, root), "the tip off disk");
+        let p = Pursuer::new(card, &w.fx.params, 3);
+        assert_eq!(missing_of(&p.plan(&w.net, &lie.id, &da)), vec![1, 2], "the half-built group off disk");
+        assert_eq!(p.run(&mut w.net, &lie.id, &da, 8).await, KernelPursuitStepV1::Done(KernelPursuitOutcomeV1::Convicted));
+        assert_convicted_once(&w.net, card, &lie.id, group, 3);
+        let z = w.net.replay().await;
+        w.net.assert_same(&z, "a node replaying across the restart");
+    })
 }
 
 // ---- 3. a reorg removes the partial filing, then the merge re-adds it ------------------------------------------------------------

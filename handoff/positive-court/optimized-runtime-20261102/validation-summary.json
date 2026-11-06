@@ -1,0 +1,77 @@
+{
+  "implementation_commit": "6cd0f4dbc36d7508c63fd03b036aacc1ccffdc1a",
+  "before_source_commit": "1f250d0f9",
+  "changed_rust_files": [
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs"
+  ],
+  "source_unchanged_during_each_run": true,
+  "baseline_source_matches_baseline_model": true,
+  "final_source_matches_runtime_model_and_clippy": true,
+  "runtime_counts": [
+    [
+      11,
+      0,
+      0
+    ],
+    [
+      4,
+      0,
+      0
+    ],
+    [
+      20,
+      0,
+      2
+    ]
+  ],
+  "strict_selected_clippy": 0,
+  "binary_current_sha_matches_compiled_record": {
+    "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_wide_material_v2-b6cae2802249778d",
+    "sha256": "262e3c5bc135f6666502909a20b909a8d4e8137c7d27c842880477bff43951e0",
+    "bytes": 8907280
+  },
+  "selected_profiles": {
+    "misaka_palw_tir": {
+      "opt_level": "2",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "kaspa_consensus_core": {
+      "opt_level": "2",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "misaka_palw_tir_exec": {
+      "opt_level": "2",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": false
+    },
+    "positive_wide_material_v2": {
+      "opt_level": "2",
+      "debuginfo": 0,
+      "debug_assertions": true,
+      "overflow_checks": true,
+      "test": true
+    }
+  },
+  "toolchain": "rustc 1.93.0 (254b59607 2026-01-19)\nbinary: rustc\ncommit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c\ncommit-date: 2026-01-19\nhost: aarch64-apple-darwin\nrelease: 1.93.0\nLLVM version: 21.1.8\n",
+  "trained_model_success": false,
+  "full_node_verdict": false,
+  "native_authority_or_activation": false,
+  "new_production_config": false,
+  "qualification": "local prefix performance only; current producer/Node coexist and retain producer owners; source hashing warms OS caches",
+  "documentation": {
+    "record": "docs-complete.json",
+    "mode": "no-new-regressions",
+    "new_issue_occurrences": 0,
+    "known_issue_occurrences": 43,
+    "baseline_changed": false
+  }
+}

@@ -14,6 +14,10 @@
             assert_eq!(requirements.shape_v1().grammar_v1(),crate::palw_court_shared_tir_builder_store_v1::original_aggregate::OriginalGrammarV1::Ordinary);
             assert_eq!(requirements.numerical_v1().source_id_v3(),plan.source_id);
             assert_eq!(requirements.inputs_v1().parameters_v1().source_id,plan.source_id);
+            let demand=requirements.input_material_v1();
+            assert_eq!(demand.parameter_targets,requirements.inputs_v1().parameters_v1().union.len() as u64);
+            assert!(demand.total_bytes_v1().unwrap()>=demand.parameter_bytes);
+            assert!(demand.prompt_targets>0);
             assert_eq!(requirements.numerical_v1().roots_v3().len(),requirements.inputs_v1().roots_v1().len());
             assert!(matches!(requirements.source_graph_v1(),Err(PreparedRequirementsErrorV1::MissingSharedServiceNamespace)));
             assert!(matches!(requirements.numerical_material_join_v1(&paired,&ctx,100000),Err(PreparedRequirementsErrorV1::MissingSharedServiceNamespace)));

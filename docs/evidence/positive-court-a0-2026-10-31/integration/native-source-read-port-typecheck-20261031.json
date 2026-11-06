@@ -1,0 +1,26 @@
+{
+  "head_at_end": "e280be1372622c733b3e99fc2f169c5e6e883e37",
+  "command": [
+    "cargo",
+    "check",
+    "-p",
+    "kaspa-consensus-core",
+    "--lib",
+    "--offline",
+    "--locked"
+  ],
+  "exit_code": 0,
+  "elapsed_seconds": 67.47571396827698,
+  "source_before": {
+    "consensus/core/src/api/mod.rs": "2a2dd3c1f58c487d38865d773fc760b60862debdc089aee777aa0bd7a72c9fb1",
+    "consensus/core/src/lib.rs": "de19d29087a801665a6ee2f8fdb9291e55b63c19a7b3997382c75ce669f2e6e1",
+    "consensus/core/src/palw_positive_source_read_v2.rs": "d06aa2fbff482dd0612713bda59c7bdee8b535fa9e8b05731f643fa30cdf119f"
+  },
+  "source_after": {
+    "consensus/core/src/api/mod.rs": "2a2dd3c1f58c487d38865d773fc760b60862debdc089aee777aa0bd7a72c9fb1",
+    "consensus/core/src/lib.rs": "de19d29087a801665a6ee2f8fdb9291e55b63c19a7b3997382c75ce669f2e6e1",
+    "consensus/core/src/palw_positive_source_read_v2.rs": "d06aa2fbff482dd0612713bda59c7bdee8b535fa9e8b05731f643fa30cdf119f"
+  },
+  "log_sha256": "995622f6c5b78ec56b9a05e43c0b3e40069bb90b3fb299fc51a2ae288216ab6c",
+  "scope": "new read-only consensus API typecheck only; default returns Unavailable and no production native duty owner implemented"
+}

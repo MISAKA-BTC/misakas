@@ -28,6 +28,8 @@
 //! 128 hex). There is deliberately no built-in "demo" executor: an attempt whose execution a Panel cannot replay is fraud, and a miner must not be
 //! one flag away from producing one.
 //!
+//! Prefix a JSON wRPC URL with `json+` in `--rpc`. Unprefixed endpoints use Borsh.
+//!
 //! **Keeping the material.** The Panel pulls the capture from the miner (or a provider). The file is kept under `--state-dir/material/<attempt
 //! id>`; until the independent DA transport serves it for you (`misaka_palw_remote::evidence`), this machine must stay up and serve it — "the PC can
 //! be off after claiming" is NOT claimed here.
@@ -54,7 +56,7 @@ use misaka_palw_remote::attempt::{AttemptExecutor, AttemptParams, AttemptSigner,
 use misaka_palw_remote::checkpoint::Checkpoint;
 use misaka_palw_remote::miner::{
     BlockObservation, BlockState, BlockTracker, MinerConfig, MinerHalt, MinerState, NodeTemplate, RemoteNode, StepOutcome,
-    publish_block, step_with_custody,
+    publish_block, step_with_custody_and_retention,
 };
 use misaka_palw_remote::relay::Reply;
 use misaka_palw_remote::template::{TemplatePolicy, producer_facts_from_wire_v1};
@@ -80,6 +82,7 @@ fn outpoint(text: &str) -> TransactionOutpoint {
 
 struct WrpcNode<'a> {
     endpoint: String,
+    p2p_id: String,
     runtime: &'a tokio::runtime::Runtime,
     client: KaspaRpcClient,
     pay_address: kaspa_addresses::Address,
@@ -138,6 +141,10 @@ impl RemoteNode for WrpcNode<'_> {
 
     fn chain_facts(&self) -> Result<NodeFacts, ViewError> {
         let info = self.runtime.block_on(self.client.get_block_dag_info()).map_err(|e| ViewError(e.to_string()))?;
+        let peer = self.runtime.block_on(self.client.get_info()).map_err(|e| ViewError(e.to_string()))?;
+        if !peer.is_synced || peer.p2p_id != self.p2p_id {
+            return Err(ViewError(format!("{} is unsynced or changed its node ID", self.endpoint)));
+        }
         Ok(NodeFacts {
             network_id: info.network.to_string(),
             sink: info.sink,
@@ -447,6 +454,7 @@ struct Args {
     executor: PathBuf,
     executor_args: Vec<String>,
     state_dir: PathBuf,
+    evidence_provider: Option<String>,
     steps: Option<u64>,
     poll_secs: u64,
     min_submit: Option<usize>,
@@ -483,6 +491,7 @@ fn parse_args() -> Args {
     let (mut drill_salt, mut drill_ruleset) = (None, None);
     let (mut fork_choice_issuers, mut fork_choice_dir, mut fork_choice_limits) =
         (Vec::new(), None, misaka_palw_remote::l2::L2LimitsV1::default());
+    let mut evidence_provider = None;
     let (mut native_providers, mut native_max_body) = (Vec::new(), 64u64 << 20);
     while let Some(flag) = it.next() {
         let mut value = |name: &str| it.next().unwrap_or_else(|| die(format!("{name} needs a value")));
@@ -506,6 +515,7 @@ fn parse_args() -> Args {
             "--executor-cmd" => executor = Some(PathBuf::from(value("--executor-cmd"))),
             "--executor-arg" => executor_args.push(value("--executor-arg")),
             "--state-dir" => state_dir = Some(PathBuf::from(value("--state-dir"))),
+            "--evidence-provider" => evidence_provider = Some(value("--evidence-provider")),
             "--steps" => steps = Some(value("--steps").parse().unwrap_or_else(|_| die("--steps is not a number"))),
             "--poll-secs" => poll = value("--poll-secs").parse().unwrap_or_else(|_| die("--poll-secs is not a number")),
             "--min-submit" => min_submit = Some(value("--min-submit").parse().unwrap_or_else(|_| die("--min-submit is not a number"))),
@@ -621,6 +631,7 @@ fn parse_args() -> Args {
         executor: executor.unwrap_or_else(|| die("--executor-cmd is required: this binary does not contain a model backend")),
         executor_args,
         state_dir: state_dir.unwrap_or_else(|| die("--state-dir is required")),
+        evidence_provider,
         steps,
         poll_secs: poll,
         min_submit,
@@ -639,9 +650,13 @@ fn parse_args() -> Args {
 }
 
 fn connect(runtime: &tokio::runtime::Runtime, endpoint: &str) -> Result<KaspaRpcClient, String> {
+    let (encoding, endpoint) = match endpoint.strip_prefix("json+") {
+        Some(url) => (WrpcEncoding::SerdeJson, url),
+        None => (WrpcEncoding::Borsh, endpoint),
+    };
     let url = if endpoint.contains("://") { endpoint.to_string() } else { format!("ws://{endpoint}") };
-    let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
-        .map_err(|e| format!("cannot build a client for {url}: {e}"))?;
+    let client =
+        KaspaRpcClient::new(encoding, Some(&url), None, None, None).map_err(|e| format!("cannot build a client for {url}: {e}"))?;
     let options = ConnectOptions {
         block_async_connect: true,
         connect_timeout: Some(std::time::Duration::from_secs(10)),
@@ -656,14 +671,34 @@ fn say(event: &str, fields: serde_json::Value) {
     println!("{}", serde_json::json!({ "event": event, "detail": fields }));
 }
 
-fn keep_material(dir: &Path, attempt_id: &Hash64, material: &[u8]) {
+fn keep_material(dir: &Path, attempt_id: Hash64, material: &[u8]) -> Result<(), String> {
+    use std::io::Write;
     let dir = dir.join("material");
-    let _ = std::fs::create_dir_all(&dir);
-    if let Err(e) = std::fs::write(dir.join(attempt_id.to_string()), material) {
-        eprintln!(
-            "[palw-remote-miner] WARNING: cannot keep the capture for {attempt_id}: {e} — the Panel will not be able to read it"
-        );
-    }
+    let path = dir.join(attempt_id.to_string());
+    let write = || -> std::io::Result<()> {
+        std::fs::create_dir_all(&dir)?;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_nanos());
+        let temporary = dir.join(format!(".{attempt_id}.{}.{stamp}.tmp", std::process::id()));
+        let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&temporary)?;
+        let result = (|| {
+            file.write_all(material)?;
+            file.sync_all()?;
+            match std::fs::hard_link(&temporary, &path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if std::fs::read(&path)? != material {
+                        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "different capture at attempt ID"));
+                    }
+                    std::fs::File::open(&path)?.sync_all()?;
+                }
+                Err(error) => return Err(error),
+            }
+            std::fs::File::open(&dir)?.sync_all()
+        })();
+        let _ = std::fs::remove_file(&temporary);
+        result
+    };
+    write().map_err(|error| format!("{}: {error}", path.display()))
 }
 
 fn main() {
@@ -683,16 +718,29 @@ fn main() {
     }
 
     let mut clients = Vec::new();
+    let mut node_ids = std::collections::BTreeSet::new();
     for endpoint in &args.rpc {
         match connect(&runtime, endpoint) {
-            Ok(client) => clients.push((endpoint.clone(), client)),
+            Ok(client) => {
+                let info =
+                    runtime.block_on(async { tokio::time::timeout(std::time::Duration::from_secs(10), client.get_info()).await });
+                match info {
+                    Ok(Ok(info)) if !info.p2p_id.is_empty() && node_ids.insert(info.p2p_id.clone()) => {
+                        clients.push((endpoint.clone(), info.p2p_id, client));
+                    }
+                    Ok(Ok(_)) => eprintln!("[palw-remote-miner] {endpoint}: missing or duplicate node ID — not counted"),
+                    Ok(Err(error)) => eprintln!("[palw-remote-miner] {endpoint}: getInfo: {error} — not counted"),
+                    Err(_) => eprintln!("[palw-remote-miner] {endpoint}: getInfo timed out — not counted"),
+                }
+            }
             Err(e) => eprintln!("[palw-remote-miner] {e} — not counted"),
         }
     }
     let nodes: Vec<WrpcNode<'_>> = clients
         .into_iter()
-        .map(|(endpoint, client)| WrpcNode {
+        .map(|(endpoint, p2p_id, client)| WrpcNode {
             endpoint,
+            p2p_id,
             runtime: &runtime,
             client,
             pay_address: pay_address.clone(),
@@ -798,6 +846,15 @@ fn main() {
             Box::new(move |daa| fence.is_some_and(|a| a.is_active(daa)))
         })
     });
+    let evidence_providers = args.evidence_provider.as_deref().map(|list| {
+        let specs = misaka_palw_remote::transport::parse_provider_list_v1(list)
+            .unwrap_or_else(|error| die(format!("--evidence-provider: {error}")));
+        if specs.is_empty() {
+            die("--evidence-provider names no provider");
+        }
+        misaka_palw_remote::transport::open_providers_v1(&specs)
+    });
+    let evidence_refs: Vec<_> = evidence_providers.iter().flatten().map(Box::as_ref).collect();
     let mut executor = CommandExecutor { program: args.executor.clone(), args: args.executor_args.clone() };
 
     let network_domain = palw_network_domain_v2_for(args.network.as_bytes(), Some(params.genesis.hash));
@@ -938,15 +995,41 @@ fn main() {
             }
         }
         let custody = native_exchange.as_mut().map(|x| x as &mut dyn misaka_palw_remote::attempt::NativeCustodyV3);
-        let outcome =
-            step_with_custody(&refs, &cfg_step, &mut state, &mut executor, &signer, &network_draw, &custody_in_force, custody);
+        let outcome = step_with_custody_and_retention(
+            &refs,
+            &cfg_step,
+            &mut state,
+            &mut executor,
+            &signer,
+            &network_draw,
+            &custody_in_force,
+            custody,
+            &|mounted| {
+                keep_material(&args.state_dir, mounted.attempt_id, &mounted.material)?;
+                if !evidence_refs.is_empty() {
+                    let report = misaka_palw_remote::transport::publish_attempt_capture_v1(
+                        &mounted.attempt,
+                        &mounted.material,
+                        &evidence_refs,
+                    )?;
+                    say(
+                        "evidence-retained",
+                        serde_json::json!({
+                            "attempt_id": mounted.attempt_id.to_string(),
+                            "manifest_id": report.manifest_id.to_string(),
+                            "verified_copies": report.verified_copies(),
+                        }),
+                    );
+                }
+                Ok(())
+            },
+        );
         if let Some(mode) = state.last_mode {
             say("mode", serde_json::json!({ "mode": mode.as_str(), "claim": mode.claim(), "l2": state.last_l2 }));
         }
         match outcome {
             Ok(StepOutcome::DrawLost { bucket }) => say("draw-lost", serde_json::json!({ "bucket": bucket })),
             Ok(StepOutcome::Published(p)) => {
-                keep_material(&args.state_dir, &p.attempt_id, &p.material);
                 say(
                     "published",
                     serde_json::json!({
@@ -1028,5 +1111,27 @@ fn main() {
             }
         }
         std::thread::sleep(std::time::Duration::from_secs(args.poll_secs));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_capture_is_idempotent_and_immutable() {
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("rfc09-retention-{}-{stamp}", std::process::id()));
+        let attempt = Hash64::from_u64_word(8);
+        let check = (|| -> Result<(), String> {
+            keep_material(&root, attempt, b"the original")?;
+            keep_material(&root, attempt, b"the original")?;
+            assert!(keep_material(&root, attempt, b"another capture").is_err());
+            assert_eq!(std::fs::read(root.join("material").join(attempt.to_string())).unwrap(), b"the original");
+            assert_eq!(std::fs::read_dir(root.join("material")).unwrap().count(), 1);
+            Ok(())
+        })();
+        let _ = std::fs::remove_dir_all(&root);
+        check.unwrap();
     }
 }

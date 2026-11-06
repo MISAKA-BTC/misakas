@@ -1,0 +1,298 @@
+{
+  "decision": "No blocker found in the corrected 107-test evidence count or stated qualification scope.",
+  "review_mode": "Independent read-only artifact/hash/raw-log audit; no Root/index/Cargo changes or test reruns.",
+  "audited_count_file": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/hello2-source-clock-corrected-count-audit-20261101.json",
+  "audited_count_sha256": "63d1197d1864800c9cc16b4153cae85362be300be32ad93aa286c4fdafbed700",
+  "source_commit": "7a6935de6add7fe66deb324090a7144b974a8730",
+  "checks": {
+    "two_runtime_manifests_pinned_hashes_match": true,
+    "same_source_in_both_manifests": true,
+    "all_2189_before_after_source_hashes_identical": true,
+    "all_2189_snapshot_hashes_match_named_git_commit": true,
+    "all_2189_current_source_hashes_match": true,
+    "same_rocksdb_archive_current_hash_matches_both_runtime_manifests": true,
+    "raw_logs_and_summaries_match": true,
+    "every_counted_target_summary_nonzero_success": true,
+    "unique_successful_test_names": 107,
+    "duplicate_successful_test_names": [],
+    "total": 107,
+    "breakdown": [
+      30,
+      10,
+      40,
+      1,
+      2,
+      17,
+      7
+    ],
+    "zero_core_lib_filter_explicitly_false_and_excluded": true,
+    "correct_source_integration_40": true,
+    "memory_one_and_producer_seven_distinct_targets": true,
+    "default_stack_no_RUST_MIN_STACK": true,
+    "old_failed_runs_preserved_on_distinct_sources": true
+  },
+  "runtime": [
+    {
+      "file": "hello2-admission-source-clock-corrected-20261101.json",
+      "sha256": "5f61fb5a98fe509441d7ef14ac9ba804f880275a3aeca82f26e76eb175e92320",
+      "head": "7a6935de6add7fe66deb324090a7144b974a8730",
+      "results": [
+        {
+          "log": "hello2-admission-source-clock-corrected-20261101-0.log",
+          "raw_sha256_verified": true,
+          "passed": 30,
+          "counted": true,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 4,
+              "failed": 0
+            },
+            {
+              "status": "ok",
+              "passed": 12,
+              "failed": 0
+            },
+            {
+              "status": "ok",
+              "passed": 6,
+              "failed": 0
+            },
+            {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0
+            },
+            {
+              "status": "ok",
+              "passed": 7,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "tests/capture_codec.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/capture_codec-bd9af3d9c95b8e12)",
+            "tests/cell.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell-31fb22b90f49729e)",
+            "tests/cell_ipc_v2.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell_ipc_v2-24d04baed76552cc)",
+            "tests/run_wide_memory.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_memory-c0cdcb1dcf02896e)",
+            "tests/wide_capture_v2.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/wide_capture_v2-cc910cf2d06a0915)"
+          ]
+        },
+        {
+          "log": "hello2-admission-source-clock-corrected-20261101-1.log",
+          "raw_sha256_verified": true,
+          "passed": 10,
+          "counted": true,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 10,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)"
+          ]
+        },
+        {
+          "log": "hello2-admission-source-clock-corrected-20261101-2.log",
+          "raw_sha256_verified": true,
+          "passed": 0,
+          "counted": false,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 0,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)"
+          ]
+        }
+      ],
+      "source_entries": 2189,
+      "source_before_after_identical": true,
+      "default_stack_env": true
+    },
+    {
+      "file": "source-clock-producer-correct-targets-20261101.json",
+      "sha256": "02a0369d31bdf7a1a5c4600c849fdc16a9dbebc808c4ae57881d4bc44d2b57f4",
+      "head": "7a6935de6add7fe66deb324090a7144b974a8730",
+      "results": [
+        {
+          "log": "source-clock-producer-correct-targets-20261101-0.log",
+          "raw_sha256_verified": true,
+          "passed": 40,
+          "counted": true,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 40,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "tests/positive_source_v2.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_source_v2-cd4948d3a0edb2e1)"
+          ]
+        },
+        {
+          "log": "source-clock-producer-correct-targets-20261101-1.log",
+          "raw_sha256_verified": true,
+          "passed": 1,
+          "counted": true,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 1,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)"
+          ]
+        },
+        {
+          "log": "source-clock-producer-correct-targets-20261101-2.log",
+          "raw_sha256_verified": true,
+          "passed": 2,
+          "counted": true,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 2,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)"
+          ]
+        },
+        {
+          "log": "source-clock-producer-correct-targets-20261101-3.log",
+          "raw_sha256_verified": true,
+          "passed": 17,
+          "counted": true,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 17,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting_node-079fcdd0641abd4c)"
+          ]
+        },
+        {
+          "log": "source-clock-producer-correct-targets-20261101-4.log",
+          "raw_sha256_verified": true,
+          "passed": 7,
+          "counted": true,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 7,
+              "failed": 0
+            }
+          ],
+          "targets": [
+            "tests/run_wide_q24_v2.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/run_wide_q24_v2-33192694b100907b)"
+          ]
+        }
+      ],
+      "source_entries": 2189,
+      "source_before_after_identical": true,
+      "default_stack_env": true
+    }
+  ],
+  "failures_preserved": [
+    {
+      "kind": "Hello2 first OS-child failure",
+      "source_commit": "9795a6038c1edff2ccaa86d7ca9b4a6876830d1d",
+      "manifest": "hello2-admission-source-clock-joined-20261101.json",
+      "manifest_sha256": "561c83bd679ed9a01ee62e6e009481b840e59f55869c94c80199138de895245d",
+      "failures": [
+        {
+          "log": "hello2-admission-source-clock-joined-20261101-0.log",
+          "sha256": "449d72b855a9be1f12b8020299b69f0782e66f85f4647c619ee132d5e7738c75",
+          "passed": 21,
+          "effective_success": false,
+          "summaries": [
+            {
+              "status": "ok",
+              "passed": 4,
+              "failed": 0
+            },
+            {
+              "status": "ok",
+              "passed": 12,
+              "failed": 0
+            },
+            {
+              "status": "FAILED",
+              "passed": 5,
+              "failed": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "Core E0061 compile failure, no runtime",
+      "source_commit": "9795a6038c1edff2ccaa86d7ca9b4a6876830d1d",
+      "manifest": "admission-source-clock-remaining-20261101.json",
+      "manifest_sha256": "6eee39da77075afe49c5d0443deef43bcf2951322d00762032fbe7a30444889a",
+      "failures": [
+        {
+          "log": "admission-source-clock-remaining-20261101-0.log",
+          "sha256": "6694f951b0d632036c3c9db12a825e22f7d59e55334162074542e876d7508e9c",
+          "passed": 0,
+          "effective_success": false,
+          "summaries": []
+        }
+      ]
+    },
+    {
+      "kind": "Original operand oracle 8/2 failure",
+      "source_commit": "c85d5a9c92632e81a2880d3159bf95ce38e0e370",
+      "manifest": "wide-admission-stack-joined-20261101.json",
+      "manifest_sha256": "43e73cd29c30cde6608361d024a33fe2bdac793a02f9d87699f3e5374e0d8296",
+      "failures": [
+        {
+          "log": "wide-admission-stack-joined-20261101-2.log",
+          "sha256": "edb7791591377941bb03f088c9d820ba2de68accb519e1b69e30a77d2bdf08f0",
+          "passed": 8,
+          "effective_success": false,
+          "summaries": [
+            {
+              "status": "FAILED",
+              "passed": 8,
+              "failed": 2
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "initial_binary_archives": [
+    {
+      "manifest": "hello2-first-failure-binary-preservation-20261101.json",
+      "source_commit": "9795a6038",
+      "gzip_sha256_verified": true,
+      "decompressed_original_sha256_verified": true
+    },
+    {
+      "manifest": "admission-first-failure-binary-preservation-20261101.json",
+      "source_commit": "c85d5a9c9",
+      "gzip_sha256_verified": true,
+      "decompressed_original_sha256_verified": true
+    }
+  ],
+  "scope": "Local/private CPU/data/fixture regressions only. Not native acceptance/funding/P/credit, generic artifact startup, complete native history/permissionless draw, or real trained LLM registration qualification.",
+  "limitations": [
+    "Historical archive stability is recorded by the runtime runner; this independent audit additionally verifies the current archive against both pinned runtime records.",
+    "A3 initial OS-child failure and c85 admission-oracle failure are not combined with the corrected 7a source count.",
+    "The ignored Hello2 child helper is not counted as a successful test.",
+    "No new runtime test was executed during this audit."
+  ]
+}

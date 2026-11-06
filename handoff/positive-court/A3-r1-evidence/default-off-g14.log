@@ -1,0 +1,33 @@
+    Blocking waiting for file lock on artifact directory
+   Compiling rustix v0.38.37
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling polling v3.7.3
+   Compiling async-io v2.3.4
+   Compiling async-global-executor v2.4.1
+   Compiling async-std v1.13.0
+   Compiling workflow-core v0.18.0
+   Compiling workflow-wasm v0.18.0
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/crypto/merkle)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/crypto/muhash)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/math)
+   Compiling kaspa-addresses v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/crypto/addresses)
+   Compiling kaspa-wasm-core v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/wasm/core)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/sketch)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/crypto/txscript)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/pq/validator-core)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/endpoints)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/remote)
+    Finished `test` profile [unoptimized] target(s) in 2m 03s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-a3-target/debug/deps/misaka_palw_remote-58f01cd9e6b48b55)
+
+running 4 tests
+test pursuit::tests::the_resume_bound_leaves_the_carriage_and_one_fold ... ok
+test pursuit::tests::horizon_words_are_the_ledgers_refusals ... ok
+test pursuit::tests::g14k_a_step_sends_exactly_its_objects ... ok
+test pursuit::tests::g14k_both_chunk_lanes_reassemble_in_any_order_once ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 173 filtered out; finished in 0.00s
+

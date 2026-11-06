@@ -700,8 +700,8 @@ fn fund(
     let next = r.execution_nonce_counter_v11(&w.requester_operator).map_err(refused)?.advance(&w.nonce).map_err(refused)?;
     let requester_payout = requester.payout_payload;
     let producer_payout = producer.payout_payload;
-    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < w.reward as u128
-        || (producer.collateral as u128).saturating_sub(builder.committed_at(&producer_key, ctx.daa_score))
+    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < w.reward as u128
+        || (producer.collateral as u128).saturating_sub(builder.committed_at(&producer_key, ctx.daa_score)?)
             < q.maximum.record().producer_reserve as u128
     {
         return Err(refused("text29 original actual escrow or collectible producer reserve unavailable"));
@@ -1157,7 +1157,7 @@ fn own(
     }
     let ledger = super::super::palw_kernel_route_fold_v1::route_ledger_policy_v1(builder)?;
     let fee = ledger.job_fee.max(1);
-    if (bond.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < fee as u128 {
+    if (bond.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < fee as u128 {
         return Err(refused("text29 original paid discovery/seal fee unavailable"));
     }
     let receipt = object_id(

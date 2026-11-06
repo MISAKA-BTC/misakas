@@ -231,6 +231,84 @@ pub fn palw_g14_funded_admission_estimate_v1() -> crate::palw_funded_original_ad
     .expect("the lane VAL admission estimate is in range")
 }
 
+/// **Batch replay ceiling that fits one adopted service packet.** Provisional estimate, same class as V1–V5.
+/// Not a measured Qwen replay. The verification packet's service cost is exactly one
+/// [`PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1`] budget slot: work 13, io 1, and
+/// `34,000 − verification carrier` retained fault bytes. A larger cone is refused.
+pub fn palw_g14_batch_replay_budget_estimate_v1() -> crate::palw_court_shared_material_intake_v1::NumericalBatchReplayBudgetV1 {
+    use crate::palw_court_shared_material_intake_v1::batch::numerical_verification::verification_carrier_bytes_v1;
+    use crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1;
+    let carrier = verification_carrier_bytes_v1();
+    let fault = PALW_G14_PACKET_BYTES_V1.checked_sub(carrier).expect("verification carrier fits one packet");
+    crate::palw_court_shared_material_intake_v1::NumericalBatchReplayBudgetV1 {
+        // (2 + 3) × 2 + 1 target + 1 source read + base work 1 = session weight 13.
+        work: PalwTirBuilderWorkLimitsV1 {
+            evaluation: misaka_palw_tir::demand::DemandLimits { max_elements: 2, max_terms: 3 },
+            max_target_requests: 1,
+            max_source_reads: 1,
+        },
+        workspace_bytes: PALW_G14_HEAP_BYTES_PER_BRANCH_V1,
+        max_fault_bytes: fault,
+        base_work: 1,
+        io: 1,
+    }
+}
+
+/// Replay profile the accepting extras install while Batch Court is in force.
+/// `service_profile` is the rooted book's profile id, not the source profile id.
+pub fn palw_g14_batch_replay_profile_estimate_v1(
+    service_profile: crate::Hash64,
+) -> crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1 {
+    crate::palw_court_shared_material_intake_v1::NumericalBatchReplayProfileV1 {
+        service_profile,
+        budget: palw_g14_batch_replay_budget_estimate_v1(),
+    }
+}
+
+/// **Funded Batch schedule** attached only while `batch_court_active_v1` is set. Clocks are the existing
+/// notice window (3,120 DAA), dispute window (10,000 DAA), inclusion delay, turn deadline and service span.
+/// Carrier work stays one packet; the fold overwrites carrier bytes with the actual body.
+pub(crate) fn palw_g14_funded_batch_schedule_estimate_v1() -> crate::palw_funded_original_coordinator_v1::FundedBatchScheduleV1 {
+    use crate::palw_court_shared_material_intake_v1::batch::admission::{NativeBatchDeliveryCostsV1, NativeBatchDeliveryTimingV1};
+    use crate::palw_funded_original_coordinator_v1::FundedBatchScheduleV1;
+    use crate::palw_tir_public_source_v1::parameter_cover_v1::StreamingParameterCoverBudgetV1;
+    let replay = palw_g14_batch_replay_budget_estimate_v1();
+    let packet = PALW_G14_COURT_SERVICE_PROFILE_ESTIMATE_V1.packet_cost;
+    let turn = PALW_G14_T12_TURN_DEADLINE_DAA_V1;
+    FundedBatchScheduleV1 {
+        cover: StreamingParameterCoverBudgetV1 {
+            total: PALW_G14_PARAMETER_COVER_BUDGET_V1,
+            per_root_edges: PALW_G14_PARAMETER_COVER_BUDGET_V1.max_total_edges,
+            per_root_coordinates: PALW_G14_PARAMETER_COVER_BUDGET_V1.max_total_coordinates,
+            per_root_memberships: PALW_G14_PARAMETER_COVER_BUDGET_V1.max_root_memberships,
+            max_workspace_bytes: PALW_G14_HEAP_BYTES_PER_BRANCH_V1,
+        },
+        maximum_ranges: crate::palw_batch_court_v1::MAX_BATCH_RANGES_V1,
+        delivery: NativeBatchDeliveryCostsV1 {
+            numerical_verification: replay,
+            terminal: packet,
+            recovery_daa: turn,
+            maximum_packets: PALW_G14_PARAMETER_COVER_BUDGET_V1.max_original_leaves as usize + 1,
+            timing: NativeBatchDeliveryTimingV1 {
+                open_daa: PALW_G14_COURT_SERVICE_INCLUSION_DELAY_DAA_ESTIMATE_V1,
+                provider_wait_daa: turn,
+                begin_daa: turn,
+                parts_daa: PALW_G14_SERVICE_SPAN_DAA_V1,
+                finish_daa: turn,
+                verification_daa: turn,
+                stop_daa: turn,
+                terminal_daa: turn,
+            },
+        },
+        carrier_costs: [packet; 4],
+        open_work_per_range: 0,
+        finish_work_per_byte: 0,
+        finish_io_per_byte: 0,
+        stop_verification: packet,
+        stop_filing: packet,
+    }
+}
+
 /// **V2 funded original pin** through the validated production constructor. Profile ids are derived from the value names.
 pub fn palw_g14_funded_original_schedule_estimate_v1() -> crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1 {
     let [l, r, pa, e, pb] = PALW_G14_NUMERICAL_GEOMETRY_V1;
@@ -351,6 +429,52 @@ mod tests {
         assert!(125_000 - p.budget.bytes >= 56_134);
         // 1 packet/DAA: each 833-DAA interval needs 2 slots for one original.
         assert!(PALW_G14_SERVICE_SPAN_DAA_V1 * PALW_G14_SERVICE_BUDGET_PACKETS_PER_DAA_V1 >= PALW_G14_PANEL1_LIABLE_SIGNERS_V1);
+    }
+
+    #[test]
+    fn batch_replay_profile_matches_the_funded_schedule_and_one_service_packet() {
+        use crate::palw_court_policy_v1::{DISPUTE_WINDOW_DAA, NOTICE_WINDOW_DAA};
+        use crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1;
+        use crate::palw_court_service_state_v2::court_service_profile_id_v2;
+        use crate::palw_funded_original_coordinator_v1::palw_funded_original_schedule_v1;
+        use crate::palw_state_v2::PalwTransitionExtrasV1;
+        let service = PALW_COURT_SERVICE_PROFILE_V1.expect("adopted court service profile");
+        let profile = palw_g14_batch_replay_profile_estimate_v1(court_service_profile_id_v2(service.id()));
+        let batch = palw_g14_funded_batch_schedule_estimate_v1();
+        assert_eq!(profile.budget, batch.delivery.numerical_verification);
+        let cost = profile.budget.service_cost_v1().expect("verification packet");
+        assert!(cost.bytes <= service.budget.bytes && cost.work <= service.budget.work && cost.io <= service.budget.io);
+        assert_eq!(cost.controls, service.budget.controls);
+        assert!(profile.budget.covers_terminal_recheck_v1(batch.delivery.terminal));
+        let timing = batch.delivery.timing;
+        let occupied = timing.open_daa
+            + timing.provider_wait_daa
+            + timing.begin_daa
+            + timing.parts_daa
+            + timing.finish_daa
+            + timing.verification_daa
+            + timing.stop_daa
+            + timing.terminal_daa;
+        assert!(NOTICE_WINDOW_DAA + 1 + occupied + batch.delivery.recovery_daa < DISPUTE_WINDOW_DAA);
+        let mut extras = PalwTransitionExtrasV1::default();
+        assert!(palw_funded_original_schedule_v1(&extras).is_err());
+        extras.tir_public_conviction_active = true;
+        assert!(palw_funded_original_schedule_v1(&extras).unwrap().batch_v1().is_none());
+        extras.batch_court_active_v1 = true;
+        let armed = palw_funded_original_schedule_v1(&extras).unwrap();
+        assert_eq!(armed.batch_v1().unwrap().delivery.numerical_verification, profile.budget);
+        // The shipped testnet-12 ruleset leaves the fence unset. A test ruleset that already
+        // resolves conviction and the audit accepts the same fence once it sits at or above both.
+        let shipped = crate::config::params::palw_t12_release_v2_params();
+        assert!(shipped.palw_batch_court_v1.is_none());
+        assert!(shipped.palw_batch_court_v1_fence().is_none());
+        shipped.validate_palw_batch_court_v1().unwrap();
+        let mut armed_params = crate::palw_g14_gates_v1::palw_g14_genesis_test_params_v1();
+        let floor = armed_params.palw_tir_public_conviction_v1_fence().expect("conviction").daa_score()
+            .max(armed_params.palw_audit_2026_09_11_fence().expect("audit").daa_score());
+        armed_params.palw_batch_court_v1 = Some(crate::config::params::ForkActivation::new(floor));
+        assert_eq!(armed_params.palw_batch_court_v1_fence().expect("batch").daa_score(), floor);
+        armed_params.validate_palw_batch_court_v1().unwrap();
     }
 
     #[test]

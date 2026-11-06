@@ -123,6 +123,14 @@ pub struct LowerOpts {
     /// Includes split outlier main rows and expert stacks; stored quant formats stay exact.
     /// Opt-in changes canonical program/parameter identities, never an existing artifact.
     pub linear_weight_bits: u8,
+    /// Explicit decoder Q24 output storage width. Default 32 preserves the
+    /// legacy program and tensor bytes; 64 selects final-post i64 Q24 without
+    /// changing natural-log units, the context, weights or model layers.
+    pub logits_bits: u8,
+    /// Attention projections only; an opt-in precision profile using existing integer matmuls.
+    pub attention_weight_bits: u8,
+    /// Dense MLP output/down projections only.
+    pub mlp_down_weight_bits: u8,
     /// **The gated-delta core on a fine grid** (registrant's choice of fidelity; default off, and off leaves every program and artifact
     /// byte for byte as before). A gated-delta layer's core output is `i32` on the wire but carries ONE scale per tensor, set by the
     /// calibrated absmax of the 16-bit grid; the gated RMS norm after it is per head, so a head whose core is far smaller than the
@@ -144,6 +152,9 @@ impl Default for LowerOpts {
             table_chunk_rows: None,
             conv_weight_bits: 8,
             linear_weight_bits: 8,
+            logits_bits: 32,
+            attention_weight_bits: 8,
+            mlp_down_weight_bits: 8,
             gdn_core_wide: false,
         }
     }
@@ -413,8 +424,20 @@ pub(crate) fn lower_recipe(hl: &HlProgram, opts: &LowerOpts, profile: Option<&ti
     if let Some(profile) = profile {
         profile.check().map_err(LowerError::bad)?;
     }
+    if !matches!(opts.mlp_down_weight_bits, 8 | 16) {
+        return Err(LowerError::bad("mlp_down_weight_bits: expected 8 or 16"));
+    }
+    if !matches!(opts.attention_weight_bits, 8 | 16) {
+        return Err(LowerError::bad("attention_weight_bits: expected 8 or 16"));
+    }
     if !matches!(opts.linear_weight_bits, 8 | 16) {
         return Err(LowerError::bad(format!("linear_weight_bits {}: expected 8 or 16", opts.linear_weight_bits)));
+    }
+    if !matches!(opts.logits_bits, 32 | 64) {
+        return Err(LowerError::bad("logits_bits must be 32 or 64"));
+    }
+    if opts.logits_bits == 64 && !matches!(hl.output, hl::HlOutput::Logits) {
+        return Err(LowerError::not_lowerable("wide Q24 is currently a decoder logit profile"));
     }
     let hb = opts.history_bound;
     if hb != tir::program::HISTORY_BOUND_V1_SMALL && hb != tir::program::HISTORY_BOUND_V1_HELD {
@@ -485,6 +508,9 @@ pub(crate) fn lower_recipe(hl: &HlProgram, opts: &LowerOpts, profile: Option<&ti
         table_chunk: i64::from(opts.table_chunk_rows.unwrap_or(1 << 24).clamp(1, 1 << 24)),
         conv_weight_bits: 8,
         linear_weight_bits: opts.linear_weight_bits,
+        logits_dtype: if opts.logits_bits == 64 { DType::I64 } else { DType::I32 },
+        attention_weight_bits: opts.attention_weight_bits,
+        mlp_down_weight_bits: opts.mlp_down_weight_bits,
         out_major_rows: profile.is_some(),
         gdn_core_wide: opts.gdn_core_wide,
     };
@@ -562,7 +588,10 @@ pub(crate) fn lower_recipe(hl: &HlProgram, opts: &LowerOpts, profile: Option<&ti
     }
     let logits = logits.ok_or_else(|| LowerError::eval("internal: post block produced no logits"))?;
     let layers: Vec<u8> = hl.schedule.iter().map(|k| block_map[*k as usize]).collect();
-    let program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
+    let mut program = pb.finish(block_map[hl.pre], layers, block_map[hl.post], logits);
+    if opts.logits_bits == 64 {
+        program.logits_scheme_id = tir::program::LOGITS_I64_Q24_SCHEME_V2;
+    }
     // `prim_set_id` is the builder's default, `misaka_palw_tir::prim::PRIM_SET_ID_V1` (NF-1).
     if profile.is_none() {
         tir::validate::validate(&program)
@@ -655,6 +684,9 @@ struct Cx<'h> {
     /// [`LowerOpts::conv_weight_bits`] (8 or 16).
     conv_weight_bits: u8,
     linear_weight_bits: u8,
+    logits_dtype: DType,
+    attention_weight_bits: u8,
+    mlp_down_weight_bits: u8,
     /// **Encoder rows' projections stored OUT-major** (`[out, in]`, as the decoder's): `linear_rows` computes `(W · Xᵀ)ᵀ` instead
     /// of `X · Wᵀ` — the same integers — so a commit tile of `T` output channels reads `T` contiguous weight rows (`T` inventory
     /// pieces) rather than a column slice through every input row (`in` pieces). Off by default (the programs every existing
@@ -689,6 +721,7 @@ fn code_bounds(dt: DType) -> (i64, i64) {
     match dt {
         DType::I16 => (-32767, 32767),
         DType::I32 => (i32::MIN as i64, i32::MAX as i64),
+        DType::I64 => (i64::MIN, i64::MAX),
         other => panic!("no code bounds for {}", other.name()),
     }
 }
@@ -802,7 +835,7 @@ fn lower_block(
         role: blk.role,
         prefixes,
         vals: Vec::with_capacity(blk.nodes.len()),
-        wants: plan(hl, hbk),
+        wants: plan(hl, hbk, cx.logits_dtype),
         rope_sites: rope_consumer_sites(blk),
         split: split_plan(hl, blk, &cx.shared, cx.split_max_readers),
         windows: BTreeMap::new(),
@@ -864,7 +897,8 @@ fn lower_block(
         BlockRole::Post => {
             let v = operand(&lb, blk.outputs[0])?;
             let key = output_key(hl, &v.site);
-            let v = coerce(&mut b, cx, &mut lb, &v, DType::I32, &key)?;
+            let dt = if matches!(hl.output, hl::HlOutput::Logits) { cx.logits_dtype } else { DType::I32 };
+            let v = coerce(&mut b, cx, &mut lb, &v, dt, &key)?;
             let v = ensure_node(&mut b, &v);
             let tir::Ref::Node(li) = v.r else { unreachable!("ensure_node") };
             b.commit(v.r);
@@ -979,7 +1013,7 @@ fn note_resid(cx: &mut Cx<'_>, lb: &Lb, v: &Val) {
 /// consumer needs. Block outputs want the residual `i32` scale (post: the wide logits); an `Add`
 /// passes its want to both operands, a `Scale{c}` to its input divided by `c`. Everything else
 /// produces its default (`i16` codes at its own site) and consumers convert.
-fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
+fn plan(hl: &HlProgram, hbk: usize, logits_dtype: DType) -> Vec<Option<Want>> {
     let blk = &hl.blocks[hbk];
     let mut want: Vec<Option<Want>> = vec![None; blk.nodes.len()];
     let out_want = if blk.role == BlockRole::Post {
@@ -987,7 +1021,7 @@ fn plan(hl: &HlProgram, hbk: usize) -> Vec<Option<Want>> {
             hl::Ref::Node(i, _) => blk.nodes[i as usize].site.clone().unwrap_or_else(|| "logits".into()),
             _ => "logits".into(),
         };
-        Want { dt: DType::I32, key: output_key(hl, &site) }
+        Want { dt: if matches!(hl.output, hl::HlOutput::Logits) { logits_dtype } else { DType::I32 }, key: output_key(hl, &site) }
     } else {
         Want { dt: DType::I32, key: ScaleKey::resid() }
     };
@@ -1076,7 +1110,7 @@ pub const LOGITS_Q24_REFUSE_AT: f64 = 120.0;
 
 /// `LOGITS_Q24_V1`'s bound, checked where the post occurrence's scales resolve: the calibrated
 /// absmax of the logits site, in natural-log units, must fit.
-pub(crate) fn check_logits_range(hl: &HlProgram, ctx: &FillCtx<'_>) -> Result<()> {
+pub(crate) fn check_logits_range(hl: &HlProgram, ctx: &FillCtx<'_>, dtype: DType) -> Result<()> {
     if !matches!(hl.output, hl::HlOutput::Logits) {
         return Ok(());
     }
@@ -1086,10 +1120,12 @@ pub(crate) fn check_logits_range(hl: &HlProgram, ctx: &FillCtx<'_>) -> Result<()
     };
     let Some(site) = site else { return Ok(()) };
     let amax = ctx.absmax(&site)?;
-    if amax >= LOGITS_Q24_REFUSE_AT {
+    let limit = if dtype == DType::I64 { (1u64 << 39) as f64 * (120.0 / 128.0) } else { LOGITS_Q24_REFUSE_AT };
+    if !amax.is_finite() || amax < 0.0 || amax >= limit {
+        let profile = if dtype == DType::I64 { "LOGITS_I64_Q24_V2" } else { "LOGITS_Q24_V1" };
         return Err(LowerError::not_lowerable(format!(
-            "LOGITS_Q24_V1: the calibrated logits reach {amax:.1} natural-log units (limit {LOGITS_Q24_REFUSE_AT}); the Q24 logits of a text program hold |logit| < 128. \
-             A randomly initialised model can have logits this large; a trained model's are far below — a property of the checkpoint, not of the lowering"
+            "{profile}: the calibrated logits reach {amax:.1} natural-log units (limit {limit}); Q24 output storage {dtype:?} must retain its declared range (legacy i32 holds |logit| < 128). \
+             This is an output representation limit, not a test of whether the checkpoint was trained. Trained checkpoints can exceed it; clipping, rescaling, or narrowing these values would change the declared output contract"
         )));
     }
     Ok(())
@@ -2782,7 +2818,15 @@ fn lower_linear(
     // too: the wide input gives up the outlier split, whose high-precision weight columns carried
     // most of such an input's energy (Mamba-370m: KL 0.0012 → 0.0041 at `i8`). `i16 × i32` over
     // `inp ≤ 2^16` terms stays inside `i64`.
-    let wide16 = x.dt == DType::I32 || lb.w16_now || cx.linear_weight_bits == 16;
+    let selected_bits = if site.starts_with("attn.") || site.contains(".attn.") {
+        cx.attention_weight_bits
+    } else if site.starts_with("mlp") && site.ends_with(".out") {
+        cx.mlp_down_weight_bits
+    } else {
+        8
+    };
+    let bits = cx.linear_weight_bits.max(selected_bits);
+    let wide16 = x.dt == DType::I32 || lb.w16_now || bits == 16;
     let r = if k == 0 {
         // A head tied to an embedding reads the table's `i16` codes (the same param).
         let rows16 = table || wide16;
@@ -2806,7 +2850,6 @@ fn lower_linear(
     } else {
         // Reserve the selected main weight width before the outlier shift: both
         // i8 × i16 and i16 × i16 accumulators retain the same i64 headroom.
-        let bits = cx.linear_weight_bits;
         let acc_bits = (i32::from(bits) - 1) + 15 + (inp as f64).log2().ceil() as i32;
         let f_max = (62 - acc_bits).clamp(0, 24);
         let (k1, k2, k3, k4) = (kx.clone(), kx.clone(), kx.clone(), kx.clone());

@@ -1,0 +1,95 @@
+{
+  "archive": "/Users/wata/.cache/misaka-positive-court-build-preservation/previous-own-contract-fence-tests-20261102.tar.gz",
+  "archive_bytes": 15094639,
+  "archive_sha256": "6ea620536b0d8af88c308844487973554b3a2a60b5b617e6e1a4f47648a30c14",
+  "full_extracted_streams_verified": true,
+  "files": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/case_journal-72f8c05071d40941",
+      "bytes": 1635856,
+      "sha256": "613110767bf46262f388dba37ca5e7df0cd73ef6701acb6ce466a8b0361b0761"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/certification-54f02565c5e669dc",
+      "bytes": 2702752,
+      "sha256": "397c71b70d78425fb93e486f2b679c9de55e1183103765f9397373c872aa3083"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/contracts-f9a126bef1d6e811",
+      "bytes": 3048168,
+      "sha256": "303f004aaf8500c0063488761b8e461338fe5128d929c664ba4c66fcd32d3887"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/execution_record-d272a259619dca25",
+      "bytes": 1504336,
+      "sha256": "e7b52a6a2187be32fb3367057155ce8de607118722da4351d82246d19b96f19f"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/funding-3aa7cef921d49ced",
+      "bytes": 2935944,
+      "sha256": "06781efd4435009d88942238a0e132de81e409a43ca5e0e324152ec92f7c5e95"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/independent_consumer_routes-940b6414022f66bd",
+      "bytes": 994160,
+      "sha256": "12c37c16d84feb5e2bb3c79ef1032b1c3462719752c08a67370bf18578b5ff53"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/independent_credit_graph-4154f88d7cb3d94a",
+      "bytes": 1274808,
+      "sha256": "0e8b3e24d46c48bf1ef34a88add251c9cfae79cacbefae366e910754122db587"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/independent_fee_conservation-5782ab4a60f72a33",
+      "bytes": 1641632,
+      "sha256": "14de2e212e6cb82ffdfea3344369e39e7be49a4d017c9e39dff59107b2aaa848"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_positive_accounting-48e95e54e47ac566",
+      "bytes": 2496960,
+      "sha256": "0150baa1b523ea8a48da61b6e8191d542187ddaca4f37fad39bd2bfecc5931b5"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_positive_contract-7911f73a05a2ab01",
+      "bytes": 963728,
+      "sha256": "250455efc2c13a6c8288d1a15777b4cfa257a890d6a1811586e5269f3705e92b"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/native_namespace-97c9bf9bc6033093",
+      "bytes": 1533264,
+      "sha256": "3111122d428074fdbed7f0d90ea9c07295b48ffe7314bb15b85fbeff1fd62ca1"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/native_preflight_alloc-66205b8ca7101278",
+      "bytes": 1618872,
+      "sha256": "450ed75f996984fea5d93772f156292f643d5e2104b0a14e4644155da11ed1d8"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/native_rows-c0bbb1d8ca96ad4d",
+      "bytes": 3241344,
+      "sha256": "a16e7ecf7d8052166071fa7ae83914a258370dd7bcf2ec30b06ba5fbee269cbe"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_court_fence_v2-f29d7b4b1b1c6b58",
+      "bytes": 6481176,
+      "sha256": "227916c999c8ce915a13f8d9486976aec5e6a8a0b50d537636d2105a448037eb"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_source_v2-874c7e89468102b1",
+      "bytes": 5103856,
+      "sha256": "4fd13d4f5e3164fa702fed5ddb1b8c36283ad1f84918388dc11ef31838b05562"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/remaining_capacity-77da362c96b2b0f5",
+      "bytes": 1000896,
+      "sha256": "6811a3ca6c8c196329dc2d2f84a3153d2586d6ca0f1c8d56c9c5f2703ea313cd"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/tir_contract-e754ce9aeaaa30bf",
+      "bytes": 1404416,
+      "sha256": "a31be02019bbe05363cf1f627cb8f6d9bbbb81750db4c08d3367418757cb30c7"
+    }
+  ],
+  "released": true,
+  "observed_free_after": 871649280
+}

@@ -273,6 +273,9 @@ fn gate(params: &Params, bundle: &PalwConsensusParamsV2, class: &PalwTirClassV1,
         Ok(p) => p,
         Err(e) => return Gate::Unbuildable(format!("the program does not decode: {e}")),
     };
+    if program.wide_logits_q24() {
+        return Gate::Unbuildable("wide Q24 registration requires explicit V2 StepSpace/Court admission".into());
+    }
     let class_id = class.class_id(&artifact_root);
     let Some(canonical) = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(class) else {
         return Gate::Unbuildable(format!("a context of {} positions is too narrow for a canonical job", class.layout.max_context));
@@ -882,8 +885,11 @@ pub fn judge(net: &PreflightNetwork, opts: &Options, program: &TirProgramV1, ana
                             le(u64::from(prefill), inline),
                             "palw_tir_attempt_canonical_of_v1; J5b's inline prompt bound",
                         ));
-                        let facts = PalwTirJobFactsV1::of(&class, program, class.class_id(&placeholder_root));
-                        canonical_job = Some(palw_tir_job_context_v1(&facts, (prefill, decode)));
+                        // No legacy facts-only wide context: the V1 admission gate explicitly refuses it.
+                        if !program.wide_logits_q24() {
+                            let facts = PalwTirJobFactsV1::of(&class, program, class.class_id(&placeholder_root));
+                            canonical_job = Some(palw_tir_job_context_v1(&facts, (prefill, decode)));
+                        }
                     }
                     None => conditions.push(cond(
                         "canonical_job",

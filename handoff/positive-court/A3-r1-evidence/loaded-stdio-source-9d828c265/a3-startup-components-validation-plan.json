@@ -1,0 +1,717 @@
+{
+  "kind": "PLAN_ONLY_SOURCE_AUDIT_NO_CARGO_NO_RUSTC_NO_RUNTIME",
+  "created_utc": "2026-11-01T16:18:11.725265+00:00",
+  "source": {
+    "workspace": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet",
+    "candidate": "37ab25298365b9027a7fef6f38c5aacbe1383acc",
+    "tree": "b5df0987ca2edefa3f693ef57bb1b3d439a4e046",
+    "Loaded_freeze": "90877a99fd29dbf652435f4ef26abc97ecc8add5",
+    "source_status": "Current tracked working tree clean at plan preparation; freeze again before authorized execution.",
+    "source_hashes_scope": "Record all tracked Rust sources and Cargo manifests/config/lock/toolchain for Core, TIR core/artifact/Exec and shared inputs before/after builds and runtime; compare each to frozen git object and reject dirty/untracked source changes.",
+    "pin_files": {
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/Cargo.lock": "b8a58e9e08bdbfd7e3dfa87118d641fd673e50d7c277dfebd59686f4cb29ed61",
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/Cargo.toml": "5b1cf91b2106e81e3c4046c125ec062d33dae86e7b5d8361ec4a2ce187e51efc",
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/rust-toolchain.toml": "10fe019a963ff62c5314ccd3f3eeb1f1d4711ad7683e28bfafe944b8af4761f5",
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/.cargo/config.toml": "4803ef93c0ff535fdbb87b93548efc2ddfbc4770e255a8452b04c6fe9cecb80f",
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core/build.rs": "4bebbb8e4d33c2da4601b3782eb89fe95cc790a35ae83b12d4312bfdece91460",
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core/Cargo.toml": "084e2eb8a015be8b0c3abd513244a4587493a404810884b383b801b096fb1295",
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/Cargo.toml": "0160303ae165f06ebdf68e8d091792c60c8899d51d0a0f7d245ff48e29b49aaa",
+      "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/artifact/Cargo.toml": "23ad4e10b166a645e63469e61b71fa0c296270d7aefecb7aca327d0f4daf06dd"
+    }
+  },
+  "authorization": "Execution remains HOLD until A0 explicitly schedules the existing A3 build slot. This JSON neither requests nor implies permission and executes no build/test.",
+  "environment": {
+    "set": {
+      "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-a3-target",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_TERM_COLOR": "never",
+      "ROCKSDB_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out",
+      "ROCKSDB_STATIC": "1",
+      "SNAPPY_LIB_DIR": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out",
+      "SNAPPY_STATIC": "1",
+      "ROCKSDB_COMPILE": "0",
+      "SNAPPY_COMPILE": "0",
+      "CXX": "<evidence_dir>/forbid-cxx.py",
+      "HOST_CXX": "<evidence_dir>/forbid-cxx.py"
+    },
+    "unset_and_record_removed": [
+      "RUST_MIN_STACK"
+    ],
+    "must_be_absent_or_empty": [
+      "RUSTFLAGS",
+      "CARGO_ENCODED_RUSTFLAGS",
+      "RUSTC_WRAPPER",
+      "RUSTC_WORKSPACE_WRAPPER",
+      "RUSTC_BOOTSTRAP",
+      "RUST_TARGET_PATH"
+    ],
+    "guard_additional_CXX_precedence": "Set applicable target-specific CXX_<triple> and CXX_<underscore_triple> to the same guard; reject unexplained inherited CXX precedence overrides. No shell compiler probe.",
+    "constraints": [
+      "Existing target directory must exist; do not create another target, rebuild C++, clean other caches, install toolchains or relax quotas/context/stack.",
+      "Run build commands sequentially and one selected binary case at a time; no build concurrency with another A0 slot.",
+      "Do not execute sh -c compiled commands or interpolate JSON with unsafe shell quoting; use subprocess argv/env arrays.",
+      "Record free space before each phase; stop on configured shared disk threshold, do not delete shared files."
+    ]
+  },
+  "supplied_archives_expected_from_prior_Root_record": [
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/librocksdb.a",
+      "bytes": 23048496,
+      "sha256": "6eae541967b2cb5345ace55eadb34b2c490e91acfd8a4e2da5822a60f91af3a2"
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc14-g14-completion/MISAKA-testnet/target/release/build/librocksdb-sys-865d89ee7dbf2b2a/out/libsnappy.a",
+      "bytes": 46784,
+      "sha256": "f45a4731a8dc330e5723b70dabb4be96167a71044fcdeb0ce4d78f837f9538e5"
+    }
+  ],
+  "archive_policy": "Recheck actual existence, bytes and SHA256 before and after execution; prior expected identities are not a fresh measurement in this plan.",
+  "no_cxx_guard": {
+    "materialize_only_when_execution_authorized": "<evidence_dir>/forbid-cxx.py",
+    "behavior": "Executable Python wrapper records argv/time to a dedicated guard log and exits nonzero (85); it never launches a compiler. Any guard invocation fails the stage even if Cargo later succeeds. Preserve guard source/hash and empty-or-nonempty attempt log.",
+    "script_template": "#!/usr/bin/env python3\nimport json,os,sys,time\nwith open(os.environ[\"A3_FORBID_CXX_LOG\"],\"a\") as out: out.write(json.dumps({\"time\":time.time(),\"argv\":sys.argv})+\"\\n\")\nsys.exit(85)\n"
+  },
+  "builds": [
+    {
+      "id": "core-lib-no-run",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "kaspa-consensus-core",
+        "--lib",
+        "--no-run",
+        "--message-format=json-render-diagnostics"
+      ],
+      "expected_executable_targets": [
+        "kaspa_consensus_core"
+      ]
+    },
+    {
+      "id": "exec-lib-and-regression-no-run",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "node",
+        "--lib",
+        "--test",
+        "cell_ipc_v2",
+        "--test",
+        "cell",
+        "--no-run",
+        "--message-format=json-render-diagnostics"
+      ],
+      "expected_executable_targets": [
+        "misaka_palw_tir_exec",
+        "cell_ipc_v2",
+        "cell"
+      ]
+    },
+    {
+      "id": "artifact-lib-no-run",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "test",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-artifact",
+        "--lib",
+        "--no-run",
+        "--message-format=json-render-diagnostics"
+      ],
+      "expected_executable_targets": [
+        "misaka_palw_tir_artifact"
+      ]
+    }
+  ],
+  "build_evidence_requirements": [
+    "Keep exact Cargo argv, effective documented env, full raw JSONL/stderr, exit code and build-finished success. Any first build failure means current runtime0 for that build; preserve before fixing.",
+    "Resolve every test executable only from a matching compiler-artifact JSON entry: correct package/target, profile.test=true, executable nonnull. Never pick an arbitrary previous filename/glob.",
+    "Record actual target kind/name/features, opt_level=0, debuginfo=0, overflow/debug flags, fresh flag, executable absolute path/bytes/SHA256; reject missing or duplicate ambiguous artifacts.",
+    "Require Core build-script-executed private cfg misaka_source_local_audited_rust193_v1 and generated env MISAKA_SOURCE_LOCAL_BUILD_PROFILE_V1=rust-1.93.0-borsh-1.5.1-v1. Missing/unsupported profile is not an audited success.",
+    "Record exact Rust1.93 -vV metadata on authorized execution and Core generated supported-profile outputs; toolchain pin text alone is not a runtime version observation. This remains a trusted installed toolchain/dependency premise, not source authentication.",
+    "List each resolved binary with --list --format terse. Every selected exact name must appear once; all15 Core/21 Exec/5 artifact/18 integration selected entries must exist. Missing audited cfg cases are fatal before runtime.",
+    "Capture --ignored --list --format terse inventory to verify expected child helpers are ignored; do not execute them independently or add their nested counts.",
+    "Before runtime compare binary identities again, source hashes and no-C++ log; standard Rust worker stack remains unmodified."
+  ],
+  "selected_groups": [
+    {
+      "id": "core-source-facade",
+      "package": "kaspa-consensus-core",
+      "binary_target": "kaspa_consensus_core",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core/src/palw_native_resource_v1/source_local/tests.rs",
+      "source_sha256": "0115daac6c89c8214377b5a89a2f3336d227fce035ff58e99706e0375fef120e",
+      "module_prefix": "palw_native_resource_v1::source_local::tests::",
+      "selected_names": [
+        "palw_native_resource_v1::source_local::tests::checked_work_precharge_is_atomic_and_never_refunds",
+        "palw_native_resource_v1::source_local::tests::unknown_profile_refuses_before_any_scanner_charge",
+        "palw_native_resource_v1::source_local::tests::local_owner_is_independent_of_zero_global_limits_in_child",
+        "palw_native_resource_v1::source_local::tests::audited::same_bytes_narrow_wide_old_quote_and_four_reader_observations",
+        "palw_native_resource_v1::source_local::tests::audited::exact_limits_and_each_one_below_precede_canonical_decode",
+        "palw_native_resource_v1::source_local::tests::audited::failed_scans_observe_consumed_bytes_and_retries_spend_full_envelopes",
+        "palw_native_resource_v1::source_local::tests::audited::canonical_error_kinds_utf8_and_unvalidated_ranks_are_preserved",
+        "palw_native_resource_v1::source_local::tests::audited::bootstrap_branch_types_and_nf_text_are_finite_without_recharging_writers"
+      ],
+      "expected_outer_passed": 8,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [
+        "3 generic plus5 audited source cases; the supported-build control return in unknown_profile case is not an exercised unsupported refusal or another decode.",
+        "Parent flag case invokes exact ignored child helper internally; child result is not additive."
+      ],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for kaspa_consensus_core",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "core-thin-observation",
+      "package": "kaspa-consensus-core",
+      "binary_target": "kaspa_consensus_core",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs",
+      "source_sha256": "0f8690ccf277ce2e0b14912326d46ee3e6b5892567a5dc6d75175f2050ad774f",
+      "module_prefix": "palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::",
+      "selected_names": [
+        "palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::failed_step_increments_and_refused_skip_observes_no_bytes",
+        "palw_native_resource_v1::ledger_expansion::source_scan_observation_tests_v1::observed_memory_port_keeps_legacy_error_kind_and_text"
+      ],
+      "expected_outer_passed": 2,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for kaspa_consensus_core",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "core-old-source-profile",
+      "package": "kaspa-consensus-core",
+      "binary_target": "kaspa_consensus_core",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core/src/palw_native_resource_v1/ledger_expansion.rs",
+      "source_sha256": "0f8690ccf277ce2e0b14912326d46ee3e6b5892567a5dc6d75175f2050ad774f",
+      "module_prefix": "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::",
+      "selected_names": [
+        "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_profile_real_program_and_exact_quota_lifetime",
+        "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_malformed_wire_rank_and_duplicate_carry_release_quota",
+        "palw_native_resource_v1::ledger_expansion::source_program_profile_tests_v1::source_normal_form_repeated_liveness_edges_are_linear_and_reject_dead_node"
+      ],
+      "expected_outer_passed": 3,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for kaspa_consensus_core",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "core-public-vec",
+      "package": "kaspa-consensus-core",
+      "binary_target": "kaspa_consensus_core",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/consensus/core/src/palw_native_resource_v1/tir.rs",
+      "source_sha256": "d58d8aab47f2025016d8cfe87e0ac72c560ddd752e20e772bbfc866281e2ac14",
+      "module_prefix": "palw_native_resource_v1::tir::tests::",
+      "selected_names": [
+        "palw_native_resource_v1::tir::tests::public_vec_capacity_envelope_keeps_literal_minimum_and_overflow_boundaries",
+        "palw_native_resource_v1::tir::tests::private_vec_request_preserves_capacity_byte_and_total_overflow_order"
+      ],
+      "expected_outer_passed": 2,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for kaspa_consensus_core",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "exec-owned-params",
+      "package": "misaka-palw-tir-exec",
+      "binary_target": "misaka_palw_tir_exec",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+      "source_sha256": "a8b411aefb6d6d0fded9f052c12a80f4ab3b1b821e1fe79e6ef773974f740a32",
+      "module_prefix": "node::owned_artifact_params_v2::tests::",
+      "selected_names": [
+        "node::owned_artifact_params_v2::tests::native_owned_endpoints_idx_root_context_and_guard_stay_together",
+        "node::owned_artifact_params_v2::tests::root_mismatch_and_truncation_release_guard_without_returning_partial_owner",
+        "node::owned_artifact_params_v2::tests::exact_and_one_below_native_chunk_payload_work_and_io_caps_are_preallocation",
+        "node::owned_artifact_params_v2::tests::i16_per_layer_and_i32_multi_piece_values_keep_authoritative_root_and_metadata"
+      ],
+      "expected_outer_passed": 4,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for misaka_palw_tir_exec",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "exec-compile-quote",
+      "package": "misaka-palw-tir-exec",
+      "binary_target": "misaka_palw_tir_exec",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/src/plan/compile_quote_v2.rs",
+      "source_sha256": "0e7d49113e3c82767f6c48c30350422fd3b2f0da73846a324a4cff155955405d",
+      "module_prefix": "plan::compile_quote_v2::tests::",
+      "selected_names": [
+        "plan::compile_quote_v2::tests::actual_compile_const_slabs_row_groups_transpose_and_state_instances",
+        "plan::compile_quote_v2::tests::exact_and_one_below_compiler_caps_refuse_before_compile",
+        "plan::compile_quote_v2::tests::shared_vec_tree_arithmetic_overflow_is_fixed_and_nonallocating"
+      ],
+      "expected_outer_passed": 3,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [
+        "2 success/prepared-path tests require audited Source profile; arithmetic case alone proves no successful compile.",
+        "Case count is not number of decoder/compiler calls inside narrow/wide and repeated-layer loops."
+      ],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for misaka_palw_tir_exec",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "exec-loaded",
+      "package": "misaka-palw-tir-exec",
+      "binary_target": "misaka_palw_tir_exec",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/loaded/tests.rs",
+      "source_sha256": "15e87f48d35440317849485203af3a23f5631aae64a7133ae89ff906dc002d4f",
+      "module_prefix": "node::owned_artifact_params_v2::loaded::tests::",
+      "selected_names": [
+        "node::owned_artifact_params_v2::loaded::tests::regular_file_to_private_source_compile_native_values_and_wide_cpu_endpoints",
+        "node::owned_artifact_params_v2::loaded::tests::header_source_compile_and_params_failures_keep_precharges_and_release_whole_guard",
+        "node::owned_artifact_params_v2::loaded::tests::bad_actual_root_retries_keep_read_work_and_claims_until_attempt_cap",
+        "node::owned_artifact_params_v2::loaded::tests::truncated_regular_file_is_refused_by_split_table_before_any_owned_payload",
+        "node::owned_artifact_params_v2::loaded::tests::bridge_floor_precedes_prepared_path_and_terminal_serve_preserves_upstream_usage",
+        "node::owned_artifact_params_v2::loaded::tests::unsupported_build_explicitly_refuses_without_startup_success_claim"
+      ],
+      "expected_outer_passed": 6,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [
+        "5 audited-path tests plus1 unsupported-build control; on a supported build the last case returns as control and is not an unsupported-path startup/decode.",
+        "First case checks ordinary CPU known literal endpoint values in both layout modes, not a trained model or native backend."
+      ],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for misaka_palw_tir_exec",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "exec-process-owner",
+      "package": "misaka-palw-tir-exec",
+      "binary_target": "misaka_palw_tir_exec",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/src/node/cell_ipc_v2/process/tests.rs",
+      "source_sha256": "88a1a37b3d25818d82caa2df70433a1112e4b2486bec972aa2141be64a618da6",
+      "module_prefix": "node::cell_ipc_v2::process::tests::",
+      "selected_names": [
+        "node::cell_ipc_v2::process::tests::actual_process_builder_frames_native_bytes_exports_work_and_drop_reap",
+        "node::cell_ipc_v2::process::tests::prepaid_builder_one_below_and_cumulative_reopen_fail_before_open_wire",
+        "node::cell_ipc_v2::process::tests::wrong_ready_constructor_refused_open_and_wrong_tag_poison_reap_owned_child"
+      ],
+      "expected_outer_passed": 3,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for misaka_palw_tir_exec",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "exec-deadline",
+      "package": "misaka-palw-tir-exec",
+      "binary_target": "misaka_palw_tir_exec",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/src/node/cell_ipc_v2/deadline_unix.rs",
+      "source_sha256": "77270d0613e54e7692391ebcf9de8d39a183415b7d629d0085431ea994129d92",
+      "module_prefix": "node::cell_ipc_v2::deadline_unix::tests::",
+      "selected_names": [
+        "node::cell_ipc_v2::deadline_unix::tests::real_slow_peer_cannot_restart_deadline_with_each_byte",
+        "node::cell_ipc_v2::deadline_unix::tests::real_partial_read_and_write_use_original_native_handles",
+        "node::cell_ipc_v2::deadline_unix::tests::a_write_then_read_share_one_absolute_exchange_clock",
+        "node::cell_ipc_v2::deadline_unix::tests::interrupted_and_wouldblock_retries_keep_the_same_deadline",
+        "node::cell_ipc_v2::deadline_unix::tests::partial_constructor_error_and_unwind_close_pipes_without_joining_child"
+      ],
+      "expected_outer_passed": 5,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [
+        "One case deliberately catches an injected panic. A raw panic line is not itself failure if the exact outer test completes successfully; retain raw text."
+      ],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for misaka_palw_tir_exec",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "artifact-bounded-header",
+      "package": "misaka-palw-tir-artifact",
+      "binary_target": "misaka_palw_tir_artifact",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/artifact/src/bounded_v1.rs",
+      "source_sha256": "75f032c66f5a7cb9f70a3b366825c028cb5733511e6060d787e93a2b62821feb",
+      "module_prefix": "bounded_v1::tests::",
+      "selected_names": [
+        "bounded_v1::tests::exact_native_copy_and_joint_peak_refuse_one_below",
+        "bounded_v1::tests::hostile_header_lengths_and_prefix_refuse_before_owned_payload_request",
+        "bounded_v1::tests::empty_table_borrows_already_decoded_program_without_redecode_or_defaults",
+        "bounded_v1::tests::nonempty_table_matches_handwritten_instances_and_refuses_bad_extents",
+        "bounded_v1::tests::layout_is_borrowed_canonical_existing_words_with_no_generic_vec_decode"
+      ],
+      "expected_outer_passed": 5,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [
+        "This is a rerun on the new combined candidate; do not add the historical earlier header5 result."
+      ],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for misaka_palw_tir_artifact",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "hello2-integration",
+      "package": "misaka-palw-tir-exec",
+      "binary_target": "cell_ipc_v2",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/tests/cell_ipc_v2.rs",
+      "source_sha256": "98b0af4a33a4de578664e1fc4c612d967cc3766aa908e60505797553a50ee9fb",
+      "module_prefix": "",
+      "selected_names": [
+        "hello2_wire_has_literal_i64_logits_and_preserves_all_other_v1_message_bytes",
+        "codec_caps_native_headers_aggregate_lanes_truncation_and_owned_spare_capacity",
+        "pre_admitted_cpu_keeps_exact_wide_rows_old_state_bytes_and_workspace_guard_scope",
+        "client_poisoning_prefix_charges_and_exports_survive_close_without_v1_fallback",
+        "server_requires_hello2_and_never_resets_step_or_io_quotas_on_reopen",
+        "actual_toy_process_hello2_preserves_wide_values_and_rejects_both_v1_directions"
+      ],
+      "expected_outer_passed": 6,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [
+        "Ignored hello2_process_child is invoked internally by a parent case and is not another outer selected case.",
+        "Uses corrected accepted TCP blocking fixture, not the historical EAGAIN attempt."
+      ],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for cell_ipc_v2",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    },
+    {
+      "id": "legacy-cell-integration",
+      "package": "misaka-palw-tir-exec",
+      "binary_target": "cell",
+      "source": "/Users/wata/.codex/worktrees/a3-panel-positive-court/MISAKA-testnet/misaka/palw/tir/exec/tests/cell.rs",
+      "source_sha256": "94a0a75ff72d4a166f0248e3b508fb69edab674215fac76be2c52e28badbef11",
+      "module_prefix": "",
+      "selected_names": [
+        "every_cell_of_every_partition_verifies_from_its_boundary_rows_and_its_shards_weights",
+        "a_pipelined_producer_commits_what_the_whole_schedule_producer_commits",
+        "a_lie_inside_a_cell_is_found_by_that_cell_at_that_leaf_and_a_consistent_boundary_lie_by_the_upstream_cell",
+        "a_wrong_generated_id_is_a_token_fault_and_a_missing_input_is_unavailable_and_runs_answer_like_a_capture",
+        "a_seat_duty_verifies_its_shards_cells_over_a_backends_capture",
+        "the_drills_boundary_lie_is_found_upstream_and_passes_downstream",
+        "a_helper_process_device_answers_every_cell_as_the_cpu_does_and_a_lying_helper_is_caught_by_the_mirror",
+        "the_cell_wire_round_trips_and_refuses_hostile_frames",
+        "a_capture_is_reassembled_from_answered_runs_and_refuses_a_false_leaf_or_a_gap",
+        "a_shard_only_holder_fetches_its_rows_proves_each_and_verifies_its_cells",
+        "a_row_pursuit_over_peers_refuses_liars_and_ends_with_the_mirrors_holding",
+        "malformed_public_cell_run_requests_refuse_before_indexing_or_demanding_unrestorable_material"
+      ],
+      "expected_outer_passed": 12,
+      "expected_outer_failed": 0,
+      "expected_selected_ignored": 0,
+      "notes": [],
+      "execution_template": {
+        "executable": "resolved Cargo compiler-artifact executable for cell",
+        "argv_suffix_per_selected_case": [
+          "--exact",
+          "<one selected_names entry>",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "run_each_name_once": true,
+        "per_invocation_last_outer_summary": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        }
+      }
+    }
+  ],
+  "ignored_helpers_not_additive": [
+    {
+      "binary_target": "kaspa_consensus_core",
+      "exact": "palw_native_resource_v1::source_local::tests::global_flags_child_helper",
+      "parent": "palw_native_resource_v1::source_local::tests::local_owner_is_independent_of_zero_global_limits_in_child"
+    },
+    {
+      "binary_target": "cell_ipc_v2",
+      "exact": "hello2_process_child",
+      "parent": "actual_toy_process_hello2_preserves_wide_values_and_rejects_both_v1_directions"
+    }
+  ],
+  "runtime_audit": {
+    "must_observe_in_source_parent_log": "SOURCE_LOCAL_AUDITED_PROFILE: successful local decode with both global limits zero; no native lease",
+    "fatal_labels_any_selected_runtime": [
+      "SOURCE_LOCAL_UNSUPPORTED_PROFILE",
+      "COMPILE_QUOTE_UNSUPPORTED_SOURCE_PROFILE",
+      "LOADED_WIDE_UNSUPPORTED_PROFILE"
+    ],
+    "summary_rule": "Each exact invocation exits0 and last enclosing test summary is ok:1passed/0failed/0ignored; retain all nested child output. Never add nested helpers or filtered-out tests. Reject0run, ignored, missing name, signal, panic-abort, timeout, partial log or missing final summary.",
+    "sequentiality": "An exact test may spawn its own intentionally bounded child or deterministic partial-IO peers; that is part of the case, not a concurrent build slot or extra case count.",
+    "test_case_semantics": "Names count source test cases, not decode/compile calls, loop iterations, CPU positions, successful startup instances or model count. Supported-profile control cases can return without testing the unsupported branch.",
+    "stop_rule": "Stop after the first failing exact test, preserve its manifest/log/binary/source/env/counters and already completed cases; no forced retry or stack increase.",
+    "source_and_binary_stability": "Hash all frozen inputs and selected binary before/after; changing implementation, generated source, profile, source commit or binary invalidates a combined59 claim."
+  },
+  "strict_clippy": [
+    {
+      "id": "three-production-libraries",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "clippy",
+        "--offline",
+        "--locked",
+        "-p",
+        "kaspa-consensus-core",
+        "-p",
+        "misaka-palw-tir-artifact",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "misaka-palw-tir-exec/node",
+        "--lib",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "scope": "New production source including Core build script, header helper and Node owners/bridges; no dependency lint baseline suppression."
+    },
+    {
+      "id": "named-existing-regression-targets",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.dev.package.kaspa-consensus-core.opt-level=0",
+        "--config",
+        "profile.test.package.kaspa-consensus-core.opt-level=0",
+        "clippy",
+        "--offline",
+        "--locked",
+        "-p",
+        "misaka-palw-tir-exec",
+        "--features",
+        "node",
+        "--test",
+        "cell_ipc_v2",
+        "--test",
+        "cell",
+        "--no-deps",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "scope": "Meaningful explicit regression targets already selected at this candidate; unit test sources are typechecked by no-run, not falsely claimed linted by this command."
+    }
+  ],
+  "clippy_scope_note": "Do not claim --lib production clippy linted cfg(test) unit bodies. If unit-body lint is required, schedule an explicit package lib-test/all-tests check, preserve unrelated failures, and do not suppress them or count checks as runtime cases. Future harness=false target gets its own exact Clippy command after target freeze.",
+  "docs": {
+    "command": [
+      "python3",
+      "docs/maintenance/check_docs.py"
+    ],
+    "expected_known_issue_occurrences": 43,
+    "expected_new_issue_occurrences": 0,
+    "scope": "Baseline missing references remain; this is not a clean strict audit."
+  },
+  "proposed_counts": {
+    "Core_source_facade": 8,
+    "Core_thin_ports": 2,
+    "Core_old_source_profile": 3,
+    "Core_public_Vec": 2,
+    "Exec_owned_params": 4,
+    "Exec_compile_quote": 3,
+    "Exec_Loaded": 6,
+    "Exec_process_and_deadline": 8,
+    "artifact_bounded": 5,
+    "Hello2_integration": 6,
+    "legacy_cell_integration": 12
+  },
+  "proposed_total_selected_cases": 59,
+  "count_policy": "59 is conditional on one actual frozen candidate/profile and exact matching executed selected names. It is NOT currently achieved, and is not added to older Root86, Root37, historical header5 or any other stage/role.",
+  "pending_harness_false_stdio_join": {
+    "status": "DISABLED_PENDING_CONCRETE_FROZEN_SOURCE_TARGET_AND_MARKERS",
+    "included_in_59": false,
+    "required_source_audit": "After author delivers, freeze source/tests/manifest and verify Cargo.toml has an actual [[test]] with harness=false, correct path/required-features. Never guess target name or run a placeholder.",
+    "build_plan_after_binding": "Separate exact cargo test --offline --locked -p misaka-palw-tir-exec --features node --test <verified target> --no-run --message-format=json-render-diagnostics with same resource/profile settings; resolve actual executable from Cargo JSON, hash and record profile.",
+    "runtime_classification": "A separate harness=false executable OS main-thread process record with RUST_MIN_STACK absent. It has no Rust libtest summary/standard test-worker claim and contributes zero cases to the59 source-case sum.",
+    "must_freeze_before_enable": [
+      "exact target and source commit/tree/path/hash",
+      "exact argv/environment",
+      "source-declared required completion markers and expected multiplicity/order",
+      "audited profile/startup/Hello2/native endpoint/cleanup assertions actually performed by that source",
+      "actual binary/profile/source identities",
+      "separate strict-Clippy exact target command"
+    ],
+    "missing_marker_policy": "Any required success marker absent, unsupported/skip label, wrong multiplicity, timeout/signal or nonzero exit is fatal. Exit0 alone is insufficient; no default fabricated success JSON or Rust summary.",
+    "scope_limit": "A literal-fixture Loaded/native-stdio process join is not trained-model/native registration/fullCourt/payment/recovery completion. Record actual source/role/model/geometry without relabeling."
+  },
+  "final_status": "PLAN_ONLY_ALL59_RUNTIME_AND_CLIPPY_UNRUN_ON_THIS_COMBINED_CANDIDATE",
+  "compiler_metadata_on_authorized_execution": {
+    "command": [
+      "rustc",
+      "-vV"
+    ],
+    "required_release_line": "release: 1.93.0",
+    "record": "raw stdout/stderr/exit and SHA256 before Cargo; no compiler invocation has been made while preparing this plan.",
+    "scope": "Version metadata under trusted local toolchain premise, not compiler binary authentication. Must match private Core build-profile evidence."
+  }
+}

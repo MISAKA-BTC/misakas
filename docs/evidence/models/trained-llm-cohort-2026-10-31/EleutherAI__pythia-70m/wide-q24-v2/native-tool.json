@@ -1,0 +1,26 @@
+{
+  "build_argv": [
+    "cargo",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0",
+    "--config",
+    "profile.dev.package.kaspa-consensus.opt-level=0",
+    "test",
+    "--locked",
+    "--offline",
+    "-p",
+    "kaspa-consensus",
+    "--features",
+    "evm",
+    "--lib",
+    "--no-run",
+    "--message-format=json"
+  ],
+  "executable": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus-3c124941e1736064",
+  "sha256": "3b65ebe2a6592642e9bfb13e412ed87b09b5b2a1949c0b31e8ae55cdd91e6e60",
+  "test_argv": [
+    "g14_downloaded_hf_artifact_registration_mined_and_replayed",
+    "--ignored",
+    "--nocapture"
+  ]
+}

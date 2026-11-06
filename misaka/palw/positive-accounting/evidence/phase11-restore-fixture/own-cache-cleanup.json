@@ -1,0 +1,74 @@
+{
+  "scope": "A5-owned disposable target cache only; no source or external target touched",
+  "reason": "old core snapshots are stale for exact production79c3; no A5 cargo/rustc was running",
+  "removed": [
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-08d2a89ac5296efd.rmeta",
+      "bytes": 66946393
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rlib",
+      "bytes": 359964544
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-0bbd599cd27ef842.rmeta",
+      "bytes": 115524829
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-45961f23ac5a21bc.rmeta",
+      "bytes": 66946393
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-75cc5d5dcf8a13fa.rlib",
+      "bytes": 359230688
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-75cc5d5dcf8a13fa.rmeta",
+      "bytes": 115498960
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-8bbdf11e36135ee7.rlib",
+      "bytes": 359825336
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-8bbdf11e36135ee7.rmeta",
+      "bytes": 115501592
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-ac4cfeb2c841efc2.rmeta",
+      "bytes": 66925624
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-cd7238451ff8c8b7.rmeta",
+      "bytes": 66925288
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-da978217e274e72a.rlib",
+      "bytes": 359084520
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-da978217e274e72a.rmeta",
+      "bytes": 115494257
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-e5c0cb0ca317b30b.rlib",
+      "bytes": 359716104
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-e5c0cb0ca317b30b.rmeta",
+      "bytes": 115520462
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-f4a626df57ede07b.rmeta",
+      "bytes": 141893722
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-f6de87a8d454f2e8.rlib",
+      "bytes": 359144088
+    },
+    {
+      "path": "/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/libkaspa_consensus_core-f6de87a8d454f2e8.rmeta",
+      "bytes": 115517868
+    }
+  ]
+}

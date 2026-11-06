@@ -1,0 +1,67 @@
+{
+  "base_head": "5b55ade80122410af5add1e27427485409b0f8d5",
+  "package": "kaspa-consensus-core",
+  "default_stack_required": true,
+  "do_not_set": [
+    "RUST_MIN_STACK"
+  ],
+  "do_not_regenerate_expected_goldens": true,
+  "existing_lib_exact_filters": [
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_close_receipt_preserves_signed_native_inputs",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_complete_malformed_side_is_settled_once",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::rooted_court_end_archive_fulfilled_close_keeps_raw_material_without_pending_charge",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::g14_tir_frame_without_tfp1_earns_nothing_past_the_fence",
+    "palw_state_v2::palw_tir_public_fold_v1::tests::new_original_frame_cannot_license_an_unqualified_valid_or_reinterpret_typed_receipt",
+    "palw_panel_v2::tests::a_receipt_outside_its_window_is_not_a_discharge_of_the_duty",
+    "palw_fp_admission_v3::tests::r6_receipt_pause_row_follows_a_reorg",
+    "palw_state_v2::tests::the_version_22_state_root_golden_vectors"
+  ],
+  "existing_integrations": [
+    {
+      "target": "rcore_m5_v22_golden",
+      "source_sha256": "167e975d907b4f7b5e8c21e41813aa5b53e2ccf175b67793ace87073124acc64",
+      "exact_filters": [
+        "t41_the_v22_golden_vectors_empty_and_inhabited",
+        "t41_the_v22_record_encodings_are_pinned"
+      ]
+    },
+    {
+      "target": "t12_regenesis",
+      "source_sha256": "c8c34a7fe38774b6d6f7fff6306aa970cf45fb6edf939ba73cdf3cc72fa4464b",
+      "exact_filters": [
+        "t12_community_table_is_t11_plus_four",
+        "t12_genesis_mints_exactly_the_cap",
+        "t12_bond_collateral_matches_the_card",
+        "t12_reserves_the_escrow_from_genesis",
+        "no_model_class_declares_a_share",
+        "the_held_rows_are_the_fleets_classes",
+        "every_rule_is_in_force_from_genesis",
+        "t12_keeps_t11_peer_port",
+        "the_fleets_premine_indices_are_unchanged_on_t12s_own_txid",
+        "t12_genesis_reads_its_root_from_the_committed_manifest",
+        "t12_arms_every_fence_t11_armed",
+        "t12_certifies_both_lanes_of_the_classes_it_registers",
+        "t12_genesis_roots_are_all_read_from_committed_manifests",
+        "t12_shares_no_premine_outpoint_or_genesis_with_the_sentinel_chains",
+        "t12_runs_mainnet_s_tolerance_and_level_ceiling"
+      ]
+    }
+  ],
+  "new_candidate_lib_exact_filters": [
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::paired_fp_late_original_deposit_failure_restores_the_entire_checkpoint",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::object_dispatch_panel_lifetime_service_deadline_is_inclusive_and_late_receipts_write_nothing",
+    "palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::object_dispatch_panel_lifetime_maximum_pause_is_inclusive_and_over_budget_receipts_write_nothing"
+  ],
+  "limitations": {
+    "qualified_receipt_test": "Guard helper only, not full receipt apply_object path.",
+    "generic_window_test": "Ordinary receipt window, not PanelLifetime absolute service or maximum-pause guard.",
+    "mechanical_arm_proof": "153 arm bodies/patterns identical is structural evidence, not runtime coverage for every arm.",
+    "new_patch": "Authored and source-checked only. No Cargo compilation or runtime test performed."
+  },
+  "command_templates": [
+    "env -u RUST_MIN_STACK CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p kaspa-consensus-core --lib EXACT_FILTER -- --exact",
+    "env -u RUST_MIN_STACK CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p kaspa-consensus-core --test rcore_m5_v22_golden",
+    "env -u RUST_MIN_STACK CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 cargo test -p kaspa-consensus-core --test t12_regenesis"
+  ],
+  "cache_configuration": "Root must preserve its already-cached build flags; templates are filter/stack requirements, not authorization to replace the cache or start Cargo."
+}

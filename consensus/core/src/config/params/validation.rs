@@ -268,6 +268,9 @@ impl Params {
         self.validate_palw_stage_execution_v28()?;
         self.validate_palw_native_execution_v39()?;
         self.validate_palw_native_mining_v39()?;
+        self.validate_palw_positive_court_v2()?;
+        self.validate_palw_positive_assignment_v2()?;
+        self.validate_palw_positive_funding_relay_v2()?;
         // **RFC-0004 Part II's dormant fence** (`crate::palw_typed_roots_v1`): refused when armed.
         self.validate_palw_typed_roots_v1()?;
         // **RFC-0009 L2's dormant fence** (`crate::palw_fork_choice_commitment_v1`): refused when armed.
@@ -338,6 +341,7 @@ impl Params {
         self.validate_palw_class_registration_origin_v1()?;
         self.validate_palw_selected_source_bootstrap_v1()?;
         self.validate_palw_source_verifier_economics_v2()?;
+        self.validate_palw_verifier_watch_v1()?;
         self.validate_palw_paid_bootstrap_source_v6()?;
         // **RFC-0017's model eligibility** (`crate::palw_model_eligibility_v1`): refused when armed.
         self.validate_palw_model_eligibility_v1()?;
@@ -359,6 +363,7 @@ impl Params {
         self.validate_palw_fp_prefix_state_v1()?;
         // **palw_fp_answer_accounting_v1** (`crate::palw_fp_answer_accounting_v1`, compute-claim audit CX-01/CX-02).
         self.validate_palw_fp_answer_accounting_v1()?;
+        self.validate_palw_court_family_supplier_v1()?;
         // **palw_fp_tokenizer_match** (`crate::palw_fp_tokenizer_v1`).
         self.validate_palw_fp_tokenizer_match_v1()?;
         // **palw_fp_constraint_v2** (`crate::palw_fp_constraint_v2`).
@@ -378,6 +383,7 @@ impl Params {
         self.validate_palw_court_commitment_scope_v1()?;
         self.validate_palw_staged_public_court_v1()?;
         self.validate_palw_staged_route_extensions_v1()?;
+        self.validate_palw_batch_court_v1()?;
         // **The cross-lane G14 gates** (`crate::palw_g14_gates_v1`): G-18's legacy-filer prerequisite of the staged court, and the
         // arm-readiness record of every gated fence (G-10, N4, G-01 option (b), the reward liability horizon).
         self.validate_palw_g14_gates_in_v1(records)?;
@@ -1898,7 +1904,10 @@ impl Params {
                     .iter()
                     .filter(|o| matches!(o, crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { .. }))
                     .count();
-                if registered < crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1() {
+                // RFC-0041: a new genesis with no seats bootstraps through public recovery
+                // and ordinary registration. It has no genesis jury whose spare capacity could
+                // be lost. Every arriving bond still serves the ordinary maturity window.
+                if registered != 0 && registered < crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1() {
                     return Err(PalwModeV2Error::Invalid(
                         "palw_bond_maturity is armed on a genesis whose bond registry has no spare seat: D1 makes a \
                          replacement bond unseatable for a full window, so one departure would leave every claim unable \
@@ -3019,6 +3028,37 @@ impl Params {
                     "a staged route extension requires ConsensusV2 and palw_staged_public_court_v1 at or below it",
                 ));
             }
+        }
+        Ok(())
+    }
+
+    pub fn validate_palw_batch_court_v1(&self) -> Result<(), crate::palw_state_v2::PalwStateV2Error> {
+        use crate::palw_state_v2::PalwStateV2Error::InvalidParams;
+        if !self.palw_batch_court_v1.is_some_and(|f| f != ForkActivation::never()) {
+            return Ok(());
+        }
+        if self.palw_batch_court_v1_fence().is_none() {
+            return Err(InvalidParams("Batch Court requires lifecycle audit and native TIR conviction at or below its fence"));
+        }
+        // The funded schedule, the replay profile and the carrier fold share one budget.
+        // Activation still requires this preset to name the fence; no shipped preset does.
+        let Some(service) = crate::palw_court_service_binding_v1::PALW_COURT_SERVICE_PROFILE_V1 else {
+            return Err(InvalidParams("Batch Court requires the adopted court service profile"));
+        };
+        let service_profile = crate::palw_court_service_state_v2::court_service_profile_id_v2(service.id());
+        let replay = crate::palw_g14_values_v1::palw_g14_batch_replay_profile_estimate_v1(service_profile);
+        let batch = crate::palw_g14_values_v1::palw_g14_funded_batch_schedule_estimate_v1();
+        let Some(cost) = replay.budget.service_cost_v1() else {
+            return Err(InvalidParams("Batch Court replay budget does not price a verification packet"));
+        };
+        let fits = cost.bytes <= service.budget.bytes
+            && cost.work <= service.budget.work
+            && cost.io <= service.budget.io
+            && cost.controls == service.budget.controls
+            && replay.budget == batch.delivery.numerical_verification
+            && replay.budget.covers_terminal_recheck_v1(batch.delivery.terminal);
+        if !fits {
+            return Err(InvalidParams("Batch Court replay profile, funded schedule and service budget disagree"));
         }
         Ok(())
     }

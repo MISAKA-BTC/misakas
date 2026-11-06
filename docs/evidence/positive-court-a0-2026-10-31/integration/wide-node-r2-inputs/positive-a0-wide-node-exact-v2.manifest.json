@@ -1,0 +1,126 @@
+{
+  "base_commit": "08d20b23f1acf9dbba46c25331a97f9ea84d517b",
+  "artifact": "/tmp/positive-a0-wide-node-exact-v2.patch",
+  "sha256": "64a36f7de40c458baabd85c98a058b3c595d093fc813e5be2121d1ed3adf01f3",
+  "files": [
+    {
+      "path": "consensus/core/src/palw_tir_court_v1/exact_geometry.rs",
+      "before_sha256": null,
+      "after_sha256": "94386eb63b7c536fbe40a9d2d0fc59ec120a913c258141b3af7812b454085fad",
+      "status": "new"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_court_v1.rs",
+      "before_sha256": "8ea36af84ca1f7e3af96145a30a51e382573692691820ea83ce70a5af55f94b0",
+      "after_sha256": "196905cddb4f965f6e253341ac93aeb40a5b785356d349bc21821d970eda198b",
+      "status": "modified"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_court_v1/source_geometry.rs",
+      "before_sha256": "0ffb6e3c735bcf5e343b9da15929fb3755f5f57930d1bdf06f88d705f2e6ed3a",
+      "after_sha256": "f3cb244ffdd4cbcc9329050ff86da4e09099b138782a42643d253a4f01c97874",
+      "status": "modified"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/expanded_plan/wide_v2.rs",
+      "before_sha256": null,
+      "after_sha256": "1a26442f3180c086f3cbc1363de58e11e1acdc70c36e70f88b674182613184b0",
+      "status": "new"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/expanded_plan.rs",
+      "before_sha256": "478034a05203bfc9b08b5a064ec15ca434b6be02adf2250fa373204a6026a642",
+      "after_sha256": "157134a0a70dfcf42447ae8d4a69e9cd5841dde008a2cd5177ae29b16885db91",
+      "status": "modified"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_court_v1/source_only/wide_v2.rs",
+      "before_sha256": null,
+      "after_sha256": "4e75bf6b75d33fc069241280df6dcbba09d0ce44209827eac065e895bf5b25f0",
+      "status": "new"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_court_v1/source_only.rs",
+      "before_sha256": "583eb83932c05448dba3e062ef4fd7bdf27a45bc746919b9df6e47b8f4a0d979",
+      "after_sha256": "6bc47d670ee58dd85dc98916fad4d6d79de429710c62e36736e9a49b1072d5e0",
+      "status": "modified"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2.rs",
+      "before_sha256": null,
+      "after_sha256": "3c0ede7b36f94031f493a48cd842bcf8a88cd99578b5c6bd0323de9fdf956c68",
+      "status": "new"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/full_relation.rs",
+      "before_sha256": "e8d436080a1e27655c987a743623b281796b39a2f8adaff6f6077d6691fc8776",
+      "after_sha256": "35fe0c422b2595c3fd7a346edd562623e32e35902365a481b639f11aadb591f3",
+      "status": "modified"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests.rs",
+      "before_sha256": null,
+      "after_sha256": "d76382205b7d8eee95f009a069cf70f16c1ecc19ef2b6c1000a829beb7d1cfba",
+      "status": "new"
+    },
+    {
+      "path": "consensus/core/src/palw_tir_court_v1/source_only/wide_v2/test_support.rs",
+      "before_sha256": null,
+      "after_sha256": "4d4c8dacd8f9fbf77c0caa753f2705c466e8523736a28abfba8292676c809d12",
+      "status": "new"
+    },
+    {
+      "path": "consensus/core/src/palw_positive_check_v2/full_relation/wide_v2/tests/mixed_state.rs",
+      "before_sha256": null,
+      "after_sha256": "750951a90c73a9457b05fdd572c42cfc6a894c0ee60ef16d97ae6439a252d71e",
+      "status": "new"
+    }
+  ],
+  "test_names": [
+    "actual_wide_source_relations_and_greedy_rows_complete_without_narrowing",
+    "signed_wrong_panel_intermediate_rejects_only_witness_not_miner_output",
+    "wrong_signed_miner_output_is_compared_only_after_all_wide_relations",
+    "corrupt_transport_or_wide_generated_pin_cannot_advance_coverage",
+    "insufficient_workspace_or_static_range_profile_never_becomes_miner_fault",
+    "coherently_committed_wrong_panel_greedy_id_never_refutes_the_signed_miner",
+    "wide_ids_pin_byte_unit_and_storage_bounds_include_the_new_root_and_ids",
+    "wide_stateful_windows_verify_fixed_history_and_partial_history_read_closure",
+    "dropped_corrupt_and_authenticated_stale_wide_checkpoint_cannot_advance_or_convict",
+    "signed_wrong_wide_checkpoint_is_panel_witness_rejection_only"
+  ],
+  "test_status": "WRITTEN_NOT_COMPILED_OR_EXECUTED",
+  "checks": {
+    "rustfmt_parse_and_format": "PASS",
+    "git_apply_check": "PASS",
+    "existing_source_before_hashes_equal_current_root": "PASS",
+    "root_source_writes": false,
+    "cargo_or_rust_build_run": false,
+    "independent_review": "INITIAL_REVIEW_FINDINGS_CORRECTED_SECOND_REVIEW_PENDING"
+  },
+  "scope": [
+    "explicit wide LOCAL expanded plan/source authentication/full relation checker",
+    "private read-only geometry reuse; no V2 to V1 object escape",
+    "existing local opaque manifest/domain/limits; exact profile bound by original class/context/program",
+    "narrow source step operands; V2 generated-ID outer root and final8B targets",
+    "no Panel source-material store builder in this increment",
+    "no native receipt/admission/wire/domain/tag/rate/public activation",
+    "cfg(test)-only read-set discovery over finite reference data; not an authenticated source or production store builder"
+  ],
+  "limitations": [
+    "actual caller-owned simultaneous resource leases still required",
+    "program/range/inventory/Merkle/evaluator/record/signature peak reservations remain owner obligations",
+    "no real LLM/native acceptance test or performance claim",
+    "legacy public source/checker entrypoints remain narrow-only"
+  ],
+  "initial_artifact": "/tmp/positive-a0-wide-node-exact-v2.initial.patch",
+  "initial_sha256": "b0048181651f4c8afdc76458632f79d36dac87d4c6a39d7f980c42168eaa969a",
+  "initial_manifest": "/tmp/positive-a0-wide-node-exact-v2.initial.manifest.json",
+  "initial_manifest_sha256": "f7cdb32a99d9885e7ad99f8e83f1e07d63f20e6a4b21c312aca2c366b1151a8c",
+  "corrections": [
+    "distinct TirSourceOnlyEvaluationV2 removes duplicate V1 import/type collision",
+    "checked mul replaces missing add_mul",
+    "unused valid_limits import/private check_selection argument removed",
+    "separately declared Fixed+Hist fixture windows1/3 checkpoint2/historytile2; real reference values and authenticated openings",
+    "missing/corrupt/authentic-stale checkpoint delivery isolation and signed wrong Panel checkpoint rejection"
+  ]
+}

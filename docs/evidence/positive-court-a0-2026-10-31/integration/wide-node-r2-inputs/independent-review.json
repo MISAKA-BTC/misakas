@@ -1,0 +1,9 @@
+{
+  "artifact_sha256": "64a36f7de40c458baabd85c98a058b3c595d093fc813e5be2121d1ed3adf01f3",
+  "static_reviewer": "positive_tests",
+  "scope": "Revised 12-file explicitwide Node Plan/source/checker and ten WRITTEN newtests; all before/after source hashes match",
+  "initial_artifact": "b004818 rejected before import for four compile/lint issues and state coverage gap; retained unchanged",
+  "review_result": "reported four issues corrected; Fixed/Hist/window1/3 actual source proofs/closure and Panel-vs-Miner responsibility tests added; proceed-to-test only",
+  "tests_executed": false,
+  "native_authority": false
+}

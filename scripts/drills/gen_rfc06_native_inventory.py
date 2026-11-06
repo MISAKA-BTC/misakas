@@ -8,6 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 CORE = ROOT / 'consensus/core/src'
 OUT = CORE / 'palw_native_resource_v1/generated.rs'
+# Exact files emitted this run, shared with the canonical wire entry point.
+GENERATED_OUTPUTS = {OUT}
 
 def clean(s):
     return re.sub(r'/\*.*?\*/|//[^\n]*', '', s, flags=re.S)
@@ -44,6 +46,7 @@ def module_of(base,crate,file):
     if crate=='misaka_palw_panel':module=''
     if module in {'lib','mod'}:module=''
     elif module.endswith('::mod'):module=module[:-5]
+    if crate=='crate' and module=='palw_claim_local_prefix_v1':module='palw_claim_local_v1::prefix_v1'
     return module
 # A private `mod child;` re-exported by `pub use child::*;` publishes its pub items at the PARENT path (e.g. the kernel's
 # `flat_quota11::{sharded,protected}`): the computed file path would name a private module the generated code cannot reach.
@@ -75,11 +78,7 @@ for base,crate in CRATES:
 for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_panel'),(ROOT/'misaka/palw/kernel/src','misaka_palw_kernel'),(ROOT/'misaka/palw/gen/src','misaka_palw_gen'),(ROOT/'misaka/palw/tir/core/src','misaka_palw_tir'),(ROOT/'misaka/palw/challenge/src','misaka_palw_challenge')]:
  for file in base.rglob('*.rs'):
     if 'tests' in file.parts or file.name=='generated.rs':continue
-    raw=clean(file.read_text()); relative=file.relative_to(base).with_suffix('')
-    module='::'.join(relative.parts)
-    if crate=='misaka_palw_panel':module=''
-    if module in {'lib','mod'}:module=''
-    elif module.endswith('::mod'):module=module[:-5]
+    raw=clean(file.read_text()); module=module_of(base,crate,file)
     for a in re.finditer(r'(?:pub(?:\([^)]*\))?\s+)?type\s+(\w+)\s*=\s*([^;]+);',raw):
         apath='::'.join(x for x in [crate,module,a.group(1)] if x)
         aliases[apath]=(a.group(2),dict(path=apath,module=module))
@@ -96,10 +95,10 @@ for base,crate in [(CORE,'crate'),(ROOT/'misaka/palw/panel/src','misaka_palw_pan
         item=dict(attrs=attrs,kind=kind,name=name,path=path,body=body,form=form,module=module,type_public=m.group(0).startswith('pub'),file=str(file.relative_to(ROOT)))
         defs[path]=item;byname.setdefault(name,[]).append(item)
 
-primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()'}
+primitive={'u8','u16','u32','u64','u128','usize','i8','i16','i32','i64','i128','isize','bool','f32','f64','String','Hash64','BlockHash','TransactionId','Hash','Hash32','Digest','()','PalwLegacyCarrierLocatorV9'}
 # `PalwSharedCourtV1<T>` (G14) is a generic Arc newtype whose Borsh layout is T's: a container with hand-written visitors.
 containers={'Vec','Option','Box','Arc','BTreeMap','BTreeSet','HashMap','HashSet','VecDeque','IndexMap','IndexSet','SmallVec','Cow','PalwSharedCourtV1','NativeRetainedV1'}
-queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
+queue=['crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1','crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1','crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3','crate::header::Header','crate::palw_attempt_material_v3::PalwAttemptMaterialEnvelopeV3','crate::palw_material_session_enrollment_v4::PalwNativeRecoverySessionQuoteV4','crate::palw_material_capacity_v1::PalwKernelMaterialBundleV1','crate::palw_material_capacity_v1::PalwSegmentedMaterialBundleV1','misaka_palw_kernel::public::PositionResponseV1','misaka_palw_kernel::seg_da::SegPartResponseV1',
        'crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialRequestV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelMaterialIntentV4','crate::palw_prospective_kernel_material_v4::PalwProspectiveKernelBundleV4','crate::palw_prospective_kernel_material_v4::PalwTypedKernelMaterialBundleV4',
        'crate::palw_kernel_parameter_material_v4::PalwKernelSegmentedPartV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterRowV4','crate::palw_kernel_parameter_material_v4::PalwKernelParameterOpeningV4',
        'crate::palw_kernel_material_context_v4::PalwProspectiveKernelMaterialContextV4',
@@ -131,7 +130,7 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        'crate::palw_state_v2::PalwStateDeltaV2','crate::palw_native_settlement_v1::NativeDeltaEvidenceV1','crate::palw_fork_choice_commitment_v1::PalwForkChoiceDeltaV1',
        'crate::palw_material_capacity_v1::PalwHeldMaterialBundleV1',
        # Field types of the hand-written Panel containers (PermissionlessPanelStateV1/PanelCandidatesV1 are manual).
-       'misaka_palw_panel::ClaimRecordV3','misaka_palw_panel::BondIdV1','misaka_palw_panel::EpochSourceSetV1','misaka_palw_panel::SeatCandidateV1','misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateViewV7','misaka_palw_kernel::flat_candidate9::FlatCandidateViewV9','crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3','crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1','crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimLockV2','crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2','crate::palw_claim_challenge_v2::PalwPaidClaimEvidenceV3','crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3','misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2','misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2','misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2','misaka_palw_challenge::approval_scope::LifetimeCounterV3','misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3','crate::palw_kernel_route_v1::KernelAssignmentV1','crate::palw_kernel_route_v1::PalwKernelChunkGroupV1','misaka_palw_kernel::receipt::PalwConstraintReceiptV1','crate::palw_onboarding_v1::ArtifactBindingRowV1','crate::palw_onboarding_v1::KernelBindingRowV1','crate::palw_onboarding_v1::ConformanceRowV1','crate::palw_onboarding_v1::ConformanceAttemptRowV1','crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1','crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1','crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1','crate::palw_state_v2::PalwClassAdmissionCarriageV2','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_state_v2::PalwChainStateV2','misaka_palw_kernel::ledger::KernelLedgerV1',
+       'misaka_palw_panel::ClaimRecordV3','misaka_palw_panel::BondIdV1','misaka_palw_panel::EpochSourceSetV1','misaka_palw_panel::SeatCandidateV1','misaka_palw_kernel::state::ClassRecordV1','misaka_palw_kernel::state::PipelineClassRecordV1','misaka_palw_kernel::flat_candidate7::FlatCandidateViewV7','misaka_palw_kernel::flat_candidate9::FlatCandidateViewV9','crate::palw_claim_challenge_v2::PalwPaidClaimIndexV3','crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2','crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1','crate::palw_panel_source_fee_v2::PalwPanelSourceFeeAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimAuthorityV2','crate::palw_claim_challenge_v2::PalwPaidClaimLockV2','crate::palw_claim_challenge_v2::PalwPaidClaimFinalV2','crate::palw_claim_challenge_v2::PalwPaidClaimEvidenceV3','crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3','misaka_palw_kernel::claim_paid_v2::PaidClaimClassV2','misaka_palw_kernel::claim_paid_v2::PaidClaimJobV2','misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2','misaka_palw_challenge::approval_scope::LifetimeCounterV3','misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3','crate::palw_kernel_route_v1::KernelAssignmentV1','crate::palw_kernel_route_v1::PalwKernelChunkGroupV1','misaka_palw_kernel::receipt::PalwConstraintReceiptV1','crate::palw_onboarding_v1::ArtifactBindingRowV1','crate::palw_onboarding_v1::KernelBindingRowV1','crate::palw_onboarding_v1::ConformanceRowV1','crate::palw_onboarding_v1::ConformanceAttemptRowV1','crate::palw_conformance_evidence_v1::ConformanceEvidencePostV1','crate::palw_beacon_source_fee_v1::PalwBeaconSourceCostBoundsV1','crate::palw_panel_source_snapshot_v1::PalwPanelSourceSnapshotV1','crate::palw_state_v2::PalwClassAdmissionCarriageV2','crate::palw_state_v2::PalwStateCarriageV2','crate::palw_state_v2::PalwChainStateV2','misaka_palw_kernel::ledger::KernelLedgerV1',
        'crate::palw_panel_lifetime_v2::PalwPanelAuthorizationRowV2','crate::palw_panel_lifetime_v2::PalwPanelConsentCaptureV2','crate::palw_panel_lifetime_v2::PalwPanelLifetimeEnrollmentV2',
        'misaka_palw_kernel::panel_lifetime_v2::PanelLifetimeAuthorizationV2','misaka_palw_kernel::panel_lifetime_v2::PanelConsumerLifetimeTermsV2',
        'crate::palw_econ_contracts_v1::PalwModelVerificationTallyV1','crate::palw_econ_contracts_v1::PalwHorizonExtensionRowV1','crate::palw_econ_contracts_v1::PalwMinimumPriceRowV1',
@@ -142,8 +141,10 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        'crate::palw_model_eligibility_v1::PalwEligibilityPrincipalRowV1','crate::palw_model_eligibility_v1::PalwEligibilityNetworkRowV1',
        'crate::palw_model_eligibility_v1::PalwEligibilityExamRowV1','crate::palw_model_eligibility_v1::PalwEligibilityProbationClaimRowV1',
        # RFC-0018 (2026-10-15): the SecurityCertified rows of kernel route aux 136.
-       'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
+       'crate::palw_security_certification_v1::PalwClaimCertificationRowV1','crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1','crate::palw_security_certification_v1::PalwCertificationClassRowV1',
        'crate::palw_security_certification_v1::PalwCertificationNetworkRowV1',
+       # Existing kernel Gate C hold row, decoded by native checkpoint/effects.
+       'crate::palw_security_certification_v1::PalwKernelCertifiedRewardHoldV1',
        # RFC-0006 consumer v2 (2026-10-15): the router binding rows of kernel route aux 139.
        'crate::palw_router_binding_v2::PalwRouterBindingRowV2',
        # RFC-0006 RFC06-8 (2026-10-15): the class registration origins of kernel route aux 141 (dormant fence).
@@ -153,6 +154,10 @@ queue=['crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1','crate::palw_
        # RFC-0007 §4.1 T6 (2026-10-16): the paid-claim trap rows of kernel route aux 142 (dormant fence).
        'crate::palw_paid_claim_trap_v1::PalwPaidClaimConvictionRowV1','crate::palw_paid_claim_trap_v1::PalwHeldCheckFeeRowV1',
        'crate::palw_paid_claim_trap_v1::PalwPaidTrapCommitmentRowV1',
+       # ADR-0207: authenticated ordinary verifier consent and actual funded fee hold (aux 142).
+       'crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1',
+       'crate::palw_verifier_watch_v1::PalwVerifierWatchRowV1',
+       'crate::palw_verifier_watch_v1::PalwFrozenWatcherPoolV1','crate::palw_verifier_watch_v1::PalwWatcherClaimContextV1',
        # G14 lane closure (2026-10-16): kernel route aux 143 (dormant).
        'crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1','crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1',
        # RFC08 08-B (2026-10-18): held native fees, kernel route aux 144 (dormant).
@@ -222,7 +227,11 @@ def aux_root(value):
         references(re.sub(r'mirror:[\w:]+','u8',alt),AUX_ORIGIN)
 for _n in AUX.NS:aux_root(_n['value'])
 FUNDED_MANUAL={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1'}
-while queue:
+wire_visited = None
+while queue or wire_visited is None:
+ if not queue:
+    wire_visited = visited.copy()
+    queue.append('crate::palw_batch_court_v1::carriage::BatchCourtWireV1')
  path=queue.pop(0)
  if path in visited:continue
  visited.add(path)
@@ -232,7 +241,15 @@ while queue:
  if item is None:
     unresolved.append(path);continue
  kind=item['kind']; form=item['form']; body=item['body']
- if path=='crate::palw_kernel_route_v1::KernelLedgerCacheV1':continue
+ if path in {'crate::palw_kernel_route_v1::KernelLedgerCacheV1','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15'}:continue
+ # Route fields still seed dependencies, but aux151 needs its manual typed-workspace visitor.
+ if path=='crate::palw_kernel_route_v1::PalwKernelRouteStateV1':
+    for _,typ,_ in fields(item):references(typ,item)
+    continue
+ # These process-local Assignment owners already visit their nested values.
+ if path in {'crate::palw_tir_owner_schedule_rooted_v2::TirOwnerScheduleRowV2',
+             'crate::palw_state_v2::positive_assignment_raw::PositiveAssignmentScheduledActionV2',
+             'crate::palw_positive_assignment_funds_v2::AssignmentSpendPlanV2'}:continue
  # Funded-original pairing (holds a whole carrier Transaction) and its test-only schedule: hand-written visitors in typed.rs.
  if path in FUNDED_MANUAL:unresolved.append(path);continue
  if kind=='struct' and form=='named':
@@ -278,10 +295,85 @@ while queue:
 
 # Opaque public types: preserve the actual type name in every refusal. Handwritten
 # private-owner visitors are intentionally omitted here.
-manual={'crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
+manual={'crate::palw_kernel_route_v1::PalwKernelRouteStateV1','crate::palw_claim_local_execution_cohort_census_v15::ExecutionCohortCensusV15','crate::palw_claim_local_context_gc_v3::ContextGcV3','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1','crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1','misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26','misaka_palw_panel::PanelCandidatesV1','misaka_palw_panel::PermissionlessPanelStateV1','crate::palw_kernel_route_v1::KernelLedgerCacheV1','kaspa_math::Uint512','kaspa_math::Uint576','misaka_palw_kernel::ledger::KernelLedgerV1','misaka_palw_kernel::opv::OpvStateV1'}
 header='//! Generated explicit native field inventory. Regenerate with\n//! scripts/drills/gen_rfc06_native_inventory.py after schema changes.\n//! Every field/variant is exhaustive; private layouts are visited beside owners.\nuse super::*;\n'
+# Reviewed NativeHeap implementations already live beside these owners. Keep
+# traversal/visited intact so nested fields and structural wire coverage remain
+# discoverable; suppress only duplicate heap implementation emission.
+OWNER_NATIVE_HEAP = {
+    'crate::palw_court_original_escrow_v1::FundingTermsV1',
+    'crate::palw_court_original_escrow_v1::FundingConsentV1',
+    'crate::palw_tir_funded_original_envelope_v1::PalwTirFundedOriginalEnvelopeV1',
+    'crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1',
+    'crate::palw_court_family_material_v1::FamilyOriginalRuleContextV2',
+    'crate::palw_court_family_material_v1::FamilyMaterialTargetV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialActionV1',
+    'crate::palw_court_family_material_v1::SignedFamilyMaterialV1',
+    'crate::palw_court_family_material_v1::FamilyTableInventoryRowV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialDraftV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialPartV1',
+    'crate::palw_court_family_material_v1::FamilyMaterialBodyV1',
+    'crate::palw_court_family_material_v1::FamilyDraftQuoteV2',
+    'crate::palw_court_family_material_v1::FamilyDraftReservationV2',
+    'crate::palw_court_family_material_v1::FamilyPrimaryDraftV2',
+    'crate::palw_court_family_material_v1::FamilyCarrierProjectionFactsV3',
+    'crate::palw_native_settlement_v1::PalwSettlementPolicyV1',
+    'crate::palw_native_settlement_v1::PalwDnsRetirementV1',
+    'crate::palw_native39_settlement_checkpoint_v1::Native39SettlementFoldV1',
+    'crate::palw_fork_choice_commitment_v1::PalwWeightAllocationSlotV1',
+    'crate::palw_fork_choice_commitment_v1::PalwForkChoiceLeafV1',
+}
+OWNER_NATIVE_HEAP.update({
+    'crate::config::params::positive_assignment_v2::AssignmentNativePreimagesV2',
+    'crate::config::params::positive_court_v2::CheckProfile',
+    'crate::config::params::positive_court_v2::PositiveCourtPolicyV2',
+    'crate::config::params::positive_funding_relay_v2::AssignmentFundingRelayProfileV2',
+    'crate::config::params::positive_funding_relay_v2::FundingRelayFeeScheduleV2',
+    'crate::config::params::positive_funding_relay_v2::FundingRelayPhysicalProfileV2',
+    'crate::config::params::positive_funding_relay_v2::FundingRelayPolicyV2',
+    'crate::palw_batch_court_v1::rooted::RootedBatchDemandV1',
+    'crate::palw_court_shared_material_intake_v1::SharedValidatedBatchCarrierV1',
+    'crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayProfileV1',
+    'crate::palw_native_resource_v1::demand::MemoryLease',
+    'crate::palw_native_resource_v1::demand::Mutex',
+    'crate::palw_positive_assignment_funds_v2::AssignmentFeeScheduleV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentMoneyQuoteV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentPhysicalProfileV2',
+    'crate::palw_positive_assignment_funds_v2::AssignmentPhysicalUsageV2',
+    'crate::palw_positive_assignment_material_v2::AcceptedMaterial',
+    'crate::palw_positive_assignment_material_v2::AcceptedOrigin',
+    'crate::palw_positive_assignment_material_v2::AssignmentAdmissionMaterialV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentCustodyDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentId',
+    'crate::palw_positive_assignment_material_v2::AssignmentJobDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentPolicyV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentRegisteredDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::AssignmentSourceQuoteDescriptorV2',
+    'crate::palw_positive_assignment_material_v2::NativeHash64',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCancellationPolicyV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCancellationRuleV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentCaseFeeScheduleV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentSourcePolicyV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentSourceReleaseV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentSourceResponsibilityV2',
+    'crate::palw_positive_assignment_resources_v2::AssignmentWorkScheduleV2',
+    'crate::palw_positive_journal_chain_v2::CaseId',
+    'crate::palw_positive_journal_chain_v2::ChainScope',
+    'crate::palw_positive_journal_chain_v2::JournalHeadRow',
+    'crate::palw_positive_journal_chain_v2::ResultId',
+    'crate::palw_state_v2::positive_assignment_backing::AcceptedOrigin',
+    'crate::palw_state_v2::positive_assignment_backing::AssignmentRow',
+    'crate::palw_state_v2::positive_assignment_backing::NativePositiveDecisionHistoryV2',
+    'crate::tx::AtomicU64',
+    'crate::tx::TransactionInput',
+    'crate::tx::TransactionOutput',
+    'crate::tx::UtxoEntry',
+    'crate::tx::script_public_key::ScriptPublicKey',
+})
+manual.update(OWNER_NATIVE_HEAP)
 private={}; public=[]
 for item,code,is_private in generated:
+    if item['path'] in OWNER_NATIVE_HEAP:continue
     if is_private:
         private.setdefault(item['module'],[]).append(code)
     else:public.append(code.replace('crate::palw_bond_budget_v1::material::','crate::palw_bond_budget_v1::').replace('crate::palw_bond_budget_v1::consumer::','crate::palw_bond_budget_v1::'))
@@ -291,8 +383,9 @@ for old in private_dir.glob('*.rs'):
     if old.read_text().startswith('// Generated owner-local field visitor') and old.stem not in {m.replace('::','_') for m in private}:old.unlink()
 for module,codes in private.items():
     filename=module.replace('::','_')+'.rs'
+    GENERATED_OUTPUTS.add(private_dir/filename)
     (private_dir/filename).write_text('// Generated owner-local field visitor. Root/hash/codec unchanged.\n#[allow(unused_imports)]\nuse crate::palw_native_resource_v1::{NativeHeapV1, NativeCoverageV1, native_struct, native_tuple_struct, native_enum, native_unit};\n'+'\n'.join(codes)+'\n')
-print(f'wrote {OUT.relative_to(ROOT)}: {len(generated)} explicit types, {len(set(unresolved)-manual)} opaque/unresolved types')
+print(f'wrote {OUT.relative_to(ROOT)}: {len(public)+sum(len(v) for v in private.values())} emitted explicit types, {len(set(unresolved)-manual)} opaque/unresolved types')
 print('Private owners: '+', '.join(private))
 print('\n'.join(sorted(set(unresolved)-manual)))
 
@@ -300,11 +393,13 @@ ledger=defs['misaka_palw_kernel::ledger::KernelLedgerV1']; fs=fields(ledger)
 hidden=[(name,typ) for name,typ,public in fs if not public]
 bridge="\n// Generated read-only native inventory bridge; every ledger field is exhaustive.\nimpl KernelLedgerV1 {\n    pub fn native_inventory_hidden_v1(&self) -> ("+','.join('&'+typ for _,typ in hidden)+",) {\n        let Self { "+', '.join(name if not public else name+': _' for name,_,public in fs)+" } = self;\n        ("+', '.join(name for name,_ in hidden)+",)\n    }\n}\n"
 bridge_path=ROOT/'misaka/palw/kernel/src/native_inventory_ledger_v1.rs'
+GENERATED_OUTPUTS.add(bridge_path)
 bridge_path.write_text('use super::*;\n'+bridge)
 publicfields=[name for name,_,public in fs if public]
 visitor='impl NativeHeapV1 for misaka_palw_kernel::ledger::KernelLedgerV1 {\n fn native_heap_v1(&self,path:&str)->NativeCoverageV1 {\n  let mut sum=self.native_inventory_hidden_v1().native_heap_v1(path);\n'
 visitor+=''.join('  sum=sum.add::<Self>(self.'+name+'.native_heap_v1(path),path);\n' for name in publicfields)
 visitor+='  sum\n }\n}\n'
+GENERATED_OUTPUTS.add(OUT.parent/'kernel_ledger.rs')
 (OUT.parent/'kernel_ledger.rs').write_text('//! Generated matching public/private ledger visitor.\nuse super::*;\n'+visitor)
 
 source_plan_path='misaka_palw_kernel::flat_quota11::stage14::source26::StageSourcePlanRecordV26'
@@ -316,4 +411,5 @@ if source_plan_path in visited:
  marker='// Generated source26 native inventory bridge; private fields remain private.'
  owner=ROOT/item['file'];text=owner.read_text();text=text.split(marker)[0].rstrip()
  text+='\n\n'+marker+'\nimpl StageSourcePlanRecordV26 {\n pub fn native_inventory_parts_v1(&self)->'+typ+' {\n let Self { '+','.join(n for n,_,_ in fs)+' }=self;\n '+body+'\n }\n}\n'
+ GENERATED_OUTPUTS.add(owner)
  owner.write_text(text)

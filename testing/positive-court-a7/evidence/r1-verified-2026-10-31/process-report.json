@@ -1,0 +1,154 @@
+{
+  "a2_miner_adapter_connected": false,
+  "a3_builder_port_connected": false,
+  "activation_allowed": false,
+  "cold_model": false,
+  "native_network": false,
+  "profile": "warm-4x4-3-decode",
+  "real_llm": false,
+  "recovery": "test-frame replay only; not A6 atomic/native persistence",
+  "reports": [
+    {
+      "detail": {
+        "generated": [
+          2,
+          0,
+          0
+        ],
+        "inference_with_fixture_setup_seconds": 0.000407208
+      },
+      "elapsed_seconds": 0.000415333,
+      "pid": 62487,
+      "role": "baseline",
+      "usage": {
+        "peak_rss_bytes": 10043392,
+        "system_cpu_seconds": 0.001748,
+        "user_cpu_seconds": 0.00273
+      }
+    },
+    {
+      "detail": {
+        "result_bytes": 8303
+      },
+      "elapsed_seconds": 0.024246,
+      "pid": 62488,
+      "role": "miner",
+      "usage": {
+        "peak_rss_bytes": 11124736,
+        "system_cpu_seconds": 0.00181,
+        "user_cpu_seconds": 0.025809
+      }
+    },
+    {
+      "detail": {
+        "artifact": "8265752fdea94a94a83c7c41c8a9ab2540df5e55b7b2f7b8c100b780105157c4524b11bee67f03b99b1a13f3cad4648217d7f658c64c8ca8d022542d611500c4",
+        "full_frame_bytes": 27288,
+        "input": "35f0d2bd9172a3387fc7c1800051751e0fbc582bb45be938af5378a673ef1cd9e76fcf85debfd6c3fdddc4131d39fffd3e164ce3aa682f4b228d248a9fa9a98b",
+        "leaves": 9,
+        "signed_delivery_bytes": 68931
+      },
+      "elapsed_seconds": 0.238652625,
+      "pid": 62489,
+      "role": "panel",
+      "usage": {
+        "peak_rss_bytes": 12337152,
+        "system_cpu_seconds": 0.002422,
+        "user_cpu_seconds": 0.239519
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 27288,
+        "cursor": 9,
+        "native_credit": false,
+        "status": "Matched"
+      },
+      "elapsed_seconds": 0.082095875,
+      "pid": 62490,
+      "role": "node",
+      "usage": {
+        "peak_rss_bytes": 10616832,
+        "system_cpu_seconds": 0.001977,
+        "user_cpu_seconds": 0.083816
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 11549,
+        "cursor": 4,
+        "native_credit": false,
+        "status": "Checking"
+      },
+      "elapsed_seconds": 0.045808125,
+      "pid": 62491,
+      "role": "prefix",
+      "usage": {
+        "peak_rss_bytes": 10518528,
+        "system_cpu_seconds": 0.002408,
+        "user_cpu_seconds": 0.047495
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 27288,
+        "cursor": 9,
+        "native_credit": false,
+        "status": "Matched"
+      },
+      "elapsed_seconds": 0.083452041,
+      "pid": 62492,
+      "role": "restart",
+      "usage": {
+        "peak_rss_bytes": 10616832,
+        "system_cpu_seconds": 0.002339,
+        "user_cpu_seconds": 0.085134
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 27288,
+        "cursor": 9,
+        "native_credit": false,
+        "status": "OutputMismatch"
+      },
+      "elapsed_seconds": 0.082378584,
+      "pid": 62493,
+      "role": "refute",
+      "usage": {
+        "peak_rss_bytes": 10616832,
+        "system_cpu_seconds": 0.002006,
+        "user_cpu_seconds": 0.084128
+      }
+    },
+    {
+      "detail": {
+        "charged_full_frame_bytes": 2342,
+        "cursor": 0,
+        "native_credit": false,
+        "status": "WitnessRejected"
+      },
+      "elapsed_seconds": 0.022615584,
+      "pid": 62494,
+      "role": "reject",
+      "usage": {
+        "peak_rss_bytes": 10305536,
+        "system_cpu_seconds": 0.001707,
+        "user_cpu_seconds": 0.024771
+      }
+    },
+    {
+      "detail": {
+        "status": "RejectedForeignScope"
+      },
+      "elapsed_seconds": 0.000156791,
+      "pid": 62495,
+      "role": "foreign",
+      "usage": {
+        "peak_rss_bytes": 8011776,
+        "system_cpu_seconds": 0.001688,
+        "user_cpu_seconds": 0.002718
+      }
+    }
+  ],
+  "schema": "a7-r1-all-node-i32-v1"
+}

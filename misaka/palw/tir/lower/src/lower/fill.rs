@@ -678,7 +678,11 @@ pub fn materialise(
             out.tensors.insert(key, t);
         }
         if hbk == hl.post {
-            super::check_logits_range(hl, &ctx)?;
+            super::check_logits_range(
+                hl,
+                &ctx,
+                lw.program.blocks[lw.program.schedule.post as usize].nodes[lw.program.logits as usize].out.dtype,
+            )?;
             logits_scale = Some(ctx.scale(&lw.logits_key)?);
         }
         quant_inexact += ctx.quant_inexact();

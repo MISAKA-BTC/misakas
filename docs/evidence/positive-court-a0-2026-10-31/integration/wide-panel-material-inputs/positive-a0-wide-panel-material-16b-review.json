@@ -1,0 +1,103 @@
+{
+  "kind": "Independent static review; NOT import/build-ready",
+  "recorded_at_utc": "2026-11-01T14:04:31.512386+00:00",
+  "patch_sha256": "16b2de79f1c0597253ea9b8680f69bef87a03d305f41ca126b2bc4b4631da165",
+  "manifest_sha256": "ca133b1e11c3ce51ee9072b8a649d69079c71f8a890fc8c8c78c326b47596bd6",
+  "base_commit": "7a6935de6add7fe66deb324090a7144b974a8730",
+  "reviewed_source_hashes": {
+    "consensus/core/src/palw_tir_court_v1/source_only/wide_v2.rs": "9245be2f553cd52d169135b5f9afac8ad937b9cd838917c392dd002e98d6a243",
+    "misaka/palw/tir/core/src/demand.rs": "0f7309d5f457756c02bf5359c67a7ef703bf7de7c2cf5753f9ac5bcdda5f40c8",
+    "misaka/palw/tir/core/src/lane_geometry.rs": "00032d3d89aae772250ec3524b026c4ee6c6eef1f2f598206faaa9a884c40fbb",
+    "misaka/palw/tir/core/src/lib.rs": "eab4db343bbe63a7216a49ec1e83efd922d9c2ebbfeb1622c8a7de83fc1fadb0",
+    "misaka/palw/tir/exec/src/node/mod.rs": "d7239ef7cf864c08b675cead63520ca0efc2eac436c151e8f58bbf43acd4acdd",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs": "916d34f00850758d8a66aae2333c51b0f072b41d5c9fa15c105d8d280a606ea5",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs": "3f2cf3a94b9b3d0d4188fa6ae73477775ab0143b6d559fe8afd4222002cc24cc",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs": "4af9dc1df10ecf6e536178ed7bcb9f6db5dc52581c1fc673f20787e85451a239",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs": "2f36898047d00143ef485898b7584f180552323686e01a9656626624f15c6e71",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs": "3f1fa1f122bbfecfc263e3257d8e2323d08057ed9043e8c1213653129540323e",
+    "misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs": "c046784b97f1f706f0d51090fc7be80042414dea7fc8ec5963c43eed294db1ff",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs": "87eb305eb15d244b4070f58a3904cd91927e1af14aef5a4d1bed9c4494b4a9f6"
+  },
+  "initial_all_12_before_after_hashes_matched": true,
+  "stage_drift_at_recording": [
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs"
+  ],
+  "blockers": [
+    {
+      "priority": "P1",
+      "file": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs",
+      "lines": [
+        25,
+        97
+      ],
+      "related_file": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs:8",
+      "finding": "External exec crate references palw_step_leg::PalwStepCoordinateV1, but that module only privately imports this type at core palw_step_leg.rs:28-30. Expected E0603. Use public palw_step::PalwStepCoordinateV1."
+    },
+    {
+      "priority": "P2",
+      "file": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs",
+      "lines": [
+        344,
+        345,
+        346
+      ],
+      "finding": "claim() performs relation_at before charging geometry Visit. Repeated calls after exhausted budget can still perform the lookup/traversal before rejection. Charge first as the existing relation() helper does."
+    },
+    {
+      "priority": "P2",
+      "file": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs",
+      "lines": [
+        414,
+        415,
+        428
+      ],
+      "finding": "context_hash is evaluated before V2 network-id length/shape cap and before session work admission. Oversized typed job.network_id can force unbounded early hashing even when job/work mismatch is rejected. Guard context lengths/shape or perform bounded quote before hashing."
+    }
+  ],
+  "compile_lint_followup": [
+    {
+      "file": "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs",
+      "line": 356,
+      "finding": "Initial out=Vec::new is overwritten in both exhaustive match arms before read; expected unused_assignments warning under -D warnings. Return the match expression."
+    }
+  ],
+  "checked_invariants": [
+    "Old Demand numerical evaluation, source API and Request-set logic are unchanged. unravel/ravel/broadcast_index function bodies are byte-identical moves; Gather index/data coordinate expressions preserve exact original order/arguments and range check. No numerical primitive or selection algorithm was replaced.",
+    "New authenticated parameter accessors expose artifact-authenticated data/coordinates only, without model evaluation or an arithmetic verdict.",
+    "One runner invocation per shared work handle; immutable shared session counters and started flag survive failure/cloning. New run fallible callback propagates write/refusal failure before returning a completed run. No producer eval_demanded/Interpreter is introduced in production dependency discovery.",
+    "Captured dynamic Gather/Select control values select only producer dependency addresses. Node retains independent arithmetic and canonical exact read closure.",
+    "RAM and separate disk callbacks are mandatory; provider scratch must be known/capped before provider call, returned proof is bounded and authenticated against original artifact, exact requested absolute leaf set is checked.",
+    "Single live material slot is borrowed and released on Drop; failed material attempts clear only the slot, retain cumulative charges. One live builder prevents simultaneous duplicate Merkle index owners.",
+    "Miner Result output is deliberately NOT required equal to Panel recomputation at prepare. Class/artifact/input/job/preparation/result pins are checked, Panel binding/trace/claims use its run, and Node compares Miner output only after complete relation/trace/greedy coverage. Wrong provider/unknown scratch is a local data refusal, never a Miner verdict."
+  ],
+  "test_source_and_gaps": {
+    "new_count": 5,
+    "status": "WRITTEN_NOT_COMPILED_OR_EXECUTED_BY_REVIEWER",
+    "target": "cargo test --locked -p misaka-palw-tir-exec --features positive-panel --test positive_wide_material_v2",
+    "observed_content": [
+      "windows1/3 material through real Node checker",
+      "wrong signed Panel claim versus wrong signed Miner output",
+      "unknown provider scratch with retained failed-attempt costs",
+      "Gather/Select/TopK and Fixed/Hist declaration through actual Node",
+      "failed pre-run nonempty tape consumes shared attempt and preserves meter"
+    ],
+    "missing_evidence": [
+      "The failed-capture test fails on nonempty tape BEFORE CPU execution; it does not test a mid-run disk/write failure abort or demonstrate no later callbacks after such failure.",
+      "No new negative actual wrong-root/corrupt provider proof test; authentication path reviewed statically only.",
+      "No meaningful physical RAM/disk lease accounting is measured: tests supply no-op operational guards.",
+      "No actual compile/clippy or runtime results; private path compile issue must be corrected first."
+    ]
+  },
+  "scope": [
+    "Pure local data production, no native admission/receipt/grant/credit/public activation.",
+    "Current Node PrototypePanelRecord signing/storage still materializes bounded Vec<Vec<i128>>; stream claims tape signing and Node stream reader integration are incomplete.",
+    "Original run rows/hash vectors and step/row/tile Merkle indices remain RAM-backed; large-run spill/residency feasibility is incomplete.",
+    "Flat prompt only; original Held/Merkle prompt and context must not be rewritten to this adapter.",
+    "Original model/plan/prepared fields, actual upstream catalog/consent/duty/funding/native authority and simultaneous external owners remain caller obligations.",
+    "Merkle indices are built once per successful builder lifetime; dropping/recreating a builder may rebuild, retaining cumulative costs."
+  ],
+  "reviewer_root_source_or_index_edits": false,
+  "reviewer_build_or_tests_run": false,
+  "record_path": "/tmp/positive-a0-wide-panel-material-16b-review.json"
+}

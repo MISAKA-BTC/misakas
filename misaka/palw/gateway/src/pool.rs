@@ -15,7 +15,8 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::net::IpAddr;
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 struct PoolState<T> {
     /// Idle slots, by index; `workers[i]` is `Some` while slot `i` is idle.
@@ -85,6 +86,44 @@ impl<T> SlotPool<T> {
             state = self.freed.wait(state).expect("the pool lock is never poisoned");
         }
     }
+
+    /// A slot, unless `cancelled` becomes true while this caller is still waiting.
+    ///
+    /// Cancellation before a slot is taken removes the ticket and does not check a worker out.
+    /// Cancellation after this returns is a different contract: the caller holds [`SlotGuard`]
+    /// until the running job confirms stop or finishes draining.
+    pub fn acquire_unless_cancelled(&self, cancelled: &dyn Fn() -> bool) -> Result<SlotGuard<'_, T>, SlotWaitError> {
+        let mut state = self.state.lock().expect("the pool lock is never poisoned");
+        let ticket = state.next_ticket;
+        state.next_ticket += 1;
+        state.waiting.push_back(ticket);
+        loop {
+            if cancelled() {
+                state.waiting.retain(|waiting| *waiting != ticket);
+                self.freed.notify_all();
+                return Err(SlotWaitError::CancelledWhileWaiting);
+            }
+            if state.waiting.front() == Some(&ticket)
+                && let Some(index) = state.idle.pop()
+            {
+                state.waiting.pop_front();
+                let worker = state.workers[index].take();
+                self.freed.notify_all();
+                return Ok(SlotGuard { pool: self, index, worker });
+            }
+            let (next, _) = self
+                .freed
+                .wait_timeout(state, Duration::from_millis(20))
+                .expect("the pool lock is never poisoned");
+            state = next;
+        }
+    }
+}
+
+/// The wait ended before a slot was taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotWaitError {
+    CancelledWhileWaiting,
 }
 
 impl<T> SlotGuard<'_, T> {
@@ -151,8 +190,21 @@ impl SourceGate {
         }
     }
 
+    /// Count `n` jobs in flight and return the share that releases them on drop.
+    pub fn reserve_jobs(&self, source: IpAddr, n: u32) -> Result<JobShare<'_>, GateRefusal> {
+        self.start_jobs(source, n)?;
+        Ok(JobShare { gate: self, source, jobs: n })
+    }
+
+    /// Count one connection and return the share that releases it on drop, including unwind.
+    pub fn open_connection_owned(self: &Arc<Self>, source: IpAddr) -> Result<OwnedConnection, GateRefusal> {
+        self.open_connection(source)?;
+        Ok(OwnedConnection { gate: Arc::clone(self), source })
+    }
+
     /// Count `n` jobs in flight for `source` (a request for `n` candidates is `n` jobs).
-    pub fn start_jobs(&self, source: IpAddr, n: u32) -> Result<(), GateRefusal> {
+    /// Callers outside this module use [`Self::reserve_jobs`].
+    pub(crate) fn start_jobs(&self, source: IpAddr, n: u32) -> Result<(), GateRefusal> {
         let mut map = self.inner.lock().expect("the gate lock is never poisoned");
         let entry = map.entry(source).or_insert((0, 0));
         if entry.1.saturating_add(n) > self.max_jobs {
@@ -162,7 +214,7 @@ impl SourceGate {
         Ok(())
     }
 
-    pub fn finish_jobs(&self, source: IpAddr, n: u32) {
+    pub(crate) fn finish_jobs(&self, source: IpAddr, n: u32) {
         let mut map = self.inner.lock().expect("the gate lock is never poisoned");
         if let Some(entry) = map.get_mut(&source) {
             entry.1 = entry.1.saturating_sub(n);
@@ -178,11 +230,36 @@ impl SourceGate {
     }
 }
 
+/// Jobs counted against one source, released when the request ends.
+pub struct JobShare<'a> {
+    gate: &'a SourceGate,
+    source: IpAddr,
+    jobs: u32,
+}
+
+impl Drop for JobShare<'_> {
+    fn drop(&mut self) {
+        self.gate.finish_jobs(self.source, self.jobs);
+    }
+}
+
+/// One open connection, released when the serving thread ends.
+pub struct OwnedConnection {
+    gate: Arc<SourceGate>,
+    source: IpAddr,
+}
+
+impl Drop for OwnedConnection {
+    fn drop(&mut self) {
+        self.gate.close_connection(self.source);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::Duration;
 
     #[test]
@@ -270,5 +347,46 @@ mod tests {
         gate.close_connection(a);
         gate.close_connection(b);
         assert_eq!(gate.tracked_sources(), 0);
+    }
+
+    #[test]
+    fn a_cancelled_waiter_does_not_take_the_slot_the_running_job_still_holds() {
+        let pool = Arc::new(SlotPool::new(vec![7u32]));
+        let mut running = pool.acquire();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let waiting_pool = Arc::clone(&pool);
+        let waiting_cancel = Arc::clone(&cancel);
+        let took = Arc::new(AtomicUsize::new(0));
+        let took_flag = Arc::clone(&took);
+        let handle = std::thread::spawn(move || {
+            match waiting_pool.acquire_unless_cancelled(&|| waiting_cancel.load(Ordering::Acquire)) {
+                Ok(guard) => {
+                    took_flag.fetch_add(1, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(30));
+                    drop(guard);
+                }
+                Err(SlotWaitError::CancelledWhileWaiting) => {}
+            }
+        });
+        while pool.waiting() == 0 {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        cancel.store(true, Ordering::Release);
+        handle.join().unwrap();
+        assert_eq!(took.load(Ordering::SeqCst), 0, "the cancelled waiter never checked a worker out");
+        assert_eq!(*running.get_mut(), 7, "the running slot is still held");
+        drop(running);
+        let mut next = pool.acquire();
+        assert_eq!(*next.get_mut(), 7);
+    }
+
+    #[test]
+    fn a_job_share_returns_its_count_when_dropped() {
+        let gate = SourceGate::new(2, 2);
+        let source: IpAddr = "10.0.0.8".parse().unwrap();
+        let share = gate.reserve_jobs(source, 2).expect("the share fits");
+        assert!(matches!(gate.reserve_jobs(source, 1), Err(GateRefusal::TooManyJobs)));
+        drop(share);
+        assert!(gate.reserve_jobs(source, 2).is_ok());
     }
 }

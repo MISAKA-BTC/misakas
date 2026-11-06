@@ -1,0 +1,15 @@
+   Compiling misaka-palw-positive-accounting-node v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting-node)
+    Finished `test` profile [unoptimized] target(s) in 3.15s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/misaka_palw_positive_accounting_node-49ca883e32b27f5d)
+
+running 7 tests
+test dues::tests::zero_fee_first_receipt_keeps_identity_and_later_price_cannot_reopen_due ... ok
+test dues::tests::preincremented_fee_regressing_meters_and_completion_recipient_are_rejected ... ok
+test dues::tests::duplicate_receipt_never_adds_due_and_cannot_replace_first_provider_or_response ... ok
+test dues::tests::first_source_due_preserves_meters_and_does_not_pay_or_erase_ended_service ... ok
+test dues::tests::settlement_reference_is_not_first_delivery_evidence_or_a_new_due ... ok
+test dues::tests::cross_result_scope_schedule_source_and_fee_cap_substitution_fail_closed ... ok
+test dues::tests::whole_schedule_quote_counts_source_separately_from_court_and_never_mutates ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 22 filtered out; finished in 0.00s
+

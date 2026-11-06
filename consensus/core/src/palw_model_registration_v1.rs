@@ -48,6 +48,9 @@ pub fn palw_registration_carrier_object_v1(tx: &crate::tx::Transaction) -> Optio
     if tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_LIFECYCLE {
         return None;
     }
+    if crate::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
+        return None;
+    }
     let payload: PalwLifecycleTxPayloadV2 = borsh::from_slice(&tx.payload).ok()?;
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return None;

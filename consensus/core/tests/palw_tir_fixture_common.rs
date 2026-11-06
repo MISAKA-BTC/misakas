@@ -154,12 +154,26 @@ pub fn fixture_with(name: String, program: TirProgramV1, params: MapParams, toke
 /// scheme's 4,096: spec 04b §10.3's carriable-close rule lets a class tile its logits finer).
 pub fn fixture_tiled(
     name: String,
+    program: TirProgramV1,
+    params: MapParams,
+    tokens: Vec<u32>,
+    prefill: u32,
+    decode: u32,
+    logits_tile: u32,
+) -> Fixture {
+    fixture_tiled_with_tokenizer(name, program, params, tokens, prefill, decode, logits_tile, Hash64::from_bytes([3; 64]))
+}
+/// Bind actual tokenizer identity before class identity, step space and execution.
+/// Existing fixtures retain their literal historical tokenizer through the wrapper.
+pub fn fixture_tiled_with_tokenizer(
+    name: String,
     mut program: TirProgramV1,
     params: MapParams,
     tokens: Vec<u32>,
     prefill: u32,
     decode: u32,
     logits_tile: u32,
+    tokenizer: Hash64,
 ) -> Fixture {
     program.logits_scheme_id.copy_from_slice(tiled_logits_scheme_id_v1().as_byte_slice());
     let bytes = program.encode();
@@ -209,8 +223,7 @@ pub fn fixture_tiled(
         .position(|(bi, ni)| bi == program.schedule.post as usize && ni == program.logits as usize)
         .expect("the logits node commits");
     lay.commit_tiles[logits_index] = logits_tile;
-    let class =
-        PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: bytes, layout: lay, tokenizer_id: Hash64::from_bytes([3; 64]) };
+    let class = PalwTirClassV1 { version: PALW_TIR_CLASS_VERSION_V1, program: bytes, layout: lay, tokenizer_id: tokenizer };
     let (ops, artifact_root) = if program.params.is_empty() {
         (Vec::new(), Hash64::from_bytes([0xA7; 64]))
     } else {

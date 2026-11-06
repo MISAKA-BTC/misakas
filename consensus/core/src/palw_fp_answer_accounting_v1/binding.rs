@@ -1,5 +1,5 @@
 //! Transaction accounting answer binding. Served-material FPA1 is deliberately absent from this codec.
-use super::{PALW_FP_ANSWER_ENVELOPE_MAGIC_V1, palw_fp_answer_envelope_view_v1};
+use super::{PALW_FP_ANSWER_ENVELOPE_MAGIC_V1, palw_fp_accounting_carrier_view_v1, palw_fp_answer_envelope_view_v1};
 use crate::{
     Hash64,
     palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFreePromptCommitmentV3},
@@ -21,7 +21,8 @@ impl NativeWireScanV1 for PalwFpCommitmentTxPayloadV3 {
 }
 
 /// Locate the old literal original inside a previously validated accounting inner payload. This is not an envelope validator.
-/// Exactly the specified order: FPA1 outside plain/TFP1/HFP1/TFO1, and TFO1 around a literal TFP1.
+/// Exactly the specified order: FPA1 outside plain/TFP1/HFP1/TFO1/TFO2;
+/// TFO2 retains literal TFO1, which retains literal TFP1. No claim authorization is inferred.
 pub fn palw_fp_accounting_original_bytes_v1(inner: &[u8]) -> Option<&[u8]> {
     fn bytes_at(payload: &[u8], offset: usize, cap: usize) -> Option<&[u8]> {
         let count = u32::from_le_bytes(payload.get(offset..offset.checked_add(4)?)?.try_into().ok()?) as usize;
@@ -32,6 +33,20 @@ pub fn palw_fp_accounting_original_bytes_v1(inner: &[u8]) -> Option<&[u8]> {
         payload.get(start..start.checked_add(count)?)
     }
     use crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES as FP_MAX;
+    // Read-only identity view. Native admission separately decodes TFO2 and
+    // verifies every new supplier consent against its actual original carrier.
+    let inner = if inner.starts_with(b"TFO2") {
+        if inner.get(4..6)? != 2u16.to_le_bytes() {
+            return None;
+        }
+        let literal = bytes_at(inner, 6, crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1)?;
+        if !literal.starts_with(b"TFO1") {
+            return None;
+        }
+        literal
+    } else {
+        inner
+    };
     let original = if inner.starts_with(b"TFP1") {
         bytes_at(inner, 14, FP_MAX)?
     } else if inner.starts_with(b"HFP1") {
@@ -51,6 +66,7 @@ pub fn palw_fp_accounting_original_bytes_v1(inner: &[u8]) -> Option<&[u8]> {
         || original.starts_with(b"TFP1")
         || original.starts_with(b"HFP1")
         || original.starts_with(b"TFO1")
+        || original.starts_with(b"TFO2")
     {
         return None;
     }
@@ -95,7 +111,7 @@ pub fn palw_fp_answer_envelope_retain_encode_v1(inner: &[u8], ids: &[u32]) -> Re
         crate::palw_tir_public_fp_envelope_v1::PALW_TIR_PUBLIC_FP_ENVELOPE_MAX_BYTES_V1
     } else if inner.starts_with(b"HFP1") {
         crate::palw_history_custody_v1::PALW_HISTORY_FP_ENVELOPE_MAX_BYTES_V1
-    } else if inner.starts_with(b"TFO1") {
+    } else if inner.starts_with(b"TFO1") || inner.starts_with(b"TFO2") {
         crate::palw_tir_funded_original_envelope_v1::PALW_TIR_FUNDED_ORIGINAL_MAX_BYTES_V1
     } else {
         crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES
@@ -137,7 +153,7 @@ pub fn palw_fp_answer_bind_duty_v1(
     if !duty.free_prompt || tx.subnetwork_id != crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT || !tx.id_is_current() {
         return Err(invalid("accounting carrier namespace or stale actual ID"));
     }
-    let view = palw_fp_answer_envelope_view_v1(&tx.payload, u32::MAX as usize)
+    let view = palw_fp_accounting_carrier_view_v1(&tx.payload, u32::MAX as usize)
         .ok_or_else(|| invalid("missing accounting transaction envelope"))?;
     let original = palw_fp_accounting_original_decode_v1(view.inner)?;
     let c = &original.commitment;
@@ -185,7 +201,13 @@ mod tests {
         tfo.extend_from_slice(&[0; 2]);
         tfo.extend_from_slice(&(tfp.len() as u32).to_le_bytes());
         tfo.extend_from_slice(&tfp);
-        for inner in [&plain[..], &tfp, &hfp, &tfo] {
+        let mut tfo2 = b"TFO2".to_vec();
+        tfo2.extend_from_slice(&2u16.to_le_bytes());
+        tfo2.extend_from_slice(&(tfo.len() as u32).to_le_bytes());
+        tfo2.extend_from_slice(&tfo);
+        // This fixture tests identity slicing only, not valid signed TFO2 admission.
+        tfo2.extend_from_slice(&1u32.to_le_bytes());
+        for inner in [&plain[..], &tfp, &hfp, &tfo, &tfo2] {
             assert_eq!(palw_fp_accounting_original_bytes_v1(inner), Some(&plain[..]));
             let wire = palw_fp_answer_envelope_retain_encode_v1(inner, &[7, 9]).unwrap();
             let view = palw_fp_answer_envelope_view_v1(&wire, 2).unwrap();
@@ -195,6 +217,14 @@ mod tests {
             assert!(palw_fp_answer_envelope_retain_encode_v1(&wire, &[7]).is_err());
         }
         assert!(palw_fp_accounting_original_bytes_v1(b"TFO1\0\0\x01\0\0\0x").is_none());
+        let mut wrong = tfo2.clone();
+        wrong[4..6].copy_from_slice(&1u16.to_le_bytes());
+        assert!(palw_fp_accounting_original_bytes_v1(&wrong).is_none());
+        let mut nested = b"TFO2".to_vec();
+        nested.extend_from_slice(&2u16.to_le_bytes());
+        nested.extend_from_slice(&(tfo2.len() as u32).to_le_bytes());
+        nested.extend_from_slice(&tfo2);
+        assert!(palw_fp_accounting_original_bytes_v1(&nested).is_none());
         assert!(
             palw_fp_answer_envelope_retain_encode_v1(&vec![0; crate::palw_freeprompt_v3::PALW_FP_COMMITMENT_TX_MAX_BYTES + 1], &[])
                 .is_err()

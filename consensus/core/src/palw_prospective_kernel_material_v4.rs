@@ -372,6 +372,19 @@ pub fn prepare_unsigned_kernel_candidate_v4(
     commit_daa: u64,
     raw_depth: Option<u64>,
 ) -> Result<ReservedKernelLedgerV1, String> {
+    prepare_unsigned_kernel_candidate_checked_v4(state, params, producer, commit, salt, commit_daa, raw_depth)
+        .map_err(|error| error.to_string())
+}
+/// Classified preparation; local capacity/context never becomes collateral shortage.
+pub fn prepare_unsigned_kernel_candidate_checked_v4(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    producer: &PalwBondKeyV2,
+    commit: &SaltedCommitV1,
+    salt: &Digest,
+    commit_daa: u64,
+    raw_depth: Option<u64>,
+) -> Result<ReservedKernelLedgerV1, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
     let route = state.kernel_route().ok_or("native kernel route absent")?;
     let (root, job, actor) = commit_identity_v4(commit);
     if actor != palw_kernel_bond_id_v1(producer) {
@@ -381,7 +394,7 @@ pub fn prepare_unsigned_kernel_candidate_v4(
     if bond.status != PalwBondStatusV2::Active {
         return Err("prospective producer is not Active".into());
     }
-    let mut candidate = route.ledger()?;
+    let mut candidate = route.ledger_checked_v1()?;
     if candidate.claims.contains_key(&root) {
         return Err("prospective work already accepted".into());
     }
@@ -389,11 +402,11 @@ pub fn prepare_unsigned_kernel_candidate_v4(
         return Err("paid checker work cannot adopt an independent source opt-in".into());
     }
     let kernel = route.ledger_reserved_of(producer) as u128;
-    let committed = crate::palw_state_v2::palw_bond_committed_raw_v1(state, params, producer, commit_daa, raw_depth);
+    let committed = crate::palw_state_v2::palw_bond_committed_raw_checked_v2(state, params, producer, commit_daa, raw_depth)?;
     let non_kernel = committed.saturating_sub(kernel);
     let collateral = (bond.collateral as u128).saturating_sub(non_kernel).max(kernel).min(bond.collateral as u128) as u64;
-    candidate.try_sync_bond_v1(actor, collateral).map_err(|e| e.to_string())?;
-    candidate.try_replay_salted_claim_v4(commit, salt, actor, commit_daa)?;
+    candidate.try_sync_bond_v1(actor, collateral).map_err(PalwMaterialQuoteFaultV4::from)?;
+    candidate.try_replay_salted_claim_checked_v4(commit, salt, actor, commit_daa)?;
     if !candidate.claims.contains_key(&root) {
         return Err("kernel replay did not admit the actual claim".into());
     }
@@ -411,6 +424,20 @@ pub fn prospective_kernel_material_v4(
     max_bytes: u64,
     verify_mldsa: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> Result<PalwProspectiveKernelMaterialOwnedV4, String> {
+    prospective_kernel_material_checked_v4(state, params, checkpoint, now_daa, raw_depth, request, max_bytes, verify_mldsa)
+        .map_err(|error| error.to_string())
+}
+/// Classified preparation; local capacity/context never becomes collateral shortage.
+pub fn prospective_kernel_material_checked_v4(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    checkpoint: Hash64,
+    now_daa: u64,
+    raw_depth: Option<u64>,
+    request: &PalwProspectiveKernelMaterialRequestV4,
+    max_bytes: u64,
+    verify_mldsa: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+) -> Result<PalwProspectiveKernelMaterialOwnedV4, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
     let intent = &request.intent;
     let route = state.kernel_route().ok_or("native kernel route absent")?;
     if intent.version != 4
@@ -456,8 +483,8 @@ pub fn prospective_kernel_material_v4(
     if request.bundle.claim().as_bytes() != root || intent.manifest.root.as_bytes() != root || intent.manifest.scopes.len() != 1 {
         return Err("prospective bundle/manifest root substituted".into());
     }
-    intent.manifest.validate(max_bytes).map_err(|e| e.to_string())?;
-    let mut candidate = prepare_unsigned_kernel_candidate_v4(
+    intent.manifest.validate(max_bytes).map_err(PalwMaterialQuoteFaultV4::from)?;
+    let mut candidate = prepare_unsigned_kernel_candidate_checked_v4(
         state,
         params,
         &intent.producer,
@@ -470,20 +497,19 @@ pub fn prospective_kernel_material_v4(
         return Err("prospective enrollment requires the complete v4 codec, including immutable artifacts".into());
     }
     let coverage = crate::palw_material_capacity_v1::prospective_kernel_bundle_requests_v4(&request.bundle)?;
-    let _bundle_decode_lease =
-        crate::palw_native_resource_v1::reserve_native_requests_v1(coverage.bytes().ok_or_else(|| coverage.to_string())?)
-            .map_err(|e| e.to_string())?;
-    candidate.try_reserve_kernel_material_v4(&root).map_err(|e| e.to_string())?;
+    let _bundle_decode_lease = crate::palw_native_resource_v1::reserve_native_requests_v1(coverage.bytes().ok_or(coverage)?)
+        .map_err(PalwMaterialQuoteFaultV4::from)?;
+    candidate.try_reserve_kernel_material_v4(&root).map_err(PalwMaterialQuoteFaultV4::from)?;
     let auth = crate::palw_material_capacity_v1::prospective_kernel_bundle_auth_requests_v4(&request.bundle, &candidate)?;
-    let _bundle_auth_lease = crate::palw_native_resource_v1::reserve_native_requests_v1(auth.bytes().ok_or_else(|| auth.to_string())?)
-        .map_err(|e| e.to_string())?;
-    let scope = request.bundle.verify(&candidate, max_bytes).map_err(|e| e.to_string())?;
+    let _bundle_auth_lease = crate::palw_native_resource_v1::reserve_native_requests_v1(auth.bytes().ok_or(auth)?)
+        .map_err(PalwMaterialQuoteFaultV4::from)?;
+    let scope = request.bundle.verify(&candidate, max_bytes).map_err(PalwMaterialQuoteFaultV4::from)?;
     if intent.manifest.scopes.first() != Some(&scope) {
         return Err("prospective held bytes differ from producer-signed manifest".into());
     }
     let subject = candidate
         .try_claim_challenge_subject_v4(&root)
-        .map_err(|e| e.to_string())?
+        .map_err(PalwMaterialQuoteFaultV4::from)?
         .ok_or("prospective actual claim subject absent")?;
     let row = candidate.claims.get(&root).ok_or("prospective admitted row absent")?;
     let authority = PalwProspectiveKernelMaterialAuthorityV4 {
@@ -497,18 +523,19 @@ pub fn prospective_kernel_material_v4(
         prior_aux_root: intent.aux_root,
         commit_daa: intent.commit_daa,
     };
-    let producer_pubkey = NativeRetainedV1::try_from_clone_v1(&producer.pubkey).map_err(|e| e.to_string())?;
+    let producer_pubkey = NativeRetainedV1::try_from_clone_v1(&producer.pubkey).map_err(PalwMaterialQuoteFaultV4::from)?;
     let mut provider_pubkeys = std::array::from_fn(|_| None);
     for (index, key) in intent.providers.iter().enumerate() {
         let provider = state.bond(key).ok_or("provider native bond absent")?;
-        provider_pubkeys[index] = Some((*key, NativeRetainedV1::try_from_clone_v1(&provider.pubkey).map_err(|e| e.to_string())?));
+        provider_pubkeys[index] =
+            Some((*key, NativeRetainedV1::try_from_clone_v1(&provider.pubkey).map_err(PalwMaterialQuoteFaultV4::from)?));
     }
     Ok(PalwProspectiveKernelMaterialOwnedV4 {
         producer_pubkey,
         provider_pubkeys,
         candidate,
         authority,
-        manifest: NativeRetainedV1::try_from_clone_v1(&intent.manifest).map_err(|e| e.to_string())?,
+        manifest: NativeRetainedV1::try_from_clone_v1(&intent.manifest).map_err(PalwMaterialQuoteFaultV4::from)?,
         request: request.id(),
     })
 }
@@ -707,5 +734,86 @@ mod tests {
         assert_eq!(borsh::to_vec(&PalwMaterialCodecV1::KernelPositions).unwrap(), vec![1]);
         assert_eq!(borsh::to_vec(&PalwMaterialCodecV1::SegmentedParts).unwrap(), vec![2]);
         assert_eq!(borsh::to_vec(&PalwMaterialCodecV1::TypedKernelV4).unwrap(), vec![3]);
+    }
+}
+
+/// Local state/capacity failures are distinct from a refused preparation request.
+/// This is a read-side quote error, never admission or payment authority.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PalwMaterialQuoteFaultV4 {
+    #[error("local quote state unavailable: {0}")]
+    State(#[from] crate::palw_state_v2::PalwStateV2Error),
+    #[error("{0}")]
+    Refused(String),
+    #[error("{0}")]
+    Material(crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1),
+}
+impl From<String> for PalwMaterialQuoteFaultV4 {
+    fn from(s: String) -> Self {
+        Self::Refused(s)
+    }
+}
+impl From<&str> for PalwMaterialQuoteFaultV4 {
+    fn from(s: &str) -> Self {
+        Self::Refused(s.into())
+    }
+}
+impl From<crate::palw_native_resource_v1::NativeCoverageV1> for PalwMaterialQuoteFaultV4 {
+    fn from(e: crate::palw_native_resource_v1::NativeCoverageV1) -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeResource(e))
+    }
+}
+impl<E: std::fmt::Display> From<crate::palw_native_resource_v1::NativeDecodeErrorV1<E>> for PalwMaterialQuoteFaultV4 {
+    fn from(e: crate::palw_native_resource_v1::NativeDecodeErrorV1<E>) -> Self {
+        match e {
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => e.into(),
+            crate::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => Self::Refused(e.to_string()),
+        }
+    }
+}
+
+impl From<std::io::Error> for PalwMaterialQuoteFaultV4 {
+    fn from(e: std::io::Error) -> Self {
+        match e.kind() {
+            std::io::ErrorKind::OutOfMemory => crate::palw_native_resource_v1::NativeCoverageV1::overflow::<
+                PalwProspectiveKernelMaterialOwnedV4,
+            >("material quote shape scan")
+            .into(),
+            std::io::ErrorKind::Unsupported | std::io::ErrorKind::TimedOut => {
+                crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<PalwProspectiveKernelMaterialOwnedV4>(
+                    "material quote shape scan",
+                    &e.to_string(),
+                )
+                .into()
+            }
+            _ => Self::Refused(e.to_string()),
+        }
+    }
+}
+
+impl PalwMaterialQuoteFaultV4 {
+    pub fn capacity_unavailable_v4() -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::CapacityUnavailable,
+        ))
+    }
+    pub fn history_unavailable_v4() -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+        ))
+    }
+    pub fn store_unreadable_v4() -> Self {
+        Self::State(crate::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(
+            crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::StoreUnreadable,
+        ))
+    }
+}
+
+impl From<crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1> for PalwMaterialQuoteFaultV4 {
+    fn from(e: crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1) -> Self {
+        match e {
+            crate::palw_material_capacity_v1::PalwMaterialCapacityErrorV1::LocalResource(resource) => resource.into(),
+            other => Self::Material(other),
+        }
     }
 }

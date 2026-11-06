@@ -1637,8 +1637,48 @@
       "kind": "adr",
       "number": "0210",
       "path": "docs/adr/0210-all-model-g14-panel-one.md",
-      "title": "ADR-0210 — 全モデルの新規 producer claim を G14 の 1 席経路へ移す",
+      "title": "ADR-0210 (AllModelG14PanelOne) — 全モデルの新規 producer claim を G14 の 1 席経路へ移す",
       "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0210",
+      "path": "docs/adr/0210-court-family-supplier-consent-and-native-reservation.md",
+      "title": "ADR-0210 (CourtSupplierConsent) — Court全分岐の供給者契約と原子的native予約",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0211",
+      "path": "docs/adr/0211-wide-q24-llm-output.md",
+      "title": "ADR-0211 — 学習済みcheckpointのlogit範囲を損なわず扱う",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0212",
+      "path": "docs/adr/0212-positive-court-without-model-prepossession.md",
+      "title": "ADR-0212 — Panelが正常・不正の証拠生成を担い、Minerは結果commitと上限付き対話応答に限定する",
+      "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0213",
+      "path": "docs/adr/0213-positive-court-canonical-assignment.md",
+      "title": "ADR-0213 — 最初のPositive native TIR経路を合意Assignmentとposter原資で分離する",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "adr",
+      "number": "0214",
+      "path": "docs/adr/0214-positive-native-funded-relay.md",
+      "title": "ADR-0214 — Positive原資へ先行relay資料・custodyを追加する判断案",
+      "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     },
     {
@@ -1973,8 +2013,48 @@
       "kind": "rfc",
       "number": "0042",
       "path": "docs/rfc/0042-all-model-g14-panel-one.md",
-      "title": "RFC-0042 — 全モデルの producer を G14 Panel=1 に統一する",
+      "title": "RFC-0042 (AllModelG14PanelOne) — 全モデルの producer を G14 Panel=1 に統一する",
       "topic": "Models / execution / onboarding",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0042",
+      "path": "docs/rfc/0042-court-family-supplier-consent-and-native-reservation.md",
+      "title": "RFC-0042 (CourtSupplierConsent) — Court全分岐の供給者同意・実原資・native予約",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0043",
+      "path": "docs/rfc/0043-wide-q24-llm-output.md",
+      "title": "RFC-0043 — 学習済みLLMの広いQ24 logit表現",
+      "topic": "Consensus / architecture",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0044",
+      "path": "docs/rfc/0044-positive-court-full-coverage.md",
+      "title": "RFC-0044 — Positive Court：Panelによる正常計算証拠の生成・提出と、Minerの上限付き対話応答",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0045",
+      "path": "docs/rfc/0045-positive-court-canonical-assignment.md",
+      "title": "RFC-0045 — Canonical TIR Assignmentを起点とするPositive Court native経路",
+      "topic": "Verification / court",
+      "status": "原文と後続改定を参照"
+    },
+    {
+      "kind": "rfc",
+      "number": "0046",
+      "path": "docs/rfc/0046-positive-native-funded-relay.md",
+      "title": "RFC-0046 — Positive native原資の先行relay資料と有限custody",
+      "topic": "Consensus / architecture",
       "status": "原文と後続改定を参照"
     }
   ]

@@ -27,6 +27,11 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
         ));
     }
     let mut q = TirNativeRequestsV1::new();
+    // Actual source coordinates, not encoded bytes or all nested world rows.
+    let carrier = crate::palw_state_v2::palw_carrier_legacy_restore_requests_v9(c.kernel_route.as_ref())
+        .map_err(|e| NativeCoverageV1::unsupported::<PalwStateCarriageV2>("legacy carrier restore count", &e.to_string()))?;
+    q.add_v1(carrier)?;
+    q.add_v1(carrier)?;
     let claims = c.claims.len() as u64;
     let courts = c.court_sessions.len() as u64;
     let audits = c.vertex.mesh.audits.values().try_fold(0u64, |n, row| add(n, row.assignments.len() as u64))?;
@@ -68,6 +73,13 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
         };
     }
     let counts = [
+        (
+            "exec_v2",
+            0,
+            c.exec_v2
+                .native_members_v1()
+                .ok_or_else(|| NativeCoverageV1::overflow::<PalwStateCarriageV2>("EXEC incidence source count"))?,
+        ),
         count!(claims),
         count!(court_close_groups),
         count!(court_sessions),
@@ -100,6 +112,14 @@ pub(crate) fn native_restore_consistency_requests_v1(c: &PalwStateCarriageV2) ->
     for row in c.vesting.values() {
         let heap = row.native_heap_v1("restore cloned vesting row");
         q.add_v1(heap.bytes().ok_or(heap)?)?;
+    }
+    if let Some(route) = &c.kernel_route {
+        let count =
+            route.aux.keys().filter(|(table, _)| *table == misaka_palw_positive_contract::native::KERNEL_AUX_TABLE).count() as u64;
+        let bytes = count
+            .checked_mul(super::positive_rows::positive_aux_row_memory_bytes_v1())
+            .ok_or_else(|| NativeCoverageV1::overflow::<PalwStateCarriageV2>("Positive aux151 restore workspace"))?;
+        q.add_v1(bytes)?;
     }
     Ok(q.bytes_v1())
 }

@@ -33,6 +33,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+/// Opt-in bounded PALWTIR1 metadata parsing; the existing default loader is unchanged.
+pub mod bounded_v1;
+
 /// **`PALWTIR2`**: a pipeline class's container (RFC-0003) — N programs and one tensor table in the
 /// pipeline inventory's order. A PALWTIR1 reader refuses it by its magic.
 pub mod v2;

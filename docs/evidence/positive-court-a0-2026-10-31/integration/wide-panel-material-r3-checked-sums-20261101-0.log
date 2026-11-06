@@ -1,0 +1,67 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 11.11s
+     Running tests/positive_expanded_plan.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_expanded_plan-12066fd3974897ed)
+
+running 5 tests
+test original_matmul_and_reduction_work_is_counted_at_every_executed_position ... ok
+test canonical_zero_job_tokenizer_preserves_registered_class_identity_and_stale_ids_still_fail ... ok
+test original_sparse_i64_i128_and_output_unused_lanes_are_all_enumerated ... ok
+test expanded_geometry_rejects_wrong_identity_zero_jobs_and_every_finite_reservation_cap ... ok
+test dynamic_history_reused_layers_and_fixed_history_leaves_preserve_all_geometry ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/positive_full_relation.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_full_relation-e7a518d5bca743ab)
+
+running 11 tests
+test original_sparse_wide_program_checks_every_relation_and_only_then_completes ... ok
+test separately_signed_miner_output_is_compared_only_after_the_final_full_relation ... ok
+test canonical_zero_job_tokenizer_capture_and_full_check_preserve_nonzero_registration_metadata ... ok
+test a_signed_lie_in_an_output_unused_i128_lane_is_rejected_without_rewriting_legacy_roots ... ok
+test canonical_tokenizer_support_does_not_allow_class_job_or_panel_binding_substitution ... ok
+test repeated_unsigned_delivery_failure_spends_geometry_budget_without_advancing_coverage ... ok
+test exact_signed_rounding_and_lowest_lane_greedy_rules_cannot_be_replaced_by_floor_rounding ... ok
+test record_memory_and_evaluation_budgets_never_become_arithmetic_faults ... ok
+test original_fixed_replay_history_and_signed_checkpoint_claims_are_all_checked ... ok
+test unsigned_missing_tampered_unused_and_future_sources_remain_retryable_deliveries ... ok
+test the_frozen_manifest_authenticates_exact_claims_actor_policy_and_verifier_local_context ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+     Running tests/positive_wide_material_v2.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/positive_wide_material_v2-af4f03d4a24b5512)
+
+running 6 tests
+test oversized_typed_network_is_dropped_before_hashing_or_starting_the_cpu_run ... ok
+test failed_capture_keeps_shared_spent_work_and_cannot_start_a_second_cpu_run ... ok
+test unknown_provider_scratch_is_refused_without_resetting_session_costs ... ok
+test wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations ... FAILED
+test one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three ... FAILED
+test captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation ... FAILED
+
+failures:
+
+---- wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations stdout ----
+
+thread 'wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations' (4238200) panicked at misaka/palw/tir/exec/tests/positive_wide_material_v2.rs:277:81:
+called `Result::unwrap()` on an `Err` value: "wide provider response bounds: Budget"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three stdout ----
+
+thread 'one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three' (4238197) panicked at misaka/palw/tir/exec/tests/positive_wide_material_v2.rs:277:81:
+called `Result::unwrap()` on an `Err` value: "wide provider response bounds: Budget"
+
+---- captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation stdout ----
+
+thread 'captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation' (4238195) panicked at misaka/palw/tir/exec/tests/positive_wide_material_v2.rs:277:81:
+called `Result::unwrap()` on an `Err` value: "wide provider response bounds: Budget"
+
+
+failures:
+    captured_gather_select_topk_and_fixed_history_feed_actual_node_without_discovery_evaluation
+    one_pass_wide_tape_materials_reach_real_node_for_windows_one_and_three
+    wrong_panel_claim_remains_witness_rejection_and_wrong_miner_waits_for_all_relations
+
+test result: FAILED. 3 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+error: test failed, to rerun pass `-p misaka-palw-tir-exec --test positive_wide_material_v2`

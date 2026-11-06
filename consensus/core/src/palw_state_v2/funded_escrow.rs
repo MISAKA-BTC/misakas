@@ -20,15 +20,43 @@ fn refused(why: impl std::fmt::Debug) -> PalwStateV2Error {
     PalwStateV2Error::CarriageInconsistent(format!("RFC-0035 A funded escrow: {why:?}"))
 }
 
+impl PalwChainStateV2 {
+    pub(super) fn has_funded_escrow_for_claim_v1(&self, claim: Hash64) -> bool {
+        let first = (claim, Hash64::from_bytes([0; 64]));
+        let last = (claim, Hash64::from_bytes([u8::MAX; 64]));
+        self.funded_escrows_by_claim.range(first..=last).next().is_some()
+    }
+
+    pub(super) fn replace_funded_escrow_v1(&mut self, key: Hash64, new: Option<PalwFundedEscrowRowV1>) {
+        let old = match new {
+            Some(row) => self.funded_escrows.insert(key, row),
+            None => self.funded_escrows.remove(&key),
+        };
+        let old_claim = old.map(|row| row.claim);
+        let new_claim = new.map(|row| row.claim);
+        if old_claim != new_claim {
+            if let Some(claim) = old_claim {
+                self.funded_escrows_by_claim.remove(&(claim, key));
+            }
+            if let Some(claim) = new_claim {
+                self.funded_escrows_by_claim.insert((claim, key));
+            }
+        }
+    }
+}
+
 impl TransitionBuilder<'_> {
     /// The one writer: refuses any transition the row rules do not define, journals the rest.
     pub(super) fn write_funded_escrow_v1(&mut self, key: Hash64, new: Option<PalwFundedEscrowRowV1>) -> Result<(), PalwStateV2Error> {
         let old = self.state.funded_escrows.get(&key).copied();
         palw_escrow_row_transition_v1(&key, old.as_ref(), new.as_ref()).map_err(refused)?;
-        match new {
-            Some(row) => self.state.funded_escrows.insert(key, row),
-            None => self.state.funded_escrows.remove(&key),
-        };
+        if self.native_writers_tracking_v1() {
+            let install = old.is_none() && new.is_some();
+            let mut quote = native_writers::NativeWriteQuoteV1::new("native funded escrow writer");
+            quote.member_if::<Hash64, PalwFundedEscrowRowV1>(install)?.member_if::<(Hash64, Hash64), ()>(install)?.slots(1)?;
+            self.admit_native_write_v1(quote)?;
+        }
+        self.state.replace_funded_escrow_v1(key, new);
         self.entries.push(PalwDeltaEntryV2::FundedEscrow { key, old, new });
         Ok(())
     }
@@ -36,6 +64,7 @@ impl TransitionBuilder<'_> {
     /// **Install a fresh row** for a fully admitted funded original (the coordinator only). One row per contract and per
     /// outpoint: an outpoint is never escrowed twice.
     pub(super) fn install_funded_escrow_v1(&mut self, row: PalwFundedEscrowRowV1) -> Result<(), PalwStateV2Error> {
+        self.reject_positive_claim_alias_v2(row.claim)?;
         if self.state.funded_escrows.contains_key(&row.contract_id)
             || self.state.funded_escrows.values().any(|other| other.funding_outpoint == row.funding_outpoint)
         {
@@ -58,6 +87,15 @@ impl TransitionBuilder<'_> {
         let open: Vec<PalwFundedEscrowRowV1> =
             self.state.funded_escrows.values().filter(|r| r.liability_open && r.settled_by.is_none()).copied().collect();
         for row in open {
+            super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::retry_original_archive_ownership_v19(
+                self, &row, daa,
+            )?;
+            // A missing/malformed financial authority is a typed refusal, not
+            // a quiet downgrade to a merely pending old escrow.
+            if super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, &row)?
+            {
+                continue;
+            }
             if self.funded_liability_strictly_resolved_v1(&row, daa)
                 && palw_escrow_liability_resolved_v1(&row, &self.funded_escrow_claim_view_v1(&row.claim), daa)
             {
@@ -71,6 +109,13 @@ impl TransitionBuilder<'_> {
     /// hard deadline, the original frame's material horizon, every duty clock of the claim and every packet of its binding decided.
     fn funded_liability_strictly_resolved_v1(&self, row: &PalwFundedEscrowRowV1, daa: u64) -> bool {
         use crate::palw_funded_original_admission_v1::{FundedLiabilityViewV1, funded_liability_resolved_v1};
+        // Version2 holds the dedicated extra UTXO capital until its OWN
+        // Source16 root/A2 retention has actually been released. A missing or
+        // resource-unavailable receipt cannot free principal.
+        match super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, row) {
+            Ok(false) => {}
+            Ok(true) | Err(_) => return false,
+        }
         let material_until_daa = crate::palw_tir_public_claim_v1::palw_tir_public_claim_v1(&self.state, row.claim)
             .map(|frame| frame.plan_v1().terms.material_until_daa);
         let clocks = self
@@ -109,7 +154,11 @@ impl TransitionBuilder<'_> {
         {
             return Err(refused("a continued escrow row whose change-back outpoint is another live row's"));
         }
-        self.write_funded_escrow_v1(fact.contract_id, Some(fact.new))
+        self.write_funded_escrow_v1(fact.contract_id, Some(fact.new))?;
+        super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::collect_settled_original_archive_receipt_v1(
+            self,
+            fact.contract_id,
+        )
     }
 
     /// **G14 r5: the rooted liability view of a row's claim** — open court sessions, whether the claim record is still rooted and
@@ -134,6 +183,9 @@ impl TransitionBuilder<'_> {
         if !row.liability_open || row.settled_by.is_some() {
             return Err(refused("only an unsettled row with an open liability clears"));
         }
+        if super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, &row)? {
+            return Err(refused("original archive capital still has a native retention owner"));
+        }
         let mut cleared = row;
         cleared.liability_open = false;
         self.write_funded_escrow_v1(contract_id, Some(cleared))?;
@@ -157,6 +209,11 @@ impl TransitionBuilder<'_> {
     pub(super) fn sweep_funded_escrows_v1(&mut self, now: u64) -> Result<(), PalwStateV2Error> {
         if self.state.funded_escrows.is_empty() {
             return Ok(());
+        }
+        for row in self.state.funded_escrows.values().filter(|r| {
+            r.version == crate::palw_funded_escrow_v1::PALW_FUNDED_ESCROW_ORIGINAL_ARCHIVE_ROW_VERSION_V1 && r.settled_by.is_none()
+        }) {
+            super::palw_tir_public_fold_v1::original_archive_reservation_proposal_v1::archive_capital_pending_v1(&self.state, row)?;
         }
         let resolved: Vec<Hash64> = self
             .state
@@ -223,6 +280,10 @@ mod tests {
         assert!(b.install_funded_escrow_v1(row()).is_err(), "a contract is escrowed once");
         let installed = b.state.clone();
         let install_delta = delta(b.entries.clone());
+        assert!(installed.has_funded_escrow_for_claim_v1(row().claim));
+        assert!(!installed.has_funded_escrow_for_claim_v1(h(50_000)));
+        let replayed = apply_delta_v2(&parent, &install_delta, &p).unwrap();
+        assert!(replayed.has_funded_escrow_for_claim_v1(row().claim));
         assert_eq!(palw_escrow_rows_by_outpoint_v1(installed.funded_escrows_v1()).len(), 1);
 
         let tx = Transaction::new(
@@ -248,6 +309,9 @@ mod tests {
         assert_eq!(palw_escrow_rows_by_outpoint_v1(undone.funded_escrows_v1()).len(), 1, "lock restored");
         assert_eq!(undone.state_root(), installed.state_root());
         let before = revert_delta_v2(&installed, &install_delta, &p).unwrap();
+        assert!(settled.has_funded_escrow_for_claim_v1(row().claim));
+        assert!(undone.has_funded_escrow_for_claim_v1(row().claim));
+        assert!(!before.has_funded_escrow_for_claim_v1(row().claim));
         assert!(before.funded_escrows_v1().is_empty());
         assert_eq!(before.state_root(), parent.state_root(), "an empty table roots exactly as before");
     }
@@ -465,6 +529,7 @@ mod tests {
         let s4 = b.state.clone();
         let d4 = delta(b.entries.clone());
         assert!(s4.funded_escrows_v1().is_empty());
+        assert!(!s4.has_funded_escrow_for_claim_v1(open_row().claim));
         assert_eq!(s4.state_root(), genesis.state_root(), "a retired table roots as the empty one");
 
         // Undo every step.
@@ -487,6 +552,9 @@ mod tests {
             let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
             let back: PalwStateCarriageV2 = borsh::from_slice(&bytes).unwrap();
             assert_eq!(&back.funded_escrows, state.funded_escrows_v1());
+            let restored = back.into_state(&p, Some(state.state_root())).unwrap();
+            assert_eq!(restored.has_funded_escrow_for_claim_v1(open_row().claim), !state.funded_escrows_v1().is_empty());
+            assert_eq!(borsh::to_vec(&PalwStateCarriageV2::from_state(&restored)).unwrap(), bytes);
         }
     }
 

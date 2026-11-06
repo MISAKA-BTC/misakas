@@ -28,6 +28,7 @@
 //! Structural test values only (the parent module's TEST mining policy), never measurements. At most three consensus instances exist
 //! at once (A, B, the replaying node).
 use super::*;
+use crate::model::services::reachability::ReachabilityService;
 use crate::model::stores::ghostdag::GhostdagStoreReader;
 use crate::pipeline::virtual_processor::tests::OnetimeTxSelector;
 use crate::pipeline::virtual_processor::tests::t12_round_lane_e2e::{sign_spend_many, stamp_harness_time};
@@ -216,6 +217,11 @@ fn pnr9_block(
     nonce: u64,
     miner: ScriptPublicKey,
 ) -> MutableBlock {
+    // The EVM root commits the builder's timestamp. Arm the actual template
+    // clock before execution; an active lane is never re-stamped afterwards.
+    if chain.config.params.is_evm_active(chain.daa_of(chain.sink())) {
+        chain.vp().template_clock.store(chain.ctx.simulated_time + 1, std::sync::atomic::Ordering::Relaxed);
+    }
     let mut t = chain
         .ctx
         .consensus
@@ -476,15 +482,419 @@ async fn rfc02_native39_node_e2e_job_credit_delivery_witness_derives_on_the_node
     let _ = std::fs::remove_dir_all(&d.c.dir);
 }
 
+/// Read the real selected branch's stored deltas with the production RFC-0012
+/// consumer. No relabelled class, synthetic work fact or injected approval.
+fn native39_settlement_facts_on_blocks(
+    chain: &T12Chain,
+    blocks: &[BlockHash],
+    receipt: Hash64,
+) -> Vec<kaspa_consensus_core::palw_native_settlement_v1::MatureUsefulWorkV1> {
+    use kaspa_consensus_core::palw_native_settlement_v1::{
+        NativeFactRulesV1, native_delta_evidence_v1, native_facts_and_skips_with_native39_v1,
+    };
+    let vp = chain.vp();
+    let state = chain.tip_state().1;
+    let params = vp.palw_state_params_v2.as_ref().unwrap();
+    let disputes = std::collections::BTreeSet::new();
+    let rules = NativeFactRulesV1 {
+        state: &state,
+        params,
+        claims_with_open_disputes: &disputes,
+        canonical_work_daa: vp.palw_canonical_work_daa,
+        quantum_maturity_daa: vp.palw_exec_quantum_maturity_daa,
+    };
+    let mut output = Vec::new();
+    for block in blocks {
+        let (_, delta) = vp.palw_state_v2_store.read().delta_of(*block).unwrap();
+        let evidence = native_delta_evidence_v1(&delta);
+        if evidence.native39_quanta.is_empty() {
+            continue;
+        }
+        assert!(evidence.native39_quanta.iter().all(|q| q.receipt_id == receipt));
+        assert_eq!(evidence.native39_missing_receipts, 0);
+        let header = chain.ctx.consensus.get_header(*block).unwrap();
+        let empty = std::collections::BTreeSet::new();
+        let (facts, skipped) =
+            native_facts_and_skips_with_native39_v1(&rules, &evidence, &empty, &empty, (header.daa_score, header.blue_score));
+        assert_eq!(
+            facts.len(),
+            evidence.native39_quanta.len(),
+            "genuine certified native quanta become priced settlement facts: {skipped:?}"
+        );
+        for (fact, quantum) in facts.iter().zip(&evidence.native39_quanta) {
+            assert_eq!(
+                (fact.work, fact.anchor, fact.operator, fact.class),
+                (quantum.work, quantum.anchor, quantum.operator, quantum.class)
+            );
+            assert!(fact.work > 0 && fact.matured_daa >= quantum.expires, "settlement never bypasses receipt liability maturity");
+        }
+        let (revoked, why) = native_facts_and_skips_with_native39_v1(
+            &rules,
+            &evidence,
+            &empty,
+            &std::collections::BTreeSet::from([receipt]),
+            (header.daa_score, header.blue_score),
+        );
+        assert!(revoked.is_empty());
+        assert_eq!(why.voided as usize, evidence.native39_quanta.len());
+        output.extend(facts);
+    }
+    output
+}
+
+/// Durable structural evidence before an expensive certification wait. These
+/// are private test funds/keys; preserving the actual journal lets a failed
+/// reservation be diagnosed without recreating its whole admission history.
+fn capture_native39_budget_v1(net: &Net, claim: &NativeMiningClaimRecordV39, phase: &str) {
+    let (_, state) = net.chain.tip_state();
+    let id = native_mining_budget_id_v39(&claim.id);
+    let row = state.bond_budget().and_then(|budget| budget.claim_row(&id));
+    let params = net.chain.vp().palw_state_params_v2.clone().unwrap();
+    let subsidy = net.chain.vp().coinbase_manager.calc_block_subsidy(net.daa());
+    let carve = params.worker_carve_at(subsidy, None);
+    let cap = row.zip(params.bond_budget()).map(|(row, mirror)| {
+        kaspa_consensus_core::palw_bond_budget_v1::palw_bond_budget_export_cap_v1(&mirror.policy, row.liability_sompi)
+    });
+    let binding = kaspa_consensus_core::palw_native_budget_binding_v1::native_budget_binding_v1(&state, id)
+        .unwrap()
+        .expect("actual native admission installs source-bound collateral");
+    assert_eq!(binding.liability_sompi, row.expect("actual committed budget").liability_sompi);
+    let native_held =
+        kaspa_consensus_core::palw_native_budget_binding_v1::native_budget_held_for_bond_v1(&state, &claim.producer, net.daa())
+            .unwrap();
+    let committed = kaspa_consensus_core::palw_state_v2::palw_bond_committed_checked_v2(
+        &state,
+        &claim.producer,
+        net.daa(),
+        None,
+        params.window_court(),
+    )
+    .unwrap();
+    assert!(native_held >= binding.liability_sompi, "the actual mining L and possession stake stay counted");
+    assert!(committed >= native_held, "shared committed capital includes the actual native source holds");
+    eprintln!(
+        "[n39] exact collateral nativeHeld={native_held}, commonCommitted={committed}, originalPWUminimum={}",
+        claim.price.reserved_exposure
+    );
+    eprintln!(
+        "[n39] budget {phase}: id {id}, subsidy {subsidy}, workerCarve(default) {carve}, formula2 {}, exportCap {cap:?}, row {row:?}",
+        params.bond_formula_v2_applies_at(net.daa())
+    );
+    let directory = std::env::temp_dir().join(format!("misaka-native39-budget-{}-{}", std::process::id(), claim.claim_hash()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let carriage = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+    std::fs::write(directory.join(format!("{phase}.carriage.borsh")), borsh::to_vec(&carriage).unwrap()).unwrap();
+    std::fs::write(directory.join(format!("{phase}.budget.borsh")), borsh::to_vec(&row.copied()).unwrap()).unwrap();
+    std::fs::write(directory.join(format!("{phase}.state-params.borsh")), borsh::to_vec(&params).unwrap()).unwrap();
+    std::fs::write(
+        directory.join(format!("{phase}.context.txt")),
+        format!(
+            "sink={} daa={} ruleset={} subsidy={} carve={} formula2={} exportCap={cap:?}\nrow={row:?}\nparams={params:?}\n",
+            net.chain.sink(),
+            net.daa(),
+            net.config.params.consensus_params_id(),
+            subsidy,
+            carve,
+            params.bond_formula_v2_applies_at(net.daa())
+        ),
+    )
+    .unwrap();
+    eprintln!("[n39] durable budget capture {}", directory.display());
+}
+
+/// Self-consistent attacker metadata is still refused by the network rule, both
+/// before a tracked tip write and at the pruning/import installation writer.
+fn assert_native39_birth_context_is_enforced(net: &Net, state: &PalwChainStateV2) {
+    use kaspa_consensus_core::palw_native39_frontier_v1::*;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    let params = net.chain.vp().palw_state_params_v2.clone().unwrap();
+    let expected = net.config.params.palw_exec_quantum_maturity_v1();
+    validate_native39_frontier_context_v1(state, &params, expected).unwrap();
+    let anchors = native39_frontier_anchors_v1(state).unwrap();
+    let (key, original) = &anchors[0];
+    let mut changed = original.clone();
+    changed.quantum_maturity_daa += 1;
+    changed.matured_daa = kaspa_consensus_core::palw_native_settlement_v1::native39_matured_daa_v1(
+        &params,
+        changed.quantum_maturity_daa,
+        changed.anchor_daa,
+        changed.established_daa,
+        changed.expires,
+    )
+    .unwrap();
+    let mut carriage = PalwStateCarriageV2::from_state(state);
+    carriage
+        .kernel_route
+        .as_mut()
+        .unwrap()
+        .aux
+        .insert((NATIVE39_FRONTIER_TABLE_V1, key.as_bytes().to_vec()), borsh::to_vec(&changed).unwrap());
+    let bytes = borsh::to_vec(&carriage).unwrap();
+    let changed = borsh::from_slice::<PalwStateCarriageV2>(&bytes).unwrap().into_state(&params, None).unwrap();
+    assert!(
+        validate_native39_frontier_context_v1(&changed, &params, expected).is_err(),
+        "exact arithmetic cannot authorize a different network maturity"
+    );
+    let vp = net.chain.vp();
+    let mut store = vp.palw_state_v2_store.write();
+    let before = store.load_tip(&params).unwrap().unwrap();
+    let mut tip_batch = rocksdb::WriteBatch::default();
+    assert!(store.set_tip_batch_tracked_v1(&mut tip_batch, net.chain.sink(), &changed).is_err());
+    let mut pruning_batch = rocksdb::WriteBatch::default();
+    assert!(store.set_pruning_snapshot_batch_tracked_v1(&mut pruning_batch, net.chain.sink(), &changed).is_err());
+    let after = store.load_tip(&params).unwrap().unwrap();
+    assert_eq!(
+        (before.0, before.1.state_root()),
+        (after.0, after.1.state_root()),
+        "rejected tip/import writes leave the actual disk state intact"
+    );
+}
+
+/// After heavy native sources have actually been collected, the compact ledger
+/// still requires the network's birth rules. Recomputing the carriage root does
+/// not authorize a different maturity/pricing context.
+fn assert_closed_fact_context_is_enforced(net: &Net, state: &PalwChainStateV2) {
+    use kaspa_consensus_core::palw_native_closed_facts_v1::*;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+    validate_fact_archives_context_v1(state, &net.config.params).unwrap();
+    let rows = read_native_closed_facts_v1(state).unwrap();
+    let (id, row) = rows
+        .iter()
+        .find(|(_, r)| r.origin.family == ClosedFactFamilyV1::NativeMining39)
+        .expect("actual closed native accounting survives heavy-source GC");
+    let params = net.chain.vp().palw_state_params_v2.clone().unwrap();
+    for mutation in 0..3 {
+        let mut changed = row.clone();
+        match mutation {
+            0 => changed.origin.ruleset = kaspa_consensus_core::Hash::from_bytes([0xA7; 32]),
+            1 => changed.origin.canonical_work_daa = Some(u64::MAX),
+            _ => {
+                changed.origin.quantum_maturity_daa += 1;
+                changed.fact.matured_daa = changed
+                    .origin
+                    .material_until_daa
+                    .max(changed.origin.terminal_daa.saturating_add(changed.origin.retirement_daa))
+                    .max(changed.fact.anchor_daa.saturating_add(changed.origin.quantum_maturity_daa));
+            }
+        }
+        changed.validate_v1(*id).unwrap();
+        let mut carriage = PalwStateCarriageV2::from_state(state);
+        carriage
+            .kernel_route
+            .as_mut()
+            .unwrap()
+            .aux
+            .insert((NATIVE_CLOSED_FACTS_TABLE_V1, id.as_bytes().to_vec()), borsh::to_vec(&changed).unwrap());
+        let altered = carriage.into_state(&params, None).unwrap();
+        assert!(
+            validate_fact_archives_context_v1(&altered, &net.config.params).is_err(),
+            "root-consistent archived metadata cannot change actual network rules ({mutation})"
+        );
+        let vp = net.chain.vp();
+        let mut store = vp.palw_state_v2_store.write();
+        let before = store.load_tip(&params).unwrap().unwrap();
+        let mut batch = rocksdb::WriteBatch::default();
+        assert!(store.set_tip_batch_tracked_v1(&mut batch, net.chain.sink(), &altered).is_err());
+        let mut batch = rocksdb::WriteBatch::default();
+        assert!(store.set_pruning_snapshot_batch_tracked_v1(&mut batch, net.chain.sink(), &altered).is_err());
+        let after = store.load_tip(&params).unwrap().unwrap();
+        assert_eq!((before.0, before.1.state_root()), (after.0, after.1.state_root()));
+    }
+    use kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::*;
+    let archive = read_native39_settlement_checkpoint_v1(state).unwrap().expect("actual native prefix decision");
+    net.chain.vp().validate_native_checkpoint_headers_v1(state, 0).unwrap();
+    for mutation in 0..3 {
+        let mut changed = (*archive).clone();
+        match mutation {
+            0 => {
+                changed.depth_required += 1;
+                changed.depth = changed.depth.max(changed.depth_required);
+                changed.policy_id = changed.policy_v1().id();
+            }
+            1 => changed.parent_state_root = Hash64::from_u64_word(0xBADD),
+            _ => changed.point.daa_score += 1,
+        }
+        changed.validate_shape_v1().unwrap();
+        let mut carriage = PalwStateCarriageV2::from_state(state);
+        carriage.kernel_route.as_mut().unwrap().aux.insert(
+            (NATIVE39_SETTLEMENT_CHECKPOINT_TABLE_V1, NATIVE39_SETTLEMENT_CHECKPOINT_KEY_V1.to_vec()),
+            borsh::to_vec(&changed).unwrap(),
+        );
+        let altered = carriage.into_state(&params, None).unwrap();
+        assert!(
+            net.chain.vp().validate_native_checkpoint_headers_v1(&altered, 0).is_err(),
+            "coherent archival policy/root/header-clock mutation must fail actual context ({mutation})"
+        );
+    }
+}
+
 #[tokio::test]
 async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_reorg_restart() {
+    run_native39_node_e2e(false).await;
+}
+#[cfg(feature = "evm")]
+#[tokio::test]
+async fn rfc0012_native39_fixture_clock_survives_same_db_restart() {
+    use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+    let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg(native39_node_campaign_config_v1(true, false), |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
+    net._keep.push(Box::new(receiver));
+    net.chain.ctx.consensus.set_validation_time_for_test(net.chain.ctx.simulated_time);
+    // Larger than the real clock lead cap: this is simulated elapsed time,
+    // not a change to a header, the EVM commitment, or the network cap.
+    let before = net.chain.ctx.simulated_time;
+    let first = net.chain.heartbeat(600_000, Vec::new()).await;
+    assert!(first.header.timestamp >= before + 600_000);
+    let sink = net.chain.sink();
+    let root = net.chain.tip_state().1.state_root();
+    let mut net = net.restart(db.clone());
+    assert_eq!(net.chain.sink(), sink);
+    assert_eq!(net.chain.tip_state().1.state_root(), root);
+    assert!(net.chain.ctx.consensus.has_validation_time_for_test(), "restart must retain the explicit instance-local clock mode");
+    let before = net.chain.ctx.simulated_time;
+    let second = net.chain.heartbeat(600_000, Vec::new()).await;
+    assert!(second.header.timestamp >= before + 600_000);
+    assert_eq!(net.chain.sink(), second.header.hash);
+}
+#[cfg(feature = "evm")]
+#[tokio::test]
+async fn rfc0012_native39_actual_evm_settlement_maturity_reorg_restart() {
+    run_native39_node_e2e(true).await;
+}
+/// A distinct pre-genesis policy exercises two authenticated quantum anchors.
+/// It does not claim operator/class diversification or legacy-family coverage.
+#[cfg(feature = "evm")]
+#[tokio::test]
+async fn rfc0012_native39_actual_evm_two_quantum_policy_reorg_restart_pruned_import() {
+    let mut parts = native39_node_campaign_config_v1(true, false);
+    let quantum = parts.0.params.palw_native_mining_v39.as_ref().unwrap().policy.network_quantum_mac;
+    let policy = &mut parts.0.params.palw_dns_retirement.as_mut().unwrap().settlement;
+    policy.settled_anchor_depth = 2;
+    policy.unique_mature_work = u128::from(quantum).checked_mul(2).unwrap();
+    assert!(policy.valid());
+    run_native39_node_e2e_with_parts_v2(parts, true, false).await;
+}
+#[tokio::test]
+async fn rfc23s2_native39_independent_pending_claim_actual_node_reorg_restart() {
+    run_native39_node_e2e_with_stage2(false, true).await;
+}
+#[cfg(feature = "evm")]
+#[tokio::test]
+async fn rfc23s2_native39_actual_evm_independent_claim_pruned_import() {
+    run_native39_node_e2e_with_stage2(true, true).await;
+}
+mod family_joint_campaign;
+mod family_legacy_campaign;
+#[path = "stage2_pruned.rs"]
+mod stage2_pruned;
+/// One private, pre-genesis configuration for native39, actual funded text
+/// claims and claim-local EVM campaigns. Callers must derive their network
+/// domain from the returned genesis before constructing signed jobs/roots.
+pub(crate) fn native39_node_campaign_config_v1(
+    evm_settlement: bool,
+    claim_local_stage2: bool,
+) -> (Config, PalwConsensusParamsV2, Premine, Premine) {
+    let mut parts = mining_config_v3_budget();
+    let formal_native_settlement = evm_settlement || claim_local_stage2;
+    if formal_native_settlement {
+        use kaspa_consensus_core::config::params::ForkActivation;
+        // These are the existing explicit test policies, not shipped fences.
+        // A formal native fact requires its real once-only issuance obligation,
+        // the shared bond budget and the actual X3 liability deadline.
+        parts.0.params.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(parts.1.clone());
+        parts.0.params.palw_settlement_once_v1 = Some(ForkActivation::new(0));
+        parts.0.params.palw_claim_hard_deadline_v1 = Some(
+            kaspa_consensus_core::palw_ruling_fences_v1::PalwClaimHardDeadlineFenceV1::unapproved_probe_at(ForkActivation::new(0)),
+        );
+        // The inherited mechanics harness can leave the existing V3 budget at
+        // a later fence. Formal receipt issuance needs that same real policy
+        // from birth, including its formula/rights accounting and state mirror.
+        parts.0.params.palw_bond_budget_v1.as_mut().expect("V3 owning39 budget policy exists").activation = ForkActivation::new(0);
+        parts.0.params.sync_palw_bond_budget_v1();
+        assert!(parts.0.params.palw_probabilistic_constraints_v1.is_some_and(|f| f.is_active(0)));
+        assert!(parts.0.params.palw_bond_budget_v1.as_ref().is_some_and(|f| f.activation.is_active(0)));
+        parts.0.params.sync_palw_2026_10_12_ruling_fences_v1();
+        parts.0.params.sync_palw_settlement_once_v1();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &parts.0.params.palw_consensus_mode else {
+            unreachable!()
+        };
+        parts.1 = bundle.clone();
+    }
+    #[cfg(feature = "evm")]
+    if evm_settlement {
+        let launched = kaspa_consensus_core::config::params::palw_t12_launch_params_v1();
+        parts.0.params.evm_activation_daa_score = launched.evm_activation_daa_score;
+        parts.0.params.palw_model_evm = launched.palw_model_evm;
+        parts.0.params.palw_dns_retirement =
+            Some(crate::pipeline::virtual_processor::tests::rfc12_zero_dns_matrix::test_retirement(0));
+    }
+    if claim_local_stage2 {
+        // Explicit experimental node campaign configuration, not production
+        // parameter validation or permission to arm the unmeasured public fork.
+        parts.0.params.palw_consensus_mode = kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(parts.1.clone());
+        parts.0.params.palw_claim_local_settlement_v1 = Some(kaspa_consensus_core::config::params::ForkActivation::new(0));
+        parts.0.params.sync_palw_claim_local_settlement_v1();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &parts.0.params.palw_consensus_mode else {
+            panic!("stage2 campaign requires V2")
+        };
+        parts.1 = bundle.clone();
+    }
+    if formal_native_settlement {
+        assert!(parts.1.state.bond_budget_active_at(0), "formal genesis uses the actual mirrored native budget");
+        assert!(parts.1.state.settlement_once_active_at(0), "formal genesis uses the actual once-only issuance mirror");
+    }
+    parts
+}
+
+async fn run_native39_node_e2e(evm_settlement: bool) {
+    run_native39_node_e2e_with_stage2(evm_settlement, false).await;
+}
+async fn run_native39_node_e2e_with_stage2(evm_settlement: bool, claim_local_stage2: bool) {
+    run_native39_node_e2e_with_parts_v2(
+        native39_node_campaign_config_v1(evm_settlement, claim_local_stage2),
+        evm_settlement,
+        claim_local_stage2,
+    )
+    .await;
+}
+/// Reuse the actual native receipt/UTXO/reorg/restart/pruned-import campaign on
+/// one caller-selected, completely configured genesis candidate.
+pub(crate) async fn run_native39_node_e2e_with_parts_v2(
+    parts: (Config, PalwConsensusParamsV2, Premine, Premine),
+    evm_settlement: bool,
+    claim_local_stage2: bool,
+) {
     use kaspa_database::{create_temp_db, prelude::ConnBuilder};
     kaspa_core::log::try_init_logger("warn");
     let began = std::time::Instant::now();
     let (_db_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
     let (sender, receiver) = async_channel::unbounded();
-    let mut net = Net::over_cfg(mining_config_v3_budget(), |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
+    let formal_native_settlement = evm_settlement || claim_local_stage2;
+    if formal_native_settlement {
+        assert!(parts.1.state.bond_budget_active_at(0));
+        assert!(parts.1.state.settlement_once_active_at(0));
+    }
+    let mut net = Net::over_cfg(parts, |cfg| TestConsensus::with_db(db.clone(), cfg, sender));
     net._keep.push(Box::new(receiver));
+    run_native39_node_e2e_on_net_v3(net, db, evm_settlement, claim_local_stage2, began).await;
+}
+
+/// Preserve one real DB-backed candidate while the joint caller installs its
+/// independently signed legacy-family history before native B begins.
+pub(super) async fn run_native39_node_e2e_on_net_v3(
+    mut net: Net,
+    db: Arc<kaspa_database::prelude::DB>,
+    evm_settlement: bool,
+    claim_local_stage2: bool,
+    began: std::time::Instant,
+) -> Net {
+    let formal_native_settlement = evm_settlement || claim_local_stage2;
+    if formal_native_settlement {
+        // Long deterministic settlement/pruning advances use the instance-local
+        // test clock, just like the EVM t12 harness. Production caps stay intact.
+        net.chain.ctx.consensus.set_validation_time_for_test(net.chain.ctx.simulated_time);
+    }
     let params = net.config.params.clone();
     let (producer, outsider) = (0usize, 1usize);
     let d = through_credit_delivery(&mut net, producer, began).await;
@@ -498,8 +908,53 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     let _ = &d.fx;
     eprintln!("[n39] 3. credit paid by {pay_block}: outpoint {credit_outpoint}, {} sompi", credit_entry.amount);
 
+    // Independent A is an actually admitted native mining claim whose drawn
+    // verifiers do not approve it. No receipt, reward or supplied Final bit.
+    let pending_native = if claim_local_stage2 {
+        let a = master_component(&mut net, &d.fx, producer, 1, 5).await;
+        finalize(&mut net, &a).await;
+        let before = ids(&net, MINING_MODEL_KIND_V39);
+        act(
+            &mut net,
+            1,
+            REGISTER_MODEL_ACTION_V39,
+            borsh::to_vec(&NativeMiningModelWireV39 { version: 39, template_master: a.master, sequence: 0, share_permille: 0 })
+                .unwrap(),
+        )
+        .await;
+        let model_a = new_id(&net, MINING_MODEL_KIND_V39, &before);
+        act(
+            &mut net,
+            producer,
+            MODEL_SEAT_ACTION_V39,
+            borsh::to_vec(&NativeMiningSeatWireV39 { version: 39, model: model_a, kind: 0 }).unwrap(),
+        )
+        .await;
+        let cert = net.chain.vp().palw_state_params_v2.clone().unwrap().rfc0018_v1().unwrap().certification;
+        net.beat_to(cert.verifier_maturity_daa + 2).await;
+        let before = ids(&net, MINING_CLAIM_KIND_V39);
+        act(
+            &mut net,
+            producer,
+            MINING_COMMIT_ACTION_V39,
+            borsh::to_vec(&NativeMiningCommitWireV39 { version: 39, model: model_a, master: a.master, sequence: 0 }).unwrap(),
+        )
+        .await;
+        let id = new_id(&net, MINING_CLAIM_KIND_V39, &before);
+        let claim_a = mining_claim(&net, &id);
+        assert!(claim_a.closed.is_none());
+        Some((a, claim_a))
+    } else {
+        None
+    };
+
     // ---- 4. the mining line: 73 register, 74 seat, 75 commit, Gate C draw and approvals, 77 receipt ----
-    let wire = NativeMiningModelWireV39 { version: 39, template_master: c.master, sequence: 0, share_permille: 0 };
+    let wire = NativeMiningModelWireV39 {
+        version: 39,
+        template_master: c.master,
+        sequence: u64::from(claim_local_stage2),
+        share_permille: 0,
+    };
     let before = ids(&net, MINING_MODEL_KIND_V39);
     act(&mut net, 1, REGISTER_MODEL_ACTION_V39, borsh::to_vec(&wire).unwrap()).await;
     let model = new_id(&net, MINING_MODEL_KIND_V39, &before);
@@ -513,7 +968,8 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
         &mut net,
         producer,
         MINING_COMMIT_ACTION_V39,
-        borsh::to_vec(&NativeMiningCommitWireV39 { version: 39, model, master: c.master, sequence: 0 }).unwrap(),
+        borsh::to_vec(&NativeMiningCommitWireV39 { version: 39, model, master: c.master, sequence: u64::from(claim_local_stage2) })
+            .unwrap(),
     )
     .await;
     let claim = mining_claim(&net, &new_id(&net, MINING_CLAIM_KIND_V39, &before));
@@ -524,6 +980,98 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
         net.daa(),
         claim.price
     );
+    capture_native39_budget_v1(&net, &claim, "accepted");
+    let source20_birth = if claim_local_stage2 {
+        let state = net.chain.tip_state().1;
+        let id = Hash64::from_bytes(claim.id);
+        let receipt = state.native_mining_source_summary_v20(id).unwrap().expect("actual action75 captures native scoped birth/hold");
+        assert_eq!(receipt.claim, id);
+        assert_eq!(receipt.birth.daa_score, claim.admitted_daa);
+        assert_eq!(receipt.original_root, Hash64::from_bytes(claim.root()));
+        assert_eq!(receipt.latest_root, receipt.original_root);
+        assert_eq!(receipt.anchor_references, 0);
+        assert!(receipt.collected.is_none());
+        // Compare with the REAL original admission delta, not current policy or
+        // a synthetic native row. The hold's exact jobs are written by action75.
+        let (_, delta) = net.chain.vp().palw_state_v2_store.read().delta_of(receipt.birth.block).unwrap();
+        let actual_h = delta
+            .entries
+            .iter()
+            .filter_map(|e| match e {
+                kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2::KernelRouteRow { table, key, new: Some(raw), .. }
+                    if *table == MINING_TABLE_V39 && key.len() == 66 && key[..2] == [39, MINING_JOB_HOLD_KIND_V39] =>
+                {
+                    let (owner, until): ([u8; 64], u64) = borsh::from_slice(raw).unwrap();
+                    (owner == claim.id).then_some(until)
+                }
+                _ => None,
+            })
+            .max()
+            .expect("actual mining birth has its actual source holds");
+        assert_eq!(receipt.liability_until, actual_h);
+        let cold = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state)
+            .into_state(&net.bundle.state, Some(state.state_root()))
+            .unwrap();
+        assert_eq!(cold.native_mining_source_summary_v20(id).unwrap(), Some(receipt));
+        // Genuine admitted state, with ZERO old frames and ZERO native anchors.
+        // This isolates the new scoped source's actual construction ownership.
+        let mut scoped = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+        scoped.kernel_route.as_mut().unwrap().aux.retain(|(table, key), _| {
+            !(*table == kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1 && key.len() == 65 && key[0] == b'F')
+        });
+        let scoped = scoped.into_state(&net.bundle.state, None).expect("actual current scoped sources reconstruct with zero F1");
+        assert!(kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_anchors_v1(&scoped).unwrap().is_empty());
+        let point = *scoped.last_point().unwrap();
+        let before = scoped.state_root();
+        let requests = kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_construction_requests_v24(
+            &scoped,
+            &net.bundle.state,
+            &point,
+        )
+        .unwrap();
+        assert!(requests > 0);
+        use kaspa_consensus_core::palw_native_resource_v1::{NativeDemandCheckerV1, NativeSnapshotResourceLimitsV1};
+        let exact = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: requests, database_bytes: 0 });
+        let owned = kaspa_consensus_core::palw_state_v2::palw_claim_local_owned_checkpoint_with_checker_v20(
+            &scoped,
+            &net.bundle.state,
+            &point,
+            &exact,
+        )
+        .unwrap();
+        assert_eq!(exact.outstanding(), (requests, 0));
+        assert!(owned.checkpoint().is_some());
+        let facts = owned.allocation_footprint_v20().unwrap().unwrap();
+        assert!(
+            facts.heap_bytes <= requests && facts.canonical_bytes <= requests && facts.material_bytes <= requests,
+            "actual typed output fits the declared inventory: {facts:?} / {requests}"
+        );
+        let logical = kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_snapshot_v2(&scoped).unwrap().unwrap();
+        let work = kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalWorkRefV1::NativeMiningClaim39 { claim: id };
+        assert_eq!(
+            logical.records[&work].material.len(),
+            4,
+            "actual receipt header/body/current native row/explicit certification are retained; repeated current tuple dedups"
+        );
+        assert!(facts.records >= 1 && facts.material_rows >= 4 && facts.material_references >= 4);
+        drop(owned);
+        assert_eq!(exact.outstanding(), (0, 0), "actual owned output and local capacity release together");
+        let short = NativeDemandCheckerV1::new(NativeSnapshotResourceLimitsV1 { memory_bytes: requests - 1, database_bytes: 0 });
+        assert!(matches!(
+            kaspa_consensus_core::palw_state_v2::palw_claim_local_owned_checkpoint_with_checker_v20(
+                &scoped,
+                &net.bundle.state,
+                &point,
+                &short
+            ),
+            Err(kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(_))
+        ));
+        assert_eq!(short.outstanding(), (0, 0));
+        assert_eq!(scoped.state_root(), before, "one-under refuses before pure checkpoint construction changes any source/state");
+        Some(receipt)
+    } else {
+        None
+    };
     let ttpb = net.ttpb();
     for round in 0..64 {
         if cert_row(&net, &claim).is_some_and(|r| r.anchor.is_some()) {
@@ -564,6 +1112,85 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
         began.elapsed().as_secs_f64()
     );
     assert!(rc.price.quanta >= 2, "the reorg branch spends two quanta: the fixture receipt has {}", rc.price.quanta);
+    capture_native39_budget_v1(&net, &claim, "receipt-before-gate");
+
+    if let Some((_, a)) = &pending_native {
+        use kaspa_consensus_core::palw_claim_local_v1::PalwClaimLocalWorkRefV1 as W;
+        let state = net.chain.tip_state().1;
+        assert!(
+            mining_claim(&net, &a.id).closed.is_none(),
+            "A remains an unissued native claim while independent B gets an actual certified receipt"
+        );
+        let _validated = kaspa_consensus_core::palw_state_v2::palw_claim_local_owned_checkpoint_v1(
+            &state,
+            &net.bundle.state,
+            state.last_point().unwrap(),
+        )
+        .unwrap()
+        .expect("the actual current checkpoint validates before reading its records");
+        let checkpoint = kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_snapshot_v2(&state)
+            .unwrap()
+            .expect("the current checkpoint has a logical snapshot");
+        let a_record = &checkpoint.records[&W::NativeMiningClaim39 { claim: Hash64::from_bytes(a.id) }];
+        assert!(!a_record.final_claim && !a_record.certified && !a_record.liability_closed && !a_record.material.is_empty());
+        let b_record = &checkpoint.records[&W::NativeMiningClaim39 { claim: Hash64::from_bytes(claim.id) }];
+        assert!(b_record.final_claim && b_record.certified, "B's actual Gate C approval is retained independently");
+        assert!(a_record.accepted_blue_score < b_record.accepted_blue_score);
+        let full_frames = state
+            .kernel_route_state_v1()
+            .unwrap()
+            .aux
+            .iter()
+            .filter(|((table, key), _)| {
+                *table == kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1 && key.len() == 65 && key[0] == b'F'
+            })
+            .map(|(_, raw)| kaspa_consensus_core::palw_claim_local_v1::palw_liability_material_id_v1(raw))
+            .collect::<std::collections::BTreeSet<_>>();
+        assert!(
+            a_record.material.is_disjoint(&full_frames) && b_record.material.is_disjoint(&full_frames),
+            "native mining checkpoints retain scoped actual birth/hold material, with no F1 carriage"
+        );
+        let mut missing = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+        let route = missing.kernel_route.as_mut().unwrap();
+        let body = route
+            .aux
+            .keys()
+            .find(|(table, key)| {
+                *table == kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1
+                    && key.len() == 65
+                    && key[0] == b'B'
+                    && b_record.material.contains(&Hash64::from_bytes(key[1..].try_into().unwrap()))
+            })
+            .cloned()
+            .expect("the real native receipt owns a scoped literal body");
+        route.aux.remove(&body);
+        assert!(
+            missing.into_state(&net.bundle.state, None).is_err(),
+            "present scoped owner with missing real material never downgrades to still-retained old F1"
+        );
+        let id = Hash64::from_bytes(claim.id);
+        let native = state.native_mining_source_summary_v20(id).unwrap().unwrap();
+        assert_ne!(native.birth.block, native.updated.block, "the real receipt update follows its original admission");
+        let mut partial_history = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state);
+        let route = partial_history.kernel_route.as_mut().unwrap();
+        let born_key = kaspa_consensus_core::palw_claim_local_v1::palw_claim_liability_frame_key_v1(native.birth.block);
+        let update_key = kaspa_consensus_core::palw_claim_local_v1::palw_claim_liability_frame_key_v1(native.updated.block);
+        assert!(route.aux.contains_key(&(kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, born_key.to_vec())));
+        assert!(
+            route.aux.remove(&(kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, update_key.to_vec())).is_some()
+        );
+        let partial = partial_history
+            .into_state(&net.bundle.state, None)
+            .expect("newer actual scoped native current supersedes a retained earlier birth F1");
+        assert_eq!(partial.native_mining_source_summary_v20(id).unwrap(), Some(native));
+        let partial_checkpoint =
+            kaspa_consensus_core::palw_state_v2::palw_claim_local_checkpoint_snapshot_v2(&partial).unwrap().unwrap();
+        assert_eq!(
+            partial_checkpoint.records[&W::NativeMiningClaim39 { claim: id }],
+            *b_record,
+            "removing only the later F1 preserves exact native birth/H and current credit decision"
+        );
+    }
 
     // ---- 5. the PNR9 receipt block on A, merged by a heartbeat whose coinbase pays the producer's registered payout ----
     let (bond, leg_spk) = (net.bond(producer), payout_spk(&net, producer));
@@ -600,6 +1227,28 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
         at_fork.safe_weight(),
         after_m.safe_weight()
     );
+    let a_settlement = if formal_native_settlement {
+        native39_settlement_facts_on_blocks(&net.chain, &[r1.header.hash, m.header.hash], receipt)
+    } else {
+        Vec::new()
+    };
+    if formal_native_settlement {
+        assert_eq!(a_settlement.len(), 1, "one actual issuance obligation creates exactly one RFC-0012 quantum");
+        let anchors = kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_anchors_v1(&after_m).unwrap();
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(
+            (anchors[0].1.anchor, anchors[0].1.matured_daa),
+            (a_settlement[0].anchor, a_settlement[0].matured_daa),
+            "frontier and settlement use one actual accepted quantum and one liability clock"
+        );
+    }
+    if evm_settlement {
+        assert_native39_birth_context_is_enforced(&net, &after_m);
+        let evaluated = net.chain.vp().native_evaluate(net.chain.sink()).snapshot;
+        assert!(a_settlement[0].matured_daa > net.daa());
+        assert_eq!(evaluated.safe, None, "an authentic receipt remains immature through its complete native liability horizon");
+        assert_eq!(evaluated.finalized, None);
+    }
     let leg = paid(&m, &leg_spk);
     let leg_index = m.transactions[0].outputs.iter().position(|o| o.script_public_key == leg_spk);
     eprintln!("[n39] 5. PNR9 {} (algo 7) merged by {}: producer payout leg {leg} sompi", r1.header.hash, m.header.hash);
@@ -613,6 +1262,9 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     // delivery (not a matured spend: that would be a reorg below finality); the matured UTXO spend is made on the winning branch (7).
     let a_work = net.chain.ctx.consensus.get_header(net.chain.sink()).unwrap().blue_work;
     let mut b = t12_genesis_chain(&net.config, &net.bundle, &net.premine, &net.floats);
+    if formal_native_settlement {
+        b.ctx.consensus.set_validation_time_for_test(sim_at_fork);
+    }
     for blk in past_in_order(&net.chain, fork) {
         arrive(&b, blk, "B's replay up to the fork").await;
     }
@@ -645,6 +1297,37 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
         assert!(!on_a.contains(&h), "{what} is off the selected chain after the reorg");
     }
     assert!(net.chain.ctx.consensus.get_virtual_utxo_entry(leg_outpoint).is_none(), "A's PNR9 coinbase leg is gone after the reorg");
+    let selected_native_blocks: Vec<_> = branch.iter().map(|block| block.header.hash).collect();
+    let b_settlement = if formal_native_settlement {
+        native39_settlement_facts_on_blocks(&net.chain, &selected_native_blocks, receipt)
+    } else {
+        Vec::new()
+    };
+    if formal_native_settlement {
+        assert_eq!(b_settlement.len(), 2, "reorg replacement contains two real quanta, not A plus B");
+        assert_ne!(b_settlement[0].identity, b_settlement[1].identity, "quantum identity counts work exactly once");
+        let (_, replacement) = net.chain.tip_state();
+        let anchors = kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_anchors_v1(&replacement).unwrap();
+        assert_eq!(anchors.len(), 2);
+        if claim_local_stage2 {
+            let summary = replacement.native_mining_source_summary_v20(Hash64::from_bytes(claim.id)).unwrap().unwrap();
+            assert_eq!(summary.anchor_references, 2, "native receipt references follow the actual reorg replacement only");
+            let born = source20_birth.unwrap();
+            assert_eq!(
+                (summary.birth, summary.original_root, summary.liability_until),
+                (born.birth, born.original_root, born.liability_until),
+                "reorg does not rebase the original native consent or source hold"
+            );
+            let cold = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&replacement)
+                .into_state(&net.bundle.state, Some(replacement.state_root()))
+                .unwrap();
+            assert_eq!(cold.native_mining_source_summary_v20(Hash64::from_bytes(claim.id)).unwrap(), Some(summary));
+        }
+        assert!(
+            anchors.iter().all(|(_, anchor)| anchor.anchor != m.header.hash),
+            "reorg removes abandoned native anchors along with their work and coinbase leg"
+        );
+    }
     let rc_after = receipt_record(&net.chain.tip_state().1, &receipt).unwrap();
     assert!(
         rc_after.is_spent(0) && rc_after.is_spent(1) && rc_after.spent_quanta == 2,
@@ -689,6 +1372,140 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     assert!(accepted.contains(&spend_leg.id()), "the same chain block accepts the PNR9 leg spend");
     eprintln!("[n39] 7. spends: leg {} and credit {} accepted by chain block {accepting}", spend_leg.id(), spend_credit.id());
 
+    if evm_settlement {
+        let maturity = b_settlement.iter().map(|fact| fact.matured_daa).max().unwrap();
+        net.beat_to((maturity + 2).max(params.pruning_depth().saturating_add(2))).await;
+        let settlement_policy = params.palw_dns_retirement.unwrap().settlement;
+        if settlement_policy.settled_anchor_depth == 2 {
+            use kaspa_consensus_core::palw_native_settlement_v1::certify_native_effect_v1;
+            assert_eq!(b_settlement.len(), 2);
+            assert_ne!(b_settlement[0].anchor, b_settlement[1].anchor);
+            let first = b_settlement.iter().min_by_key(|f| (f.accepted_blue, f.accepted_daa)).unwrap();
+            let order = (first.accepted_daa, first.accepted_blue);
+            let pair_work: u128 = b_settlement.iter().map(|f| f.work).sum();
+            assert_eq!(
+                pair_work, settlement_policy.unique_mature_work,
+                "W is exactly two actual native-priced quanta, without clipping or invented work"
+            );
+            for fact in &b_settlement {
+                assert!(fact.work < settlement_policy.unique_mature_work);
+                assert!(
+                    certify_native_effect_v1(settlement_policy, order, net.daa(), true, true, true, true, std::slice::from_ref(fact))
+                        .is_err(),
+                    "each authenticated fact is insufficient on its own"
+                );
+            }
+            certify_native_effect_v1(settlement_policy, order, net.daa(), true, true, true, true, &b_settlement)
+                .expect("the real pair satisfies the same depth/work arithmetic consumed by production evaluation");
+        }
+        for _ in 0..64 {
+            if net.chain.ctx.consensus.get_native_settlement_snapshot().unwrap().is_some_and(|s| s.finalized.is_some()) {
+                break;
+            }
+            net.chain.heartbeat(ttpb, Vec::new()).await;
+        }
+        let sink = net.chain.sink();
+        let evaluated = net.chain.vp().native_evaluate(sink).snapshot;
+        let published = net
+            .chain
+            .ctx
+            .consensus
+            .get_native_settlement_snapshot()
+            .unwrap()
+            .expect("native settlement published by actual EVM blocks");
+        assert_eq!(evaluated, published, "the published certificate is exactly the production native evaluation");
+        assert!(published.safe.is_some(), "mature independently certified PNR9 work advances actual EVM Safe: {published:?}");
+        assert!(published.unique_work.parse::<u128>().unwrap() > 0);
+        let heads = net.chain.ctx.consensus.get_evm_canonical_heads().unwrap().unwrap();
+        assert_eq!(
+            (heads.latest_head(), heads.safe_head(), heads.finalized_head()),
+            (published.latest, published.safe, published.finalized)
+        );
+        // Finalized is constrained by the node's real validated pruning point.
+        // Genesis has no EVM execution; waiting through actual pruning is needed
+        // for a finalized label, never a test-side pruning-point replacement.
+        assert!(
+            published.finalized.is_some(),
+            "actual pruning must retain and finalize a prefix under mature native work: {published:?}"
+        );
+        // Release the actual receipt/claim through action79, then let the normal
+        // finite journal GC retire its heavy source capsules. No state mutation
+        // or fabricated fact substitutes for the native admission history.
+        let (_, before_collect) = net.chain.tip_state();
+        let retained = kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_anchors_v1(&before_collect).unwrap();
+        let release_at = retained
+            .iter()
+            .map(|(_, a)| kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_retained_until_v1(&net.bundle.state, a))
+            .max()
+            .unwrap();
+        net.beat_to(release_at.saturating_add(2)).await;
+        act(
+            &mut net,
+            outsider,
+            COLLECT_MINING_ACTION_V39,
+            borsh::to_vec(&NativeMiningSubjectWireV39 { version: 39, kind: 1, id: receipt.as_bytes() }).unwrap(),
+        )
+        .await;
+        for _ in 0..3 {
+            net.chain.heartbeat(ttpb, Vec::new()).await;
+        }
+        let (_, collected) = net.chain.tip_state();
+        assert!(receipt_record(&collected, &receipt).is_none(), "actual collection releases the source receipt");
+        if claim_local_stage2 {
+            assert!(
+                collected.native_mining_source_summary_v20(Hash64::from_bytes(claim.id)).unwrap().is_none(),
+                "actual collection plus final anchor retirement releases the scoped birth/hold owner"
+            );
+            let cold = kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&collected)
+                .into_state(&net.bundle.state, Some(collected.state_root()))
+                .unwrap();
+            assert!(cold.native_mining_source_summary_v20(Hash64::from_bytes(claim.id)).unwrap().is_none());
+        }
+        assert!(
+            kaspa_consensus_core::palw_native39_frontier_v1::native39_frontier_anchors_v1(&collected).unwrap().is_empty(),
+            "finite retention releases all heavy native capsules"
+        );
+        assert!(
+            !kaspa_consensus_core::palw_native_closed_facts_v1::read_native_closed_facts_v1(&collected).unwrap().is_empty(),
+            "compact closed identities preserve actual work after source GC"
+        );
+        assert!(
+            kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::read_native39_settlement_checkpoint_v1(&collected)
+                .unwrap()
+                .is_some(),
+            "actual policy certificate survives source GC"
+        );
+        let after_gc = net.chain.ctx.consensus.get_native_settlement_snapshot().unwrap().unwrap();
+        assert_eq!(net.chain.vp().native_evaluate(net.chain.sink()).snapshot, after_gc);
+        let archive = kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::read_native39_settlement_checkpoint_v1(&collected)
+            .unwrap()
+            .unwrap();
+        let pruning = net.chain.ctx.consensus.pruning_point();
+        if net.chain.vp().reachability_service.try_is_chain_ancestor_of(pruning, archive.effect.block).unwrap() {
+            assert!(
+                after_gc.safe.is_some() && after_gc.finalized.is_some(),
+                "a covered executed archival prefix keeps positive Safe/Finalized after heavy-source collection"
+            );
+        } else if after_gc.finalized.is_none() {
+            // RFC0012 recomputes public labels. A certificate below the current
+            // pruning walk cannot be relabelled as execution of a newer block.
+            let readiness = net.chain.vp().native_safe_readiness(net.chain.sink()).unwrap();
+            assert!(
+                readiness.finalized.withdrawn_from.is_some(),
+                "a real label withdrawal is explicit; equal None is not preserved positive finality"
+            );
+            let history = net.chain.vp().native_finalized_publication().unwrap().unwrap();
+            assert!(history.finalized.is_some(), "incident history retains the actual earlier publication");
+        }
+        eprintln!(
+            "[n39] post-GC archive effect {}, actual PP {}, public safe {:?}, finalized {:?}",
+            archive.effect.block, pruning, after_gc.safe, after_gc.finalized
+        );
+        if !claim_local_stage2 {
+            assert_closed_fact_context_is_enforced(&net, &collected);
+        }
+    }
+
     // ---- 8. restart A over its database ----
     let (sink, root, route, utxos) = (net.chain.sink(), net.chain.tip_state().1.state_root(), net.api(), Net::utxos_of(&net.chain));
     let mut net = net.restart(db.clone());
@@ -696,14 +1513,58 @@ async fn rfc02_native39_node_e2e_register_fund_final_gate_c_pnr9_coinbase_spend_
     assert_eq!(net.chain.tip_state().1.state_root(), root, "the PALW state root off disk");
     assert_eq!(net.api(), route, "the kernel route rows off disk");
     assert_eq!(Net::utxos_of(&net.chain), utxos, "the UTXO set off disk");
-    assert!(receipt_record(&net.chain.tip_state().1, &receipt).unwrap().is_spent(1));
-    net.chain.heartbeat(ttpb, Vec::new()).await;
-    // The third node: every block of A's past (side blocks of the reorged-away branch included) in DAG order, as an IBD takes them.
-    let replay = t12_genesis_chain(&net.config, &net.bundle, &net.premine, &net.floats);
-    for blk in past_in_order(&net.chain, net.chain.sink()) {
-        arrive(&replay, blk, "the replaying node's block").await;
+    if evm_settlement {
+        assert!(receipt_record(&net.chain.tip_state().1, &receipt).is_none());
+    } else {
+        assert!(receipt_record(&net.chain.tip_state().1, &receipt).unwrap().is_spent(1));
     }
-    net.assert_same(&replay, "native39 node E2E after reorg and restart");
-    eprintln!("[n39] 8. restart restored sink/root/route/UTXO; replay agrees ({:.0}s total)", began.elapsed().as_secs_f64());
+    net.chain.heartbeat(ttpb, Vec::new()).await;
+    if evm_settlement {
+        let snapshot = net.chain.ctx.consensus.get_native_settlement_snapshot().unwrap().unwrap();
+        let state = net.chain.tip_state().1;
+        let archive = kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::read_native39_settlement_checkpoint_v1(&state)
+            .unwrap()
+            .unwrap();
+        if net
+            .chain
+            .vp()
+            .reachability_service
+            .try_is_chain_ancestor_of(net.chain.ctx.consensus.pruning_point(), archive.effect.block)
+            .unwrap()
+        {
+            assert!(
+                snapshot.safe.is_some() && snapshot.finalized.is_some(),
+                "restart preserves positive public heads for a covered archived executed prefix"
+            );
+        }
+        stage2_pruned::exercise(&net, pending_native.as_ref().map(|(_, claim)| Hash64::from_bytes(claim.id))).await;
+    }
+    // The legacy campaign retains its independent full-history replay. The
+    // EVM campaign has just exercised a real pruned join above; it must not
+    // require bodies which ordinary source pruning is allowed to discard.
+    if !evm_settlement {
+        let replay = t12_genesis_chain(&net.config, &net.bundle, &net.premine, &net.floats);
+        for blk in past_in_order(&net.chain, net.chain.sink()) {
+            arrive(&replay, blk, "the replaying node's block").await;
+        }
+        net.assert_same(&replay, "native39 node E2E after reorg and restart");
+    }
+    eprintln!(
+        "[n39] 8. restart restored sink/root/route/UTXO; independent import agrees ({:.0}s total)",
+        began.elapsed().as_secs_f64()
+    );
+    if let Some((a, claim_a)) = &pending_native {
+        assert!(
+            mining_claim(&net, &claim_a.id).closed.is_none(),
+            "independent A is still explicitly retained after B's real payment/reorg/restart"
+        );
+        let _ = std::fs::remove_dir_all(&a.dir);
+    }
     let _ = std::fs::remove_dir_all(&c.dir);
+    net
 }
+
+pub(crate) mod actual_fp_wire_source_v1;
+
+#[cfg(test)]
+mod original_archive_node_flow_v1;

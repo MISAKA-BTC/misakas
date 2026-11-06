@@ -1,0 +1,30 @@
+{
+  "observations": [
+    {
+      "file": "public-wrpc-continuation-2026-10-26.json",
+      "sha256": "7eaf9944f4c1d5bff8d78e17c5b36e5af5646477509df2c5162413e0df52090e",
+      "received_at": "2026-10-26T06:03:33.105Z",
+      "virtual_daa": 15904,
+      "sink_daa": 15904,
+      "sink": "fd97fe4add58265a1e50b52430b09e20606aecbe24a76fead4fb991020ad8a6c8a9acb8d853c36eda7c28d5ac4f32f67b688cedd130d64c3bab08286008a6301",
+      "pruning_point": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "transaction_count": 1
+    },
+    {
+      "file": "public-wrpc-evening-2026-10-26.json",
+      "sha256": "cd8906bdc01d1cab02f0f703d749c02ecec00613f1a1036b5d722efdcf8aee78",
+      "received_at": "2026-10-26T10:42:45.863Z",
+      "virtual_daa": 16003,
+      "sink_daa": 16003,
+      "sink": "7e725411dd3d1990a152d9dcbbc427c9042f6d4da8acdb11145337e9e73ed52e3df877c4cc82e85c65a7127abf03215f42433b307f9eb5e7fa6272ceaf0b0298",
+      "pruning_point": "a27f8f44fe4d91a5bed940be9dbd6d260ccb95cc00d948b1c08ddb6bd1a5f02542a6cf35c7a4d959ba4863ac1557861671763e5cc22937c697870283a8ca1f23",
+      "transaction_count": 2
+    }
+  ],
+  "elapsed_seconds": 16752.758,
+  "net_daa_advance": 99,
+  "seconds_per_net_daa_advance": 169.2197777777778,
+  "remaining_to_17000": 997,
+  "scope": "two-endpoint average; not block interval distribution, inclusion delay or activation wall-clock guarantee",
+  "arming_evidence": false
+}

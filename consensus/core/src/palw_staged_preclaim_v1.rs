@@ -285,27 +285,88 @@ pub(crate) fn finish_preclaim_quote_v1(
     original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
     semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
     inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
-    mut families: Vec<(PalwStagedFamilyV1, PalwRenderingResourcePlanV1)>,
+    families: Vec<(PalwStagedFamilyV1, PalwRenderingResourcePlanV1)>,
     source: PalwPreclaimSourceGeometryV1,
     maximum_custodians: u64,
     config: PalwStagedPublicCourtConfigV1,
 ) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
+    finish_preclaim_quote_inner_v2(geometry, original, semantics, inventory, families, source, maximum_custodians, config, None, false)
+}
+
+pub(crate) fn finish_preclaim_quote_v2(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    families: Vec<(PalwStagedFamilyV1, PalwRenderingResourcePlanV1)>,
+    source: PalwPreclaimSourceGeometryV1,
+    maximum_custodians: u64,
+    config: PalwStagedPublicCourtConfigV1,
+    table: &crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1,
+) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
+    finish_preclaim_quote_family_v3(
+        geometry,
+        original,
+        semantics,
+        inventory,
+        families,
+        source,
+        maximum_custodians,
+        config,
+        Some(table),
+    )
+}
+
+pub(crate) fn finish_preclaim_quote_family_v3(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    families: Vec<(PalwStagedFamilyV1, PalwRenderingResourcePlanV1)>,
+    source: PalwPreclaimSourceGeometryV1,
+    maximum_custodians: u64,
+    config: PalwStagedPublicCourtConfigV1,
+    table: Option<&crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
+) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
+    finish_preclaim_quote_inner_v2(geometry, original, semantics, inventory, families, source, maximum_custodians, config, table, true)
+}
+
+fn finish_preclaim_quote_inner_v2(
+    geometry: &PalwStagedClaimGeometryV1,
+    original: &crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3,
+    semantics: &crate::palw_class_semantics_v1::PalwClassSemanticsV1,
+    inventory: Option<&crate::palw_tokenizer_artifact_inventory_v1::PalwTokenizerArtifactInventoryCertificateV1>,
+    mut families: Vec<(PalwStagedFamilyV1, PalwRenderingResourcePlanV1)>,
+    source: PalwPreclaimSourceGeometryV1,
+    maximum_custodians: u64,
+    config: PalwStagedPublicCourtConfigV1,
+    table: Option<&crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1>,
+    native_tir_family: bool,
+) -> Result<Option<PalwStagedPreclaimQuoteV1>, String> {
     let vocab = source.vocab;
+    if native_tir_family && semantics.raw_tokenizer_bytes.is_some() && table.is_none() {
+        return Err("native family raw tokenizer requires authenticated canonical table EOF".into());
+    }
+    if let Some(table) = table {
+        table.exact_bytes_for_context_v2(semantics, vocab)?;
+    }
     let intake = match (semantics.raw_tokenizer_bytes, inventory) {
         (Some(_), Some(cert)) => {
             cert.check_v1()?;
             if cert.artifact_hash != semantics.tokenizer_id || cert.completed_daa > geometry.accepted_daa {
                 return Err("preclaim resource inventory is foreign or newer than accepted snapshot".into());
             }
-            families.push((
-                PalwStagedFamilyV1::Tokenizer,
-                crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
+            families.push((PalwStagedFamilyV1::Tokenizer, {
+                let tokenizer = crate::palw_rendering_resources_v1::PalwTokenizerResourcePlanV1::derive_with_key_bound(
                     cert.actual_bytes,
                     cert.key_event_upper_bound_v1(),
                     config.prices,
-                )?
-                .court_envelope(vocab, config.prices)?,
-            ));
+                )?;
+                match table {
+                    Some(table) => tokenizer.court_envelope_with_authenticated_table_v2(vocab, config.prices, semantics, table)?,
+                    None => tokenizer.court_envelope(vocab, config.prices)?,
+                }
+            }));
             Some(PalwTokenizerInventoryPlanV1::derive_v1(cert.actual_bytes, config)?)
         }
         (None, None) => None,
@@ -318,16 +379,28 @@ pub(crate) fn finish_preclaim_quote_v1(
     let maximum_records = families
         .iter()
         .try_fold(0u64, |n, (_, p)| n.checked_add(p.maximum_moves).ok_or("original signed history capacity overflow"))?;
-    let recovery = crate::palw_history_custody_v1::history_recovery_resource_plan_with_wait_v1(
-        maximum_records,
-        usize::try_from(maximum_custodians).map_err(|_| "platform history custody overflow")?,
-        config.acquisition_daa,
-        config.prices,
-    )?;
+    // V2 is reached only through the authenticated TFO2 native-TIR allocation.
+    // Its Prefix stage is a TirPrefix checkpoint, which cannot open the legacy
+    // PublicPrefix history-recovery endpoint. Its separate acquisition MMR,
+    // accepted body rows and reacquisition work remain in their native plans.
+    // Historical V1 retains its exact original PublicPrefix recovery reserve.
+    let recovery = if !native_tir_family {
+        Some(crate::palw_history_custody_v1::history_recovery_resource_plan_with_wait_v1(
+            maximum_records,
+            usize::try_from(maximum_custodians).map_err(|_| "platform history custody overflow")?,
+            config.acquisition_daa,
+            config.prices,
+        )?)
+    } else {
+        None
+    };
     let profile_bytes = source.profile_bytes;
     let mut staged = Vec::new();
     for (family, semantic) in families {
-        let semantic = if family == PalwStagedFamilyV1::PublicPrefix { semantic.checked_sum_v1(recovery)? } else { semantic };
+        let semantic = match (family, recovery) {
+            (PalwStagedFamilyV1::PublicPrefix, Some(recovery)) => semantic.checked_sum_v1(recovery)?,
+            _ => semantic,
+        };
         let mut acquisition = staged_context_resource_plan_v1(profile_bytes, semantic, config)?;
         if family == PalwStagedFamilyV1::Constraint {
             let slots = u32::try_from(maximum_custodians).map_err(|_| "source native custody exceeds format")?;

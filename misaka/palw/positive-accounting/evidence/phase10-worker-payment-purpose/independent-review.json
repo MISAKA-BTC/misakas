@@ -1,0 +1,113 @@
+{
+  "reviewed_execution_base_commit": "dd8efe1ab1034555e30b828d9471b7e2503e1dcd",
+  "scope": "Separate existing poster-funded worker success payment from primary issuance purpose, while preserving source-service fees and safe refunds outside computation credit.",
+  "actions": {
+    "builds_run_by_reviewer": false,
+    "tests_rerun_by_reviewer": false,
+    "source_code_edits_during_final_review": false,
+    "independent_tests_updated_by_reviewer_before_freeze": [
+      "misaka/palw/positive-accounting/tests/independent_credit_graph.rs",
+      "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs"
+    ],
+    "git_commits_created": false,
+    "only_this_evidence_json_written_during_final_review": true
+  },
+  "findings": [],
+  "reviewed_invariants": [
+    "WorkerPayment is appended to the existing nonserialized pure CreditUse enum; Reward is documented as primary issuance only. No wire/domain/key or new economic policy entitlement is introduced.",
+    "ALL_CREDIT_USES contains all eight purposes and both PositiveCreditGate and denial-only NativeRowCreditGate exhaustively handle WorkerPayment. Missing native ownership still returns a denial with Infallible authorization.",
+    "The dedicated worker_payment consumer requests WorkerPayment, while inference_reward requests Reward. The gate retains the requested purpose, existing rooted entitlement and all shared prerequisites; ancestors still require Dependency rights.",
+    "The independent matrix checks all eight public purposes against all eight granted purposes. WorkerPayment plus contractual Settlement permits only those two uses and cannot authorize primary Reward, WorkReceipt, DAG weight or Rule E. The recording route checks both allowed and denied worker requests separately from Reward.",
+    "The supplied private-money counterexample pays delivered source services in Pending and EndedUnverified even while all eight computation uses are denied. It refuses an unresolved refund, then permits only an authority-established safe closure refund, preserves once-only transfers and fully undoes them."
+  ],
+  "independent_test_source_sha256": {
+    "misaka/palw/positive-accounting/tests/independent_credit_graph.rs": "7db4035cb1004e968c06417cca13d22712bd1ae853232517456b4131942698a5",
+    "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs": "668c2d6a00df7667dc450e1f74997dafbb320b642e9031f13655dfd865f06bc7"
+  },
+  "execution_evidence": {
+    "common-all": {
+      "metadata": "common-all-result.json",
+      "metadata_sha256": "062acf9cd776cacd25bbe65356182669ffac1659b835c50b24ecf9213e7fb69d",
+      "raw_log": "common-all.log",
+      "raw_log_sha256": "9aca7bb617300bed14c3216ae150657ec57c3a044ebed44175193c62576fa0e2",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_25_recorded_source_hashes_match_current": true,
+      "passed": 35,
+      "target_pass_counts": {
+        "certification": 6,
+        "contracts": 14,
+        "funding": 5,
+        "namespace": 2,
+        "rows": 5,
+        "tir_contract": 3,
+        "unit_and_doc": 0
+      }
+    },
+    "leaf-all": {
+      "metadata": "leaf-all-result.json",
+      "metadata_sha256": "a9af4ca85de10fd5dc05b9b68895f59f7f95c25b94b4e66a7dfb8c51fe0da29e",
+      "raw_log": "leaf-all.log",
+      "raw_log_sha256": "1f4cc31a13fb885e975f9f1568b0fe17ab0e7e3aba6696c714486a2c7f6ddd1a",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_25_recorded_source_hashes_match_current": true,
+      "passed": 53,
+      "target_pass_counts": {
+        "unit": 42,
+        "consumer_routes": 1,
+        "graph_and_entitlement": 8,
+        "fee_conservation": 2,
+        "doc": 0
+      },
+      "service_fee_safe_refund_counterexample_passed": true,
+      "worker_payment_primary_reward_independent_counterexample_passed": true
+    },
+    "leaf-clippy": {
+      "metadata": "leaf-clippy-result.json",
+      "metadata_sha256": "5106b1919cabf02d7e4b1f57f83405e2e4d932b9784518ed88bcb3e1bc78b108",
+      "raw_log": "leaf-clippy.log",
+      "raw_log_sha256": "979fb5e8cd69f05ef04fc414d02138d0592fde54ed32af21258bde05aba6073d",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_25_recorded_source_hashes_match_current": true,
+      "raw_warnings_found": false
+    },
+    "node-default-all": {
+      "metadata": "node-default-all-result.json",
+      "metadata_sha256": "dae9f18de0f020756fe0fbe70b43759787f6af51f9a4982ca88e87996786d166",
+      "raw_log": "node-default-all.log",
+      "raw_log_sha256": "cc9e5f3ace7f72cade7f6c6c630038d6e547d4977d1d5214d1f1c7701270b97d",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_25_recorded_source_hashes_match_current": true,
+      "passed": 55,
+      "default_features_enabled": true,
+      "module_pass_counts": {
+        "dues": 9,
+        "native_funds": 15,
+        "native": 15,
+        "rows": 7,
+        "tir": 9
+      }
+    },
+    "node-default-clippy": {
+      "metadata": "node-default-clippy-result.json",
+      "metadata_sha256": "4a30476b2012b8b693b6b0dd19a6535f7f5a05203c3a5e1dad0431d34ab1d5ac",
+      "raw_log": "node-default-clippy.log",
+      "raw_log_sha256": "f27c3b29082ffcb6a4ca8d12ff289862b96dd4459b85202fce8b63a9bf78366b",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_25_recorded_source_hashes_match_current": true,
+      "raw_warnings_found": false
+    }
+  },
+  "limits": [
+    "Root performed every recorded execution. This reviewer updated the two independent test files before source freeze, then performed source/raw/hash review without another build, test or code edit.",
+    "Authorization remains a generic type carrying a usage value. The actual native final issuer/payer must check the exact purpose against current binding and existing entitlement; a WorkerPayment authorization must never be accepted as Reward.",
+    "Actual native financial/origin/current-root entitlement resolution, accepted history, live UTXO locking and atomic writer integration are not implemented or exercised by these private calculator/adapter fixtures.",
+    "Source-service fees and refunds still require their actual delivery, liability, funding, once-only and money predicates; unavailable computation credit neither waives those checks nor automatically unlocks funds.",
+    "Common, leaf and default-node results have distinct scopes and must not be summed with each other or earlier candidates as a native end-to-end pass count.",
+    "The nine TIR tests exercise the actual A1 checker adapter with private rooted fixture conditions; they do not establish a multi-node native payment or issuance lifecycle."
+  ]
+}

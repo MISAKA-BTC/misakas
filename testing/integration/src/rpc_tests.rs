@@ -1298,12 +1298,20 @@ async fn sanity_test() {
                 let rpc_client = client.clone();
                 tst!(op, {
                     // Tooling lane (op 226): exactly one of claim / session.
-                    let both = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: "00".repeat(64) };
+                    let both = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: "00".repeat(64), ..Default::default() };
                     assert!(rpc_client.get_palw_court_state_call(None, both).await.is_err());
                     let neither = GetPalwCourtStateRequest::default();
                     assert!(rpc_client.get_palw_court_state_call(None, neither).await.is_err());
-                    let well = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: String::new() };
+                    let well = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), session_hex: String::new(), ..Default::default() };
                     let read = rpc_client.get_palw_court_state_call(None, well).await.unwrap();
+                    assert!(!read.available && !read.found);
+                    let batch = GetPalwCourtStateRequest { claim_hex: "00".repeat(64), batch_ordinal: u64::MAX.to_string(),
+                        batch_target: "full-ids".into(), ..Default::default() };
+                    let incomplete = GetPalwCourtStateRequest { batch_target: String::new(), ..batch.clone() };
+                    assert!(rpc_client.get_palw_court_state_call(None, incomplete).await.is_err());
+                    let invalid = GetPalwCourtStateRequest { batch_target: "parameter:4294967296".into(), ..batch.clone() };
+                    assert!(rpc_client.get_palw_court_state_call(None, invalid).await.is_err());
+                    let read = rpc_client.get_palw_court_state_call(None, batch).await.unwrap();
                     assert!(!read.available && !read.found);
                 })
             }
@@ -1783,6 +1791,35 @@ async fn sanity_test() {
                     let response = rpc_client.get_palw_node_status_call(None, GetPalwNodeStatusRequest {}).await.unwrap();
                     assert!(!response.consensus_params_id.is_empty(), "a node always knows the fingerprint it booted");
                     assert_eq!(response.producer_state, "off", "the sanity daemon runs no producer");
+                })
+            }
+            KaspadPayloadOps::GetPalwMemoryRoutingOutcomeV1 => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    // Valid fixed-width identities with no committed observation
+                    // remain unavailable/UNKNOWN, never synthetic approval.
+                    let unknown = "0".repeat(128);
+                    let response = rpc_client
+                        .get_palw_memory_routing_outcome_v1_call(
+                            None,
+                            GetPalwMemoryRoutingOutcomeV1Request { block_hash: unknown.clone(), claim_id: unknown.clone() },
+                        )
+                        .await
+                        .unwrap();
+                    assert!(!response.available, "unobserved court outcome grants no availability");
+                    assert!(response.observation_json.is_empty(), "missing observation has no outcome payload");
+                    assert!(!response.reason.is_empty(), "unavailable observation explains its UNKNOWN status");
+                    // A malformed identity is an RPC error, distinct from a
+                    // well-formed unobserved request above.
+                    assert!(
+                        rpc_client
+                            .get_palw_memory_routing_outcome_v1_call(
+                                None,
+                                GetPalwMemoryRoutingOutcomeV1Request { block_hash: unknown, claim_id: "0".into() },
+                            )
+                            .await
+                            .is_err()
+                    );
                 })
             }
             KaspadPayloadOps::GetPalwRegistrationTerms => {

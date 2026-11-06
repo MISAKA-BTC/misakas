@@ -1,0 +1,40 @@
+{
+  "source_commit": "713024a1cb8aaff5cc9d0758dde24b533f155d64",
+  "scope": "Exact extracted numeric helpers only. Not Assignment acceptance, job identity, inference, coverage, native read authorization, Gate C, settlement or DAG credit. Context inputs come from retained metadata pins, not a newly accepted model registration.",
+  "compiler": "rustc 1.93.0 (254b59607 2026-01-19)",
+  "pins_sha256": "b9b30c7909ff0dd8545e6e74eadb1c7edb20a4eb1d453802cffd4491dbe776fc",
+  "extracted_rust_sha256": "00e6b64cec4e97f96c5726467e91f801dfebaae6286ca0469665b639fd0499cf",
+  "extracted_rust": "mod palw_context_ladder {\npub const PALW_CONTEXT_LADDER_QUANTA_PER_CANONICAL_JOB: u32 = 8;\npub const fn palw_canonical_footprint_floor_v1(n_ctx: u32) -> u64 {\n    let floor = (n_ctx / PALW_CONTEXT_LADDER_QUANTA_PER_CANONICAL_JOB) as u64;\n    if floor == 0 { 1 } else { floor }\n}\n}\npub fn palw_tir_attempt_canonical_of_v1(max_context: u32) -> Option<(u32, u32)> {\n    let floor = u32::try_from(crate::palw_context_ladder::palw_canonical_footprint_floor_v1(max_context)).ok()?;\n    (floor >= 2).then_some((floor - 1, 2))\n}\nfn main(){\nlet (p,d)=palw_tir_attempt_canonical_of_v1(8192).unwrap();println!(\"smollm2-360m {} {}\",p,d);\nlet (p,d)=palw_tir_attempt_canonical_of_v1(8192).unwrap();println!(\"smollm2-135m {} {}\",p,d);\nlet (p,d)=palw_tir_attempt_canonical_of_v1(2048).unwrap();println!(\"pythia-70m {} {}\",p,d);\n}\n",
+  "models": [
+    {
+      "model": "smollm2-360m",
+      "pinned_original_max_context_positions": 8192,
+      "canonical_prefill": 1023,
+      "canonical_decode": 2,
+      "context_token_budget_by_native_convention": 8193,
+      "wide_q24": false,
+      "prior_short_job_prefill": 16,
+      "prior_short_job_decode": 1
+    },
+    {
+      "model": "smollm2-135m",
+      "pinned_original_max_context_positions": 8192,
+      "canonical_prefill": 1023,
+      "canonical_decode": 2,
+      "context_token_budget_by_native_convention": 8193,
+      "wide_q24": false,
+      "prior_short_job_prefill": 16,
+      "prior_short_job_decode": 1
+    },
+    {
+      "model": "pythia-70m",
+      "pinned_original_max_context_positions": 2048,
+      "canonical_prefill": 255,
+      "canonical_decode": 2,
+      "context_token_budget_by_native_convention": 2049,
+      "wide_q24": true,
+      "prior_short_job_prefill": 16,
+      "prior_short_job_decode": 1
+    }
+  ]
+}

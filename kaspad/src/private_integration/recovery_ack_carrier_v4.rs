@@ -187,7 +187,13 @@ impl PrivateRecoveryAckFeeSpecV4 {
                             let daa = session.get_virtual_daa_score();
                             let minimum =
                                 crate::palw_panel::palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&config.params, object, daa);
-                            let locked: HashSet<_> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+                            let locked: HashSet<_> = match session.palw_locked_bond_outpoints_checked_v3() {
+                                Ok(locked) => locked.into_iter().collect(),
+                                Err(why) => {
+                                    kaspa_core::warn!("private ACK waits for own collateral state: {why}");
+                                    continue;
+                                }
+                            };
                             let usable = |outpoint: &TransactionOutpoint, entry: &kaspa_consensus_core::tx::UtxoEntry| {
                                 entry.amount >= minimum
                                     && entry.script_public_key == script

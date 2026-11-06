@@ -95,18 +95,24 @@ impl From<&VirtualState> for VirtualStateStats {
 /// for a possible virtual state write to complete but can rather settle with the last known state
 #[derive(Clone, Default)]
 pub struct LkgVirtualState {
-    inner: Arc<ArcSwap<VirtualState>>,
+    inner: Arc<ArcSwap<VersionedVirtualState>>,
+}
+
+#[derive(Default)]
+struct VersionedVirtualState {
+    generation: u64,
+    state: Arc<VirtualState>,
 }
 
 /// Guard for accessing the last known good virtual state (lock-free)
 /// It's a simple newtype over arc_swap::Guard just to avoid explicit dependency
-pub struct LkgVirtualStateGuard(arc_swap::Guard<Arc<VirtualState>>);
+pub struct LkgVirtualStateGuard(arc_swap::Guard<Arc<VersionedVirtualState>>);
 
 impl Deref for LkgVirtualStateGuard {
     type Target = Arc<VirtualState>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.0.state
     }
 }
 
@@ -118,12 +124,63 @@ impl LkgVirtualState {
 
     /// Loads the last known good virtual state.
     pub fn load_full(&self) -> Arc<VirtualState> {
-        self.inner.load_full()
+        self.inner.load().state.clone()
+    }
+
+    /// One atomic publication identity and its corresponding state. Native
+    /// read sessions must recheck this identity before returning authority:
+    /// moving away and back to the same selected parent still invalidates a
+    /// previous session. This process-local identity is not a chain clock.
+    pub fn load_versioned(&self) -> (u64, Arc<VirtualState>) {
+        let snapshot = self.inner.load();
+        (snapshot.generation, snapshot.state.clone())
     }
 
     // Kept private in order to make sure it is only updated by DbVirtualStateStore
     fn store(&self, virtual_state: Arc<VirtualState>) {
-        self.inner.store(virtual_state)
+        self.inner.rcu(|previous| {
+            Arc::new(VersionedVirtualState {
+                generation: previous.generation.checked_add(1).expect("virtual state publication generation exhausted"),
+                state: virtual_state.clone(),
+            })
+        });
+    }
+}
+
+#[cfg(test)]
+mod lkg_generation_tests {
+    use super::*;
+
+    #[test]
+    fn returning_to_the_same_state_invalidates_the_old_generation() {
+        let cache = LkgVirtualState::default();
+        let original = Arc::new(VirtualState::default());
+        cache.store(original.clone());
+        let (before, state) = cache.load_versioned();
+        assert!(Arc::ptr_eq(&original, &state));
+        cache.store(Arc::new(VirtualState::default()));
+        cache.store(original.clone());
+        let (after, state) = cache.clone().load_versioned();
+        assert_eq!(after, before + 2);
+        assert!(Arc::ptr_eq(&original, &state));
+        assert!(Arc::ptr_eq(&original, &cache.load()));
+        assert!(Arc::ptr_eq(&original, &cache.load_full()));
+    }
+
+    #[test]
+    fn concurrent_publications_do_not_reuse_a_generation() {
+        let cache = LkgVirtualState::default();
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                let cache = cache.clone();
+                scope.spawn(move || {
+                    for _ in 0..25 {
+                        cache.store(Arc::new(VirtualState::default()));
+                    }
+                });
+            }
+        });
+        assert_eq!(cache.load_versioned().0, 100);
     }
 }
 

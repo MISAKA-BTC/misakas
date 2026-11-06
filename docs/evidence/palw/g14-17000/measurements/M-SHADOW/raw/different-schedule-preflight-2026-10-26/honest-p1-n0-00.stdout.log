@@ -1,0 +1,7 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::measurement::g14_native_panel_measure ... G14_MEASURE {"actual_seats":null,"arming_evidence":false,"case":"honest","challenge":null,"claim":"15bcb669e617f0812d60b5ba66312f048c2096160a8d6ad061ae525ad1a74a8e11f2c7ec495d5ed6b96696cac8de1b7c9cabbc9f258589588981bdcebea01baf","class":"6a85c5bded8e3ba3fd777d5f40b145397395bb07030cce4f90b8e502a0af8c22d7ac4f5383dbf529ef128b427d70e17feb1862f31818f14a1d2b59d4de34ec55","final_daa":null,"fixture_only":true,"gate_c_certification_measured":false,"job":"7ad6befa35d6b2a4f196683abecf1609828c2f1f00cb2d136ade7c0568bfc9f3492ea0d5e1e78b23c893677641946fc2d93af4d4fcaa597c8e709246565a4d78","legacy_model_route_compared":false,"n":0,"phases":[],"post_commit_beacon_measured":false,"randomness_withholding_measured":false,"requested_seats":1,"schema":1,"scope":"native_kernel_interim_panel3_vs_panel1","verdict":"SETUP_ONLY"}
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1192 filtered out; finished in 0.03s
+

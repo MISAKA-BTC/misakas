@@ -2227,3 +2227,6 @@ async fn g14_opv_bootstrap_source_fee_is_refused_without_its_independent_monetar
     assert_eq!(net.collateral(CAND), collateral);
     assert!(net.ledger().beacon_source_fees.is_empty());
 }
+
+#[path = "opv_bootstrap/paid_archive_v3.rs"]
+mod paid_archive_v3;

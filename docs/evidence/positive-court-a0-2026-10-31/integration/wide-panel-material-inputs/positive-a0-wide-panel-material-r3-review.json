@@ -1,0 +1,88 @@
+{
+  "kind": "Independent fixed-artifact source-only re-review; proceed to import/build/test; NOT runtime validation",
+  "recorded_at_utc": "2026-11-01T14:10:50.183204+00:00",
+  "patch_sha256": "2b6a434f19d1a48f348383d2484db2b01cc621e47339944a498dd380fa8da8c6",
+  "manifest_sha256": "c26a981b0f359e185928ddbc768af89ed232fc08553e8a7f301872ec883104b4",
+  "base_commit": "7a6935de6add7fe66deb324090a7144b974a8730",
+  "source_tree": "/tmp/positive-wide-panel-v2-r3-frozen",
+  "all_12_after_hashes_match": true,
+  "all_existing_before_hashes_match_fixed_base": true,
+  "prior_review": {
+    "path": "/tmp/positive-a0-wide-panel-material-16b-review.json",
+    "sha256": "78a323bce7a498966604f961a814373041e08157e668b5a1810107c0e6389948"
+  },
+  "changed_since_16b": [
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs"
+  ],
+  "blockers": [],
+  "closed_findings": [
+    {
+      "prior": "P1 external coordinate type privacy",
+      "resolution": "capture Leaf/coordinate construction and trace import now use public palw_step::PalwStepCoordinateV1; public definition at core palw_step.rs:974."
+    },
+    {
+      "prior": "P2 relation lookup before budget admission",
+      "resolution": "claim charges geometry Visit before relation_at, and charges canonical leaf geometry lookup before palw_tir_leaf_values_v2."
+    },
+    {
+      "prior": "P2 context hash before untrusted typed metadata cap",
+      "resolution": "capture checks version/network bytes/nonzero counts/checked context sum/prompt extent/program/layout vector bounds before any hash or started flag mutation. Then started is shared and immutable across clones/failures, fixed-field context hash charge precedes hash, class/prompt hash and geometry work charged before quote/class joins. Computed context/class IDs are cached rather than rehashed per leaf/tile."
+    },
+    {
+      "prior": "Unused initial assignment",
+      "resolution": "claim returns exhaustive match output without overwritten Vec initialization."
+    }
+  ],
+  "additional_delta_checks": [
+    "prepare metadata comparison is charged before comparisons/rooted join; declarations remain operational owner bounds, not native permission.",
+    "Provider/IO/Visit charges precede scratch quote and fetch, including unknown/cap/missing-proof failures. Return proof preflight and artifact authentication plus exact requested leaf-set equality are retained.",
+    "All unchanged after-hash files retain the previously reviewed old Demand arithmetic, selection mapping, Request-set behavior and callback success semantics. r3 makes no numeric evaluator change.",
+    "One CPU run per shared started handle remains; failed capture cannot restart, failed builder/material attempts retain all successfully admitted charges. Only borrowed live slots reset on Drop/failure.",
+    "Builder does not compare Miner output root/tokens to Panel recomputation initially. Original class/artifact/input/job/preparation/result/rooted metadata stay pinned, Panel roots use the original observed run, Node returns Miner mismatch only after full relation/source/trace/greedy coverage.",
+    "Wrong provider proof/unknown scratch remains local data/material refusal; it does not generate a Miner-fault verdict.",
+    "No new public wire/domain/version/native authorization, old V1 escape, Held rewrite or credit activation introduced."
+  ],
+  "new_sixth_test": {
+    "name": "oversized_typed_network_is_dropped_before_hashing_or_starting_the_cpu_run",
+    "source_assessment": "Actual V2 runner/work fixture with network cap+1 asserts early shape/length rejection and unchanged shared meter. The implementation places early rejection before started.replace; test itself does not retry a valid job or observe CPU callbacks, so that portion is supported by source inspection rather than an independent execution assertion."
+  },
+  "validation": {
+    "new_test_count": 6,
+    "reviewer_compile_tests_or_clippy_run": false,
+    "owner_manifest_test_status": "WRITTEN_NOT_COMPILED_OR_EXECUTED",
+    "command": "cargo test --locked -p misaka-palw-tir-exec --features positive-panel --test positive_wide_material_v2",
+    "recommended_followups": [
+      "Run above target and clippy on frozen imported source.",
+      "Run legacy Demand/Gather and old wide-run observer golden/regression targets because shared helpers and observer API were extracted.",
+      "Add real mid-run write/disk failure and corrupt/wrong-root provider proof negative tests; current capture failure test stops before CPU execution."
+    ]
+  },
+  "scope_limits": [
+    "Import/build-ready here means no remaining identified static blocker; APIs have not been compiled or executed by reviewer.",
+    "Claims stream signing and Node streaming record reader remain incomplete; compatibility test still materializes bounded Vec<Vec<i128>>.",
+    "Original run leaf hashes/logits and Merkle indices remain RAM-backed; large-run spill/residency is not established.",
+    "RAM/disk lease callbacks are mandatory contracts, but tests use no-op guards and do not measure physical resources.",
+    "Flat prompt only; Held/Merkle/native service/funding/consent/reservations and actual registration authority remain upstream obligations.",
+    "No actual Hugging Face full-context feasibility, production native grants, final credit or public activation claim."
+  ],
+  "reviewed_source_hashes": {
+    "consensus/core/src/palw_tir_court_v1/source_only/wide_v2.rs": "9245be2f553cd52d169135b5f9afac8ad937b9cd838917c392dd002e98d6a243",
+    "misaka/palw/tir/core/src/demand.rs": "0f7309d5f457756c02bf5359c67a7ef703bf7de7c2cf5753f9ac5bcdda5f40c8",
+    "misaka/palw/tir/core/src/lane_geometry.rs": "00032d3d89aae772250ec3524b026c4ee6c6eef1f2f598206faaa9a884c40fbb",
+    "misaka/palw/tir/core/src/lib.rs": "eab4db343bbe63a7216a49ec1e83efd922d9c2ebbfeb1622c8a7de83fc1fadb0",
+    "misaka/palw/tir/exec/src/node/mod.rs": "d7239ef7cf864c08b675cead63520ca0efc2eac436c151e8f58bbf43acd4acdd",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/capture.rs": "308f377b5cb88dfc9a6042ed27a0fcbc009551eca82b94fd417415eec4b54a67",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/claims_tape.rs": "3f2cf3a94b9b3d0d4188fa6ae73477775ab0143b6d559fe8afd4222002cc24cc",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/mod.rs": "4af9dc1df10ecf6e536178ed7bcb9f6db5dc52581c1fc673f20787e85451a239",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/proof.rs": "0ad7c89eefb022ff4f525ae84bf32d72959c035cf652f252deea1ad98d9d0ce7",
+    "misaka/palw/tir/exec/src/node/positive_wide_material_v2/trace.rs": "edad9358129e593edf7f8875e3863b41758eeb0d33502df5f1f13620ce992a1d",
+    "misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs": "c046784b97f1f706f0d51090fc7be80042414dea7fc8ec5963c43eed294db1ff",
+    "misaka/palw/tir/exec/tests/positive_wide_material_v2.rs": "0a73750f34593f4608f2b0004eee680d6645e6347ed14426100a784447131024"
+  },
+  "reviewer_root_source_index_edits": false,
+  "reviewer_mutable_stage_reads": false,
+  "record_path": "/tmp/positive-a0-wide-panel-material-r3-review.json"
+}

@@ -1,0 +1,62 @@
+{
+  "source_commit": "8e96ab0538e0be5de90b8096accf66edca61feb1",
+  "scope": "source-based relation calculation, not observed saturation cost or a production-node run",
+  "declared_work_source": "native-capacity-batch-2026-10-26 (9c93b6a13)",
+  "declared_worst_work": 1224336,
+  "inputs": {
+    "max_court_work_per_block": 1073741824,
+    "check_window_daa": 100,
+    "challenge_window_daa": 50,
+    "liability_daa": 200,
+    "dismissed_proof_fee_sompi": 10000000,
+    "claim_reward_sompi": 500000000,
+    "approved_external_gain_sompi": 50000000000
+  },
+  "cases": [
+    {
+      "adjudication_cap": 4,
+      "runs": 4,
+      "dismissal_fee_sompi": 10000000,
+      "exposure_daa": 350,
+      "cost_sompi": 14000000000,
+      "gain_sompi": 50500000000,
+      "passes_cost_gt_gain": false
+    },
+    {
+      "adjudication_cap": 64,
+      "runs": 64,
+      "dismissal_fee_sompi": 10000000,
+      "exposure_daa": 350,
+      "cost_sompi": 224000000000,
+      "gain_sompi": 50500000000,
+      "passes_cost_gt_gain": true
+    }
+  ],
+  "files": [
+    {
+      "path": "consensus/core/src/palw_kernel_route_panel_one_censorship_v1.rs",
+      "git_blob": "6395423d51a4e10afe8400df84cd890a3127af3d",
+      "sha256": "587285d2d7cbdb7e56943995a76e4bc5ef631bbcfa5fcb5283bcd2082427c4b0"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_v1.rs",
+      "git_blob": "3228093e19595da70890f05c9ea3f8a9421b41dc",
+      "sha256": "8b5f7eb58235f0feafddf66d0004a6fd15ffb1d409be17112bd79a9f9dbdc210"
+    },
+    {
+      "path": "consensus/core/src/palw_g14_values_v1.rs",
+      "git_blob": "3df1eb1b0559ef1d58a2421a90a1ea3a6770d4ae",
+      "sha256": "2650d7b4fbf41107a76804828c0e3e859bf3c5ed2ae1b101d8785478f5734a0f"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/processor/palw.rs",
+      "git_blob": "a0955fb5ca57d516397dc64eadb926141692b8f2",
+      "sha256": "bd920710305bd106b1fccfdd507e1ecf55b150926ddb7e4e4222828920c31c8c"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_fold_v1.rs",
+      "git_blob": "6ba4622e5c17a20d04d2efd78d9dde674abb81bb",
+      "sha256": "60debd3dc314d74ca5d71a8920bcc1d2ade2c53ba9e80c795c7176dabd302bbd"
+    }
+  ]
+}

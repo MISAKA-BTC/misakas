@@ -113,6 +113,17 @@ impl Factory {
             .expect("active management entry names an actual Factory-created native instance")
     }
 
+    /// Only the existing fingerprinted private-fixture constructor can populate
+    /// this registry. It already supplies a prepared Config with genesis disabled;
+    /// rebuilding it would incorrectly reapply public network arm-readiness to a
+    /// test-only privately armed ruleset. No production ConfigBuilder is changed.
+    pub(super) fn retained_fixture_staging_config_v1(&self) -> Option<Arc<Config>> {
+        self.retained_fixture_clock_v1.as_ref().map(|_| {
+            assert!(!self.config.process_genesis, "prepared existing-only fixture config");
+            Arc::new(self.config.clone())
+        })
+    }
+
     pub(super) fn register_retained_fixture_instance_v1(&self, consensus: &Arc<Consensus>, staging: bool) {
         if let Some(clock) = &self.retained_fixture_clock_v1 {
             clock.register(consensus, staging);

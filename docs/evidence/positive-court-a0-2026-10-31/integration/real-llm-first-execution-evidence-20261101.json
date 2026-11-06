@@ -1,0 +1,181 @@
+{
+  "scope": "Immutable Rootcc22 first actual trainedcohort local CPU/capture+quote evidence, not native registration/full-context/role performance/credit. Driver unverified buildmapping field kept raw; independent audit bridges actual Cargo build record.",
+  "files": {
+    "real-llm-harness-first-build-20261101.json": {
+      "bytes": 601924,
+      "sha256": "da7bade4a00d13c993bba22a5948327b0d22027cbd2ce613d86067a81fef91be"
+    },
+    "real-llm-harness-first-build-20261101.stderr.log": {
+      "bytes": 2979,
+      "sha256": "fdce12938eff927adb2adb5fad3c650c45ddfae142159842763cffbf45a1c6fd"
+    },
+    "real-llm-harness-first-build-20261101.stdout.jsonl": {
+      "bytes": 291566,
+      "sha256": "acb3ed028e20f915d5eca726dde28756dbb9ea491515950566b5117a988a96ce"
+    },
+    "real-llm-independent-audit-20261101.json": {
+      "bytes": 11134,
+      "sha256": "7c8bed36aa08ca97fb670dfd2bf07ad77734617b3fdae3ebbffd84d8f5e66748"
+    },
+    "real-llm-quote-8gib-20261101/manifest.json": {
+      "bytes": 2024858,
+      "sha256": "e1088f92485098ec9581671eb487b75f2405d6dc6ff3b349ebba2271502db68b"
+    },
+    "real-llm-quote-8gib-20261101/pythia-70m/runner.json": {
+      "bytes": 7614,
+      "sha256": "716815f5e4a5b7bbada9576ab39b9a43596c355ebdb9552aca0885b3202565f5"
+    },
+    "real-llm-quote-8gib-20261101/pythia-70m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-8gib-20261101/pythia-70m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-8gib-20261101/pythia-70m/time-l.log": {
+      "bytes": 777,
+      "sha256": "8fbb0e4ce99023dc65bf4f1daa1c754d435569c85a8dc699779b7c5c11f37072"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-135m/runner.json": {
+      "bytes": 7648,
+      "sha256": "868ca32513f5b3638b91cdc1a3273b4451e0c8f92e32b06542392566efa0adf9"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-135m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-135m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-135m/time-l.log": {
+      "bytes": 777,
+      "sha256": "691e3444ebfec4275f24280189822be3798ca49c3953f97c01b5ae0709ee0b5e"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-360m/runner.json": {
+      "bytes": 7651,
+      "sha256": "074d9a80cf34bbd8027772ba98f6094b5c6032e372b3fa90545988ec3cf5cef1"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-360m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-360m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-8gib-20261101/smollm2-360m/time-l.log": {
+      "bytes": 777,
+      "sha256": "984669702ce9f72b00958e0ef1f0be30bda6fe9bfc8dca6f14ba60e0637e02d6"
+    },
+    "real-llm-quote-first-20261101/manifest.json": {
+      "bytes": 1985970,
+      "sha256": "a10d745d58e40d964fe522a13b78cf0cb1f6d1b3220a643c214523a36e533d24"
+    },
+    "real-llm-quote-pinned-20261101/manifest.json": {
+      "bytes": 2025383,
+      "sha256": "8c4b8df4eb5db52e2ea50f3e4a0577dc6aa086dee811798e419a542ec8abc90c"
+    },
+    "real-llm-quote-pinned-20261101/pythia-70m/runner.json": {
+      "bytes": 7712,
+      "sha256": "9ea26a3882c9636828a3890a03801d6b13716bd104dc827c889672f6f2c876fa"
+    },
+    "real-llm-quote-pinned-20261101/pythia-70m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-pinned-20261101/pythia-70m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-pinned-20261101/pythia-70m/time-l.log": {
+      "bytes": 777,
+      "sha256": "4e2b700aaf5b85b5c142258e0cc6854455b7a26c63baabc92c4aa12cbb973c0c"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-135m/runner.json": {
+      "bytes": 7746,
+      "sha256": "8e2f1e8ea3ee43db610e0e0907d1f19ebceac18683a2c1a48406e464ab7566bc"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-135m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-135m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-135m/time-l.log": {
+      "bytes": 777,
+      "sha256": "923034f89955ae5166695b4747198246b8098b8c5a65ad85a180a875f648d4cd"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-360m/runner.json": {
+      "bytes": 7749,
+      "sha256": "bc351ccd638ab9b367a6786d27d71b86e1576f64baba332108a6bd7d6bab53ca"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-360m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-360m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-quote-pinned-20261101/smollm2-360m/time-l.log": {
+      "bytes": 777,
+      "sha256": "1793dd89995313827db8836c4034e5ff234b4a853259ebd65d2114593f98b1bd"
+    },
+    "real-llm-run-8gib-20261101/manifest.json": {
+      "bytes": 2030738,
+      "sha256": "7c00a76085935b21548361c8f3d4d0d6af31c77aec9aa523c7397cfdc0a98c15"
+    },
+    "real-llm-run-8gib-20261101/pythia-70m/runner.json": {
+      "bytes": 9896,
+      "sha256": "ca383907aa31bd1c9d1259fb91fe13a4234af5a783f1327ac6208fddb90986bc"
+    },
+    "real-llm-run-8gib-20261101/pythia-70m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-run-8gib-20261101/pythia-70m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-run-8gib-20261101/pythia-70m/time-l.log": {
+      "bytes": 777,
+      "sha256": "2efd39ff05f52dbad6ffa8f7adfc3bbc456afc14bb9dc68407848c80c6790ed7"
+    },
+    "real-llm-run-8gib-20261101/smollm2-135m/runner.json": {
+      "bytes": 9166,
+      "sha256": "936b479a28c5d3ea822f8f49d9ea80ea124f53700dd0c61ccb7596d9ea7e8d9d"
+    },
+    "real-llm-run-8gib-20261101/smollm2-135m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-run-8gib-20261101/smollm2-135m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-run-8gib-20261101/smollm2-135m/time-l.log": {
+      "bytes": 777,
+      "sha256": "2b5a5ac788901f8f470eb010dc4da823703f247e4e3598a95e27c8af16f276d9"
+    },
+    "real-llm-run-8gib-20261101/smollm2-360m/runner.json": {
+      "bytes": 9173,
+      "sha256": "915fe1b00429dfb6f3516eed1a16dbdc276eadae012fff3a5f299849f36faa2a"
+    },
+    "real-llm-run-8gib-20261101/smollm2-360m/stderr.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-run-8gib-20261101/smollm2-360m/stdout.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "real-llm-run-8gib-20261101/smollm2-360m/time-l.log": {
+      "bytes": 777,
+      "sha256": "56e910054289114e0fa40a6fe0882b2442776b05d163e32eb3d9b6683587f14b"
+    }
+  }
+}

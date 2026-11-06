@@ -1,0 +1,9 @@
+{
+  "command_verified": "32054 43247 /Users/wata/.rustup/toolchains/1.93.0-aarch64-apple-darwin/bin/cargo test --message-format=json-render-diagnostics --offline --locked -p kaspa-consensus --lib -- model::stores::palw_state_v2::assignment_journal::tests malformed_assignment_money_projection_fails_closed_in_the_shared_filter g14_cert_kernel_route_ g14_kernel_route_a_covered_lie_is_convicted g14_kernel_route_a_chunked_object_is_signature_checked_at_the_completing_chunk g14r_kernel_v2_the_pursuit_resumes_after_a_node_restart_mid_filing g14_kernel_route_the_final_reward_is_paid_once_out_of_the_posters_escrow_across_reorg_replay_and_redemption positive_relay_full_script_tests_v2 --nocapture --test-threads=1",
+  "process_group": 43247,
+  "action": "SIGTERM to this task's redundant native test rebuild",
+  "reason": "Prior native DB/G14/Full 14 passed on retained source; corrected boundary/context paths now have Core 80 external + 16 internal, all-target native typecheck and strict Clippy. Stop repeat codegen before runtime and integrate next source stage.",
+  "native_runtime_pass_claimed": false,
+  "preserve_raw_execution_record": true,
+  "unix_time": 1793652626.222836
+}

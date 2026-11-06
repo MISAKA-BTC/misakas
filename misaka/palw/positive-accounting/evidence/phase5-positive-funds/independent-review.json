@@ -1,0 +1,176 @@
+{
+  "reviewed_base_commit": "c0d21e2f10061dea5261ee56b1e654354950d874",
+  "scope": "Independent source review of node-local Positive lock classification, source due and three-leg spend DATA proposals; not native acceptance or spending authority.",
+  "actions": {
+    "read_only_source_review": true,
+    "builds_run": false,
+    "tests_run": false,
+    "source_code_edited": false,
+    "evidence_json_written": true,
+    "git_commits_created": false
+  },
+  "source_sha256": {
+    "misaka/palw/positive-accounting-node/src/dues.rs": "c3db139200395acff2aac6c307e61b7aade16b870502b426e1ea23916c2e7f91",
+    "misaka/palw/positive-accounting-node/src/dues/tests.rs": "8d2c5d8c25fac2f1b6c667cc5c173701d85250c90f1e896e9a06b82f62877b7f",
+    "misaka/palw/positive-accounting-node/src/lib.rs": "62657713cd3311968ca27ffc5bbefdd768593e5fb387451478f3005ee5d47c49",
+    "misaka/palw/positive-accounting-node/src/native.rs": "27011bd251f0496a26d4279e56682dbdc5f03b82697034e402aec3d11b41277c",
+    "misaka/palw/positive-accounting-node/src/native/tests.rs": "f96ea0bec32adfbed4d9d8c1ae6ef7fb11866277829bd5df192ae3e3db1ffcc6",
+    "misaka/palw/positive-accounting-node/src/native_funds.rs": "53800ab7889605d141407e588e9d51d384f023ca483c1c4506ef54fe2e1fdb0a",
+    "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": "ce6f998ee72d35c7737b207e0a0818db6cccf4ec7eeb182bf998bdd8ce31b99c",
+    "misaka/palw/positive-accounting-node/src/rows.rs": "a78a2a6aa0148874ee0f6a354b1c24b8f11a7d1cb1ce855a41dc6e1b3b035807",
+    "misaka/palw/positive-accounting-node/src/rows/tests.rs": "3cce030a5737981560043a8ace736fdc15b6fa295b4bb37c3a5fcac5f60fa2db",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "c09507b31356a1c3384d3fce6a28a22abdc31b972d11be872e0803117ae210a3",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "14b8840d1db8f3d04180eb993236a878ed1d05298806cf10ec8e88b7e1d0ed29",
+    "misaka/palw/positive-accounting-node/Cargo.toml": "15e519598233cc4b10d90371f28c824def40726a6c4149d34b2f1aeebccf1515",
+    "misaka/palw/positive-contract/src/rows.rs": "917cf67e5ef6f0e75ac36c1d1e9cebbbe81e3bf67722b57f6236467bd2dfef89",
+    "misaka/palw/positive-contract/src/funding.rs": "dc546c3c871db0c7706c7a9d0b4078c424a6ba75eb9472d4f08c382996f210fd",
+    "misaka/palw/positive-accounting/src/fees.rs": "e7b47b3fb6fc6c2584eed4ca9f2f8cd37f8614d6f0c7bdab6ec5049427179658"
+  },
+  "findings": [],
+  "resolved_review_findings": [
+    {
+      "issue": "A prepared completion/source proposal could pass funding-only CAS after Case status or other guard changes.",
+      "resolution": "The proposal retains and compares the full ResultRow, CaseRow and FundingRow; a separate receipt snapshot comparison checks exact unique before receipts.",
+      "regression_test": "native_funds::tests::snapshot_guards_detect_changed_case_result_funding_and_receipts"
+    },
+    {
+      "issue": "A later spend could rewind the recorded settlement clock.",
+      "resolution": "Funding/case/last-settlement/duty/response/service origins must not be after the new settlement; identical last settlement event positions are refused.",
+      "regression_test": "native_funds::tests::clocks_cannot_rewind_after_a_previous_settlement_or_before_a_response"
+    },
+    {
+      "issue": "Different accepted material or attempts could duplicate the same completion/carrier in one proposal.",
+      "resolution": "Completion is once per case/plan and carrier is once per physical transaction within a proposal; global prior-paid markers remain a native owner obligation.",
+      "regression_test": "native_funds::tests::panel_attempt_and_accepting_origin_changes_cannot_purchase_another_completion_or_carrier_fee"
+    },
+    {
+      "issue": "Distinct current outpoints could represent the same case or original funding output.",
+      "resolution": "The view rejects duplicate case/original/current outpoints and overlap with legacy or provisional lock sets.",
+      "regression_test": "native_funds::tests::duplicate_cases_original_points_and_cross_namespace_locks_are_rejected"
+    }
+  ],
+  "reviewed_invariants": [
+    "Receipt identity is the existing case/kind/source/unit key; provider, Panel, attempt and transport do not create a new source due.",
+    "Source due is accounted on the first receipt; settlement None is not delivery or absence of a due. Zero-fee receipts still retain identity.",
+    "Case usage fee is source-only; control, carrier, completion and burn remain separate Court whole fees.",
+    "One classifier rejects duplicate inputs, provisional spends and multiple locked inputs across old and new namespaces; a Positive escrow must be input zero.",
+    "Actual supplied populated entry amount/refund script, current transaction ID, recipient output amount/script and exact continuation are checked; unsupported nonempty payloads are refused.",
+    "Only fee remaining funds fees/burn; capital and surplus remain separate. Foreign outputs cannot consume the protected escrow and all burn categories share one checked actual fee budget.",
+    "Refunds retain three-leg accounting and a resolution reference check; reference equality is explicitly not liability discharge authority.",
+    "Old FundingTerms identifiers/rows/relay payloads are not reinterpreted, and no new global key, wire tag or hash/signature domain is introduced.",
+    "The proposal has private construction but remains DATA. require_native_commit always returns ActualAcceptedMoneyContext missing and cannot authorize spending."
+  ],
+  "existing_execution_evidence": {
+    "source-dues": {
+      "metadata": "source-dues-result.json",
+      "metadata_sha256": "3e7bbe2cba2cc117f2866d0056a530ac87860d3a59b5fef61e4a04fef3173b42",
+      "raw_log": "source-dues.log",
+      "raw_log_sha256": "9dfd068cb9f9e819c387732e36196737b7f1edc3fcfbc32c342890ac8e05be9e",
+      "recorded_exit_code": 0,
+      "recorded_base_commit": "cb353f7baa85b41251c3e2e48d4691271066a55f",
+      "source_sha256_matches_current": {
+        "misaka/palw/positive-accounting-node/src/lib.rs": false,
+        "misaka/palw/positive-accounting-node/src/dues.rs": true,
+        "misaka/palw/positive-accounting-node/src/dues/tests.rs": true,
+        "misaka/palw/positive-contract/src/rows.rs": true
+      },
+      "raw_pass_counts_by_module": {
+        "dues": 7,
+        "native_funds": 0,
+        "native": 0,
+        "rows": 0
+      }
+    },
+    "native-funds-clippy-lib": {
+      "metadata": "native-funds-clippy-lib-result.json",
+      "metadata_sha256": "2e09c86b6d733c33b544d0707a594b804c68a360ff57b4736f8542a146e81ae7",
+      "raw_log": "native-funds-clippy-lib.log",
+      "raw_log_sha256": "8fad4455712c78334047b1e98e9a1ce304ae109c042c16d50f483fe58876abe6",
+      "recorded_exit_code": 0,
+      "recorded_base_commit": "c0d21e2f10061dea5261ee56b1e654354950d874",
+      "source_sha256_matches_current": {
+        "misaka/palw/positive-accounting-node/src/lib.rs": true,
+        "misaka/palw/positive-accounting-node/src/dues.rs": true,
+        "misaka/palw/positive-accounting-node/src/native_funds.rs": true,
+        "misaka/palw/positive-contract/src/rows.rs": true
+      },
+      "raw_pass_counts_by_module": {
+        "dues": 0,
+        "native_funds": 0,
+        "native": 0,
+        "rows": 0
+      }
+    },
+    "node-data-proposals-initial": {
+      "metadata": "node-data-proposals-initial-result.json",
+      "metadata_sha256": "926acfeb486a5ae505dd36df1e7a502e45646c614d899b6ee7eff456232cda84",
+      "raw_log": "node-data-proposals-initial.log",
+      "raw_log_sha256": "b65cf7d6ea062c5a05bbedb0cac39d02fa460d2426f95a39b07f42d1005cc2ce",
+      "recorded_exit_code": 0,
+      "recorded_base_commit": "c0d21e2f10061dea5261ee56b1e654354950d874",
+      "source_sha256_matches_current": {
+        "misaka/palw/positive-accounting-node/src/dues.rs": true,
+        "misaka/palw/positive-accounting-node/src/dues/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/lib.rs": true,
+        "misaka/palw/positive-accounting-node/src/native.rs": true,
+        "misaka/palw/positive-accounting-node/src/native/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/native_funds.rs": true,
+        "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/rows.rs": true,
+        "misaka/palw/positive-accounting-node/src/rows/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/tir.rs": true,
+        "misaka/palw/positive-accounting-node/src/tir_tests.rs": true,
+        "misaka/palw/positive-accounting-node/Cargo.toml": true,
+        "misaka/palw/positive-contract/src/rows.rs": true,
+        "misaka/palw/positive-contract/src/funding.rs": true,
+        "misaka/palw/positive-accounting/src/fees.rs": true
+      },
+      "raw_pass_counts_by_module": {
+        "dues": 7,
+        "native_funds": 15,
+        "native": 15,
+        "rows": 7
+      },
+      "raw_result_summary_matches_44_passes": true
+    },
+    "node-all-targets-clippy-initial": {
+      "metadata": "node-all-targets-clippy-initial-result.json",
+      "metadata_sha256": "204b04c2312b1cc072dff99ca892afa90bf08942cbd94e7593e70cfba9243c0b",
+      "raw_log": "node-all-targets-clippy-initial.log",
+      "raw_log_sha256": "47e72c64f5517ef6a4617fad298608c279391a1261adc9e7da6c388942980934",
+      "recorded_exit_code": 0,
+      "recorded_base_commit": "c0d21e2f10061dea5261ee56b1e654354950d874",
+      "source_sha256_matches_current": {
+        "misaka/palw/positive-accounting-node/src/dues.rs": true,
+        "misaka/palw/positive-accounting-node/src/dues/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/lib.rs": true,
+        "misaka/palw/positive-accounting-node/src/native.rs": true,
+        "misaka/palw/positive-accounting-node/src/native/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/native_funds.rs": true,
+        "misaka/palw/positive-accounting-node/src/native_funds/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/rows.rs": true,
+        "misaka/palw/positive-accounting-node/src/rows/tests.rs": true,
+        "misaka/palw/positive-accounting-node/src/tir.rs": true,
+        "misaka/palw/positive-accounting-node/src/tir_tests.rs": true
+      },
+      "raw_warnings_found": false,
+      "raw_completion_matches_recorded_success": true,
+      "scope": "No-default all-targets node crate Clippy with --no-deps -- -D warnings; root execution inspected, not rerun by reviewer."
+    }
+  },
+  "evidence_notes": [
+    "All final combined-run recorded source hashes match the bytes reviewed here. The raw log contains 44 successes: dues 7, native_funds 15, native 15 and rows 7.",
+    "The earlier source-dues lib.rs hash differs because native_funds module registration followed that run. Both dues source/test hashes and common rows match; the original record is preserved.",
+    "Production-lib and subsequent all-targets Clippy records both have exit zero and matching source hashes. The latter includes no-default test targets with --no-deps -- -D warnings, but does not claim default-feature TIR targets.",
+    "These executions were performed by the root agent. This independent review only inspected their raw output and metadata and did not rerun them."
+  ],
+  "limits": [
+    "Lock-set completeness, actual accepted lineage/prefix/import generation and irreversible context must be derived and rechecked by native owners. Equal DTOs cannot detect rollback ABA.",
+    "The supplied populated UTXO entries and zero-signature DATA fixtures do not establish actual UTXO existence, ordinary script validation, funding admission or coin locks.",
+    "A4 must resolve first eligible accepted duty/response, canonical unit bounds, provider/rate and the whole source quote before atomically applying due and money proposals.",
+    "Court whole fees are deduplicated only inside the proposal. Cross-settlement once-only markers must be checked and written by the native owner.",
+    "Unpaid earned dues, reserved future fees, capital liability and surplus return conditions must be derived from current canonical preimages; a liability reference or admission expiry cannot authorize refund.",
+    "Actual block/mempool/template connection, same-mergeset lock installation, one-writer PALW/UTXO batch, failure atomicity, reorg/undo and IBD remain external integration requirements.",
+    "The 44-test run used no default features, so it does not re-execute the TIR adapter tests or demonstrate a multi-node native end-to-end lifecycle."
+  ]
+}

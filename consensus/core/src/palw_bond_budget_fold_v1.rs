@@ -52,6 +52,9 @@ pub(super) const PALW_BUDGET_WRITES_PER_ROW_V1: u64 = 16;
 /// count, and the material root/source/due indexes touched by one income row (at most four of them for one write).
 pub(super) const PALW_BUDGET_INDEX_NODES_PER_WRITE_V1: u64 = 4;
 
+/// Borsh's initial buffer covers every fixed-size budget key and row.
+const PALW_BUDGET_FIXED_ENCODING_BYTES_V1: u64 = 1024;
+
 /// RFC-0006 (RFC06-1): the rows a material sweep may touch — every material income row of the engine.
 fn material_rows_v1(builder: &TransitionBuilder<'_>) -> usize {
     builder.state.bond_budget.as_ref().map_or(0, |b| b.material_income.len())
@@ -92,23 +95,26 @@ impl PalwBudgetGrowthV1 {
 impl PalwChainStateV2 {
     /// UTXO validation and producer preflight use the same first-fence legacy
     /// seeds and clock release as the native fold, before any fee is collected.
+    /// Only a dormant budget returns `Ok(None)`.
     pub fn round_fee_admission_v1(
         &self,
         params: &PalwStateParamsV2,
         ctx: &PalwBlockContextV2,
         escrow_carve: Option<crate::palw_reward_v2::PalwRewardParamsV2>,
-    ) -> Option<PalwRoundFeeAdmissionV1> {
-        let mirror = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score))?;
+    ) -> Result<Option<PalwRoundFeeAdmissionV1>, PalwStateV2Error> {
+        let Some(mirror) = params.bond_budget.as_ref().filter(|mirror| mirror.active_at(ctx.daa_score)) else {
+            return Ok(None);
+        };
         let extras = PalwTransitionExtrasV1 { escrow_carve, ..PalwTransitionExtrasV1::default() };
-        // `new` is the tests' panicking constructor; a native-resource refusal here is simply no admission view.
-        let mut builder = TransitionBuilder::try_new(self, params, false, false, false, false, &extras).ok()?;
-        tick_bond_budget_v1(&mut builder, ctx).ok()?;
-        Some(PalwRoundFeeAdmissionV1 {
+        let mut builder = TransitionBuilder::try_new(self, params, false, false, false, false, &extras)?;
+        tick_bond_budget_v1(&mut builder, ctx)?;
+        let book = builder.state.bond_budget.take().ok_or(PalwStateV2Error::DeltaMismatch("active Round fee budget is missing"))?;
+        Ok(Some(PalwRoundFeeAdmissionV1 {
             policy: mirror.policy.clone(),
-            book: builder.state.bond_budget.take().expect("active tick creates the budget"),
+            book,
             capital: self.bonds.iter().map(|(bond, row)| (*bond, row.collateral)).collect(),
             daa_score: ctx.daa_score,
-        })
+        }))
     }
 
     /// **Lane BUDGET: the bond budget's engine**, once the fence's first block has folded.
@@ -342,6 +348,9 @@ pub(super) struct PalwBudgetPlanV1 {
     consume_blocks_now: u64,
     /// ユーザー方針 2026-10-15: the claim's verification mode (Panel=1 day view / Panel=0), fixed at acceptance.
     mode: PalwHoldModeV1,
+    /// Local planning choice only, not a row/wire change. Native fixed block
+    /// rewards have reduction_allowed=false under the adopted formula.
+    native_unreduced_reward: bool,
 }
 
 impl PalwBudgetPlanV1 {
@@ -841,24 +850,28 @@ impl TransitionBuilder<'_> {
 
     /// **RFC-0006 (RFC06-1): admit an engine op's growth before it runs** — `growth.writes` journal entries, each at most one new
     /// membership of the widest engine table, [`PALW_BUDGET_INDEX_NODES_PER_WRITE_V1`] derived-index nodes and three canonical
-    /// encodings (pinned Borsh: at least 1,024 bytes each, at most twice the widest row — an assignment row of
-    /// `max_models_per_bond` entries), its delta slot and the op's own journal Vec; plus `growth.rows` rows of op scratch (the
-    /// collected due/credit lists) and the assignment heap the op names. A no-op with tracking off (every preset).
+    /// encodings, its delta slot and the op's own journal Vec. Only allocation operations that can write a capital
+    /// assignment quote the variable-length row encoding. Also covers `growth.rows` rows of scratch and the assignment
+    /// heap the op names. A no-op with tracking off (every preset).
     fn admit_bond_budget_growth_v1(&mut self, growth: PalwBudgetGrowthV1) -> Result<(), PalwStateV2Error> {
         use crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1 as Node;
         use std::mem::size_of;
         if !self.native_writers_tracking_v1() {
             return Ok(());
         }
-        // An assignment row's width is the ALLOCATION policy's (ADR-0177); without that fence the widest a u16 count admits.
-        let max_models = self
-            .params
-            .bond_budget()
-            .and_then(|mirror| mirror.allocation.as_ref())
-            .map_or(u64::from(u16::MAX), |(_, policy)| u64::from(policy.max_models_per_bond));
-        let entry = size_of::<(Hash64, u64)>() as u64;
-        let assignment_row = max_models.saturating_mul(2).saturating_mul(entry).saturating_add(64);
-        let encoding = assignment_row.saturating_mul(2).max(1024);
+        let assignment_row = if growth.assignment_rows == 0 {
+            0
+        } else {
+            // Allocation operations retain the bound for both effective and pending assignments.
+            let max_models = self
+                .params
+                .bond_budget()
+                .and_then(|mirror| mirror.allocation.as_ref())
+                .map_or(u64::from(u16::MAX), |(_, policy)| u64::from(policy.max_models_per_bond));
+            let entry = size_of::<(Hash64, u64)>() as u64;
+            max_models.saturating_mul(2).saturating_mul(entry).saturating_add(64)
+        };
+        let encoding = assignment_row.saturating_mul(2).max(PALW_BUDGET_FIXED_ENCODING_BYTES_V1);
         let widest_row = [
             size_of::<Node<Hash64, PalwBudgetClaimRowV1>>(),
             size_of::<Node<PalwBondKeyV2, PalwBudgetBondRowV1>>(),
@@ -911,17 +924,57 @@ impl TransitionBuilder<'_> {
             return Ok(None);
         }
         self.admit_bond_budget_growth_v1(growth)?;
+        if let Some(point) = self.claim_local_lock_point_v6
+            && self.params.claim_local_settlement_active_at(point.daa_score)
+        {
+            // Inverse apply_row decodes/reindexes at most these SAME actual
+            // typed row/write bounds. Own a second simultaneous reservation
+            // BEFORE f; no fee, consensus limit or native journal changes.
+            self.admit_bond_budget_growth_v1(PalwBudgetGrowthV1 {
+                writes: growth.writes,
+                rows: 0,
+                assignment_rows: growth.assignment_rows,
+            })?;
+        }
         let mut budget = self.state.bond_budget.take().expect("checked above");
         let mut journal = Vec::new();
         let out = f(&mut budget, &self.state, &mut journal);
         self.state.bond_budget = Some(budget);
-        if self.native_writers_tracking_v1() && journal.len() as u64 > growth.writes {
-            return Err(super::native_writers::native_err_v1(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
-                PalwBudgetWriteV1,
-            >(
-                "bond budget engine op",
-                "the op journaled more writes than its admitted bound",
-            )));
+        if self.native_writers_tracking_v1() {
+            let fault =
+                |reason| {
+                    super::native_writers::native_err_v1(crate::palw_native_resource_v1::NativeCoverageV1::unsupported::<
+                        PalwBudgetWriteV1,
+                    >("bond budget engine op", reason))
+                };
+            if journal.len() as u64 > growth.writes {
+                return Err(fault("the op journaled more writes than its admitted bound"));
+            }
+            if growth.assignment_rows == 0
+                && journal.iter().any(|write| match write {
+                    PalwBudgetWriteV1::Header { .. } => false,
+                    PalwBudgetWriteV1::Row { table, key, old, new } => {
+                        *table == PALW_BUDGET_TABLE_ASSIGNMENTS_V1
+                            || std::iter::once(key)
+                                .chain(old)
+                                .chain(new)
+                                .any(|buf| buf.capacity() as u64 > PALW_BUDGET_FIXED_ENCODING_BYTES_V1)
+                    }
+                })
+            {
+                return Err(fault("the op journaled an encoding outside its fixed-size bound"));
+            }
+        }
+        // Native engine writes and admitted bound have succeeded. Observe
+        // the exact borrowed operation journal before publishing its delta.
+        if let Some(point) = self.claim_local_lock_point_v6
+            && let Err(error) = super::palw_claim_local_material_income_lineage_v7::observe_operation_v7(self, point, &journal)
+        {
+            let mut book = self.state.bond_budget.take().expect("existing native engine");
+            let restored = super::palw_claim_local_material_income_lineage_v7::restore_engine_v7(&mut book, &journal);
+            self.state.bond_budget = Some(book);
+            restored?;
+            return Err(error);
         }
         self.journal_bond_budget(journal);
         Ok(Some(out))
@@ -966,6 +1019,20 @@ impl TransitionBuilder<'_> {
         consume_blocks_now: u64,
         mode: PalwHoldModeV1,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
+        self.plan_bond_budget_moded_native_v39(ctx, bond, model, ask, origin, consume_blocks_now, mode, false)
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn plan_bond_budget_moded_native_v39(
+        &self,
+        ctx: &PalwBlockContextV2,
+        bond: PalwBondKeyV2,
+        model: Option<Hash64>,
+        ask: PalwBudgetAskV1,
+        origin: PalwBudgetOriginV1,
+        consume_blocks_now: u64,
+        mode: PalwHoldModeV1,
+        native_unreduced_reward: bool,
+    ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return Ok(None) };
         let capital = self.state.bonds.get(&bond).map(|r| r.collateral).unwrap_or(0);
         // RFC-0016 P4 (user decision 2026-10-15): a user-paid escrow claim (the kernel route) is never clipped by, and never
@@ -984,9 +1051,12 @@ impl TransitionBuilder<'_> {
                 &empty
             }
         };
-        let reservation = budget
-            .preview_claim_for_origin_moded_v1(&mirror.policy, capital, bond, model, ask, origin, mode)
-            .map_err(|why| budget_refused(bond, why))?;
+        let reservation = if native_unreduced_reward {
+            budget.preview_native_mining_unreduced_v39(&mirror.policy, capital, bond, model, ask, mode)
+        } else {
+            budget.preview_claim_for_origin_moded_v1(&mirror.policy, capital, bond, model, ask, origin, mode)
+        }
+        .map_err(|why| budget_refused(bond, why))?;
         if consume_blocks_now > reservation.block_units {
             return Err(budget_refused(bond, PalwBudgetRefusalV1::Short { dim: PalwBudgetDimV1::BlockUnits }));
         }
@@ -1012,6 +1082,7 @@ impl TransitionBuilder<'_> {
             reservation,
             consume_blocks_now,
             mode,
+            native_unreduced_reward,
         }))
     }
 
@@ -1044,18 +1115,32 @@ impl TransitionBuilder<'_> {
             .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| {
                 // Allocation bootstrap (option (b)): an empty allocation reserves no block opportunity either.
                 let bootstrapping = budget.allocation_bootstrapping_v1();
-                let reserved = budget.reserve_claim_moded_v1(
-                    &plan.policy,
-                    plan.capital,
-                    claim_id,
-                    plan.bond,
-                    plan.model,
-                    plan.accepted_daa,
-                    plan.ask,
-                    plan.origin,
-                    plan.mode,
-                    j,
-                )?;
+                let reserved = if plan.native_unreduced_reward {
+                    budget.reserve_native_mining_unreduced_v39(
+                        &plan.policy,
+                        plan.capital,
+                        claim_id,
+                        plan.bond,
+                        plan.model,
+                        plan.accepted_daa,
+                        plan.ask,
+                        plan.mode,
+                        j,
+                    )?
+                } else {
+                    budget.reserve_claim_moded_v1(
+                        &plan.policy,
+                        plan.capital,
+                        claim_id,
+                        plan.bond,
+                        plan.model,
+                        plan.accepted_daa,
+                        plan.ask,
+                        plan.origin,
+                        plan.mode,
+                        j,
+                    )?
+                };
                 debug_assert_eq!(reserved, plan.reservation, "the plan and the commit read one engine state");
                 // ADR-0177 (2026-10-14): the model's block opportunity is taken at acceptance (never returned early).
                 if let Some(m) = plan.model
@@ -1890,10 +1975,12 @@ impl TransitionBuilder<'_> {
     pub(super) fn plan_attempt_budget_v1(
         &self,
         ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
         claim: &PalwClaimStateV2,
         artifact_root: &Hash64,
         rider: bool,
         budget_block_units: u64,
+        retirement: &super::palw_staged_court_fold_v1::PalwProspectiveRetirementV1,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
             return Ok(None);
@@ -1914,7 +2001,13 @@ impl TransitionBuilder<'_> {
             self.admit_claim_liability_v1(
                 ctx.daa_score,
                 plan,
-                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim,
+                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim {
+                    retire_not_before: if self.params.settlement_once_active_at(ctx.daa_score) {
+                        retirement.floor_v1(self.params, claim_id, claim)?
+                    } else {
+                        0 // Ignored by dormant admission; do not evaluate a new horizon.
+                    },
+                },
             )?;
         }
         Ok(plan)
@@ -1924,8 +2017,10 @@ impl TransitionBuilder<'_> {
     pub(super) fn plan_free_prompt_budget_v1(
         &self,
         ctx: &PalwBlockContextV2,
+        claim_id: Hash64,
         claim: &PalwClaimStateV2,
         quanta: u32,
+        retirement: &super::palw_staged_court_fold_v1::PalwProspectiveRetirementV1,
     ) -> Result<Option<PalwBudgetPlanV1>, PalwStateV2Error> {
         if self.bond_budget_mirror_at(ctx.daa_score).is_none() {
             return Ok(None);
@@ -1945,7 +2040,13 @@ impl TransitionBuilder<'_> {
             self.admit_claim_liability_v1(
                 ctx.daa_score,
                 plan,
-                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim,
+                super::palw_settlement_liability_fold_v1::PalwAdmissionLiabilityV1::V2Claim {
+                    retire_not_before: if self.params.settlement_once_active_at(ctx.daa_score) {
+                        retirement.floor_v1(self.params, claim_id, claim)?
+                    } else {
+                        0 // Ignored by dormant admission; do not evaluate a new horizon.
+                    },
+                },
             )?;
         }
         Ok(plan)
@@ -2133,9 +2234,11 @@ impl TransitionBuilder<'_> {
                 .unwrap_or(0);
             let until = hold_until.max(accepted.saturating_add(retention));
             self.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| budget.close_keeping_liability_v1(claim_id, until, j))?;
+            super::palw_native_budget_binding_fold_v1::sync_native_budget_binding_v1(self, *claim_id)?;
             return Ok(());
         }
         self.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| budget.close_at(claim_id, Some(hold_until), j))?;
+        super::palw_native_budget_binding_fold_v1::sync_native_budget_binding_v1(self, *claim_id)?;
         Ok(())
     }
 
@@ -2158,6 +2261,7 @@ impl TransitionBuilder<'_> {
     /// **A claim left the state** (retirement): its row leaves once it is out of the window too.
     pub(super) fn bond_budget_forget_v1(&mut self, claim_id: &Hash64) -> Result<(), PalwStateV2Error> {
         self.bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| budget.forget(claim_id, j))?;
+        super::palw_native_budget_binding_fold_v1::sync_native_budget_binding_v1(self, *claim_id)?;
         Ok(())
     }
 }
@@ -2170,6 +2274,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
     if builder.state.bond_budget.is_none() {
         builder.create_bond_budget_v1(ctx, &mirror)?;
     }
+    super::palw_verifier_watch_draw_v1::freeze_epoch(builder, ctx)?;
     let now = ctx.daa_score;
     if builder.params.reporter_income_active_at(now)
         && builder.state.bond_budget.as_ref().expect("created").header.version == PALW_BOND_BUDGET_STATE_VERSION_V1
@@ -2241,6 +2346,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             .map_err(|why| PalwStateV2Error::BondBudgetRefused(why.to_string()))?;
     }
     for queue in &drained {
+        super::palw_monetary_material_fold_v1::observe_payment(builder, ctx, Hash64::default(), *queue)?;
         builder
             .bond_budget_op(PalwBudgetGrowthV1::rows(material_rows_v1(builder)), |budget, _, j| {
                 budget.confirm_legacy_material_queue_v1(*queue, now, mirror.policy.window_daa, j)
@@ -2264,6 +2370,7 @@ pub(super) fn tick_bond_budget_v1(builder: &mut TransitionBuilder<'_>, ctx: &Pal
             .saturating_add(b.liability_releases.iter().take_while(|(at, _)| *at <= now).count())
     });
     builder.bond_budget_op(PalwBudgetGrowthV1::rows(due_rows), |budget, _, j| budget.release_due(now, j))?;
+    super::palw_native_budget_binding_fold_v1::sweep_native_budget_bindings_v1(builder, now)?;
     // Funded court debt is redeemed only after the real queue drain and its
     // W release. Full R or a full native queue defers cash, never conviction.
     // Each award/progress pair creates a separate exact physical payout row.
@@ -2726,6 +2833,10 @@ impl TransitionBuilder<'_> {
         {
             return Err(bad("native39 original producer/current admission/shared terms/Final/physical policy differs"));
         }
+        let committed = self.committed_at(&producer, ctx.daa_score)?;
+        if committed.checked_add(u128::from(original.reserve)).is_none_or(|total| total > u128::from(bond.collateral)) {
+            return Err(bad("native39 original reserve exceeds principal free of all existing obligations"));
+        }
         let Some(mirror) = self.bond_budget_mirror_at(ctx.daa_score) else { return self.unbudgeted_panel_free_v1() };
         if mirror.allocation_at(ctx.daa_score).is_some() {
             return Err(bad("native39 funded work has no authenticated native model-line allocation"));
@@ -2751,6 +2862,10 @@ impl TransitionBuilder<'_> {
             0,
         )?;
         // RFC-0008 / ADR-0184 §1: the signed original deadline bounds `final_after` (the claim's Final floor).
+        let liability = plan.as_ref().map_or(0, |p| p.ask.liability_sompi).max(u128::from(original.reserve));
+        if committed.checked_add(liability).is_none_or(|total| total > u128::from(bond.collateral)) {
+            return Err(bad("native39 original/formula liability exceeds principal free of all existing obligations"));
+        }
         self.admit_native_claim_liability_v1(ctx.daa_score, plan.as_ref(), original.deadline)?;
         Ok(plan)
     }
@@ -2811,18 +2926,40 @@ impl TransitionBuilder<'_> {
         let block_units = PALW_BUDGET_BLOCK_UNIT_V1.checked_mul(quanta).ok_or_else(|| bad("native39 block units overflow"))?;
         let reward_sompi = carve.checked_mul(quanta).ok_or_else(|| bad("native39 reward ask overflow"))?;
         let final_weight = weight_per_quantum.checked_mul(quanta as u128).ok_or_else(|| bad("native39 weight ask overflow"))?;
-        let liability_sompi =
+        let formula_liability =
             self.bond_formula_native_mining_liability_v39(ctx, reward_sompi, final_weight, block_units, exposure_sompi);
+        let mirror = self.bond_budget_mirror_at(ctx.daa_score).ok_or_else(|| bad("native39 budget policy missing"))?;
+        let export_permille = u128::from(mirror.policy.export_cap_permille);
+        if export_permille == 0 && reward_sompi > 0 {
+            return Err(bad("native39 full reward cannot leave a zero export cap"));
+        }
+        // Reserve enough actual liability for every indivisible promised block.
+        // This is the inverse of the unchanged export predicate, not a new rate.
+        let export_liability = if reward_sompi == 0 { 0 } else { (u128::from(reward_sompi) * 1000).div_ceil(export_permille) };
+        let liability_sompi = formula_liability.max(export_liability);
+        let committed = self.committed_at(&producer, ctx.daa_score)?;
+        let collateral = self.state.bonds.get(&producer).ok_or_else(|| bad("native39 producer collateral absent"))?.collateral;
+        if committed.checked_add(liability_sompi).is_none_or(|total| total > u128::from(collateral)) {
+            return Err(bad("native39 full liability exceeds principal free of all existing obligations"));
+        }
         let plan = self
-            .plan_bond_budget_v1(
+            .plan_bond_budget_moded_native_v39(
                 ctx,
                 producer,
                 Some(model),
                 PalwBudgetAskV1 { block_units, reward_sompi, final_weight, liability_sompi },
                 PalwBudgetOriginV1::FreePrompt,
                 0,
+                crate::palw_bond_formula_v2::PalwClaimTypeV2::NativeFunded.mode(),
+                true,
             )?
             .ok_or_else(|| bad("native39 mining reservation could not be planned"))?;
+        if plan.reservation.block_units < block_units
+            || plan.reservation.reward_sompi < reward_sompi
+            || palw_bond_budget_export_cap_v1(&plan.policy, plan.ask.liability_sompi) < reward_sompi
+        {
+            return Err(bad("native39 whole quantum reservation cannot cover promised block/reward/export before acceptance"));
+        }
         // RFC-0008 / ADR-0184 §1: a mining claim is accepted only over Final components (its Master's Final is at or before this
         // block), so its Final floor is this block's DAA at the latest.
         self.admit_native_claim_liability_v1(ctx.daa_score, Some(&plan), ctx.daa_score)?;
@@ -2862,7 +2999,7 @@ impl TransitionBuilder<'_> {
         budget_id: &Hash64,
         bond: PalwBondKeyV2,
         per_quantum: u128,
-        last_quantum: bool,
+        _last_quantum: bool,
     ) -> Result<u128, PalwStateV2Error> {
         let carve = self.params.worker_carve_at(ctx.subsidy, self.extras.escrow_carve);
         if !self.state.bond_budget_native_receipt_fits_v39(self.params, budget_id, ctx.daa_score, carve) {
@@ -2871,18 +3008,16 @@ impl TransitionBuilder<'_> {
                 why: "a native receipt block exceeds its reservation or the 0.51 export of its liability (PESG §6)".to_string(),
             });
         }
-        let hold_until = self.bond_budget_liability_hold_until_v1(ctx.daa_score);
         let granted = self
             .bond_budget_op(PalwBudgetGrowthV1::point(), |budget, _, j| {
                 let blocks = budget.consume(budget_id, PalwBudgetDimV1::BlockUnits, PALW_BUDGET_BLOCK_UNIT_V1 as u128, true, j);
                 let reward = budget.consume(budget_id, PalwBudgetDimV1::Reward, carve as u128, true, j);
                 debug_assert!(matches!((blocks, reward), (Some(Ok(_)), Some(Ok(_)))), "checked whole above");
-                let weight =
-                    budget.consume(budget_id, PalwBudgetDimV1::FinalWeight, per_quantum, false, j).and_then(Result::ok).unwrap_or(0);
-                if last_quantum {
-                    budget.close_at(budget_id, Some(hold_until), j);
-                }
-                weight
+
+                // Exhausting issuance is not the end of the native claim's
+                // accusation/material liability. Keep the exact row and L open
+                // until its actual collection or conviction closes that claim.
+                budget.consume(budget_id, PalwBudgetDimV1::FinalWeight, per_quantum, false, j).and_then(Result::ok).unwrap_or(0)
             })?
             .ok_or(PalwStateV2Error::BondBudgetRefused("native39 receipt budget engine absent".into()))?;
         Ok(granted)

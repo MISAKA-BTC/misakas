@@ -130,8 +130,10 @@ impl VirtualStateProcessor {
                             None => return Err(format!("court {session_id} completes with chunk {i} missing")),
                         }
                     }
-                    let assembles =
-                        kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled) == group.close_digest;
+                    // Tag176 cannot be an old CourtClosed; never decode its
+                    // peer-sized body through this unrelated chunk reader.
+                    let assembles = !kaspa_consensus_core::palw_lifecycle_objects_v2::palw_positive_object_bytes_v2(&assembled)
+                        && kaspa_consensus_core::palw_state_v2::palw_court_close_chunk_digest_v1(&assembled) == group.close_digest;
                     let decoded = assembles
                             .then(|| borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&assembled).ok())
                             .flatten()
@@ -846,6 +848,16 @@ impl VirtualStateProcessor {
                 let row = state.panel_da_disclosure_v1(claim).ok_or_else(|| format!("claim {claim}: no PanelDa disclosure row"))?;
                 row.admit_v1(prompt_token_ids, point.daa_score)
                     .map_err(|why| format!("claim {claim}: disclosure refused: {why:?}"))?;
+            }
+            Obj::CourtFamilyMaterialV1 { control } => {
+                if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {
+                    return Ok(());
+                }
+                let record = state.bond(&control.submitter).ok_or("family material submitter bond absent")?;
+                if !matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Active) {
+                    return Err("family material submitter inactive".into());
+                }
+                control.verify_v1(self.palw_network_domain_v2(), &record.pubkey)?;
             }
             Obj::MaterialIntakeV1 { intake } => {
                 if !self.palw_lifecycle_kind_fences.kind_in_force_at(object, point.daa_score) {

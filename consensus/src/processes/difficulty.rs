@@ -538,6 +538,23 @@ impl<T: HeaderStoreReader, U: GhostdagStoreReader> SampledDifficultyManager<T, U
         // this block's own window — and whether it granted. That is not a carried value: it is
         // recomputed with the score on every call, and it has readers (the heartbeat adapter and
         // the miner's hint read it for the virtual; `DaaWindow::clock` is where they find it).
+        // Operational trace of the exact clock input and verdict. The timestamp
+        // can be shared by both lanes, so the counts are kept alongside it.
+        kaspa_core::trace!(
+            target: "palw_clock",
+            "clock step parent={} parent_daa={} next_slot_ms={:?} granted={} attempt_ticks={} priced={} attempts={}              heartbeats={} newest_attempt_ms={:?} newest_heartbeat_ms={:?} tick_source_ms={:?}",
+            ghostdag_data.selected_parent,
+            parent_daa,
+            parent_cursor.map(|cursor| cursor.next_slot_ms),
+            granted,
+            attempt_ticks,
+            priced,
+            attempts,
+            heartbeats,
+            newest_attempt_ms,
+            newest_beat_ms,
+            stand_in.then_some(beat_ms)
+        );
         let clock = PalwClockStepV1 { governs: true, cursor: parent_cursor, granted, floor, attempt_ticks };
         (if granted { exempt.saturating_sub(1) } else { exempt }, clock)
     }

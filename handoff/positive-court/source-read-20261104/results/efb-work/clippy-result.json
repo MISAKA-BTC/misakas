@@ -1,0 +1,13 @@
+{
+  "source_commit": "efb8862fcca43b088279847c4a8ed91714f8d492",
+  "command": "cargo +1.93.0 clippy --offline --locked -p kaspa-consensus-core -p kaspa-consensus --features evm --lib -- -D warnings",
+  "exit_code": 0,
+  "elapsed_seconds": 331,
+  "scope": "Strict Core and Consensus library Clippy only; test-target typechecking and source-work runtime remain pending. Not native Assignment/Case or full goal completion.",
+  "artifacts_sha256": {
+    "misaka-positive-efb8862fc-clippy.exit": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "misaka-positive-efb8862fc-clippy.log": "2caa3421a80edc4cdf4cb292c0b2bc71f84fac508c06c674201ab5339512003e",
+    "misaka-positive-efb8862fc-source.txt": "7e0db07f02d8fcc38ed566cf439a0911ff3320b141c26f55809ec3d457b78dd2",
+    "misaka-positive-efb8862fc-verify.sh": "e2317850f42c7541daaae4d23aa8f3e2bc02c73ddbb7747596b2a52d14e1a268"
+  }
+}

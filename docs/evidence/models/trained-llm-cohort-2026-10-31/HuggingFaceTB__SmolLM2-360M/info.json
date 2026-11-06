@@ -1,0 +1,230 @@
+{
+  "_id": "6722d29f02e2f9ded982cdaf",
+  "id": "HuggingFaceTB/SmolLM2-360M",
+  "private": false,
+  "pipeline_tag": "text-generation",
+  "library_name": "transformers",
+  "tags": [
+    "transformers",
+    "safetensors",
+    "llama",
+    "text-generation",
+    "en",
+    "arxiv:2502.02737",
+    "license:apache-2.0",
+    "eval-results",
+    "text-generation-inference",
+    "endpoints_compatible",
+    "deploy:azure",
+    "region:us"
+  ],
+  "downloads": 118420,
+  "likes": 143,
+  "modelId": "HuggingFaceTB/SmolLM2-360M",
+  "author": "HuggingFaceTB",
+  "sha": "f8027fd0eaeea54caa13c31d31b9fdc459c38b49",
+  "lastModified": "2025-02-06T10:34:16.000Z",
+  "gated": false,
+  "disabled": false,
+  "widgetData": [
+    {
+      "text": "Hi, what can you help me with?"
+    },
+    {
+      "text": "What is 84 * 3 / 2?"
+    },
+    {
+      "text": "Tell me an interesting fact about the universe!"
+    },
+    {
+      "text": "Explain quantum computing in simple terms."
+    }
+  ],
+  "model-index": null,
+  "config": {
+    "architectures": [
+      "LlamaForCausalLM"
+    ],
+    "model_type": "llama",
+    "tokenizer_config": {
+      "bos_token": "<|endoftext|>",
+      "eos_token": "<|endoftext|>",
+      "unk_token": "<|endoftext|>"
+    }
+  },
+  "cardData": {
+    "library_name": "transformers",
+    "license": "apache-2.0",
+    "language": [
+      "en"
+    ]
+  },
+  "transformersInfo": {
+    "auto_model": "AutoModelForCausalLM",
+    "pipeline_tag": "text-generation",
+    "processor": "AutoTokenizer"
+  },
+  "siblings": [
+    {
+      "rfilename": ".gitattributes",
+      "blobId": "a6344aac8c09253b3b630fb776ae94478aa0275b",
+      "size": 1519
+    },
+    {
+      "rfilename": "README.md",
+      "blobId": "75cae4c3d8f5f25a3f22ef6427403db2bb3dc83b",
+      "size": 6623
+    },
+    {
+      "rfilename": "config.json",
+      "blobId": "2c111af0f7d9845b3b9910d3d18f7cdd94bf16c4",
+      "size": 689
+    },
+    {
+      "rfilename": "generation_config.json",
+      "blobId": "0fce861c328ff24830f3037d91ce773254447bf7",
+      "size": 111
+    },
+    {
+      "rfilename": "merges.txt",
+      "blobId": "69503b13f727ba3812b6803e97442a6de05ef5eb",
+      "size": 466391
+    },
+    {
+      "rfilename": "model.safetensors",
+      "blobId": "b048c4168f1e461fc18a4b7307892877f9098d55",
+      "size": 723674912,
+      "lfs": {
+        "sha256": "7aaff6661428bed033abba9522bec81938678642cca3181fe752b6ca9e1e540f",
+        "size": 723674912,
+        "pointerSize": 134
+      }
+    },
+    {
+      "rfilename": "special_tokens_map.json",
+      "blobId": "f6652f246cb895ca1edfb16d10b57917b266e335",
+      "size": 831
+    },
+    {
+      "rfilename": "tokenizer.json",
+      "blobId": "f922b1797f0c88e71addc8393787831f2477a4bd",
+      "size": 2104556
+    },
+    {
+      "rfilename": "tokenizer_config.json",
+      "blobId": "d45192775d58298087a1fedf5967fe5b63b091ab",
+      "size": 3658
+    },
+    {
+      "rfilename": "vocab.json",
+      "blobId": "0ad5ecc2035b7031b88afb544ee95e2d49baa484",
+      "size": 800662
+    }
+  ],
+  "spaces": [
+    "AlekseyCalvin/SLM_Bistro",
+    "FlameF0X/Micro-ARC",
+    "pliny-the-prompter/obliteratus",
+    "EuroEval/euroeval_leaderboard",
+    "FlameF0X/SLM-Playground",
+    "dumbordumber/obliteratus",
+    "Kodacoda/obliteratus",
+    "AsadIsmail/ternary-quant-demo",
+    "build-small-hackathon/lesson-agent",
+    "hugging-apps/univoice-tts-demo",
+    "mlanvvs/fitcheck",
+    "ZivK/smollm2-end-of-sentence-demo",
+    "dromero14521/obliteratus",
+    "rbinrs/obliteratus",
+    "kicfk/obliteratus",
+    "aaahmet/obliteratus",
+    "Deadmon/obliteratus",
+    "Ngixdev/obliteratus",
+    "RavichandranJ/obliteratus",
+    "S-Dreamer/obliteratus",
+    "AlanaSky/asgaard",
+    "marchkamal51/obliteratus",
+    "Fabriwin/Convx",
+    "YoussefSharawy91/T.M.Riddle_Diary",
+    "Hameed13/my_news_podcast",
+    "DauroCamilo/chat-backend-test",
+    "janmayjay/demo",
+    "dinesh231999/voiceAssitent",
+    "cw4444/obliteratus",
+    "kalmuahlaunda/obliteratus",
+    "sub314xxl/obliteratus",
+    "mastodonitis/obliteratus",
+    "GrozniMilitq/obliteratus",
+    "liminal4423/obliteratus",
+    "duarffodog/obliteratus",
+    "cypher109/obliteratus",
+    "milkygingers/obliteratus",
+    "TOpNeT7/obliteratus",
+    "kirikir13/obliteratus",
+    "RaccoonStampede/obliteratus",
+    "impresionist/OBLITERATUS",
+    "bresseporix22/obliteratus",
+    "Sendpns/obliteratus",
+    "jessy38472/obliteratus",
+    "epixdonkey/obliteratus",
+    "ymonoce/obliteratus",
+    "masoudbarati/Test",
+    "Jjopajd1334/obliteratus",
+    "dryouviavant/obliteratus",
+    "minta27/obliteratus",
+    "profanitys/obliteratus",
+    "CandelaGreen/obliteratus",
+    "steindev/obliteratus",
+    "wickywickyyeah/obliteratus",
+    "jussix/obliteratus",
+    "gbenga-face/obliteratus",
+    "MSGEncrypted/lesson-agent-dev",
+    "EuroBench/leaderboard",
+    "nosdxh/obliteratus",
+    "Sixiong33/obliter8",
+    "VladDVille/Bella-Brain-Server",
+    "acnmc/obliteratus",
+    "jannat2363/obliteratus",
+    "Johnblick187/obliteratus",
+    "gianface/obliteratus",
+    "bloodymatzohball/obliteratus",
+    "michaelshapkin/obliteratus",
+    "johndeadlock/obliteratus",
+    "Xhaheen/obliteratus",
+    "DannyBrennan1995/obliteratus",
+    "Mspanz88/obliteratus",
+    "Zmu/obliteratus",
+    "lactroiii/obliteratus",
+    "LittleSA1GON/careergps-inference-lab",
+    "Buleegasy/GREEK_DENG",
+    "0xSojalSec/obliteratus",
+    "tetracta/model-xray-sample-reports",
+    "AlphaBlogduckcom/obliteratus",
+    "walmartshoppingbag/univoice-tts-demo",
+    "mkmckay/obliteratus",
+    "yava-code/tessera-comparison",
+    "petra312/obliteratus",
+    "tiagoatdeveloph/obliteratus",
+    "AlekseyCalvin/SLM-Playground",
+    "egonR/obliteratus",
+    "JCdaGoat/obliteratus",
+    "AlekseyCalvin/NEURONAUT",
+    "jpenzell/who-did-the-thinking",
+    "AlekseyCalvin/NEURONAUT_gpu",
+    "sudoscorp/obliteratus",
+    "sudoscorp/obliteratus28sudo",
+    "AlekseyCalvin/NEURONAUT_Turbo",
+    "trantam31/smollm2-playground",
+    "wojtekzbieg/obliteratus",
+    "timrbuck1299/obliteratus",
+    "Huggingur/obliteratus"
+  ],
+  "createdAt": "2024-10-31T00:43:11.000Z",
+  "safetensors": {
+    "parameters": {
+      "BF16": 361821120
+    },
+    "total": 361821120
+  },
+  "usedStorage": 723674912
+}

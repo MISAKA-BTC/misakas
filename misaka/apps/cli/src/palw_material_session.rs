@@ -10,6 +10,16 @@
 //!       --out OBJECT.borsh                             file it with `misaka palw submit-object --object OBJECT.borsh`
 //! ```
 //!
+//! New cohorts use the atomic finite-fee contract (network is in the draft):
+//! ```text
+//! fee-seal-v2 --draft DRAFT.json --ruleset RULESET_HEX --signer-key BOND=KEY_FILE ... --out OBJECT.borsh
+//!             [--previous ACCEPTED_CONSENT --sequence NEXT_SEQUENCE]
+//! ```
+//! Every provider signs both its unchanged service obligation and the fee-only
+//! horizon; the sponsor signs the entire action. All signer files must be local,
+//! permission-checked registered keys. The command emits no partial signatures
+//! and sends nothing to a node. Legacy `seal` is only for pre-fence V1 admission.
+//!
 //! The pattern of `palw da-accuse` / `tir-registration`: nothing is broadcast here. Each party signs the SAME consent payload
 //! (`PalwMonetaryMaterialEnrollmentV1::payload`) under `palw_provider_court_message_v1(domain, 240, bond, payload)`, the
 //! message the native acceptance layer verifies with each bond's REGISTERED key. `seal` verifies each signature under the key
@@ -38,6 +48,25 @@ pub(crate) const MATERIAL_SESSION_SIGNATURE_SCHEMA_V1: &str = "misaka.palw.mater
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum MaterialSessionCmd {
+    /// Offline atomic V2 enrollment/replacement: signs original service, finite fee and full sponsor action.
+    /// Loads all registered keys from permission-checked files; never writes partial signatures.
+    FeeSealV2 {
+        #[arg(long)]
+        draft: PathBuf,
+        /// Exact current native route ruleset digest (128 hex, nonzero).
+        #[arg(long)]
+        ruleset: String,
+        /// Repeat BOND=KEY_FILE for sponsor and every provider. Values are file paths, never secret seeds.
+        #[arg(long="signer-key",required=true,num_args=1..)]
+        signer_keys: Vec<String>,
+        /// Previous accepted consent for replacement; must be paired with --sequence.
+        #[arg(long, requires = "sequence")]
+        previous: Option<String>,
+        #[arg(long, requires = "previous")]
+        sequence: Option<u64>,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Build the exact unsigned enrollment from a JSON spec and write the draft every party signs.
     Draft {
         #[arg(long)]
@@ -57,7 +86,7 @@ pub(crate) enum MaterialSessionCmd {
         #[arg(long)]
         out: PathBuf,
     },
-    /// Check every party's signature and write the borsh `PalwConsensusObjectV2::MonetaryMaterialEnrolledV1`.
+    /// Legacy V1 only: seal the old pre-fence enrollment. New cohorts require fee-seal-v2.
     Seal {
         #[arg(long)]
         draft: PathBuf,
@@ -277,8 +306,66 @@ fn message(domain: Hash64, enrollment: &PalwMonetaryMaterialEnrollmentV1, signer
     palw_provider_court_message_v1(domain, PALW_MONETARY_MATERIAL_ENROLL_TAG_V1, signer, &enrollment.payload())
 }
 
+fn fee_signer_paths_v2(
+    values: &[String],
+    expected: &std::collections::BTreeSet<PalwBondKeyV2>,
+) -> Result<std::collections::BTreeMap<PalwBondKeyV2, String>, CliError> {
+    let mut paths = std::collections::BTreeMap::new();
+    for value in values {
+        let (who, path) = value.split_once('=').ok_or_else(|| CliError::generic("--signer-key expects BOND=KEY_FILE"))?;
+        let who = bond("--signer-key bond", who)?;
+        if path.is_empty() || !expected.contains(&who) || paths.insert(who, path.to_string()).is_some() {
+            return Err(CliError::generic("empty key path, extra party, or duplicate signer"));
+        }
+    }
+    if paths.len() != expected.len() {
+        return Err(CliError::generic("every sponsor/provider key is required; no partial object was written"));
+    }
+    Ok(paths)
+}
+
 pub(crate) fn run(cmd: MaterialSessionCmd) -> CliResult {
     match cmd {
+        MaterialSessionCmd::FeeSealV2 { draft, ruleset, signer_keys, previous, sequence, out } => {
+            let draft: MaterialSessionDraftV1 = read_json(&draft)?;
+            let (network, enrollment) = decode_draft(&draft)?;
+            let ruleset = hash("--ruleset", &ruleset)?;
+            if ruleset == Hash64::default() {
+                return Err(CliError::generic("--ruleset must be the nonzero current native route digest"));
+            }
+            let replacement = match (previous, sequence) {
+                (None, None) => None,
+                (Some(previous), Some(sequence)) if sequence > 0 => Some((hash("--previous", &previous)?, sequence)),
+                _ => return Err(CliError::generic("replacement requires --previous and a positive --sequence")),
+            };
+            let expected: std::collections::BTreeSet<_> = signers(&enrollment).into_iter().collect();
+            let paths = fee_signer_paths_v2(&signer_keys, &expected)?;
+            // Prevalidate the complete roster before loading any key. All keys stay
+            // in this offline process; only the fully signed object is written.
+            let mut keys = std::collections::BTreeMap::new();
+            for (bond, path) in paths {
+                keys.insert(bond, crate::keys::KeySource { key_file: Some(path), key_stdin: false }.load_key()?);
+            }
+            let object = kaspa_consensus_core::palw_monetary_material_fee_v2::monetary_material_fee_object_v2(
+                network,
+                ruleset,
+                enrollment,
+                replacement,
+                |bond, message, context| keys.get(bond).map(|key| key.sign_with_context(message, context).to_vec()),
+            )
+            .ok_or_else(|| CliError::generic("atomic fee enrollment requires every original service, fee and sponsor signature"))?;
+            kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&object)
+                .map_err(|why| CliError::generic(format!("finite fee object cannot ride a carrier: {why}")))?;
+            let bytes = borsh::to_vec(&object).map_err(|e| CliError::generic(e.to_string()))?;
+            write_new(&out, &bytes)?;
+            println!(
+                "{}",
+                serde_json::json!({"ok":true,"object":out.display().to_string(),"version":2,
+                "networkDomain":network.to_string(),"ruleset":ruleset.to_string(),"consent":draft.consent,
+                "replacement":replacement.is_some(),"submitted":false})
+            );
+            Ok(())
+        }
         MaterialSessionCmd::Draft { spec, out } => {
             let draft = draft_v1(&read_json(&spec)?)?;
             write_new(&out, &serde_json::to_vec_pretty(&draft).map_err(|e| CliError::generic(e.to_string()))?)?;
@@ -385,6 +472,22 @@ mod tests {
                 OfferSpecV1 { provider: format!("{txid}:1"), collateral_sompi: 100, prepaid_fee_sompi: 100 },
             ],
         }
+    }
+
+    #[test]
+    fn finite_fee_cli_requires_exact_complete_key_roster_before_loading_or_writing() {
+        let draft = draft_v1(&spec()).unwrap();
+        let (_, e) = decode_draft(&draft).unwrap();
+        let expected = signers(&e).into_iter().collect();
+        let paths: Vec<_> = draft.signers.iter().map(|b| format!("{b}=/offline/key")).collect();
+        assert!(fee_signer_paths_v2(&paths, &expected).is_ok());
+        assert!(fee_signer_paths_v2(&paths[..2], &expected).is_err());
+        let mut dup = paths.clone();
+        dup.push(paths[0].clone());
+        assert!(fee_signer_paths_v2(&dup, &expected).is_err());
+        let mut empty = paths;
+        empty[0] = format!("{}=", draft.signers[0]);
+        assert!(fee_signer_paths_v2(&empty, &expected).is_err());
     }
 
     #[test]

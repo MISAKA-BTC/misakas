@@ -81,6 +81,9 @@ use kaspa_muhash::MuHash;
 use libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair;
 use std::sync::Arc;
 
+#[path = "rfc0041_bond_free_bootstrap.rs"]
+mod bond_free_bootstrap;
+
 const T12_GENESIS_CARDS: usize = 8;
 
 #[path = "t12_real_attempt.rs"]
@@ -430,6 +433,9 @@ impl T12Chain {
         let (t, _) = self.vp().heartbeat_adapt_block_template(t).expect("the heartbeat lane is open on testnet-12");
         assert_eq!(t.block.header.pow_algo_id, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1);
         self.ctx.simulated_time = self.ctx.simulated_time.max(t.block.header.timestamp);
+        // The adapter can advance the final stamp. Keep the opted-in instance
+        // validation clock on that same simulated instant before insertion.
+        self.arm_clock();
         self.heartbeats += 1;
         self.insert_chain_block(t.block, "a heartbeat").await
     }
@@ -1216,7 +1222,9 @@ async fn merge_the_round_block(
         let virtual_state = vp.virtual_stores.read().state.get().unwrap();
         assert!(virtual_state.ghostdag_data.mergeset_reds.contains(&round_hash), "virtual merges the round block as a red");
         let (_, parent_state) = at.chain.tip_state();
-        vp.palw_round_verdicts_v1(&parent_state, &virtual_state.ghostdag_data, virtual_state.daa_score).expect("the lane is open")
+        vp.palw_round_verdicts_v1(&parent_state, &virtual_state.ghostdag_data, virtual_state.daa_score)
+            .expect("Round fee budget preparation succeeds")
+            .expect("the lane is open")
     };
     assert!(verdicts.round_blocks.contains(&round_hash));
     let (merging, _) = at.chain.attempt(2, 1_000, Vec::new(), &|_| true).await;

@@ -1,0 +1,628 @@
+{
+  "model": "pythia-70m",
+  "stages": [
+    {
+      "model": "pythia-70m",
+      "stage": "cohort_pins",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.000208834,
+      "stage": "cohort_pins",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "fixture_identity",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.00079725,
+      "stage": "fixture_identity",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "prior_inventory_file_identity",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.00807175,
+      "stage": "prior_inventory_file_identity",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "retained_sdk_entry_and_inventory",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.474018625,
+      "stage": "retained_sdk_entry_and_inventory",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "whole_retained_artifact_sha256",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.296940084,
+      "stage": "whole_retained_artifact_sha256",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "original_class_program_layout_profile",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.002287125,
+      "stage": "original_class_program_layout_profile",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "private_same_court2_params",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.155764542,
+      "stage": "private_same_court2_params",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "registration_database",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.004059292,
+      "stage": "registration_database",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "native_genesis_active_bond",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.01771075,
+      "stage": "native_genesis_active_bond",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "warm_block",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.004500125,
+      "stage": "warm_block",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "chain_registration_terms",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.000233875,
+      "stage": "chain_registration_terms",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "sdk_unsigned_build_and_selected_full_gate",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 5.953381,
+      "stage": "sdk_unsigned_build_and_selected_full_gate",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "actual_registrant_mldsa_signature",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.026170167,
+      "stage": "actual_registrant_mldsa_signature",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "signed_original_payload_identity",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.001494375,
+      "stage": "signed_original_payload_identity",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "actual_native_processor_validation",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 5.924220625,
+      "stage": "actual_native_processor_validation",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "expected_full_schema1_metadata",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.002278833,
+      "stage": "expected_full_schema1_metadata",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "actual_funded_carrier_and_production_fee",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.061542,
+      "stage": "actual_funded_carrier_and_production_fee",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "production_mining_manager_construction",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.000233875,
+      "stage": "production_mining_manager_construction",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "production_mining_manager_standard_insertion",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.009947959,
+      "stage": "production_mining_manager_standard_insertion",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "standard_template_and_carrying_block",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.005216666,
+      "stage": "standard_template_and_carrying_block",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "actual_template_inclusion",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 2.125e-06,
+      "stage": "actual_template_inclusion",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "accepting_block_and_native_fold",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 5.963328583,
+      "stage": "accepting_block_and_native_fold",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "accepted_utxo_and_native_full_row_origin",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.000853416,
+      "stage": "accepted_utxo_and_native_full_row_origin",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "second_node_genesis",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.018510959,
+      "stage": "second_node_genesis",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "accepted_block_chain_inventory",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 4.3458e-05,
+      "stage": "accepted_block_chain_inventory",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.003399916,
+      "stage": "second_node_replay_block",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.012858625,
+      "stage": "second_node_replay_block",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 5.957320833,
+      "stage": "second_node_replay_block",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "second_node_replay_identity",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.000966167,
+      "stage": "second_node_replay_identity",
+      "status": "passed"
+    },
+    {
+      "model": "pythia-70m",
+      "stage": "same_database_restore",
+      "status": "started"
+    },
+    {
+      "model": "pythia-70m",
+      "seconds": 0.005132292,
+      "stage": "same_database_restore",
+      "status": "passed"
+    }
+  ],
+  "results": [
+    {
+      "facts": {
+        "artifact_bytes_stream_hashed": 103402560,
+        "carrier": {
+          "actual_change_sompi": 9998000000,
+          "actual_input_sompi": 10000000000,
+          "compute_mass": 38207,
+          "existing_standard_mass_limit": 480000,
+          "fee_sompi": 2000000,
+          "payload_bytes": 20006,
+          "production_relay_rate_sompi_per_1000_mass": 10000,
+          "storage_mass": 0,
+          "transient_mass": 109988,
+          "txid": "fddbd6f08111560750c1e969c13acecb1df8c366cc69794cd7151d842349796464687d7d67911bf17f96533b89f5766fe8a55aedeb100493dc29e9c929cc249f"
+        },
+        "chain_identity": {
+          "court_version": 2,
+          "genesis": "286aba8484183a7aea4d4a00a595c7d4528ece894cb9f58ca533384dfee6c1958c9ce4df19225d118918c8d0b91d5d6f8e70a81efca1d8d29fabd90f86d094bd",
+          "isolated_record_exemption": true,
+          "params_id": "fc4855fd90c8f4ac3b2b2189eb25c151a416112223fe5eb5b5490c0bc2a71934",
+          "schedule_id": "b60d9e81836f70c6e8d139945767d37047cf94ba47863bde665ca94263d6b9e1"
+        },
+        "identity_before": {
+          "artifact_root": "427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4",
+          "checkpoint_interval": 65536,
+          "class_id": "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
+          "h_tile": 64,
+          "layout_sha256": "a7ddfddc283c60995e94da60bfa1f5bac022d57928c8b0bc156c5aefcda9802e",
+          "max_context": 2048,
+          "program_sha256": "1c5dba053682afd2a53b5649da96150860463a35ae35505aa0c114e425e145b9",
+          "tokenizer_id": "9ccc3c319505ec74ccccb984a97bbd955c2c3f30e4c8f2dbe95ff8e13b213d84074d705cf61decf466eb2026e4a1b9ebf3e33f32abdc0653382ea0a669941a43"
+        },
+        "input_pin": {
+          "artifact": {
+            "bytes": 103402560,
+            "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/model.palwtir.private-wide-q24.palwtir",
+            "sha256": "2d1010327664743f240ea8d5bc089daed5a704d4340fea322d1f9cafbe009651"
+          },
+          "artifact_root": "427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4",
+          "checkpoint_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/checkpoint",
+          "class_id": "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
+          "fixture": {
+            "path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/registration-fixture.json",
+            "sha256": "29c0d221c7f998dee2e4778bd8bfd9f9b8b4e610b17a62b1bf6f4484b7f367a8"
+          },
+          "inventory": {
+            "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/testing/positive-court-a7/evidence/real-llm-inventory-4753-2026-11-01/pythia-70m.json",
+            "sha256": "24296d0c2a56a50d662092eb20f1dc8e35dfa46af6762ad32e7e184f1c54f60b"
+          },
+          "layout_sha256": "a7ddfddc283c60995e94da60bfa1f5bac022d57928c8b0bc156c5aefcda9802e",
+          "original_max_context": 2048,
+          "program_sha256": "1c5dba053682afd2a53b5649da96150860463a35ae35505aa0c114e425e145b9",
+          "repository": "EleutherAI/pythia-70m",
+          "revision": "a39f36b100fe8a5377810d56c3f4789b9c53ac42",
+          "slug": "pythia-70m",
+          "tokenizer_id": "9ccc3c319505ec74ccccb984a97bbd955c2c3f30e4c8f2dbe95ff8e13b213d84074d705cf61decf466eb2026e4a1b9ebf3e33f32abdc0653382ea0a669941a43",
+          "tokenizer_path": "/Users/wata/Downloads/misaka-trained-llm-cohort-20261031/EleutherAI__pythia-70m/run-wide-q24-v2/checkpoint/tokenizer.json",
+          "wide_q24": true
+        },
+        "inventory_sha256": "24296d0c2a56a50d662092eb20f1dc8e35dfa46af6762ad32e7e184f1c54f60b",
+        "native_acceptance": {
+          "accepted_carrier": "fddbd6f08111560750c1e969c13acecb1df8c366cc69794cd7151d842349796464687d7d67911bf17f96533b89f5766fe8a55aedeb100493dc29e9c929cc249f",
+          "folding_block": "5abbcd05363b5c153c47367006dd62335e0c2d2a63ba5b48660075442920482ee7c86edd954fbbd01d6bd6ff3a5220455b65e76f690184007c83d5a0cbd01d7c",
+          "status": "FOLDED"
+        },
+        "native_processor": {
+          "method": "palw_v2_validate_objects",
+          "scope": "actual native validator on current chain state; additional full-gate traversal, before carrier inclusion",
+          "selected_daa": 0,
+          "status": "VALIDATED"
+        },
+        "native_registration": {
+          "claim_credit": false,
+          "class_id": "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
+          "folding_block": "5abbcd05363b5c153c47367006dd62335e0c2d2a63ba5b48660075442920482ee7c86edd954fbbd01d6bd6ff3a5220455b65e76f690184007c83d5a0cbd01d7c",
+          "identity_after": {
+            "artifact_root": "427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4",
+            "class_id": "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
+            "layout_sha256": "a7ddfddc283c60995e94da60bfa1f5bac022d57928c8b0bc156c5aefcda9802e",
+            "max_context": 2048,
+            "program_sha256": "1c5dba053682afd2a53b5649da96150860463a35ae35505aa0c114e425e145b9",
+            "tokenizer_id": "9ccc3c319505ec74ccccb984a97bbd955c2c3f30e4c8f2dbe95ff8e13b213d84074d705cf61decf466eb2026e4a1b9ebf3e33f32abdc0653382ea0a669941a43"
+          },
+          "origin_aux141": true,
+          "original_max_context": 2048,
+          "registered_daa": 1,
+          "state_root": "8851ebbb02903b55005f9f2cb3d0da19b09e784322af84d7c48389f49a7cbad877d72a0b911290e410618858eb994c8211482b660636d5e9fd010f80ce444967"
+        },
+        "registration_inputs": {
+          "activation_daa": 30,
+          "active_genesis_bond": "PalwBondKeyV2(TransactionOutpoint { transaction_id: 5e0d5f1b37a71288cc0eb24acc10d2f4973dd3475569f274f03cc64a2233d035099d386e24c91d48427c30a895664dea979abedc90a7788fad170379e55e2669, index: 2 })",
+          "bond_collateral_sompi": 93906321001040,
+          "bond_registry_pubkey_sha256": "2a61c98bc1b2e64b76fe9e1ae48c904416d4a951ed0987e979ac9a902f410b9f",
+          "chain_certified_families_count": 0,
+          "chain_target": "1218938590613259230285389391303016447",
+          "prior_registration_exposure": 0,
+          "registered_classes_count": 3,
+          "sdk_protocol_share_permille": 0,
+          "selected_daa": 0,
+          "served_min_grantable_share_permille": 0,
+          "slash_value_per_pwu": 5
+        },
+        "signed_object": {
+          "borsh_bytes": 20004,
+          "borsh_sha256": "6e01d7977cd5108115ec369f5e4a403a6c37cf85e78c9eac8df030f7266a486d",
+          "network_domain": "98a79222a166055390d714b53ccd8bfcf6200cce645b165b797405d4722a44bf8def5952bfcee5a43071154e67ebe43aa275743c0543b567f13adcb2948b3575",
+          "sdk_message_digest": "e08f4a3f0a85e3cf50fb327ceb47cedb8eb6ae79021f8c5fb175ea204f05fb103b5e45d212ad1135533820571b70d64de73969ec0698483db740fd70b8bb02a3"
+        }
+      },
+      "failure": null,
+      "funding_scope": "genesis Active registrant bond and its existing backed allocation, plus a new real fee-float UTXO spend; SDK protocol share0; no dummy pure-gate registration",
+      "model": "pythia-70m",
+      "not_performed": [
+        "new model inference/full original-context run",
+        "new conversion",
+        "claim certification or credit",
+        "public activation"
+      ],
+      "result": "native_registration_checked",
+      "schema": "misaka.a1.hf3.native-registration-result.v1",
+      "scope": "actual retained artifact identity, SDK build, actual bond/carrier signatures, production MiningManager standard insertion, Standard template, native registration fold, second-node replay and same-DB restore",
+      "seconds": 24.921204125,
+      "stages": [
+        {
+          "model": "pythia-70m",
+          "seconds": 0.000208834,
+          "stage": "cohort_pins",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.00079725,
+          "stage": "fixture_identity",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.00807175,
+          "stage": "prior_inventory_file_identity",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.474018625,
+          "stage": "retained_sdk_entry_and_inventory",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.296940084,
+          "stage": "whole_retained_artifact_sha256",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.002287125,
+          "stage": "original_class_program_layout_profile",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.155764542,
+          "stage": "private_same_court2_params",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.004059292,
+          "stage": "registration_database",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.01771075,
+          "stage": "native_genesis_active_bond",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.004500125,
+          "stage": "warm_block",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.000233875,
+          "stage": "chain_registration_terms",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 5.953381,
+          "stage": "sdk_unsigned_build_and_selected_full_gate",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.026170167,
+          "stage": "actual_registrant_mldsa_signature",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.001494375,
+          "stage": "signed_original_payload_identity",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 5.924220625,
+          "stage": "actual_native_processor_validation",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.002278833,
+          "stage": "expected_full_schema1_metadata",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.061542,
+          "stage": "actual_funded_carrier_and_production_fee",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.000233875,
+          "stage": "production_mining_manager_construction",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.009947959,
+          "stage": "production_mining_manager_standard_insertion",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.005216666,
+          "stage": "standard_template_and_carrying_block",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 2.125e-06,
+          "stage": "actual_template_inclusion",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 5.963328583,
+          "stage": "accepting_block_and_native_fold",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.000853416,
+          "stage": "accepted_utxo_and_native_full_row_origin",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.018510959,
+          "stage": "second_node_genesis",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 4.3458e-05,
+          "stage": "accepted_block_chain_inventory",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.003399916,
+          "stage": "second_node_replay_block",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.012858625,
+          "stage": "second_node_replay_block",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 5.957320833,
+          "stage": "second_node_replay_block",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.000966167,
+          "stage": "second_node_replay_identity",
+          "status": "passed"
+        },
+        {
+          "model": "pythia-70m",
+          "seconds": 0.005132292,
+          "stage": "same_database_restore",
+          "status": "passed"
+        }
+      ]
+    }
+  ],
+  "stage_record_complete": true
+}

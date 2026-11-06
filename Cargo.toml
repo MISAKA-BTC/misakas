@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/tonic"]
 members = [
     "daemon",
     "cli",
@@ -58,6 +59,9 @@ members = [
     "misaka/palw/tir/sketch",
     "misaka/palw/gen",
     "misaka/palw/panel",
+    "misaka/palw/positive-contract",
+    "misaka/palw/positive-accounting",
+    "misaka/palw/positive-accounting-node",
     "simpa",
     "wasm",
     "wasm/core",
@@ -182,6 +186,9 @@ default-members = [
     "misaka/palw/tir/sketch",
     "misaka/palw/gen",
     "misaka/palw/panel",
+    "misaka/palw/positive-contract",
+    "misaka/palw/positive-accounting",
+    "misaka/palw/positive-accounting-node",
     "simpa",
     "wasm",
     "wasm/core",
@@ -324,6 +331,9 @@ misaka-palw-constraint = { version = "1.1.0", path = "misaka/palw/constraint" }
 misaka-palw-tir = { path = "misaka/palw/tir/core" }
 misaka-palw-gen = { path = "misaka/palw/gen" }
 misaka-palw-panel = { path = "misaka/palw/panel" }
+misaka-palw-positive-contract = { path = "misaka/palw/positive-contract" }
+misaka-palw-positive-accounting = { path = "misaka/palw/positive-accounting" }
+misaka-palw-positive-accounting-node = { path = "misaka/palw/positive-accounting-node" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka/endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka/palw/core" }
@@ -619,3 +629,7 @@ doc_overindented_list_items = "allow"
 type_complexity = "allow"
 large_enum_variant = "allow"
 assertions_on_constants = "allow"
+
+# tonic 0.14.5: release oversized per-stream encode buffers after each frame.
+[patch.crates-io]
+tonic = { path = "vendor/tonic" }

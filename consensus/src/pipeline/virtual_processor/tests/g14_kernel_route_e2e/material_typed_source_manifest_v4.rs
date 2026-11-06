@@ -1,7 +1,7 @@
 //! Durable input retention for a later fresh-DB pruning-import experiment.
 //! This records source readiness, never successful IBD or a signed attestation.
 #[path = "material_typed_pruned_import_v1.rs"]
-mod pruned_import;
+pub(in crate::pipeline::virtual_processor::tests) mod pruned_import;
 
 use super::*;
 use crate::model::stores::pruning::PruningStoreReader;

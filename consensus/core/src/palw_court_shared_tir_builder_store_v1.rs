@@ -5,7 +5,7 @@
 use crate::palw_artifact::PalwArtifactOpeningV1;
 use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 as PromptForm;
 use crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1;
-use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepTileLeafV1};
+use crate::palw_step_leg::{PalwStepOpeningV1, PalwStepRangeOpeningV1, PalwStepTileLeafV1};
 use crate::palw_step_refute::{PalwDecodeTokenPinV1, PalwTiledDecodePinV1, PalwTiledDecodeTokensV1};
 use crate::palw_tir_court_v1::PalwTirEvidenceStoreV1;
 use crate::palw_tir_public_source_v1::{
@@ -13,16 +13,39 @@ use crate::palw_tir_public_source_v1::{
     PalwTirPublicResponseV1 as R, PalwTirPublicSourceV1 as Source,
 };
 use crate::{Hash64, palw_state_v2::PalwChainStateV2};
+use std::borrow::Cow;
 
 /// Inputs remain owned by the caller. Only complete authenticated units and
 /// canonical parameter openings are consulted. Missing inputs return None.
 /// Prompt form is resolved from the retained original work rules, never chosen by input.
 pub(crate) struct SharedTirBuilderStoreV1<'a> {
     source: Source,
-    units: &'a [Unit],
+    units: UnitMaterialV1<'a>,
     params: ParameterMaterialV1<'a>,
     ids: Option<&'a Ids>,
     prompt: PromptMaterialV1<'a>,
+}
+#[derive(Clone, Copy)]
+enum UnitMaterialV1<'a> {
+    Borrowed(&'a [Unit]),
+    Retained(&'a [crate::palw_native_resource_v1::NativeRetainedV1<Unit>]),
+}
+impl UnitMaterialV1<'_> {
+    fn len(&self) -> usize {
+        match self {
+            Self::Borrowed(v) => v.len(),
+            Self::Retained(v) => v.len(),
+        }
+    }
+    fn get(&self, i: usize) -> &Unit {
+        match self {
+            Self::Borrowed(v) => &v[i],
+            Self::Retained(v) => &v[i],
+        }
+    }
+    fn iter(&self) -> impl Iterator<Item = &Unit> {
+        (0..self.len()).map(|i| self.get(i))
+    }
 }
 /// A retained view borrows the actual decoded payload owners, never bare deep
 /// copies made from them. Borrowed compatibility inputs retain the old contract.
@@ -111,7 +134,15 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
         ids: Option<&'a Ids>,
         prompt: PromptMaterialV1<'a>,
     ) -> Result<Self, String> {
-        Self::new_with_parameter_material(state, claim, scope, units, ParameterMaterialV1::Borrowed(params), ids, prompt)
+        Self::new_with_parameter_material(
+            state,
+            claim,
+            scope,
+            UnitMaterialV1::Borrowed(units),
+            ParameterMaterialV1::Borrowed(params),
+            ids,
+            prompt,
+        )
     }
     /// Native parameter payload owners stay borrowed for this Store's lifetime.
     /// Raw carrier bytes and outer owner-array construction need their own admission.
@@ -124,13 +155,40 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
         ids: Option<&'a Ids>,
         prompt: PromptMaterialV1<'a>,
     ) -> Result<Self, String> {
-        Self::new_with_parameter_material(state, claim, scope, units, ParameterMaterialV1::Retained(params), ids, prompt)
+        Self::new_with_parameter_material(
+            state,
+            claim,
+            scope,
+            UnitMaterialV1::Borrowed(units),
+            ParameterMaterialV1::Retained(params),
+            ids,
+            prompt,
+        )
+    }
+    pub(crate) fn new_with_retained_material_v1(
+        state: &PalwChainStateV2,
+        claim: Hash64,
+        scope: Hash64,
+        units: &'a [crate::palw_native_resource_v1::NativeRetainedV1<Unit>],
+        params: &'a [crate::palw_native_resource_v1::NativeRetainedV1<PalwArtifactOpeningV1>],
+        ids: Option<&'a Ids>,
+        prompt: PromptMaterialV1<'a>,
+    ) -> Result<Self, String> {
+        Self::new_with_parameter_material(
+            state,
+            claim,
+            scope,
+            UnitMaterialV1::Retained(units),
+            ParameterMaterialV1::Retained(params),
+            ids,
+            prompt,
+        )
     }
     fn new_with_parameter_material(
         state: &PalwChainStateV2,
         claim: Hash64,
         scope: Hash64,
-        units: &'a [Unit],
+        units: UnitMaterialV1<'a>,
         params: ParameterMaterialV1<'a>,
         ids: Option<&'a Ids>,
         prompt: PromptMaterialV1<'a>,
@@ -141,7 +199,7 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
         }
         let source = c.source(state)?;
         for (i, u) in units.iter().enumerate() {
-            if u.source_id_v1() != source.source_id_v1() || units[..i].iter().any(|p| p.request_v1() == u.request_v1()) {
+            if u.source_id_v1() != source.source_id_v1() || units.iter().take(i).any(|p| p.request_v1() == u.request_v1()) {
                 return Err("builder material wrong source or duplicate query".into());
             }
         }
@@ -215,12 +273,12 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
                     }
                 }
                 I::CarryStepLeaf(index) => {
-                    if !matches!(self.unit(Q::StepLeaf { index }), Some(R::StepLeaf { .. })) {
+                    if self.step_leaf_ref(index).is_none() {
                         return Err("builder input cover lacks authenticated carry unit".into());
                     }
                 }
                 I::CommittedStepLeaf(index) | I::FixedCheckpointStepLeaf(index) | I::HistoryStepLeaf(index) => {
-                    if !matches!(self.unit(Q::StepLeaf { index }), Some(R::StepLeaf { .. })) {
+                    if self.step_leaf_ref(index).is_none() {
                         return Err("builder input cover lacks authenticated step boundary unit".into());
                     }
                 }
@@ -253,19 +311,44 @@ impl<'a> SharedTirBuilderStoreV1<'a> {
     fn unit(&self, q: Q) -> Option<&R> {
         self.units.iter().find(|u| u.request_v1() == q).map(|u| u.response_v1())
     }
+
+    fn step_run_leaf(&self, index: u64) -> Option<(&PalwStepTileLeafV1, &PalwStepRangeOpeningV1)> {
+        self.units.iter().find_map(|unit| {
+            let R::StepRun { preimages, range } = unit.response_v1() else { return None };
+            let offset = usize::try_from(index.checked_sub(range.first_leaf_index)?).ok()?;
+            Some((preimages.get(offset)?, range))
+        })
+    }
+
+    fn step_leaf_ref(&self, index: u64) -> Option<&PalwStepTileLeafV1> {
+        if let Some(R::StepLeaf { preimage, .. }) = self.unit(Q::StepLeaf { index }) {
+            return Some(preimage);
+        }
+        self.step_run_leaf(index).map(|(preimage, _)| preimage)
+    }
+
+    fn step_opening_material(&self, index: u64) -> Option<Cow<'_, PalwStepOpeningV1>> {
+        if let Some(R::StepLeaf { opening, .. }) = self.unit(Q::StepLeaf { index }) {
+            return Some(Cow::Borrowed(opening));
+        }
+        let (_, range) = self.step_run_leaf(index)?;
+        let mut quote = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
+        // The range walk owns the current and next frontier plus a leaf path.
+        quote.vec_v1::<Hash64>(range.leaf_hashes.len() as u64).ok()?;
+        quote.vec_v1::<Hash64>(range.leaf_hashes.len() as u64 + 2).ok()?;
+        quote.vec_v1::<Hash64>(64).ok()?;
+        let _scratch = crate::palw_native_resource_v1::reserve_native_requests_v1(quote.bytes_v1()).ok()?;
+        crate::palw_step_leg::step_opening_from_range_capped_v1(self.source.leaf_count_v1(), range, index, self.source.leaf_count_v1())
+            .ok()
+            .map(Cow::Owned)
+    }
 }
 impl PalwTirEvidenceStoreV1 for SharedTirBuilderStoreV1<'_> {
     fn step_leaf(&self, index: u64) -> Option<PalwStepTileLeafV1> {
-        match self.unit(Q::StepLeaf { index })? {
-            R::StepLeaf { preimage, .. } => Some(preimage.clone()),
-            _ => None,
-        }
+        self.step_leaf_ref(index).cloned()
     }
     fn step_opening(&self, index: u64) -> Option<PalwStepOpeningV1> {
-        match self.unit(Q::StepLeaf { index })? {
-            R::StepLeaf { opening, .. } => Some(opening.clone()),
-            _ => None,
-        }
+        self.step_opening_material(index).map(Cow::into_owned)
     }
     fn step_range_siblings(&self, first: u64, count: u64) -> Option<Vec<Hash64>> {
         if count == 0 {
@@ -274,14 +357,11 @@ impl PalwTirEvidenceStoreV1 for SharedTirBuilderStoreV1<'_> {
         let last = first.checked_add(count.checked_sub(1)?)?;
         // Even a long run can be assembled from its two authenticated boundary
         // openings. No full leaf-hash tree or hidden execution store is read.
-        let (a, b) = match (self.unit(Q::StepLeaf { index: first })?, self.unit(Q::StepLeaf { index: last })?) {
-            (R::StepLeaf { opening: a, .. }, R::StepLeaf { opening: b, .. }) => (a, b),
-            _ => return None,
-        };
+        let (a, b) = (self.step_opening_material(first)?, self.step_opening_material(last)?);
         crate::palw_step_leg::step_range_siblings_from_edges_capped_v1(
             self.source.leaf_count_v1(),
-            a,
-            b,
+            a.as_ref(),
+            b.as_ref(),
             self.source.header_v1().step_merkle_root,
             self.source.leaf_count_v1(),
         )

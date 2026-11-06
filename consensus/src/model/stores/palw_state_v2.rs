@@ -47,7 +47,7 @@ use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
 use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_native_resource_v1::{
-    NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_classified_v1,
+    NativeChainStateV1, NativeStateCarriageV1, retain_native_carriage_decode_with_preflight_error_v1,
 };
 use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2};
 use kaspa_database::prelude::CachePolicy;
@@ -59,6 +59,10 @@ use kaspa_database::registry::DatabaseStorePrefixes;
 use kaspa_utils::mem_size::MemSizeEstimator;
 use rocksdb::WriteBatch;
 use serde::{Deserialize, Serialize};
+
+pub mod assignment_journal;
+pub(crate) mod funding_relay;
+pub mod positive_journal;
 
 /// The layout the rows were written under. Bump on ANY change to the wrapped Borsh types or to
 /// the record shapes below, so old rows are discarded for rebuilding instead of read as absent.
@@ -153,6 +157,9 @@ pub struct DbPalwStateV2Store {
     /// node unable to load its own tip, and every peer refused the snapshot with it. `None` on
     /// every shipped preset, which is byte-for-byte the behaviour before the field existed.
     canonical_work_daa: Option<u64>,
+    /// Full network context is node-local; it never changes the carriage codec.
+    native39_frontier_context: Option<(Arc<PalwStateParamsV2>, u64)>,
+    native39_checkpoint_params: Option<Arc<kaspa_consensus_core::config::params::Params>>,
     /// **The materialized tip, keyed on the tip row it was decoded from** (audit M-7).
     ///
     /// `load_tip` is a full re-materialization: borsh-decode the whole carriage,
@@ -167,6 +174,9 @@ pub struct DbPalwStateV2Store {
     /// state. Shared through the `Arc` so a `clone()` of the store is the same cache, and holding
     /// the state itself in an `Arc` so a hit hands out a pointer rather than a copy of the tip.
     tip_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeChainStateV1>)>>>,
+    // Separate from the cache lock: only cold readers serialize, while hits
+    // and DB writers never wait for materialization under a cache mutex.
+    tip_load: Arc<parking_lot::Mutex<()>>,
     /// Carriage bytes this store has actually borsh-decoded for a tip read. A measurement, not a
     /// rule: it is what makes "the cache works" a number in a test rather than an assertion about
     /// code that was read.
@@ -187,6 +197,7 @@ pub struct DbPalwStateV2Store {
     /// misses, and the answer is re-materialized. Nothing invalidates this cache by hand, so
     /// nothing can forget to.
     pruning_snapshot_cache: Arc<parking_lot::Mutex<Option<(BlockHash, Hash64, Arc<NativeStateCarriageV1>)>>>,
+    pruning_snapshot_load: Arc<parking_lot::Mutex<()>>,
     /// Carriage bytes borsh-decoded for pruning-point snapshot serves. The same measurement as
     /// `tip_bytes_decoded`, for the lane that has no authentication in front of it at all.
     pruning_snapshot_bytes_decoded: Arc<std::sync::atomic::AtomicU64>,
@@ -233,9 +244,13 @@ impl DbPalwStateV2Store {
             schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
             uncertified_weightless: None,
             canonical_work_daa: None,
+            native39_frontier_context: None,
+            native39_checkpoint_params: None,
             tip_cache: Arc::new(parking_lot::Mutex::new(None)),
+            tip_load: Arc::new(parking_lot::Mutex::new(())),
             tip_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pruning_snapshot_cache: Arc::new(parking_lot::Mutex::new(None)),
+            pruning_snapshot_load: Arc::new(parking_lot::Mutex::new(())),
             pruning_snapshot_bytes_decoded: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -266,6 +281,61 @@ impl DbPalwStateV2Store {
         self
     }
 
+    pub fn with_native39_frontier_context_v1(mut self, params: &kaspa_consensus_core::config::params::Params) -> Self {
+        // Context changes invalidate shared decoded caches without making each
+        // unauthenticated cache hit scan the state again.
+        self.tip_cache = Arc::new(parking_lot::Mutex::new(None));
+        self.pruning_snapshot_cache = Arc::new(parking_lot::Mutex::new(None));
+        self.native39_checkpoint_params = Some(Arc::new(params.clone()));
+        self.native39_frontier_context = match &params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                Some((Arc::new(bundle.state.clone()), params.palw_exec_quantum_maturity_v1()))
+            }
+            _ => None,
+        };
+        self
+    }
+
+    fn check_native39_frontier_context_v1(&self, state: &PalwChainStateV2) -> StoreResult<()> {
+        use kaspa_consensus_core::palw_native39_frontier_v1 as native;
+        if !state.kernel_route_state_v1().is_some_and(|r| {
+            r.aux.keys().any(|(table, key)| {
+                *table == native::NATIVE39_FRONTIER_TABLE_V1
+                    || *table == kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::NATIVE39_SETTLEMENT_CHECKPOINT_TABLE_V1
+                    || *table == kaspa_consensus_core::palw_native_closed_facts_v1::NATIVE_CLOSED_FACTS_TABLE_V1
+                    || *table == kaspa_consensus_core::palw_state_v2::LEGACY_PENDING_FACT_TABLE_V1
+                    || (*table == kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1
+                        && key.len() == 65
+                        && key.first().is_some_and(|prefix| {
+                            *prefix == kaspa_consensus_core::palw_state_v2::PALW_COMPACT_CLAIM_SOURCE_PREFIX_V1
+                                || *prefix == kaspa_consensus_core::palw_state_v2::PALW_COMPACT_KERNEL_ORIGIN_PREFIX_V1
+                                || *prefix == b'A'
+                        }))
+            })
+        }) {
+            return Ok(());
+        }
+        let Some((params, maturity)) = self.native39_frontier_context.as_ref() else {
+            return Err(StoreError::LocalResourceUnavailable("native39 frontier network context is not configured".into()));
+        };
+        let full = self.native39_checkpoint_params.as_ref().ok_or_else(|| {
+            StoreError::LocalResourceUnavailable("native39 archival checkpoint network context is not configured".into())
+        })?;
+        native::validate_native39_frontier_context_v1(state, params, *maturity)
+            .and_then(|()| {
+                kaspa_consensus_core::palw_native39_settlement_checkpoint_v1::validate_native39_settlement_checkpoint_context_v1(
+                    state, full,
+                )
+            })
+            .and_then(|()| kaspa_consensus_core::palw_state_v2::validate_fact_archives_context_v1(state, full))
+            .map_err(|why| match why {
+                kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(resource) => {
+                    StoreError::LocalResourceUnavailable(resource.to_string())
+                }
+                other => StoreError::DataInconsistency(other.to_string()),
+            })
+    }
+
     /// The rule in force at the chain point a decoded snapshot stands at. A carriage with no
     /// `last_point` is a genesis state, which holds no claims and so is priced identically either
     /// way.
@@ -275,9 +345,12 @@ impl DbPalwStateV2Store {
     }
 
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
-        Self::new(Arc::clone(&self.db), cache_policy)
+        let mut out = Self::new(Arc::clone(&self.db), cache_policy)
             .with_uncertified_weightless(self.uncertified_weightless)
-            .with_canonical_work_daa(self.canonical_work_daa)
+            .with_canonical_work_daa(self.canonical_work_daa);
+        out.native39_frontier_context = self.native39_frontier_context.clone();
+        out.native39_checkpoint_params = self.native39_checkpoint_params.clone();
+        out
     }
 
     /// If the stored schema is not this build's, retire derived rows, tip and
@@ -441,16 +514,54 @@ impl DbPalwStateV2Store {
         delta.into_unreserved_legacy_v1().map(|delta| (root, delta)).map_err(|e| StoreError::LocalResourceUnavailable(e.to_string()))
     }
 
+    /// Return the block's post-transition state root and its delta.
     /// Decode directly from a pinned record view. No intermediate bincode
     /// Vec/cache/deep clone occurs before the typed Borsh preflight.
     pub fn delta_of_retained_v1(
         &self,
         block: BlockHash,
     ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1)> {
+        let (root, delta, _, _) = self.read_retained_delta_v2(block, None)?;
+        Ok((root, delta))
+    }
+
+    /// A paid history reader supplies the remaining wire and decoded-heap caps.
+    /// Check both against the pinned record before allocating the delta.
+    pub(crate) fn delta_of_retained_bounded_v2(
+        &self,
+        block: BlockHash,
+        maximum_bytes: u64,
+        maximum_heap: u64,
+    ) -> StoreResult<(kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64, u64)> {
+        let (_, delta, bytes, heap) = self.read_retained_delta_v2(block, Some((maximum_bytes, maximum_heap)))?;
+        Ok((delta, bytes, heap))
+    }
+
+    fn read_retained_delta_v2(
+        &self,
+        block: BlockHash,
+        limits: Option<(u64, u64)>,
+    ) -> StoreResult<(Hash64, kaspa_consensus_core::palw_native_resource_v1::NativeStateDeltaV1, u64, u64)> {
         let prefix: Vec<u8> = DatabaseStorePrefixes::PalwStateV2Deltas.into();
         let key = kaspa_database::prelude::DbKey::new(&prefix, block);
         let bytes = self.db.get_pinned(&key)?.ok_or_else(|| StoreError::KeyNotFound(key))?;
+        let extent = bytes.len() as u64;
+        if limits.is_some_and(|(maximum_bytes, _)| extent > maximum_bytes) {
+            return Err(StoreError::LocalResourceUnavailable(format!("PALW delta wire cap at {block}")));
+        }
         let record: PalwDeltaRecordViewV1<'_> = bincode::deserialize(&bytes)?;
+        let heap = if let Some((_, maximum_heap)) = limits {
+            let wire = record.delta_borsh;
+            let preflight =
+                kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(wire, wire.len() as u64)
+                    .map_err(|why| StoreError::DataInconsistency(format!("PALW delta shape at {block}: {why}")))?;
+            if preflight.logical_requests_v1() > maximum_heap {
+                return Err(StoreError::LocalResourceUnavailable(format!("PALW delta decode heap cap at {block}")));
+            }
+            preflight.logical_requests_v1()
+        } else {
+            0
+        };
         let delta =
             kaspa_consensus_core::palw_native_resource_v1::retain_native_value_decode_classified_v1(record.delta_borsh, || {
                 borsh::from_slice::<PalwStateDeltaV2>(record.delta_borsh)
@@ -463,7 +574,7 @@ impl DbPalwStateV2Store {
                     StoreError::DataInconsistency(format!("palw delta decode at {block}: {e}"))
                 }
             })?;
-        Ok((record.state_root, delta))
+        Ok((record.state_root, delta, extent, heap))
     }
 
     fn with_pinned_tip_v1<T>(
@@ -493,6 +604,7 @@ impl DbPalwStateV2Store {
         block: BlockHash,
         state: &PalwChainStateV2,
     ) -> StoreResult<NativeStoreWriteTicketV1> {
+        self.check_native39_frontier_context_v1(state)?;
         let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
             block,
             state,
@@ -639,6 +751,7 @@ impl DbPalwStateV2Store {
         block: BlockHash,
         state: &PalwChainStateV2,
     ) -> StoreResult<NativeStoreWriteTicketV1> {
+        self.check_native39_frontier_context_v1(state)?;
         let lease = kaspa_consensus_core::palw_native_resource_v1::reserve_native_install_in_database_v1(
             block,
             state,
@@ -770,6 +883,25 @@ impl DbPalwStateV2Store {
         {
             return Ok(Some(Arc::clone(carriage)));
         }
+        let _load = self.pruning_snapshot_load.lock();
+        // Another cold reader may have populated the cache or the row may have
+        // moved while we waited. Re-read durable identity under the load gate.
+        let Some((block, root)) = self.pruning_snapshot_key()? else { return Ok(None) };
+        if block != pruning_point {
+            return Ok(None);
+        }
+        if let Some((cached_block, cached_root, carriage)) = self.pruning_snapshot_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some(Arc::clone(carriage)));
+        }
+        // Release an obsolete cache generation before allocating its
+        // replacement. External Arc readers keep their own ticket as needed.
+        // Keeping a cache-only predecessor here can otherwise permanently
+        // refuse the replacement even though it fits on its own.
+        let stale = self.pruning_snapshot_cache.lock().take();
+        drop(stale);
         self.with_pinned_tip_v1(true, |record| {
             if record.block != pruning_point {
                 return Ok(None);
@@ -782,6 +914,80 @@ impl DbPalwStateV2Store {
             Ok(Some(served))
         })
         .map(Option::flatten)
+    }
+
+    /// RFC-0037 serving bridge. Bind the row source and native suffix to one
+    /// pinned snapshot record, so a re-capture cannot mix two state versions.
+    /// State bytes are compared in fixed scratch before any generation output.
+    pub fn write_pruning_snapshot_row_generation_v1(
+        &self,
+        params: &PalwStateParamsV2,
+        point: BlockHash,
+        suffix: &mut dyn std::io::Read,
+        suffix_len: u64,
+        writer: &mut dyn std::io::Write,
+    ) -> std::io::Result<Option<u64>> {
+        use std::io::{self, Read};
+        if self.pruning_snapshot_key().map_err(io::Error::other)?.map(|(block, _)| block) != Some(point) {
+            return Ok(None);
+        }
+        if suffix_len > kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_MAX_GENERATION_BYTES_V1 as u64 {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "native suffix exceeds row stream policy"));
+        }
+        self.with_pinned_tip_v1(true, |record| {
+            if record.block != point {
+                return Ok(Ok(None));
+            }
+            let state_bytes = record.carriage_borsh.len() as u64;
+            if state_bytes.checked_add(14).is_none_or(|minimum| suffix_len < minimum) {
+                return Ok(Err(io::Error::new(io::ErrorKind::InvalidData, "native row suffix is truncated")));
+            }
+            let mut header = [0u8; 10];
+            if let Err(why) = suffix.read_exact(&mut header) {
+                return Ok(Err(why));
+            }
+            if header[..2] != 1u16.to_le_bytes() || header[2..] != state_bytes.to_le_bytes() {
+                return Ok(Err(io::Error::new(io::ErrorKind::InvalidData, "row suffix does not name the captured native frame")));
+            }
+            let mut scratch = [0u8; 8192];
+            for expected in record.carriage_borsh.chunks(scratch.len()) {
+                if let Err(why) = suffix.read_exact(&mut scratch[..expected.len()]) {
+                    return Ok(Err(why));
+                }
+                if &scratch[..expected.len()] != expected {
+                    return Ok(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "row source and native suffix belong to different snapshots",
+                    )));
+                }
+            }
+            // The same recorded root and point-policy restoration as every
+            // trusted snapshot load. Native decode ownership is retained below.
+            let state = self.materialize_native_fields_v1(
+                record.block,
+                record.state_root,
+                record.carriage_borsh,
+                params,
+                "row-stream snapshot",
+            )?;
+            let _root_scratch = kaspa_consensus_core::palw_native_resource_v1::reserve_native_root_workspace_v1(state_bytes)
+                .map_err(|why| StoreError::LocalResourceUnavailable(why.to_string()))?;
+            // Reconstitute the already-compared prefix from pinned bytes; only
+            // declarations remain unread. No full encoded suffix Vec is made.
+            let mut replay = io::Cursor::new(header).chain(io::Cursor::new(record.carriage_borsh)).chain(&mut *suffix);
+            Ok(kaspa_consensus_core::palw_direct_row_export_v1::write_row_generation_stream_v1(
+                &state,
+                &mut replay,
+                suffix_len,
+                writer,
+            )
+            .map(Some))
+        })
+        .map_err(|why| match why {
+            StoreError::LocalResourceUnavailable(message) => io::Error::new(io::ErrorKind::WouldBlock, message),
+            other => io::Error::other(other),
+        })?
+        .unwrap_or(Ok(None))
     }
 
     pub fn load_tip(&self, params: &PalwStateParamsV2) -> StoreResult<Option<(BlockHash, PalwChainStateV2)>> {
@@ -800,6 +1006,19 @@ impl DbPalwStateV2Store {
             self.materialize_native_fields_v1(record.block, record.state_root, record.carriage_borsh, params, "tip")
                 .map(|state| (record.block, state))
         })
+    }
+
+    /// Small durable identity + an already-authenticated resident Arc only.
+    /// Irreversible GC must not turn a cold allocation refusal into an absent claim.
+    pub(crate) fn load_tip_resident_v1(&self) -> StoreResult<Option<(BlockHash, Arc<NativeChainStateV1>)>> {
+        let Some((block, root)) = self.tip_key()? else { return Ok(None) };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
+        Err(StoreError::LocalResourceUnavailable("PALW GC snapshot is not resident; retry after the ordinary reader warms it".into()))
     }
 
     /// **The tip, materialized ONCE per tip row** (audit M-7) — the read every `palw_*` RPC answer
@@ -825,6 +1044,16 @@ impl DbPalwStateV2Store {
         {
             return Ok(Some((block, Arc::clone(state))));
         }
+        let _load = self.tip_load.lock();
+        let Some((block, root)) = self.tip_key()? else { return Ok(None) };
+        if let Some((cached_block, cached_root, state)) = self.tip_cache.lock().as_ref()
+            && *cached_block == block
+            && *cached_root == root
+        {
+            return Ok(Some((block, Arc::clone(state))));
+        }
+        let stale = self.tip_cache.lock().take();
+        drop(stale);
         self.with_pinned_tip_v1(false, |record| {
             self.tip_bytes_decoded.fetch_add(record.carriage_borsh.len() as u64, std::sync::atomic::Ordering::Relaxed);
             let state =
@@ -867,20 +1096,44 @@ impl DbPalwStateV2Store {
         if let Some(why) = kaspa_consensus_core::palw_state_v2::palw_carriage_version_refusal_v1(canonical) {
             return Err(StoreError::DataInconsistency(format!("palw v2 {label}: {why}")));
         }
-        retain_native_carriage_decode_classified_v1(block, canonical, || {
-            let carriage = borsh::from_slice::<PalwStateCarriageV2>(canonical)
-                .map_err(|why| format!("palw v2 {label} does not decode: {why}"))?;
-            let armed = self.uncertified_weightless_at(&carriage);
-            carriage
-                .into_state_v3(params, Some(root), armed, self.canonical_work_daa)
-                .map_err(|why| format!("palw v2 {label} refused: {why}"))
-        })
+        let restored = retain_native_carriage_decode_with_preflight_error_v1(
+            block,
+            canonical,
+            |why| {
+                use kaspa_consensus_core::palw_native_resource_v1::{NativeCoverageV1, NativeDecodeErrorV1};
+                match why.kind() {
+                    std::io::ErrorKind::InvalidData | std::io::ErrorKind::UnexpectedEof => {
+                        NativeDecodeErrorV1::Decode(StoreError::DataInconsistency(format!("palw v2 {label} preflight refused: {why}")))
+                    }
+                    _ => NativeDecodeErrorV1::Resource(NativeCoverageV1::unsupported::<PalwStateCarriageV2>(
+                        "actual cold native carriage shape",
+                        &why.to_string(),
+                    )),
+                }
+            },
+            || {
+                let carriage = borsh::from_slice::<PalwStateCarriageV2>(canonical)
+                    .map_err(|why| StoreError::DataInconsistency(format!("palw v2 {label} does not decode: {why}")))?;
+                let armed = self.uncertified_weightless_at(&carriage);
+                carriage.into_state_v3(params, Some(root), armed, self.canonical_work_daa).map_err(|why| match why {
+                    kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeResource(resource) => {
+                        StoreError::LocalResourceUnavailable(resource.to_string())
+                    }
+                    kaspa_consensus_core::palw_state_v2::PalwStateV2Error::NativeContextUnavailable(reason) => {
+                        StoreError::LocalResourceUnavailable(reason.to_string())
+                    }
+                    other => StoreError::DataInconsistency(format!("palw v2 {label} refused: {other}")),
+                })
+            },
+        )
         .map_err(|why| match why {
             kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(e) => {
                 StoreError::LocalResourceUnavailable(e.to_string())
             }
-            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => StoreError::DataInconsistency(e),
-        })
+            kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Decode(e) => e,
+        })?;
+        self.check_native39_frontier_context_v1(&restored)?;
+        Ok(restored)
     }
 }
 
@@ -1001,6 +1254,87 @@ mod tests {
         ]
     }
 
+    #[test]
+    fn retained_delta_replays_original_prefix_from_distinct_parent_and_result_roots() {
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(8));
+        let params = params();
+        let parent_block = BlockHash::from_u64_word(31);
+        let parent = PalwChainStateV2::genesis();
+        let point = ctx(32, 100, 100);
+        let (child, delta) = apply_palw_transition_v2(&parent, &params, &point, &registrations(), None).unwrap();
+        let parent_root = parent.state_root();
+        let child_root = child.state_root();
+        assert_ne!(parent_root, child_root);
+        assert_ne!(parent_block, child_root);
+
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, parent_block, &parent).unwrap();
+        store.insert_delta_batch(&mut batch, point.block, child_root, &delta).unwrap();
+        db.write(batch).unwrap();
+
+        let (loaded_block, loaded_parent) = store.load_tip_retained_v1(&params).unwrap().unwrap();
+        let (recorded_root, retained_delta) = store.delta_of_retained_v1(point.block).unwrap();
+        assert_eq!(loaded_block, parent_block);
+        assert_eq!(loaded_parent.state_root(), parent_root);
+        assert_eq!(recorded_root, child_root);
+        let revert_heap =
+            kaspa_consensus_core::palw_native_resource_v1::native_delta_replay_requests_v1(&child, &retained_delta).unwrap();
+        assert!(matches!(
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1::try_revert_archive_delta_v2(
+                &child,
+                &retained_delta,
+                &params,
+                revert_heap - 1,
+            ),
+            Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+        ));
+        let (reverted, retained_heap) =
+            kaspa_consensus_core::palw_native_resource_v1::NativeChainStateV1::try_revert_archive_delta_v2(
+                &child,
+                &retained_delta,
+                &params,
+                revert_heap,
+            )
+            .unwrap();
+        assert!(retained_heap <= revert_heap);
+        assert_eq!(reverted.state_root(), parent_root);
+        assert_eq!(child.state_root(), child_root);
+        let replay_heap =
+            kaspa_consensus_core::palw_native_resource_v1::native_delta_replay_requests_v1(&loaded_parent, &retained_delta).unwrap();
+        assert!(matches!(
+            loaded_parent.try_delta_prefix_v2(&retained_delta, 0, parent_root, &params, replay_heap - 1),
+            Err(kaspa_consensus_core::palw_native_resource_v1::NativeDecodeErrorV1::Resource(_))
+        ));
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, parent_root, &params, replay_heap).is_ok());
+        assert!(loaded_parent.try_delta_prefix_v2(&retained_delta, 0, recorded_root, &params, replay_heap).is_err());
+        assert!(
+            loaded_parent
+                .try_delta_prefix_v2(&retained_delta, retained_delta.entries.len(), recorded_root, &params, replay_heap,)
+                .is_ok()
+        );
+
+        let wire = borsh::to_vec(&delta).unwrap();
+        let heap = kaspa_consensus_core::palw_native_resource_v1::preflight_native_value_v1::<PalwStateDeltaV2>(
+            wire.as_slice(),
+            wire.len() as u64,
+        )
+        .unwrap()
+        .logical_requests_v1();
+        let (loaded, extent, retained_heap) = store.delta_of_retained_bounded_v2(point.block, u64::MAX, heap).unwrap();
+        assert_eq!(*loaded, delta);
+        assert_eq!(retained_heap, heap);
+        assert!(store.delta_of_retained_bounded_v2(point.block, extent, heap).is_ok());
+        assert!(matches!(
+            store.delta_of_retained_bounded_v2(point.block, extent - 1, heap),
+            Err(StoreError::LocalResourceUnavailable(_))
+        ));
+        assert!(matches!(
+            store.delta_of_retained_bounded_v2(point.block, extent, heap - 1),
+            Err(StoreError::LocalResourceUnavailable(_))
+        ));
+    }
+
     /// **A `palw_*` read costs one materialization per TIP, not one per request** (audit M-7),
     /// measured in carriage bytes decoded.
     ///
@@ -1031,6 +1365,8 @@ mod tests {
         let per_call = uncached.tip_bytes_decoded() / CALLS;
 
         let cached = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        assert!(matches!(cached.load_tip_resident_v1(), Err(StoreError::LocalResourceUnavailable(_))));
+        assert_eq!(cached.tip_bytes_decoded(), 0, "GC does not trigger a cold materialization or turn its failure into absence");
         for _ in 0..CALLS {
             let (block, state) = cached.load_tip_cached(&p).unwrap().expect("the tip is there");
             assert_eq!(block, c1.block);
@@ -1043,6 +1379,12 @@ mod tests {
             cached.tip_bytes_decoded()
         );
         assert_eq!(cached.tip_bytes_decoded(), per_call, "the cache decoded the carriage more than once for one tip");
+        for _ in 0..CALLS {
+            let (at, resident) = cached.load_tip_resident_v1().unwrap().unwrap();
+            assert_eq!(at, c1.block);
+            assert_eq!(*resident, child);
+        }
+        assert_eq!(cached.tip_bytes_decoded(), per_call, "healthy GC borrows cached native state without decoding/cloning it");
         assert_eq!(uncached.tip_bytes_decoded(), per_call * CALLS, "the uncached path is the per-call cost this test measures");
 
         // **And it is keyed on the tip row, not on "we read once".** A second block moves the tip,
@@ -1058,6 +1400,176 @@ mod tests {
         let (block, state) = moved.load_tip_cached(&p).unwrap().expect("the tip is there");
         assert_eq!(block, c2.block, "the cache answered from a tip the chain has left");
         assert_eq!(*state, grand);
+    }
+
+    #[test]
+    fn nested_native_pressure_child_preserves_local_resource_classification() {
+        if std::env::var_os("MISAKA_NATIVE_PRESSURE_CHILD").is_none() {
+            return;
+        }
+        use kaspa_consensus_core::palw_native_resource_v1::{preflight_native_carriage_v1, preflight_native_value_v1};
+        use kaspa_consensus_core::palw_reader_router_v2::{
+            PALW_READER_ROUTER_TABLE_V2, PalwReaderRouterDeclarationV2, PalwReaderRouterRowV2,
+        };
+        use kaspa_consensus_core::palw_state_v2::PalwBondKeyV2;
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        // The auxiliary declaration has valid Borsh shape. It intentionally has
+        // no owning class, so after pressure is released its distinct semantic
+        // error is also observable. No fixture bypasses root/consistency checks.
+        let class = Hash64::from_u64_word(500);
+        let row = PalwReaderRouterRowV2 {
+            declaration: PalwReaderRouterDeclarationV2 {
+                version: 2,
+                class_id: class,
+                artifact_root: Hash64::default(),
+                bindings: Vec::new(),
+            },
+            registrant: PalwBondKeyV2(Default::default()),
+            bound_from_daa: 0,
+        };
+        let row_bytes = borsh::to_vec(&row).unwrap();
+        let nested = preflight_native_value_v1::<PalwReaderRouterRowV2>(row_bytes.as_slice(), row_bytes.len() as u64)
+            .unwrap()
+            .logical_requests_v1();
+        assert!(nested > 1);
+        let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        let mut route = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
+            kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None,
+            None,
+            Default::default(),
+        );
+        route.aux.insert((PALW_READER_ROUTER_TABLE_V2, class.as_byte_slice().to_vec()), row_bytes);
+        carriage.kernel_route = Some(route);
+        let canonical = borsh::to_vec(&carriage).unwrap();
+        let outer = preflight_native_carriage_v1(canonical.as_slice(), canonical.len() as u64).unwrap().memory_requests_v1().unwrap();
+        let budget = global_memory_budget();
+        let total = budget.snapshot().limit_bytes;
+        let native_cap = total.saturating_sub((total / 8).min(128 << 20));
+        let occupied = native_cap.checked_sub(outer).unwrap().checked_sub(nested / 2).unwrap();
+        let pressure = budget.try_reserve_retained(MemoryClass::Native, occupied).unwrap();
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(4));
+        let block = BlockHash::from_u64_word(501);
+        let mut batch = WriteBatch::default();
+        store
+            .set_tip_record_batch(
+                &mut batch,
+                PalwStateTipRecordV2 { block, state_root: Hash64::default(), carriage_borsh: canonical.clone() },
+            )
+            .unwrap();
+        db.write(batch).unwrap();
+        assert!(native_cap - occupied >= outer, "outer carriage fits before the nested row read");
+        match store.load_tip_cached(&params()) {
+            Err(StoreError::LocalResourceUnavailable(message)) => assert!(message.contains("byte budget"), "{message}"),
+            other => panic!("nested capacity must stay local, got {other:?}"),
+        }
+        // A small control message still fits while native admission is held.
+        let control = budget.try_reserve(MemoryClass::Transport, 1024).unwrap();
+        control.materialized();
+        drop(control);
+        drop(pressure);
+        assert!(
+            matches!(store.load_tip_cached(&params()), Err(StoreError::DataInconsistency(_))),
+            "the fixture's missing class remains a semantic consistency error after capacity returns"
+        );
+        let mut malformed = canonical;
+        malformed.truncate(2); // keep current version, corrupt payload
+        let mut batch = WriteBatch::default();
+        store
+            .set_tip_record_batch(&mut batch, PalwStateTipRecordV2 { block, state_root: Hash64::default(), carriage_borsh: malformed })
+            .unwrap();
+        db.write(batch).unwrap();
+        assert!(matches!(store.load_tip_cached(&params()), Err(StoreError::DataInconsistency(_))));
+        // A genuinely valid row can be loaded by the same store after repair.
+        let mut batch = WriteBatch::default();
+        store.set_tip_batch(&mut batch, block, &PalwChainStateV2::genesis()).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.load_tip_cached(&params()).unwrap().unwrap().0, block);
+        std::fs::write(std::env::var_os("MISAKA_NATIVE_PRESSURE_RESULT").unwrap(), b"passed").unwrap();
+    }
+
+    #[test]
+    fn nested_native_pressure_is_local_and_corrupt_frames_remain_data_errors() {
+        // Isolate the global bank and its optional capabilities from parallel
+        // tests. The child runs real storage, preflight and nested consistency.
+        let marker = std::env::temp_dir().join(format!(
+            "misaka-native-pressure-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        ));
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "model::stores::palw_state_v2::tests::nested_native_pressure_child_preserves_local_resource_classification",
+                "--nocapture",
+            ])
+            .env("MISAKA_NATIVE_PRESSURE_CHILD", "1")
+            .env("MISAKA_NATIVE_PRESSURE_RESULT", &marker)
+            .env("MISAKA_MEMORY_BUDGET_BYTES", (64u64 << 20).to_string())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(std::fs::read(&marker).unwrap(), b"passed", "the filtered child test must actually run");
+        std::fs::remove_file(marker).unwrap();
+    }
+
+    #[test]
+    fn concurrent_cold_readers_share_one_materialization_and_error_retries_progress() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut writer = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        writer.reindex_if_stale().unwrap();
+        let p = params();
+        let c = ctx(0xB1, 100, 100);
+        let (state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &c, &registrations(), None).unwrap();
+        let mut batch = WriteBatch::default();
+        writer.set_tip_batch(&mut batch, c.block, &state).unwrap();
+        writer.set_pruning_snapshot_batch(&mut batch, c.block, &state).unwrap();
+        db.write(batch).unwrap();
+        let store = Arc::new(DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16)));
+        let tip_len = store.tip_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        let snapshot_len = store.pruning_snapshot_record().unwrap().unwrap().carriage_borsh.len() as u64;
+        let barrier = Arc::new(std::sync::Barrier::new(8));
+        let answers: Vec<_> = std::thread::scope(|scope| {
+            let mut threads = Vec::new();
+            for _ in 0..8 {
+                let store = store.clone();
+                let barrier = barrier.clone();
+                let p = &p;
+                threads.push(scope.spawn(move || {
+                    barrier.wait();
+                    (
+                        store.load_tip_cached(p).unwrap().unwrap().1,
+                        store.load_pruning_snapshot_carriage_cached(p, c.block).unwrap().unwrap(),
+                    )
+                }));
+            }
+            threads.into_iter().map(|t| t.join().unwrap()).collect()
+        });
+        assert_eq!(store.tip_bytes_decoded(), tip_len);
+        assert_eq!(store.pruning_snapshot_bytes_decoded(), snapshot_len);
+        for answer in &answers {
+            assert!(Arc::ptr_eq(&answer.0, &answers[0].0));
+            assert!(Arc::ptr_eq(&answer.1, &answers[0].1));
+        }
+        // A failed cold decode must release the load gate. It is not cached;
+        // after the durable row is repaired, the same store makes progress.
+        let previous = Arc::downgrade(&answers[0].0);
+        drop(answers);
+        let mut record = writer.tip_record().unwrap().unwrap();
+        let good = record.clone();
+        record.state_root = Hash64::from_u64_word(0xBAD);
+        record.carriage_borsh.truncate(1);
+        let mut batch = WriteBatch::default();
+        writer.set_tip_record_batch(&mut batch, record).unwrap();
+        db.write(batch).unwrap();
+        assert!(store.load_tip_cached(&p).is_err());
+        assert!(previous.upgrade().is_none(), "cache-only predecessor is freed before the replacement decode");
+        assert!(store.load_tip_cached(&p).is_err());
+        let mut batch = WriteBatch::default();
+        writer.set_tip_record_batch(&mut batch, good).unwrap();
+        db.write(batch).unwrap();
+        assert_eq!(store.load_tip_cached(&p).unwrap().unwrap().0, c.block);
     }
 
     /// **A pruning-point snapshot serve costs one materialization per CAPTURED SNAPSHOT, and
@@ -1189,6 +1701,54 @@ mod tests {
         assert_eq!(loaded_delta, delta, "the delta's bytes are the machine's bytes");
         let reverted = revert_delta_v2(&tip_state, &loaded_delta, &p).unwrap();
         assert_eq!(reverted, genesis, "the reorg primitive survives the disk");
+    }
+
+    /// Unsupported scoped codec coverage is a local refusal even during the
+    /// typed consistency pass, after the cold wire preflight has succeeded.
+    #[test]
+    fn cold_restore_keeps_unsupported_scoped_codec_as_local_resource() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let mut store = DbPalwStateV2Store::new(db.clone(), CachePolicy::Count(16));
+        store.reindex_if_stale().unwrap();
+        let p = params().with_claim_local_settlement_from_daa(Some(0));
+        let point = ctx(0x37, 1, 1);
+        let mut carriage = PalwStateCarriageV2::from_state(&PalwChainStateV2::genesis());
+        carriage.last_point = Some(point);
+        let mut route = kaspa_consensus_core::palw_kernel_route_v1::PalwKernelRouteStateV1::new_typed(
+            kaspa_consensus_core::palw_kernel_route_v1::palw_kernel_route_policy_v1(Hash64::default(), Hash64::default()),
+            None,
+            None,
+            misaka_palw_kernel::rows::LedgerScalarsV1 { daa: 1, burned: 0 },
+        );
+        // Negative input only: exact published ComponentSpec/Root Borsh grammar,
+        // but key width513 is outside this node's concrete512-byte codec profile.
+        // No accepted source/frame/checkpoint authority is invented by this test.
+        let spec = (12u8, 1u32, 3u16, 513u16, u64::MAX);
+        let mut key = vec![b'I'];
+        key.extend(borsh::to_vec(&spec).unwrap());
+        let value = borsh::to_vec(&(spec, Option::<Hash64>::None, 0u64)).unwrap();
+        route.aux.insert((kaspa_consensus_core::palw_claim_local_v1::PALW_CLAIM_LOCAL_TABLE_V1, key), value);
+        carriage.kernel_route = Some(route);
+        let mut batch = WriteBatch::default();
+        store
+            .set_tip_record_batch(
+                &mut batch,
+                PalwStateTipRecordV2 {
+                    block: point.block,
+                    state_root: Hash64::default(),
+                    carriage_borsh: borsh::to_vec(&carriage).unwrap(),
+                },
+            )
+            .unwrap();
+        db.write(batch).unwrap();
+        drop(store);
+        let cold = DbPalwStateV2Store::new(db, CachePolicy::Count(16));
+        match cold.load_tip_retained_v1(&p) {
+            Err(StoreError::LocalResourceUnavailable(why)) => {
+                assert!(why.contains("bounded key codec"), "inner scoped codec refusal must survive: {why}")
+            }
+            other => panic!("unsupported scoped schema must stay local, got {other:?}"),
+        }
     }
 
     /// A tampered snapshot refuses to become a sink: the recorded root is demanded at load, so

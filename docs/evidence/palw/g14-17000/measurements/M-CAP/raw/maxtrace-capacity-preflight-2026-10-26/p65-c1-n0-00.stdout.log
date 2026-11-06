@@ -1,0 +1,11 @@
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::g14_kernel_route_e2e::canonical::capacity_measurement::g14_kernel_capacity_measure
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1206 filtered out; finished in 0.02s
+

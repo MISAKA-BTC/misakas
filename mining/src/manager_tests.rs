@@ -44,6 +44,130 @@ mod tests {
     const TARGET_TIME_PER_BLOCK: u64 = 1_000;
     const MAX_BLOCK_MASS: u64 = 500_000;
 
+    #[test]
+    fn local_submission_guard_rechecks_after_worker_handoff_before_insert_or_rbf() {
+        use crate::manager::MiningManagerProxy;
+        use kaspa_consensusmanager::ConsensusSessionOwned;
+        use std::{
+            sync::atomic::{AtomicBool, Ordering},
+            time::Duration,
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread().max_blocking_threads(1).build().unwrap();
+        runtime.block_on(async {
+            for replace in [false, true] {
+                let consensus = Arc::new(ConsensusMock::new());
+                let session = ConsensusSessionOwned::new_without_session_guard(consensus.clone());
+                let manager = Arc::new(MiningManager::new(
+                    TARGET_TIME_PER_BLOCK,
+                    false,
+                    MAX_BLOCK_MASS,
+                    None,
+                    Arc::new(MiningCounters::default()),
+                ));
+                let funding = create_transaction_without_input(vec![500 * SOMPI_PER_KASPA]);
+                let old = create_transaction(&funding, DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+                let next = create_transaction(&funding, 5 * DEFAULT_MINIMUM_RELAY_TRANSACTION_FEE);
+                consensus.add_transaction(funding, 1);
+                if replace {
+                    manager
+                        .validate_and_insert_transaction(
+                            consensus.as_ref(),
+                            old.clone(),
+                            Priority::Low,
+                            Orphan::Forbidden,
+                            RbfPolicy::Forbidden,
+                        )
+                        .unwrap();
+                }
+                let (started_tx, started_rx) = std::sync::mpsc::channel();
+                let (release_tx, release_rx) = std::sync::mpsc::channel();
+                let blocker = tokio::task::spawn_blocking(move || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                });
+                started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let current = Arc::new(AtomicBool::new(true));
+                assert!(current.load(Ordering::SeqCst), "pre-enqueue view is current");
+                let read = current.clone();
+                let rbf = if replace { RbfPolicy::Mandatory } else { RbfPolicy::Forbidden };
+                let next_id = next.id();
+                let mut submission = std::pin::pin!(MiningManagerProxy::new(manager.clone()).validate_and_insert_transaction_guarded(
+                    &session,
+                    next,
+                    Priority::Low,
+                    Orphan::Forbidden,
+                    rbf,
+                    Box::new(move |_| {
+                        if !read.load(Ordering::SeqCst) {
+                            return Err("duty changed".into());
+                        }
+                        Ok(Box::new(|_| Ok(())))
+                    }),
+                ));
+                assert!(futures_util::poll!(submission.as_mut()).is_pending(), "worker is queued behind blocker");
+                current.store(false, Ordering::SeqCst);
+                release_tx.send(()).unwrap();
+                blocker.await.unwrap();
+                assert!(matches!(submission.await, Err(MiningManagerError::LocalSubmissionWithheld(_))));
+                assert!(manager.get_transaction(&next_id, TransactionQuery::TransactionsOnly).is_none());
+                assert_eq!(manager.get_transaction(&old.id(), TransactionQuery::TransactionsOnly).is_some(), replace);
+            }
+        });
+    }
+
+    #[test]
+    fn local_submission_pin_refuses_changed_view_after_second_exact_check() {
+        use crate::manager::MiningManagerProxy;
+        use kaspa_consensusmanager::ConsensusSessionOwned;
+        use std::{
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread().build().unwrap();
+        runtime.block_on(async {
+            let consensus = Arc::new(ConsensusMock::new());
+            let session = ConsensusSessionOwned::new_without_session_guard(consensus.clone());
+            let manager =
+                Arc::new(MiningManager::new(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS, None, Arc::new(MiningCounters::default())));
+            let next = create_child_and_parent_txs_and_add_parent_to_consensus(&consensus);
+            let next_id = next.id();
+            let generation = Arc::new(AtomicUsize::new(1));
+            let worker_generation = Arc::clone(&generation);
+            let exact_count = Arc::new(AtomicUsize::new(0));
+            let worker_count = Arc::clone(&exact_count);
+            let (checked_tx, checked_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel();
+            let submission = MiningManagerProxy::new(manager.clone()).validate_and_insert_transaction_guarded(
+                &session,
+                next,
+                Priority::Low,
+                Orphan::Forbidden,
+                RbfPolicy::Forbidden,
+                Box::new(move |_| {
+                    let pinned = worker_generation.load(Ordering::SeqCst);
+                    if worker_count.fetch_add(1, Ordering::SeqCst) == 1 {
+                        checked_tx.send(pinned).unwrap();
+                        release_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+                    }
+                    let generation = Arc::clone(&worker_generation);
+                    Ok(Box::new(move |_| {
+                        (generation.load(Ordering::SeqCst) == pinned).then_some(()).ok_or_else(|| "pinned view changed".into())
+                    }))
+                }),
+            );
+            let mut submission = std::pin::pin!(submission);
+            assert!(futures_util::poll!(submission.as_mut()).is_pending());
+            assert_eq!(checked_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 1);
+            generation.store(2, Ordering::SeqCst);
+            release_tx.send(()).unwrap();
+            assert!(matches!(submission.await, Err(MiningManagerError::LocalSubmissionWithheld(why)) if why == "pinned view changed"));
+            assert_eq!(exact_count.load(Ordering::SeqCst), 2);
+            assert!(manager.get_transaction(&next_id, TransactionQuery::TransactionsOnly).is_none());
+        });
+    }
+
     // test_validate_and_insert_transaction verifies that valid transactions were successfully inserted into the mempool.
     #[test]
     fn test_validate_and_insert_transaction() {
@@ -2231,6 +2355,66 @@ mod tests {
         [Priority::Low, Priority::High]
             .iter()
             .flat_map(|priority| [Orphan::Allowed, Orphan::Forbidden].iter().map(|orphan| (*priority, *orphan)))
+    }
+
+    /// Pool policy control using the real revalidation and template-cleanup
+    /// paths. Local collateral reads make no new transaction validity decision.
+    #[test]
+    fn native_bond_exit_local_retry_retains_pool_descendants_and_never_spins_template_cleanup() {
+        let consensus = Arc::new(ConsensusMock::new());
+        let manager = MiningManager::new(TARGET_TIME_PER_BLOCK, false, MAX_BLOCK_MASS, None, Arc::new(MiningCounters::default()));
+        let (parent, spend) = create_parent_and_children_transactions(&consensus, vec![3000 * SOMPI_PER_KASPA]);
+        consensus.add_transaction(parent, 0);
+        let descendant = create_transaction(&spend, 1000);
+        for tx in [&spend, &descendant] {
+            manager
+                .validate_and_insert_transaction(
+                    consensus.as_ref(),
+                    tx.clone(),
+                    Priority::High,
+                    Orphan::Forbidden,
+                    RbfPolicy::Forbidden,
+                )
+                .unwrap();
+        }
+        let errors = [
+            TxRuleError::LocalNativeCapacityUnavailable(
+                kaspa_consensus_core::palw_native_resource_v1::NativeCoverageV1::unsupported::<u8>(
+                    "own exit reader",
+                    "temporarily held memory",
+                ),
+            ),
+            TxRuleError::LocalNativeStateContextUnavailable(
+                kaspa_consensus_core::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1::HistoryUnavailable,
+            ),
+        ];
+        for error in errors {
+            let classified: RuleError = error.clone().into();
+            assert!(classified.is_local_native_retry_v1());
+            consensus.set_status(spend.id(), Err(error.clone()));
+            let (sender, _receiver) = unbounded_channel();
+            manager.revalidate_high_priority_transactions(consensus.as_ref(), sender);
+            assert_transaction_count(&manager, 2, "local revalidation is not invalidity");
+            assert!(manager.has_transaction(&descendant.id(), TransactionQuery::All));
+            let invalid = std::collections::HashMap::from([(spend.id(), error)]);
+            assert!(
+                matches!(
+                    manager.remove_invalid_block_template_transactions(invalid),
+                    Err(kaspa_consensus_core::errors::block::RuleError::LocalNativeCapacityUnavailable(_)
+                        | kaspa_consensus_core::errors::block::RuleError::LocalNativeStateContextUnavailable(_))
+                ),
+                "end this build attempt instead of remove-and-retry on an unchanged pool"
+            );
+            assert_transaction_count(&manager, 2, "template local retry preserves both entries");
+        }
+        consensus.set_status(spend.id(), Ok(()));
+        let (sender, mut receiver) = unbounded_channel();
+        manager.revalidate_high_priority_transactions(consensus.as_ref(), sender);
+        assert!(
+            receiver.blocking_recv().unwrap().contains(&spend.id()),
+            "the identical transaction is revalidated once own context recovers"
+        );
+        assert_transaction_count(&manager, 2, "no txid invalid cache was poisoned");
     }
 
     fn all_priority_orphan_rbf_policy_combinations() -> impl Iterator<Item = (Priority, Orphan, RbfPolicy)> {

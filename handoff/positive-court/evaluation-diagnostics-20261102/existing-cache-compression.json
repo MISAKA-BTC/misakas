@@ -1,0 +1,32 @@
+{
+  "scope": "transparent filesystem compression of already-present valid own compiled libraries; identical readable bytes/paths/mtime; no absent library restored or foreign binary injected",
+  "files": [
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_kernel-fc1467d1bac8ae21.rlib",
+      "logical_bytes": 48468656,
+      "unchanged_sha256": "406cbe37785c57eceb33ea78b38bde75fbfc4026a769c070f0d4d88aae96c5ab",
+      "mtime_ns_unchanged": 1793575828074979285,
+      "allocated_before": 48472064,
+      "allocated_after": 14434304,
+      "observed_free_after": 967876608
+    },
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-44363294fa56f20c.rlib",
+      "logical_bytes": 32010376,
+      "unchanged_sha256": "d17f7065e05cb98cae08f830010e3ed9e2f3ecddd1351d92931c64ead3275855",
+      "mtime_ns_unchanged": 1793578504524908651,
+      "allocated_before": 32014336,
+      "allocated_after": 9469952,
+      "observed_free_after": 990375936
+    },
+    {
+      "existing_path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/positive_wide_material_v2-b6a66b1c57fb18c4",
+      "logical_bytes": 25980848,
+      "unchanged_sha256": "9efa4d3d51bd3cea1b96d9f1551be5086e56eda22193aeeaec59cfad931d87d9",
+      "mtime_ns_unchanged": 1793583596401455302,
+      "allocated_before": 25980928,
+      "allocated_after": 7852032,
+      "observed_free_after": 1008615424
+    }
+  ]
+}

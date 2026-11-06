@@ -304,14 +304,14 @@ fn selected_slots_share_one_actor_hold_and_objective_court_is_once_inclusive_h()
     let mut b = TransitionBuilder::new(&f.state, &f.p, false, false, false, false, &f.extras);
     fund_action(&mut b, &f);
     let before = b.state.clone();
-    let rooms = (2..=3).map(bond).map(|a| (a, b.gate_room(&a, 36, PalwRcoreGateV1::Work))).collect::<BTreeMap<_, _>>();
+    let rooms = (2..=3).map(bond).map(|a| (a, b.gate_room(&a, 36, PalwRcoreGateV1::Work).unwrap())).collect::<BTreeMap<_, _>>();
     let journal_start = b.entries.len();
     all_approvals(&mut b, &f);
     let actors = f.epoch.cohort.iter().map(|s| s.bond).collect::<BTreeSet<_>>();
     for actor in (2..=3).map(bond).filter(|a| actors.contains(&palw_kernel_bond_id_v1(a))) {
         assert_eq!(b.state.reserved_exposure(&actor) - before.reserved_exposure(&actor), 7);
         assert_eq!(
-            rooms[&actor] - b.gate_room(&actor, 36, PalwRcoreGateV1::Work),
+            rooms[&actor] - b.gate_room(&actor, 36, PalwRcoreGateV1::Work).unwrap(),
             7,
             "common gate consumes source hold exactly once without aux reads"
         );

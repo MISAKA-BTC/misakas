@@ -681,8 +681,7 @@ pub fn palw_producer_facts_v4(
         real_attempts_refused: false,
         rider_pwu: Vec::new(),
         is_base_class: class_id == state_params.base_class_id(),
-        fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
-            || state.fp_lane_certification(&class_id).is_some(),
+        fp_certified: crate::palw_state_v2::palw_fp_lane_available_v1(state, state_params, &class_id, false),
         // Lane g14-court-capacity-r2: a court-demanding (fused-attention) class past `palw_court_capacity_v1` promises the longer
         // retention its court guarantee needs; every other class the minimum.
         min_trace_retention_daa: crate::palw_court_capacity_v1::palw_attempt_trace_retention_daa_v1(
@@ -1845,6 +1844,39 @@ pub struct PalwDisclosureDutyV1 {
 }
 
 impl PalwDisclosureDutyV1 {
+    #[allow(clippy::too_many_arguments)]
+    fn from_claim(
+        claim_id: Hash64,
+        claim: &crate::palw_state_v2::PalwClaimStateV2,
+        artifact_root: Hash64,
+        discloser: PalwBondKeyV2,
+        role: PalwDisclosureRoleV1,
+        signer_rank: u16,
+        unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+        deadline_daa: u64,
+        disclose_window_daa: u64,
+        in_run_rows: u32,
+    ) -> Self {
+        Self {
+            claim_id,
+            accepted_block: claim.accepted_block,
+            class_id: claim.class_id,
+            artifact_root,
+            executor_bond: claim.bond,
+            discloser,
+            role,
+            signer_rank,
+            unit,
+            deadline_daa,
+            disclose_window_daa,
+            in_run_rows,
+            trace_root: claim.trace_root,
+            execution_root: claim.execution_root,
+            free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+            job_identity: claim.job_identity,
+        }
+    }
+
     /// The free-prompt pin an answer's capture must reproduce — `None` for an attempt (its whole job
     /// is the anchor's) or an unrecorded identity; the one reading of
     /// [`PalwSeatDutyV2::fp_job_pin_v1`].
@@ -1937,12 +1969,10 @@ pub fn palw_disclosure_duties_v1(
                     None => continue,
                 }
             };
-            duties.push(PalwDisclosureDutyV1 {
+            duties.push(PalwDisclosureDutyV1::from_claim(
                 claim_id,
-                accepted_block: claim.accepted_block,
-                class_id: claim.class_id,
+                claim,
                 artifact_root,
-                executor_bond: claim.bond,
                 discloser,
                 role,
                 signer_rank,
@@ -1950,11 +1980,7 @@ pub fn palw_disclosure_duties_v1(
                 deadline_daa,
                 disclose_window_daa,
                 in_run_rows,
-                trace_root: claim.trace_root,
-                execution_root: claim.execution_root,
-                free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
-                job_identity: claim.job_identity,
-            });
+            ));
         }
     }
     duties.sort_by(|a, b| (a.deadline_daa, a.claim_id, a.unit).cmp(&(b.deadline_daa, b.claim_id, b.unit)));
@@ -1971,6 +1997,165 @@ pub fn palw_disclosure_duties_v1(
     retain.sort_unstable();
     retain.dedup();
     PalwDisclosureDutiesV1 { duties, retain }
+}
+
+/// Project just the ordinary DA duty named by the queue. Reads borrowed rows
+/// and uses the same availability, clock and covering rules as the batch.
+pub fn palw_disclosure_duty_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+    requested: &PalwDisclosureDutyV1,
+    now_daa: u64,
+) -> Option<PalwDisclosureDutyV1> {
+    use crate::palw_state_v2::{palw_da_covering_signer_rank_v1, palw_da_disclose_window_daa_v1};
+
+    if !params.rcore_plus_active_at(now_daa) {
+        return None;
+    }
+    let PalwDisclosureDutyV1 { claim_id, unit, discloser, .. } = *requested;
+    let claim = state.claim(&claim_id)?;
+    let artifact_root = state.class(&claim.class_id)?.artifact_root;
+    let in_run_rows = crate::palw_da_rcore_v1::palw_da_in_run_rows_v1(claim, extras.fp_da_pins_active);
+    if state.da_claim(&claim_id).is_some_and(|record| state.palw_da_unit_available_v1(&claim_id, record, &unit, in_run_rows)) {
+        return None;
+    }
+    let deadline_daa = state
+        .da_sessions_of(&claim_id)
+        .filter(|(_, session)| session.deadline_daa >= now_daa && session.units.contains(&unit))
+        .map(|(_, session)| session.deadline_daa)
+        .min()?;
+    let (role, rank) = if discloser == claim.bond {
+        (PalwDisclosureRoleV1::Producer, 0)
+    } else {
+        state.slashable_lock(discloser, claim_id)?;
+        let rank = palw_da_covering_signer_rank_v1(state, params, extras, claim_id, &unit, discloser, now_daa)?;
+        (PalwDisclosureRoleV1::CoveringSigner, rank)
+    };
+    Some(PalwDisclosureDutyV1::from_claim(
+        claim_id,
+        claim,
+        artifact_root,
+        discloser,
+        role,
+        rank,
+        unit,
+        deadline_daa,
+        palw_da_disclose_window_daa_v1(params),
+        in_run_rows,
+    ))
+}
+
+/// Pins an already-owned immutable virtual publication and its import epoch.
+/// The concrete snapshot remains private to the consensus implementation.
+pub struct PalwProviderDaCurrentViewV1 {
+    pub daa_score: u64,
+    pub import_epoch: u64,
+    snapshot: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+}
+
+impl PalwProviderDaCurrentViewV1 {
+    pub fn new<T: Send + Sync + 'static>(daa_score: u64, import_epoch: u64, snapshot: std::sync::Arc<T>) -> Self {
+        Self { daa_score, import_epoch, snapshot }
+    }
+
+    pub fn pins<T: 'static>(&self, snapshot: &T) -> bool {
+        self.snapshot.downcast_ref::<T>().is_some_and(|pinned| std::ptr::eq(pinned, snapshot))
+    }
+}
+
+/// Fixed-size metadata for the exact packet admitted by the Panel outbox.
+#[derive(Clone, Copy)]
+pub struct PalwProviderDaAnswerStageV1 {
+    claim: Hash64,
+    unit: crate::palw_da_rcore_v1::PalwDaUnitV1,
+    discloser: PalwBondKeyV2,
+    kind: PalwProviderDaAnswerKindV1,
+}
+
+#[derive(Clone, Copy)]
+enum PalwProviderDaAnswerKindV1 {
+    Material,
+    LegacyDirect,
+    LegacyDeclaration {
+        parts: usize,
+    },
+    LegacyChunk {
+        manifest: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2,
+        chunk: crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkPinV2,
+    },
+}
+
+impl PalwProviderDaAnswerStageV1 {
+    pub fn from_object(
+        object: &crate::palw_state_v2::PalwConsensusObjectV2,
+        manifest: Option<crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2>,
+    ) -> Option<Self> {
+        use crate::palw_da_rcore_v1::PalwDaUnitV1;
+        use crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerChunkPinV2;
+        use crate::palw_state_v2::PalwConsensusObjectV2 as O;
+        use PalwProviderDaAnswerKindV1 as Kind;
+
+        let (claim, unit, discloser, kind) = match (object, manifest) {
+            (O::MaterialDisclosedV2 { claim, unit, discloser, .. }, None) if !matches!(unit, PalwDaUnitV1::LegacyHeldV2(_)) => {
+                (*claim, *unit, *discloser, Kind::Material)
+            }
+            (O::LegacyHeldAnsweredV2 { answer }, None) => {
+                (answer.claim, PalwDaUnitV1::LegacyHeldV2(answer.unit), answer.discloser, Kind::LegacyDirect)
+            }
+            (O::LegacyHeldAnswerDeclaredV2 { declaration }, None) => (
+                declaration.claim,
+                PalwDaUnitV1::LegacyHeldV2(declaration.unit),
+                declaration.discloser,
+                Kind::LegacyDeclaration { parts: declaration.chunk_digests.len() },
+            ),
+            (O::LegacyHeldAnswerChunkV2 { chunk }, Some(manifest)) => (
+                chunk.claim,
+                PalwDaUnitV1::LegacyHeldV2(chunk.unit),
+                chunk.discloser,
+                Kind::LegacyChunk { manifest, chunk: PalwLegacyAnswerChunkPinV2::new(chunk) },
+            ),
+            _ => return None,
+        };
+        Some(Self { claim, unit, discloser, kind })
+    }
+}
+
+/// Check the provider binding and the exact queued stage on one accepted snapshot.
+pub fn palw_provider_da_answer_matches_v1(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    extras: &crate::palw_state_v2::PalwTransitionExtrasV1,
+    duty: &PalwDisclosureDutyV1,
+    roots: &crate::palw_evidence_v1::ClaimRoots,
+    stage: PalwProviderDaAnswerStageV1,
+    now_daa: u64,
+) -> bool {
+    use crate::palw_da_rcore_v1::PalwDaUnitV1;
+    use crate::palw_state_v2::PALW_COURT_CLOSE_INCLUSION_MARGIN;
+    use PalwProviderDaAnswerKindV1 as Kind;
+    let Some(claim) = state.claim(&duty.claim_id) else { return false };
+    if (stage.claim, stage.unit, stage.discloser) != (duty.claim_id, duty.unit, duty.discloser)
+        || !matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::Attempt)
+        || (claim.trace_root, claim.output_root, claim.execution_root, claim.trace_chunk_count, claim.trace_retention_daa)
+            != (roots.trace_root, roots.output_root, roots.execution_root, roots.trace_chunk_count, roots.retention_deadline)
+        || palw_disclosure_duty_v1(state, params, extras, duty, now_daa).as_ref() != Some(duty)
+    {
+        return false;
+    }
+    let PalwDaUnitV1::LegacyHeldV2(unit) = stage.unit else { return matches!(stage.kind, Kind::Material) };
+    let pending = state.legacy_answer_pending_v2(&(stage.claim, unit, stage.discloser));
+    match stage.kind {
+        Kind::LegacyDirect => pending.is_none(),
+        Kind::LegacyDeclaration { parts } => {
+            pending.is_none()
+                && now_daa.saturating_add(PALW_COURT_CLOSE_INCLUSION_MARGIN.saturating_mul(parts as u64)) < duty.deadline_daa
+        }
+        Kind::LegacyChunk { manifest, chunk } => {
+            pending.is_some_and(|pending| pending.matches_queued_chunk_v2(chunk, manifest, now_daa, duty.deadline_daa))
+        }
+        Kind::Material => false,
+    }
 }
 
 /// **P2-6: what an automatic data-availability accusation of a claim by `accuser` comes to** — node

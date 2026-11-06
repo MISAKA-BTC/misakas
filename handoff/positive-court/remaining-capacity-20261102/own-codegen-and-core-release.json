@@ -1,0 +1,268 @@
+{
+  "reason": "only this goal turn: regenerate feature-specific libraries when needed; keep successful linked executable, source, models, native archives and raw evidence",
+  "files": [
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.00.rcgu.o",
+      "bytes": 19795936,
+      "sha256": "cc848ae593daa32c2da368f9a6f847ed980eb26604e08bfcbfc274ab5baee2b9",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.01.rcgu.o",
+      "bytes": 5906392,
+      "sha256": "239f1fc5806d86bf978527de510cb308c4992f6f0c968ba3159c8489f1d1dac9",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.02.rcgu.o",
+      "bytes": 4839136,
+      "sha256": "cc8bafa7259b5a6f8b234bc3adc328c360ece51f411a90469993a715f0604086",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.03.rcgu.o",
+      "bytes": 7842024,
+      "sha256": "f0c3d4a26676a4411a170689dae01dbbe211a46af445c66028633f9b04c2d196",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.04.rcgu.o",
+      "bytes": 4130968,
+      "sha256": "24e685ac2116f8827a3c16d84885770fdfae1deb56c571c695f7990075510890",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.05.rcgu.o",
+      "bytes": 16966352,
+      "sha256": "dc891c75f534a0b857f213ffede20375c64bb3b8628813374b6ba4734e01f373",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.06.rcgu.o",
+      "bytes": 9042304,
+      "sha256": "d0ee8970a740526d3dafe77cc0620d78476f11ca05bb97a97fd6a823af5b8f34",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.07.rcgu.o",
+      "bytes": 3723072,
+      "sha256": "41826bfcca191bbd8a3d1c5fc74d8b40d31e986b220cf8cb3017c7aa246ad353",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.08.rcgu.o",
+      "bytes": 10793472,
+      "sha256": "d9f28b47282262cdda282622ea0ebadeec6498647a33193fe608a1e992e94c10",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.09.rcgu.o",
+      "bytes": 4098736,
+      "sha256": "aaa0212f0ede2dd2f630833c9c066e571abfab840736507eebd8aff766e333ee",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.10.rcgu.o",
+      "bytes": 6939232,
+      "sha256": "2a303b53b0eff0ef327a403c9667090066668b2e5bfe74ca13526001446c6e56",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.11.rcgu.o",
+      "bytes": 16840368,
+      "sha256": "201b5c68442e157da5488199f3d7a350ce5461da09164a3e23308c590c5614dd",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.12.rcgu.o",
+      "bytes": 10906880,
+      "sha256": "27ae490604a6d7f5929d2c4e647409958a95b125bdbf11308dd8bd5d0e668bf0",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.13.rcgu.o",
+      "bytes": 7182800,
+      "sha256": "5c0320d51f6c440b7b4e278686dedb89c8e3d7221ab9d41d1e61669f38cf5a8f",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.14.rcgu.o",
+      "bytes": 4548120,
+      "sha256": "66e2134f27ae654dba16a891e928317241d9011098f4fb28de05f555faf3d7c5",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_tir_exec-e65e9eb9f2a1c87f.misaka_palw_tir_exec.e015aa9c44351c4d-cgu.15.rcgu.o",
+      "bytes": 7364432,
+      "sha256": "c0f1e9c0ab9b3aa7f95c264ea8129f813b3210e516b707446003bed75e9ec409",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_tir_exec-e65e9eb9f2a1c87f.rlib",
+      "retained_archive_sha256": "8a956209d60a26c1d69e73c621365f92d66302efaba11522458c05259a6e1eae"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.00.rcgu.o",
+      "bytes": 7097224,
+      "sha256": "5177fa8c473a7c94b6e7ac7fd300ef2f7e3e01266f56046cb24445b938326025",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.01.rcgu.o",
+      "bytes": 5460088,
+      "sha256": "c4df9d19dcb18d56c3f3d87b427a81ffb0e1d7eb8c97518cfa9f92fc8a599b65",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.02.rcgu.o",
+      "bytes": 4293568,
+      "sha256": "5000b182874c9220da51bbdeef8c6cd90cea943bb205f9142c6bd68e6399be2b",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.03.rcgu.o",
+      "bytes": 4870592,
+      "sha256": "32ad46a35938b9fa39bf50e2bd42fb194483cb66b865be6213d24bc028af9617",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.04.rcgu.o",
+      "bytes": 7168328,
+      "sha256": "60f861cdc63a4175424eb0233b3ecdbcbc8673b901d4fcaf8afb8d5316a310c2",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.05.rcgu.o",
+      "bytes": 4236400,
+      "sha256": "a6fcc1f0a6f77bff6a122ccfcd5082e7fa16b9b6e4d2063f22e4a3add8b49cc0",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.06.rcgu.o",
+      "bytes": 14009248,
+      "sha256": "d105fcfc690771406bfb79e2883a9dde65dc3b4844cee849fa41b6c82086cf5a",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.07.rcgu.o",
+      "bytes": 5442280,
+      "sha256": "8da546e63242970bc76c2ae5b101d2d3901b14c72578a11b5bb9355ee4e1166f",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.08.rcgu.o",
+      "bytes": 3333504,
+      "sha256": "d1a2734648a1c7e7e7a029d888ffe1d6aaaf99ba35874e211b6635db3b3564bb",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.09.rcgu.o",
+      "bytes": 4635744,
+      "sha256": "ede896d5ab601d63ec640e2a04f5728efedbf73d8ff6e1dedd0dc8fb7fbbf2c5",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.10.rcgu.o",
+      "bytes": 4840888,
+      "sha256": "96fb66949551bdfd50127ba9e8238d0e0c9f8d6690ccde24ecbd1da12a624766",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.11.rcgu.o",
+      "bytes": 4259128,
+      "sha256": "32090cf2a45216f0c83309917b91e6885543f2073ef2e376641285645cccba65",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.12.rcgu.o",
+      "bytes": 9246832,
+      "sha256": "6208303292569c84b28e1e03706e4b66d2da52bb873bb845550cff9834f0db2b",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.13.rcgu.o",
+      "bytes": 5311920,
+      "sha256": "f2e64a6ce19a1ea81fe12af9197792ed8f51b801959e4ca0beadfb6526f615aa",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.14.rcgu.o",
+      "bytes": 6903528,
+      "sha256": "6e836fd8c5a6513dd74ba5fa353e9a5fe9fec5999da20c5f2e80ab72f602e668",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_base0-14320e6eac4fc802.misaka_palw_base0.4c92c14d753e278d-cgu.15.rcgu.o",
+      "bytes": 4595800,
+      "sha256": "56c917063ac3eb94ab8939a3fe38e91be2cf339d473fd04d7b2f6c2c46df1e0a",
+      "retained_archive": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libmisaka_palw_base0-14320e6eac4fc802.rlib",
+      "retained_archive_sha256": "8e5ff36afdfe7b6fb3ada98f94286a806a0258733c3de844c549c618561e2d3e"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-a0d28fd456ecd999.rlib",
+      "bytes": 372093568,
+      "sha256": "e89d39d3bc712bcfcd5adc4c34e9495cd243f6d47dfcc1cf69d0a343906410e2"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-a0d28fd456ecd999.rmeta",
+      "bytes": 122904138,
+      "sha256": "e7d4ccc264c7f5fc52ee0c3aa975920cbfe1a0e3304386e5a1da4945ea1e4363"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/libkaspa_consensus_core-e26f169f58011e8b.rmeta",
+      "bytes": 122899785,
+      "sha256": "7ebc94750516248725c22150e3a7cfcdfdebd9ef81892b913d80723d1ef72b31"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-e26f169f58011e8b.kaspa_consensus_core.6b05d2d4338172bd-cgu.00.rcgu.o",
+      "bytes": 20138968,
+      "sha256": "52597e765498d5f7ea3de9f05af3301a5286a0481bc95289c8bb96425f266fdc"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-e26f169f58011e8b.kaspa_consensus_core.6b05d2d4338172bd-cgu.01.rcgu.o",
+      "bytes": 11757136,
+      "sha256": "645e8005490a17aec1fa233e6da78edf14e69a2d2448b0c35db7f605c015af01"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-e26f169f58011e8b.kaspa_consensus_core.6b05d2d4338172bd-cgu.14.rcgu.o",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/kaspa_consensus_core-e26f169f58011e8b.kaspa_consensus_core.6b05d2d4338172bd-cgu.15.rcgu.o",
+      "bytes": 15047248,
+      "sha256": "96e6c1fe652efe7cb2ecf89d989cf1985b20b20fb7539633dcbe93d2948dff29"
+    }
+  ],
+  "initial_free_bytes": 530911232,
+  "released_bytes": 901466139,
+  "final_free_bytes": 1433079808,
+  "successful_executable_unchanged": true
+}

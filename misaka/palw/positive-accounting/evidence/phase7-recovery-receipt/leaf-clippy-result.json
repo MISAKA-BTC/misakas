@@ -1,0 +1,39 @@
+{
+  "command": [
+    "cargo",
+    "clippy",
+    "--offline",
+    "--locked",
+    "-p",
+    "misaka-palw-positive-accounting",
+    "--all-targets",
+    "--no-deps",
+    "--",
+    "-D",
+    "warnings"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "base_commit": "e4c1a08c5572872c173921687d91af87c796b1e1",
+  "source_sha256": {
+    "misaka/palw/positive-accounting/src/credit.rs": "2e91f703e130356c61f68fbed5696bf15d20bffb0f7a9240f394ce7fedfd49d0",
+    "misaka/palw/positive-accounting/src/credit/consumers.rs": "a29f5cf1ac627cb1df45b89f2b9170ae576d30cbc9b192b1107def83a3f1e8b9",
+    "misaka/palw/positive-accounting/src/credit/tests.rs": "5969b6b12633707c8ac97fbec9cf24562871eec20a839217936b955d3db6e833",
+    "misaka/palw/positive-accounting/src/fees.rs": "fe7b3e59121b92a2fe406137b66a4f89ebb1ae48e85981e42e51d1c84fa312f7",
+    "misaka/palw/positive-accounting/src/fees/tests.rs": "9bef575130546715bcd2733914dd1e30eca9c32aa224efedc27e1a125c7a5db4",
+    "misaka/palw/positive-accounting/src/lib.rs": "5e9de0d6b3211b4129e24fc5c81f25214ed30ba7caf81a5dc55df72c26e23cb3",
+    "misaka/palw/positive-accounting/tests/independent_consumer_routes.rs": "b8f523fb4d133fc11ab13ee359794966e86965854be4ad42590e17d61872b4a7",
+    "misaka/palw/positive-accounting/tests/independent_credit_graph.rs": "f19f5060af28cb1144912b031371c07ba13695f6cd9593e8160bb8a47bfb5e5e",
+    "misaka/palw/positive-accounting/tests/independent_fee_conservation.rs": "d12221758134ada0cd64b4ffe74921a2d47f996202adee14ecc58644190fef84",
+    "misaka/palw/positive-contract/src/ports.rs": "c56e73687408918654d1eab4e893fc2105bf6627e9e8b21ab6361024e202b6e4"
+  },
+  "exit_code": 0,
+  "raw_log": "leaf-clippy.log",
+  "scope": "genuine private accounting committed receipt; not native restart/restore",
+  "source_unchanged_during_run": true
+}

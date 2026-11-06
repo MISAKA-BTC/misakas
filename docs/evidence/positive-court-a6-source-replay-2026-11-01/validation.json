@@ -1,0 +1,56 @@
+{
+  "branch": "codex/rfc42-a6-common-journal",
+  "code_commit": "199ae602f",
+  "suites": [
+    {
+      "suite": "core source helper",
+      "log": "helper-tests.log",
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "actual A2 source engine and G14 geometry",
+      "log": "source-engine-tests.log",
+      "passed": 37,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "suite": "actual A1/A4 TIR common replay, including six real source tests",
+      "log": "actual-tir-replay-tests.log",
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "passed_total": 53,
+  "failed_final": 0,
+  "ignored_final": 0,
+  "count_scope": "53 on final source phase; overlaps phase1, do not add to phase1 38; new source integration six + helper two are eight new regressions",
+  "profile": "core opt0/debug0, incremental0, jobs2; standard stack",
+  "RUST_MIN_STACK": null,
+  "fixture": "actual TIR/G14, four artifact units plus one input, seven source events/five first receipts/due15; historical native context and tariff are explicitly test-only",
+  "source_fee": "mapper has no fee field; actual SourceLedger first receipt alone increases Case.usage.fee",
+  "kind1": "typed MissingSettlementPort before policy/cost/ledger changes; no qualified projection/public setter/success stub",
+  "poison": "all eight accessors refuse after actual source apply then policy failure; fresh replay succeeds",
+  "earlier_attempts": [
+    "missing AggregateUsage import, fixed in 2f498d17e",
+    "four source fixture tests assumed one artifact unit; corrected to actual four in 199ae602f",
+    "lib positive_source filter ran zero tests; not counted; corrected to --test positive_source_v2",
+    "pre-fee-fix helper success is retained only as earlier evidence; final helper tests rerun after cb4538ac4"
+  ],
+  "boundaries": [
+    "local projection and checked fact only, no native authority or payment capability",
+    "native job/role/opportunity/admission/current-root money owner ports remain required; A0 confirmed no additional adopted concrete port",
+    "native source tariff conversion is unadopted; required mapper and explicitly toy fixture only",
+    "native resource lease must cover whole output lifetime and simultaneous ledger/fee map/geometry buffers; logical limits are not admission",
+    "full native restart, actual spending, P2P/IBD, GC/pruning supply, T12 and public activation not demonstrated"
+  ],
+  "checks": {
+    "rustfmt": "PASS",
+    "source_diff_check": "PASS excluding preserved raw evidence",
+    "docs": "PASS with 43 known reference occurrences, zero new; baseline not changed",
+    "snapshot_sha256": "all final source files match"
+  }
+}

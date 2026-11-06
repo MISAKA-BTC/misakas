@@ -91,10 +91,9 @@ impl DbReachabilitySet {
     }
 
     fn append(&mut self, writer: impl DbWriter, hash: BlockHash, element: BlockHash) -> Result<(), StoreError> {
-        if let Some(mut entry) = self.cache.get(&hash) {
-            Arc::make_mut(&mut entry).push(element);
-            self.cache.insert(hash, entry);
-        }
+        // Mutate the cache-owned Arc directly. Taking a cloned Arc with get()
+        // first would force a deep copy even when no reader holds the old set.
+        self.cache.update_if_entry_exists(hash, |entry| Arc::make_mut(entry).push(element));
         self.access.write(writer, hash, element)?;
         Ok(())
     }
@@ -106,10 +105,7 @@ impl DbReachabilitySet {
         element: BlockHash,
         insertion_index: usize,
     ) -> Result<(), StoreError> {
-        if let Some(mut entry) = self.cache.get(&hash) {
-            Arc::make_mut(&mut entry).insert(insertion_index, element);
-            self.cache.insert(hash, entry);
-        }
+        self.cache.update_if_entry_exists(hash, |entry| Arc::make_mut(entry).insert(insertion_index, element));
         self.access.write(writer, hash, element)?;
         Ok(())
     }
@@ -122,14 +118,10 @@ impl DbReachabilitySet {
         replaced_index: usize,
         replace_with: &[BlockHash],
     ) -> Result<(), StoreError> {
-        if let Some(mut entry) = self.cache.get(&hash) {
-            {
-                let removed_elements =
-                    Arc::make_mut(&mut entry).splice(replaced_index..replaced_index + 1, replace_with.iter().copied());
-                debug_assert_eq!(replaced_hash, removed_elements.exactly_one().unwrap());
-            }
-            self.cache.insert(hash, entry);
-        }
+        self.cache.update_if_entry_exists(hash, |entry| {
+            let removed_elements = Arc::make_mut(entry).splice(replaced_index..replaced_index + 1, replace_with.iter().copied());
+            debug_assert_eq!(replaced_hash, removed_elements.exactly_one().unwrap());
+        });
         self.access.delete(&mut writer, hash, replaced_hash)?;
         for added_element in replace_with.iter().copied() {
             self.access.write(&mut writer, hash, added_element)?;
@@ -810,6 +802,81 @@ impl ReachabilityStoreReader for MemoryReachabilityStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cached_set(db: Arc<DB>, hash: BlockHash, max_units: usize) -> DbReachabilitySet {
+        let access = DbSetAccess::new(db.clone(), vec![DatabaseStorePrefixes::ReachabilityTreeChildren.into()]);
+        let cache =
+            Cache::new(CachePolicy::Tracked { max_size: max_units, min_items: 0, mem_mode: kaspa_utils::mem_size::MemMode::Units });
+        let mut members = Vec::with_capacity(16);
+        for value in [11u64, 22, 33] {
+            let member = BlockHash::from(value);
+            access.write(kaspa_database::prelude::DirectDbWriter::new(&db), hash, member).unwrap();
+            members.push(member);
+        }
+        cache.insert(hash, Arc::new(members));
+        DbReachabilitySet::new(access, cache)
+    }
+
+    fn update_cached_set(set: &mut DbReachabilitySet, db: &DB, hash: BlockHash, operation: usize) -> Vec<BlockHash> {
+        use kaspa_database::prelude::DirectDbWriter;
+        match operation {
+            0 => {
+                set.append(DirectDbWriter::new(db), hash, 44.into()).unwrap();
+                vec![11.into(), 22.into(), 33.into(), 44.into()]
+            }
+            1 => {
+                set.insert(DirectDbWriter::new(db), hash, 44.into(), 1).unwrap();
+                vec![11.into(), 44.into(), 22.into(), 33.into()]
+            }
+            _ => {
+                set.replace(DirectDbWriter::new(db), hash, 22.into(), 1, &[44.into(), 55.into()]).unwrap();
+                vec![11.into(), 44.into(), 55.into(), 33.into()]
+            }
+        }
+    }
+
+    #[test]
+    fn cache_owned_reachability_updates_reuse_the_vec_allocation() {
+        use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        for operation in 0..3 {
+            let hash = BlockHash::from(100 + operation as u64);
+            let mut set = cached_set(db.clone(), hash, 64);
+            let before = set.cache.get(&hash).unwrap().as_ptr(); // temporary Arc is dropped before the mutation
+            let expected = update_cached_set(&mut set, &db, hash, operation);
+            let after = set.cache.get(&hash).unwrap();
+            assert_eq!(after.as_ptr(), before, "cache-only update must not deep-clone the reserved-capacity Vec");
+            assert_eq!(*after, expected);
+            let mut persisted = set.access.bucket_iterator(hash).collect::<Result<Vec<_>, _>>().unwrap();
+            persisted.sort();
+            let mut expected = expected;
+            expected.sort();
+            assert_eq!(persisted, expected, "cache optimization preserves DB membership");
+        }
+    }
+
+    #[test]
+    fn reachability_updates_preserve_live_reader_snapshots_and_cache_limit() {
+        use kaspa_database::{create_temp_db, prelude::ConnBuilder};
+        let (_lifetime, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        for operation in 0..3 {
+            let hash = BlockHash::from(200 + operation as u64);
+            let mut set = cached_set(db.clone(), hash, 64);
+            let reader = set.cache.get(&hash).unwrap();
+            let expected = update_cached_set(&mut set, &db, hash, operation);
+            let after = set.cache.get(&hash).unwrap();
+            assert!(!Arc::ptr_eq(&reader, &after), "a live reader requires copy-on-write");
+            assert_eq!(*reader, vec![11.into(), 22.into(), 33.into()]);
+            assert_eq!(*after, expected);
+        }
+        let hash = BlockHash::from(300);
+        let mut set = cached_set(db.clone(), hash, 3);
+        let reader = set.cache.get(&hash).unwrap();
+        set.append(kaspa_database::prelude::DirectDbWriter::new(&db), hash, 44.into()).unwrap();
+        assert!(set.cache.get(&hash).is_none(), "tracked update still evicts an over-budget set");
+        assert_eq!(*reader, vec![11.into(), 22.into(), 33.into()]);
+        assert_eq!(set.access.bucket_iterator(hash).count(), 4, "eviction cannot drop persisted members");
+    }
 
     #[test]
     fn test_store_basics() {

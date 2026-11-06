@@ -1,0 +1,252 @@
+{
+  "scope": "failed_preflight_source_diagnosis",
+  "arming_evidence": false,
+  "measured_source": "b5c35166072499eb3a4ef6eb8e007b17d2a35391",
+  "stderr_sha256": "c89e7aefae8f8f3dd95327ac516e153b15c76c8e50db4416c8056925597bdd59",
+  "attempts": [
+    {
+      "round": 0,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 1,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 2,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 3,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 4,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 5,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 6,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 7,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 8,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 9,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 10,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 11,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 12,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 13,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 14,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 15,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 16,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 17,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 18,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 19,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 20,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 21,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 22,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 23,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 24,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 25,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 26,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 27,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 28,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 29,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 30,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    },
+    {
+      "round": 31,
+      "daa": 6,
+      "commit": 6,
+      "schedule_span_daa": 1,
+      "anchor_span": 6
+    }
+  ],
+  "source_files": [
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/t12_round_lane_e2e.rs",
+      "blob": "3d8d11c0a69f9c242743f1ef76b56b9267611169",
+      "sha256": "380be46477921c20baabcc659aa20d8dcbee31d4c1c3eaacf3f53db1732ae1f4"
+    },
+    {
+      "path": "consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/canonical/seed.rs",
+      "blob": "2e69b728510177033438e8b2f63f9a2912680683",
+      "sha256": "13e6019e2185f0299b3de53a395ab4f16755311e0aeb4a0e3d3d0ed1526e724b"
+    },
+    {
+      "path": "consensus/core/src/palw_kernel_route_v1.rs",
+      "blob": "3228093e19595da70890f05c9ea3f8a9421b41dc",
+      "sha256": "8b5f7eb58235f0feafddf66d0004a6fd15ffb1d409be17112bd79a9f9dbdc210"
+    }
+  ],
+  "finding": "All 32 admitted attempt blocks remain at commit DAA/span 6. Strictly post-commit anchor is therefore absent. Test helper never mines a heartbeat, the only DAA-advancing lane after anchor clock. Early anchor retention alone cannot make these equal-span anchors post-commit.",
+  "proposed_test_only_fix": "Insert an ordinary heartbeat before each attempt; retain the 32-attempt budget, approved external gain and strict post-commit predicate. Preserve a no-early-retention control.",
+  "fix_executed": false
+}

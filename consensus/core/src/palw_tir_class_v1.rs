@@ -49,6 +49,28 @@ fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
+/// The existing class identity from its committed digests, in the V1 field order.
+/// This hashes supplied metadata only: it does not authenticate a row, validate a
+/// program/layout preimage, admit a class or authorize execution or credit.
+pub fn palw_tir_class_id_from_digests_v1(
+    version: u16,
+    graph_ir_root: &Hash64,
+    layout_digest: &Hash64,
+    artifact_root: &Hash64,
+    tokenizer_id: &Hash64,
+) -> Hash64 {
+    keyed64(
+        PALW_TIR_CLASS_ID_DOMAIN_V1,
+        &[
+            &version.to_le_bytes(),
+            graph_ir_root.as_byte_slice(),
+            layout_digest.as_byte_slice(),
+            artifact_root.as_byte_slice(),
+            tokenizer_id.as_byte_slice(),
+        ],
+    )
+}
+
 /// **The commitment layout** — what the step space of an IR class is enumerated under (design
 /// §2.3, §2.5). Declared by the registrant, verified by admission, inside the class id. It never
 /// prices work (PALW-TIR-16): the structural work vector reads none of it.
@@ -98,15 +120,12 @@ impl PalwTirClassV1 {
     /// **The class id** over the weights it is registered with (`artifact_root`, the TIR
     /// inventory root). Every field is a fact about the model; none is a node's choice.
     pub fn class_id(&self, artifact_root: &Hash64) -> Hash64 {
-        keyed64(
-            PALW_TIR_CLASS_ID_DOMAIN_V1,
-            &[
-                &self.version.to_le_bytes(),
-                self.graph_ir_root().as_byte_slice(),
-                self.layout_digest().as_byte_slice(),
-                artifact_root.as_byte_slice(),
-                self.tokenizer_id.as_byte_slice(),
-            ],
+        palw_tir_class_id_from_digests_v1(
+            self.version,
+            &self.graph_ir_root(),
+            &self.layout_digest(),
+            artifact_root,
+            &self.tokenizer_id,
         )
     }
 
@@ -171,4 +190,52 @@ pub fn palw_tir_class_registration_message_v1(
 /// then `Params::validate_palw_v2` refuses a genesis that carries one.
 pub fn palw_genesis_registers_tir_class_v1(bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> bool {
     bundle.genesis_objects.iter().any(|o| matches!(o, crate::palw_state_v2::PalwConsensusObjectV2::ClassRegisteredTirV1 { .. }))
+}
+
+#[cfg(test)]
+mod class_id_digest_tests {
+    use super::*;
+
+    #[test]
+    fn digest_helper_preserves_legacy_preimage_and_binds_every_part() {
+        let class = PalwTirClassV1 {
+            version: PALW_TIR_CLASS_VERSION_V1,
+            program: vec![1, 2, 3],
+            layout: PalwTirLayoutV1 {
+                version: PALW_TIR_LAYOUT_VERSION_V1,
+                max_context: 64,
+                checkpoint_interval: 8,
+                h_tile: 4,
+                commit_tiles: vec![4, 16],
+                state_tiles: vec![8],
+            },
+            tokenizer_id: Hash64::from_bytes([0x44; 64]),
+        };
+        let artifact = Hash64::from_bytes([0x33; 64]);
+        let graph = class.graph_ir_root();
+        let layout = class.layout_digest();
+        // The legacy preimage has no lengths between its fixed-width fields.
+        let mut preimage = class.version.to_le_bytes().to_vec();
+        preimage.extend_from_slice(graph.as_byte_slice());
+        preimage.extend_from_slice(layout.as_byte_slice());
+        preimage.extend_from_slice(artifact.as_byte_slice());
+        preimage.extend_from_slice(class.tokenizer_id.as_byte_slice());
+        let legacy = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/tir/class-id/v1").hash(&preimage);
+        let expected = Hash64::from_bytes(legacy.as_bytes().try_into().expect("64-byte digest"));
+        let id = palw_tir_class_id_from_digests_v1(class.version, &graph, &layout, &artifact, &class.tokenizer_id);
+        assert_eq!(id, expected);
+        assert_eq!(class.class_id(&artifact), expected);
+
+        let changed = Hash64::from_bytes([0x55; 64]);
+        for other in [
+            palw_tir_class_id_from_digests_v1(class.version + 1, &graph, &layout, &artifact, &class.tokenizer_id),
+            palw_tir_class_id_from_digests_v1(class.version, &changed, &layout, &artifact, &class.tokenizer_id),
+            palw_tir_class_id_from_digests_v1(class.version, &graph, &changed, &artifact, &class.tokenizer_id),
+            palw_tir_class_id_from_digests_v1(class.version, &graph, &layout, &changed, &class.tokenizer_id),
+            palw_tir_class_id_from_digests_v1(class.version, &graph, &layout, &artifact, &changed),
+            palw_tir_class_id_from_digests_v1(class.version, &graph, &layout, &class.tokenizer_id, &artifact),
+        ] {
+            assert_ne!(id, other);
+        }
+    }
 }

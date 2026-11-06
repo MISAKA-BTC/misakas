@@ -1,0 +1,63 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a1/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 2.03s
+     Running tests/court.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/court-50cf56c649ee9863)
+
+running 7 tests
+test one_position_replay_does_not_allocate_for_a_100k_position_job ... ok
+test replay_work_is_shared_across_all_source_requests_until_the_next_builder_move ... ok
+test replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_model_leaf ... ok
+test bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary ... ok
+test the_step_tree_opens_as_the_consensus_tree ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 186.83s
+
+     Running tests/positive_check.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_check-4b3dd829e3f24140)
+
+running 13 tests
+test budgets_overflow_heap_caps_and_malformed_vectors_fail_closed ... ok
+test sparse_legacy_commitments_do_not_authorize_full_coverage ... ok
+test stochastic_selection_is_unsupported_instead_of_a_miner_refutation ... ok
+test merkle_authenticated_arithmetic_lie_rejects_only_the_panel_candidate ... ok
+test unauthenticated_model_material_cannot_replace_the_registered_inventory ... ok
+test wrong_model_input_count_and_empty_schedule_are_rejected ... ok
+test output_mismatch_is_reported_only_after_complete_arithmetic ... ok
+test missing_logits_bridge_and_forged_losing_lane_are_rejected ... ok
+test omitted_final_leaf_duplicate_and_reordering_cannot_complete ... ok
+test later_logits_tile_cannot_reuse_another_tile_or_rows_trace_opening ... ok
+test cold_node_checks_all_leaves_history_and_every_output_row ... ok
+test ragged_second_logits_tile_is_required_and_global_ties_choose_the_first_lane ... ok
+test valid_alternative_model_and_input_openings_cannot_be_spliced_into_the_admitted_job ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s
+
+     Running tests/positive_check_hardening.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_check_hardening-1ba59a457437c2bf)
+
+running 2 tests
+test plan_derivation_refuses_inherited_and_malformed_contexts_before_reservation ... ok
+test honest_material_over_the_evaluation_allowance_ends_unverified_without_panel_blame ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/positive_contract.rs (/Users/wata/.cache/misaka-positive-a1-port-target/debug/deps/positive_contract-fc1244ce0329056f)
+
+running 13 tests
+test an_omitted_terminal_part_remains_incomplete_through_the_shared_port ... ok
+test a_signed_alternate_selector_cannot_replace_the_rooted_greedy_rule ... ok
+test bounded_outer_frames_do_not_authorize_malformed_inner_length_prefixes ... ok
+test signed_false_generated_ids_cannot_become_a_miner_output_mismatch ... ok
+test signed_transport_reservation_includes_every_signature_and_refuses_aggregate_overflow ... ok
+test foreign_frame_identity_does_not_poison_the_target_candidates_progress ... ok
+test author_signed_malformed_material_charges_the_panel_packet_and_rejects_only_its_witness ... ok
+test admission_reserves_every_outer_header_and_both_payload_length_prefixes ... ok
+test identical_public_ids_do_not_allow_progress_to_switch_local_resource_limits ... ok
+test signed_role_commits_and_framed_parts_reach_only_a_checked_terminal_fact ... ok
+test bad_actor_signatures_and_signed_false_witness_metadata_are_rejected ... ok
+test author_authenticated_frames_can_be_relayed_and_charge_all_packet_signatures ... ok
+test unauthenticated_or_foreign_packets_cannot_poison_an_honest_panel_candidate ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+

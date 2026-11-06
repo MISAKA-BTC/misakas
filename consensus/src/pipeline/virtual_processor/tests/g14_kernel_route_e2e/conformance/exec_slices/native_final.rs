@@ -16,6 +16,9 @@ use kaspa_consensus_core::palw_tir_artifact_v1::palw_tir_inventory_operands_v1;
 use kaspa_consensus_core::palw_verification_v2::palw_segment_assignment_v2;
 use kaspa_consensus_core::palw_work_slice_v2::PalwExecV2RewardFundV1;
 
+#[path = "retired_source.rs"]
+mod retired_source;
+
 /// Prove the actual native inventory at this span. No cached readiness row or
 /// lifecycle/Panel/Final setter is used. Each proof is authenticated at acceptance.
 pub(super) async fn ready_native_seats(cw: &mut Cw) {

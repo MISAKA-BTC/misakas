@@ -26,6 +26,7 @@
 //! The operator funds one address once; the bond key — which the node already holds to sign
 //! receipts — signs the spends. No second key, no key material beyond what a bonded node has.
 
+use crate::palw_retention::{RetainedPublication, publish_retained_file};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -368,6 +369,7 @@ pub(crate) fn own_claim_events_at_v1(
                     R::WorkSliceProvenFalse => "work_slice_proven_false",
                     R::WorkSliceDefaulted => "work_slice_defaulted",
                     R::PanelDaDisclosureDefault => "panel_da_disclosure_default",
+                    R::PrefixExportFraud => "prefix_export_fraud",
                 };
                 ("VOIDED", *voided_daa, format!(" reason={why}"))
             }
@@ -2203,32 +2205,56 @@ fn pool_sweep_material_v1(
 /// evidence, was deleted while the claim was still `PanelBound` and the seat still serving pulls
 /// for it. A file named for a claim in `pinned` — the panel's live claims, its duties, court duties
 /// and disputes — is kept whatever its age, and does not count toward `max_files`; the live set is
-/// bounded by this seat's own duties, so the pin does not reopen the directory to a stranger.
-fn prune_foreign_retention_v1(dir: &std::path::Path, pinned: &HashSet<Hash64>, now: std::time::SystemTime, max_files: usize) {
+/// bounded by this seat's own duties. `chain_owed` also protects each file's
+/// accepted DA/payment obligation when that finite duty cache is absent.
+fn prune_foreign_retention_v1(
+    dir: &std::path::Path,
+    pinned: &HashSet<Hash64>,
+    now: std::time::SystemTime,
+    max_files: usize,
+    chain_owed: impl Fn(&Hash64) -> Result<bool, String>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     let cutoff = now - std::time::Duration::from_secs(72 * 3600);
     let claim_of = |path: &std::path::Path| -> Option<Hash64> {
         let name = path.file_name()?.to_str()?;
         name.get(..name.find('.')?)?.parse::<Hash64>().ok()
     };
-    let mut kept: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+    // Cached duties assist the chain read. A missing/changed snapshot cannot
+    // discharge an obligation, and a later healthy read can still release it.
+    let reclaimable =
+        |claim: Option<Hash64>| claim.is_none_or(|claim| !pinned.contains(&claim) && matches!(chain_owed(&claim), Ok(false)));
+    let mut kept = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if claim_of(&path).is_some_and(|claim| pinned.contains(&claim)) {
-            continue;
-        }
         let Ok(meta) = entry.metadata() else { continue };
-        let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-        if modified < cutoff {
-            let _ = std::fs::remove_file(&path);
+        if !meta.is_file() {
             continue;
         }
-        kept.push((modified, path));
+        let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        let claim = claim_of(&path);
+        if !reclaimable(claim) {
+            continue;
+        }
+        let file = crate::palw_retention::RetainedFileV1::new(path, &meta);
+        if modified < cutoff {
+            file.unlink_if_current(claim);
+            continue;
+        }
+        kept.push((modified, claim, file));
     }
-    if kept.len() > max_files {
-        kept.sort_by_key(|(at, _)| *at);
-        for (_, path) in kept.iter().take(kept.len() - max_files) {
-            let _ = std::fs::remove_file(path);
+    let excess = kept.len().saturating_sub(max_files);
+    if excess > 0 {
+        kept.sort_by_key(|(at, _, _)| *at);
+        // Recheck the chain and the inventoried file before each unlink.
+        let mut removed = 0;
+        for (_, claim, file) in kept {
+            if reclaimable(claim) && file.unlink_if_current(claim) {
+                removed += 1;
+                if removed == excess {
+                    break;
+                }
+            }
         }
     }
 }
@@ -2324,8 +2350,8 @@ pub(crate) fn palw_seat_note_duty_liability_v1(
 /// — duties, court duties, disputes — and past SEAT-R every claim this seat held a duty on whose
 /// retention horizon ([`palw_seat_retention_horizon_v1`]) has not passed: a licence ends the duty, and
 /// the court window, the Valid lock and a DA accusation still ask about the claim after it. Bounded by
-/// the liabilities it reads ([`palw_seat_note_liability_v1`]), and the retention janitor's space rule
-/// still frees the volume under its floor.
+/// the liabilities it reads ([`palw_seat_note_liability_v1`]). Both GC paths also read
+/// accepted chain obligations; storage pressure cannot discharge material still owed.
 pub(crate) fn palw_seat_retention_pins_v1(
     live: &HashSet<Hash64>,
     liabilities: &HashMap<Hash64, u64>,
@@ -2427,6 +2453,30 @@ impl PalwDaClaimFactsV1 {
             job_pin,
         }
     }
+}
+
+fn palw_da_provider_attempt_roots_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+) -> Option<PalwClaimRootsV1> {
+    // Only CoreV1 material verification binds the optional output root.
+    let roots = facts.roots_v1(None);
+    (backend.attempt_rules_v1() == kaspa_consensus_core::palw_attempt_rules_v1::PalwAttemptRulesV1::CoreV1
+        && roots.anchor != Hash64::default()
+        && roots.attempt_draw.is_some())
+    .then_some(roots)
+}
+
+fn palw_da_verify_provider_attempt_v1(
+    backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    facts: &PalwDaClaimFactsV1,
+    output_root: Hash64,
+    bytes: &[u8],
+) -> bool {
+    palw_da_provider_attempt_roots_v1(backend, facts).is_some_and(|mut roots| {
+        roots.output_root = Some(output_root);
+        backend.verify_material(&fp_capture_view(bytes, facts.form), roots) == PalwMaterialVerdictV1::Matches
+    })
 }
 
 /// **The material an R-core answer is built from, checked against the claim's roots** (P2-7).
@@ -2941,11 +2991,23 @@ pub(crate) fn palw_da_claim_answers_v1(
 /// space rule takes a copy an R-core session can still demand last. Best-effort: on a failed write the
 /// answers built from it still go, and the next session re-makes it.
 fn palw_da_keep_remade_v1(dir: &std::path::Path, claim: &Hash64, bytes: &[u8]) {
+    let _publication = crate::palw_retention::pin_attempt_publication(*claim);
     let path = dir.join(format!("{claim}.material"));
-    let partial = dir.join(format!("{claim}.material.partial"));
-    if let Err(e) =
-        std::fs::create_dir_all(dir).and_then(|()| std::fs::write(&partial, bytes)).and_then(|()| std::fs::rename(&partial, &path))
-    {
+    let result = crate::palw_retention::ensure_retained_replay(&path, bytes, || {
+        let bytes = bytes.len() as u64;
+        let storage = kaspa_utils::storage_budget::reserve_global(kaspa_utils::storage_budget::StorageCategory::PalwRetained, bytes)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if storage.is_none() {
+            let (free, total) = crate::palw_retention::volume_space_v1(dir)
+                .ok_or_else(|| std::io::Error::other("cannot measure the retention volume"))?;
+            let reserve = crate::palw_retention::retention_reserve_bytes_v1(total);
+            if reserve.checked_add(bytes).is_none_or(|required| free < required) {
+                return Err(std::io::Error::other("the capture would consume the retention volume reserve"));
+            }
+        }
+        Ok(storage)
+    });
+    if let Err(e) = result {
         warn!("[{PALW_PANEL}] claim {claim}: cannot keep the re-made capture ({e}); the next data-availability session re-makes it");
     }
 }
@@ -4323,6 +4385,8 @@ pub struct PalwPanelConfig {
     /// these — a manifest any provider holds for the claim that agrees with the claim's own roots, every chunk checked against it — in addition
     /// to the producer pull, which is unchanged and stays the fallback. Empty: no provider source, the node behaves as before.
     pub evidence_provider_dirs: Vec<PathBuf>,
+    /// Operator-configured numeric HTTP fallbacks for the same claim evidence.
+    pub evidence_provider_http: Vec<misaka_palw_remote::transport::NumericEvidenceEndpointV1>,
     /// **Lane G14-K: the registered kernel models this node's verifier holds** (`--palw-kernel-model`, one `PALWKM01` file a model;
     /// ADR-0177 D7). A model is used for a kernel class only when it opens to the class's REGISTERED parameter commitments. Empty: the
     /// kernel-route verifier (`palw_kernel_verifier`) does nothing.
@@ -4434,6 +4498,33 @@ enum CaptureSamplesV1 {
     },
 }
 
+struct FetchedProviderMaterialV1 {
+    bytes: Vec<u8>,
+    report: misaka_palw_remote::evidence::FetchReport,
+    // Keep the admission and single-flight slot with the blocking job and
+    // its output, including when the waiting async task is cancelled.
+    http_admission: Option<(kaspa_core::memory_budget::MemoryLease, tokio::sync::OwnedSemaphorePermit)>,
+}
+
+struct PendingProviderMaterialV1 {
+    claim: Hash64,
+    roots: misaka_palw_remote::evidence::ClaimRoots,
+    material: FetchedProviderMaterialV1,
+    /// A Court recovery result may only be used for this exact Attempt carrier.
+    court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ready_at: std::time::Instant,
+}
+
+impl PendingProviderMaterialV1 {
+    fn matches_court(&self, claim: Hash64, carrier: kaspa_consensus_core::BlockHash) -> bool {
+        self.claim == claim && self.court_carrier == Some(carrier)
+    }
+
+    fn unused_after_court_pass(&self, tick_started: std::time::Instant) -> bool {
+        self.court_carrier.is_some() && self.ready_at <= tick_started
+    }
+}
+
 pub struct PalwPanelService {
     worker_running: std::sync::atomic::AtomicBool,
     /// **DRILL ONLY (`--palw-drill-extra-seat`)**: this service's own copy of the node's gossip inbox, fanned out by the daemon when
@@ -4459,6 +4550,11 @@ pub struct PalwPanelService {
     /// When `retention/foreign/` was last swept. The sweep is a full directory walk, so it runs on
     /// a cadence rather than inside every write (audit M2-2).
     foreign_prune_at: std::sync::Mutex<std::time::Instant>,
+    provider_http_fetch: Arc<tokio::sync::Semaphore>,
+    pending_provider_http: Arc<std::sync::Mutex<Option<PendingProviderMaterialV1>>>,
+    // A metadata-only request from this tick's Court pass. Seat pulls get
+    // first use of the single HTTP slot before this request is dispatched.
+    provider_court_request: std::sync::Mutex<Option<(Hash64, Hash64, misaka_palw_remote::evidence::ClaimRoots)>>,
     /// The claims the panel's last tick held live (its duties, court duties and disputes): their
     /// files in `retention/foreign/` are out of the sweep's reach, age and count alike
     /// ([`prune_foreign_retention_v1`]).
@@ -4981,6 +5077,9 @@ impl PalwPanelService {
             improve_holdings: std::sync::Mutex::new(Vec::new()),
             root_fetch: std::sync::Mutex::new(Default::default()),
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
+            provider_http_fetch: Arc::new(tokio::sync::Semaphore::new(1)),
+            pending_provider_http: Arc::new(std::sync::Mutex::new(None)),
+            provider_court_request: std::sync::Mutex::new(None),
             foreign_pinned: std::sync::Mutex::new(HashSet::new()),
             served_openings: std::sync::Mutex::new(Vec::new()),
             opening_gate: std::sync::Mutex::new(()),
@@ -5934,7 +6033,13 @@ impl PalwPanelService {
         let script = self.fee_script(session)?;
         let pov_daa = session.get_virtual_daa_score();
         let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();
-        let locked: HashSet<TransactionOutpoint> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+        let locked: HashSet<TransactionOutpoint> = match session.palw_locked_bond_outpoints_checked_v3() {
+            Ok(locked) => locked.into_iter().collect(),
+            Err(why) => {
+                kaspa_core::warn!("PALW funding waits for own collateral state: {why}");
+                return None;
+            }
+        };
         let usable = |outpoint: &TransactionOutpoint, entry: &UtxoEntry| {
             palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)
         };
@@ -6216,7 +6321,13 @@ impl PalwPanelService {
     /// opening stands ([`PalwCarrierReplacementV1::is_replaced_by`]) is the pool's replacement of it
     /// (RBF, `submit_rpc_transaction_replacement`), and the opening records it; every other carrier
     /// is submitted exactly as before. `Err` carries the pool's refusal for the site to log.
-    async fn submit_carrier_v1(&self, session: &kaspa_consensusmanager::ConsensusProxy, tx: Transaction) -> Result<(), String> {
+    async fn submit_carrier_v1(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        tx: Transaction,
+        guard: Option<kaspa_mining::manager::LocalTransactionSubmissionGuard>,
+    ) -> Result<(), String> {
+        use kaspa_mining::mempool::tx::RbfPolicy;
         // DRILL ONLY (the G14 collusion drill): a colluding seat files nothing against its producer — no accusation, demand,
         // disclosure or filing leaves this node; its receipts, readiness proofs and bond objects do.
         if !self.config.drill_collude_with.is_empty()
@@ -6228,11 +6339,27 @@ impl PalwPanelService {
             return Err(format!("PALW DRILL (G14 collusion): a colluding seat files no {kind}"));
         }
         let opening = self.carrier_replacement.lock().unwrap().as_ref().filter(|opening| opening.is_replaced_by(&tx)).cloned();
-        let Some(opening) = opening else {
-            return self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await.map_err(|e| e.to_string());
-        };
         let txid = tx.id();
-        let replaced = self.flow_context.submit_rpc_transaction_replacement(session, tx).await.map_err(|e| e.to_string())?;
+        let replaced = match (opening.as_ref(), guard) {
+            (None, None) => {
+                return self.flow_context.submit_rpc_transaction(session, tx, Orphan::Forbidden).await.map_err(|e| e.to_string());
+            }
+            (Some(_), None) => self.flow_context.submit_rpc_transaction_replacement(session, tx).await.map_err(|e| e.to_string())?,
+            (None, Some(guard)) => {
+                self.flow_context
+                    .submit_rpc_transaction_guarded(session, tx, RbfPolicy::Forbidden, guard)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                return Ok(());
+            }
+            (Some(_), Some(guard)) => self
+                .flow_context
+                .submit_rpc_transaction_guarded(session, tx, RbfPolicy::Mandatory, guard)
+                .await
+                .map_err(|e| e.to_string())?
+                .ok_or("accepted replacement did not return the replaced transaction")?,
+        };
+        let opening = opening.expect("only a replacement reaches its bookkeeping");
         if let Some(open) = self.carrier_replacement.lock().unwrap().as_mut() {
             open.replaced_by = Some(txid);
         }
@@ -6498,7 +6625,13 @@ impl PalwPanelService {
         // duties, accusations or unmatured rows stand.
         let pov_daa = session.get_virtual_daa_score();
         let spend_maturity = self.consensus_config.params.coinbase_spend_maturity();
-        let locked: HashSet<TransactionOutpoint> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+        let locked: HashSet<TransactionOutpoint> = match session.palw_locked_bond_outpoints_checked_v3() {
+            Ok(locked) => locked.into_iter().collect(),
+            Err(why) => {
+                kaspa_core::warn!("PALW funding waits for own collateral state: {why}");
+                return None;
+            }
+        };
         let usable = |outpoint: &TransactionOutpoint, entry: &UtxoEntry| {
             palw_fee_funding_usable_v1(outpoint, entry, pov_daa, spend_maturity, self.bond, &locked)
         };
@@ -7162,6 +7295,7 @@ impl PalwPanelService {
         court_outbox: &mut CourtOutboxV1,
         carrier: &mut CarrierBookMutV1<'_>,
         challenged: &mut HashSet<Hash64>,
+        da_flat_sent: &mut HashMap<Hash64, u64>,
     ) {
         // The court's moves first: a rung has a deadline and a receipt quorum does not — and among
         // them the one due first (EDF; the licences' turn and the one-in-flight rule are the tick's
@@ -7183,6 +7317,33 @@ impl PalwPanelService {
             }
         };
         for (session_id, round, mine_is_responder, object) in batch {
+            let key = (session_id, round, mine_is_responder);
+            let stamp = match court_outbox.provider_da_stamp(key, &object) {
+                Ok(stamp) => stamp,
+                Err(why) => {
+                    warn!("[{PALW_PANEL}] provider DA packet withheld: {why}");
+                    continue;
+                }
+            };
+            let provider = match stamp {
+                None => None,
+                Some(stamp) => {
+                    let Some(stage) =
+                        kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1::from_object(&object, stamp.manifest)
+                    else {
+                        continue;
+                    };
+                    Some((stamp, stage))
+                }
+            };
+            let provider_check = || {
+                provider.map(|(stamp, stage)| self.current_provider_da_session(stamp, stage)).transpose().inspect_err(|why| {
+                    debug!("[{PALW_PANEL}] provider DA packet no longer current: {why}");
+                })
+            };
+            let Ok(provider_session) = provider_check() else { continue };
+            let (funding_session, funding_daa) =
+                provider_session.as_ref().map_or((session, current_daa), |(active, daa)| (active, *daa));
             let rider_batch = crate::palw_rider_outbox::palw_rider_queued_v1(round, mine_is_responder, &object);
             if let Err(why) = court_outbox.refresh_rider(&object, &self.consensus_config.params, session) {
                 warn!("[{PALW_PANEL}] rider native work withheld before funding: {why}");
@@ -7201,12 +7362,12 @@ impl PalwPanelService {
                 }
                 continue;
             }
-            let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, current_daa);
+            let minimum = palw_carrier_fees::palw_lifecycle_funding_minimum_v2(&self.consensus_config.params, &object, funding_daa);
             // A failed full scan also excludes a higher minimum in this pass. Do not scan the
             // same unavailable heavy budget for every queued proof; cheap moves may still use
             // the smaller float we retained. A successful submission ends the free slot.
             if failed_minimum.is_none_or(|failed| minimum < failed)
-                && let Some(failed) = self.ensure_carrier_funding_v2(session, &object, current_daa, carrier).await
+                && let Some(failed) = self.ensure_carrier_funding_v2(funding_session, &object, funding_daa, carrier).await
             {
                 failed_minimum = Some(failed);
             }
@@ -7238,8 +7399,10 @@ impl PalwPanelService {
                 }
                 continue;
             }
+            let Ok(provider_session) = provider_check() else { continue };
+            let sign_daa = provider_session.as_ref().map_or(current_daa, |(_, daa)| *daa);
             let prepared = match court_outbox.current_source_then(&object, session, || {
-                self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, current_daa)
+                self.prepare_lifecycle_carrier_v1(&object, funding_outpoint, &funding_entry, sign_daa)
             }) {
                 Ok(prepared) => prepared,
                 Err(why) => {
@@ -7262,9 +7425,13 @@ impl PalwPanelService {
                         }
                         continue;
                     }
-                    let submission = match court_outbox
-                        .current_source_then(&object, session, || self.submit_prepared_carrier_v1(session, prepared_carrier))
-                    {
+                    let Ok(provider_session) = provider_check() else { continue };
+                    let (submit_session, submit_daa) =
+                        provider_session.as_ref().map_or((session, current_daa), |(active, daa)| (active, *daa));
+                    let guard = provider.map(|(stamp, stage)| self.provider_da_submission_guard(stamp.clone(), stage));
+                    let submission = match court_outbox.current_source_then(&object, session, || {
+                        self.submit_prepared_carrier_with_guard_v1(submit_session, prepared_carrier, guard)
+                    }) {
                         Ok(submission) => submission,
                         Err(why) => {
                             warn!("[{PALW_PANEL}] source response withheld before carrier submission: {why}");
@@ -7294,7 +7461,10 @@ impl PalwPanelService {
                             }
                             sent_carrier
                                 .record_change(carrier, CarrierInFlightUpdateV1::Increment, |next| self.persist_fee_outpoint(next));
-                            court_outbox.mark_submitted((session_id, round, mine_is_responder), current_daa);
+                            court_outbox.mark_submitted(key, submit_daa);
+                            if provider_session.is_some() && court_outbox::ProviderDaStampV1::is_flat(&object) {
+                                da_flat_sent.insert(session_id, submit_daa);
+                            }
                             if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
                                 challenged.insert(*claim);
                             }
@@ -7754,25 +7924,18 @@ impl PalwPanelService {
     /// whether a copy for the claim is on disk — written now or before — and that seat abstains
     /// rather than sign what it holds nothing to answer from.
     fn persist_foreign_material(&self, claim: &Hash64, bytes: &[u8]) -> bool {
+        let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}.material"));
-        if path.exists() {
-            return true;
+        // A complete copy must be on disk before the seat can rely on it.
+        match publish_retained_file(&path, bytes, RetainedPublication::KeepExisting) {
+            Ok(true) => self.prune_foreign_retention(&dir),
+            Ok(false) => {}
+            Err(e) => {
+                warn!("[{PALW_PANEL}] cannot retain material for claim {claim}: {e}");
+                return false;
+            }
         }
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            warn!("[{PALW_PANEL}] cannot create the foreign retention directory {}: {e}", dir.display());
-            return false;
-        }
-        // **A write failure is reported.** Swallowing it (`let _ =`) left the panel believing it
-        // was retaining while a full volume dropped every byte — the node then answers no pull and
-        // is charged for the silence (audit M2-2).
-        if let Err(e) = std::fs::write(&path, bytes) {
-            warn!("[{PALW_PANEL}] cannot retain material for claim {claim}: {e}");
-            // A half-written file would read as kept on the next call.
-            let _ = std::fs::remove_file(&path);
-            return false;
-        }
-        self.prune_foreign_retention(&dir);
         true
     }
 
@@ -7783,8 +7946,35 @@ impl PalwPanelService {
     /// withholds (DA-7); so a seat that could not keep it files nothing this tick (silence costs a seat
     /// nothing, X10) and is asked again on the next.
     fn licensed_job_kept_v1(&self, claim: &Hash64, bytes: Option<Vec<u8>>, current_daa: u64) -> bool {
-        let kept = bytes.is_none_or(|bytes| self.persist_foreign_material(claim, &bytes));
-        if !kept && self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+        if !self.consensus_config.params.palw_rcore_plus_active_at(current_daa) {
+            if let Some(bytes) = bytes {
+                self.persist_foreign_material(claim, &bytes);
+            }
+            return true;
+        }
+        let kept = bytes.is_some_and(|bytes| {
+            let _publication = crate::palw_retention::pin_attempt_publication(*claim);
+            let path = self.fp_retained_replay_path(claim);
+            let result = crate::palw_retention::ensure_retained_replay(&path, &bytes, || {
+                kaspa_utils::storage_budget::reserve_global(
+                    kaspa_utils::storage_budget::StorageCategory::PalwRetained,
+                    bytes.len() as u64,
+                )
+                .map_err(|e| std::io::Error::other(e.to_string()))
+            });
+            match result {
+                Ok(true) => {
+                    self.prune_foreign_retention(path.parent().expect("foreign retention directory"));
+                    true
+                }
+                Ok(false) => true,
+                Err(e) => {
+                    warn!("[{PALW_PANEL}] cannot retain the verified replay for claim {claim}: {e}");
+                    false
+                }
+            }
+        });
+        if !kept {
             warn!(
                 "[{PALW_PANEL}] claim {claim}: licensed by replay, but its job could not be kept on disk — no Valid: a full \
                  mask's Valid owes every unit a data-availability session can demand, from material this seat does not hold \
@@ -7812,26 +8002,15 @@ impl PalwPanelService {
             }
             *last = now;
         }
-        let mut pinned = self.foreign_pinned.lock().unwrap().clone();
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let now_daa = session.get_virtual_daa_score();
-        if self.consensus_config.params.palw_material_income_active_at(now_daa) {
-            // Re-read each retained file's rooted physical-payment obligation. The
-            // seat's old finite duty cache cannot discharge a later queue + W hold.
-            if let Ok(entries) = std::fs::read_dir(dir) {
-                for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    if let Some(name) = name.to_str()
-                        && let Some(stem) = name.split('.').next()
-                        && let Ok(claim) = stem.parse::<Hash64>()
-                        && session.palw_material_income_hold_until_v1(claim).is_some_and(|until| until == u64::MAX || now_daa < until)
-                    {
-                        pinned.insert(claim);
-                    }
-                }
-            }
-        }
-        prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES);
+        let pinned = self.foreign_pinned.lock().unwrap().clone();
+        prune_foreign_retention_v1(dir, &pinned, std::time::SystemTime::now(), FOREIGN_RETENTION_MAX_FILES, |claim| {
+            // One fallible, generation-checked borrowed read. Option getters
+            // merge absent claims with pressure/DB errors and cannot authorize GC.
+            self.consensus_manager
+                .consensus()
+                .unguarded_session()
+                .with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(*claim))
+        });
     }
 
     /// **A free-prompt claim's job, and the user's prompt, off its job material** (ADR-0073
@@ -8513,13 +8692,9 @@ impl PalwPanelService {
     /// Retain this node's own free-prompt material under the claim id, where the resolver serves
     /// it — written whole then renamed, so a reader never sees a half file.
     fn retain_own_material(&self, claim: &Hash64, bytes: &[u8]) {
+        let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let path = crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim);
-        let partial = path.with_extension("material.partial");
-        if let Err(e) = std::fs::create_dir_all(&self.config.retention_dir) {
-            warn!("[{PALW_PANEL}] cannot create the retention directory: {e}");
-            return;
-        }
-        if let Err(e) = std::fs::write(&partial, bytes).and_then(|()| std::fs::rename(&partial, &path)) {
+        if let Err(e) = publish_retained_file(&path, bytes, RetainedPublication::Replace) {
             warn!("[{PALW_PANEL}] cannot retain the material for claim {claim}: {e}");
         }
     }
@@ -8576,6 +8751,14 @@ impl PalwPanelService {
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| "this node's pay address".to_string())
         );
+        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+            && kaspa_consensus_core::config::params::palw_genesis_objects_have_no_bond_v1(&bundle.genesis_objects)
+        {
+            info!(
+                "[{PALW_PANEL}] genesis registers no bond. Funding is a matured BASE coinbase (the idle-floor subsidy, spendable after coinbase maturity) or a genesis UTXO this pay address already owns. Neither one registers a bond until this worker submits BondRegistered."
+            );
+        }
 
         // **An unchanged refusal is a different fact from a fresh one, and reprinting it verbatim
         // hides which of the two an operator is reading.**
@@ -9257,9 +9440,31 @@ impl PalwPanelService {
             // Drain the gossip inbox first, so this tick's decisions see this tick's mail.
             self.drain_panel_inbox_v1(&mut inbox, &mut pool_books, &mut first_seen, &mut shard_books.arrivals, &mut receipt_arrivals);
 
+            let provider_tick_started = std::time::Instant::now();
+            self.provider_court_request.lock().unwrap().take();
+            let pending = self.pending_provider_http.lock().unwrap().take_if(|ready| ready.court_carrier.is_none());
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
+                self.pending_provider_http.lock().unwrap().take();
                 continue;
+            }
+            if let Some(PendingProviderMaterialV1 {
+                claim,
+                roots,
+                material: FetchedProviderMaterialV1 { bytes, report, http_admission },
+                ..
+            }) = pending
+                && self.provider_claim_roots(roots.network_domain, claim, None) == Some(roots)
+            {
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from HTTP evidence provider(s) {:?}; {} failed attempt(s)",
+                    bytes.len(),
+                    report.served_by,
+                    report.failures.len()
+                );
+                pool_books.material.admit(claim, bytes);
+                pool_books.material.evict_after_gossip(claim, &mut first_seen);
+                drop(http_admission);
             }
             let current_daa = session.get_virtual_daa_score();
             let tick_read = tick_inputs::PanelTickReadV1::new(&session, bond_key, network_domain, current_daa);
@@ -9627,6 +9832,9 @@ impl PalwPanelService {
                     },
                 )
                 .await;
+            // Give a ready Court result one full Court pass. A reverted or
+            // already answered duty must not hold the provider slot forever.
+            self.pending_provider_http.lock().unwrap().take_if(|ready| ready.unused_after_court_pass(provider_tick_started));
             tick_guard.phase("court+da");
             if self.consensus_config.params.palw_staged_public_court_v1_active_at(current_daa)
                 && (self.config.canonical_claims || self.config.canonical_class.is_some())
@@ -10089,6 +10297,12 @@ impl PalwPanelService {
                 },
             )
             .await;
+            let court_request = self.provider_court_request.lock().unwrap().take();
+            if let Some((claim, carrier, roots)) = court_request
+                && self.provider_claim_roots(roots.network_domain, claim, Some(carrier)) == Some(roots)
+            {
+                self.queue_provider_http_fetch(claim, roots, Some(carrier));
+            }
             tick_guard.phase("duty-sweep");
             // --- the seat's re-send: its own receipts, while their panels stand (fix (4)) ---
             //
@@ -10458,6 +10672,7 @@ impl PalwPanelService {
                     licence_idle: &mut licence_idle,
                     court_outbox: &mut court_outbox,
                     challenged: &mut challenged,
+                    da_flat_sent: &mut da_flat_sent,
                     carrier_chain: &mut carrier_chain,
                     registration: &mut registration,
                     readiness_lane: &mut readiness_lane,
@@ -10855,6 +11070,7 @@ fn palw_drill_collusion_allows_v1(tx: &Transaction) -> Result<(), &'static str> 
 
 fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
     match object {
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { .. } => "CourtFamilyMaterialV1",
         PalwConsensusObjectV2::ReceiptLicensed { .. } => "ReceiptLicensed",
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
@@ -12115,15 +12331,20 @@ impl PalwPanelService {
         })
     }
 
-    /// Every file a free-prompt payload for `claim` may be retained under, own retention first:
-    /// the material and the answer envelope, then their foreign twins (ADR-0084 Decision 2).
-    fn fp_retained_payload_paths(&self, claim: &Hash64) -> [std::path::PathBuf; 4] {
+    fn fp_retained_replay_path(&self, claim: &Hash64) -> PathBuf {
+        self.config.retention_dir.join("foreign").join(format!("{claim}.replay"))
+    }
+
+    /// A verified replay is retained separately from captures and answer
+    /// envelopes, which may still be needed as evidence or to avoid replay.
+    fn fp_retained_payload_paths(&self, claim: &Hash64) -> [std::path::PathBuf; 5] {
         let dir = &self.config.retention_dir;
         [
             crate::palw_producer::palw_retained_material_path(dir, claim),
             crate::palw_producer::palw_retained_answer_path(dir, claim),
             dir.join("foreign").join(format!("{claim}.material")),
             dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX)),
+            self.fp_retained_replay_path(claim),
         ]
     }
 
@@ -12131,12 +12352,10 @@ impl PalwPanelService {
     /// few kilobytes proven the claim's (its ids recompute the committed `output_root`), so this
     /// node can serve the next seat's pull for the claim.
     fn persist_foreign_answer(&self, claim: &Hash64, bytes: &[u8]) {
+        let _publication = crate::palw_retention::pin_attempt_publication(*claim);
         let dir = self.config.retention_dir.join("foreign");
         let path = dir.join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
-        if path.exists() {
-            return;
-        }
-        if let Err(e) = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, bytes)) {
+        if let Err(e) = publish_retained_file(&path, bytes, RetainedPublication::KeepExisting) {
             warn!("[{PALW_PANEL}] cannot retain the answer envelope for claim {claim}: {e}");
         }
     }
@@ -12245,7 +12464,20 @@ impl PalwPanelService {
             // Decision 1's persistence), and it is what an interval-lane seat needs.
             let own_answer = crate::palw_producer::palw_retained_answer_path(dir, &claim);
             let foreign_answer = dir.join("foreign").join(format!("{claim}{}", crate::palw_producer::PALW_RETAINED_ANSWER_SUFFIX));
-            return std::fs::read(own_answer).ok().or_else(|| std::fs::read(foreign_answer).ok());
+            return std::fs::read(own_answer).ok().or_else(|| std::fs::read(foreign_answer).ok()).or_else(|| {
+                // Authorizing a request and resolving it use separate file
+                // reads. Private replay inputs stay on the local Court path.
+                use std::io::Read;
+                let file = std::fs::File::open(self.fp_retained_replay_path(&claim)).ok()?;
+                if file.metadata().ok()?.len() > PALW_MATERIAL_MAX_BYTES as u64 {
+                    return None;
+                }
+                let mut bytes = Vec::new();
+                file.take(PALW_MATERIAL_MAX_BYTES as u64 + 1).read_to_end(&mut bytes).ok()?;
+                use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, palw_fp_privacy_mode_peek_v1};
+                (bytes.len() <= PALW_MATERIAL_MAX_BYTES && palw_fp_privacy_mode_peek_v1(&bytes) == Some(PALW_FP_PRIVACY_PUBLIC_DA))
+                    .then_some(bytes)
+            });
         };
         let size = std::fs::metadata(&material_path).ok()?.len();
         // DRILL (ADR-0111): served as if no capture fit the cap, whatever its size.
@@ -12260,8 +12492,8 @@ impl PalwPanelService {
         // Cached beside the material, written whole then renamed, so the next pull costs a read
         // of kilobytes and a reader never sees a half file. Best-effort: a failed cache is a
         // slower serve, not a refused one.
-        let partial = answer_path.with_extension("answer.partial");
-        if let Err(e) = std::fs::write(&partial, &answer).and_then(|()| std::fs::rename(&partial, &answer_path)) {
+        let _publication = crate::palw_retention::pin_attempt_publication(claim);
+        if let Err(e) = publish_retained_file(&answer_path, &answer, RetainedPublication::Replace) {
             warn!("[{PALW_PANEL}] cannot cache the answer envelope for claim {claim}: {e}");
         } else {
             info!(
@@ -13157,9 +13389,12 @@ impl PalwPanelService {
         network_domain: Hash64,
         duties: &[&kaspa_consensus_core::palw_producer_v2::PalwDisclosureDutyV1],
         flat_queued: bool,
-    ) -> Result<Vec<Result<Option<PalwConsensusObjectV2>, String>>, PalwDaClaimHoldV1> {
+    ) -> Result<
+        (Vec<Result<Option<court_outbox::ProviderDaBuiltAnswerV1>, String>>, Option<misaka_palw_remote::evidence::ClaimRoots>),
+        PalwDaClaimHoldV1,
+    > {
         use kaspa_consensus_core::palw_producer_v2::PalwDisclosureRoleV1;
-        let Some(first) = duties.first() else { return Ok(Vec::new()) };
+        let Some(first) = duties.first() else { return Ok((Vec::new(), None)) };
         let (claim, class_id, artifact_root) = (first.claim_id, first.class_id, first.artifact_root);
         let backend: Arc<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1> = match first.role {
             PalwDisclosureRoleV1::Producer => self.executor_backend_v1(session, class_id, artifact_root),
@@ -13249,48 +13484,114 @@ impl PalwPanelService {
             None
         };
         let answer_form = facts.form;
-        let (built, _held_for_the_answers) = offload_shared(backend, move |b| {
+        // The ordinary local answer path can use material without the old
+        // carrier header. A third-party copy must reproduce its exact job.
+        let court_carrier = palw_da_provider_attempt_roots_v1(backend.as_ref(), &facts).map(|_| first.accepted_block);
+        let provider = court_carrier.and_then(|carrier| {
+            let ready = self.pending_provider_http.lock().unwrap().take_if(|ready| ready.matches_court(claim, carrier))?;
+            (self.provider_claim_roots(network_domain, claim, Some(carrier)) == Some(ready.roots)
+                && ready.roots.execution_root == first.execution_root
+                && ready.roots.trace_root == first.trace_root)
+                .then_some(ready)
+        });
+        let result = offload_shared(backend, move |b| {
+            let (provider_roots, provider_bytes, _provider_admission) = match provider {
+                Some(ready) => (Some(ready.roots), Some(ready.material.bytes), ready.material.http_admission),
+                None => (None, None, None),
+            };
+            let provider_verified = std::cell::Cell::new(false);
+            let provider = provider_bytes.into_iter().filter(|bytes| {
+                let verified =
+                    provider_roots.is_some_and(|roots| palw_da_verify_provider_attempt_v1(b, &facts, roots.output_root, bytes));
+                provider_verified.set(verified);
+                verified
+            });
             let built = palw_da_claim_answers_v1(
                 b,
                 &facts,
-                paths.iter().filter_map(|path| std::fs::read(path).ok()),
+                paths.iter().filter_map(|path| std::fs::read(path).ok()).chain(provider),
                 |bytes| palw_da_keep_remade_v1(&foreign, &claim, bytes),
                 &units,
                 in_run_rows,
                 flat_queued,
                 tir.as_ref(),
             )?;
-            Ok::<_, String>((built, reserved))
+            Ok::<_, String>((built, reserved, provider_roots.filter(|_| provider_verified.get())))
         })
         .await
-        .map_err(PalwDaClaimHoldV1::Material)?
-        .map_err(PalwDaClaimHoldV1::Material)?;
+        .and_then(|result| result);
+        let (built, _held_for_the_answers, provider_roots) = match result {
+            Ok(result) => result,
+            Err(why) => {
+                if !self.config.evidence_provider_http.is_empty()
+                    && let Some(carrier) = court_carrier
+                    && let Some(roots) = self.provider_claim_roots(network_domain, claim, Some(carrier))
+                    && roots.execution_root == first.execution_root
+                    && roots.trace_root == first.trace_root
+                {
+                    self.provider_court_request.lock().unwrap().get_or_insert((claim, carrier, roots));
+                }
+                return Err(PalwDaClaimHoldV1::Material(why));
+            }
+        };
         if built.remade {
             info!(
                 "[{PALW_PANEL}] claim {claim}: no kept copy reproduces its roots — its capture was re-made by replaying the claim's job \
-                 and kept, to answer a data-availability session ({:?})",
+                 to answer a data-availability session ({:?})",
                 first.role
             );
         }
         let duties: Vec<_> = duties.iter().map(|d| (*d).clone()).collect();
+        let discloser = first.discloser;
         let session = session.clone();
+        let consensus_manager = self.consensus_manager.clone();
         let keypair = self.keypair.clone();
         let maximum = self.config.court.max_close_bytes();
         tokio::task::spawn_blocking(move || {
             let _replay_guard = _held_for_the_answers;
             let _transport_guard = _transport_reservation;
+            let (session, current_duties) = if let Some(roots) = provider_roots {
+                let active = consensus_manager.consensus().unguarded_session();
+                let view = || {
+                    active.with_consensus_api_v1(|c| {
+                        let (import, stable) = c.pruning_import_status().map_err(|error| error.to_string())?;
+                        if !stable || import.active.is_some() {
+                            return Err("provider-backed DA awaits a stable import".to_owned());
+                        }
+                        Ok((import.epoch, c.get_sink(), c.get_virtual_daa_score()))
+                    })
+                };
+                let before = view()?;
+                if Self::provider_claim_roots_in_v1(&active, network_domain, claim, court_carrier) != Some(roots) {
+                    return Err("the accepted claim changed while building its provider-backed DA answer".into());
+                }
+                let current = active.palw_disclosure_duties_v1(vec![discloser]).duties;
+                let latest = consensus_manager.consensus().unguarded_session();
+                if view()? != before
+                    || !active
+                        .with_consensus_api_v1(|observed| latest.with_consensus_api_v1(|current| std::ptr::eq(observed, current)))
+                {
+                    return Err("the active view changed while checking the provider-backed DA duty".into());
+                }
+                (active, Some((current, before.2)))
+            } else {
+                (session, None)
+            };
             let sign = |message: &[u8], context: &[u8]| {
                 keypair.as_ref().and_then(|kp| {
                     libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message, context, [0u8; 32]).ok().map(|sig| sig.as_ref().to_vec())
                 })
             };
-            duties
+            let answers = duties
                 .iter()
                 .zip(built.answers)
                 .map(|(duty, answer)| match answer {
                     None => Ok(None),
                     Some(Err(why)) => Err(why),
                     Some(Ok(answer)) => {
+                        if current_duties.as_ref().is_some_and(|(current, now)| *now > duty.deadline_daa || !current.contains(duty)) {
+                            return Err("the provider-backed DA duty is no longer current".into());
+                        }
                         let progress = if let kaspa_consensus_core::palw_da_rcore_v1::PalwDaUnitV1::LegacyHeldV2(unit) = duty.unit {
                             session.palw_legacy_answer_progress_v2((duty.claim_id, unit, duty.discloser))?
                         } else {
@@ -13307,7 +13608,7 @@ impl PalwPanelService {
                             false,
                             |message, context| sign(message, context),
                         )?;
-                        da_answer_chunks::next_answer_object_v2(
+                        let object = da_answer_chunks::next_answer_object_v2(
                             object,
                             progress.as_ref(),
                             session.get_virtual_daa_score(),
@@ -13315,14 +13616,79 @@ impl PalwPanelService {
                             maximum,
                             &network_domain,
                             |message, context| sign(message, context),
-                        )
-                        .map(Some)
+                        )?;
+                        let manifest =
+                            if provider_roots.is_some() && matches!(&object, PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. }) {
+                                let progress = progress.as_ref().ok_or("provider DA chunk has no accepted manifest")?;
+                                Some(
+                                    kaspa_consensus_core::palw_legacy_answer_chunks_v2::PalwLegacyAnswerManifestPinV2::new(
+                                        &progress.declaration,
+                                        progress.deadline_daa,
+                                    )
+                                    .map_err(|error| error.to_string())?,
+                                )
+                            } else {
+                                None
+                            };
+                        Ok(Some(court_outbox::ProviderDaBuiltAnswerV1 { object, manifest }))
                     }
                 })
-                .collect()
+                .collect();
+            Ok((answers, provider_roots))
         })
         .await
-        .map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))
+        .map_err(|e| PalwDaClaimHoldV1::Material(format!("DA transport task did not finish: {e}")))?
+        .map_err(PalwDaClaimHoldV1::Material)
+    }
+
+    fn current_provider_da_session(
+        &self,
+        stamp: &court_outbox::ProviderDaStampV1,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> Result<(kaspa_consensusmanager::ConsensusProxy, u64), String> {
+        let active = self.consensus_manager.consensus().unguarded_session();
+        let view =
+            active.with_consensus_api_v1(|pinned| Self::check_provider_da_current(&self.consensus_manager, pinned, stamp, stage))?;
+        Ok((active, view.daa_score))
+    }
+
+    fn check_provider_da_current(
+        manager: &kaspa_consensusmanager::ConsensusManager,
+        pinned: &dyn kaspa_consensus_core::api::ConsensusApi,
+        stamp: &court_outbox::ProviderDaStampV1,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> Result<kaspa_consensus_core::palw_producer_v2::PalwProviderDaCurrentViewV1, String> {
+        if !manager.is_current_consensus_v1(pinned) {
+            return Err("provider DA pinned consensus is no longer active".into());
+        }
+        let view = pinned
+            .palw_provider_da_answer_current_v1(&stamp.duty, &stamp.roots, stage)?
+            .ok_or("provider DA carrier, roots, duty or multipart stage changed")?;
+        if !palw_disclosure_due_v1(&stamp.duty, view.daa_score) || !manager.is_current_consensus_v1(pinned) {
+            return Err("provider DA duty is outside its turn or the active consensus changed".into());
+        }
+        Ok(view)
+    }
+
+    fn provider_da_submission_guard(
+        &self,
+        stamp: court_outbox::ProviderDaStampV1,
+        stage: kaspa_consensus_core::palw_producer_v2::PalwProviderDaAnswerStageV1,
+    ) -> kaspa_mining::manager::LocalTransactionSubmissionGuard {
+        let manager = self.consensus_manager.clone();
+        Box::new(move |pinned| {
+            let view = Self::check_provider_da_current(&manager, pinned, &stamp, stage)?;
+            let manager = Arc::clone(&manager);
+            Ok(Box::new(move |pinned| {
+                if !manager.is_current_consensus_v1(pinned)
+                    || !pinned.palw_provider_da_view_current_v1(&view)
+                    || !manager.is_current_consensus_v1(pinned)
+                {
+                    return Err("provider DA authority changed before insertion".into());
+                }
+                Ok(())
+            }))
+        })
     }
 
     const LEAF_PURSUITS_CAP: usize = 1_024;
@@ -14755,97 +15121,189 @@ impl PalwPanelService {
         true
     }
 
-    /// **RFC-0009 stage B: the material from ANY evidence provider, root-checked before it is handed on.**
-    ///
-    /// The claim's roots are the CHAIN's (`trace_root`, `output_root`, `execution_root`, the chunk count and the retention it obliges): a
-    /// provider's manifest that disagrees with them is another execution's evidence, whoever signed for it. Each chunk is checked against the
-    /// manifest; the reassembled bytes are then injected into the same inbox a peer's answer enters, so the seat's own `verify_material` and
-    /// re-execution still judge them. A miss costs nothing: the producer pull that follows is unchanged. Provider silence is never evidence of
-    /// anything (no slash rests on it — see `misaka_palw_remote::evidence::evidence_responsibility_v1`).
-    async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
+    fn has_evidence_providers(&self) -> bool {
+        !self.config.evidence_provider_dirs.is_empty() || !self.config.evidence_provider_http.is_empty()
+    }
+
+    fn provider_claim_roots(
+        &self,
+        network_domain: Hash64,
+        claim: Hash64,
+        court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ) -> Option<misaka_palw_remote::evidence::ClaimRoots> {
         let session = self.consensus_manager.consensus().unguarded_session();
-        let Some((state, _, _)) = session.palw_derived_artifacts_v1(claim) else { return };
-        let roots = misaka_palw_remote::evidence::ClaimRoots {
+        Self::provider_claim_roots_in_v1(&session, network_domain, claim, court_carrier)
+    }
+
+    fn provider_claim_roots_in_v1(
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        claim: Hash64,
+        court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ) -> Option<misaka_palw_remote::evidence::ClaimRoots> {
+        let (state, _, _) = session.palw_derived_artifacts_v1(claim)?;
+        if court_carrier.is_some_and(|carrier| {
+            state.accepted_block != carrier || !matches!(state.source, kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::Attempt)
+        }) {
+            return None;
+        }
+        Some(misaka_palw_remote::evidence::ClaimRoots {
             network_domain,
             trace_root: state.trace_root,
             output_root: state.output_root,
             execution_root: state.execution_root,
             trace_chunk_count: state.trace_chunk_count,
             retention_deadline: state.trace_retention_daa,
-        };
-        let dirs = self.config.evidence_provider_dirs.clone();
-        let claim_hex = claim.to_string();
-        let fetched = tokio::task::spawn_blocking(move || {
-            misaka_palw_remote::evidence::fs::fetch_claim_material(
-                &dirs,
-                &claim_hex,
-                &roots,
-                &misaka_palw_remote::evidence::ManifestLimits::default(),
-                claim,
-            )
         })
-        .await;
-        match fetched {
-            Ok(Ok((bytes, report))) => {
-                let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &bytes);
-                info!(
-                    "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from evidence provider(s) {:?} ({admitted:?}); {} failed attempt(s) on the way",
-                    bytes.len(),
-                    report.served_by,
-                    report.failures.len()
-                );
+    }
+
+    async fn fetch_directory_provider_material(
+        &self,
+        claim: Hash64,
+        roots: misaka_palw_remote::evidence::ClaimRoots,
+        limits: misaka_palw_remote::evidence::ManifestLimits,
+    ) -> Result<FetchedProviderMaterialV1, String> {
+        use misaka_palw_remote::evidence::fs;
+        let dirs = self.config.evidence_provider_dirs.clone();
+        if dirs.is_empty() {
+            return Err("no evidence provider directories configured".into());
+        }
+        let (bytes, report) =
+            tokio::task::spawn_blocking(move || fs::fetch_claim_material(&dirs, &claim.to_string(), &roots, &limits, claim))
+                .await
+                .map_err(|error| error.to_string())?
+                .map_err(|error| format!("{error:?}"))?;
+        Ok(FetchedProviderMaterialV1 { bytes, report, http_admission: None })
+    }
+
+    /// Reserve before spawning so even a saturated blocking executor queues
+    /// at most one HTTP job. Its result holds the slot until it is consumed.
+    fn spawn_provider_http_fetch<T: Send + 'static>(
+        &self,
+        claim: Hash64,
+        roots: misaka_palw_remote::evidence::ClaimRoots,
+        finish: impl FnOnce(Result<FetchedProviderMaterialV1, String>) -> T + Send + 'static,
+    ) -> Result<(std::time::Instant, tokio::task::JoinHandle<T>), String> {
+        use kaspa_core::memory_budget::{MemoryClass, global_memory_budget};
+        use misaka_palw_remote::evidence::ManifestLimits;
+        let permit = self.provider_http_fetch.clone().try_acquire_owned().map_err(|_| "evidence HTTP fetch already in progress")?;
+        // Reassembly temporarily holds both the chunks and the contiguous
+        // output. Leave room for one response, manifest and diagnostics.
+        const MAX_BYTES: u64 = kaspa_p2p_flows::palw_gossip::PALW_MATERIAL_MAX_BYTES as u64;
+        let lease = global_memory_budget()
+            .try_reserve(MemoryClass::Transport, 2 * MAX_BYTES + (8 << 20))
+            .map_err(|error| error.to_string())?;
+        let endpoints = self.config.evidence_provider_http.clone();
+        let limits = ManifestLimits { max_chunks: 128, max_total_bytes: MAX_BYTES, ..ManifestLimits::default() };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let task = tokio::task::spawn_blocking(move || {
+            finish(
+                misaka_palw_remote::transport::fetch_verifier_http_material_v1(&endpoints, claim, &roots, &limits, deadline)
+                    .map(|(bytes, report)| FetchedProviderMaterialV1 { bytes, report, http_admission: Some((lease, permit)) })
+                    .map_err(|error| error.to_string()),
+            )
+        });
+        Ok((deadline, task))
+    }
+
+    fn queue_provider_http_fetch(
+        &self,
+        claim: Hash64,
+        roots: misaka_palw_remote::evidence::ClaimRoots,
+        court_carrier: Option<kaspa_consensus_core::BlockHash>,
+    ) {
+        let pending = self.pending_provider_http.clone();
+        if let Err(why) = self.spawn_provider_http_fetch(claim, roots, move |result| match result {
+            Ok(material) => {
+                let mut pending = pending.lock().unwrap();
+                debug_assert!(pending.is_none(), "the HTTP admission owns the single-flight slot");
+                *pending =
+                    Some(PendingProviderMaterialV1 { claim, roots, material, court_carrier, ready_at: std::time::Instant::now() });
             }
-            // No provider offered an admissible manifest, or a chunk would not verify: say so once per pull, and fall through to the producer.
-            Ok(Err(why)) => info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})"),
-            Err(join) => warn!("[{PALW_PANEL}] claim {claim}: the evidence-provider fetch did not finish ({join})"),
+            Err(why) => debug!("[{PALW_PANEL}] claim {claim}: no HTTP evidence-provider material ({why})"),
+        }) {
+            debug!("[{PALW_PANEL}] claim {claim}: HTTP evidence-provider fetch skipped ({why})");
         }
     }
 
-    /// **G14 lane FPSEL (coordinator decision 2026-10-26): a TIR frame original from the RFC-0009 stage B evidence providers.** A
-    /// node-less producer's rail publishes the claim's FPC1 capture to a provider (`--evidence-out` + `palw-evidence publish`); a
-    /// custodian that retains no original of the claim (`fp_retained_payload_paths`) fetches it here, root-checked against the CHAIN's
-    /// roots and every chunk against the manifest, and keeps it under `retention/foreign/<claim>.material`, where the frame custodian's
-    /// reader (`retained_original_v1`) finds it and still checks it against the frame. `Ok(false)`: no provider dir, or a copy is
-    /// already retained. A provider's silence is the claimant's DA no-response (a DA default), never a computation fault: nothing here
-    /// files or accuses anything, and no responsibility moves to the provider (no provider court).
+    /// A verified provider copy enters the same seat pool and re-execution
+    /// path as a producer's reply. A miss does not establish a claim fault.
+    async fn pull_material_from_evidence_providers(&self, network_domain: Hash64, claim: Hash64) {
+        let Some(roots) = self.provider_claim_roots(network_domain, claim, None) else { return };
+        use misaka_palw_remote::evidence::ManifestLimits;
+        let limits = ManifestLimits {
+            max_total_bytes: kaspa_p2p_flows::palw_gossip::PALW_MATERIAL_MAX_BYTES as u64,
+            ..ManifestLimits::default()
+        };
+        match self.fetch_directory_provider_material(claim, roots, limits).await {
+            Ok(material) => {
+                // A directory read can straddle a reorg or a new acceptance.
+                if self.provider_claim_roots(network_domain, claim, None) != Some(roots) {
+                    return;
+                }
+                let admitted = self.flow_context.palw_gossip().inject_local_material(claim, &material.bytes);
+                info!(
+                    "[{PALW_PANEL}] claim {claim}: {} byte(s) of material from evidence provider(s) {:?} ({admitted:?}); {} failed attempt(s) on the way",
+                    material.bytes.len(),
+                    material.report.served_by,
+                    material.report.failures.len()
+                );
+                return;
+            }
+            Err(why) if self.config.evidence_provider_http.is_empty() => {
+                info!("[{PALW_PANEL}] claim {claim}: no evidence-provider material ({why})");
+                return;
+            }
+            Err(_) => {}
+        }
+
+        // The P2P request has already been dispatched. Do not wait on HTTP
+        // here: one silent endpoint must not delay later duties in the tick.
+        self.queue_provider_http_fetch(claim, roots, None);
+    }
+
+    /// Fetch and stage a TIR frame original for the existing custodian.
     pub(crate) async fn fetch_tir_original_from_evidence_providers_v1(
         &self,
         network_domain: Hash64,
         claim: Hash64,
     ) -> Result<bool, String> {
-        if self.config.evidence_provider_dirs.is_empty() || self.fp_retained_payload_paths(&claim).iter().any(|p| p.is_file()) {
+        if !self.has_evidence_providers()
+            || self.fp_retained_payload_paths(&claim).iter().any(|p| p.extension().is_some_and(|ext| ext != "replay") && p.is_file())
+        {
             return Ok(false);
         }
-        let session = self.consensus_manager.consensus().unguarded_session();
-        let (state, _, _) = session.palw_derived_artifacts_v1(claim).ok_or("the claim's committed roots are not readable")?;
-        let roots = misaka_palw_remote::evidence::ClaimRoots {
-            network_domain,
-            trace_root: state.trace_root,
-            output_root: state.output_root,
-            execution_root: state.execution_root,
-            trace_chunk_count: state.trace_chunk_count,
-            retention_deadline: state.trace_retention_daa,
+        let roots = self.provider_claim_roots(network_domain, claim, None).ok_or("the claim's committed roots are not readable")?;
+        let limits = misaka_palw_remote::evidence::ManifestLimits::default();
+        let material = match self.fetch_directory_provider_material(claim, roots, limits).await {
+            Ok(material) => material,
+            Err(why) if self.config.evidence_provider_http.is_empty() => return Err(why),
+            Err(_) => {
+                let (deadline, mut task) = self.spawn_provider_http_fetch(claim, roots, |result| result)?;
+                let material = match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), &mut task).await {
+                    Ok(result) => result.map_err(|error| error.to_string())??,
+                    Err(_) => {
+                        task.abort();
+                        return Err("evidence HTTP fetch deadline reached".into());
+                    }
+                };
+                material
+            }
         };
-        let dirs = self.config.evidence_provider_dirs.clone();
+        // Both directory and HTTP reads may have started on an earlier branch.
+        if self.provider_claim_roots(network_domain, claim, None) != Some(roots) {
+            return Err("claim evidence roots or accepted retention changed during provider fetch".into());
+        }
         let target = self.config.retention_dir.join("foreign").join(format!("{claim}.material"));
         tokio::task::spawn_blocking(move || -> Result<bool, String> {
-            let (bytes, report) = misaka_palw_remote::evidence::fs::fetch_claim_material(
-                &dirs,
-                &claim.to_string(),
-                &roots,
-                &misaka_palw_remote::evidence::ManifestLimits::default(),
-                claim,
-            )
-            .map_err(|why| format!("no evidence provider served the frame original ({why:?})"))?;
-            let parent = target.parent().ok_or("retention path has no parent")?;
-            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            let partial = target.with_extension("material.partial");
-            std::fs::write(&partial, &bytes).and_then(|()| std::fs::rename(&partial, &target)).map_err(|e| e.to_string())?;
+            let _publication = crate::palw_retention::pin_attempt_publication(claim);
+            publish_retained_file(&target, &material.bytes, RetainedPublication::Replace).map_err(|e| e.to_string())?;
             info!(
                 "[{PALW_PANEL}] claim {claim}: TIR frame original ({} B) from evidence provider(s) {:?}",
-                bytes.len(),
-                report.served_by
+                material.bytes.len(),
+                material.report.served_by
             );
+            drop(material);
             Ok(true)
         })
         .await
@@ -14858,10 +15316,6 @@ impl PalwPanelService {
     /// key, which is a node that files no receipts either.
     pub async fn request_material_signed(&self, network_domain: Hash64, claim: Hash64, requested_daa: u64) {
         self.flow_context.palw_gossip().note_pull_request(claim);
-        // RFC-0009 stage B: a provider may already hold the material — ask the directories too, before and beside the producer pull.
-        if !self.config.evidence_provider_dirs.is_empty() {
-            self.pull_material_from_evidence_providers(network_domain, claim).await;
-        }
         let signed = self.keypair.as_ref().and_then(|kp| {
             crate::palw_fp_seat::palw_fp_sign_opening_request_v1(&kp.signing_key, network_domain, claim, None, requested_daa)
                 .map(|signature| (kp.verification_key.as_ref().to_vec(), signature))
@@ -14869,6 +15323,10 @@ impl PalwPanelService {
         match signed {
             Some((pubkey, signature)) => self.flow_context.request_palw_material_signed(claim, pubkey, signature, requested_daa).await,
             None => self.flow_context.request_palw_material(claim).await,
+        }
+        // Dispatch the producer request before a provider I/O miss can delay it.
+        if self.has_evidence_providers() {
+            self.pull_material_from_evidence_providers(network_domain, claim).await;
         }
     }
 }

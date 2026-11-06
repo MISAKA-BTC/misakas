@@ -809,6 +809,7 @@ mod tests {
             "palw_court_commitment_scope_v1" => params.palw_court_commitment_scope_v1 = Some(at),
             "palw_staged_public_court_v1" => params.palw_staged_public_court_v1 = Some(at),
             "palw_staged_tir_route_v1" => params.palw_staged_tir_route_v1 = Some(at),
+            "palw_batch_court_v1" => params.palw_batch_court_v1 = Some(at),
             // G14 original paid TIR conviction: a bare height; `palw_tir_public_conviction_v1_fence` resolves it only with the staged
             // TIR route, the staged court, the objective-offence ledger, R-core+ and the aggregate liability, which the probe does not ask.
             "palw_tir_public_conviction_v1" => params.palw_tir_public_conviction_v1 = Some(at),
@@ -924,6 +925,9 @@ mod tests {
             "palw_native_execution_v39" => {
                 params.palw_native_execution_v39 =
                     Some(crate::palw_native_execution_v39::PalwNativeExecutionFenceV39::unapproved_probe_at(at, [0; 64]));
+            }
+            "palw_positive_court_v2" => {
+                params.palw_positive_court_v2 = Some(crate::config::params::PositiveCourtFenceV2::unapproved_probe_at(at));
             }
             "palw_native_mining_v39" => {
                 params.palw_native_mining_v39 =

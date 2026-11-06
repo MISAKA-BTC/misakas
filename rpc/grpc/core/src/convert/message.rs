@@ -6116,10 +6116,12 @@ try_from!(item: &protowire::GetPalwClaimDetailRequestMessage, kaspa_rpc_core::Ge
     Self { claim_hex: item.claim_hex.clone() }
 });
 from!(item: &kaspa_rpc_core::GetPalwCourtStateRequest, protowire::GetPalwCourtStateRequestMessage, {
-    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone() }
+    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone(), batch_ordinal: item.batch_ordinal.clone(),
+        batch_target: item.batch_target.clone(), batch_open: item.batch_open.clone() }
 });
 try_from!(item: &protowire::GetPalwCourtStateRequestMessage, kaspa_rpc_core::GetPalwCourtStateRequest, {
-    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone() }
+    Self { claim_hex: item.claim_hex.clone(), session_hex: item.session_hex.clone(), batch_ordinal: item.batch_ordinal.clone(),
+        batch_target: item.batch_target.clone(), batch_open: item.batch_open.clone() }
 });
 from!(item: &kaspa_rpc_core::GetPalwFenceScheduleRequest, protowire::GetPalwFenceScheduleRequestMessage, {
     Self { view: item.view.clone(), key: item.key.clone() }
@@ -6601,5 +6603,19 @@ try_from!(item: &protowire::GetPalwTirOriginalQuoteResponseMessage, RpcResult<ka
         refusal: item.refusal.clone(),
         quote_daa: item.quote_daa,
         plan_hex: item.plan_hex.clone(),
+        door_diagnostics: None,
     }
+});
+
+from!(item: &kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Request, protowire::GetPalwMemoryRoutingOutcomeV1RequestMessage, {
+    Self { block_hash: item.block_hash.clone(), claim_id: item.claim_id.clone() }
+});
+try_from!(item: &protowire::GetPalwMemoryRoutingOutcomeV1RequestMessage, kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Request, {
+    Self { block_hash: item.block_hash.clone(), claim_id: item.claim_id.clone() }
+});
+from!(item: RpcResult<&kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Response>, protowire::GetPalwMemoryRoutingOutcomeV1ResponseMessage, {
+    Self { available: item.available, observation_json: item.observation_json.clone(), reason: item.reason.clone(), error: None }
+});
+try_from!(item: &protowire::GetPalwMemoryRoutingOutcomeV1ResponseMessage, RpcResult<kaspa_rpc_core::GetPalwMemoryRoutingOutcomeV1Response>, {
+    Self { available: item.available, observation_json: item.observation_json.clone(), reason: item.reason.clone() }
 });

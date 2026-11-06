@@ -29,10 +29,23 @@ fn calibration(dir: &Path, vocab: usize, n: usize, len: usize) -> CalibInput {
 }
 
 fn build(src: &Path, work: &Path, vocab: usize, with_reference: bool) -> (RuntimePackV1, String, PathBuf) {
+    build_profile(src, work, vocab, with_reference, 32, None)
+}
+
+fn build_profile(
+    src: &Path,
+    work: &Path,
+    vocab: usize,
+    with_reference: bool,
+    logits_bits: u8,
+    streamed: Option<bool>,
+) -> (RuntimePackV1, String, PathBuf) {
     let pack_dir = work.join("pack");
     let mut req = ConvertRequest::new(src, work.join("artifact.palwtir"));
     req.calib = Some(calibration(work, vocab, 3, 12));
+    req.logits_bits = logits_bits;
     let mut o = BuildOpts::new(req, &pack_dir, "fixture");
+    o.streamed = streamed;
     o.prompts = 2;
     o.prefill = 5;
     o.decode = 2;
@@ -677,4 +690,176 @@ fn metadata_profile_v16_is_explicit_in_pack_and_declared_artifact() {
     bad["converter"]["metadata_parsing_profile"] = serde_json::json!("unpriced-guess");
     assert!(RuntimePackV1::parse(&bad.to_string()).is_err());
     let _ = std::fs::remove_dir_all(work);
+}
+
+#[test]
+fn absent_and_explicit_32_bit_pins_keep_the_historical_manifest_identity() {
+    let work = scratch("legacy-logits-pin");
+    let (pack, digest, _) = build(&fixture("hf/llama"), &work, 64, false);
+    let mut v: serde_json::Value = serde_json::from_str(&pack.canonical()).unwrap();
+    assert!(v["profile"].get("logits_bits").is_none(), "the old serialized image gains no default field");
+    assert_eq!(RuntimePackV1::parse(&v.to_string()).unwrap().profile.logits_bits, 32);
+    v["profile"]["logits_bits"] = 32.into();
+    let explicit = RuntimePackV1::parse(&v.to_string()).unwrap();
+    assert_eq!(explicit.digest(), digest);
+    assert_eq!(explicit.canonical(), pack.canonical());
+    for invalid in [0, 16, 128] {
+        v["profile"]["logits_bits"] = invalid.into();
+        assert!(RuntimePackV1::parse(&v.to_string()).unwrap_err().contains("logits_bits"));
+    }
+    // The valid narrow entry, including caller-specified legacy counts, keeps its exact context.
+    let mut entry = entry_for_profile_fixture(&pack, &work.join("artifact.palwtir"));
+    entry.canonical_job = (3, 4);
+    let facts = kaspa_consensus_core::palw_tir_attempt_v1::PalwTirJobFactsV1::of(
+        &entry.class,
+        &entry.artifact.plan().program,
+        entry.class_id(),
+    );
+    let historical = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_job_context_v1(&facts, (3, 4));
+    assert_eq!(entry.canonical_context(), historical);
+    assert_eq!(entry.canonical_context_v2(entry.class.program.len()).unwrap(), historical);
+    // A wide pin on an unchanged narrow artifact is refused even without source/rebuild.
+    v["profile"]["logits_bits"] = 64.into();
+    let dir = work.join("pack");
+    std::fs::write(dir.join(PACK_FILE), v.to_string()).unwrap();
+    let mut opts = VerifyOpts::new(&dir);
+    opts.artifact = Some(work.join("artifact.palwtir"));
+    let report = verify_pack(&opts, &|_| {}).unwrap();
+    assert!(report.checks.iter().any(|c| c.name == "artifact" && c.status == Status::Fail && c.detail.contains("logits_bits")));
+    let _ = std::fs::remove_dir_all(work);
+}
+
+#[test]
+fn wide_profile_pin_rebuilds_on_both_pack_paths_and_cannot_relabel_an_artifact() {
+    let src = fixture("hf/llama");
+    for streamed in [false, true] {
+        let work = scratch(if streamed { "wide-pin-streamed" } else { "wide-pin-resident" });
+        let (pack, digest, dir) = build_profile(&src, &work, 64, true, 64, Some(streamed));
+        assert_eq!(pack.profile.logits_bits, 64);
+        assert!(pack.canonical().contains("\"logits_bits\":64"));
+        assert_eq!(RuntimePackV1::parse(&pack.canonical()).unwrap().digest(), digest);
+        let artifact = work.join("artifact.palwtir");
+        let container = misaka_palw_tir_artifact::PalwTirContainerV1::open(&artifact).unwrap();
+        assert!(container.program.wide_logits_q24());
+        let config = std::fs::read_to_string(src.join("config.json")).unwrap();
+        let narrow = misaka_palw_tir_lower::fidelity::prepare(&config, &Default::default()).unwrap();
+        assert_eq!(container.program.history_bound, narrow.lowered.program.history_bound);
+        assert_eq!(container.program.token_bound, narrow.lowered.program.token_bound);
+        drop(container);
+        // Both prepared frontend LowerOpts and full ConvertRequest rebuild must restore64.
+        let mut opts = VerifyOpts::new(&dir);
+        opts.model = Some(src.clone());
+        opts.rebuild = true;
+        opts.streamed = Some(streamed);
+        let report = verify_pack(&opts, &|_| {}).unwrap();
+        assert!(report.verified(), "{}", report.render());
+        assert!(report.checks.iter().any(|c| c.name == "artifact" && c.status == Status::Pass));
+        // Merely relabelling the pin fails the existing artifact without needing model files.
+        let mut wrong = pack.clone();
+        wrong.profile.logits_bits = 32;
+        std::fs::write(dir.join(PACK_FILE), wrong.to_pretty()).unwrap();
+        let mut supplied = VerifyOpts::new(&dir);
+        supplied.artifact = Some(artifact);
+        let report = verify_pack(&supplied, &|_| {}).unwrap();
+        assert!(report.checks.iter().any(|c| c.name == "artifact" && c.status == Status::Fail && c.detail.contains("logits_bits")));
+        // Rebuilding from the wrong pin generates another program, not a matching wide artifact.
+        let report = verify_pack(&opts, &|_| {}).unwrap();
+        assert!(report.checks.iter().any(|c| c.name == "artifact" && c.status == Status::Fail));
+        let _ = std::fs::remove_dir_all(work);
+    }
+}
+
+#[test]
+fn explicit_wide_sdk_context_matches_the_resolver_without_enabling_v1_admission() {
+    use kaspa_consensus_core::palw_tir_profile_resolver_v2::TirTraceProfileV2;
+    use kaspa_hashes::Hash64;
+    let work = scratch("wide-sdk-context");
+    let (pack, _, _) = build_profile(&fixture("hf/llama"), &work, 64, false, 64, Some(true));
+    let mut entry = entry_for_profile_fixture(&pack, &work.join("artifact.palwtir"));
+    let cap = entry.class.program.len();
+    let resolved = entry.resolved_job_profile_v2(cap).unwrap();
+    assert_eq!(resolved.profile(), TirTraceProfileV2::TiledI64Q24);
+    let context = entry.canonical_context_v2(cap).unwrap();
+    assert_eq!(context, resolved.ctx().unwrap());
+    assert_eq!(context, entry.canonical_context());
+    assert_eq!(context.max_context_tokens, entry.class.layout.max_context + 1);
+    assert_eq!(context.shape_profile_id, entry.class_id());
+    let anchor = Hash64::from_bytes([91; 64]);
+    let (job, ids) = resolved.job_for_anchor(&anchor, kaspa_consensus_core::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat).unwrap();
+    assert_eq!(job.trace_scheme_id, context.trace_scheme_id);
+    assert_eq!(job.shape_profile_id, context.shape_profile_id);
+    assert_eq!(job.max_context_tokens, context.max_context_tokens);
+    assert_eq!(job.job_id, anchor);
+    assert_eq!(ids.len(), entry.canonical_job.0 as usize);
+    assert!(entry.canonical_context_v2(cap - 1).is_err());
+    // V1 declarations cannot overwrite or reinterpret the wide scheme.
+    let program = &entry.artifact.plan().program;
+    assert_eq!(misaka_palw_sdk::tir_layout::tir_program_with_scheme_v1(program, None).unwrap().encode(), program.encode());
+    for scheme in [misaka_palw_sdk::tir_layout::TirLogitsSchemeV1::Flat, misaka_palw_sdk::tir_layout::TirLogitsSchemeV1::Tiled] {
+        assert!(misaka_palw_sdk::tir_layout::tir_program_with_scheme_v1(program, Some(scheme)).is_err());
+    }
+    let params = misaka_palw_sdk::runtime_pack::build::network("testnet-12").unwrap();
+    assert!(
+        misaka_palw_sdk::tir_layout::tir_canonical_job_answerable_at_v1(&params, &entry.class, u64::MAX)
+            .unwrap_err()
+            .contains("explicit V2")
+    );
+    entry.canonical_job = (1, 1);
+    assert!(entry.canonical_context_v2(cap).unwrap_err().contains("canonical counts"));
+    let _ = std::fs::remove_dir_all(work);
+}
+
+// Fixture metadata only: this declaration is never an admitted or certified native class.
+fn entry_for_profile_fixture(pack: &RuntimePackV1, path: &Path) -> misaka_palw_sdk::PalwTirClassEntryV1 {
+    use kaspa_consensus_core::palw_tir_class_v1::{PalwTirClassV1, PalwTirLayoutV1};
+    use kaspa_hashes::Hash64;
+    use misaka_palw_sdk::PalwTirClassEntryV1;
+    use std::sync::Arc;
+    let artifact = Arc::new(misaka_palw_tir_exec::node::TirArtifactV1::open(path).unwrap());
+    let mut program = artifact.plan().program.clone();
+    if !program.wide_logits_q24() {
+        program.logits_scheme_id = kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1().as_bytes();
+    }
+    let class = PalwTirClassV1 {
+        version: 1,
+        program: program.encode(),
+        tokenizer_id: Hash64::from_bytes([33; 64]),
+        layout: PalwTirLayoutV1 {
+            version: 1,
+            max_context: program.history_bound,
+            checkpoint_interval: 1,
+            h_tile: 1,
+            commit_tiles: vec![1; program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).count()],
+            state_tiles: vec![1; program.states.len()],
+        },
+    };
+    let canonical_job = kaspa_consensus_core::palw_tir_attempt_v1::palw_tir_attempt_canonical_v1(&class).unwrap();
+    PalwTirClassEntryV1 {
+        model_id: "fixture".into(),
+        lineage_id: "tir-v1",
+        class: Arc::new(class),
+        artifact_root: pack.result.inventory_root.parse().unwrap(),
+        canonical_job,
+        artifact,
+        path: None,
+    }
+}
+
+#[test]
+fn pack_cli_rejects_invalid_logit_width_before_opening_source_files() {
+    for bits in ["0", "16", "128"] {
+        let args = [
+            "build",
+            "--model",
+            "/nonexistent-model",
+            "--out",
+            "/nonexistent-output",
+            "--pack",
+            "/nonexistent-pack",
+            "--logits-bits",
+            bits,
+        ]
+        .map(str::to_owned);
+        assert!(misaka_palw_sdk::runtime_pack::cli::run(&args).unwrap_err().contains("--logits-bits must be 32 or 64"));
+    }
 }

@@ -180,7 +180,7 @@ pub(super) fn demand(
     let answer_work = crate::palw_model_artifact_v2::model_artifact_work_v2(0, FLAT_VECTOR_ANSWER_MAX_BYTES_V9).unwrap();
     let bond = policy.demand_bond.max(policy.dismissal_fee_v1(answer_work));
     let requester = builder.state.bonds.get(signer).unwrap();
-    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < bond as u128 {
+    if (requester.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < bond as u128 {
         return Err(refused("native original DA requester bond unavailable"));
     }
     let d = NativeExecutionDemandV11 {

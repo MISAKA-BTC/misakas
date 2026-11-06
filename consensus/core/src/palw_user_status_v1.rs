@@ -74,6 +74,7 @@ pub const PALW_STATUS_CODE_TEXTS_V1: &[(&str, &str)] = &[
     ("bind_timeout", "voided: no Panel bound the claim in time"),
     ("receipt_timeout", "voided: the receipt window ended without a licence"),
     ("court_fraud", "voided: a court convicted the claim of a computation fault"),
+    ("prefix_export_fraud", "voided: the producer's signed prefix export was refuted"),
     ("producer_withholding", "voided: the producer withheld material a court asked for (DA default)"),
     ("no_capable_panel", "voided: no capable Panel"),
     ("unavailable_quorum", "voided: the quorum was unavailable"),

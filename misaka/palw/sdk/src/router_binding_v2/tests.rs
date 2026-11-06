@@ -118,3 +118,15 @@ fn cli_writes_native_carrier_and_preserves_existing_output() {
     assert!(!output.exists());
     std::fs::remove_dir_all(&path).unwrap();
 }
+
+#[test]
+fn court_expectation_does_not_accept_binding_declarations_as_outcomes() {
+    use kaspa_consensus_core::palw_router_binding_v2::PalwRouterBindingRowV2;
+    let d = declaration();
+    let row = PalwRouterBindingRowV2 { version: 1, bound_from_daa: 10, readers: d.readers.clone() };
+    let object = signed_router_binding_v2(&ValidatorKey::from_seed([0x42; 32]), Hash64::default(), d).unwrap();
+    let error = court_expectation::expectation(&object, &row, Hash64::default(), "ExecutorGuilty", "route", "A").unwrap_err();
+    assert!(error.contains("accusation required"));
+    assert!(court_expectation::expectation(&object, &row, Hash64::default(), "PASS", "route", "A").is_err());
+    assert!(court_expectation::expectation(&object, &row, Hash64::default(), "ExecutorGuilty", "", "A").is_err());
+}

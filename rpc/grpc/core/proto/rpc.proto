@@ -3478,6 +3478,9 @@ message GetPalwClaimDetailRequestMessage {
 message GetPalwCourtStateRequestMessage {
   string claimHex = 1;
   string sessionHex = 2;
+  string batchOrdinal = 3;
+  string batchTarget = 4;
+  string batchOpen = 5;
 }
 
 // Lane UX-A: empty view = the fence schedule (unchanged); otherwise a view kind of the op-227 multiplexer (see the Rust request).
@@ -3727,5 +3730,17 @@ message GetPalwTirOriginalQuoteResponseMessage {
   string refusal = 3;
   uint64 quoteDaa = 4;
   string planHex = 5;
+  RPCError error = 1000;
+}
+
+// Node-local observations published only after the authoritative block commit.
+message GetPalwMemoryRoutingOutcomeV1RequestMessage {
+  string blockHash = 1;
+  string claimId = 2;
+}
+message GetPalwMemoryRoutingOutcomeV1ResponseMessage {
+  bool available = 1;
+  string observationJson = 2;
+  string reason = 3;
   RPCError error = 1000;
 }

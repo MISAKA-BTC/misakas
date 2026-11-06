@@ -42,6 +42,54 @@ pub fn restore_native_carriage_v1(
 
 #[allow(clippy::too_many_arguments)]
 fn restore_with_reservation_v1(
+    point: crate::BlockHash,
+    carriage: PalwStateCarriageV2,
+    params: &PalwStateParamsV2,
+    expected_root: Option<crate::Hash64>,
+    uncertified_weightless: bool,
+    canonical_work_daa: Option<u64>,
+    enabled: bool,
+    reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+) -> Result<NativeChainStateV1, NativeStateMutationErrorV1> {
+    restore_with_reservation_and_check_v1(
+        point,
+        carriage,
+        params,
+        expected_root,
+        uncertified_weightless,
+        canonical_work_daa,
+        enabled,
+        reserve,
+        |_| Ok(()),
+    )
+}
+
+/// Keep the already-reserved root/consistency workspace alive while the caller
+/// compares the authenticated row inventory with the canonical root writer.
+pub(super) fn restore_checked_v1(
+    point: crate::BlockHash,
+    carriage: PalwStateCarriageV2,
+    params: &PalwStateParamsV2,
+    expected_root: Option<crate::Hash64>,
+    uncertified_weightless: bool,
+    canonical_work_daa: Option<u64>,
+    check: impl FnOnce(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), PalwStateV2Error>,
+) -> Result<NativeChainStateV1, NativeStateMutationErrorV1> {
+    restore_with_reservation_and_check_v1(
+        point,
+        carriage,
+        params,
+        expected_root,
+        uncertified_weightless,
+        canonical_work_daa,
+        native_logical_admission_enabled_v1() || native_resource_admission_enabled_v1(),
+        reserve_native_requests_v1,
+        check,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn restore_with_reservation_and_check_v1(
     _point: crate::BlockHash,
     carriage: PalwStateCarriageV2,
     params: &PalwStateParamsV2,
@@ -50,6 +98,7 @@ fn restore_with_reservation_v1(
     canonical_work_daa: Option<u64>,
     enabled: bool,
     reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+    check: impl FnOnce(&crate::palw_state_v2::PalwChainStateV2) -> Result<(), PalwStateV2Error>,
 ) -> Result<NativeChainStateV1, NativeStateMutationErrorV1> {
     let mut lease = None;
     let mut codec_lease = None;
@@ -92,9 +141,13 @@ fn restore_with_reservation_v1(
         let shape = preflight_native_carriage_v1(canonical.as_slice(), bytes as u64)
             .map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
         let restore = shape.memory_requests_v1().map_err(|e| NativeDecodeErrorV1::Resource(restore_fault_v1(e)))?;
-        ticket.grow_memory_v1(restore).map_err(NativeDecodeErrorV1::Resource)?;
+        ticket.grow_pending_memory_v1(restore).map_err(NativeDecodeErrorV1::Resource)?;
     }
     let state = carriage.into_state_v3(params, expected_root, uncertified_weightless, canonical_work_daa).map_err(|e| match e {
+        PalwStateV2Error::NativeResource(why) => NativeDecodeErrorV1::Resource(why),
+        other => NativeDecodeErrorV1::Decode(other),
+    })?;
+    check(&state).map_err(|e| match e {
         PalwStateV2Error::NativeResource(why) => NativeDecodeErrorV1::Resource(why),
         other => NativeDecodeErrorV1::Decode(other),
     })?;

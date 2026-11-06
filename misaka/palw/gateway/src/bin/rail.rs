@@ -73,14 +73,24 @@ fn hex(h: Hash64) -> String {
 
 /// The class the rail signs a claim in: the user's own node on this machine is `FULL_NODE`; another node, or any relay, `UNVERIFIED_REMOTE`;
 /// no node at all (an offline signature over a job someone else assembled) `UNVERIFIED_REMOTE` too.
-fn rail_mode_v1(rpc: Option<&str>, relaying: bool) -> misaka_palw_remote::verify::ModeLabelV1 {
+fn rail_mode_v1(
+    rpc: Option<&str>,
+    relaying: bool,
+    accepted: Option<misaka_palw_remote::verify::ModeLabelV1>,
+) -> misaka_palw_remote::verify::ModeLabelV1 {
     use misaka_palw_remote::verify::ModeLabelV1;
     let own = rpc.is_some_and(|r| {
         let host = r.trim_start_matches("ws://").trim_start_matches("wss://");
         let host = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host).trim_start_matches('[').trim_end_matches(']');
         matches!(host, "127.0.0.1" | "localhost" | "::1")
     });
-    if own && !relaying { ModeLabelV1::FullNode } else { ModeLabelV1::UnverifiedRemote }
+    // An SSH tunnel can be loopback while the node is remote. Explicit remote consent
+    // must never be promoted to FULL_NODE merely because of its transport address.
+    if own && !relaying && accepted != Some(ModeLabelV1::UnverifiedRemote) {
+        ModeLabelV1::FullNode
+    } else {
+        ModeLabelV1::UnverifiedRemote
+    }
 }
 
 fn read_borsh<T: borsh::BorshDeserialize>(path: &Path, what: &str) -> T {
@@ -122,6 +132,14 @@ fn parse_outpoint(s: &str) -> TransactionOutpoint {
     }
     let index: u32 = index.parse().unwrap_or_else(|e| die(format!("{index:?} is not an output index: {e}")));
     TransactionOutpoint::new(Hash64::from_bytes(out), index)
+}
+
+/// Each watched claim has its own public authorization; literal one-shot paths retain their meaning.
+fn redemption_path_for_claim_v1(path: &Path, claim: &Hash64) -> PathBuf {
+    match path.to_str() {
+        Some(text) => PathBuf::from(text.replace("{claim_id}", &hex(*claim))),
+        None => path.to_path_buf(),
+    }
 }
 
 fn main() {
@@ -182,6 +200,7 @@ fn main() {
     // RFC-0009 stage C: the executor's redemption authorization, signed once at claim time so any builder may spend the claim's winning
     // quanta while this PC is off (`palw_receipt_spend_v4`, dormant until its fence opens).
     let mut redeem_auth_out: Option<PathBuf> = None;
+    let mut redemption_providers: Option<String> = None;
     // RFC-0009 operating modes (2026-10-08): the class the user accepts signing in below VERIFIED_REMOTE.
     let mut accept_unverified: Option<misaka_palw_remote::verify::ModeLabelV1> = None;
     // RFC-0009 stage A: the bond key stays in a `kaspa-pq-signer` sidecar. `--signer-socket <path> --bond-pubkey <hex>` builds the carrier
@@ -236,6 +255,7 @@ fn main() {
             "--bond-pubkey" => bond_pubkey_hex = Some(value("--bond-pubkey")),
             "--relay-signed" => relay_signed = Some(PathBuf::from(value("--relay-signed"))),
             "--redeem-auth-out" => redeem_auth_out = Some(PathBuf::from(value("--redeem-auth-out"))),
+            "--redemption-providers" => redemption_providers = Some(value("--redemption-providers")),
             "--accept-unverified-state" => {
                 let v = value("--accept-unverified-state");
                 accept_unverified = Some(misaka_palw_remote::verify::ModeLabelV1::parse(&v).unwrap_or_else(|| {
@@ -366,6 +386,9 @@ fn main() {
     // carries it — and until this mode existed, the only thing that did was a script on the pool's
     // own hosts. An outside operator ran the gateway, watched `v3 executed` scroll by, and had no
     // way to learn that nothing had reached the chain.
+    if redemption_providers.is_some() && redeem_auth_out.is_none() {
+        die("--redemption-providers needs --redeem-auth-out".into());
+    }
     if let Some(outbox) = watch_outbox {
         let seed = seed_path.unwrap_or_else(|| die("--watch needs --bond-key-seed <file>: it signs every job it submits".into()));
         let rpc = rpc_endpoint
@@ -388,6 +411,7 @@ fn main() {
             pass_through.extend(["--retention-dir".to_string(), dir.display().to_string()]);
         }
         pass_through.extend(["--anchor-ttl-daa".to_string(), anchor_ttl_daa.to_string()]);
+        pass_through.extend(["--tfp1".into(), tfp1.as_str().into()]);
         // RFC-0009: the one-shot run of a watched job also files the claim's evidence and its V4 redemption authorization (the drill's
         // fence-4 leg, `tools/drills/combined/rfc9-v4-leg.sh`, runs the rail this way with `--once`: one job, one authorization file).
         if let Some(dir) = &evidence_out {
@@ -395,6 +419,9 @@ fn main() {
         }
         if let Some(label) = accept_unverified {
             pass_through.extend(["--accept-unverified-state".to_string(), label.as_str().to_string()]);
+        }
+        if let Some(providers) = &redemption_providers {
+            pass_through.extend(["--redemption-providers".to_string(), providers.clone()]);
         }
         if let Some(path) = &redeem_auth_out {
             pass_through.extend(["--redeem-auth-out".to_string(), path.display().to_string()]);
@@ -475,6 +502,9 @@ fn main() {
             })
         );
         return;
+    }
+    if !print_claim {
+        tfp1.check_inputs(public_binding_path.as_deref(), rpc_endpoint.as_deref()).unwrap_or_else(|why| die(why.into()));
     }
     let stem = artifact_stem.unwrap_or_else(|| die("--artifact <outbox/fp-job-XXXX> is required (the path WITHOUT a suffix)".into()));
     let unsigned_path = PathBuf::from(format!("{}.commitment-unsigned.borsh", stem.display()));
@@ -642,7 +672,7 @@ fn main() {
     // **The class this claim is signed in, and the gate** (RFC-0009, 2026-10-08): the job's anchor and the chain's price came from the
     // node(s) named; a node on this machine is the user's own (FULL_NODE), any other — and every --relay — is their word
     // (UNVERIFIED_REMOTE), and the claim is signed only when the user named that class.
-    let mode = rail_mode_v1(rpc_endpoint.as_deref(), !relay_endpoints.is_empty());
+    let mode = rail_mode_v1(rpc_endpoint.as_deref(), !relay_endpoints.is_empty(), accept_unverified);
     eprintln!("[misaka-palw-fp-rail] {}", mode.line());
     if let Err(g) = misaka_palw_remote::verify::signing_gate_v1(mode, accept_unverified) {
         die(format!("nothing was signed: {g}"));
@@ -664,9 +694,6 @@ fn main() {
             }
             return None;
         };
-        if tfp1 == Tfp1ModeV1::Require && rpc_endpoint.is_none() {
-            die("--tfp1 require needs --rpc: the frame is the node's quote (op 248)".into());
-        }
         let Some(endpoint) = rpc_endpoint.as_deref() else {
             eprintln!(
                 "[misaka-palw-fp-rail] WARNING: a TIR original without --rpc cannot be quoted for its TFP1 frame; past \
@@ -872,6 +899,57 @@ fn main() {
     // the one library; not two commands an operator has to remember to run in order, and not a
     // shell-out. Every refusal below is named by `FpSubmitError`, including the SA-1(b) one that
     // fires when the node's DAA has passed this commitment's anchor deadline.
+    // The numbers the builder checked, from the source it checked them against — the leaves
+    // derivation here would contradict the chain past the bundle (and panic on its `None`).
+    let (quanta, pwu) = match price {
+        FpCommitmentPriceV1::Chain { quanta, pwu } => (quanta, pwu),
+        FpCommitmentPriceV1::Leaves { freeprompt, class_canonical_leaves } => freeprompt
+            .derive_quanta_and_pwu(commitment.work_leaves, class_canonical_leaves)
+            .expect("the builder already refused a sub-quantum job"),
+    };
+    // Publish and read back the authorization before any carrier broadcast.
+    // **RFC-0009: the redemption authorization**, signed once, for every quantum of this claim (`[0, quanta)`). A builder holding the file
+    // can spend a winning quantum into its own block once `palw_receipt_spend_v4` is armed; the miner's PC need not be on. The file is not
+    // secret and grants nothing beyond what it says (the range, the beacon rule, the fee in basis points, the expiry).
+    let redeemed = redeem_auth_out.as_ref().map(|path| {
+        // Signed through whatever custodies the bond key: the seed this process holds, or the sidecar (`SigningPurpose::PalwReceiptAuthV4`,
+        // visible only under `palw_receipt_spend_v4`: a daemon not started with `--palw-receipt-spend-v4` refuses by name, and that refusal
+        // is printed here as it came).
+        let bundle = build_redemption_bundle_v4_with(
+            bond.signer(),
+            commitment.job.network_domain,
+            claim_id,
+            commitment.job.executor_bond,
+            0,
+            quanta,
+            redeem_fee_bps,
+            redeem_expiry_daa,
+        )
+        .unwrap_or_else(|e| die(format!("cannot sign the redemption authorization: {e}")));
+        let path = redemption_path_for_claim_v1(path, &claim_id);
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            std::fs::create_dir_all(parent).unwrap_or_else(|e| die(format!("cannot create {}: {e}", parent.display())));
+        }
+        let bytes = bundle.encode();
+        std::fs::write(&path, &bytes).unwrap_or_else(|e| die(format!("cannot write {}: {e}", path.display())));
+        let published_to = redemption_providers.as_ref().map(|specs| {
+            let specs = misaka_palw_remote::transport::parse_provider_list_v1(specs).unwrap_or_else(|e| die(e));
+            let providers = misaka_palw_remote::transport::open_providers_v1(&specs);
+            let refs: Vec<&dyn misaka_palw_remote::transport::EvidenceProvider> = providers.iter().map(|p| p.as_ref()).collect();
+            let outcomes = misaka_palw_remote::transport::publish_redemption_v1(&bytes, &refs, 1)
+                .unwrap_or_else(|failures| die(format!("redemption provider unavailable: {failures:?}")));
+            outcomes.into_iter().filter(|p| p.result.is_ok()).map(|p| p.provider).collect::<Vec<_>>()
+        });
+        serde_json::json!({
+            "file": path.display().to_string(),
+            "claim_id": hex(claim_id),
+            "published_to": published_to,
+            "quantum_range": [0, quanta],
+            "builder_fee_bps": redeem_fee_bps,
+            "expiry_daa": if redeem_expiry_daa == u64::MAX { serde_json::Value::Null } else { serde_json::json!(redeem_expiry_daa) },
+            "note": "dormant: no network accepts a V4 receipt until palw_receipt_spend_v4 is armed; hand this file to a block builder",
+        })
+    });
     if submit && !relay_endpoints.is_empty() {
         die("--submit (one node, stages the material beside it) and --relay (many nodes, stages nothing) are different handoffs: pick one".into());
     }
@@ -908,14 +986,6 @@ fn main() {
         None
     };
 
-    // The numbers the builder checked, from the source it checked them against — the leaves
-    // derivation here would contradict the chain past the bundle (and panic on its `None`).
-    let (quanta, pwu) = match price {
-        FpCommitmentPriceV1::Chain { quanta, pwu } => (quanta, pwu),
-        FpCommitmentPriceV1::Leaves { freeprompt, class_canonical_leaves } => freeprompt
-            .derive_quanta_and_pwu(commitment.work_leaves, class_canonical_leaves)
-            .expect("the builder already refused a sub-quantum job"),
-    };
     // **RFC-0009 stage B: the evidence, placed with a provider** — the SAME bytes the node would serve (`encode_claim_material`), split into chunks and
     // named by a manifest whose roots are the claim's own. Written chunks first and the manifest last, so a reader never sees a manifest without its chunks.
     let evidenced = evidence_out.as_ref().map(|dir| {
@@ -941,34 +1011,6 @@ fn main() {
             "chunks": chunks.len(),
             "material_bytes": material.len(),
             "note": "a promise by this directory's operator, not proof of availability: the producer (you) stays accountable until a provider court is armed",
-        })
-    });
-    // **RFC-0009: the redemption authorization**, signed once, for every quantum of this claim (`[0, quanta)`). A builder holding the file
-    // can spend a winning quantum into its own block once `palw_receipt_spend_v4` is armed; the miner's PC need not be on. The file is not
-    // secret and grants nothing beyond what it says (the range, the beacon rule, the fee in basis points, the expiry).
-    let redeemed = redeem_auth_out.as_ref().map(|path| {
-        // Signed through whatever custodies the bond key: the seed this process holds, or the sidecar (`SigningPurpose::PalwReceiptAuthV4`,
-        // visible only under `palw_receipt_spend_v4`: a daemon not started with `--palw-receipt-spend-v4` refuses by name, and that refusal
-        // is printed here as it came).
-        let bundle = build_redemption_bundle_v4_with(
-            bond.signer(),
-            commitment.job.network_domain,
-            claim_id,
-            commitment.job.executor_bond,
-            0,
-            quanta,
-            redeem_fee_bps,
-            redeem_expiry_daa,
-        )
-        .unwrap_or_else(|e| die(format!("cannot sign the redemption authorization: {e}")));
-        std::fs::write(path, bundle.encode()).unwrap_or_else(|e| die(format!("cannot write {}: {e}", path.display())));
-        serde_json::json!({
-            "file": path.display().to_string(),
-            "claim_id": hex(claim_id),
-            "quantum_range": [0, quanta],
-            "builder_fee_bps": redeem_fee_bps,
-            "expiry_daa": if redeem_expiry_daa == u64::MAX { serde_json::Value::Null } else { serde_json::json!(redeem_expiry_daa) },
-            "note": "dormant: no network accepts a V4 receipt until palw_receipt_spend_v4 is armed; hand this file to a block builder",
         })
     });
     // **What this carrier leaves behind for the next one.** The commitment spends the one funding
@@ -1741,6 +1783,26 @@ enum Tfp1ModeV1 {
 }
 
 impl Tfp1ModeV1 {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Require => "require",
+            Self::Off => "off",
+        }
+    }
+
+    fn check_inputs(self, binding: Option<&Path>, rpc: Option<&str>) -> Result<(), &'static str> {
+        if self == Self::Require {
+            if binding.is_none() {
+                return Err("--tfp1 require: no TIR public binding was supplied");
+            }
+            if rpc.is_none() {
+                return Err("--tfp1 require needs --rpc: the frame is the node's quote (op 248)");
+            }
+        }
+        Ok(())
+    }
+
     fn parse(s: &str) -> Result<Self, String> {
         match s {
             "auto" => Ok(Self::Auto),
@@ -2151,6 +2213,7 @@ mod watch {
         let text = message.to_ascii_lowercase();
         if [
             "cannot reach",
+            "redemption provider unavailable",
             "connection",
             "timed out",
             "timeout",
@@ -2585,6 +2648,17 @@ mod watch {
     mod tests {
         use super::*;
 
+        #[test]
+        fn tfp1_require_rejects_absent_binding_or_node() {
+            let mode = super::super::Tfp1ModeV1::Require;
+            let binding = Path::new("tir-public-binding.hex");
+            assert!(mode.check_inputs(None, Some("rpc")).is_err());
+            assert!(mode.check_inputs(Some(binding), None).is_err());
+            assert!(mode.check_inputs(Some(binding), Some("rpc")).is_ok());
+            assert_eq!(mode.as_str(), "require");
+            assert!(super::super::Tfp1ModeV1::Auto.check_inputs(None, None).is_ok());
+        }
+
         fn scratch(name: &str) -> PathBuf {
             let dir = std::env::temp_dir().join(format!("rail-watch-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
@@ -2788,5 +2862,34 @@ mod watch {
             assert_eq!(t.len(), 20, "{t}");
             assert!(t.ends_with('Z') && t.as_bytes()[10] == b'T', "{t}");
         }
+    }
+}
+
+#[cfg(test)]
+mod remote_transport_label_tests {
+    use super::*;
+    use misaka_palw_remote::verify::ModeLabelV1;
+
+    #[test]
+    fn explicit_remote_consent_keeps_a_loopback_tunnel_unverified() {
+        let rpc = Some("ws://127.0.0.1:39413");
+        assert_eq!(rail_mode_v1(rpc, false, Some(ModeLabelV1::UnverifiedRemote)), ModeLabelV1::UnverifiedRemote);
+        assert_eq!(rail_mode_v1(rpc, false, None), ModeLabelV1::FullNode);
+        assert_eq!(rail_mode_v1(rpc, true, None), ModeLabelV1::UnverifiedRemote);
+        assert_eq!(rail_mode_v1(Some("wss://wallet.misakascan.com/t12/wrpc/borsh"), false, None), ModeLabelV1::UnverifiedRemote);
+    }
+}
+
+#[cfg(test)]
+mod redemption_handoff_tests {
+    use super::*;
+    #[test]
+    fn watched_authorizations_use_distinct_claim_paths_and_keep_literal_paths() {
+        let a = Hash64::from_u64_word(1);
+        let b = Hash64::from_u64_word(2);
+        let path = Path::new("/data/redemptions/{claim_id}.rda4");
+        assert_ne!(redemption_path_for_claim_v1(path, &a), redemption_path_for_claim_v1(path, &b));
+        assert_eq!(redemption_path_for_claim_v1(Path::new("one.rda4"), &a), PathBuf::from("one.rda4"));
+        assert_eq!(watch::classify("redemption provider unavailable"), watch::Failure::Transient);
     }
 }

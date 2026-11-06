@@ -331,6 +331,8 @@ pub enum RpcApiOps {
     /// RFC-0006 consumer v2: a class's immutable per-reader router binding (kernel-route aux 139). Read-only. Appended at the
     /// tail (the RFC06 GDN/router lane's allocation).
     GetPalwRouterBindingV2 = 245,
+    /// Node-local committed tag 243/244 outcome observation; absence after restart is UNKNOWN.
+    GetPalwMemoryRoutingOutcomeV1 = 249,
     /// RFC-0012 acceptance: one paid claim (enrollment, round seats/quorum/receipts, Final) at the tip. Read-only, no authority.
     /// Op 247 is the RFC-0012 harness's reservation (`scripts/drills/rfc12_acceptance_observe.py`).
     GetPalwPaidClaim = 247,

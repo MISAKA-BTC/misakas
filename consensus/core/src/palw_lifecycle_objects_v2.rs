@@ -633,6 +633,14 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         }
         // RFC-0032 A material intake (tag 255): signed, and a Part inside the one-part bound. Authentication against the original,
         // the per-target bound and the per-submitter budget are the fold's (`material_intake`).
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { control } => {
+            if control.version!=1||control.signature.len()!=crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN {
+                return Err("family material version/signature shape");
+            }
+            if let crate::palw_court_family_material_v1::FamilyMaterialActionV1::Part{bytes,..}=&control.action
+                &&(bytes.is_empty()||bytes.len()>crate::palw_court_family_material_v1::FAMILY_MATERIAL_PART_BYTES_V1){return Err("family material part bound");}
+            Ok(())
+        }
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
             if intake.signature.is_empty() {
                 return Err("a material intake step must carry its submitter's signature");
@@ -1095,12 +1103,103 @@ pub fn palw_bond_registration_keyed_to_its_carrier_v2(carrier: TransactionId, ob
 }
 
 pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwLifecycleExtractionV2 {
+    extract_lifecycle_objects_v2(txs, None)
+}
+
+/// Height-aware native entrance. A reserved Positive carrier below its fence
+/// is recognized from its outer tag BEFORE decoding any body or signature.
+pub fn palw_lifecycle_objects_from_accepted_txs_in_context_v2(
+    txs: &[Transaction],
+    fences: &PalwLifecycleKindFencesV1,
+    daa: u64,
+) -> PalwLifecycleExtractionV2 {
+    extract_lifecycle_objects_v2(txs, Some((fences, daa)))
+}
+
+/// Raw tag classification only. It must not read a claimed Result/profile or
+/// reserve resources, inspect funding, or allocate/deserialize an inner body.
+pub fn palw_positive_lifecycle_payload_v2(payload: &[u8]) -> bool {
+    payload.get(2..).is_some_and(palw_positive_object_bytes_v2)
+}
+/// Raw object bytes (without the lifecycle u16 version). Unrelated old object
+/// readers use this to preserve their nonmatching path without decoding 176.
+pub fn palw_positive_object_bytes_v2(object: &[u8]) -> bool {
+    object.first() == Some(&misaka_palw_positive_contract::native::LIFECYCLE_OBJECT_TAG)
+}
+pub fn palw_positive_lifecycle_unjudged_v2(payload: &[u8], fences: &PalwLifecycleKindFencesV1, daa: u64) -> bool {
+    palw_positive_lifecycle_payload_v2(payload)
+        && (!fences.positive_court_reserved_active_at_v2(daa)
+            || (matches!(payload.get(7), Some(8..=13)) && fences.assignment_body_limits_v2_at(daa).is_none())
+            || (payload.get(7) == Some(&14) && fences.funding_relay_frame_cap_v2_at(daa).is_none()))
+}
+
+/// Predecode syntax/resource check only; this installs no decoder or acceptance
+/// authority for the reserved tag. Call only AFTER its owning height check.
+fn preflight_positive_lifecycle_payload_v2(
+    payload: &[u8],
+    assignment_limits: Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2>,
+    relay_frame_cap: Option<u64>,
+) -> Result<(), PalwLifecycleTxError> {
+    use crate::palw_positive_court_v2::coordinator::native_body::{
+        MAX_BODY_BYTES_V2, MAX_EXACT_RELATIONS_V2, MAX_OPAQUE_BYTES_V2, MAX_SIGNATURES_V2, NativeBodyLimitsV2, scan_native_body_v2,
+    };
+    if !palw_positive_lifecycle_payload_v2(payload) {
+        return Ok(());
+    }
+    let got = u16::from_le_bytes([payload[0], payload[1]]);
+    if got != PALW_LIFECYCLE_TX_VERSION_V2 {
+        return Err(PalwLifecycleTxError::UnsupportedVersion { got, expected: PALW_LIFECYCLE_TX_VERSION_V2 });
+    }
+    if matches!(payload.get(7), Some(8..=13)) {
+        let limits = assignment_limits.ok_or(PalwLifecycleTxError::Undecodable)?;
+        return crate::palw_positive_court_v2::coordinator::assignment_body::scan_assignment_body_v2(&payload[3..], limits)
+            .map(|_| ())
+            .map_err(|_| PalwLifecycleTxError::Undecodable);
+    }
+    if payload.get(7) == Some(&14) {
+        let maximum = relay_frame_cap.ok_or(PalwLifecycleTxError::Undecodable)?;
+        return crate::palw_positive_funding_relay_v2::quote_funding_relay_body_v2(&payload[3..], maximum)
+            .map(|_| ())
+            .map_err(|_| PalwLifecycleTxError::Undecodable);
+    }
+    // These are codec defense ceilings, not an adopted execution profile. The
+    // native driver must additionally clamp to its rooted finite runtime policy.
+    scan_native_body_v2(
+        &payload[3..],
+        NativeBodyLimitsV2 {
+            max_body_bytes: MAX_BODY_BYTES_V2,
+            max_opaque_bytes: MAX_OPAQUE_BYTES_V2,
+            max_exact_relations: MAX_EXACT_RELATIONS_V2,
+            max_signatures: MAX_SIGNATURES_V2,
+        },
+    )
+    .map(|_| ())
+    .map_err(|_| PalwLifecycleTxError::Undecodable)
+}
+
+fn extract_lifecycle_objects_v2(txs: &[Transaction], context: Option<(&PalwLifecycleKindFencesV1, u64)>) -> PalwLifecycleExtractionV2 {
     let mut out = PalwLifecycleExtractionV2::default();
     for tx in txs {
         if tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE {
             continue;
         }
         let id = tx.id();
+        if palw_positive_lifecycle_payload_v2(&tx.payload)
+            && context.is_none_or(|(fences, daa)| palw_positive_lifecycle_unjudged_v2(&tx.payload, fences, daa))
+        {
+            out.skipped.push((id, "positive2 is undecodable below its owning fence"));
+            continue;
+        }
+        if preflight_positive_lifecycle_payload_v2(
+            &tx.payload,
+            context.and_then(|(fences, daa)| fences.assignment_body_limits_v2_at(daa)),
+            context.and_then(|(fences, daa)| fences.funding_relay_frame_cap_v2_at(daa)),
+        )
+        .is_err()
+        {
+            out.skipped.push((id, "payload does not decode"));
+            continue;
+        }
         let payload: PalwLifecycleTxPayloadV2 = match borsh::from_slice(&tx.payload) {
             Ok(payload) => payload,
             Err(_) => {
@@ -1197,6 +1296,11 @@ pub enum PalwLifecycleTxError {
 /// height gate would need the DAA threaded into this context-free path (the same admission-layer
 /// threading B-4 defers).
 pub fn validate_palw_lifecycle_tx(payload: &[u8], tolerate_undecodable: bool) -> Result<(), PalwLifecycleTxError> {
+    // Isolation holds no DAA. Preserve A-2's undecodable reading without even
+    // parsing a Positive body; the height-aware door applies its actual rules.
+    if palw_positive_lifecycle_payload_v2(payload) {
+        return if tolerate_undecodable { Ok(()) } else { Err(PalwLifecycleTxError::Undecodable) };
+    }
     let payload: PalwLifecycleTxPayloadV2 = match borsh::from_slice(payload) {
         Ok(payload) => payload,
         // Unknown/appended object tag (or trailing bytes a newer build wrote): the extraction walk
@@ -1311,11 +1415,12 @@ pub enum PalwLifecycleKindFenceV1 {
     SelectedSourceBootstrapV1 = 21,
     /// `Params::palw_panel_da_disclosure_v1` — ADR-0206's PanelDa disclosure (tag 233). Local activation-table slot (not wire).
     PanelDaDisclosureV1 = 22,
+    CourtFamilySupplierV1 = 23,
 }
 
 impl PalwLifecycleKindFenceV1 {
     /// Every owning fence, in declaration order (index = discriminant).
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::ProbabilisticConstraintsV1,
         Self::SignedRegistrationV1,
         Self::PermissionlessPanelV1,
@@ -1339,6 +1444,7 @@ impl PalwLifecycleKindFenceV1 {
         Self::TirBoundedDoorV1,
         Self::SelectedSourceBootstrapV1,
         Self::PanelDaDisclosureV1,
+        Self::CourtFamilySupplierV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -1360,6 +1466,7 @@ impl PalwLifecycleKindFenceV1 {
             Self::MemoryRoutingCourtV2 => "palw_memory_routing_court_v2",
             Self::SelectedSourceBootstrapV1 => "palw_selected_source_bootstrap_v1",
             Self::StagedTirRouteV1 => "palw_staged_tir_route_v1",
+            Self::CourtFamilySupplierV1 => "palw_court_family_supplier_v1",
             Self::StagedFloatConstraintV1 => "palw_staged_float_constraint_v1",
             Self::TirPublicConvictionV1 => "palw_tir_public_conviction_v1",
             Self::TirContainerIdentityV1 => "palw_tir_container_identity_v1",
@@ -1604,6 +1711,7 @@ pub fn palw_lifecycle_kind_owner_v1(object: &PalwConsensusObjectV2) -> PalwLifec
         O::SeatReadinessDemandedV1 { .. } | O::SeatReadinessAnsweredV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtModelScopeV1),
         // RFC-0032 A material intake (tag 255): the shared TIR court's own fence (G-10), no new fence.
         O::MaterialIntakeV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::StagedTirRouteV1),
+        O::CourtFamilyMaterialV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::CourtFamilySupplierV1),
         // ADR-0206 (lane g14-fam-panelda): the PanelDa disclosure (tag 233), dormant behind its own fence.
         O::PanelDaPromptDisclosedV1 { .. } => PalwLifecycleKindOwnerV1::Fence(F::PanelDaDisclosureV1),
         // RFC-0024 §4/§5 (lane r5-p2-terminal): the position terminal and the lookahead moves (tags 201-204).
@@ -1769,6 +1877,7 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
     (231, "SeatReadinessDemandedV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (232, "SeatReadinessAnsweredV1", PalwLifecycleKindFenceV1::CourtModelScopeV1),
     (255, "MaterialIntakeV1", PalwLifecycleKindFenceV1::StagedTirRouteV1),
+    (250, "CourtFamilyMaterialV1", PalwLifecycleKindFenceV1::CourtFamilySupplierV1),
     (233, "PanelDaPromptDisclosedV1", PalwLifecycleKindFenceV1::PanelDaDisclosureV1),
     (201, "TirPositionDissectedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
     (202, "TirPositionClosedV2", PalwLifecycleKindFenceV1::TirBoundedDoorV1),
@@ -1794,9 +1903,52 @@ pub const PALW_LIFECYCLE_NEW_KINDS_V1: &[(u8, &str, PalwLifecycleKindFenceV1)] =
 pub struct PalwLifecycleKindFencesV1 {
     /// Indexed by the fence's discriminant ([`PalwLifecycleKindFenceV1::ALL`]'s order).
     activations: [Option<crate::config::params::ForkActivation>; PalwLifecycleKindFenceV1::ALL.len()],
+    // Reserved-only: tag176 has no live decoder/owner yet. Keep it OUT of ALL/NEW_KINDS until A4 lands the actual event.
+    positive_court_reserved_v2: Option<crate::config::params::ForkActivation>,
+    /// Separate finite codec routing for RFC-0045. This is never admission.
+    assignment_body_limits_v2: Option<(
+        crate::config::params::ForkActivation,
+        crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
+    )>,
+    funding_relay_frame_cap_v2: Option<(crate::config::params::ForkActivation, u64)>,
+    batch_court_v1: Option<crate::config::params::ForkActivation>,
 }
 
 impl PalwLifecycleKindFencesV1 {
+    /// Raw predecode routing for a RESERVED namespace, not a live owning fence.
+    /// This does not install an event, decoder, state effect or activation permit.
+    pub fn with_positive_court_reserved_v2(mut self, activation: Option<crate::config::params::ForkActivation>) -> Self {
+        self.positive_court_reserved_v2 = activation;
+        self
+    }
+    pub fn with_assignment_body_limits_v2(
+        mut self,
+        value: Option<(
+            crate::config::params::ForkActivation,
+            crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2,
+        )>,
+    ) -> Self {
+        self.assignment_body_limits_v2 = value;
+        self
+    }
+    pub fn assignment_body_limits_v2_at(
+        &self,
+        daa: u64,
+    ) -> Option<crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2> {
+        self.assignment_body_limits_v2
+            .filter(|(at, _)| *at != crate::config::params::ForkActivation::never() && at.is_active(daa))
+            .map(|(_, limits)| limits)
+    }
+    fn funding_relay_frame_cap_v2_at(&self, daa: u64) -> Option<u64> {
+        self.assignment_body_limits_v2_at(daa)?;
+        self.funding_relay_frame_cap_v2
+            .filter(|(at, _)| *at != crate::config::params::ForkActivation::never() && at.is_active(daa))
+            .map(|(_, limit)| limit)
+    }
+    pub fn positive_court_reserved_active_at_v2(&self, daa: u64) -> bool {
+        self.positive_court_reserved_v2.is_some_and(|at| at != crate::config::params::ForkActivation::never() && at.is_active(daa))
+    }
+
     /// These activations with `fence` resolved to `activation` (how `Params` resolves each fence, and how a test arms one).
     pub fn with(mut self, fence: PalwLifecycleKindFenceV1, activation: Option<crate::config::params::ForkActivation>) -> Self {
         if let Some(slot) = self.activations.get_mut(fence as usize) {
@@ -1820,6 +1972,38 @@ impl PalwLifecycleKindFencesV1 {
         self.activation(fence).is_some_and(|activation| activation.is_active(daa_score))
     }
 
+    pub fn batch_court_in_force_at(&self, daa_score: u64) -> bool {
+        self.batch_court_v1.is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// Fee projection after all preceding allocations. None retains the
+    /// legacy amount, including malformed historical carriers in a mergeset.
+    pub fn batch_court_collectible_fee_v1(&self, tx: &Transaction, remaining: u64, daa: u64) -> Option<u64> {
+        if !self.batch_court_in_force_at(daa)
+            || tx.subnetwork_id != SUBNETWORK_ID_PALW_LIFECYCLE
+            || !tx.payload.starts_with(crate::palw_batch_court_v1::carriage::BATCH_COURT_CARRIER_MAGIC_V1)
+        {
+            return None;
+        }
+        crate::palw_court_shared_material_intake_v1::material_batch_carrier_fee_v1(tx, remaining)
+            .ok()
+            .map(|split| split.collectible_fee)
+    }
+
+    fn validate_batch_court_shape_v1(&self, payload: &[u8], daa: u64) -> Result<bool, PalwLifecycleTxError> {
+        if !self.batch_court_in_force_at(daa) {
+            return Ok(false);
+        }
+        if crate::palw_batch_court_v1::carriage::batch_stop_wire_shape_v1(payload)
+            .map_err(|_| PalwLifecycleTxError::Undecodable)?
+        {
+            return Ok(true);
+        }
+        crate::palw_batch_court_v1::carriage::decode_batch_court_payload_v1(payload)
+            .map(|wire| wire.is_some())
+            .map_err(|_| PalwLifecycleTxError::Undecodable)
+    }
+
     /// **Does this build read `object` as a statement at `daa_score`** — a kind the live build knows, or one whose owning fence is in
     /// force there? `false` means: read its bytes as the live build does, undecodable — skip it, charge nothing.
     pub fn kind_in_force_at(&self, object: &PalwConsensusObjectV2, daa_score: u64) -> bool {
@@ -1833,64 +2017,81 @@ impl PalwLifecycleKindFencesV1 {
 impl crate::config::params::Params {
     /// **The owning fences, resolved once** — the one reading every height-holding site asks ([`PalwLifecycleKindFencesV1`]).
     pub fn palw_lifecycle_kind_fences_v1(&self) -> PalwLifecycleKindFencesV1 {
-        PalwLifecycleKindFenceV1::ALL.into_iter().fold(PalwLifecycleKindFencesV1::default(), |fences, fence| {
-            fences.with(
-                fence,
-                match fence {
-                    PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => self.palw_probabilistic_constraints_v1,
-                    PalwLifecycleKindFenceV1::SignedRegistrationV1 => self.palw_signed_registration_v1,
-                    PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_activation_v1(),
-                    // In force where BOTH the court's and the kernel route's fences are (the processor's `palw_provider_court_at`).
-                    PalwLifecycleKindFenceV1::ProviderCourtV1 => {
-                        let never = crate::config::params::ForkActivation::never();
-                        match (self.palw_provider_court_v1, self.palw_probabilistic_constraints_v1) {
-                            (Some(court), Some(route)) if court != never && route != never => {
-                                Some(crate::config::params::ForkActivation::new(court.daa_score().max(route.daa_score())))
+        let mut fences = PalwLifecycleKindFenceV1::ALL
+            .into_iter()
+            .fold(PalwLifecycleKindFencesV1 { batch_court_v1: self.palw_batch_court_v1_fence(), ..Default::default() }, |fences, fence| {
+                fences.with(
+                    fence,
+                    match fence {
+                        PalwLifecycleKindFenceV1::ProbabilisticConstraintsV1 => self.palw_probabilistic_constraints_v1,
+                        PalwLifecycleKindFenceV1::SignedRegistrationV1 => self.palw_signed_registration_v1,
+                        PalwLifecycleKindFenceV1::PermissionlessPanelV1 => self.palw_permissionless_panel_activation_v1(),
+                        // In force where BOTH the court's and the kernel route's fences are (the processor's `palw_provider_court_at`).
+                        PalwLifecycleKindFenceV1::ProviderCourtV1 => {
+                            let never = crate::config::params::ForkActivation::never();
+                            match (self.palw_provider_court_v1, self.palw_probabilistic_constraints_v1) {
+                                (Some(court), Some(route)) if court != never && route != never => {
+                                    Some(crate::config::params::ForkActivation::new(court.daa_score().max(route.daa_score())))
+                                }
+                                _ => None,
                             }
-                            _ => None,
                         }
-                    }
-                    PalwLifecycleKindFenceV1::LegacyHeldDaV2 => self.palw_legacy_held_da_v2,
-                    // HFX: the task-head profile's own fence (a ConsensusV2 rule; `None` where unarmed or `never()`).
-                    PalwLifecycleKindFenceV1::TaskHeadsV1 => self.palw_task_heads_v1_fence().map(|fence| fence.activation),
-                    // Lane BUDGET: in force where BOTH the allocation's and the budget's fences are (`palw_model_bond_allocation_at`).
-                    PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
-                        let never = crate::config::params::ForkActivation::never();
-                        match (self.palw_model_bond_allocation_v1.as_ref(), self.palw_bond_budget_v1.as_ref()) {
-                            (Some(a), Some(b)) if a.activation != never && b.activation != never => Some(
-                                crate::config::params::ForkActivation::new(a.activation.daa_score().max(b.activation.daa_score())),
-                            ),
-                            _ => None,
+                        PalwLifecycleKindFenceV1::LegacyHeldDaV2 => self.palw_legacy_held_da_v2,
+                        // HFX: the task-head profile's own fence (a ConsensusV2 rule; `None` where unarmed or `never()`).
+                        PalwLifecycleKindFenceV1::TaskHeadsV1 => self.palw_task_heads_v1_fence().map(|fence| fence.activation),
+                        // Lane BUDGET: in force where BOTH the allocation's and the budget's fences are (`palw_model_bond_allocation_at`).
+                        PalwLifecycleKindFenceV1::ModelBondAllocationV1 => {
+                            let never = crate::config::params::ForkActivation::never();
+                            match (self.palw_model_bond_allocation_v1.as_ref(), self.palw_bond_budget_v1.as_ref()) {
+                                (Some(a), Some(b)) if a.activation != never && b.activation != never => Some(
+                                    crate::config::params::ForkActivation::new(a.activation.daa_score().max(b.activation.daa_score())),
+                                ),
+                                _ => None,
+                            }
                         }
-                    }
-                    // RFC-0008 v2: only on a `ConsensusV2` network (`palw_exec_payload_v2_fence` folds the mode in).
-                    PalwLifecycleKindFenceV1::ExecPayloadV2 => self.palw_exec_payload_v2_fence(),
-                    PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
-                    PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
-                    PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
-                    PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
-                    PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => self.palw_memory_routing_court_v2_fence(),
-                    PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1 => self.palw_selected_source_bootstrap_fence(),
-                    PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(
-                        self.palw_material_release_recovery_v2.as_ref().map(|f| f.activation),
-                        self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
-                    ),
-                    // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
-                    PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
-                        Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
-                    }
-                    PalwLifecycleKindFenceV1::StagedFloatConstraintV1 => {
-                        Self::palw_later_of_v1(self.palw_staged_float_constraint_v1_fence(), self.palw_staged_public_court_v1)
-                    }
-                    PalwLifecycleKindFenceV1::TirPublicConvictionV1 => self.palw_tir_public_conviction_v1_fence(),
-                    PalwLifecycleKindFenceV1::TirContainerIdentityV1 => self.palw_tir_container_identity_v1_fence(),
-                    PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => self.palw_tir_designated_answers_v1_fence(),
-                    PalwLifecycleKindFenceV1::CourtModelScopeV1 => self.palw_court_model_scope_v1,
-                    PalwLifecycleKindFenceV1::TirBoundedDoorV1 => self.palw_tir_bounded_door_v1_fence(),
-                    PalwLifecycleKindFenceV1::PanelDaDisclosureV1 => self.palw_panel_da_disclosure_v1_fence(),
-                },
+                        // RFC-0008 v2: only on a `ConsensusV2` network (`palw_exec_payload_v2_fence` folds the mode in).
+                        PalwLifecycleKindFenceV1::ExecPayloadV2 => self.palw_exec_payload_v2_fence(),
+                        PalwLifecycleKindFenceV1::LegacyPublicFilerV1 => self.palw_legacy_public_filer_v1,
+                        PalwLifecycleKindFenceV1::ClassSemanticsV1 => self.palw_class_semantics_v1_fence(),
+                        PalwLifecycleKindFenceV1::StagedPublicCourtV1 => self.palw_staged_public_court_v1,
+                        PalwLifecycleKindFenceV1::MonetaryMaterialV1 => self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                        PalwLifecycleKindFenceV1::MemoryRoutingCourtV2 => self.palw_memory_routing_court_v2_fence(),
+                        PalwLifecycleKindFenceV1::SelectedSourceBootstrapV1 => self.palw_selected_source_bootstrap_fence(),
+                        PalwLifecycleKindFenceV1::MaterialReleaseRecoveryV2 => Self::palw_later_of_v1(
+                            self.palw_material_release_recovery_v2.as_ref().map(|f| f.activation),
+                            self.palw_monetary_material_v1.as_ref().map(|f| f.activation),
+                        ),
+                        // In force where BOTH the route's and the staged court's fences are (the route's rows are the court's).
+                        PalwLifecycleKindFenceV1::CourtFamilySupplierV1 => self.palw_court_family_supplier_v1,
+                        PalwLifecycleKindFenceV1::StagedTirRouteV1 => {
+                            Self::palw_later_of_v1(self.palw_staged_tir_route_v1_fence(), self.palw_staged_public_court_v1)
+                        }
+                        PalwLifecycleKindFenceV1::StagedFloatConstraintV1 => {
+                            Self::palw_later_of_v1(self.palw_staged_float_constraint_v1_fence(), self.palw_staged_public_court_v1)
+                        }
+                        PalwLifecycleKindFenceV1::TirPublicConvictionV1 => self.palw_tir_public_conviction_v1_fence(),
+                        PalwLifecycleKindFenceV1::TirContainerIdentityV1 => self.palw_tir_container_identity_v1_fence(),
+                        PalwLifecycleKindFenceV1::TirDesignatedAnswersV1 => self.palw_tir_designated_answers_v1_fence(),
+                        PalwLifecycleKindFenceV1::CourtModelScopeV1 => self.palw_court_model_scope_v1,
+                        PalwLifecycleKindFenceV1::TirBoundedDoorV1 => self.palw_tir_bounded_door_v1_fence(),
+                        PalwLifecycleKindFenceV1::PanelDaDisclosureV1 => self.palw_panel_da_disclosure_v1_fence(),
+                    },
+                )
+            })
+            .with_positive_court_reserved_v2(
+                self.palw_positive_court_v2.as_ref().filter(|f| f.policy.validate_shape().is_ok()).map(|f| f.activation),
             )
-        })
+            .with_assignment_body_limits_v2(self.palw_positive_assignment_v2.as_ref().and_then(|fence| {
+                crate::palw_positive_court_v2::coordinator::assignment_body::AssignmentBodyLimitsV2::from_policy(&fence.policy)
+                    .ok()
+                    .map(|limits| (fence.activation, limits))
+            }));
+        fences.funding_relay_frame_cap_v2 = self
+            .palw_positive_funding_relay_v2
+            .as_ref()
+            .filter(|fence| fence.validate_preimages().is_ok())
+            .map(|fence| (fence.activation, fence.physical.max_frame_bytes));
+        fences
     }
 
     /// Both fences armed (neither `never()`): the later one; otherwise none.
@@ -1945,6 +2146,17 @@ pub fn validate_palw_lifecycle_tx_in_context_v1(
     fences: &PalwLifecycleKindFencesV1,
     ctx_daa_score: u64,
 ) -> Result<(), PalwLifecycleTxError> {
+    if fences.validate_batch_court_shape_v1(payload, ctx_daa_score)? {
+        return Ok(());
+    }
+    if palw_positive_lifecycle_unjudged_v2(payload, fences, ctx_daa_score) {
+        return Ok(());
+    }
+    preflight_positive_lifecycle_payload_v2(
+        payload,
+        fences.assignment_body_limits_v2_at(ctx_daa_score),
+        fences.funding_relay_frame_cap_v2_at(ctx_daa_score),
+    )?;
     let Ok(payload) = borsh::from_slice::<PalwLifecycleTxPayloadV2>(payload) else { return Ok(()) };
     if payload.version != PALW_LIFECYCLE_TX_VERSION_V2 {
         return Ok(());
@@ -2008,11 +2220,13 @@ pub enum PalwKernelInnerFenceV1 {
     ModelEligibilityV1,
     /// `Params::palw_elastic_final_capacity_v1` (RFC-0016 V8): a verifier's capacity attestation (inner 76).
     ElasticCapacityV1,
+    /// ADR-0207 ordinary verifier fee consent (inner 77).
+    SettlementOnceV1,
 }
 
 impl PalwKernelInnerFenceV1 {
     /// Every inner-kind fence.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::PanelFreeV1,
         Self::TypedRootsV1,
         Self::PanelFreeAndTypedRootsV1,
@@ -2030,6 +2244,7 @@ impl PalwKernelInnerFenceV1 {
         Self::BeaconBootstrapV1,
         Self::ModelEligibilityV1,
         Self::ElasticCapacityV1,
+        Self::SettlementOnceV1,
     ];
 
     /// The `Params` field the fence is resolved from.
@@ -2051,6 +2266,7 @@ impl PalwKernelInnerFenceV1 {
             Self::BeaconBootstrapV1 => "palw_beacon_bootstrap_v1",
             Self::ModelEligibilityV1 => "palw_model_eligibility_v1",
             Self::ElasticCapacityV1 => "palw_elastic_final_capacity_v1",
+            Self::SettlementOnceV1 => "palw_settlement_once_v1",
         }
     }
 }
@@ -2136,6 +2352,8 @@ pub fn palw_kernel_route_inner_fence_v1(object: &misaka_palw_kernel::route::Kern
         K::BootstrapExactV1 { .. } => Some(PalwKernelInnerFenceV1::BeaconBootstrapV1),
         K::CommitEligibilityExamV1 { .. } | K::AttestEligibilityExamV1 { .. } => Some(PalwKernelInnerFenceV1::ModelEligibilityV1),
         K::AttestCapacityV1 { .. } => Some(PalwKernelInnerFenceV1::ElasticCapacityV1),
+        K::ConsentVerifierFeeV1 { .. } => Some(PalwKernelInnerFenceV1::SettlementOnceV1),
+        K::WatchVerifierPoolV1 { .. } => Some(PalwKernelInnerFenceV1::VerifierPayV1),
         K::FundBeaconSourceFee { .. } | K::FundPanelBeaconSourceFeeV2 { .. } | K::OptInPaidBeaconSource { .. } => {
             Some(PalwKernelInnerFenceV1::BeaconSourceFeeV1)
         }
@@ -2221,6 +2439,8 @@ pub const PALW_KERNEL_ROUTE_INNER_KINDS_V1: &[(u8, &str, Option<PalwKernelInnerF
     (75, "AttestEligibilityExamV1", Some(PalwKernelInnerFenceV1::ModelEligibilityV1)),
     // RFC-0016 V8 (2026-10-17, audit 16-A): a verifier's capacity attestation.
     (76, "AttestCapacityV1", Some(PalwKernelInnerFenceV1::ElasticCapacityV1)),
+    (77, "ConsentVerifierFeeV1", Some(PalwKernelInnerFenceV1::SettlementOnceV1)),
+    (78, "WatchVerifierPoolV1", Some(PalwKernelInnerFenceV1::VerifierPayV1)),
 ];
 
 // The rows above are for inner kinds the live tree has. In-flight lanes join the table with the fence their row of
@@ -2445,6 +2665,28 @@ const fn a2_row(slot: PalwA2SlotV1, fence: &'static str, owner: &'static str, la
 /// written). The Lead allocates; A2U keeps the table; a lane fills its row's code at merge, and the reconciliation tests hold it to the
 /// row.
 pub const PALW_A2_KIND_FENCE_TABLE_V1: &[PalwA2RowV1] = &[
+    a2_row(
+        PalwA2SlotV1::ObjectTags { lo: 176, hi: 176 },
+        "palw_positive_court_v2",
+        "RFC-0044 Positive Court R2 reserved namespace; live event/owner pending A4",
+        false,
+    ),
+    a2_row(
+        PalwA2SlotV1::KernelNested {
+            what: "MonetaryMaterialActionV1 EnrollFeeV2(9)/ReplaceFeeV2(10): dual signed finite fee only, V1 service unchanged",
+        },
+        "palw_settlement_once_v1",
+        "RFC0039 adopted provider fee horizon",
+        true,
+    ),
+    a2_row(
+        PalwA2SlotV1::StateEncoding {
+            what: "kernel route aux191 key132 exact enrollment/provider fee consent and refund physical receipt",
+        },
+        "palw_settlement_once_v1",
+        "RFC0039 finite provider fee state",
+        true,
+    ),
     a2_row(
         PalwA2SlotV1::KernelNested {
             what: "PalwMonetaryMaterialActionV1::RecoveryV2 (7), Enroll/Replace/Acknowledge/RetireProviderStream; ChallengeCurrentV4 (8)",
@@ -3227,6 +3469,9 @@ pub const PALW_A2_TAG_ALLOCATIONS_V1: &[(u8, u8, &str, &[&str])] = &[
     // 168–169: the G14 TIR staged route (native seed opening, TIR class layout publication), merged 2026-10-15.
     (168, 169, "G14 TIR staged route", &["palw_staged_tir_route_v1"]),
     (170, 171, "G14 original paid TIR conviction", &["palw_tir_public_conviction_v1"]),
+    // A0 RFC-0044 / ADR-0212: reserved for the versioned light-result Positive
+    // Court carrier. Reservation only: no decoder/kind/fence is armed here.
+    (176, 176, "RFC-0044 Positive Court R2", &["palw_positive_court_v2"]),
     // 178: G14 lane r5-f02-wire (2026-10-22) — RFC-0029 shared court operation carriage. Chosen by the lane (lane rule: one new tag,
     // collisions detected at central merge); dormant behind the public conviction fence (+ the outsider lane in the fold).
     (178, 178, "G14 RFC-0029 shared court operation", &["palw_tir_public_conviction_v1"]),
@@ -5783,5 +6028,64 @@ pub(crate) mod tests {
         super::palw_lifecycle_object_may_ride_v2(&part(16_384)).expect("one full part rides");
         assert!(super::palw_lifecycle_object_may_ride_v2(&part(0)).is_err());
         assert!(super::palw_lifecycle_object_may_ride_v2(&part(16_385)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod batch_lifecycle_gate_tests {
+    use super::*;
+    use crate::config::params::ForkActivation;
+    use crate::palw_batch_court_v1::carriage::{BATCH_COURT_CARRIER_MAGIC_V1, BatchCourtWireV1, BatchMaterialControlV1};
+    use crate::palw_court_shared_material_intake_v1::{
+        MATERIAL_BATCH_VERSION, MaterialActionV1, MaterialTargetV1, SignedMaterialIntakeV1,
+    };
+    use crate::palw_state_v2::PalwBondKeyV2;
+    use crate::tx::TransactionOutpoint;
+
+    #[test]
+    fn batch_door_and_collectible_fee_use_the_same_height() {
+        let h = crate::Hash64::from_u64_word;
+        let begin = SignedMaterialIntakeV1 {
+            version: MATERIAL_BATCH_VERSION, claim: h(1), scope_id: h(2), target: MaterialTargetV1::PromptFlat,
+            submitter: PalwBondKeyV2(TransactionOutpoint::new(h(3), 0)),
+            action: MaterialActionV1::Begin { total_bytes: 1_024, body_hash: h(4) },
+            signature: vec![1; crate::mldsa87_primitives::MLDSA87_SIGNATURE_LEN],
+        };
+        let rent = crate::palw_court_shared_material_intake_v1::material_batch_storage_rent_v1(&begin).unwrap().unwrap();
+        assert!(rent > 0);
+        let wire = BatchCourtWireV1::Respond(BatchMaterialControlV1 { demand_ordinal: 0, intake: begin });
+        let mut payload = BATCH_COURT_CARRIER_MAGIC_V1.to_vec();
+        payload.extend(borsh::to_vec(&wire).unwrap());
+        let tx = |payload| Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_LIFECYCLE, 0, payload);
+        let good = tx(payload.clone());
+        payload.push(0);
+        let malformed = tx(payload);
+        let gates = PalwLifecycleKindFencesV1 { batch_court_v1: Some(ForkActivation::new(20)), ..Default::default() };
+        assert!(validate_palw_lifecycle_tx(&good.payload, true).is_ok());
+        assert!(validate_palw_lifecycle_tx_in_context_v1(&malformed.payload, &gates, 19).is_ok());
+        assert_eq!(gates.batch_court_collectible_fee_v1(&good, rent + 1, 19), None);
+        for daa in [20, 21] {
+            assert!(validate_palw_lifecycle_tx_in_context_v1(&good.payload, &gates, daa).is_ok());
+            assert!(validate_palw_lifecycle_tx_in_context_v1(&malformed.payload, &gates, daa).is_err());
+            assert_eq!(gates.batch_court_collectible_fee_v1(&good, rent + 1, daa), Some(1));
+            assert_eq!(gates.batch_court_collectible_fee_v1(&good, rent - 1, daa), Some(0));
+            assert_eq!(gates.batch_court_collectible_fee_v1(&malformed, rent + 1, daa), None);
+        }
+    }
+
+    #[test]
+    fn batch_fence_changes_identity_only_when_explicitly_scheduled() {
+        let base = crate::config::params::TESTNET_PARAMS;
+        assert!(base.validate_palw_batch_court_v1().is_ok());
+        let never = crate::config::params::Params { palw_batch_court_v1: Some(ForkActivation::never()), ..base.clone() };
+        assert_eq!(base.consensus_params_id(), never.consensus_params_id());
+        assert_eq!(base.consensus_schedule_id(), never.consensus_schedule_id());
+        let scheduled = crate::config::params::Params { palw_batch_court_v1: Some(ForkActivation::new(20)), ..base.clone() };
+        assert_ne!(base.consensus_params_id(), scheduled.consensus_params_id());
+        assert_ne!(base.consensus_schedule_id(), scheduled.consensus_schedule_id());
+        assert_eq!(base.consensus_identity_id(), scheduled.consensus_identity_id());
+        // This preset resolves neither the audit fence nor native TIR conviction, so naming
+        // Batch Court at DAA 20 stays refused. No shipped preset names the fence.
+        assert!(scheduled.validate_palw_batch_court_v1().is_err());
     }
 }

@@ -1,0 +1,71 @@
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/positive-contract)
+   Compiling librocksdb-sys v0.17.3+10.4.2
+   Compiling rocksdb v0.24.0
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/consensus/core)
+   Compiling kaspa-txscript v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/crypto/txscript)
+   Compiling misaka-endpoints v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/endpoints)
+   Compiling misaka-palw-remote v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/palw/remote)
+   Compiling kaspa-pq-validator-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a2-miner/MISAKA-testnet/misaka/pq/validator-core)
+error[E0599]: no method named `touched_source` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:857:23
+    |
+857 |     assert_eq!(update.touched_source(), source);
+    |                       ^^^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_unit` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:858:23
+    |
+858 |     assert_eq!(update.touched_unit(), None);
+    |                       ^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_source` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:864:23
+    |
+864 |     assert_eq!(update.touched_source(), source);
+    |                       ^^^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_unit` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:865:23
+    |
+865 |     assert_eq!(update.touched_unit(), None);
+    |                       ^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_source` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:870:23
+    |
+870 |     assert_eq!(update.touched_source(), source);
+    |                       ^^^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_unit` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:871:23
+    |
+871 |     assert_eq!(update.touched_unit(), Some(unit));
+    |                       ^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_source` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:878:23
+    |
+878 |     assert_eq!(update.touched_source(), source);
+    |                       ^^^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_unit` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:879:23
+    |
+879 |     assert_eq!(update.touched_unit(), Some(unit));
+    |                       ^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_source` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:887:23
+    |
+887 |     assert_eq!(update.touched_source(), source);
+    |                       ^^^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+error[E0599]: no method named `touched_unit` found for struct `PreparedSourceUpdateV2` in the current scope
+   --> misaka/palw/remote/tests/../../../../consensus/core/tests/../src/palw_positive_source_geometry_v2/independent_source_ledger.rs:888:23
+    |
+888 |     assert_eq!(update.touched_unit(), Some(unit));
+    |                       ^^^^^^^^^^^^ method not found in `PreparedSourceUpdateV2`
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `misaka-palw-remote` (test "positive_native_source_v2") due to 10 previous errors
+warning: build failed, waiting for other jobs to finish...

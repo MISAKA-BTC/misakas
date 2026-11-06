@@ -1,0 +1,140 @@
+{
+  "schema": "misaka.independent.closed50fe.Clippy3.audit.v1",
+  "status": "CLOSED_PARTIAL_LINT_FAILURE_CONFIRMED",
+  "manifest": {
+    "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/strict-clippy3-library-50fe-20261102.json",
+    "sha256": "199828c86cb9e447b85c832706593c5f7c0dc12ba3b68ec040a0f0b8369df026",
+    "bytes": 663499
+  },
+  "runtime_source": "50fe43e4c9ded609b1be9ab51125caa33ffffd8b",
+  "runtime_tree": "fe664df213a7f67b2fbe25bf95880f60e027769c",
+  "source_snapshot_before_evidencecommit": {
+    "path": "/tmp/positive-a0-50fe-Clippy3-closed-source-snapshot.json",
+    "sha256": "e2fbfa4dad3a4c92448f70b25ea2c626c81a347840dfe3d358e5c8ba6e6b7d47",
+    "bytes": 637681
+  },
+  "HEAD_at_final_audit": "f7a7d2897b09a9ab889e4667e0ad4888111c2566",
+  "newHEAD_never_rebound_as_runtimeSource": true,
+  "physical_source_current_matches_50fe": false,
+  "authorized_later_source_changed_after_captured50fe_snapshot": [
+    "consensus/core/src/palw_tir_step_v1.rs",
+    "consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1.rs",
+    "consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1/tests.rs",
+    "consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1.rs",
+    "consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1/tests.rs",
+    "consensus/core/tests/common/local_step_geometry_fixture_v1.rs",
+    "consensus/core/tests/local_step_geometry_quote_noalloc_v1.rs",
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward.rs",
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/measurement.rs",
+    "misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs",
+    "misaka/palw/tir/exec/src/node/run.rs",
+    "misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs",
+    "misaka/palw/tir/exec/tests/local_forward_metadata_v2.rs",
+    "misaka/palw/tir/exec/tests/local_wide_forward_v2.rs"
+  ],
+  "source_identity_basis": "Capturedfresh50feHEAD/tree/4921beforeRoots authorizednewcommit; closedstepinputs_stable+originalrawpreserved. Laterf7sourceisnot thisruntimeSource.",
+  "checks": [
+    "closedmanifest exactSHA",
+    "closedINCOMPLETE notrelabeled",
+    "reviewedplan/executor/policy exact",
+    "pre-evidence-commit snapshot exact",
+    "source50fe/treefe664 capturedbeforeevidencecommit",
+    "all4921 sourcehashes pinned",
+    "static21/nativeconfiguration exactandcurrent",
+    "currentprotectedCore8b+Node5e actualSHA/size",
+    "closedrecord plan/executor/policy linkage",
+    "newlint1GiB/per512phase only",
+    "CXXguard/env/defaultstack actualpins",
+    "no runtimetests counted",
+    "Core+Exec attemptedSDKnotrun",
+    "exact3approvedlibraryargv prefix 0",
+    "libraryonly target 0",
+    "noresource/cancel/sourcebinary drift 0",
+    "independentCargoJSONclassification 0",
+    "Clippyunsupported observation notruntime 0",
+    "Corelibrary strictPASS",
+    "exact3approvedlibraryargv prefix 1",
+    "libraryonly target 1",
+    "noresource/cancel/sourcebinary drift 1",
+    "independentCargoJSONclassification 1",
+    "Clippyunsupported observation notruntime 1",
+    "Execlibrary strictFAIL101",
+    "exacttwo textualmanual_is_multiple_of diagnostics",
+    "exactdiag375:8and375:30",
+    "diagnostichelpandstrictwarningpromotion retained",
+    "JSONlintcounter0isunavailableforhumanstderr—notabsenceoferrors",
+    "Core54closedprerequisite unchanged",
+    "Core54 54outer/nestedchild1notadded",
+    "closedClippyrecord unchanged afteraudit",
+    "static21/protectedbinaries remainunchanged afterauthorizednewSourcecommit"
+  ],
+  "library_results": [
+    {
+      "library": "core_library",
+      "outcome": "PASS",
+      "exit_code": 0,
+      "elapsed_seconds": 69.260840208,
+      "Cargo_build_finished": true,
+      "ClippySourceProfile": "unsupported observed; no runtime certification",
+      "runtime_tests": 0
+    },
+    {
+      "library": "exec_positive_panel_library",
+      "outcome": "FAIL",
+      "exit_code": 101,
+      "elapsed_seconds": 49.406875375,
+      "Cargo_build_finished": false,
+      "ClippySourceProfile": "unsupported observed; no runtime certification",
+      "runtime_tests": 0
+    },
+    {
+      "library": "sdk_library",
+      "outcome": "NOT_RUN",
+      "exit_code": null,
+      "elapsed_seconds": null,
+      "runtime_tests": 0
+    }
+  ],
+  "Exec_textual_diagnostics": [
+    {
+      "file": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+      "line": 375,
+      "column": 8,
+      "lint": "clippy::manual_is_multiple_of"
+    },
+    {
+      "file": "misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs",
+      "line": 375,
+      "column": 30,
+      "lint": "clippy::manual_is_multiple_of"
+    }
+  ],
+  "Exec_JSON_selected_error_counter_zero_does_not_mean_no_errors": true,
+  "closed_raw_pins": [
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/strict-clippy3-library-50fe-20261102-core_library.jsonl",
+      "sha256": "73177c6a493e2cd12eeac00dc5ed854437369b3cada2dbf086368304a3badc04",
+      "bytes": 271640
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/rfc42-a6-recovery/MISAKA-testnet/docs/evidence/positive-court-a0-2026-10-31/integration/strict-clippy3-library-50fe-20261102-exec_positive_panel_library.jsonl",
+      "sha256": "4bb91516f36f96c09c050bfc0112ccdbfb5b3bc90978cc5074df973fd5b96de7",
+      "bytes": 275694
+    }
+  ],
+  "closedownedPGs_reaped_and_nowabsent": [
+    4083,
+    4372
+  ],
+  "source4921_verified_at_precaptured50fe_snapshot_static21_currentprotectedbinaries_verified": true,
+  "policy_library_lint_only_initial1GiB_runtime2GiB_whole4GiB_unchanged": true,
+  "Core54_runtime54_andNative22_scoped_success_notinvalidated_or_relabelled": true,
+  "SDK_never_attempted": true,
+  "no_STRICT_Clippy3_PASS": true,
+  "actual_test_model_runtime_count_fromlint": 0,
+  "Clippy_unsupported_notruntimefailure_or_positiveSourcequalification": true,
+  "auditor_Cargo_CPP_models_LLDB_sourcewrites": 0,
+  "futurefix_newSource_requires_newlint_evidence_no50fe_reclassification": true,
+  "timestamp": "2026-11-01T20:42:26.685323+00:00"
+}

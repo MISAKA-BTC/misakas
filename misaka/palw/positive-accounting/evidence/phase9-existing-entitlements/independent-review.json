@@ -1,0 +1,97 @@
+{
+  "reviewed_execution_base_commit": "86eca644fc9288d0ac506811ed2a82ad0fd885c0",
+  "scope": "Existing use-specific credit entitlement is an additional condition, never granted by Positive completion or drawn approval.",
+  "actions": {
+    "builds_run_by_reviewer": false,
+    "tests_rerun_by_reviewer": false,
+    "additional_source_edits_during_final_review": false,
+    "independent_test_source_prepared_before_freeze": "misaka/palw/positive-accounting/tests/independent_credit_graph.rs",
+    "git_commits_created": false,
+    "only_this_evidence_json_written_during_final_review": true
+  },
+  "findings": [],
+  "reviewed_invariants": [
+    "RootedCreditView::authorize_entitlement defaults to the typed Entitlement denial for the exact claim and CreditUse. No existing adapter silently gains rights.",
+    "The gate retains exact binding, scope, full local coverage, drawn approval, fraud, maturity/liability, funding and all-ancestor checks, then also requires the requested root entitlement and each ancestor Dependency entitlement.",
+    "TirCreditView delegates entitlement checks unchanged to its current rooted owner. A real CheckedTerminal supplies coverage only, never a different existing right.",
+    "Private fixture All/Only rights are explicit. The original 512-graph oracle tests readiness/ancestry conditional on all private rights; the new tests separately cover default denial, seven-by-seven use independence, root/ancestor propagation and revocation.",
+    "Positive-ready reuse-only or settlement-only fixtures cannot acquire DAG weight, WorkReceipt or Rule E capital. Paid Final B/F/R=0 cannot gain those existing economic rights merely from Positive/P approval.",
+    "No new wire format, hash/signature domain, global key or policy right is added."
+  ],
+  "changed_source_sha256": {
+    "misaka/palw/positive-accounting/src/credit.rs": "64713b9bc894adc0d567a827595216715c0d20521bfde650a1d3774f2d3c215d",
+    "misaka/palw/positive-accounting/src/credit/tests.rs": "2f48f91727fde310f9d231ce6bf23fef3e1dfdba68d84d714f9b76a35576e7f4",
+    "misaka/palw/positive-accounting/tests/independent_credit_graph.rs": "2c94a4d68cca7199fa71ccddd5fcb9c1f50456a76b3a183fdea591684685881f",
+    "misaka/palw/positive-accounting-node/src/tir.rs": "ce528f97377ddae2610b753b7d1b04c9fdabc8705943f932b182b4a4c55f9d7c",
+    "misaka/palw/positive-accounting-node/src/tir_tests.rs": "0d5500d0836a2236cb37fe9f791f449fc9c5c50e512d1f8aec46b7cf5bef1995"
+  },
+  "execution_evidence": {
+    "leaf-all": {
+      "metadata": "leaf-all-result.json",
+      "metadata_sha256": "87c64c856c3cb3b00de9e7df55a0478d088b4584d42e6a613d0c9de06997dd66",
+      "raw_log": "leaf-all.log",
+      "raw_log_sha256": "66903fdddecd6d67a6d59040f9fef5ead966601f7f364c650c4f3ba02a287ec1",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 25,
+      "passed": 51,
+      "target_pass_counts": {
+        "unit": 41,
+        "consumer": 1,
+        "independent_graph_entitlement": 7,
+        "fee_conservation": 2,
+        "doc": 0
+      }
+    },
+    "leaf-clippy": {
+      "metadata": "leaf-clippy-result.json",
+      "metadata_sha256": "4b974647549be4f31078e60f66039ecad0aca6a6a14a189a8bc5fcdafb62dc6d",
+      "raw_log": "leaf-clippy.log",
+      "raw_log_sha256": "869c24fd0cc77d267b00e979d8af8805242f8aabfb71d499384e3c1300ae2933",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 25,
+      "raw_warnings_found": false
+    },
+    "node-default-all": {
+      "metadata": "node-default-all-result.json",
+      "metadata_sha256": "8e12f686c50a18da7807b09c96e751b0a2811a2f1ace2ff0d413053e58d4c3c6",
+      "raw_log": "node-default-all.log",
+      "raw_log_sha256": "c4c85fa78bcfc282ea854bd2263ea0dd5da91f824b3870c22d457589e29c7b56",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 25,
+      "passed": 55,
+      "module_pass_counts": {
+        "dues": 9,
+        "native_funds": 15,
+        "native": 15,
+        "rows": 7,
+        "tir": 9
+      },
+      "default_features_enabled": true
+    },
+    "node-default-clippy": {
+      "metadata": "node-default-clippy-result.json",
+      "metadata_sha256": "f26ebe7c53680f103bc1ef1d7ea007ed8b4af557811d518f2fbf992f69e8a180",
+      "raw_log": "node-default-clippy.log",
+      "raw_log_sha256": "24ac971d8c3557ac8d003257a53c83cab1389593bde8ea098cb2c9e30bf7050d",
+      "exit_code": 0,
+      "source_unchanged_during_run": true,
+      "all_recorded_source_hashes_match_current": true,
+      "matched_source_count": 25,
+      "raw_warnings_found": false
+    }
+  },
+  "limits": [
+    "Root performed the recorded test/Clippy executions. This reviewer authored the independent graph/entitlement tests before source freeze, then inspected implementation source and raw evidence without another build or run.",
+    "Actual native origin/paid-or-mining contract entitlement resolution is not implemented or exercised here; default denial remains mandatory until its owner supplies it.",
+    "Ancestor Dependency permission does not replace edge-specific export/state identity, position, model/tokenizer/layout and lineage checks owned by checked_dependencies and validate_scope.",
+    "The A7 fixture port has not been migrated/validated in this phase. A fixture retaining no entitlement override will now deny by design; no A7 end-to-end success is claimed.",
+    "Default node tests include nine actual A1 checker adapter fixtures, not actual native acceptance, multi-node lifecycle, money authority or drawn-verifier infrastructure.",
+    "Fixture readiness and explicit All/sets remain synthetic assumptions; they must not be used to implement native entitlement from a saved Positive/P flag."
+  ]
+}

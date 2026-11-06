@@ -232,11 +232,19 @@ fn the_registered_class_path_admits_by_a_computed_digest() {
         std::fs::read_to_string(repo_root().join("misaka/palw/sdk/src/sdk.rs")).expect("misaka/palw/sdk/src/sdk.rs is in the tree");
     assert!(source.contains("fn resolve_chain_registered"), "the registered-class path still exists");
     let step = source.split("fn resolve_chain_registered").nth(1).expect("checked above");
-    let body = &step[..step.len().min(4_000)];
+    let body = &step[..step.len().min(8_000)];
     assert!(
-        body.contains("artifact_root"),
-        "the registered-class path admits a holding by its registered root, computed from the bytes"
+        admits_by_computed_digest(body),
+        "the registered-class path must call the dense and Qwen3.6 computed-root lookups"
     );
+    assert!(
+        !admits_by_computed_digest("pub fn resolve_chain_registered(artifact_root: Hash64) { let _ = artifact_root; }"),
+        "a parameter named artifact_root is not a computed digest"
+    );
+}
+
+fn admits_by_computed_digest(body: &str) -> bool {
+    body.contains("dense_artifact_by_registered_root(") && body.contains("qwen36_artifact_by_registered_root(")
 }
 
 /// **SA-7, the RELAY form.** [`nothing_in_the_palw_path_logs_a_prompt`] is name-based — it looks

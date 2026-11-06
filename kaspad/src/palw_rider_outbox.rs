@@ -1,5 +1,6 @@
 //! In-process rider handoff. Opaque execution owners and their allocation ticket
 //! follow the exact unsigned-attempt batch; nothing here is serialized/restored.
+use crate::palw_retention::AttemptPublicationGuard;
 use kaspa_consensus_core::{
     Hash64,
     palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2},
@@ -8,10 +9,34 @@ use kaspa_consensus_core::{
     palw_routed_material_v2::PalwMaterialConstructionRequestsV2,
     palw_state_v2::PalwConsensusObjectV2,
 };
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 pub const PALW_RIDER_QUEUE_ROUND_V1: u32 = u32::MAX - 9;
+
+// Process-wide fallback when native accounting is disabled. A stalled Court
+// sender cannot keep admitting whole batches and pinning their captures.
+const MAX_RESIDENT_RIDER_BATCHES: usize = 8;
+static RESIDENT_RIDER_BATCHES: AtomicUsize = AtomicUsize::new(0);
+
+struct RiderBatchSlot;
+impl RiderBatchSlot {
+    fn try_acquire() -> Result<Self, NativeCoverageV1> {
+        RESIDENT_RIDER_BATCHES
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| (count < MAX_RESIDENT_RIDER_BATCHES).then_some(count + 1))
+            .map_err(|_| NativeCoverageV1::unsupported::<Self>("rider batch", "local resident batch limit reached"))?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RiderBatchSlot {
+    fn drop(&mut self) {
+        RESIDENT_RIDER_BATCHES.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 struct RiderGuard {
-    id: Hash64,
+    retention_pin: AttemptPublicationGuard,
     owner: Option<Arc<Owner>>,
     unrouted_job: Option<NativeRetainedV1<kaspa_consensus_core::palw_v2::PalwJobContextV2>>,
 }
@@ -22,6 +47,7 @@ pub(crate) struct RiderBatchV2 {
     pub(crate) next: Option<Box<Self>>,
     limit: usize,
     _lease: Option<NativeDemandLeaseV1>,
+    _slot: RiderBatchSlot,
 }
 impl RiderBatchV2 {
     /// Reserve before the producer allocates signatures/pubkeys or either array.
@@ -29,6 +55,7 @@ impl RiderBatchV2 {
         if limit > kaspa_consensus_core::palw_capacity_s567_v1::PALW_RIDERS_MAX_V1 {
             return Err(NativeCoverageV1::unsupported::<Self>("rider batch", "too many riders"));
         }
+        let slot = RiderBatchSlot::try_acquire()?;
         let mut q = PalwMaterialConstructionRequestsV2::new();
         q.vec_v1::<Self>(1)?;
         q.vec_v1::<usize>(3)?;
@@ -48,7 +75,7 @@ impl RiderBatchV2 {
         guards
             .try_reserve_exact(limit)
             .map_err(|_| NativeCoverageV1::unsupported::<Self>("rider batch", "guard array allocation refused"))?;
-        Ok(Box::new(Self { lead, riders, guards, next: None, limit, _lease: lease }))
+        Ok(Box::new(Self { lead, riders, guards, next: None, limit, _lease: lease, _slot: slot }))
     }
     pub(crate) fn reserve_court_due(len: usize, capacity: usize) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1> {
         // HashMap::capacity reports usable entries, not physical buckets.
@@ -88,6 +115,7 @@ impl RiderBatchV2 {
         envelope: PalwAttemptEnvelopeV2,
         owner: Option<Arc<Owner>>,
         job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
+        retention_pin: AttemptPublicationGuard,
     ) -> Result<(), Fault> {
         if self.riders.len() >= self.limit {
             return Err(Fault::Identity("rider batch limit exceeded"));
@@ -108,11 +136,25 @@ impl RiderBatchV2 {
                 return Err(Fault::Identity("rider envelope differs from executed native work"));
             }
         }
+        if retention_pin.claim() != attempt_id_v2(&envelope.attempt) {
+            return Err(Fault::Identity("rider capture guard names another claim"));
+        }
         let unrouted_job = if owner.is_none() { job.map(NativeRetainedV1::try_from_clone_v1).transpose()? } else { None };
-        self.guards.push(RiderGuard { id: attempt_id_v2(&envelope.attempt), owner, unrouted_job });
+        self.guards.push(RiderGuard { retention_pin, owner, unrouted_job });
         self.riders.push(envelope);
         Ok(())
     }
+    #[cfg(test)]
+    pub(crate) fn push_fixture(
+        &mut self,
+        envelope: PalwAttemptEnvelopeV2,
+        owner: Option<Arc<Owner>>,
+        job: Option<&kaspa_consensus_core::palw_v2::PalwJobContextV2>,
+    ) -> Result<(), Fault> {
+        let pin = crate::palw_retention::pin_attempt_publication(attempt_id_v2(&envelope.attempt));
+        self.push(envelope, owner, job, pin)
+    }
+
     pub(crate) fn take_object(&mut self) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::AttemptRidersV1 { lead: self.lead, riders: std::mem::take(&mut self.riders) }
     }
@@ -120,7 +162,7 @@ impl RiderBatchV2 {
         let PalwConsensusObjectV2::AttemptRidersV1 { lead, riders } = object else { return false };
         *lead == self.lead
             && riders.len() == self.guards.len()
-            && riders.iter().zip(&self.guards).all(|(r, g)| attempt_id_v2(&r.attempt) == g.id)
+            && riders.iter().zip(&self.guards).all(|(r, g)| attempt_id_v2(&r.attempt) == g.retention_pin.claim())
     }
     pub(crate) fn refresh(
         &self,
@@ -227,8 +269,8 @@ mod tests {
     fn rider_guard_binds_complete_ordered_attempts_and_never_infers_missing_owner() {
         let lead = Hash64::from_u64_word(91);
         let mut batch = RiderBatchV2::new(lead, 2).unwrap();
-        batch.push(rider_fixture_v2(lead, 0), None, None).unwrap();
-        batch.push(rider_fixture_v2(lead, 1), None, None).unwrap();
+        batch.push_fixture(rider_fixture_v2(lead, 0), None, None).unwrap();
+        batch.push_fixture(rider_fixture_v2(lead, 1), None, None).unwrap();
         let object = batch.take_object();
         assert!(batch.matches(&object));
         assert!(
@@ -295,6 +337,53 @@ mod tests {
             RiderBatchV2::reserve_court_due(map.len(), map.capacity()).is_err(),
             "retained bucket memory cannot be quoted as usable entries"
         );
+    }
+    #[test]
+    fn rider_capture_pin_follows_the_exact_batch() {
+        use crate::palw_retention::{attempt_publication_is_pinned, pin_attempt_publication};
+
+        let lead = Hash64::from_u64_word(94);
+        let mut batch = RiderBatchV2::new(lead, 1).unwrap();
+        let envelope = rider_fixture_v2(lead, 0);
+        let claim = attempt_id_v2(&envelope.attempt);
+        let foreign = Hash64::from_u64_word(95);
+        assert!(matches!(batch.push(envelope.clone(), None, None, pin_attempt_publication(foreign)), Err(Fault::Identity(_))));
+        assert!(!attempt_publication_is_pinned(foreign));
+        batch.push(envelope, None, None, pin_attempt_publication(claim)).unwrap();
+        let mut queue = Some(batch);
+        import_queue_v2(&mut queue, &mut |batch| Err(batch));
+        assert!(attempt_publication_is_pinned(claim));
+        let mut batch = queue.take().unwrap();
+        let object = batch.take_object();
+        assert!(batch.matches(&object));
+        assert!(attempt_publication_is_pinned(claim));
+        drop(batch);
+        assert!(!attempt_publication_is_pinned(claim));
+    }
+    #[test]
+    fn rider_resident_limit_with_native_accounting_disabled() {
+        const CHILD: &str = "MISAKA_RIDER_RESIDENT_LIMIT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .arg("rider_resident_limit_with_native_accounting_disabled")
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+
+        let lead = Hash64::from_u64_word(96);
+        let mut batches = Vec::new();
+        for _ in 0..MAX_RESIDENT_RIDER_BATCHES {
+            batches.push(RiderBatchV2::new(lead, 1).unwrap());
+        }
+        assert!(RiderBatchV2::new(lead, 1).is_err());
+        let mut source = batches.pop();
+        import_queue_v2(&mut source, &mut |batch| Err(batch));
+        assert!(RiderBatchV2::new(lead, 1).is_err());
+        drop(source.take().unwrap());
+        assert!(RiderBatchV2::new(lead, 1).is_ok());
     }
     #[test]
     fn rider_source_import_refusal_preserves_same_box_and_fifo() {

@@ -798,7 +798,12 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
     let canonical = sites.find_code("self.submit_prepared_direct_v1(").unwrap();
     assert!(sites[..canonical].rfind("&& !stuck_opened").is_some_and(|guard| canonical - guard < 2_000), "and it never replaces");
     let priority = body("    async fn carry_priority_v1(");
-    assert_eq!(priority.count_code("self.submit_prepared_carrier_v1(session, prepared_carrier)"), 2, "court moves and evidence");
+    assert_eq!(
+        priority.count_code("self.submit_prepared_carrier_with_guard_v1(submit_session, prepared_carrier, guard)"),
+        1,
+        "court moves"
+    );
+    assert_eq!(priority.count_code("self.submit_prepared_carrier_v1(session, prepared_carrier)"), 1, "equivocation evidence");
     assert!(!priority.contains_code("flow_context.submit_rpc_transaction("));
     assert!(
         priority.contains_code("Some((funding_outpoint, _)) if self.stuck_carrier_open_on_v1(&funding_outpoint) =>"),
@@ -814,7 +819,8 @@ fn the_tick_opens_a_stuck_carriers_slot_to_every_site_through_one_door() {
     assert!(door.contains_code("open.replaced_by = Some(txid);"));
     let shared = include_str!("carrier_chain.rs");
     for (name, door) in [
-        ("submit_prepared_carrier_v1", "self.submit_carrier_v1(session, tx).await?;"),
+        ("submit_prepared_carrier_v1", "self.submit_prepared_carrier_with_guard_v1(session, prepared, None).await"),
+        ("submit_prepared_carrier_with_guard_v1", "self.submit_carrier_v1(session, tx, guard).await?;"),
         (
             "submit_prepared_direct_v1",
             "self.flow_context.submit_rpc_transaction(session, tx, kaspa_mining::mempool::tx::Orphan::Forbidden).await?;",

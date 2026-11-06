@@ -22,6 +22,7 @@ kaspa-rpc-core = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "time"], optional = true }
 kaspa-hashes.workspace = true
 misaka-palw-base0.workspace = true
+misaka-palw-host-security.workspace = true
 # RFC-0002 Phase F: IR artifacts (the PALWTIR1 container) and their manifest.
 misaka-palw-tir.workspace = true
 # ADR-0172: the K2-TIR-v1 reference kernel's static route of a lowered program (reported by the preflight and the census).
@@ -132,4 +133,12 @@ path = "src/bin/palw-native-redemption39.rs"
 [[bin]]
 name = "palw-native-receipt-live39"
 path = "src/bin/palw-native-receipt-live39.rs"
+required-features = ["native-rpc"]
+
+[[bin]]
+name = "palw-tir-fp-worker"
+path = "src/bin/palw-tir-fp-worker.rs"
+
+[[example]]
+name = "check-t12-a16-source"
 required-features = ["native-rpc"]

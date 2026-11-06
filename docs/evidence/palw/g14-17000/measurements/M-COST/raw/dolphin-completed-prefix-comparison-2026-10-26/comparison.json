@@ -1,0 +1,23 @@
+{
+  "scope": "chunk_terminal_logits_prefix_comparison",
+  "arming_evidence": false,
+  "all_positions_logits_compared": false,
+  "full_long_run_complete": true,
+  "observed_utc": "2026-10-26T11:54:00.522492+00:00",
+  "source_commit": "3872a488c64e03abfcdac11624460dab89d11138",
+  "binary_sha256": "d709c5cbfebdfd3da7f64509f8d4856980fc68801853f298f4f01afb8c841ba1",
+  "positions_in_prefix": 8192,
+  "chunk_endpoints_compared": 512,
+  "short_run_directory": "/Users/wata/.codex/artifacts/g14-17000-measure/dolphin-long-n8192-2026-10-26",
+  "long_run_directory": "/Users/wata/.codex/artifacts/g14-17000-measure/dolphin-long-n32768-2026-10-26",
+  "short_reported_status": "UNDER_LOAD_RUNTIME_ONLY",
+  "long_reported_status": "UNDER_LOAD_RUNTIME_ONLY",
+  "artifact_sha256": "8d88abf0cf46d86bed52466328690dbfebf6b49efb2b278a9648f947c4843da6",
+  "tokens_sha256": "41069932f1940b3d7a59b54647bff7fe81fc03de9582b999fe57c2e0bd119d2d",
+  "prefix_sha256": {
+    "short": "6236cba74d66057cfdf65c8f0c8c2b61e0bd4fb526ab7f783cf5b16992af89c9",
+    "long": "8c405a6f8c91a138e9d3c8d432d79a98fd7561bd51bc4e3b60d5984bbee2ef90"
+  },
+  "mismatches": [],
+  "match": true
+}

@@ -9,7 +9,9 @@ use crate::{
 // parent, sink, precomputed-hash test ctor) use `BlockHash` (= `Hash64`).
 use kaspa_utils::mem_size::MemSizeEstimator;
 use std::sync::Arc;
+mod rpc_projection;
 mod transactions_v3;
+pub use rpc_projection::{RetainedTransactionIdsV1, RpcBlockProjectionV1};
 pub use transactions_v3::BlockTransactionsV3;
 
 /// A mutable block structure where header and transactions within can still be mutated.

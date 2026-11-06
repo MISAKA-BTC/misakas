@@ -225,7 +225,8 @@ impl PalwFoldReadV1<'_> {
         // bond accuses past its collateral (review M1: courts and the one ledger counted). Through
         // the one accuser gate ([`PalwRcoreGateV1::Accuser`]), the room the court opening and the held
         // dissection read (`TransitionBuilder::check_accuser_room`), refused the way it refuses.
-        let committed = palw_bond_committed_v1(state, accuser, now_daa, self.second_clock_depth(now_daa), self.params.window_court);
+        let committed =
+            palw_bond_committed_checked_v2(state, accuser, now_daa, self.second_clock_depth(now_daa), self.params.window_court)?;
         let room = palw_rcore_gate_room_of_v1(
             record.collateral,
             self.params.fp_max_exposure_ratio_permille,
@@ -1638,7 +1639,7 @@ impl PalwFoldReadV1<'_> {
         claim: &PalwClaimStateV2,
         now_daa: u64,
     ) -> Result<(), PalwStateV2Error> {
-        let Some((room, waiting)) = self.floor_room_reading_v1(claim_id, claim, now_daa) else { return Ok(()) };
+        let Some((room, waiting)) = self.floor_room_reading_v1(claim_id, claim, now_daa)? else { return Ok(()) };
         let base = self.params.base_class_id();
         let pending: u64 = waiting.values().sum();
         if !room.admits_one() {
@@ -1670,8 +1671,8 @@ impl PalwFoldReadV1<'_> {
 
     /// **The floor room's capacity for `claim`** (J-6: the seats' free capital over its bind eligibility),
     /// lane N's `L_seat` for the base class; `None` where J-6 is no rule.
-    pub(super) fn floor_room_capacity_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> Option<u64> {
-        self.floor_room_reading_v1(&Hash64::default(), claim, now_daa).map(|(room, _)| room.capacity())
+    pub(super) fn floor_room_capacity_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> Result<Option<u64>, PalwStateV2Error> {
+        Ok(self.floor_room_reading_v1(&Hash64::default(), claim, now_daa)?.map(|(room, _)| room.capacity()))
     }
 
     /// **J-6's reading for a floor `claim`**: the room over the seats' capital and the floor claims waiting
@@ -1681,10 +1682,10 @@ impl PalwFoldReadV1<'_> {
         claim_id: &Hash64,
         claim: &PalwClaimStateV2,
         now_daa: u64,
-    ) -> Option<(crate::palw_verify_capacity_v1::PalwFloorRoomV1, BTreeMap<PalwBondKeyV2, u64>)> {
+    ) -> Result<Option<(crate::palw_verify_capacity_v1::PalwFloorRoomV1, BTreeMap<PalwBondKeyV2, u64>)>, PalwStateV2Error> {
         let base = self.params.base_class_id();
         if !self.params.capacity_room_active_at(now_daa) || claim.class_id != base {
-            return None;
+            return Ok(None);
         }
         let seat_count = if self.params.model_panel_one_governs_v1(claim.accepted_daa) {
             1
@@ -1712,23 +1713,29 @@ impl PalwFoldReadV1<'_> {
             self.params.min_collateral_sompi
         };
         let escaped = self.second_clock_depth(now_daa);
-        let rooms = self
-            .state
-            .bonds
-            .iter()
-            .filter(|(key, record)| {
-                palw_bond_may_take_work_v2(record, floor) && palw_bond_may_judge_class_v4(self.state, key, record, &base, false, None)
-            })
-            .map(|(key, record)| {
+        let bytes = (self.state.bonds.len() as u64)
+            .checked_mul(std::mem::size_of::<u128>() as u64)
+            .ok_or(PalwStateV2Error::Overflow("floor capital rooms"))?;
+        let _rooms_lease =
+            crate::palw_native_resource_v1::reserve_native_requests_v1(bytes).map_err(PalwStateV2Error::NativeResource)?;
+        let mut rooms = Vec::with_capacity(self.state.bonds.len());
+        for (key, record) in &self.state.bonds {
+            if !palw_bond_may_take_work_v2(record, floor) || !palw_bond_may_judge_class_v4(self.state, key, record, &base, false, None)
+            {
+                continue;
+            }
+            let committed = palw_bond_committed_checked_v2(self.state, key, now_daa, escaped, self.params.window_court)?;
+            rooms.push(
                 palw_rcore_gate_room_of_v1(
                     record.collateral,
                     self.params.fp_max_exposure_ratio_permille,
-                    palw_bond_committed_v1(self.state, key, now_daa, escaped, self.params.window_court),
+                    committed,
                     self.accuser_ledger_v1(key, now_daa),
                     PalwRcoreGateV1::Work,
                 )
-                .saturating_sub(anchor_reserve)
-            });
+                .saturating_sub(anchor_reserve),
+            );
+        }
         let mut waiting: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
         for (_, key) in self.state.unresolved.iter() {
             if let Some(live) = self.state.claims.get(key)
@@ -1739,8 +1746,8 @@ impl PalwFoldReadV1<'_> {
             }
         }
         let pending: u64 = waiting.values().sum();
-        let room = crate::palw_verify_capacity_v1::palw_floor_room_v1(rooms, eligibility, seat_count, pending);
-        Some((room, waiting))
+        let room = crate::palw_verify_capacity_v1::palw_floor_room_v1(rooms.into_iter(), eligibility, seat_count, pending);
+        Ok(Some((room, waiting)))
     }
 
     /// **ADR-0160 F-N (stage 4): a class room divided by lane N's rule** — F-R's per-bond share past F-N.
@@ -1831,7 +1838,7 @@ impl PalwFoldReadV1<'_> {
         if !self.params.capacity_network_active_at(now_daa) {
             return Ok(());
         }
-        let level = self.network_level_v1(claim, now_daa);
+        let level = self.network_level_v1(claim, now_daa)?;
         let mut held: BTreeMap<PalwBondKeyV2, u64> = BTreeMap::new();
         let mut unlicensed = 0u64;
         for live in self.state.claims.values() {
@@ -1866,7 +1873,7 @@ impl PalwFoldReadV1<'_> {
     /// room for unlicensed claims ([`Self::network_seat_level_v1`]), the licences the carriage lands over
     /// `H_L` and the binds the operator anchors make over an anchor delay, both over the operator ring's
     /// `ā_op` (floored at one block a DAA).
-    pub(super) fn network_level_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> u64 {
+    pub(super) fn network_level_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> Result<u64, PalwStateV2Error> {
         use crate::palw_network_room_v1 as n;
         let lpb =
             if self.params.capacity_batch_active_at(now_daa) { n::PALW_NETWORK_LPB_BATCH_V1 } else { n::PALW_NETWORK_LPB_SINGLE_V1 };
@@ -1887,13 +1894,13 @@ impl PalwFoldReadV1<'_> {
             .params
             .capacity_network_verify_level_at(now_daa)
             .map(|base| base.saturating_mul(crate::palw_capacity_s567_v1::palw_verify_supply_milli_v1(tier)) / 1_000);
-        n::palw_network_level_with_verify_v1(
-            self.network_seat_level_v1(claim, now_daa),
+        Ok(n::palw_network_level_with_verify_v1(
+            self.network_seat_level_v1(claim, now_daa)?,
             n::palw_network_a_op_milli_v1(&self.state.operator_ring, now_daa),
             lpb,
             self.params.capacity_network_anchor_delay(),
             l_ver,
-        )
+        ))
     }
 
     /// **`L_seat`: the unlicensed claims the network's seats hold room for** — on `U`'s basis, summed over
@@ -1903,7 +1910,7 @@ impl PalwFoldReadV1<'_> {
     /// capital already holds them); and each model class's room as its per-bond shares divide it
     /// (`min(c_v2, ρ·⌈c_ship/2⌉)`). F-R keeps its per-class rooms and shares; this is the cross-class
     /// level lane N's share divides.
-    pub(super) fn network_seat_level_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> u64 {
+    pub(super) fn network_seat_level_v1(&self, claim: &PalwClaimStateV2, now_daa: u64) -> Result<u64, PalwStateV2Error> {
         let base = self.params.base_class_id();
         let template;
         let floor_claim = if claim.class_id == base {
@@ -1912,7 +1919,7 @@ impl PalwFoldReadV1<'_> {
             template = palw_claim_template_v1(base, claim.bond, now_daa, 0, claim.escrowed_reward);
             &template
         };
-        let floor = self.floor_room_capacity_v1(floor_claim, now_daa).unwrap_or(0);
+        let floor = self.floor_room_capacity_v1(floor_claim, now_daa)?.unwrap_or(0);
         let bound_floor = self
             .state
             .claims
@@ -1930,7 +1937,7 @@ impl PalwFoldReadV1<'_> {
             .filter(|class_id| **class_id != base)
             .filter_map(|class_id| self.class_share_room_v1(class_id, now_daa))
             .fold(0u64, u64::saturating_add);
-        floor.saturating_add(bound_floor).saturating_add(models)
+        Ok(floor.saturating_add(bound_floor).saturating_add(models))
     }
 
     /// **ADR-0152 v3.1 T-2(a): no bond holds more than `⌈c_class / 2⌉` unlicensed claims of a

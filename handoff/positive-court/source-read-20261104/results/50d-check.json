@@ -1,0 +1,19 @@
+{
+  "source_commit": "50d5eda4cd92c506eef20b042a6f85b505fd4877",
+  "source_tree": "3ec2f664820f9c547c75da060e4a25e393522451",
+  "command": "cargo +1.93.0 check --offline --locked -p kaspa-consensus-core -p kaspa-consensus --features evm --tests",
+  "environment": {
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_TARGET_DIR": "/dev/shm/misaka-positive-pre-isolated-target"
+  },
+  "exit_code": 0,
+  "elapsed": "16m 01s",
+  "log_sha256": "deb20bf378de3aa6bb8bd8f06b1aab8e03263b983b035f215d0687411811128e",
+  "source_status": "clean when collected",
+  "scope": "Core and Consensus libraries and all enabled test targets typechecked; this command executes no tests.",
+  "strict_library_clippy": "passed on the same source commit; see 50d-clippy.json",
+  "native_execution": "generation/relay test binary compiling on the same source; no runtime success asserted",
+  "full_original_goal": "incomplete"
+}

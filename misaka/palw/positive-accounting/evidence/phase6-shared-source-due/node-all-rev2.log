@@ -1,0 +1,55 @@
+   Compiling misaka-palw-positive-contract v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-contract)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-positive-accounting v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting)
+   Compiling misaka-palw-positive-accounting-node v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a5/MISAKA-testnet/misaka/palw/positive-accounting-node)
+    Finished `test` profile [unoptimized] target(s) in 1m 23s
+     Running unittests src/lib.rs (/Users/wata/.cache/misaka-positive-accounting-node-target/debug/deps/misaka_palw_positive_accounting_node-49ca883e32b27f5d)
+
+running 44 tests
+test dues::tests::first_source_due_preserves_meters_and_does_not_pay_or_erase_ended_service ... ok
+test dues::tests::preincremented_fee_regressing_meters_and_completion_recipient_are_rejected ... ok
+test dues::tests::duplicate_receipt_never_adds_due_and_cannot_replace_first_provider_or_response ... ok
+test dues::tests::cross_result_scope_schedule_source_and_fee_cap_substitution_fail_closed ... ok
+test dues::tests::settlement_reference_is_not_first_delivery_evidence_or_a_new_due ... ok
+test dues::tests::zero_fee_first_receipt_keeps_identity_and_later_price_cannot_reopen_due ... ok
+test dues::tests::whole_schedule_quote_counts_source_separately_from_court_and_never_mutates ... ok
+test native::tests::an_old_projection_cannot_reenter_the_native_checker_after_payment_or_rollback ... ok
+test native::tests::actual_native_engine_checks_a_source_fee_and_exact_continuation ... ok
+test native::tests::changing_outputs_without_refreshing_the_actual_transaction_identity_is_rejected ... ok
+test native::tests::empty_fee_timeout_uses_only_the_existing_deadline_return_path ... ok
+test native::tests::changed_legacy_operands_cannot_rewrite_the_private_engine_calculation ... ok
+test native::tests::hard_deadline_payer_return_cannot_silently_waive_an_earned_service_fee ... ok
+test native_funds::tests::a_transaction_cannot_cross_fund_two_locked_inputs_or_place_its_escrow_second ... ok
+test native_funds::tests::actual_transaction_identity_and_supported_payload_are_required ... ok
+test native_funds::tests::bond_legacy_and_positive_burn_share_one_actual_fee_allocation ... ok
+test native_funds::tests::clocks_cannot_rewind_after_a_previous_settlement_or_before_a_response ... ok
+test native_funds::tests::duplicate_cases_original_points_and_cross_namespace_locks_are_rejected ... ok
+test native_funds::tests::expiry_does_not_unlock_and_same_prefix_provisional_outputs_are_unspendable ... ok
+test native_funds::tests::fee_payments_cannot_spend_the_capital_or_surplus_legs ... ok
+test native_funds::tests::free_source_units_and_court_fees_do_not_increase_source_due_usage_at_settlement ... ok
+test native_funds::tests::panel_attempt_and_accepting_origin_changes_cannot_purchase_another_completion_or_carrier_fee ... ok
+test native_funds::tests::refunds_keep_three_leg_accounting_and_require_a_resolution_reference ... ok
+test native::tests::late_lower_source_unit_preserves_the_real_native_paid_prefix ... ok
+test native_funds::tests::snapshot_guards_detect_changed_case_result_funding_and_receipts ... ok
+test native_funds::tests::source_payment_preserves_all_three_legs_and_returns_no_native_authority ... ok
+test native_funds::tests::source_pending_dues_are_payable_once_but_duplicates_and_settled_receipts_are_not ... ok
+test native_funds::tests::source_provider_response_and_schedule_are_bound_to_the_current_receipt ... ok
+test native_funds::tests::wrong_recipient_remainder_or_relay_subsidy_is_rejected ... ok
+test native::tests::a_narrower_admission_intent_deadline_remains_exclusive ... ok
+test rows::tests::actual_claim_index_missing_result_never_falls_back_to_an_old_subject ... ok
+test rows::tests::actual_public_genesis_and_empty_route_reads_keep_missing_route_and_row_distinct ... ok
+test native::tests::real_acyclic_payer_signature_and_actual_output_preflight_are_distinct_from_native_admission ... ok
+test rows::tests::malformed_version_and_wrong_key_body_are_not_reported_as_absent_rows ... ok
+test native::tests::actual_carrier_value_refund_index_and_admission_expiry_are_checked_again ... ok
+test native::tests::unknown_or_malformed_recipient_keys_and_unbounded_due_counts_are_refused ... ok
+test native::tests::unverified_closure_pays_only_delivered_service_then_burn_and_refund ... ok
+test native::tests::actual_payer_signatures_reject_substitution_even_after_acyclic_links_are_recomputed ... ok
+test native::tests::capital_bearing_funding_and_different_resource_quotes_are_explicitly_refused ... ok
+test native::tests::full_planned_source_ceiling_and_court_ceiling_use_different_signed_caps ... ok
+test rows::tests::core_bundle_signature_failure_and_cross_row_link_failure_are_distinct ... ok
+test rows::tests::actual_core_signed_bundle_is_data_and_leaves_every_native_owner_missing ... ok
+test rows::tests::missing_positive_witness_or_coverage_is_not_a_completed_local_check ... ok
+test rows::tests::witness_authentication_and_coverage_binding_are_checked_by_shared_validator ... ok
+
+test result: ok. 44 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+

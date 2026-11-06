@@ -1,0 +1,26 @@
+{
+  "source_head_before_new_build": "0df5f3cca",
+  "scope": "Preserve previous SDK 16MiB oracle/standard-stack failure binary and old wide Node Core binary before Cargo may replace them. No deletion. No new test success.",
+  "files": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/runtime_pack-066d0b88b30f6893",
+      "bytes": 177603680,
+      "sha256": "bd0712abe66d232d9bd520a26319cbb61e03777ca63fb3f85c7395d88314202b",
+      "mtime_ns": 1793467019142783846,
+      "backup": "/Users/wata/.codex/worktrees/positive-court-a0/target/stack-before-0df5-preserved-20261101/runtime_pack-066d0b88b30f6893.gz",
+      "backup_bytes": 50646248,
+      "backup_sha256": "80ba4c85f9ef2aaa755fd565dbf014016b66b96400fa86c9048dabbaa0ca1f8f",
+      "decompressed_verified": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6",
+      "bytes": 238458560,
+      "sha256": "15c79b9366896cc5be494f7abfb8f89f3a038f7b39dafd0915ac5c688c23219d",
+      "mtime_ns": 1793468750222596568,
+      "backup": "/Users/wata/.codex/worktrees/positive-court-a0/target/stack-before-0df5-preserved-20261101/kaspa_consensus_core-5b3fb8e6accaaca6.gz",
+      "backup_bytes": 68358222,
+      "backup_sha256": "e7e3d0e45147a17132880e410a588f276d1f63662048b194c4ce9b81b22b0ffb",
+      "decompressed_verified": true
+    }
+  ]
+}

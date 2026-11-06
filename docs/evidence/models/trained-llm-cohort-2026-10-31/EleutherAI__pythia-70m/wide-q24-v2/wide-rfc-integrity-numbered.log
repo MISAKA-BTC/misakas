@@ -1,0 +1,2 @@
+PASS: 15 active RFC books; 41 unchanged v1 sources; 21729 source lines assigned exactly once; 89 source fragments; 374 newly authored links exist.
+Scope: documentation integrity only. No Rust build, node execution, or runtime activation was performed.

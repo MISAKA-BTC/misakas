@@ -46,7 +46,7 @@ FRAG = f'{Q}::PROTECTED_FRAGMENT_BYTES_V11'
 
 
 def L(n):
-    return f'k.len()=={n}'
+    return 'k.is_empty()' if n == 0 else f'k.len()=={n}'
 
 
 def P(n, b0):

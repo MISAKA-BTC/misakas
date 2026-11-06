@@ -1,0 +1,4139 @@
+diff --git a/consensus/core/src/palw_tir_step_v1.rs b/consensus/core/src/palw_tir_step_v1.rs
+--- a/consensus/core/src/palw_tir_step_v1.rs
++++ b/consensus/core/src/palw_tir_step_v1.rs
+@@ -43,8 +43,13 @@
+ use misaka_palw_tir::types::{DType, Dim};
+ use misaka_palw_tir::validate::ProgramInfo;
+ 
++/// Owner-local typed geometry request census; no binding or native authority.
++mod local_geometry_quote_v1;
+ /// Explicit mixed-width step construction; legacy entry points remain four-byte-only.
+ pub mod wide_v2;
++pub use local_geometry_quote_v1::quote_local_tir_step_space_additional_v1;
++mod local_space_diagnostics_v1;
++pub use local_space_diagnostics_v1::{LocalTirStepSpaceFixedRequestsV1, quote_local_tir_step_space_fixed_requests_v1};
+ pub use wide_v2::{
+     PALW_TIR_STEP_LEAF_VERSION_V2, PalwTirStepLegBuilderV2, PalwTirStepSpaceV2, PalwTirVerifiedBindingV2, palw_tir_leaf_preimage_v2,
+     palw_tir_leaf_values_v2, verify_tir_binding_v2,
+diff --git a/consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1.rs b/consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1.rs
+@@ -0,0 +1,53 @@
++//! Additive owner-local access to the EXISTING typed StepSpace Vec census.
++//! No decoder, layout/profile decision, native admission, lease or new recipe.
++
++use super::step_space_requests_from_counts_v1;
++use crate::palw_native_resource_v1::{LocalSourceProgramOwnerV1, SourceProgramLocalErrorV1, require_source_program_local_profile_v1};
++use misaka_palw_tir::program::StateKind;
++
++/// Additional construction/retained StepSpace Vec requests for THIS immutable
++/// canonical/NF Source. Counts only B block lengths and S state declarations;
++/// callers must precharge those local visits on every attempted/retried quote.
++/// The success path allocates no collection, program encoding or diagnostic.
++///
++/// Acquire the whole configured metadata owner guard BEFORE calling this helper.
++/// Existing private arithmetic may build a bounded NativeCoverage diagnostic on
++/// overflow; it is dropped here and only the fixed public error escapes. This
++/// local facade does not change the old private/native error order or semantics.
++///
++/// Does NOT include the Space root, original Source owner, a fresh decoded
++/// program/ProgramInfo/validation pass, layout/class copies, header, compiler,
++/// hash/error scratch, context/prompt or caller aliases. In particular, never
++/// replace complete Source admission with Source.quote().owner_requests(): that
++/// getter is ONLY the struct delta. Retain every co-live owner and host guard.
++///
++/// This is the same numeric census for narrow/wide geometry storage. It neither
++/// accepts a profile nor bypasses the unchanged V1/strict-V2 constructors.
++/// A returned u64 is logical data, never a capability or physical RSS bound.
++pub fn quote_local_tir_step_space_additional_v1(source: &LocalSourceProgramOwnerV1) -> Result<u64, SourceProgramLocalErrorV1> {
++    require_source_program_local_profile_v1()?;
++    let count = |n: usize| u64::try_from(n).map_err(|_| SourceProgramLocalErrorV1::ArithmeticOverflow);
++    let p = source.program();
++    let blocks = count(p.blocks.len())?;
++    let nodes = p.blocks.iter().try_fold(0u64, |total, block| {
++        total.checked_add(count(block.nodes.len())?).ok_or(SourceProgramLocalErrorV1::ArithmeticOverflow)
++    })?;
++    let layers = count(p.schedule.layers.len())?;
++    let (mut fixed_global, mut fixed_layer, mut hist_global, mut hist_layer) = (0u64, 0u64, 0u64, 0u64);
++    for state in &p.states {
++        let slot = match (state.kind, state.per_layer) {
++            (StateKind::Fixed { .. }, false) => &mut fixed_global,
++            (StateKind::Fixed { .. }, true) => &mut fixed_layer,
++            (StateKind::Hist { .. }, false) => &mut hist_global,
++            (StateKind::Hist { .. }, true) => &mut hist_layer,
++        };
++        *slot = slot.checked_add(1).ok_or(SourceProgramLocalErrorV1::ArithmeticOverflow)?;
++    }
++    step_space_requests_from_counts_v1(blocks, nodes, layers, fixed_global, fixed_layer, hist_global, hist_layer).map_err(|error| {
++        drop(error);
++        SourceProgramLocalErrorV1::ArithmeticOverflow
++    })
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1/tests.rs b/consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1/tests.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/src/palw_tir_step_v1/local_geometry_quote_v1/tests.rs
+@@ -0,0 +1,40 @@
++//! Actual metadata capacity regression, not a model-execution/host-lease test.
++use super::quote_local_tir_step_space_additional_v1;
++use crate::palw_tir_step_v1::{BlockSpaceV1, CommitNodeV1, PalwTirStateInstanceV1, PalwTirStepSpaceV1, PalwTirStepSpaceV2};
++#[path = "../../../tests/common/local_step_geometry_fixture_v1.rs"]
++mod fixture;
++use crate as geometry_core;
++#[test]
++fn same_source_mixed_fixed_hist_and_repeated_layer_geometry_fits_actual_capacities() {
++    for wide in [false, true] {
++        for layers in [1usize, 3] {
++            let class = fixture::class(wide, layers);
++            let source = fixture::source(&class);
++            let quote = quote_local_tir_step_space_additional_v1(&source).unwrap();
++            if wide {
++                let strict = PalwTirStepSpaceV2::new(&class).unwrap();
++                assert_eq!(strict.program(), source.program());
++                assert_eq!(strict.fixed_instances().len(), 1 + layers);
++                assert_eq!(strict.hist_instances().len(), 1 + layers);
++            } else {
++                let strict = PalwTirStepSpaceV1::new(&class).unwrap();
++                assert_eq!(&strict.program, source.program());
++            }
++            // Inspect EXACTLY the private shared geometry backend used by BOTH
++            // constructors. This test-private call is not a V1 wide acceptance
++            // route, execution grant or replacement ProgramInfo authority.
++            let program = source.program().clone();
++            let info = misaka_palw_tir::validate::validate(&program).unwrap();
++            let space = PalwTirStepSpaceV1::from_program_geometry(program, info, class.layout.clone()).unwrap();
++            assert_eq!(space.fixed_instances().len(), 1 + layers);
++            assert_eq!(space.hist_instances().len(), 1 + layers);
++            assert_eq!(space.occurrences().len(), layers + 2);
++            let mut actual = space.blocks.capacity() * std::mem::size_of::<BlockSpaceV1>();
++            actual += space.blocks.iter().map(|b| b.commits.capacity() * std::mem::size_of::<CommitNodeV1>()).sum::<usize>();
++            actual += space.occurrences.capacity() * std::mem::size_of::<(u8, Option<u16>)>();
++            actual += space.slot_bases.capacity() * std::mem::size_of::<u32>();
++            actual += (space.fixed.capacity() + space.hist.capacity()) * std::mem::size_of::<PalwTirStateInstanceV1>();
++            assert!(quote >= actual as u64, "wide={wide} layers={layers} quote={quote} actual={actual}");
++        }
++    }
++}
+diff --git a/consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1.rs b/consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1.rs
+@@ -0,0 +1,141 @@
++//! Finite typed roots/diagnostics for existing local V1/strict-V2 constructors.
++//! No constructor, decoder, acceptance decision, host lease or native capability.
++use super::{BlockSpaceV1, CommitNodeV1, PalwTirStateInstanceV1, PalwTirStepError, PalwTirStepSpaceV1, PalwTirStepSpaceV2};
++use crate::palw_native_resource_v1::{
++    NativeCoverageV1, SourceProgramLocalErrorV1, TirNativeRequestsV1, growing_vec_request_capacity_v1,
++    require_source_program_local_profile_v1,
++};
++use std::{any::type_name, mem::size_of};
++
++/// Logical requested objects only, not complete compiler stack frames or RSS.
++/// Root bytes and diagnostic bytes are disjoint. Diagnostic result envelopes
++/// deliberately also count complete result roots, even when that duplicates a
++/// constructor destination: explicit conservative overlap, not hidden slack.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct LocalTirStepSpaceFixedRequestsV1 {
++    pub space_root_bytes: u64,
++    pub constructor_diagnostic_bytes: u64,
++    pub coverage_diagnostic_bytes: u64,
++    pub diagnostic_peak_bytes: u64,
++}
++type E = SourceProgramLocalErrorV1;
++fn add(a: u64, b: u64) -> Result<u64, E> {
++    a.checked_add(b).ok_or(E::ArithmeticOverflow)
++}
++fn request(n: usize) -> Result<u64, E> {
++    growing_vec_request_capacity_v1::<u8>(u64::try_from(n).map_err(|_| E::ArithmeticOverflow)?).ok_or(E::ArithmeticOverflow)
++}
++fn decimal_digits(mut n: u64) -> usize {
++    let mut digits = 1;
++    while n >= 10 {
++        n /= 10;
++        digits += 1;
++    }
++    digits
++}
++fn coverage_pair<T>(component: &'static str) -> Result<u64, E> {
++    add(request(component.len())?, request(type_name::<T>().len())?)
++}
++
++/// Call only under the already acquired WHOLE configured metadata owner guard.
++/// Success and fixed public errors allocate no heap. Exact private native type
++/// names are borrowed here; SDK callers need not copy or guess their lengths.
++///
++/// This augments geometry-only quote_local_tir_step_space_additional_v1. It
++/// does NOT include geometry Vecs, layout/program/ProgramInfo allocations,
++/// original Source, class/header/compiler/context/prompt or caller error maps.
++/// The complete Source admitted envelope must separately coexist: its FOUR
++/// named diagnostic writers already cover decode/NF/validation error text and
++/// their Program-prefix conversion. We add constructor-only layout/literal
++/// text and private NativeCoverage overflow strings here. No source byte-size
++/// multiplier or Source.quote().owner_requests() floor substitutes for that S.
++///
++/// Bounds below apply to canonical/NF Source programs (MAX_BLOCKS/NODES/STATES)
++/// and the unchanged existing constructors/private geometry arithmetic only.
++/// Allocator metadata, physical quotas and arbitrary retained errors/aliases
++/// remain external. The result is data and grants no constructor/native right.
++pub fn quote_local_tir_step_space_fixed_requests_v1() -> Result<LocalTirStepSpaceFixedRequestsV1, E> {
++    require_source_program_local_profile_v1()?;
++    // Actual constructor literals, independently maintained from layout rules.
++    let literals = [
++        "wide Q24 requires an explicit v2 step space; legacy step leaves are four-byte lanes",
++        "max_context must be in [1, history_bound]",
++        "the checkpoint interval must be at least 1",
++        "h_tile must be a power of two in [1, 4096]",
++        "the post block writes state: it runs only at positions whose logits are consumed",
++        "under the tiled logits scheme the logits node's tile length divides the scheme's 4,096 lanes",
++        "more commit tiles than committed nodes",
++        "one state tile per state declaration",
++        "unsupported class version",
++        "class exceeds the existing program/layout format bounds",
++        "v2 steps require the exact wide Q24 scheme",
++        "wide logits must be the committed i64 final post node",
++        "fewer commit tiles than committed nodes",
++        "validation metadata does not match the actual program",
++    ];
++    let literal = literals.iter().map(|s| s.len()).max().unwrap_or(0);
++    use misaka_palw_tir::program::{MAX_BLOCKS, MAX_NODES_PER_BLOCK, MAX_STATES};
++    // Literal fragments + actual decimal maxima; no format!/String allocation.
++    let block = decimal_digits((MAX_BLOCKS - 1) as u64);
++    let node = decimal_digits((MAX_NODES_PER_BLOCK - 1) as u64);
++    let state = decimal_digits((MAX_STATES - 1) as u64);
++    let tile = decimal_digits(u64::from(u32::MAX));
++    let formatted = [
++        "layout version  is not ".len() + decimal_digits(u64::from(u16::MAX)) + 1,
++        "block  node : tile_len  is outside [4, 65536]".len() + block + node + tile,
++        "state : a checkpoint tile of  lanes is outside [4, 65536]".len() + state + tile,
++        "history : h_tile ×  lanes must be in [1, 65536]".len() + state + tile,
++    ]
++    .into_iter()
++    .max()
++    .unwrap_or(0);
++    // Pinned Rust formatting initial estimate <=2*total text; G includes checked
++    // geometric growth. Static String::from needs at most its literal length.
++    let constructor_payload = (literal as u64).max(request(formatted.checked_mul(2).ok_or(E::ArithmeticOverflow)?)?);
++    let constructor_roots = [
++        size_of::<PalwTirStepError>(),
++        size_of::<String>(),
++        size_of::<Result<PalwTirStepSpaceV1, PalwTirStepError>>(),
++        size_of::<Result<PalwTirStepSpaceV2, PalwTirStepError>>(),
++    ]
++    .into_iter()
++    .try_fold(0, |n, v| add(n, v as u64))?;
++    // Superset of the reachable existing geometry-overflow (component,T) pairs;
++    // only one is live. Sum roots but MAX mutually exclusive string payloads.
++    let coverage_payload = [
++        coverage_pair::<PalwTirStepSpaceV1>("StepSpace structural cardinality")?,
++        coverage_pair::<BlockSpaceV1>("TIR concrete array request")?,
++        coverage_pair::<CommitNodeV1>("TIR concrete array request")?,
++        coverage_pair::<CommitNodeV1>("TIR growing Vec capacity")?,
++        coverage_pair::<(u8, Option<u16>)>("TIR concrete array request")?,
++        coverage_pair::<u32>("TIR concrete array request")?,
++        coverage_pair::<u32>("TIR growing Vec capacity")?,
++        coverage_pair::<PalwTirStateInstanceV1>("TIR concrete array request")?,
++        coverage_pair::<PalwTirStateInstanceV1>("TIR growing Vec capacity")?,
++        coverage_pair::<Option<u16>>("TIR concrete array request")?,
++        coverage_pair::<Option<u16>>("TIR growing Vec capacity")?,
++        coverage_pair::<TirNativeRequestsV1>("coexisting TIR typed requests")?,
++    ]
++    .into_iter()
++    .max()
++    .unwrap_or(0);
++    let coverage_roots = [
++        size_of::<NativeCoverageV1>(),
++        2 * size_of::<String>(),
++        size_of::<Result<u64, NativeCoverageV1>>(),
++        size_of::<Result<u64, E>>(),
++    ]
++    .into_iter()
++    .try_fold(0, |n, v| add(n, v as u64))?;
++    let constructor_diagnostic_bytes = add(constructor_roots, constructor_payload)?;
++    let coverage_diagnostic_bytes = add(coverage_roots, coverage_payload)?;
++    Ok(LocalTirStepSpaceFixedRequestsV1 {
++        space_root_bytes: size_of::<PalwTirStepSpaceV1>().max(size_of::<PalwTirStepSpaceV2>()) as u64,
++        constructor_diagnostic_bytes,
++        coverage_diagnostic_bytes,
++        diagnostic_peak_bytes: constructor_diagnostic_bytes.max(coverage_diagnostic_bytes),
++    })
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1/tests.rs b/consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1/tests.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/src/palw_tir_step_v1/local_space_diagnostics_v1/tests.rs
+@@ -0,0 +1,47 @@
++//! Actual constructor errors, not a second spelling of the census formula.
++use super::*;
++use crate as geometry_core;
++#[path = "../../../tests/common/local_step_geometry_fixture_v1.rs"]
++mod fixture;
++
++#[test]
++fn constructor_diagnostics_cover_actual_narrow_and_wide_error_allocations() {
++    let q = quote_local_tir_step_space_fixed_requests_v1().unwrap();
++    for wide in [false, true] {
++        for invalid in 0..4 {
++            let mut class = fixture::class(wide, 3);
++            match invalid {
++                0 => class.layout.version = u16::MAX,
++                1 => class.layout.commit_tiles[0] = u32::MAX,
++                2 => class.layout.state_tiles[0] = u32::MAX,
++                3 => class.layout.state_tiles[1] = u32::MAX,
++                _ => unreachable!(),
++            }
++            // Count the original Result root conservatively alongside the actual
++            // retained error String. No ingress/authority or execution implied.
++            let (error, result_root) = if wide {
++                let result = PalwTirStepSpaceV2::new(&class);
++                (result.unwrap_err(), size_of::<Result<PalwTirStepSpaceV2, PalwTirStepError>>())
++            } else {
++                let result = PalwTirStepSpaceV1::new(&class);
++                (result.unwrap_err(), size_of::<Result<PalwTirStepSpaceV1, PalwTirStepError>>())
++            };
++            let PalwTirStepError::Layout(ref text) = error else { panic!("fixture must reach the existing layout error") };
++            let observed = (size_of::<PalwTirStepError>() + result_root + text.capacity()) as u64;
++            assert!(observed <= q.constructor_diagnostic_bytes, "actual constructor diagnostic exceeds its named quote");
++        }
++    }
++}
++
++#[test]
++fn private_native_coverage_diagnostics_fit_without_sdk_type_name_copies() {
++    let q = quote_local_tir_step_space_fixed_requests_v1().unwrap();
++    // Exercise the actual existing private helper failure, with a cardinality
++    // deliberately outside admitted Source. This tests diagnostic storage only.
++    let error = super::super::step_space_requests_from_counts_v1(u64::MAX, u64::MAX, u64::MAX, 1, 1, 1, 1).unwrap_err();
++    let NativeCoverageV1::Overflow { component, native_type } = &error else {
++        panic!("expected an actual private overflow diagnostic")
++    };
++    let observed = (size_of::<NativeCoverageV1>() + component.capacity() + native_type.capacity()) as u64;
++    assert!(observed <= q.coverage_diagnostic_bytes);
++}
+diff --git a/consensus/core/tests/common/local_step_geometry_fixture_v1.rs b/consensus/core/tests/common/local_step_geometry_fixture_v1.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/tests/common/local_step_geometry_fixture_v1.rs
+@@ -0,0 +1,72 @@
++//! Typed metadata fixture only; no weights, model execution or trace binding.
++use super::geometry_core;
++use geometry_core::{
++    Hash64,
++    palw_native_resource_v1::{
++        LocalScanWorkBudgetV1, LocalSourceProgramOwnerV1, SourceProgramLocalLimitsV1, scan_source_program_local_v1,
++    },
++    palw_tir_class_v1::{PalwTirClassV1, PalwTirLayoutV1},
++};
++use misaka_palw_tir::{
++    DType, Ref, TensorType,
++    builder::ProgramBuilder,
++    program::{HISTORY_BOUND_V1_HELD, LOGITS_I64_Q24_SCHEME_V2, MAX_PROGRAM_BYTES},
++};
++pub fn class(wide: bool, layers: usize) -> PalwTirClassV1 {
++    assert!(layers > 0);
++    let mut b = ProgramBuilder::new(4, HISTORY_BOUND_V1_HELD);
++    let seed = b.konst(DType::I32, &[4], &[1, 2, 3, 4]);
++    let fixed = b.fixed_state("global.fixed", DType::I32, &[4], -10, 10, false);
++    let hist = b.hist_state("global.hist", DType::I32, &[4], 8, false);
++    let per_fixed = b.fixed_state("layer.fixed", DType::I32, &[4], -10, 10, true);
++    let per_hist = b.hist_state("layer.hist", DType::I32, &[4], 8, true);
++    let mut pre = b.block("pre", vec![]);
++    let value = pre.state_write(fixed, seed);
++    pre.commit(value);
++    let history = pre.hist_append(hist, value);
++    pre.commit(history);
++    let pre = pre.finish(&[value]);
++    let mut layer = b.block("layer", vec![TensorType::fixed(DType::I32, &[4])]);
++    let value = layer.state_write(per_fixed, Ref::CarryIn(0));
++    layer.commit(value);
++    let history = layer.hist_append(per_hist, value);
++    layer.commit(history);
++    let layer = layer.finish(&[value]);
++    let mut post = b.block("post", vec![TensorType::fixed(DType::I32, &[4])]);
++    let logits = post.cast(Ref::CarryIn(0), if wide { DType::I64 } else { DType::I32 });
++    post.commit(logits);
++    let Ref::Node(logits) = logits else { unreachable!() };
++    let post = post.finish(&[]);
++    let mut program = b.finish(pre, vec![layer; layers], post, logits);
++    program.logits_scheme_id =
++        if wide { LOGITS_I64_Q24_SCHEME_V2 } else { geometry_core::palw_step_refute::tiled_logits_scheme_id_v1().as_bytes() };
++    PalwTirClassV1 {
++        version: 1,
++        program: program.encode(),
++        tokenizer_id: Hash64::from_u64_word(18),
++        layout: PalwTirLayoutV1 {
++            version: 1,
++            max_context: 64,
++            checkpoint_interval: 8,
++            h_tile: 2,
++            commit_tiles: vec![4; 5],
++            state_tiles: vec![4; 4],
++        },
++    }
++}
++pub fn source(class: &PalwTirClassV1) -> LocalSourceProgramOwnerV1 {
++    let mut budget = LocalScanWorkBudgetV1::new(1 << 40).unwrap();
++    scan_source_program_local_v1(
++        &class.program,
++        SourceProgramLocalLimitsV1 {
++            max_program_bytes: MAX_PROGRAM_BYTES as u64,
++            max_scan_steps: 1 << 32,
++            max_nf_items: 1 << 32,
++            max_native_requests: 1 << 40,
++        },
++        &mut budget,
++    )
++    .expect("requires actual audited Source build; unsupported does not count as geometry success")
++    .decode()
++    .unwrap()
++}
+diff --git a/consensus/core/tests/local_step_geometry_quote_noalloc_v1.rs b/consensus/core/tests/local_step_geometry_quote_noalloc_v1.rs
+new file mode 100644
+--- /dev/null
++++ b/consensus/core/tests/local_step_geometry_quote_noalloc_v1.rs
+@@ -0,0 +1,83 @@
++//! Isolated allocator boundary: setup is excluded, successful getter only.
++//! Logical request census test; no model execution or host-reservation claim.
++use kaspa_consensus_core::palw_tir_step_v1::quote_local_tir_step_space_additional_v1;
++use std::{
++    alloc::{GlobalAlloc, Layout, System},
++    cell::Cell,
++};
++#[path = "common/local_step_geometry_fixture_v1.rs"]
++mod fixture;
++use kaspa_consensus_core as geometry_core;
++struct Probe;
++thread_local! {static ACTIVE:Cell<bool>=const{Cell::new(false)};static CALLS:Cell<usize>=const{Cell::new(0)};}
++fn count() {
++    let _ = ACTIVE.try_with(|a| {
++        if a.get() {
++            let _ = CALLS.try_with(|n| n.set(n.get() + 1));
++        }
++    });
++}
++// SAFETY: all pointers/layouts are forwarded unchanged to System; only
++// thread-local scalar counters are updated, without allocating.
++unsafe impl GlobalAlloc for Probe {
++    unsafe fn alloc(&self, l: Layout) -> *mut u8 {
++        count();
++        // SAFETY: the original valid layout is forwarded unchanged.
++        unsafe { System.alloc(l) }
++    }
++    unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
++        count();
++        // SAFETY: the original valid layout is forwarded unchanged.
++        unsafe { System.alloc_zeroed(l) }
++    }
++    unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
++        // SAFETY: the original allocated pointer/matching layout are forwarded.
++        unsafe { System.dealloc(p, l) }
++    }
++    unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
++        count();
++        // SAFETY: the original pointer/layout and requested new size are forwarded.
++        unsafe { System.realloc(p, l, n) }
++    }
++}
++#[global_allocator]
++static ALLOCATOR: Probe = Probe;
++fn allocations<T>(run: impl FnOnce() -> T) -> (T, usize) {
++    ACTIVE.with(|a| assert!(!a.get()));
++    CALLS.with(|n| n.set(0));
++    struct Stop;
++    impl Drop for Stop {
++        fn drop(&mut self) {
++            ACTIVE.with(|a| a.set(false));
++        }
++    }
++    ACTIVE.with(|a| a.set(true));
++    let stop = Stop;
++    let value = run();
++    let calls = CALLS.with(Cell::get);
++    drop(stop);
++    (value, calls)
++}
++#[test]
++fn successful_immutable_source_geometry_quote_allocates_zero_after_prepared_setup() {
++    let (sentinel, calls) = allocations(|| std::hint::black_box(vec![0u8; 128]));
++    assert!(calls > 0);
++    drop(sentinel);
++    for wide in [false, true] {
++        let class = fixture::class(wide, 3);
++        let source = fixture::source(&class);
++        let expected = quote_local_tir_step_space_additional_v1(&source).unwrap();
++        let (actual, calls) = allocations(|| quote_local_tir_step_space_additional_v1(std::hint::black_box(&source)));
++        assert_eq!(calls, 0);
++        assert_eq!(actual.unwrap(), expected);
++    }
++}
++
++#[test]
++fn successful_fixed_space_diagnostic_quote_allocates_zero() {
++    use kaspa_consensus_core::palw_tir_step_v1::quote_local_tir_step_space_fixed_requests_v1;
++    let expected = quote_local_tir_step_space_fixed_requests_v1().unwrap();
++    let (actual, calls) = allocations(quote_local_tir_step_space_fixed_requests_v1);
++    assert_eq!(calls, 0);
++    assert_eq!(actual.unwrap(), expected);
++}
+diff --git a/misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs
+--- a/misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs
++++ b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2.rs
+@@ -2,6 +2,8 @@
+ //! No loader startup, program decoding/validation/compile, unsafe/mmap/lazy data,
+ //! model qualification, native activation or computation-credit decision.
+ //! Uses the shared public Vec policy from Core9c010109d.
++/// Local ordinary forward: no trace binding or native authority.
++pub mod forward;
+ use super::memory::{self, TirMemoryLeaseV1, TirMemoryReserverV1};
+ use crate::{Buf, ParamData, Slice, TirParams, TirPlan, params::quote_owned_params_table_v2};
+ use kaspa_consensus_core::{
+@@ -136,13 +138,19 @@
+         if !cfg!(target_pointer_width = "64") {
+             return Err(E::UnsupportedPolicy);
+         }
+-        let p = inputs.checked.program();
++        self.start_checked(inputs.checked)
++    }
++    fn start_checked(&mut self, checked: &PalwTirCheckedHeaderV1<'_>) -> Result<u64, E> {
++        if !cfg!(target_pointer_width = "64") {
++            return Err(E::UnsupportedPolicy);
++        }
++        let p = checked.program();
+         // O(1) format cardinalities precede any nested scans. Symbolic metadata
+         // work counts conservative reference/tree/param×layer visits, not cycles.
+         let refs = mul(mul(n(p.blocks.len())?, MAX_NODES_PER_BLOCK as u64)?, MAX_NODE_INPUTS as u64)?;
+         let joins = mul(mul(n(p.params.len())?, add(n(p.schedule.layers.len())?, 1)?)?, add(refs, 1)?)?;
+         let work = add(mul(mul(refs, add(refs, 1)?)?, 2)?, mul(joins, 3)?)?;
+-        let work = add(work, add(n(inputs.checked.header().program.len())?, n(inputs.checked.header().tensors.len())?)?)?;
++        let work = add(work, add(n(checked.header().program.len())?, n(checked.header().tensors.len())?)?)?;
+         let attempts = add(self.usage.attempts, 1)?;
+         let total = add(self.usage.work, work)?;
+         limit(attempts, self.limits.max_attempts)?;
+@@ -174,7 +182,10 @@
+ }
+ 
+ fn quote(inputs: OwnedParamInputsV2<'_>, l: OwnedParamLimitsV2, metadata_work: u64) -> Result<OwnedParamQuoteV2, E> {
+-    let p = inputs.checked.program();
++    quote_checked(inputs.checked, l, metadata_work)
++}
++fn quote_checked(checked: &PalwTirCheckedHeaderV1<'_>, l: OwnedParamLimitsV2, metadata_work: u64) -> Result<OwnedParamQuoteV2, E> {
++    let p = checked.program();
+     let table = quote_owned_params_table_v2(p).map_err(|_| E::Overflow)?;
+     let mut refs = 0;
+     for block in &p.blocks {
+@@ -203,7 +214,7 @@
+     let mut chunk = 0;
+     let mut elements = 0;
+     let mut hash_headers = 0;
+-    for e in &inputs.checked.header().tensors {
++    for e in &checked.header().tensors {
+         let d = p.params.get(e.param as usize).ok_or(E::Geometry)?;
+         if d.dtype == DType::I128 {
+             return Err(E::Geometry);
+@@ -429,22 +440,33 @@
+         ),
+         None => None,
+     };
+-    let mut params = TirParams::new(inputs.plan);
++    let (params, root) = read_owned_payload_v2(reader, inputs.checked, inputs.plan, inputs.expected.artifact_root, q)?;
++    Ok(OwnedArtifactParamsV2 { params, inputs, root, layout_origin, quote: q, _memory: lease })
++}
++// Shared same-descriptor payload identity component. Only children/old loader
++// call this AFTER literal association checks and their whole-operation lease.
++// This helper constructs no trace/root placeholders or native qualification.
++fn read_owned_payload_v2<R: Read + Seek>(
++    reader: &mut R,
++    checked: &PalwTirCheckedHeaderV1<'_>,
++    plan: &TirPlan,
++    expected_artifact: Hash64,
++    q: OwnedParamQuoteV2,
++) -> Result<(TirParams<'static>, Hash64), E> {
++    let mut params = TirParams::new(plan);
+     let mut chunk = exact::<u8>(usize::try_from(q.chunk_bytes).map_err(|_| E::Overflow)?)?;
+     chunk.resize(q.chunk_bytes as usize, 0);
+-    for entry in &inputs.checked.header().tensors {
+-        let d = &inputs.checked.program().params[entry.param as usize];
++    for entry in &checked.header().tensors {
++        let d = &checked.program().params[entry.param as usize];
+         let count = usize::try_from(entry.bytes / (d.dtype.width() as u64)).map_err(|_| E::Overflow)?;
+         reader.seek(SeekFrom::Start(entry.offset)).map_err(|_| E::Read)?;
+         let buf = read_native(reader, d.dtype, count, &mut chunk)?;
+-        params
+-            .insert(inputs.plan, entry.param, entry.layer, ParamData::from_buf(buf).map_err(|_| E::Geometry)?)
+-            .map_err(|_| E::Geometry)?;
+-    }
+-    params.check_complete(inputs.plan).map_err(|_| E::Geometry)?;
++        params.insert(plan, entry.param, entry.layer, ParamData::from_buf(buf).map_err(|_| E::Geometry)?).map_err(|_| E::Geometry)?;
++    }
++    params.check_complete(plan).map_err(|_| E::Geometry)?;
+     let mut frontier = PalwArtifactMerkleFrontierV1::new();
+     let mut failed = None;
+-    palw_tir_visit_inventory_rows_v1(inputs.checked.program(), &mut |row| {
++    palw_tir_visit_inventory_rows_v1(checked.program(), &mut |row| {
+         if failed.is_some() {
+             return;
+         }
+@@ -452,7 +474,7 @@
+             let data = params.get(row.param, row.layer).ok_or(E::Geometry)?;
+             encode_piece(data, row.row_start as usize, row.len as usize, &mut chunk)?;
+             frontier.push(artifact_leaf_parts_v1(
+-                &inputs.checked.program().params[row.param as usize].name,
++                &checked.program().params[row.param as usize].name,
+                 row.layer,
+                 row.row_start,
+                 &chunk[..row.len as usize],
+@@ -471,10 +493,10 @@
+         return Err(E::Inventory);
+     }
+     let root = frontier.root().ok_or(E::Inventory)?;
+-    if root != inputs.expected.artifact_root {
++    if root != expected_artifact {
+         return Err(E::Root);
+     }
+-    Ok(OwnedArtifactParamsV2 { params, inputs, root, layout_origin, quote: q, _memory: lease })
++    Ok((params, root))
+ }
+ /// Convenience for the existing optional global host-reserver, with no change
+ /// to its flags or admission semantics. No guard is fabricated when absent.
+diff --git a/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward.rs b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward.rs
+@@ -0,0 +1,730 @@
++//! Profile-bound local ordinary CPU output (flat/tiled I32, strict wide I64),
++//! with NO trace binding or native qualification.
++//! Existing source/compiler/header owners stay independently reserved by borrow.
++//! No wire/domain/operation, fees, result admission, saved pass or activation.
++/// Same-owned-payload dense comparison; no native authority.
++pub mod measurement;
++/// Whole same-descriptor trace-free metadata owner; no native authority.
++pub mod metadata;
++use super::*;
++use crate::{Elem, NoSink, TirExecutor, plan::LocalCompiledTirPlanV2, with_slice};
++use kaspa_consensus_core::{
++    palw_attempt_rules_v1::palw_attempt_output_root_v1,
++    palw_decode_select_v2::PalwDecodeSamplingV2,
++    palw_logits_q24_v2 as wide,
++    palw_native_resource_v1::LocalSourceProgramOwnerV1,
++    palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_match_v1},
++    palw_step_refute::{base0_decode_token_select_v1, flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1},
++    palw_tir_class_v1::{PalwTirClassV1, PalwTirLayoutV1},
++    palw_tir_step_v1::{PalwTirJobShapeV1, PalwTirStepSpaceV1, PalwTirStepSpaceV2},
++    palw_v2::PALW_V2_MAX_NETWORK_ID_BYTES,
++};
++use misaka_palw_tir::{
++    admit::node_cost,
++    program::{MAX_BLOCKS, MAX_PROGRAM_BYTES, MAX_STATES},
++};
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum LocalForwardErrorV2 {
++    Overflow,
++    Limit,
++    Pins,
++    Params,
++    Guard,
++    Execute,
++    Output,
++    UnsupportedProfile,
++}
++use LocalForwardErrorV2 as F;
++/// Operational provider quote only. Unknown retention/scratch rejects before
++/// any new owner or payload IO; backing aliases/cache/OS deadlines stay external.
++pub trait LocalForwardReaderV2: Read + Seek {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        None
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        None
++    }
++}
++impl LocalForwardReaderV2 for std::fs::File {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        Some(size_of::<Self>() as u64)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++impl LocalForwardReaderV2 for std::io::Cursor<Vec<u8>> {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        (size_of::<Self>() as u64).checked_add(self.get_ref().capacity() as u64)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++struct BoundedProvider<'a, R> {
++    inner: &'a mut R,
++    left: u64,
++}
++impl<R> BoundedProvider<'_, R> {
++    fn call(&mut self) -> std::io::Result<()> {
++        if self.left == 0 {
++            return Err(std::io::ErrorKind::Other.into());
++        }
++        self.left -= 1;
++        Ok(())
++    }
++}
++impl<R: Read> Read for BoundedProvider<'_, R> {
++    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
++        self.call()?;
++        self.inner.read(out)
++    }
++}
++impl<R: Seek> Seek for BoundedProvider<'_, R> {
++    fn seek(&mut self, p: SeekFrom) -> std::io::Result<u64> {
++        self.call()?;
++        self.inner.seek(p)
++    }
++}
++fn plus(a: u64, b: u64) -> Result<u64, F> {
++    a.checked_add(b).ok_or(F::Overflow)
++}
++fn times(a: u64, b: u64) -> Result<u64, F> {
++    a.checked_mul(b).ok_or(F::Overflow)
++}
++fn count(n: usize) -> Result<u64, F> {
++    u64::try_from(n).map_err(|_| F::Overflow)
++}
++fn cap(n: u64, max: u64) -> Result<(), F> {
++    if n > max { Err(F::Limit) } else { Ok(()) }
++}
++fn vec_bytes<T>(n: u64) -> Result<u64, F> {
++    times(growing_vec_request_capacity_v1::<T>(n).ok_or(F::Overflow)?, size_of::<T>() as u64)
++}
++// Existing CanonicalWriter starts with512, then the public growing-Vec envelope.
++fn writer_bytes(n: u64) -> Result<u64, F> {
++    vec_bytes::<u8>(n.max(512))
++}
++/// Inferred from actual class program AND original context, never caller flags.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum LocalForwardProfileV2 {
++    FlatI32,
++    TiledI32,
++    WideI64Q24,
++}
++impl LocalForwardProfileV2 {
++    fn width(self) -> u64 {
++        match self {
++            Self::FlatI32 | Self::TiledI32 => 4,
++            Self::WideI64Q24 => 8,
++        }
++    }
++}
++/// Opaque immutable legacy geometry: public mutable V1 DTO fields are not an
++/// admission source. Construct fresh canonical geometry under the external
++/// WHOLE metadata owner/ticket. No raw mutable accessor/Clone is supplied.
++/// Caller must pre-reserve class decode/validation/layout/geometry/error scratch;
++/// this constructor is data-only and NOT a metadata quote or native capability.
++pub struct LocalNarrowForwardSpaceV2<'a> {
++    inner: PalwTirStepSpaceV1,
++    _ticket: &'a (dyn Send + Sync),
++}
++impl<'a> LocalNarrowForwardSpaceV2<'a> {
++    pub fn new(class: &PalwTirClassV1, ticket: &'a (dyn Send + Sync)) -> Result<Self, F> {
++        if class.version != kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_VERSION_V1
++            || class.program.len() > MAX_PROGRAM_BYTES
++            || class.layout.commit_tiles.len() > MAX_BLOCKS * MAX_NODES_PER_BLOCK
++            || class.layout.state_tiles.len() > MAX_STATES
++        {
++            return Err(F::Pins);
++        }
++        let inner = PalwTirStepSpaceV1::new(class).map_err(|_| F::Pins)?;
++        Ok(Self { inner, _ticket: ticket })
++    }
++    /// Immutable compatibility view; deep copies need separate ownership.
++    pub fn legacy_space(&self) -> &PalwTirStepSpaceV1 {
++        &self.inner
++    }
++}
++#[derive(Clone, Copy)]
++pub enum LocalForwardSpaceV2<'a> {
++    Narrow(&'a LocalNarrowForwardSpaceV2<'a>),
++    Wide(&'a PalwTirStepSpaceV2),
++}
++impl LocalForwardSpaceV2<'_> {
++    fn program(&self) -> &misaka_palw_tir::TirProgramV1 {
++        match self {
++            Self::Narrow(s) => &s.inner.program,
++            Self::Wide(s) => s.program(),
++        }
++    }
++    fn layout(&self) -> &PalwTirLayoutV1 {
++        match self {
++            Self::Narrow(s) => &s.inner.layout,
++            Self::Wide(s) => s.layout(),
++        }
++    }
++    fn occurrences(&self) -> &[(u8, Option<u16>)] {
++        match self {
++            Self::Narrow(s) => s.inner.occurrences(),
++            Self::Wide(s) => s.occurrences(),
++        }
++    }
++    fn window(&self, block: usize) -> u64 {
++        match self {
++            Self::Narrow(s) => u64::from(s.inner.info.blocks[block].window.unwrap_or(1)),
++            Self::Wide(s) => u64::from(s.info().blocks[block].window.unwrap_or(1)),
++        }
++    }
++    fn job_shape(&self, ctx: &PalwJobContextV2) -> Result<PalwTirJobShapeV1, F> {
++        match self {
++            Self::Narrow(s) => s.inner.job_shape(ctx).map_err(|_| F::Pins),
++            Self::Wide(s) => s.job_shape(ctx).map_err(|_| F::Pins),
++        }
++    }
++    fn executor_bytes(&self, plan: &TirPlan, ctx: &PalwJobContextV2) -> Result<u64, F> {
++        match self {
++            Self::Narrow(s) => memory::tir_executor_storage_need_v1(&s.inner, plan, ctx).map_err(|_| F::Limit),
++            Self::Wide(s) => memory::tir_executor_storage_need_wide_q24_v2(s, plan, ctx).map_err(|_| F::Limit),
++        }
++    }
++    pub fn wide_space(&self) -> Option<&PalwTirStepSpaceV2> {
++        match self {
++            Self::Wide(s) => Some(s),
++            _ => None,
++        }
++    }
++}
++fn profile(i: LocalForwardInputsV2<'_>) -> Result<LocalForwardProfileV2, F> {
++    let p = i.source.program();
++    let out = &p.blocks[p.schedule.post as usize].nodes[p.logits as usize].out;
++    let scheme = Hash64::from_bytes(p.logits_scheme_id);
++    let ctx = i.original_context;
++    let (resolved, expected_trace) = if scheme == flat_logits_scheme_id_v1() && out.dtype == DType::I32 {
++        (LocalForwardProfileV2::FlatI32, kaspa_consensus_core::palw_v2::trace_scheme_id_v2())
++    } else if scheme == tiled_logits_scheme_id_v1() && out.dtype == DType::I32 {
++        (LocalForwardProfileV2::TiledI32, tiled_logits_scheme_id_v1())
++    } else if p.wide_logits_q24() && out.dtype == DType::I64 {
++        (LocalForwardProfileV2::WideI64Q24, wide::scheme_id())
++    } else {
++        return Err(F::UnsupportedProfile);
++    };
++    if ctx.version != 2 || ctx.trace_scheme_id != expected_trace {
++        return Err(F::UnsupportedProfile);
++    }
++    if !matches!(ctx.declared_prefill_tokens.checked_add(ctx.exact_decode_tokens),Some(n) if n<=ctx.max_context_tokens) {
++        return Err(F::Pins);
++    }
++    match (resolved, i.space) {
++        (LocalForwardProfileV2::WideI64Q24, LocalForwardSpaceV2::Wide(_)) => {}
++        (LocalForwardProfileV2::FlatI32 | LocalForwardProfileV2::TiledI32, LocalForwardSpaceV2::Narrow(_)) => {}
++        _ => return Err(F::UnsupportedProfile),
++    }
++    Ok(resolved)
++}
++/// No trace/step/execution-tree roots. Expected class/artifact/job MUST come from
++/// independent metadata, not the candidate header. The external ticket is a
++/// trusted CALLER retention contract, not a native capability or authentication.
++/// All header/source/compiler/class/space/context/provider/ticket/error owners
++/// and aliases remain reserved for this whole borrowed lifetime. Same checked FD
++/// and bounded provider internals/stamp checks are caller preconditions.
++#[derive(Clone, Copy)]
++pub struct LocalForwardInputsV2<'a> {
++    pub checked: &'a PalwTirCheckedHeaderV1<'a>,
++    pub source: &'a LocalSourceProgramOwnerV1,
++    pub compiled: &'a LocalCompiledTirPlanV2,
++    pub class: &'a PalwTirClassV1,
++    pub artifact: Hash64,
++    pub expected_class: Hash64,
++    pub space: LocalForwardSpaceV2<'a>,
++    pub original_context: &'a PalwJobContextV2,
++    pub expected_execution: Hash64,
++    pub external_retained_bytes: u64,
++    pub external_ticket: &'a (dyn Send + Sync),
++}
++#[derive(Clone, Copy, Debug)]
++pub struct LocalForwardLoadLimitsV2 {
++    /// External field MUST be zero; this aggregate supplies the complete sum.
++    pub params: OwnedParamLimitsV2,
++    pub max_new_owner_bytes: u64,
++    pub max_operation_bytes: u64,
++    pub max_retained_requests: u64,
++    pub max_provider_calls_per_attempt: u64,
++    pub max_total_provider_calls: u64,
++}
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct LocalForwardLoadUsageV2 {
++    pub params: OwnedParamUsageV2,
++    pub retained_requests: u64,
++    pub provider_calls_reserved: u64,
++}
++/// Owner-local persistent accounting. Creating another budget is not native
++/// permission or an authorization to reset an actual service/session budget.
++pub struct LocalForwardLoadBudgetV2 {
++    limits: LocalForwardLoadLimitsV2,
++    params: OwnedParamBudgetV2,
++    retained_requests: u64,
++    provider_calls_reserved: u64,
++}
++impl LocalForwardLoadBudgetV2 {
++    pub fn new(limits: LocalForwardLoadLimitsV2) -> Result<Self, F> {
++        if limits.params.external_retained_bytes != 0
++            || [
++                limits.max_new_owner_bytes,
++                limits.max_operation_bytes,
++                limits.max_retained_requests,
++                limits.max_provider_calls_per_attempt,
++                limits.max_total_provider_calls,
++            ]
++            .contains(&0)
++        {
++            return Err(F::Limit);
++        }
++        Ok(Self { params: OwnedParamBudgetV2::new(limits.params), limits, retained_requests: 0, provider_calls_reserved: 0 })
++    }
++    pub fn usage(&self) -> LocalForwardLoadUsageV2 {
++        LocalForwardLoadUsageV2 {
++            params: self.params.usage(),
++            retained_requests: self.retained_requests,
++            provider_calls_reserved: self.provider_calls_reserved,
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct LocalForwardLoadQuoteV2 {
++    pub params: OwnedParamQuoteV2,
++    pub metadata_hash_bytes: u64,
++    pub metadata_hash_scratch: u64,
++    pub requested_bytes: u64,
++}
++/// Native Params owned and root-checked; no Clone, raw-plan/Params export or
++/// full-binding input. This is NOT self-owned generic startup: all borrowed
++/// bounded source/header/compiled/class/job owners must stay reserved externally.
++pub struct LocalWideForwardArtifactV2<'a> {
++    params: TirParams<'static>,
++    inputs: LocalForwardInputsV2<'a>,
++    job: PalwTirJobShapeV1,
++    profile: LocalForwardProfileV2,
++    quote: LocalForwardLoadQuoteV2,
++    layout_origin: OwnedParamLayoutOriginV2,
++    _memory: TirMemoryLeaseV1,
++}
++impl LocalWideForwardArtifactV2<'_> {
++    pub fn profile(&self) -> LocalForwardProfileV2 {
++        self.profile
++    }
++    pub fn original_context(&self) -> &PalwJobContextV2 {
++        self.inputs.original_context
++    }
++    pub fn artifact_root(&self) -> Hash64 {
++        self.inputs.artifact
++    }
++    pub fn load_quote(&self) -> LocalForwardLoadQuoteV2 {
++        self.quote
++    }
++    pub fn layout_origin(&self) -> OwnedParamLayoutOriginV2 {
++        self.layout_origin
++    }
++}
++fn cheap(i: LocalForwardInputsV2<'_>) -> Result<(), F> {
++    if i.class.version != kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_VERSION_V1
++        || !cfg!(target_pointer_width = "64")
++        || i.class.program.len() > MAX_PROGRAM_BYTES
++        || i.class.layout.commit_tiles.len() > MAX_BLOCKS * MAX_NODES_PER_BLOCK
++        || i.class.layout.state_tiles.len() > MAX_STATES
++        || i.original_context.network_id.is_empty()
++        || i.original_context.network_id.len() > PALW_V2_MAX_NETWORK_ID_BYTES
++    {
++        return Err(F::Pins);
++    }
++    Ok(())
++}
++fn metadata_quote(i: LocalForwardInputsV2<'_>) -> Result<(u64, u64), F> {
++    // Layout:u16+3*u32+two Vec<u32> lengths and payload. Existing writer sizes.
++    let layout = plus(22, times(plus(count(i.class.layout.commit_tiles.len())?, count(i.class.layout.state_tiles.len())?)?, 4)?)?;
++    let context = plus(2 + 4 + 11 * 64 + 32 + 3 * 4, count(i.original_context.network_id.len())?)?;
++    let hash_bytes = plus(plus(count(i.class.program.len())?, layout)?, plus(context, 2 + 4 * 64)?)?;
++    // Existing borsh::to_vec helper starts1024; context CanonicalWriter starts512.
++    Ok((hash_bytes, plus(vec_bytes::<u8>(layout.max(1024))?, writer_bytes(context)?)?))
++}
++fn literal_pins(i: LocalForwardInputsV2<'_>) -> Result<OwnedParamLayoutOriginV2, F> {
++    let h = i.checked.header();
++    if h.program != i.class.program
++        || i.checked.program() != i.source.program()
++        || i.source.program() != &i.compiled.plan().program
++        || i.space.program() != i.source.program()
++        || i.space.layout() != &i.class.layout
++        || h.tokenizer_id != i.class.tokenizer_id.as_bytes()
++    {
++        return Err(F::Pins);
++    }
++    match i.checked.layout().map_err(|_| F::Pins)? {
++        None => Ok(OwnedParamLayoutOriginV2::IndependentlyExpectedOnly),
++        Some(v) => {
++            let x = &i.class.layout;
++            if v.version != x.version
++                || v.max_context != x.max_context
++                || v.checkpoint_interval != x.checkpoint_interval
++                || v.h_tile != x.h_tile
++                || !v.commit_tiles().eq(x.commit_tiles.iter().copied())
++                || !v.state_tiles().eq(x.state_tiles.iter().copied())
++            {
++                return Err(F::Pins);
++            }
++            Ok(OwnedParamLayoutOriginV2::DeclaredInFile)
++        }
++    }
++}
++/// Loads from the same checked descriptor under a REQUIRED same-ledger lease.
++/// Accepted attempts/work/read/retention are never refunded after guard, pins,
++/// IO or root failure. Final inventory is recomputed from owned native values.
++/// Input construction/copies and provider scratch/calls remain externally owned.
++pub fn load_local_wide_forward_v2<'a, R: LocalForwardReaderV2>(
++    reader: &mut R,
++    inputs: LocalForwardInputsV2<'a>,
++    budget: &mut LocalForwardLoadBudgetV2,
++    reserver: &TirMemoryReserverV1,
++) -> Result<LocalWideForwardArtifactV2<'a>, F> {
++    cheap(inputs)?;
++    let provider_retained = reader.retained_request_bytes().ok_or(F::Limit)?;
++    let provider_scratch = reader.scratch_request_bytes().ok_or(F::Limit)?;
++    // This is ONLY a known partial floor: Source.owner_requests is its root
++    // struct delta, NOT the full decoded Source heap. The actual external
++    // ticket must cover every deep source/header/class/space/plan/provider and
++    // alias allocation, not merely this floor or any nonzero declared number.
++    let external_floor = plus(inputs.source.quote().owner_requests(), inputs.compiled.quote().retained_bytes())?;
++    cap(plus(external_floor, provider_retained)?, inputs.external_retained_bytes)?;
++    let base_work = budget.params.start_checked(inputs.checked).map_err(|_| F::Limit)?;
++    let (hash_bytes, hash_scratch) = metadata_quote(inputs)?;
++    let work = plus(base_work, hash_bytes)?;
++    cap(work, budget.limits.params.max_work_per_attempt)?;
++    let total_work = plus(budget.params.usage.work, hash_bytes)?;
++    cap(total_work, budget.limits.params.max_total_work)?;
++    budget.params.usage.work = total_work;
++    let mut pl = budget.limits.params;
++    let q = quote_checked(inputs.checked, pl, work).map_err(|_| F::Params)?;
++    let extra = plus(size_of::<LocalWideForwardArtifactV2<'_>>() as u64, plus(hash_scratch, provider_scratch)?)?;
++    let requested = plus(q.new_owner_peak_bytes, extra)?;
++    cap(requested, budget.limits.max_new_owner_bytes)?;
++    cap(plus(plus(requested, budget.retained_requests)?, inputs.external_retained_bytes)?, budget.limits.max_operation_bytes)?;
++    let next = plus(budget.retained_requests, requested)?;
++    cap(next, budget.limits.max_retained_requests)?;
++    let prior_other = budget.retained_requests.checked_sub(budget.params.usage.retained_claims).ok_or(F::Overflow)?;
++    pl.external_retained_bytes = plus(inputs.external_retained_bytes, plus(prior_other, extra)?)?;
++    let calls = plus(budget.provider_calls_reserved, budget.limits.max_provider_calls_per_attempt)?;
++    cap(calls, budget.limits.max_total_provider_calls)?;
++    budget.params.limits = pl;
++    budget.params.admit(q).map_err(|_| F::Limit)?;
++    budget.retained_requests = next;
++    budget.provider_calls_reserved = calls;
++    let lease = reserver("tir-local-wide-forward-load-v2", inputs.expected_class, inputs.expected_execution, requested)
++        .map_err(|_| F::Guard)?;
++    let origin = literal_pins(inputs)?;
++    if inputs.class.class_id(&inputs.artifact) != inputs.expected_class
++        || inputs.original_context.shape_profile_id != inputs.expected_class
++        || inputs.original_context.context_hash() != inputs.expected_execution
++    {
++        return Err(F::Pins);
++    }
++    let resolved = profile(inputs)?;
++    let job = inputs.space.job_shape(inputs.original_context)?;
++    let mut provider = BoundedProvider { inner: reader, left: budget.limits.max_provider_calls_per_attempt };
++    let (params, _) =
++        read_owned_payload_v2(&mut provider, inputs.checked, inputs.compiled.plan(), inputs.artifact, q).map_err(|_| F::Params)?;
++    Ok(LocalWideForwardArtifactV2 {
++        params,
++        inputs,
++        job,
++        profile: resolved,
++        quote: LocalForwardLoadQuoteV2 {
++            params: q,
++            metadata_hash_bytes: hash_bytes,
++            metadata_hash_scratch: hash_scratch,
++            requested_bytes: requested,
++        },
++        layout_origin: origin,
++        _memory: lease,
++    })
++}
++#[derive(Clone, Copy, Debug)]
++pub struct LocalWideForwardLimitsV2 {
++    pub max_positions: u32,
++    pub max_generated: u32,
++    pub max_logits_lanes: u64,
++    pub max_work_per_attempt: u64,
++    pub max_requested_bytes: u64,
++    pub max_operation_bytes: u64,
++    pub max_attempts: u64,
++    pub max_total_work: u64,
++    pub max_retained_requests: u64,
++    /// Loaded backing+all external input/prompt/provider/callback/error owners.
++    pub external_retained_bytes: u64,
++}
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct LocalWideForwardUsageV2 {
++    pub attempts: u64,
++    pub work: u64,
++    pub retained_requests: u64,
++}
++/// No reset/refund: the actual session must retain this owner across attempts.
++/// A newly constructed local budget grants no native/service budget authority.
++pub struct LocalWideForwardBudgetV2 {
++    limits: LocalWideForwardLimitsV2,
++    usage: LocalWideForwardUsageV2,
++}
++impl LocalWideForwardBudgetV2 {
++    pub fn new(limits: LocalWideForwardLimitsV2) -> Result<Self, F> {
++        if [
++            u64::from(limits.max_positions),
++            u64::from(limits.max_generated),
++            limits.max_logits_lanes,
++            limits.max_work_per_attempt,
++            limits.max_requested_bytes,
++            limits.max_operation_bytes,
++            limits.max_attempts,
++            limits.max_total_work,
++            limits.max_retained_requests,
++        ]
++        .contains(&0)
++        {
++            return Err(F::Limit);
++        }
++        Ok(Self { limits, usage: LocalWideForwardUsageV2::default() })
++    }
++    pub fn usage(&self) -> LocalWideForwardUsageV2 {
++        self.usage
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct LocalWideForwardQuoteV2 {
++    pub positions: u32,
++    pub generated: u32,
++    pub vocabulary: u64,
++    pub node_visits: u64,
++    pub work: u64,
++    pub executor_bytes: u64,
++    pub row_bytes: u64,
++    pub generated_bytes: u64,
++    pub hashing_scratch: u64,
++    pub requested_bytes: u64,
++}
++/// Ordinary local data only: no serialization, trace roots, native receipt,
++/// Result constructor or success capability. Copies require separate ownership.
++pub struct LocalWideForwardOutputV2 {
++    generated: Vec<u32>,
++    output_root: Hash64,
++    execution: Hash64,
++    quote: LocalWideForwardQuoteV2,
++    _memory: TirMemoryLeaseV1,
++}
++impl LocalWideForwardOutputV2 {
++    pub fn generated(&self) -> &[u32] {
++        &self.generated
++    }
++    /// EXACT existing palw_attempt_output_root_v1; no new recipe/domain.
++    pub fn output_root(&self) -> Hash64 {
++        self.output_root
++    }
++    pub fn execution(&self) -> Hash64 {
++        self.execution
++    }
++    pub fn quote(&self) -> LocalWideForwardQuoteV2 {
++        self.quote
++    }
++}
++impl LocalWideForwardArtifactV2<'_> {
++    fn quote_scan_work(&self) -> Result<u64, F> {
++        plus(
++            count(self.inputs.class.program.len())?,
++            times(count(self.inputs.space.occurrences().len())?, MAX_NODES_PER_BLOCK as u64)?,
++        )
++    }
++    /// Borrowed allocation-free success path. Direct quote calls are caller
++    /// work, not a session-run receipt. forward_local prepays its own quote scan.
++    /// Conservative existing executor envelope retains commit/export scratch;
++    /// this is no tight RAM/RSS or native admission claim.
++    pub fn forward_quote(&self, l: LocalWideForwardLimitsV2) -> Result<LocalWideForwardQuoteV2, F> {
++        cap(u64::from(self.job.positions), u64::from(l.max_positions))?;
++        cap(u64::from(self.inputs.original_context.exact_decode_tokens), u64::from(l.max_generated))?;
++        let p = self.inputs.source.program();
++        let out = &p.blocks[p.schedule.post as usize].nodes[p.logits as usize].out;
++        let expected_dtype = if self.profile == LocalForwardProfileV2::WideI64Q24 { DType::I64 } else { DType::I32 };
++        if out.dtype != expected_dtype {
++            return Err(F::Pins);
++        }
++        let vocab = out.elements_at(1);
++        if vocab == 0 || vocab > u64::from(u32::MAX) {
++            return Err(F::Pins);
++        }
++        cap(vocab, l.max_logits_lanes)?;
++        let mut cost = 0;
++        let mut nodes = 0;
++        for &(b, _) in self.inputs.space.occurrences() {
++            let h = self.inputs.space.window(b as usize);
++            for ni in 0..p.blocks[b as usize].nodes.len() {
++                nodes = plus(nodes, 1)?;
++                let c = node_cost(p, b as usize, ni, h);
++                for v in [c.macs, c.elementwise, c.transcendentals, c.bytes_read, c.bytes_written] {
++                    if v == u64::MAX {
++                        return Err(F::Limit);
++                    }
++                    cost = plus(cost, v)?
++                }
++            }
++        }
++        let positions = u64::from(self.job.positions);
++        let decode = u64::from(self.inputs.original_context.exact_decode_tokens);
++        let prefill = u64::from(self.job.prefill);
++        let context = count(borsh::object_length(self.inputs.original_context).map_err(|_| F::Pins)?)?;
++        let encoded = count(borsh::object_length(p).map_err(|_| F::Pins)?)?;
++        // Explicit symbolic byte/element visits, not CPU instructions. First
++        // executor refinement may read EVERY native parameter for range memos,
++        // including whole embeddings even when execution gathers only a row.
++        let metadata = plus(times(encoded, 8)?, times(context, 4)?)?;
++        let host =
++            plus(plus(times(times(vocab, decode)?, 128)?, times(prefill, 64)?)?, plus(metadata, self.quote.params.payload_bytes)?)?;
++        let states = count(self.inputs.compiled.plan().instances.len())?;
++        let structural = times(times(positions, plus(count(self.inputs.space.occurrences().len())?, plus(states, 1)?)?)?, 64)?;
++        let work = plus(self.quote_scan_work()?, plus(times(cost, positions)?, plus(host, structural)?)?)?;
++        cap(work, l.max_work_per_attempt)?;
++        let executor = self.inputs.space.executor_bytes(self.inputs.compiled.plan(), self.inputs.original_context)?;
++        let row = times(vocab, self.profile.width())?;
++        let generated = times(decode, 4)?;
++        let output_writer = writer_bytes(plus(132, generated)?)?;
++        let hash =
++            plus(writer_bytes(context)?, plus(writer_bytes(plus(4, times(prefill, 4)?)?)?, plus(output_writer, writer_bytes(4)?)?)?)?;
++        let requested = plus(size_of::<LocalWideForwardOutputV2>() as u64, plus(executor, plus(row, plus(generated, hash)?)?)?)?;
++        cap(requested, l.max_requested_bytes)?;
++        Ok(LocalWideForwardQuoteV2 {
++            positions: self.job.positions,
++            generated: self.inputs.original_context.exact_decode_tokens,
++            vocabulary: vocab,
++            node_visits: times(nodes, positions)?,
++            work,
++            executor_bytes: executor,
++            row_bytes: row,
++            generated_bytes: generated,
++            hashing_scratch: hash,
++            requested_bytes: requested,
++        })
++    }
++    /// ONE ordinary CPU pass for the resolved original profile. No observer, all-row retention, leaf enumeration,
++    /// preimage/hash tree, checkpoint export, trace or evidence tape. NoSink's
++    /// existing noncontiguous commit scratch is retained under the quote.
++    /// Required guard is acquired before hashes, executor/range refinement and
++    /// output allocation. Accepted attempts/work/retention never reset on failure.
++    pub fn forward_local(
++        &self,
++        prompt: &[u32],
++        budget: &mut LocalWideForwardBudgetV2,
++        reserver: &TirMemoryReserverV1,
++    ) -> Result<LocalWideForwardOutputV2, F> {
++        let l = budget.limits;
++        let attempts = plus(budget.usage.attempts, 1)?;
++        cap(attempts, l.max_attempts)?;
++        let scans = self.quote_scan_work()?;
++        let prior_work = plus(budget.usage.work, scans)?;
++        cap(prior_work, l.max_total_work)?;
++        cap(scans, l.max_work_per_attempt)?;
++        budget.usage.attempts = attempts;
++        budget.usage.work = prior_work;
++        let q = self.forward_quote(l)?;
++        cap(q.work, l.max_work_per_attempt)?;
++        let remaining_work = q.work.checked_sub(scans).ok_or(F::Overflow)?;
++        let total_work = plus(prior_work, remaining_work)?;
++        cap(total_work, l.max_total_work)?;
++        let retained = plus(budget.usage.retained_requests, q.requested_bytes)?;
++        cap(retained, l.max_retained_requests)?;
++        cap(plus(self.inputs.external_retained_bytes, self.quote.requested_bytes)?, l.external_retained_bytes)?;
++        cap(plus(plus(l.external_retained_bytes, budget.usage.retained_requests)?, q.requested_bytes)?, l.max_operation_bytes)?;
++        budget.usage.work = total_work;
++        budget.usage.retained_requests = retained;
++        let lease =
++            reserver("tir-local-wide-forward-run-v2", self.inputs.expected_class, self.inputs.expected_execution, q.requested_bytes)
++                .map_err(|_| F::Guard)?;
++        let ctx = self.inputs.original_context;
++        if prompt.len() != ctx.declared_prefill_tokens as usize
++            || prompt.iter().any(|id| *id >= self.inputs.source.program().token_bound)
++            || !prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, prompt, &ctx.prompt_token_ids_hash)
++        {
++            return Err(F::Pins);
++        }
++        let mut exec = TirExecutor::new(self.inputs.compiled.plan(), &self.params).map_err(|_| F::Execute)?;
++        let mut ids = exact::<u32>(q.generated as usize).map_err(|_| F::Limit)?;
++        let mut row = SelectionRowV2::new(self.profile, usize::try_from(q.vocabulary).map_err(|_| F::Overflow)?)?;
++        for a in 0..self.job.positions {
++            let token = if a < self.job.prefill { prompt[a as usize] } else { ids[(a - self.job.prefill) as usize] };
++            let post = self.job.runs_post(a);
++            exec.step_opt(token, &mut NoSink, post).map_err(|_| F::Execute)?;
++            if post {
++                let (_, logits) = exec.logits();
++                if logits.len() as u64 != q.vocabulary {
++                    return Err(F::Output);
++                }
++                let id = row.select(logits, ids.len() as u32)?;
++                ids.push(u32::try_from(id).map_err(|_| F::Output)?);
++            }
++        }
++        if ids.len() != q.generated as usize {
++            return Err(F::Output);
++        }
++        let output_root = palw_attempt_output_root_v1(ctx, &ids);
++        Ok(LocalWideForwardOutputV2 {
++            generated: ids,
++            output_root,
++            execution: self.inputs.expected_execution,
++            quote: q,
++            _memory: lease,
++        })
++    }
++}
++
++enum SelectionRowV2 {
++    Narrow(Vec<i32>),
++    Wide(Vec<i64>),
++}
++impl SelectionRowV2 {
++    fn new(p: LocalForwardProfileV2, n: usize) -> Result<Self, F> {
++        Ok(match p {
++            LocalForwardProfileV2::FlatI32 | LocalForwardProfileV2::TiledI32 => Self::Narrow(exact(n).map_err(|_| F::Limit)?),
++            LocalForwardProfileV2::WideI64Q24 => Self::Wide(exact(n).map_err(|_| F::Limit)?),
++        })
++    }
++    fn select(&mut self, logits: Slice<'_>, position: u32) -> Result<usize, F> {
++        match self {
++            Self::Narrow(row) => {
++                if logits.dtype() == DType::Idx {
++                    return Err(F::Output);
++                }
++                row.clear();
++                if logits.len() > row.capacity() || logits.is_empty() {
++                    return Err(F::Output);
++                }
++                with_slice!(logits,values=>{for v in values{row.push(i32::try_from(v.to_i128()).map_err(|_|F::Output)?);}});
++                Ok(base0_decode_token_select_v1(row))
++            }
++            Self::Wide(row) => {
++                row.clear();
++                if logits.len() > row.capacity() || logits.is_empty() {
++                    return Err(F::Output);
++                }
++                with_slice!(logits,values=>{for v in values{row.push(i64::try_from(v.to_i128()).map_err(|_|F::Output)?);}});
++                wide::select(row, &PalwDecodeSamplingV2::GREEDY, position).ok_or(F::Output)
++            }
++        }
++    }
++}
++#[cfg(test)]
++mod row_tests {
++    use super::*;
++    #[test]
++    fn narrow_row_retains_legacy_idx_refusal_and_checks_storage_values_without_clipping() {
++        let mut row = SelectionRowV2::new(LocalForwardProfileV2::TiledI32, 4).unwrap();
++        assert_eq!(row.select(Slice::Idx(&[0, 1, 2, 3]), 0), Err(F::Output));
++        assert_eq!(row.select(Slice::Idx(&[u32::MAX, 0]), 0), Err(F::Output));
++        assert_eq!(row.select(Slice::I64(&[i32::MIN as i64, i32::MAX as i64, i32::MAX as i64, 0]), 0), Ok(1));
++        assert_eq!(row.select(Slice::I64(&[i32::MAX as i64 + 1]), 0), Err(F::Output));
++        assert_eq!(row.select(Slice::I16(&[-2, 9, 9, 0]), 0), Ok(1));
++        assert_eq!(row.select(Slice::I32(&[]), 0), Err(F::Output));
++    }
++}
+diff --git a/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/measurement.rs b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/measurement.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/measurement.rs
+@@ -0,0 +1,452 @@
++//! Local same-owned-parameter dense comparison only. This is not another Miner
++//! route, native authority, proof of arithmetic, Panel/Node cost measurement or
++//! a cold/independent implementation benchmark. No model reopen/copy is used.
++use super::*;
++use crate::node::{
++    run::{TirClassRunnerV1, TirJobRunV1, dense_measurement_constructor_requests_v2},
++    run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirJobRunWideQ24V2, TirWideRunLimitsV2},
++};
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum DenseMeasurementErrorV2 {
++    Limit,
++    Overflow,
++    Identity,
++    Execute,
++    Guard,
++    Unsupported,
++}
++use DenseMeasurementErrorV2 as D;
++fn add(a: u64, b: u64) -> Result<u64, D> {
++    a.checked_add(b).ok_or(D::Overflow)
++}
++fn mul(a: u64, b: u64) -> Result<u64, D> {
++    a.checked_mul(b).ok_or(D::Overflow)
++}
++fn limit(n: u64, max: u64) -> Result<(), D> {
++    if n > max { Err(D::Limit) } else { Ok(()) }
++}
++fn vec_request<T>(count: u64) -> Result<u64, D> {
++    mul(growing_vec_request_capacity_v1::<T>(count).ok_or(D::Overflow)?, size_of::<T>() as u64)
++}
++fn hash_writer(n: u64) -> Result<u64, D> {
++    vec_request::<u8>(n.max(1024))
++}
++/// Operational requests/work only. The caller supplies finite policy, actual
++/// same-ledger callbacks and the complete coexisting external ownership census.
++#[derive(Clone, Copy, Debug)]
++pub struct DenseMeasurementLimitsV2 {
++    pub runner: TirWideRunLimitsV2,
++    pub max_extra_bytes: u64,
++    pub max_combined_peak_bytes: u64,
++    pub max_operation_bytes: u64,
++    pub max_geometry_visits: u64,
++    pub max_work_per_attempt: u64,
++    pub max_attempts: u64,
++    pub max_total_work: u64,
++    pub max_retained_requests: u64,
++    pub external_retained_bytes: u64,
++}
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct DenseMeasurementUsageV2 {
++    pub attempts: u64,
++    pub work: u64,
++    pub retained_requests: u64,
++}
++pub struct DenseMeasurementBudgetV2 {
++    limits: DenseMeasurementLimitsV2,
++    usage: DenseMeasurementUsageV2,
++}
++impl DenseMeasurementBudgetV2 {
++    pub fn new(limits: DenseMeasurementLimitsV2) -> Result<Self, D> {
++        if [
++            u64::from(limits.runner.max_positions),
++            limits.runner.max_step_leaves,
++            limits.runner.max_row_lanes,
++            limits.runner.max_work,
++            limits.runner.max_requested_bytes,
++            limits.max_extra_bytes,
++            limits.max_combined_peak_bytes,
++            limits.max_operation_bytes,
++            limits.max_geometry_visits,
++            limits.max_work_per_attempt,
++            limits.max_attempts,
++            limits.max_total_work,
++            limits.max_retained_requests,
++        ]
++        .contains(&0)
++        {
++            return Err(D::Limit);
++        }
++        Ok(Self { limits, usage: DenseMeasurementUsageV2::default() })
++    }
++    pub fn usage(&self) -> DenseMeasurementUsageV2 {
++        self.usage
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum DenseRunnerReservationScopeV2 {
++    WideFullRun,
++    NarrowExecutorOnly,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct DenseMeasurementQuoteV2 {
++    pub profile: LocalForwardProfileV2,
++    pub leaves: u64,
++    pub vocabulary: u64,
++    pub geometry_visits: u64,
++    pub quote_scan_work: u64,
++    pub work: u64,
++    /// Underlying dense runner work, separately capped for BOTH widths.
++    pub runner_work: u64,
++    /// Wide: existing required run quote (ALL run backing; retained by run).
++    /// Narrow: existing executor workspace request (released after commit).
++    pub runner_requested_bytes: u64,
++    pub runner_scope: DenseRunnerReservationScopeV2,
++    /// Dense objects OUTSIDE the runner-request inventory. Wide only wrapper
++    /// metadata; narrow constructor/retained rows/hashes/roots/encoding buffers.
++    pub extra_requested_bytes: u64,
++    pub combined_peak_bytes: u64,
++    pub constructor_bytes: u64,
++    pub retained_data_bytes: u64,
++    pub conversion_bytes: u64,
++    pub emitter_bytes: u64,
++    pub tree_bytes: u64,
++    pub trace_bytes: u64,
++    pub writer_bytes: u64,
++    /// Bridge validates prompt BEFORE acquiring the runner guard, so its
++    /// distinct CanonicalWriter allocation belongs to EXTRA in both profiles.
++    pub bridge_prompt_writer_bytes: u64,
++}
++/// One shot, borrowing the SAME loaded native Params and actual ordinary output.
++/// No raw plan/Params getters, second loader/model/owner, native marker or saved
++/// pass. The ordinary guard remains live and must be in external inventory.
++pub struct PreparedDenseMeasurementV2<'a, 's> {
++    owner: &'a LocalWideForwardArtifactV2<'s>,
++    ordinary: &'a LocalWideForwardOutputV2,
++    limits: DenseMeasurementLimitsV2,
++    quote: DenseMeasurementQuoteV2,
++}
++enum DenseDataV2 {
++    Narrow(TirJobRunV1),
++    Wide(TirJobRunWideQ24V2),
++}
++impl DenseDataV2 {
++    fn generated(&self) -> &[u32] {
++        match self {
++            Self::Narrow(r) => &r.generated,
++            Self::Wide(r) => r.generated(),
++        }
++    }
++    fn output_root(&self) -> Hash64 {
++        match self {
++            Self::Narrow(r) => r.output_root,
++            Self::Wide(r) => r.output_root(),
++        }
++    }
++    fn leaf_count(&self) -> u64 {
++        match self {
++            Self::Narrow(r) => r.leaf_count,
++            Self::Wide(r) => r.leaf_count(),
++        }
++    }
++}
++/// Local matching data only: equality is not Court/P/credit or an independent
++/// implementation correctness judgment. Inner dense data drops before extra
++/// guard. Wide inner run also owns its independently acquired runner guard.
++pub struct DenseMeasurementOutputV2 {
++    data: DenseDataV2,
++    matches_ordinary: bool,
++    quote: DenseMeasurementQuoteV2,
++    _extra: TirMemoryLeaseV1,
++}
++impl DenseMeasurementOutputV2 {
++    pub fn generated(&self) -> &[u32] {
++        self.data.generated()
++    }
++    pub fn output_root(&self) -> Hash64 {
++        self.data.output_root()
++    }
++    pub fn leaf_count(&self) -> u64 {
++        self.data.leaf_count()
++    }
++    pub fn matches_ordinary(&self) -> bool {
++        self.matches_ordinary
++    }
++    pub fn quote(&self) -> DenseMeasurementQuoteV2 {
++        self.quote
++    }
++}
++fn narrow_quote(owner: &LocalWideForwardArtifactV2<'_>, l: DenseMeasurementLimitsV2, scan: u64) -> Result<DenseMeasurementQuoteV2, D> {
++    let LocalForwardSpaceV2::Narrow(space) = owner.inputs.space else { return Err(D::Unsupported) };
++    let ctx = owner.inputs.original_context;
++    let plan = owner.inputs.compiled.plan();
++    let p = owner.inputs.source.program();
++    let leaves = space.inner.leaf_count_capped(ctx, l.runner.max_step_leaves).map_err(|_| D::Limit)?;
++    let vocab = p.blocks[p.schedule.post as usize].nodes[p.logits as usize].out.elements_at(1);
++    let decode = u64::from(ctx.exact_decode_tokens);
++    limit(vocab, l.runner.max_row_lanes)?;
++    limit(u64::from(owner.job.positions), u64::from(l.runner.max_positions))?;
++    if vocab == 0 || vocab > u64::from(u32::MAX) {
++        return Err(D::Unsupported);
++    }
++    let payload = mul(space.inner.maximum_leaf_lanes_v1(&owner.job), 4)?;
++    let encoded = borsh::object_length(p).map_err(|_| D::Identity)? as u64;
++    let geometry = mul(leaves, add(encoded, 1)?)?;
++    let runner = memory::tir_executor_storage_need_v1(&space.inner, plan, ctx).map_err(|_| D::Limit)?;
++    limit(runner, l.runner.max_requested_bytes)?;
++    let constructor = dense_measurement_constructor_requests_v2(p).map_err(|_| D::Overflow)?;
++    // Legacy converts an owned i128 Vec via IntoIter.map.collect. Quote the
++    // consumed i128 backing even if std specializes/reuses it for smaller i32.
++    let conversion = vec_request::<i128>(vocab)?;
++    let row = conversion.max(vec_request::<i32>(vocab)?);
++    let retained = add(
++        vec_request::<Hash64>(leaves)?,
++        add(vec_request::<Vec<i32>>(decode)?, add(mul(decode, row)?, vec_request::<u32>(decode)?)?)?,
++    )?;
++    let emitter = vec_request::<u8>(payload)?;
++    let tree = memory::tir_full_tree_storage_need_v1(leaves).map_err(|_| D::Limit)?;
++    let tiles = vocab.div_ceil(kaspa_consensus_core::palw_step_refute::PALW_LOGITS_TILE_LANES as u64);
++    let trace = if owner.profile == LocalForwardProfileV2::TiledI32 {
++        add(
++            add(vec_request::<Hash64>(decode)?, vec_request::<Hash64>(tiles)?)?,
++            add(
++                memory::tir_full_tree_storage_need_v1(decode).map_err(|_| D::Limit)?,
++                add(
++                    memory::tir_full_tree_storage_need_v1(tiles).map_err(|_| D::Limit)?,
++                    vec_request::<u8>(mul(vocab.min(4096), 4)?)?,
++                )?,
++            )?,
++        )?
++    } else {
++        0
++    };
++    let context = borsh::object_length(ctx).map_err(|_| D::Identity)? as u64;
++    // Step leaf Writer:2version+2hash64+4coord*u32+count+length=154.
++    // Context, output and empty-rendering writers coexist conservatively.
++    let writers = add(
++        hash_writer(add(154, payload)?)?,
++        add(hash_writer(context)?, add(hash_writer(add(132, mul(decode, 4)?)?)?, hash_writer(4)?)?)?,
++    )?;
++    let prompt_bytes = add(4, mul(u64::from(owner.job.prefill), 4)?)?;
++    let prompt_writer = hash_writer(prompt_bytes)?;
++    let extra = [
++        prompt_writer,
++        size_of::<DenseMeasurementOutputV2>() as u64,
++        constructor,
++        retained,
++        conversion,
++        emitter,
++        tree,
++        trace,
++        writers,
++    ]
++    .into_iter()
++    .try_fold(0, add)?;
++    let fl = LocalWideForwardLimitsV2 {
++        max_positions: l.runner.max_positions,
++        max_generated: l.runner.max_positions,
++        max_logits_lanes: l.runner.max_row_lanes,
++        max_work_per_attempt: l.max_work_per_attempt,
++        max_requested_bytes: l.max_combined_peak_bytes,
++        max_operation_bytes: l.max_operation_bytes,
++        max_attempts: l.max_attempts,
++        max_total_work: l.max_total_work,
++        max_retained_requests: l.max_retained_requests,
++        external_retained_bytes: l.external_retained_bytes,
++    };
++    let ordinary = owner.forward_quote(fl).map_err(|_| D::Limit)?;
++    let byte_visits = add(
++        mul(mul(leaves, add(payload, 154)?)?, 2)?,
++        add(mul(mul(vocab, decode)?, 20)?, mul(add(leaves, add(decode, tiles)?)?, 256)?)?,
++    )?;
++    let runner_work = add(
++        ordinary.work.checked_sub(owner.quote_scan_work().map_err(|_| D::Overflow)?).ok_or(D::Overflow)?,
++        add(geometry, byte_visits)?,
++    )?;
++    limit(runner_work, l.runner.max_work)?;
++    // Two bridge prompt byte visits: fill CanonicalWriter then hash it. This
++    // happens outside the runner's own distinct later validation/allocation.
++    let work = add(scan, add(runner_work, mul(prompt_bytes, 2)?)?)?;
++    Ok(DenseMeasurementQuoteV2 {
++        profile: owner.profile,
++        leaves,
++        vocabulary: vocab,
++        geometry_visits: geometry,
++        quote_scan_work: scan,
++        work,
++        runner_work,
++        runner_requested_bytes: runner,
++        runner_scope: DenseRunnerReservationScopeV2::NarrowExecutorOnly,
++        extra_requested_bytes: extra,
++        combined_peak_bytes: add(runner, extra)?,
++        constructor_bytes: constructor,
++        retained_data_bytes: retained,
++        conversion_bytes: conversion,
++        emitter_bytes: emitter,
++        tree_bytes: tree,
++        trace_bytes: trace,
++        writer_bytes: writers,
++        bridge_prompt_writer_bytes: prompt_writer,
++    })
++}
++impl<'s> LocalWideForwardArtifactV2<'s> {
++    /// Pure metadata projection, not an execution/admission/ownership receipt.
++    /// Direct query work remains caller-owned; prepare_dense_measurement prepays
++    /// the SAME quote scan before using it. Useful for long-prefill sizing with
++    /// no ordinary CPU run or fabricated successful output.
++    pub fn quote_dense_measurement(&self, l: DenseMeasurementLimitsV2) -> Result<DenseMeasurementQuoteV2, D> {
++        let scan = mul(self.quote_scan_work().map_err(|_| D::Overflow)?, 8)?;
++        self.dense_projection(l, scan)
++    }
++    fn dense_projection(&self, l: DenseMeasurementLimitsV2, scan: u64) -> Result<DenseMeasurementQuoteV2, D> {
++        let quote = match self.inputs.space {
++            LocalForwardSpaceV2::Narrow(_) => narrow_quote(self, l, scan)?,
++            LocalForwardSpaceV2::Wide(space) => {
++                let runner =
++                    TirClassRunnerWideQ24V2::new(space, self.inputs.compiled.plan(), &self.params, self.inputs.expected_class)
++                        .map_err(|_| D::Identity)?;
++                let q = runner.quote(self.inputs.original_context, l.runner).map_err(|_| D::Limit)?;
++                let vocab = self.inputs.source.program().blocks[self.inputs.source.program().schedule.post as usize].nodes
++                    [self.inputs.source.program().logits as usize]
++                    .out
++                    .elements_at(1);
++                let prompt_bytes = add(4, mul(u64::from(self.job.prefill), 4)?)?;
++                let prompt_writer = hash_writer(prompt_bytes)?;
++                let extra =
++                    add((size_of::<DenseMeasurementOutputV2>() + size_of::<TirClassRunnerWideQ24V2<'_>>()) as u64, prompt_writer)?;
++                let geometry = mul(q.leaf_count, add(self.inputs.class.program.len() as u64, 1)?)?;
++                // Existing wide run q owns ALL its rows/hashes/root scratch;
++                // add first range-memo weight scan omitted by that old work q.
++                DenseMeasurementQuoteV2 {
++                    profile: self.profile,
++                    leaves: q.leaf_count,
++                    vocabulary: vocab,
++                    geometry_visits: geometry,
++                    quote_scan_work: scan,
++                    work: add(scan, add(add(q.work, self.quote.params.payload_bytes)?, mul(prompt_bytes, 2)?)?)?,
++                    runner_work: q.work,
++                    runner_requested_bytes: q.requested_bytes,
++                    runner_scope: DenseRunnerReservationScopeV2::WideFullRun,
++                    extra_requested_bytes: extra,
++                    combined_peak_bytes: add(q.requested_bytes, extra)?,
++                    constructor_bytes: size_of::<TirClassRunnerWideQ24V2<'_>>() as u64,
++                    retained_data_bytes: 0,
++                    conversion_bytes: 0,
++                    emitter_bytes: 0,
++                    tree_bytes: 0,
++                    trace_bytes: 0,
++                    writer_bytes: 0,
++                    bridge_prompt_writer_bytes: prompt_writer,
++                }
++            }
++        };
++        limit(quote.work, l.max_work_per_attempt)?;
++        limit(quote.geometry_visits, l.max_geometry_visits)?;
++        limit(quote.extra_requested_bytes, l.max_extra_bytes)?;
++        limit(quote.combined_peak_bytes, l.max_combined_peak_bytes)?;
++        Ok(quote)
++    }
++    /// One-shot preparation; accepts no replacement roots, class, job or Params.
++    /// Full work/request admission is retained on dropped preparation/failed run.
++    /// The ledger must include complete metadata/loaded backing + the still-live
++    /// ordinary output guard, aliases, controls/errors and all other attempts.
++    pub fn prepare_dense_measurement<'a>(
++        &'a self,
++        ordinary: &'a LocalWideForwardOutputV2,
++        budget: &mut DenseMeasurementBudgetV2,
++    ) -> Result<PreparedDenseMeasurementV2<'a, 's>, D>
++    where
++        's: 'a,
++    {
++        let l = budget.limits;
++        let attempt = add(budget.usage.attempts, 1)?;
++        limit(attempt, l.max_attempts)?;
++        // Eight named metadata passes: geometry/payload, constructor, Borsh,
++        // forward-cost, executor/retained, identity and root scratch projections.
++        let scan = mul(self.quote_scan_work().map_err(|_| D::Overflow)?, 8)?;
++        let precharged = add(budget.usage.work, scan)?;
++        limit(scan, l.max_work_per_attempt)?;
++        limit(precharged, l.max_total_work)?;
++        budget.usage.attempts = attempt;
++        budget.usage.work = precharged;
++        if ordinary.execution() != self.inputs.expected_execution
++            || ordinary.generated().len() != self.inputs.original_context.exact_decode_tokens as usize
++        {
++            return Err(D::Identity);
++        }
++        let quote = self.dense_projection(l, scan)?;
++        let needed_external =
++            add(self.inputs.external_retained_bytes, add(self.quote.requested_bytes, ordinary.quote().requested_bytes)?)?;
++        limit(needed_external, l.external_retained_bytes)?;
++        let retained = add(budget.usage.retained_requests, quote.combined_peak_bytes)?;
++        limit(retained, l.max_retained_requests)?;
++        limit(add(l.external_retained_bytes, retained)?, l.max_operation_bytes)?;
++        let rest = quote.work.checked_sub(scan).ok_or(D::Overflow)?;
++        let total = add(precharged, rest)?;
++        limit(total, l.max_total_work)?;
++        budget.usage.work = total;
++        budget.usage.retained_requests = retained;
++        Ok(PreparedDenseMeasurementV2 { owner: self, ordinary, limits: l, quote })
++    }
++}
++impl PreparedDenseMeasurementV2<'_, '_> {
++    pub fn quote(&self) -> DenseMeasurementQuoteV2 {
++        self.quote
++    }
++    /// TWO disjoint acquisitions on the SAME supplied ledger: extra first,
++    /// then the explicit required runner entry. No optional-global inspection,
++    /// fallback or fabricated sublease. New extra guard stays through result.
++    /// State/order/range memos are shared Params but each executor starts fresh;
++    /// a prior ordinary run may warm range/OS caches. Never claim a cold run.
++    pub fn run(self, prompt: &[u32], reserver: &TirMemoryReserverV1) -> Result<DenseMeasurementOutputV2, D> {
++        let owner = self.owner;
++        let q = self.quote;
++        let ctx = owner.inputs.original_context;
++        let extra = reserver(
++            "tir-dense-measurement-extra-v2",
++            owner.inputs.expected_class,
++            owner.inputs.expected_execution,
++            q.extra_requested_bytes,
++        )
++        .map_err(|_| D::Guard)?;
++        if prompt.len() != ctx.declared_prefill_tokens as usize
++            || !prompt_token_ids_match_v1(PalwPromptIdsFormV1::Flat, prompt, &ctx.prompt_token_ids_hash)
++        {
++            return Err(D::Identity);
++        }
++        let data = match owner.inputs.space {
++            LocalForwardSpaceV2::Narrow(space) => {
++                let runner =
++                    TirClassRunnerV1::new(&space.inner, owner.inputs.compiled.plan(), &owner.params, owner.inputs.expected_class)
++                        .map_err(|_| D::Identity)?;
++                DenseDataV2::Narrow(
++                    runner
++                        .run_required_v2(
++                            ctx,
++                            prompt,
++                            self.limits.runner.max_step_leaves,
++                            owner.inputs.expected_execution,
++                            reserver,
++                            &mut |_| {},
++                        )
++                        .map_err(|_| D::Execute)?,
++                )
++            }
++            LocalForwardSpaceV2::Wide(space) => {
++                let runner =
++                    TirClassRunnerWideQ24V2::new(space, owner.inputs.compiled.plan(), &owner.params, owner.inputs.expected_class)
++                        .map_err(|_| D::Identity)?;
++                DenseDataV2::Wide(
++                    runner
++                        .run_required_v2(ctx, prompt, owner.inputs.expected_execution, self.limits.runner, &mut |_| {}, reserver)
++                        .map_err(|_| D::Execute)?,
++                )
++            }
++        };
++        if data.leaf_count() != q.leaves {
++            return Err(D::Identity);
++        }
++        let matches_ordinary = data.generated() == self.ordinary.generated() && data.output_root() == self.ordinary.output_root();
++        Ok(DenseMeasurementOutputV2 { data, matches_ordinary, quote: q, _extra: extra })
++    }
++}
+diff --git a/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/src/node/owned_artifact_params_v2/forward/metadata.rs
+@@ -0,0 +1,616 @@
++//! Same-descriptor trace-free metadata owner. ONE real required configured
++//! guard precedes header/class/Source/Space/compiler allocations. All component
++//! quotes are logical request inventories, not allocator RSS/all-CPU guarantees.
++//! No parameter payload is read here, no trace binding is accepted/constructed,
++//! no native assignment/result/role/funding/P/credit/public flag is installed.
++use super::*;
++use crate::plan::{
++    LocalCompiledTirPlanV2, TirPlanCompileLimitsV2, TirPlanCompileQuoteV2, prepare_tir_plan_compile_v2,
++    tir_plan_compile_quote_visits_upper_v2,
++};
++use kaspa_consensus_core::{
++    palw_native_resource_v1::{
++        LocalScanWorkBudgetV1, LocalSourceProgramOwnerV1, SourceProgramLocalLimitsV1, require_source_program_local_profile_v1,
++        scan_source_program_local_v1,
++    },
++    palw_tir_step_v1::{
++        LocalTirStepSpaceFixedRequestsV1, quote_local_tir_step_space_additional_v1, quote_local_tir_step_space_fixed_requests_v1,
++    },
++};
++use misaka_palw_tir_artifact::bounded_v1::{
++    BoundedPalwTirHeaderV1, PalwTirHeaderLimitsV1, read_header_bounded_v1,
++    startup_quote::{ConfiguredSameBytesFileHeaderQuoteV1, quote_configured_same_bytes_file_header_v1},
++};
++use std::fs::{File, Metadata};
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum MetadataOwnerErrorV2 {
++    Unsupported,
++    Limit,
++    Overflow,
++    Pin,
++    MissingLayout,
++    File,
++    Changed,
++    Header,
++    Source,
++    Geometry,
++    Compile,
++    Allocation,
++    Guard,
++}
++use MetadataOwnerErrorV2 as M;
++fn add(a: u64, b: u64) -> Result<u64, M> {
++    a.checked_add(b).ok_or(M::Overflow)
++}
++fn mul(a: u64, b: u64) -> Result<u64, M> {
++    a.checked_mul(b).ok_or(M::Overflow)
++}
++fn n(a: usize) -> Result<u64, M> {
++    u64::try_from(a).map_err(|_| M::Overflow)
++}
++fn cap(a: u64, max: u64) -> Result<(), M> {
++    if a > max { Err(M::Limit) } else { Ok(()) }
++}
++fn vec_req<T>(n: u64) -> Result<u64, M> {
++    mul(growing_vec_request_capacity_v1::<T>(n).ok_or(M::Overflow)?, size_of::<T>() as u64)
++}
++fn copy_exact<T: Copy>(values: &[T]) -> Result<Vec<T>, M> {
++    let mut out = super::super::exact(values.len()).map_err(|_| M::Allocation)?;
++    out.extend_from_slice(values);
++    Ok(out)
++}
++fn collect_exact(values: impl ExactSizeIterator<Item = u32>) -> Result<Vec<u32>, M> {
++    let mut out = super::super::exact(values.len()).map_err(|_| M::Allocation)?;
++    out.extend(values);
++    Ok(out)
++}
++/// Independent metadata pins/context and ACTUAL external control/alias owner.
++/// Neither this public data nor successful metadata parsing is native authority.
++/// External includes context/network backing, optional exact layout preimage,
++/// this budget, callback/error/OS/cache/IO/deadline resources and every alias.
++/// No concurrently mutating file/descriptor-offset aliases may remain active.
++#[derive(Clone, Copy)]
++pub struct MetadataOwnerInputsV2<'a> {
++    pub expected_class: Hash64,
++    pub artifact: Hash64,
++    pub registered_tokenizer: Hash64,
++    pub registered_max_context: u32,
++    pub original_context: &'a PalwJobContextV2,
++    pub expected_execution: Hash64,
++    /// Required exact independently pinned preimage ONLY for undeclared layout;
++    /// if also provided for declared layout it must match, never overwrite it.
++    pub expected_layout: Option<&'a PalwTirLayoutV1>,
++    pub external_retained_bytes: u64,
++    pub external_ticket: &'a (dyn Send + Sync),
++}
++#[derive(Clone, Copy, Debug)]
++pub struct MetadataOwnerLimitsV2 {
++    pub header: PalwTirHeaderLimitsV1,
++    pub source: SourceProgramLocalLimitsV1,
++    pub compile: TirPlanCompileLimitsV2,
++    pub max_new_owner_bytes: u64,
++    pub max_operation_bytes: u64,
++    pub max_attempts: u64,
++    pub max_retained_requests: u64,
++    pub max_total_read_bytes: u64,
++    pub max_total_work: u64,
++    pub max_total_scan_steps: u64,
++    pub max_io_calls_per_attempt: u64,
++    pub max_total_io_calls: u64,
++}
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++pub struct MetadataOwnerUsageV2 {
++    pub attempts: u64,
++    pub retained_requests: u64,
++    pub read_bytes: u64,
++    pub work: u64,
++    pub io_calls_reserved: u64,
++    pub borrowed_validations: u64,
++}
++pub struct MetadataOwnerBudgetV2 {
++    limits: MetadataOwnerLimitsV2,
++    usage: MetadataOwnerUsageV2,
++    source: LocalScanWorkBudgetV1,
++}
++impl MetadataOwnerBudgetV2 {
++    pub fn new(l: MetadataOwnerLimitsV2) -> Result<Self, M> {
++        if l.header.external_retained_bytes != 0 || l.compile.external_retained_bytes != 0 {
++            return Err(M::Pin);
++        }
++        if [
++            l.max_new_owner_bytes,
++            l.max_operation_bytes,
++            l.max_attempts,
++            l.max_retained_requests,
++            l.max_total_read_bytes,
++            l.max_total_work,
++            l.max_total_scan_steps,
++            l.max_io_calls_per_attempt,
++            l.max_total_io_calls,
++        ]
++        .contains(&0)
++        {
++            return Err(M::Limit);
++        }
++        Ok(Self {
++            limits: l,
++            usage: MetadataOwnerUsageV2::default(),
++            source: LocalScanWorkBudgetV1::new(l.max_total_scan_steps).map_err(|_| M::Source)?,
++        })
++    }
++    pub fn usage(&self) -> MetadataOwnerUsageV2 {
++        self.usage
++    }
++    pub fn source_observations(&self) -> (u64, u64, u64, u64, u64) {
++        (
++            self.source.attempts(),
++            self.source.charged_steps(),
++            self.source.observed_steps(),
++            self.source.charged_reader_bytes(),
++            self.source.observed_reader_bytes(),
++        )
++    }
++    fn begin(&mut self, i: MetadataOwnerInputsV2<'_>) -> Result<u64, M> {
++        let prior = self.usage.retained_requests;
++        let attempts = add(self.usage.attempts, 1)?;
++        cap(attempts, self.limits.max_attempts)?;
++        let next = add(prior, self.limits.max_new_owner_bytes)?;
++        cap(next, self.limits.max_retained_requests)?;
++        cap(add(i.external_retained_bytes, next)?, self.limits.max_operation_bytes)?;
++        let calls = add(self.usage.io_calls_reserved, self.limits.max_io_calls_per_attempt)?;
++        cap(calls, self.limits.max_total_io_calls)?;
++        self.usage.attempts = attempts;
++        self.usage.retained_requests = next;
++        self.usage.io_calls_reserved = calls;
++        Ok(prior)
++    }
++    fn charge(&mut self, reads: u64, work: u64) -> Result<(), M> {
++        let r = add(self.usage.read_bytes, reads)?;
++        let w = add(self.usage.work, work)?;
++        cap(r, self.limits.max_total_read_bytes)?;
++        cap(w, self.limits.max_total_work)?;
++        self.usage.read_bytes = r;
++        self.usage.work = w;
++        Ok(())
++    }
++    fn stage(&self, peak: u64, external: u64) -> Result<u64, M> {
++        cap(peak, self.limits.max_new_owner_bytes)?;
++        let total = add(peak, external)?;
++        cap(total, self.limits.max_operation_bytes)?;
++        Ok(total)
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct MetadataFileStampV2 {
++    pub device: u64,
++    pub inode: u64,
++    pub bytes: u64,
++    pub mtime: i64,
++    pub mtime_ns: i64,
++    pub ctime: i64,
++    pub ctime_ns: i64,
++}
++fn stamp(file: &File) -> Result<MetadataFileStampV2, M> {
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::MetadataExt;
++        let s = file.metadata().map_err(|_| M::File)?;
++        if !s.is_file() {
++            return Err(M::File);
++        }
++        Ok(MetadataFileStampV2 {
++            device: s.dev(),
++            inode: s.ino(),
++            bytes: s.len(),
++            mtime: s.mtime(),
++            mtime_ns: s.mtime_nsec(),
++            ctime: s.ctime(),
++            ctime_ns: s.ctime_nsec(),
++        })
++    }
++    #[cfg(not(unix))]
++    {
++        let _ = file;
++        Err(M::Unsupported)
++    }
++}
++struct HeaderIo<'a> {
++    file: &'a mut File,
++    left_calls: u64,
++    left_bytes: u64,
++}
++impl HeaderIo<'_> {
++    fn call(&mut self) -> std::io::Result<()> {
++        if self.left_calls == 0 {
++            return Err(std::io::ErrorKind::Other.into());
++        }
++        self.left_calls -= 1;
++        Ok(())
++    }
++}
++impl Read for HeaderIo<'_> {
++    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
++        self.call()?;
++        if b.len() as u64 > self.left_bytes {
++            return Err(std::io::ErrorKind::Other.into());
++        }
++        let got = self.file.read(b)?;
++        self.left_bytes -= got as u64;
++        Ok(got)
++    }
++}
++impl Seek for HeaderIo<'_> {
++    fn seek(&mut self, p: SeekFrom) -> std::io::Result<u64> {
++        self.call()?;
++        self.file.seek(p)
++    }
++}
++enum OwnedGeometryV2<'a> {
++    Narrow(LocalNarrowForwardSpaceV2<'a>),
++    Wide(PalwTirStepSpaceV2),
++}
++impl OwnedGeometryV2<'_> {
++    fn view(&self) -> LocalForwardSpaceV2<'_> {
++        match self {
++            Self::Narrow(s) => LocalForwardSpaceV2::Narrow(s),
++            Self::Wide(s) => LocalForwardSpaceV2::Wide(s),
++        }
++    }
++}
++#[derive(Clone, Copy, Debug)]
++pub struct MetadataOwnerQuoteV2 {
++    pub fixed_roots: u64,
++    pub configured_header: ConfiguredSameBytesFileHeaderQuoteV1,
++    pub header_retained: u64,
++    pub class_requests: u64,
++    pub source_complete: u64,
++    pub space_decode: u64,
++    pub space_revalidate: u64,
++    pub space_layout: u64,
++    pub space_geometry: u64,
++    pub space_fixed: LocalTirStepSpaceFixedRequestsV1,
++    pub space_peak: u64,
++    pub hash_scratch: u64,
++    pub compile: TirPlanCompileQuoteV2,
++    pub header_stage_peak: u64,
++    pub source_stage_peak: u64,
++    pub class_stage_peak: u64,
++    pub space_stage_peak: u64,
++    pub compile_stage_peak: u64,
++    pub conservative_retained_requests: u64,
++    pub actual_guard_allowance: u64,
++    pub bridge_external_requests: u64,
++}
++/// No Clone/extraction/raw mutable plan or File getter. Every owned field drops
++/// BEFORE the real lease. Original context/preimage/control ticket remain under
++/// external lifetime; owned narrow wrapper anchors that independent ticket, not
++/// this object's own lease (no self-reference). Actual space is paid by M.
++pub struct LocalForwardMetadataOwnerV2<'a> {
++    file: File,
++    header: BoundedPalwTirHeaderV1,
++    class: PalwTirClassV1,
++    source: LocalSourceProgramOwnerV1,
++    space: OwnedGeometryV2<'a>,
++    compiled: LocalCompiledTirPlanV2,
++    inputs: MetadataOwnerInputsV2<'a>,
++    stamp: MetadataFileStampV2,
++    header_limits: PalwTirHeaderLimitsV1,
++    quote: MetadataOwnerQuoteV2,
++    validation_work: u64,
++    _memory: TirMemoryLeaseV1,
++}
++fn root_requests() -> Result<u64, M> {
++    // Logical typed roots, not compiler stack/RSS accounting. Component quotes
++    // additionally contain their own embedded roots: explicit conservative
++    // aggregate/move overlap. Context/budget/callback roots are external E.
++    let owner = size_of::<LocalForwardMetadataOwnerV2<'_>>() as u64;
++    let returned = (size_of::<Result<LocalForwardMetadataOwnerV2<'_>, M>>() as u64).checked_sub(owner).ok_or(M::Overflow)?;
++    add(
++        add(owner, returned)?,
++        add(
++            add(size_of::<HeaderIo<'_>>() as u64, mul(size_of::<MetadataFileStampV2>() as u64, 2)?)?,
++            add(size_of::<Result<Metadata, M>>() as u64, size_of::<M>() as u64)?,
++        )?,
++    )
++}
++fn source_scan_upper(bytes: u64) -> Result<u64, M> {
++    let intrinsic = |n| add(mul(n, 8)?, 4096);
++    add(add(intrinsic(add(bytes, 4)?)?, mul(intrinsic(bytes)?, 3)?)?, 4)
++}
++fn header_validation_work(p: &misaka_palw_tir::TirProgramV1, work: u64) -> Result<u64, M> {
++    let nodes = mul(n(p.blocks.len())?, MAX_NODES_PER_BLOCK as u64)?;
++    let refs = mul(nodes, MAX_NODE_INPUTS as u64)?;
++    let scans = mul(mul(n(p.params.len())?, add(n(p.schedule.layers.len())?, 1)?)?, add(add(nodes, refs)?, 1)?)?;
++    add(work, mul(add(scans, 1)?, 128)?)
++}
++fn class_quote(header: &BoundedPalwTirHeaderV1, expected: Option<&PalwTirLayoutV1>) -> Result<(u64, u64), M> {
++    let (commits, states) = match header.layout().map_err(|_| M::Header)? {
++        Some(v) => (v.commit_tiles().len(), v.state_tiles().len()),
++        None => {
++            let x = expected.ok_or(M::MissingLayout)?;
++            (x.commit_tiles.len(), x.state_tiles.len())
++        }
++    };
++    if commits > MAX_BLOCKS * MAX_NODES_PER_BLOCK || states > MAX_STATES {
++        return Err(M::Limit);
++    }
++    let layout = add(vec_req::<u32>(n(commits)?)?, vec_req::<u32>(n(states)?)?)?;
++    Ok((add(size_of::<PalwTirClassV1>() as u64, add(vec_req::<u8>(n(header.header().program.len())?)?, layout)?)?, layout))
++}
++fn build_class(header: &BoundedPalwTirHeaderV1, expected: Option<&PalwTirLayoutV1>) -> Result<PalwTirClassV1, M> {
++    let layout = match header.layout().map_err(|_| M::Header)? {
++        Some(v) => PalwTirLayoutV1 {
++            version: v.version,
++            max_context: v.max_context,
++            checkpoint_interval: v.checkpoint_interval,
++            h_tile: v.h_tile,
++            commit_tiles: collect_exact(v.commit_tiles())?,
++            state_tiles: collect_exact(v.state_tiles())?,
++        },
++        None => {
++            let e = expected.ok_or(M::MissingLayout)?;
++            PalwTirLayoutV1 {
++                version: e.version,
++                max_context: e.max_context,
++                checkpoint_interval: e.checkpoint_interval,
++                h_tile: e.h_tile,
++                commit_tiles: copy_exact(&e.commit_tiles)?,
++                state_tiles: copy_exact(&e.state_tiles)?,
++            }
++        }
++    };
++    if expected.is_some_and(|e| e != &layout) {
++        return Err(M::Pin);
++    }
++    Ok(PalwTirClassV1 {
++        version: kaspa_consensus_core::palw_tir_class_v1::PALW_TIR_CLASS_VERSION_V1,
++        program: copy_exact(&header.header().program)?,
++        layout,
++        tokenizer_id: Hash64::from_bytes(header.header().tokenizer_id),
++    })
++}
++fn cheap_inputs(i: MetadataOwnerInputsV2<'_>) -> Result<(), M> {
++    let c = i.original_context;
++    if c.version != 2
++        || c.network_id.is_empty()
++        || c.network_id.len() > PALW_V2_MAX_NETWORK_ID_BYTES
++        || c.declared_prefill_tokens == 0
++        || c.exact_decode_tokens == 0
++        || c.shape_profile_id != i.expected_class
++        || c.max_context_tokens != i.registered_max_context
++        || !matches!(c.declared_prefill_tokens.checked_add(c.exact_decode_tokens),Some(n) if n<=c.max_context_tokens)
++    {
++        return Err(M::Pin);
++    }
++    if let Some(l) = i.expected_layout {
++        if l.commit_tiles.len() > MAX_BLOCKS * MAX_NODES_PER_BLOCK || l.state_tiles.len() > MAX_STATES {
++            return Err(M::Limit);
++        }
++    }
++    Ok(())
++}
++fn hash_quote(header: &BoundedPalwTirHeaderV1, i: MetadataOwnerInputsV2<'_>) -> Result<(u64, u64), M> {
++    let (c, s) = match header.layout().map_err(|_| M::Header)? {
++        Some(l) => (l.commit_tiles().len(), l.state_tiles().len()),
++        None => {
++            let l = i.expected_layout.ok_or(M::MissingLayout)?;
++            (l.commit_tiles.len(), l.state_tiles.len())
++        }
++    };
++    let layout = add(22, mul(add(n(c)?, n(s)?)?, 4)?)?;
++    let context = add(2 + 4 + 11 * 64 + 32 + 3 * 4, n(i.original_context.network_id.len())?)?;
++    // Existing Borsh to_vec starts with 1024; CanonicalWriter with 512.
++    // Both writers are conservatively retained together, even though sequential.
++    let scratch = add(vec_req::<u8>(layout.max(1024))?, vec_req::<u8>(context.max(512))?)?;
++    // Actual program/layout/context preimages, plus the fixed class-id writer.
++    Ok((add(add(n(header.header().program.len())?, layout)?, add(context, 2 + 4 * 64)?)?, scratch))
++}
++/// Own a single open native File and all metadata needed by the ordinary CPU
++/// API, without accepting/generating ANY trace binding. The independent class,
++/// artifact, registered tokenizer/max-context and original context are pins,
++/// never inferred expectations from the candidate header. No payload IO here.
++///
++/// The callback MUST use the same actual host ledger as subsequent parameters
++/// and runs. A real configured M lease is obtained before ANY backend metadata,
++/// header quote/parse, Source/Space/compiler or identity-encoding allocation.
++/// Source native envelopes are FULL admitted requests, not owner struct deltas.
++/// Failure claims/work/IO allowances persist in the supplied budget. Component
++/// inventories do not issue second host reservations, nor grant native credit.
++/// The caller forbids concurrent file writes/offset aliases; stat observations
++/// supplement the parameter loader's actual inventory-root check, not a snapshot.
++pub fn load_local_forward_metadata_v2<'a>(
++    mut file: File,
++    inputs: MetadataOwnerInputsV2<'a>,
++    budget: &mut MetadataOwnerBudgetV2,
++    reserver: &TirMemoryReserverV1,
++) -> Result<LocalForwardMetadataOwnerV2<'a>, M> {
++    cheap_inputs(inputs)?;
++    require_source_program_local_profile_v1().map_err(|_| M::Unsupported)?;
++    let prior = budget.begin(inputs)?;
++    let allowance = budget.limits.max_new_owner_bytes;
++    let memory = reserver("tir-local-forward-metadata-v2", inputs.expected_class, inputs.expected_execution, allowance)
++        .map_err(|_| M::Guard)?;
++    let before = stamp(&file)?;
++    let base = root_requests()?;
++    let external = add(inputs.external_retained_bytes, prior)?;
++    let mut hl = budget.limits.header;
++    hl.external_retained_bytes = add(external, base)?;
++    let hq = quote_configured_same_bytes_file_header_v1(before.bytes, hl).map_err(|_| M::Header)?;
++    let header_stage_peak = add(base, hq.new_stage_peak_bytes)?;
++    budget.stage(header_stage_peak, external)?;
++    budget.charge(hq.read_bytes_upper, hq.parser_work_upper)?;
++    let mut io = HeaderIo { file: &mut file, left_calls: budget.limits.max_io_calls_per_attempt, left_bytes: hq.read_bytes_upper };
++    io.seek(SeekFrom::Start(0)).map_err(|_| M::File)?;
++    let header = read_header_bounded_v1(&mut io, before.bytes, hl).map_err(|_| M::Header)?;
++    let actual_header = header.quote(hl).map_err(|_| M::Header)?;
++    let h = actual_header.native_bytes;
++    let source_stage_peak = add(add(base, h)?, budget.limits.source.max_native_requests)?;
++    budget.stage(source_stage_peak, external)?;
++    budget.charge(0, source_scan_upper(n(header.header().program.len())?)?)?;
++    let source = scan_source_program_local_v1(&header.header().program, budget.limits.source, &mut budget.source)
++        .map_err(|_| M::Source)?
++        .decode()
++        .map_err(|_| M::Source)?;
++    let s = source.quote().admitted_native_requests();
++    let validation_work = header_validation_work(source.program(), actual_header.work)?;
++    cap(validation_work, hl.max_work)?;
++    budget.charge(0, validation_work)?;
++    budget.stage(add(header_stage_peak, s)?, external)?;
++    hl.external_retained_bytes = add(hl.external_retained_bytes, s)?;
++    // Temporary borrowed check ends before the owner moves. Recreated only in
++    // a non-escaping callback later; no transmuted/self-referential checked DTO.
++    header.validate_with_program(source.program(), hl).map_err(|_| M::Header)?;
++    let (k, l) = class_quote(&header, inputs.expected_layout)?;
++    let (hash_work, hash_scratch) = hash_quote(&header, inputs)?;
++    let class_stage_peak = add(add(add(add(base, h)?, s)?, k)?, hash_scratch)?;
++    budget.stage(class_stage_peak, external)?;
++    budget.charge(0, hash_work)?;
++    let class = build_class(&header, inputs.expected_layout)?;
++    if class.tokenizer_id != inputs.registered_tokenizer
++        || class.layout.max_context != inputs.registered_max_context
++        || class.class_id(&inputs.artifact) != inputs.expected_class
++        || inputs.original_context.context_hash() != inputs.expected_execution
++    {
++        return Err(M::Pin);
++    }
++    let fixed = quote_local_tir_step_space_fixed_requests_v1().map_err(|_| M::Geometry)?;
++    // Defensive geometry-quote errors allocate within its exact Core-owned
++    // diagnostic census. Admit that envelope BEFORE invoking the getter.
++    budget.stage(add(class_stage_peak, fixed.diagnostic_peak_bytes)?, external)?;
++    budget.charge(0, add(n(source.program().blocks.len())?, n(source.program().states.len())?)?)?;
++    let geometry = quote_local_tir_step_space_additional_v1(&source).map_err(|_| M::Geometry)?;
++    // Two real complete Source phases: fresh canonical decode/NF and the
++    // unchanged explicit validate inside new(). Original S remains separate.
++    let sp = add(
++        add(add(add(add(mul(s, 2)?, l)?, geometry)?, fixed.space_root_bytes)?, fixed.diagnostic_peak_bytes)?,
++        size_of::<OwnedGeometryV2<'_>>() as u64,
++    )?;
++    let space_stage_peak = add(class_stage_peak, sp)?;
++    budget.stage(space_stage_peak, external)?;
++    // This is a symbolic validation visit allowance, not a claim that all
++    // NF/compiler CPU is metered by bytes or a runtime deadline guarantee.
++    budget.charge(0, mul(source_scan_upper(n(class.program.len())?)?, 2)?)?;
++    let space = if source.program().wide_logits_q24() {
++        OwnedGeometryV2::Wide(PalwTirStepSpaceV2::new(&class).map_err(|_| M::Geometry)?)
++    } else {
++        OwnedGeometryV2::Narrow(LocalNarrowForwardSpaceV2 {
++            inner: PalwTirStepSpaceV1::new(&class).map_err(|_| M::Geometry)?,
++            _ticket: inputs.external_ticket,
++        })
++    };
++    // Reject unsupported final widths/schemes before expensive compilation.
++    let p = source.program();
++    let dtype = p.blocks[p.schedule.post as usize].nodes[p.logits as usize].out.dtype;
++    let scheme = Hash64::from_bytes(p.logits_scheme_id);
++    let expected_trace = if p.wide_logits_q24() && dtype == DType::I64 {
++        wide::scheme_id()
++    } else if scheme == flat_logits_scheme_id_v1() && dtype == DType::I32 {
++        kaspa_consensus_core::palw_v2::trace_scheme_id_v2()
++    } else if scheme == tiled_logits_scheme_id_v1() && dtype == DType::I32 {
++        tiled_logits_scheme_id_v1()
++    } else {
++        return Err(M::Unsupported);
++    };
++    if inputs.original_context.trace_scheme_id != expected_trace {
++        return Err(M::Pin);
++    }
++    space.view().job_shape(inputs.original_context).map_err(|_| M::Geometry)?;
++    let visits = tir_plan_compile_quote_visits_upper_v2(&source).map_err(|_| M::Compile)?;
++    budget.charge(0, visits)?;
++    let mut cl = budget.limits.compile;
++    // Compiler itself adds original complete S ONCE; exclude it from external.
++    cl.external_retained_bytes = add(external, add(add(add(add(base, h)?, k)?, sp)?, hash_scratch)?)?;
++    let prepared = prepare_tir_plan_compile_v2(&source, cl).map_err(|_| M::Compile)?;
++    let compile = *prepared.quote();
++    let compile_stage_peak = compile.operation_peak_bytes().checked_sub(external).ok_or(M::Overflow)?;
++    budget.stage(compile_stage_peak, external)?;
++    let compiled = prepared.compile().map_err(|_| M::Compile)?;
++    let retained = add(add(add(add(add(add(base, h)?, k)?, s)?, sp)?, hash_scratch)?, compile.retained_bytes())?;
++    budget.stage(retained, external)?;
++    let after = stamp(&file)?;
++    if before != after {
++        return Err(M::Changed);
++    }
++    let quote = MetadataOwnerQuoteV2 {
++        fixed_roots: base,
++        configured_header: hq,
++        header_retained: h,
++        class_requests: k,
++        source_complete: s,
++        space_decode: s,
++        space_revalidate: s,
++        space_layout: l,
++        space_geometry: geometry,
++        space_fixed: fixed,
++        space_peak: sp,
++        hash_scratch,
++        compile,
++        header_stage_peak,
++        source_stage_peak,
++        class_stage_peak,
++        space_stage_peak,
++        compile_stage_peak,
++        conservative_retained_requests: retained,
++        actual_guard_allowance: allowance,
++        bridge_external_requests: add(external, allowance)?,
++    };
++    Ok(LocalForwardMetadataOwnerV2 {
++        file,
++        header,
++        class,
++        source,
++        space,
++        compiled,
++        inputs,
++        stamp: after,
++        header_limits: hl,
++        quote,
++        validation_work,
++        _memory: memory,
++    })
++}
++impl LocalForwardMetadataOwnerV2<'_> {
++    pub fn quote(&self) -> MetadataOwnerQuoteV2 {
++        self.quote
++    }
++    pub fn file_stamp(&self) -> MetadataFileStampV2 {
++        self.stamp
++    }
++    /// Actual guard remains live for this WHOLE owner. Revalidation consumes the
++    /// persistent supplied budget before looping; no successful callback refund.
++    /// HRTB prevents any checked/metadata/FD borrow escaping as R. Owned ordinary
++    /// output may escape only after its independent run lease is established.
++    /// Taking/replacing arbitrary budget owners is not session authorization.
++    pub fn with_inputs<R>(
++        &mut self,
++        budget: &mut MetadataOwnerBudgetV2,
++        body: impl for<'b> FnOnce(&'b mut File, LocalForwardInputsV2<'b>) -> R,
++    ) -> Result<R, M> {
++        let validations = add(budget.usage.borrowed_validations, 1)?;
++        budget.charge(0, self.validation_work)?;
++        budget.usage.borrowed_validations = validations;
++        if stamp(&self.file)? != self.stamp {
++            return Err(M::Changed);
++        }
++        let checked = self.header.validate_with_program(self.source.program(), self.header_limits).map_err(|_| M::Header)?;
++        let inputs = LocalForwardInputsV2 {
++            checked: &checked,
++            source: &self.source,
++            compiled: &self.compiled,
++            class: &self.class,
++            artifact: self.inputs.artifact,
++            expected_class: self.inputs.expected_class,
++            space: self.space.view(),
++            original_context: self.inputs.original_context,
++            expected_execution: self.inputs.expected_execution,
++            external_retained_bytes: self.quote.bridge_external_requests,
++            external_ticket: &self._memory,
++        };
++        // No identity hash/parameter reopen/second owned parameter inventory.
++        let out = body(&mut self.file, inputs);
++        if stamp(&self.file)? != self.stamp {
++            return Err(M::Changed);
++        }
++        Ok(out)
++    }
++}
+diff --git a/misaka/palw/tir/exec/src/node/run.rs b/misaka/palw/tir/exec/src/node/run.rs
+--- a/misaka/palw/tir/exec/src/node/run.rs
++++ b/misaka/palw/tir/exec/src/node/run.rs
+@@ -113,6 +113,27 @@
+ /// A free-prompt job's decode rule: `(ids generated so far, logits row, row index) -> selected id`.
+ pub type TirDecodeSelectorV1 = std::sync::Arc<dyn Fn(&[u32], &[i32], u32) -> u32 + Send + Sync>;
+ 
++/// Measurement-only construction/inline request. Private concrete types are
++/// counted here rather than guessed by external callers. Payload/rows/hash/tree
++/// backing and the executor each have separately named measurement requests.
++pub(crate) fn dense_measurement_constructor_requests_v2(program: &misaka_palw_tir::TirProgramV1) -> Result<u64, String> {
++    use kaspa_consensus_core::palw_native_resource_v1::growing_vec_request_capacity_v1;
++    let mut bytes =
++        (std::mem::size_of::<TirClassRunnerV1<'_>>() + std::mem::size_of::<Emitter>() + std::mem::size_of::<Driven>()) as u64;
++    let outer = growing_vec_request_capacity_v1::<Vec<u32>>(program.blocks.len() as u64).ok_or("dense constructor overflow")?;
++    bytes = bytes
++        .checked_add(outer.checked_mul(std::mem::size_of::<Vec<u32>>() as u64).ok_or("dense constructor overflow")?)
++        .ok_or("dense constructor overflow")?;
++    for block in &program.blocks {
++        bytes = bytes
++            .checked_add(
++                (block.nodes.len() as u64).checked_mul(std::mem::size_of::<u32>() as u64).ok_or("dense constructor overflow")?,
++            )
++            .ok_or("dense constructor overflow")?;
++    }
++    Ok(bytes)
++}
++
+ /// Runs jobs of one IR class over one artifact's params.
+ pub struct TirClassRunnerV1<'a> {
+     pub space: &'a PalwTirStepSpaceV1,
+@@ -213,6 +234,36 @@
+         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+     ) -> Result<TirJobRunV1, String> {
+         let d = self.drive(ctx, prompt, cap, verify, None, None, None, on_leaf, None, None, None)?;
++        self.commit(ctx, cap, d)
++    }
++
++    /// Same default unobserved computation with an explicit REQUIRED executor
++    /// ledger. Only the measurement bridge calls this; old APIs keep None.
++    /// Retained rows/hashes/roots need the bridge's separate extra-owner guard.
++    #[allow(clippy::too_many_arguments)]
++    pub(crate) fn run_required_v2(
++        &self,
++        ctx: &PalwJobContextV2,
++        prompt: &[u32],
++        cap: u64,
++        expected_execution: Hash64,
++        reserver: &super::memory::TirMemoryReserverV1,
++        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
++    ) -> Result<TirJobRunV1, String> {
++        let d = self.drive_reserved(
++            ctx,
++            prompt,
++            cap,
++            false,
++            None,
++            None,
++            None,
++            on_leaf,
++            None,
++            None,
++            None,
++            Some((reserver, expected_execution)),
++        )?;
+         self.commit(ctx, cap, d)
+     }
+ 
+@@ -354,11 +405,29 @@
+         verify: bool,
+         start: Option<&TirResumePointV1>,
+         until: Option<u32>,
++        record: Option<&mut Vec<TirResumePointV1>>,
++        on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
++        stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
++        last_resume: Option<&mut Option<TirResumePointV1>>,
++        observer: Option<&mut dyn TirRunObserverV1>,
++    ) -> Result<Driven, String> {
++        self.drive_reserved(ctx, prompt, cap, verify, start, until, record, on_leaf, stream_rows, last_resume, observer, None)
++    }
++    #[allow(clippy::too_many_arguments)]
++    fn drive_reserved(
++        &self,
++        ctx: &PalwJobContextV2,
++        prompt: &[u32],
++        cap: u64,
++        verify: bool,
++        start: Option<&TirResumePointV1>,
++        until: Option<u32>,
+         mut record: Option<&mut Vec<TirResumePointV1>>,
+         on_leaf: &mut dyn FnMut(&TirLeafOutV1<'_>),
+         mut stream_rows: Option<&mut dyn FnMut(u32, &[i32]) -> Result<(), String>>,
+         last_resume: Option<&mut Option<TirResumePointV1>>,
+         mut observer: Option<&mut dyn TirRunObserverV1>,
++        required: Option<(&super::memory::TirMemoryReserverV1, Hash64)>,
+     ) -> Result<Driven, String> {
+         let space = self.space;
+         if ctx.shape_profile_id != self.class_id {
+@@ -379,7 +448,16 @@
+         };
+         let h_tile = space.layout.h_tile as usize;
+         let memory_need = super::memory::tir_executor_storage_need_v1(space, self.plan, ctx)?;
+-        let memory = super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-executor", self.class_id, ctx, memory_need)?;
++        let memory = match required {
++            Some((reserver, expected_execution)) => {
++                let lease = reserver("tir-dense-measurement-executor-v2", self.class_id, expected_execution, memory_need)?;
++                if ctx.context_hash() != expected_execution {
++                    return Err("dense measurement original execution pin differs".into());
++                }
++                Some(lease)
++            }
++            None => super::memory::reserve_v1(&super::memory::memory_reserver_v1(), "tir-executor", self.class_id, ctx, memory_need)?,
++        };
+         let mut exec = TirExecutor::new(self.plan, self.params).map_err(|e| e.to_string())?;
+         exec.set_hist_tail(h_tile);
+         if self.fused {
+diff --git a/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs b/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
+--- a/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
++++ b/misaka/palw/tir/exec/src/node/run_wide_q24_v2.rs
+@@ -299,6 +299,25 @@
+         self.drive(ctx, prompt, expected_execution, limits, &mut forward, Some(observer), None)
+     }
+ 
++    /// Same unobserved default computation with the existing REQUIRED run
++    /// reservation. No optional-global fallback and no extra every-node observer.
++    #[allow(clippy::too_many_arguments)]
++    pub(crate) fn run_required_v2(
++        &self,
++        ctx: &PalwJobContextV2,
++        prompt: &[u32],
++        expected_execution: Hash64,
++        limits: TirWideRunLimitsV2,
++        on_leaf: &mut dyn FnMut(&TirLeafOutWideQ24V2<'_>),
++        reserver: &TirMemoryReserverV1,
++    ) -> Result<TirJobRunWideQ24V2, String> {
++        let mut forward = |leaf: &TirLeafOutWideQ24V2<'_>| {
++            on_leaf(leaf);
++            Ok(())
++        };
++        self.drive(ctx, prompt, expected_execution, limits, &mut forward, None, Some(reserver))
++    }
++
+     /// Fallible local custody callback. A failed tape write aborts this same
+     /// run immediately; partial values cannot become a completed capture.
+     /// Requires the actual caller's RAM ledger; its run guard is retained by
+diff --git a/misaka/palw/tir/exec/tests/local_forward_metadata_v2.rs b/misaka/palw/tir/exec/tests/local_forward_metadata_v2.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/tests/local_forward_metadata_v2.rs
+@@ -0,0 +1,407 @@
++#![cfg(feature = "node")]
++//! Synthetic declarations only. No actual registered model/native receipt,
++//! native assignment, trace binding, full leaf/tree execution or model file.
++mod run_wide_common;
++use kaspa_consensus_core::{
++    Hash64,
++    palw_native_resource_v1::{SourceProgramLocalLimitsV1, require_source_program_local_profile_v1},
++    palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1},
++    palw_step_refute::{flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1},
++    palw_tir_class_v1::{PalwTirClassV1, PalwTirLayoutV1},
++    palw_v2::PalwJobContextV2,
++};
++use misaka_palw_tir_artifact::{bounded_v1::PalwTirHeaderLimitsV1, write_container_v1};
++use misaka_palw_tir_exec::{
++    TirParams, TirPlan,
++    node::{
++        TirHeldInventoryV1, TirParamsSourceV1,
++        memory::TirMemoryReserverV1,
++        owned_artifact_params_v2::{
++            OwnedParamLimitsV2,
++            forward::{metadata::*, *},
++        },
++    },
++    plan::TirPlanCompileLimitsV2,
++};
++use run_wide_common::{EXPECTED_GENERATED, MAX_CONTEXT, PROMPT};
++use std::{
++    fs::{File, OpenOptions},
++    sync::{
++        Arc,
++        atomic::{AtomicU64, AtomicUsize, Ordering},
++    },
++};
++const EXTERNAL: u64 = 1 << 30;
++struct Guard(Arc<AtomicU64>, u64);
++impl Drop for Guard {
++    fn drop(&mut self) {
++        self.0.fetch_sub(self.1, Ordering::SeqCst);
++    }
++}
++fn reserve(live: Arc<AtomicU64>, calls: Arc<AtomicUsize>) -> TirMemoryReserverV1 {
++    Arc::new(move |_, _, _, bytes| {
++        calls.fetch_add(1, Ordering::SeqCst);
++        live.fetch_add(bytes, Ordering::SeqCst);
++        Ok(Box::new(Guard(live.clone(), bytes)))
++    })
++}
++fn limits() -> MetadataOwnerLimitsV2 {
++    MetadataOwnerLimitsV2 {
++        header: PalwTirHeaderLimitsV1 {
++            max_file_bytes: 1 << 24,
++            max_header_bytes: 1 << 20,
++            max_program_bytes: 1 << 20,
++            max_layout_bytes: 1 << 20,
++            max_tensors: 1024,
++            max_meta_bytes: 4096,
++            max_native_bytes: 1 << 22,
++            max_copy_bytes: 1 << 22,
++            max_work: 1 << 42,
++            max_operation_bytes: 1 << 36,
++            external_retained_bytes: 0,
++        },
++        source: SourceProgramLocalLimitsV1 {
++            max_program_bytes: 1 << 20,
++            max_scan_steps: 1 << 36,
++            max_nf_items: 1 << 32,
++            max_native_requests: 1 << 30,
++        },
++        compile: TirPlanCompileLimitsV2 {
++            max_quote_visits: 1 << 36,
++            max_retained_bytes: 1 << 30,
++            max_scratch_bytes: 1 << 31,
++            max_operation_bytes: 1 << 36,
++            external_retained_bytes: 0,
++        },
++        max_new_owner_bytes: 1 << 32,
++        max_operation_bytes: 1 << 38,
++        max_attempts: 4,
++        max_retained_requests: 1 << 36,
++        max_total_read_bytes: 1 << 28,
++        max_total_work: 1 << 48,
++        max_total_scan_steps: 1 << 44,
++        max_io_calls_per_attempt: 1 << 20,
++        max_total_io_calls: 1 << 24,
++    }
++}
++fn load_limits() -> LocalForwardLoadLimitsV2 {
++    LocalForwardLoadLimitsV2 {
++        params: OwnedParamLimitsV2 {
++            max_tensor_bytes: 1 << 24,
++            max_payload_bytes: 1 << 25,
++            max_chunk_bytes: 32768,
++            max_metadata_bytes: 1 << 24,
++            max_native_bytes: 1 << 26,
++            max_inventory_leaves: 1 << 20,
++            max_work_per_attempt: 1 << 42,
++            max_attempts: 4,
++            max_total_read_bytes: 1 << 28,
++            max_total_inventory_leaves: 1 << 22,
++            max_total_work: 1 << 46,
++            max_operation_bytes: 1 << 38,
++            external_retained_bytes: 0,
++        },
++        max_new_owner_bytes: 1 << 28,
++        max_operation_bytes: 1 << 38,
++        max_retained_requests: 1 << 32,
++        max_provider_calls_per_attempt: 1 << 20,
++        max_total_provider_calls: 1 << 24,
++    }
++}
++fn run_limits(external: u64) -> LocalWideForwardLimitsV2 {
++    LocalWideForwardLimitsV2 {
++        max_positions: MAX_CONTEXT,
++        max_generated: 16,
++        max_logits_lanes: 64,
++        max_work_per_attempt: 1 << 44,
++        max_requested_bytes: 1 << 32,
++        max_operation_bytes: 1 << 40,
++        max_attempts: 4,
++        max_total_work: 1 << 48,
++        max_retained_requests: 1 << 35,
++        external_retained_bytes: external,
++    }
++}
++struct Fixture {
++    _dir: tempfile::TempDir,
++    path: std::path::PathBuf,
++    class: PalwTirClassV1,
++    artifact: Hash64,
++    ctx: PalwJobContextV2,
++    execution: Hash64,
++}
++impl Fixture {
++    fn new(wide: bool, flat: bool, declared_layout: bool) -> Self {
++        // Metadata/provider fixture setup is itself under the independent
++        // EXTERNAL ticket in the tests. No LLM forward/evidence run takes place.
++        let (mut p, map) = run_wide_common::program(wide, 1);
++        if flat {
++            p.logits_scheme_id = flat_logits_scheme_id_v1().as_bytes();
++        }
++        let plan = TirPlan::compile(&p).unwrap();
++        let params = TirParams::from_map(&plan, &map).unwrap();
++        let source = TirParamsSourceV1(&params);
++        let inv = TirHeldInventoryV1::build(&p, &source).unwrap();
++        let artifact = inv.tree.root();
++        let class = PalwTirClassV1 {
++            version: 1,
++            program: p.encode(),
++            layout: PalwTirLayoutV1 {
++                version: 1,
++                max_context: MAX_CONTEXT,
++                checkpoint_interval: 3,
++                h_tile: 1,
++                commit_tiles: p.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).map(|_| 4).collect(),
++                state_tiles: vec![4; p.states.len()],
++            },
++            tokenizer_id: Hash64::from_u64_word(18),
++        };
++        let zero = Hash64::default();
++        let ctx = PalwJobContextV2 {
++            version: 2,
++            network_id: b"testnet-12".to_vec(),
++            job_id: Hash64::from_u64_word(41),
++            job_nullifier: zero,
++            assignment_id: zero,
++            execution_seed: [2; 32],
++            model_profile_id: zero,
++            runtime_manifest_hash: zero,
++            runtime_class_id: zero,
++            shape_profile_id: class.class_id(&artifact),
++            trace_scheme_id: if wide {
++                kaspa_consensus_core::palw_logits_q24_v2::scheme_id()
++            } else if flat {
++                kaspa_consensus_core::palw_v2::trace_scheme_id_v2()
++            } else {
++                tiled_logits_scheme_id_v1()
++            },
++            cu_ruleset_id: zero,
++            tokenizer_id: zero,
++            prompt_token_ids_hash: prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, PROMPT).unwrap(),
++            declared_prefill_tokens: 2,
++            exact_decode_tokens: 6,
++            max_context_tokens: MAX_CONTEXT,
++        };
++        let execution = ctx.context_hash();
++        let dir = tempfile::TempDir::new().unwrap();
++        let path = dir.path().join("metadata.palwtir");
++        write_container_v1(
++            &path,
++            &p,
++            if declared_layout { borsh::to_vec(&class.layout).unwrap() } else { vec![] },
++            class.tokenizer_id.as_bytes(),
++            "test-local-no-trace".into(),
++            &mut |j, l| Ok(params.get(j, l).unwrap().to_le_bytes()),
++        )
++        .unwrap();
++        Self { _dir: dir, path, class, artifact, ctx, execution }
++    }
++    fn file(&self) -> File {
++        OpenOptions::new().read(true).write(true).open(&self.path).unwrap()
++    }
++    fn inputs<'a>(&'a self, ticket: &'a (dyn Send + Sync), layout: bool) -> MetadataOwnerInputsV2<'a> {
++        MetadataOwnerInputsV2 {
++            expected_class: self.ctx.shape_profile_id,
++            artifact: self.artifact,
++            registered_tokenizer: self.class.tokenizer_id,
++            registered_max_context: MAX_CONTEXT,
++            original_context: &self.ctx,
++            expected_execution: self.execution,
++            expected_layout: layout.then_some(&self.class.layout),
++            external_retained_bytes: EXTERNAL,
++            external_ticket: ticket,
++        }
++    }
++}
++fn audited() {
++    require_source_program_local_profile_v1().expect("audited Source build required; unsupported is not a successful metadata test");
++}
++#[test]
++fn trace_free_same_descriptor_owner_reaches_ordinary_outputs_all_three_profiles() {
++    audited();
++    for (wide, flat, expected) in [
++        (true, false, LocalForwardProfileV2::WideI64Q24),
++        (false, false, LocalForwardProfileV2::TiledI32),
++        (false, true, LocalForwardProfileV2::FlatI32),
++    ] {
++        let held = Arc::new(AtomicU64::new(0));
++        let calls = Arc::new(AtomicUsize::new(0));
++        let r = reserve(held.clone(), calls.clone());
++        let ticket = r("test-external", Hash64::default(), Hash64::default(), EXTERNAL).unwrap();
++        let f = Fixture::new(wide, flat, true);
++        let mut b = MetadataOwnerBudgetV2::new(limits()).unwrap();
++        let mut owner = load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &r).unwrap();
++        let q = owner.quote();
++        assert_eq!(held.load(Ordering::SeqCst), EXTERNAL + q.actual_guard_allowance);
++        assert_eq!(q.source_complete, q.compile.source_owner_requests());
++        assert_eq!(q.space_decode, q.source_complete);
++        assert_eq!(q.space_revalidate, q.source_complete);
++        assert!(
++            q.space_peak
++                >= 2 * q.source_complete
++                    + q.space_layout
++                    + q.space_geometry
++                    + q.space_fixed.space_root_bytes
++                    + q.space_fixed.diagnostic_peak_bytes
++        );
++        assert_eq!(q.bridge_external_requests, EXTERNAL + q.actual_guard_allowance);
++        assert!(q.compile_stage_peak >= q.source_complete + q.space_peak + q.compile.retained_bytes() + q.compile.scratch_bytes());
++        let output = owner
++            .with_inputs(&mut b, |file, i| {
++                assert_eq!(i.class, &f.class);
++                assert_eq!(i.original_context, &f.ctx);
++                assert_eq!(i.class.tokenizer_id, Hash64::from_u64_word(18));
++                assert_eq!(i.original_context.tokenizer_id, Hash64::default());
++                assert_eq!(i.original_context.cu_ruleset_id, Hash64::default());
++                assert_eq!(i.original_context.max_context_tokens, MAX_CONTEXT);
++                let loaded =
++                    load_local_wide_forward_v2(file, i, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), &r).unwrap();
++                assert_eq!(loaded.profile(), expected);
++                let external = q.bridge_external_requests + loaded.load_quote().requested_bytes;
++                loaded.forward_local(PROMPT, &mut LocalWideForwardBudgetV2::new(run_limits(external)).unwrap(), &r).unwrap()
++            })
++            .unwrap();
++        assert_eq!(output.generated(), EXPECTED_GENERATED);
++        assert_eq!(output.execution(), f.execution);
++        let output_bytes = output.quote().requested_bytes;
++        assert_eq!(held.load(Ordering::SeqCst), EXTERNAL + q.actual_guard_allowance + output_bytes);
++        drop(owner);
++        assert_eq!(held.load(Ordering::SeqCst), EXTERNAL + output_bytes);
++        drop(output);
++        drop(ticket);
++        assert_eq!(held.load(Ordering::SeqCst), 0);
++        assert_eq!(calls.load(Ordering::SeqCst), 4);
++        assert_eq!(b.usage().borrowed_validations, 1);
++    }
++}
++#[test]
++fn required_guard_denial_is_before_backend_and_keeps_attempt_reservation() {
++    audited();
++    let f = Fixture::new(true, false, true);
++    let ticket = ();
++    let mut l = limits();
++    l.max_attempts = 1;
++    let mut b = MetadataOwnerBudgetV2::new(l).unwrap();
++    let calls = Arc::new(AtomicUsize::new(0));
++    let seen = calls.clone();
++    let deny: TirMemoryReserverV1 = Arc::new(move |_, class, execution, n| {
++        seen.fetch_add(1, Ordering::SeqCst);
++        assert_eq!(n, 1 << 32);
++        assert_ne!(class, Hash64::default());
++        assert_ne!(execution, Hash64::default());
++        Err("test guard refused".into())
++    });
++    assert_eq!(
++        load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &deny).err(),
++        Some(MetadataOwnerErrorV2::Guard)
++    );
++    assert_eq!(b.usage().read_bytes, 0);
++    assert_eq!(b.source_observations().0, 0);
++    let before = b.usage();
++    assert_eq!(before.retained_requests, l.max_new_owner_bytes);
++    assert_eq!(before.io_calls_reserved, l.max_io_calls_per_attempt);
++    assert_eq!(
++        load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &deny).err(),
++        Some(MetadataOwnerErrorV2::Limit)
++    );
++    assert_eq!(before, b.usage());
++    assert_eq!(calls.load(Ordering::SeqCst), 1);
++}
++#[test]
++fn layout_none_requires_exact_independent_preimage_and_never_repairs_declared_layout() {
++    audited();
++    let ticket = ();
++    let r = reserve(Arc::new(AtomicU64::new(0)), Arc::new(AtomicUsize::new(0)));
++    let f = Fixture::new(false, false, false);
++    let mut b = MetadataOwnerBudgetV2::new(limits()).unwrap();
++    assert_eq!(
++        load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &r).err(),
++        Some(MetadataOwnerErrorV2::MissingLayout)
++    );
++    let spent = b.usage();
++    assert!(spent.read_bytes > 0 && spent.work > 0 && spent.retained_requests > 0);
++    let mut owner = load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, true), &mut b, &r).unwrap();
++    owner.with_inputs(&mut b, |_, i| assert_eq!(i.class.layout, f.class.layout)).unwrap();
++    let g = Fixture::new(true, false, true);
++    let mut wrong = g.class.layout.clone();
++    wrong.checkpoint_interval += 1;
++    let mut i = g.inputs(&ticket, true);
++    i.expected_layout = Some(&wrong);
++    assert_eq!(load_local_forward_metadata_v2(g.file(), i, &mut b, &r).err(), Some(MetadataOwnerErrorV2::Pin));
++}
++#[test]
++fn source_cap_stage_rejects_before_scan_and_failed_io_is_not_free() {
++    audited();
++    let f = Fixture::new(false, true, true);
++    let ticket = ();
++    let r = reserve(Arc::new(AtomicU64::new(0)), Arc::new(AtomicUsize::new(0)));
++    let mut l = limits();
++    l.max_new_owner_bytes = l.source.max_native_requests - 1;
++    let mut b = MetadataOwnerBudgetV2::new(l).unwrap();
++    assert_eq!(
++        load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &r).err(),
++        Some(MetadataOwnerErrorV2::Limit)
++    );
++    assert_eq!(b.source_observations().0, 0);
++    assert!(b.usage().read_bytes > 0);
++    let mut l = limits();
++    l.max_io_calls_per_attempt = 1;
++    l.max_attempts = 1;
++    let mut b = MetadataOwnerBudgetV2::new(l).unwrap();
++    assert_eq!(
++        load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &r).err(),
++        Some(MetadataOwnerErrorV2::Header)
++    );
++    let spent = b.usage();
++    assert_eq!(spent.io_calls_reserved, 1);
++    assert!(spent.read_bytes > 0);
++    assert_eq!(
++        load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &r).err(),
++        Some(MetadataOwnerErrorV2::Limit)
++    );
++    assert_eq!(spent, b.usage());
++}
++#[test]
++fn independent_class_artifact_context_pins_and_changed_descriptor_fail_closed() {
++    audited();
++    let f = Fixture::new(true, false, true);
++    let ticket = ();
++    let held = Arc::new(AtomicU64::new(0));
++    let r = reserve(held.clone(), Arc::new(AtomicUsize::new(0)));
++    for field in 0..3 {
++        let mut i = f.inputs(&ticket, false);
++        match field {
++            0 => i.artifact = Hash64::from_u64_word(987),
++            1 => i.expected_execution = Hash64::from_u64_word(654),
++            _ => i.registered_tokenizer = Hash64::from_u64_word(321),
++        };
++        let mut b = MetadataOwnerBudgetV2::new(limits()).unwrap();
++        assert_eq!(load_local_forward_metadata_v2(f.file(), i, &mut b, &r).err(), Some(MetadataOwnerErrorV2::Pin));
++        assert_eq!(held.load(Ordering::SeqCst), 0);
++        assert!(b.usage().work > 0);
++    }
++    let mut b = MetadataOwnerBudgetV2::new(limits()).unwrap();
++    let mut owner = load_local_forward_metadata_v2(f.file(), f.inputs(&ticket, false), &mut b, &r).unwrap();
++    let before = b.usage();
++    f.file().set_len(owner.file_stamp().bytes + 1).unwrap();
++    assert_eq!(
++        owner.with_inputs(&mut b, |_, _| panic!("changed file must not reach borrowed API")).err(),
++        Some(MetadataOwnerErrorV2::Changed)
++    );
++    assert!(b.usage().work > before.work);
++    assert_eq!(b.usage().borrowed_validations, before.borrowed_validations + 1);
++    drop(owner);
++    assert_eq!(held.load(Ordering::SeqCst), 0);
++}
++#[test]
++fn nested_external_double_count_and_zero_limits_are_refused() {
++    let mut l = limits();
++    l.header.external_retained_bytes = 1;
++    assert!(matches!(MetadataOwnerBudgetV2::new(l), Err(MetadataOwnerErrorV2::Pin)));
++    let mut l = limits();
++    l.compile.external_retained_bytes = 1;
++    assert!(matches!(MetadataOwnerBudgetV2::new(l), Err(MetadataOwnerErrorV2::Pin)));
++    let mut l = limits();
++    l.max_total_io_calls = 0;
++    assert!(matches!(MetadataOwnerBudgetV2::new(l), Err(MetadataOwnerErrorV2::Limit)));
++}
+diff --git a/misaka/palw/tir/exec/tests/local_wide_forward_v2.rs b/misaka/palw/tir/exec/tests/local_wide_forward_v2.rs
+new file mode 100644
+--- /dev/null
++++ b/misaka/palw/tir/exec/tests/local_wide_forward_v2.rs
+@@ -0,0 +1,784 @@
++#![cfg(feature = "node")]
++//! Local synthetic regression declarations, not native registration or credit.
++//! First startup/forward constructs NO full trace binding. Dense execution below
++//! is a separately requested regression oracle after ordinary forward completes.
++mod run_wide_common;
++use kaspa_consensus_core::{
++    Hash64, palw_logits_q24_v2,
++    palw_native_resource_v1::{LocalScanWorkBudgetV1, SourceProgramLocalLimitsV1, scan_source_program_local_v1},
++    palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1},
++    palw_step_refute::{flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1},
++    palw_tir_class_v1::{PalwTirClassV1, PalwTirLayoutV1},
++    palw_tir_step_v1::PalwTirStepSpaceV2,
++    palw_v2::PalwJobContextV2,
++};
++use misaka_palw_tir_artifact::{
++    bounded_v1::{PalwTirHeaderLimitsV1, read_header_bounded_v1},
++    write_container_v1,
++};
++use misaka_palw_tir_exec::{
++    TirParams, TirPlan,
++    node::{
++        TirHeldInventoryV1, TirParamsSourceV1,
++        memory::TirMemoryReserverV1,
++        owned_artifact_params_v2::{OwnedParamLimitsV2, forward::*},
++        run::TirClassRunnerV1,
++        run_wide_q24_v2::{TirClassRunnerWideQ24V2, TirWideRunLimitsV2},
++    },
++    plan::{TirPlanCompileLimitsV2, prepare_tir_plan_compile_v2},
++};
++use run_wide_common::{EXPECTED_GENERATED, MAX_CONTEXT, PROMPT};
++use std::{
++    fs::File,
++    io::{Read, Seek, SeekFrom, Write},
++    sync::{
++        Arc,
++        atomic::{AtomicU64, AtomicUsize, Ordering},
++    },
++};
++const EXTERNAL: u64 = 1 << 30;
++fn header_limits() -> PalwTirHeaderLimitsV1 {
++    PalwTirHeaderLimitsV1 {
++        max_file_bytes: 1 << 24,
++        max_header_bytes: 1 << 20,
++        max_program_bytes: 1 << 20,
++        max_layout_bytes: 1 << 20,
++        max_tensors: 1024,
++        max_meta_bytes: 4096,
++        max_native_bytes: 1 << 22,
++        max_copy_bytes: 1 << 22,
++        max_work: 1 << 40,
++        max_operation_bytes: 1 << 34,
++        external_retained_bytes: EXTERNAL,
++    }
++}
++fn load_limits() -> LocalForwardLoadLimitsV2 {
++    LocalForwardLoadLimitsV2 {
++        params: OwnedParamLimitsV2 {
++            max_tensor_bytes: 1 << 24,
++            max_payload_bytes: 1 << 25,
++            max_chunk_bytes: 32768,
++            max_metadata_bytes: 1 << 24,
++            max_native_bytes: 1 << 26,
++            max_inventory_leaves: 1 << 20,
++            max_work_per_attempt: 1 << 42,
++            max_attempts: 4,
++            max_total_read_bytes: 1 << 28,
++            max_total_inventory_leaves: 1 << 22,
++            max_total_work: 1 << 46,
++            max_operation_bytes: 1 << 35,
++            external_retained_bytes: 0,
++        },
++        max_new_owner_bytes: 1 << 28,
++        max_operation_bytes: 1 << 35,
++        max_retained_requests: 1 << 32,
++        max_provider_calls_per_attempt: 1 << 20,
++        max_total_provider_calls: 1 << 24,
++    }
++}
++fn run_limits() -> LocalWideForwardLimitsV2 {
++    LocalWideForwardLimitsV2 {
++        max_positions: MAX_CONTEXT,
++        max_generated: 16,
++        max_logits_lanes: 64,
++        max_work_per_attempt: 1 << 44,
++        max_requested_bytes: 1 << 32,
++        max_operation_bytes: 1 << 36,
++        max_attempts: 4,
++        max_total_work: 1 << 48,
++        max_retained_requests: 1 << 35,
++        external_retained_bytes: EXTERNAL + (1 << 28),
++    }
++}
++struct Guard(Arc<AtomicU64>, u64);
++impl Drop for Guard {
++    fn drop(&mut self) {
++        self.0.fetch_sub(self.1, Ordering::SeqCst);
++    }
++}
++fn reserver(held: Arc<AtomicU64>, calls: Arc<AtomicUsize>) -> TirMemoryReserverV1 {
++    Arc::new(move |_, _, _, n| {
++        assert!(n > 0);
++        calls.fetch_add(1, Ordering::SeqCst);
++        held.fetch_add(n, Ordering::SeqCst);
++        Ok(Box::new(Guard(held.clone(), n)))
++    })
++}
++// This finite external ticket/guard is acquired before header/source/compile
++// construction. Independent literal oracles are test-only caller inputs; no
++// allocation/RSS success is inferred from this counting test callback.
++fn fixture(
++    window: u32,
++    empty: bool,
++    body: impl FnOnce(&mut File, LocalForwardInputsV2<'_>, &TirPlan, &TirParams<'_>, &TirMemoryReserverV1),
++) {
++    fixture_case(Case::Wide, window, empty, body)
++}
++#[derive(Clone, Copy)]
++enum Case {
++    Wide,
++    Tiled,
++    Flat,
++    I8,
++    I16,
++    Idx,
++    Unknown,
++    SelectTopK,
++    Abort,
++    LongNarrow,
++    LongWide,
++}
++fn case_program(case: Case, window: u32) -> (misaka_palw_tir::TirProgramV1, misaka_palw_tir::MapParams) {
++    use misaka_palw_tir::{Cmp, DType, Ref, Tensor, builder::ProgramBuilder};
++    if matches!(case, Case::LongNarrow | Case::LongWide) {
++        let wide = matches!(case, Case::LongWide);
++        let dtype = if wide { DType::I64 } else { DType::I32 };
++        let mut b = ProgramBuilder::new(4, 1 << 21);
++        let data = b.param("long.logits", dtype, &[4], false);
++        let pre = b.block("pre", vec![]).finish(&[]);
++        let mut post = b.block("post", vec![]);
++        let out = post.reshape_fixed(data, &[4]);
++        post.commit(out);
++        let Ref::Node(logits) = out else { unreachable!() };
++        let post = post.finish(&[]);
++        let mut p = b.finish(pre, vec![], post, logits);
++        p.logits_scheme_id =
++            if wide { misaka_palw_tir::program::LOGITS_I64_Q24_SCHEME_V2 } else { tiled_logits_scheme_id_v1().as_bytes() };
++        let mut map = misaka_palw_tir::MapParams::default();
++        map.tensors.insert((0, None), Tensor::new(dtype, vec![4], vec![1, 3, 3, 0]).unwrap());
++        return (p, map);
++    }
++    if matches!(case, Case::SelectTopK | Case::Abort) {
++        let mut b = ProgramBuilder::new(4, 1 << 18);
++        if matches!(case, Case::SelectTopK) {
++            let table = b.param("selector.table", DType::I32, &[4, 4], false);
++            let threshold = b.scalar(DType::I32, 4);
++            let when_true = b.konst(DType::I32, &[2], &[0, 7]);
++            let when_false = b.konst(DType::I32, &[2], &[8, 1]);
++            let pre = b.block("pre", vec![]).finish(&[]);
++            let mut post = b.block("post", vec![]);
++            let row = post.gather(table, Ref::Input(0), 0, 0);
++            let ids = post.topk(row, 0, 2);
++            let picked = post.gather(row, ids, 0, 0);
++            // Token1 has TopK values3: false->[8,1]->ID0. Token0 has
++            // TopK values9: true->[0,7]->ID1. Both branch choice and the
++            // generated-token recurrence therefore affect the next output.
++            let condition = post.compare(picked, threshold, Cmp::Gt);
++            let out = post.select(condition, when_true, when_false, DType::I32);
++            post.commit(out);
++            let Ref::Node(logits) = out else { unreachable!() };
++            let post = post.finish(&[]);
++            let mut p = b.finish(pre, vec![], post, logits);
++            p.logits_scheme_id = tiled_logits_scheme_id_v1().as_bytes();
++            let mut map = misaka_palw_tir::MapParams::default();
++            map.tensors.insert(
++                (0, None),
++                Tensor::new(DType::I32, vec![4, 4], vec![1, 9, 9, 0, -2, 3, 1, 3, 4, 1, 2, 4, 0, 0, 0, 0]).unwrap(),
++            );
++            return (p, map);
++        }
++        let a = b.param("a", DType::I32, &[4], false);
++        let c = b.param("b", DType::I32, &[4], false);
++        let state = b.fixed_state("last", DType::I32, &[4], i64::from(i32::MIN), i64::from(i32::MAX), false);
++        let mut pre = b.block("pre", vec![]);
++        pre.state_write(state, a);
++        let pre = pre.finish(&[]);
++        let mut post = b.block("post", vec![]);
++        let out = post.add(a, c, DType::I32);
++        post.commit(out);
++        let Ref::Node(logits) = out else { unreachable!() };
++        let post = post.finish(&[]);
++        let mut p = b.finish(pre, vec![], post, logits);
++        p.logits_scheme_id = tiled_logits_scheme_id_v1().as_bytes();
++        let mut map = misaka_palw_tir::MapParams::default();
++        map.tensors.insert((0, None), Tensor::new(DType::I32, vec![4], vec![i32::MAX as i128, 0, 0, 0]).unwrap());
++        map.tensors.insert((1, None), Tensor::new(DType::I32, vec![4], vec![1, 0, 0, 0]).unwrap());
++        return (p, map);
++    }
++    let (mut p, mut map) = run_wide_common::program(matches!(case, Case::Wide), window);
++    match case {
++        Case::Flat => p.logits_scheme_id = flat_logits_scheme_id_v1().as_bytes(),
++        Case::Unknown => p.logits_scheme_id = [225; 64],
++        Case::I8 | Case::I16 | Case::Idx => {
++            let dtype = match case {
++                Case::I8 => DType::I8,
++                Case::I16 => DType::I16,
++                _ => DType::Idx,
++            };
++            p.params[1].dtype = dtype;
++            let post = p.schedule.post as usize;
++            p.blocks[post].nodes[p.logits as usize].out.dtype = dtype;
++            let data = map.tensors.get_mut(&(1, None)).unwrap();
++            data.dtype = dtype;
++            if dtype == DType::Idx {
++                for v in &mut data.data {
++                    *v += 3;
++                }
++            }
++        }
++        _ => {}
++    }
++    (p, map)
++}
++fn fixture_case(
++    case: Case,
++    window: u32,
++    empty: bool,
++    body: impl FnOnce(&mut File, LocalForwardInputsV2<'_>, &TirPlan, &TirParams<'_>, &TirMemoryReserverV1),
++) {
++    let external = Arc::new(AtomicU64::new(0));
++    let r = reserver(external.clone(), Arc::new(AtomicUsize::new(0)));
++    let ticket = r("test-forward-external", Hash64::from_u64_word(0), Hash64::from_u64_word(0), EXTERNAL).unwrap();
++    // program() only declares literal parameters and nodes; it does NOT execute
++    // the model, record node values, compute a trace root or create a binding.
++    let (program, map) = case_program(case, window);
++    let long = matches!(case, Case::LongNarrow | Case::LongWide);
++    let long_prompt = if long { Some(vec![0u32; (1 << 21) - 1]) } else { None };
++    let declared_prompt = long_prompt.as_deref().unwrap_or(PROMPT);
++    let context_max = if long { 1 << 21 } else { MAX_CONTEXT };
++    let plan = TirPlan::compile(&program).unwrap();
++    let params = TirParams::from_map(&plan, &map).unwrap();
++    let inventory = TirHeldInventoryV1::build(&program, &TirParamsSourceV1(&params)).unwrap();
++    let artifact = inventory.tree.root();
++    let class = PalwTirClassV1 {
++        version: 1,
++        program: program.encode(),
++        layout: PalwTirLayoutV1 {
++            version: 1,
++            max_context: context_max,
++            checkpoint_interval: 3,
++            h_tile: if window == 1 { 1 } else { 2 },
++            commit_tiles: program.blocks.iter().flat_map(|b| &b.nodes).filter(|n| n.commit).map(|_| 4).collect(),
++            state_tiles: vec![4; program.states.len()],
++        },
++        tokenizer_id: Hash64::from_u64_word(18),
++    };
++    let zero = Hash64::from_u64_word(0);
++    let class_id = class.class_id(&artifact);
++    let ctx = PalwJobContextV2 {
++        version: 2,
++        network_id: b"testnet-12".to_vec(),
++        job_id: Hash64::from_u64_word(41),
++        job_nullifier: zero,
++        assignment_id: zero,
++        execution_seed: [2; 32],
++        model_profile_id: zero,
++        runtime_manifest_hash: zero,
++        runtime_class_id: zero,
++        shape_profile_id: class_id,
++        trace_scheme_id: match case {
++            Case::Wide | Case::LongWide => palw_logits_q24_v2::scheme_id(),
++            Case::Flat => kaspa_consensus_core::palw_v2::trace_scheme_id_v2(),
++            _ => tiled_logits_scheme_id_v1(),
++        },
++        cu_ruleset_id: zero,
++        tokenizer_id: zero,
++        prompt_token_ids_hash: prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, declared_prompt).unwrap(),
++        declared_prefill_tokens: declared_prompt.len() as u32,
++        exact_decode_tokens: if long { 1 } else { 6 },
++        max_context_tokens: context_max,
++    };
++    let execution = ctx.context_hash();
++    let wide_space = if program.wide_logits_q24() { Some(PalwTirStepSpaceV2::new(&class).unwrap()) } else { None };
++    let narrow_space = if program.wide_logits_q24() { None } else { Some(LocalNarrowForwardSpaceV2::new(&class, &ticket).unwrap()) };
++    let space = match (&wide_space, &narrow_space) {
++        (Some(s), _) => LocalForwardSpaceV2::Wide(s),
++        (_, Some(s)) => LocalForwardSpaceV2::Narrow(s),
++        _ => unreachable!(),
++    };
++    let dir = tempfile::TempDir::new().unwrap();
++    let path = dir.path().join("forward.palwtir");
++    write_container_v1(
++        &path,
++        &program,
++        if empty { vec![] } else { borsh::to_vec(&class.layout).unwrap() },
++        class.tokenizer_id.as_bytes(),
++        "local-only".into(),
++        &mut |j, l| Ok(params.get(j, l).unwrap().to_le_bytes()),
++    )
++    .unwrap();
++    let mut file = std::fs::OpenOptions::new().read(true).write(true).open(&path).unwrap();
++    let len = file.metadata().unwrap().len();
++    let header = read_header_bounded_v1(&mut file, len, header_limits()).unwrap();
++    let mut scan = LocalScanWorkBudgetV1::new(1 << 40).unwrap();
++    let source = scan_source_program_local_v1(
++        &header.header().program,
++        SourceProgramLocalLimitsV1 {
++            max_program_bytes: 1 << 20,
++            max_scan_steps: 1 << 36,
++            max_nf_items: 1 << 32,
++            max_native_requests: 1 << 30,
++        },
++        &mut scan,
++    )
++    .expect("requires audited local Source build; unsupported is NOT a forward pass")
++    .decode()
++    .unwrap();
++    let checked = header.validate_with_program(source.program(), header_limits()).unwrap();
++    let compiled = prepare_tir_plan_compile_v2(
++        &source,
++        TirPlanCompileLimitsV2 {
++            max_quote_visits: 1 << 36,
++            max_retained_bytes: 1 << 30,
++            max_scratch_bytes: 1 << 30,
++            max_operation_bytes: 1 << 34,
++            external_retained_bytes: EXTERNAL,
++        },
++    )
++    .unwrap()
++    .compile()
++    .unwrap();
++    body(
++        &mut file,
++        LocalForwardInputsV2 {
++            checked: &checked,
++            source: &source,
++            compiled: &compiled,
++            class: &class,
++            artifact,
++            expected_class: class_id,
++            space,
++            original_context: &ctx,
++            expected_execution: execution,
++            external_retained_bytes: EXTERNAL,
++            external_ticket: &ticket,
++        },
++        &plan,
++        &params,
++        &r,
++    );
++}
++#[test]
++fn first_trace_free_startup_and_plain_forward_match_original_dense_for_fixed_hist_windows() {
++    for window in [1, 3] {
++        for empty in [false, true] {
++            fixture(window, empty, |file, input, plan, params, r| {
++                let mut loads = LocalForwardLoadBudgetV2::new(load_limits()).unwrap();
++                let loaded = load_local_wide_forward_v2(file, input, &mut loads, r).unwrap();
++                // The verified OWNED native values do not depend on later disk
++                // mutation. No execution/trace binding is involved in loading.
++                file.set_len(0).unwrap();
++                assert_eq!(loaded.original_context(), input.original_context);
++                assert_eq!(loaded.original_context().max_context_tokens, MAX_CONTEXT);
++                assert_eq!(loaded.original_context().tokenizer_id, Hash64::from_u64_word(0));
++                assert_ne!(input.class.tokenizer_id, loaded.original_context().tokenizer_id);
++                let mut runs = LocalWideForwardBudgetV2::new(run_limits()).unwrap();
++                let output = loaded.forward_local(PROMPT, &mut runs, r).unwrap();
++                assert_eq!(output.generated(), EXPECTED_GENERATED);
++                assert_eq!(output.execution(), input.expected_execution);
++                assert_eq!(output.quote().row_bytes, output.quote().vocabulary * 8);
++                assert_eq!(output.quote().generated_bytes, 6 * 4);
++                assert_eq!(runs.usage().attempts, 1);
++                assert_eq!(runs.usage().work, output.quote().work);
++                // Separate regression oracle only: production ordinary entry never calls
++                // this full runner, and its startup above never took a trace binding.
++                let old = TirClassRunnerWideQ24V2::new(input.space.wide_space().unwrap(), plan, params, input.expected_class)
++                    .unwrap()
++                    .run(
++                        input.original_context,
++                        PROMPT,
++                        input.expected_execution,
++                        TirWideRunLimitsV2 {
++                            max_positions: MAX_CONTEXT,
++                            max_step_leaves: 1 << 16,
++                            max_row_lanes: 64,
++                            max_work: 1 << 50,
++                            max_requested_bytes: 1 << 34,
++                        },
++                        &mut |_| {},
++                    )
++                    .unwrap();
++                assert_eq!(output.generated(), old.generated());
++                assert_eq!(output.output_root(), old.output_root());
++            });
++        }
++    }
++}
++#[test]
++fn output_owns_required_guard_and_failed_prompt_or_guard_attempts_do_not_refund() {
++    fixture(1, false, |file, input, _, _, _| {
++        let held = Arc::new(AtomicU64::new(0));
++        let calls = Arc::new(AtomicUsize::new(0));
++        let r = reserver(held.clone(), calls.clone());
++        let loaded = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), &r).unwrap();
++        let load_bytes = held.load(Ordering::SeqCst);
++        let mut runs = LocalWideForwardBudgetV2::new(run_limits()).unwrap();
++        let output = loaded.forward_local(PROMPT, &mut runs, &r).unwrap();
++        let run_bytes = output.quote().requested_bytes;
++        assert_eq!(held.load(Ordering::SeqCst), load_bytes + run_bytes);
++        drop(loaded);
++        assert_eq!(held.load(Ordering::SeqCst), run_bytes);
++        drop(output);
++        assert_eq!(held.load(Ordering::SeqCst), 0);
++        let loaded = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), &r).unwrap();
++        let mut l = run_limits();
++        l.max_attempts = 1;
++        let mut runs = LocalWideForwardBudgetV2::new(l).unwrap();
++        assert_eq!(loaded.forward_local(&[0, 0], &mut runs, &r).err(), Some(LocalForwardErrorV2::Pins));
++        let spent = runs.usage();
++        assert!(spent.work > 0 && spent.retained_requests > 0);
++        assert_eq!(loaded.forward_local(PROMPT, &mut runs, &r).err(), Some(LocalForwardErrorV2::Limit));
++        assert_eq!(runs.usage(), spent);
++        let deny: TirMemoryReserverV1 = Arc::new(|_, _, _, _| Err("injected denied guard".into()));
++        let mut runs = LocalWideForwardBudgetV2::new(l).unwrap();
++        assert_eq!(loaded.forward_local(PROMPT, &mut runs, &deny).err(), Some(LocalForwardErrorV2::Guard));
++        let spent = runs.usage();
++        assert!(spent.work > 0 && spent.retained_requests > 0);
++        assert_eq!(loaded.forward_local(PROMPT, &mut runs, &r).err(), Some(LocalForwardErrorV2::Limit));
++        assert_eq!(runs.usage(), spent);
++    });
++}
++#[test]
++fn one_below_load_and_run_caps_refuse_before_payload_or_cpu_guards() {
++    fixture(3, true, |file, input, _, _, r| {
++        let loaded = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
++        let lq = loaded.load_quote();
++        let mut ll = load_limits();
++        ll.max_new_owner_bytes = lq.requested_bytes - 1;
++        let mut budget = LocalForwardLoadBudgetV2::new(ll).unwrap();
++        let at = file.stream_position().unwrap();
++        let fail: TirMemoryReserverV1 = Arc::new(|_, _, _, _| panic!("refusal must precede guard"));
++        assert_eq!(load_local_wide_forward_v2(file, input, &mut budget, &fail).err(), Some(LocalForwardErrorV2::Limit));
++        assert_eq!(file.stream_position().unwrap(), at);
++        assert!(budget.usage().params.attempts > 0);
++        let mut l = run_limits();
++        let q = loaded.forward_quote(l).unwrap();
++        l.max_requested_bytes = q.requested_bytes - 1;
++        let mut budget = LocalWideForwardBudgetV2::new(l).unwrap();
++        assert_eq!(loaded.forward_local(PROMPT, &mut budget, &fail).err(), Some(LocalForwardErrorV2::Limit));
++        assert_eq!(budget.usage().attempts, 1);
++        assert!(budget.usage().work > 0);
++        let mut bad = input;
++        bad.expected_execution = Hash64::from_u64_word(999);
++        assert_eq!(
++            load_local_wide_forward_v2(file, bad, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).err(),
++            Some(LocalForwardErrorV2::Pins)
++        );
++        let mut bad = input;
++        bad.artifact = Hash64::from_u64_word(998);
++        assert_eq!(
++            load_local_wide_forward_v2(file, bad, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).err(),
++            Some(LocalForwardErrorV2::Pins)
++        );
++    });
++}
++struct Probe<'a> {
++    file: &'a mut File,
++    mode: u8,
++    calls: Arc<AtomicUsize>,
++}
++impl Read for Probe<'_> {
++    fn read(&mut self, b: &mut [u8]) -> std::io::Result<usize> {
++        self.calls.fetch_add(1, Ordering::SeqCst);
++        match self.mode {
++            1 => Err(std::io::Error::from(std::io::ErrorKind::Interrupted)),
++            2 => {
++                let n = b.len().min(1);
++                self.file.read(&mut b[..n])
++            }
++            _ => self.file.read(b),
++        }
++    }
++}
++impl Seek for Probe<'_> {
++    fn seek(&mut self, p: SeekFrom) -> std::io::Result<u64> {
++        self.calls.fetch_add(1, Ordering::SeqCst);
++        if self.mode == 3 { Err(std::io::Error::other("injected seek failure")) } else { self.file.seek(p) }
++    }
++}
++impl LocalForwardReaderV2 for Probe<'_> {
++    fn retained_request_bytes(&self) -> Option<u64> {
++        Some(std::mem::size_of::<Self>() as u64)
++    }
++    fn scratch_request_bytes(&self) -> Option<u64> {
++        Some(0)
++    }
++}
++#[test]
++fn bounded_short_read_interrupt_seek_truncation_and_root_failure_never_return_partial_owner() {
++    for mode in [0, 1, 2, 3, 4] {
++        fixture(1, false, |file, input, _, _, r| {
++            if mode == 0 {
++                let e = &input.checked.header().tensors[0];
++                file.seek(SeekFrom::Start(e.offset)).unwrap();
++                file.write_all(&[255]).unwrap();
++            }
++            if mode == 4 {
++                let e = input.checked.header().tensors.last().unwrap();
++                file.set_len(e.offset + e.bytes - 1).unwrap();
++            }
++            let calls = Arc::new(AtomicUsize::new(0));
++            let mut probe = Probe { file, mode, calls: calls.clone() };
++            let mut l = load_limits();
++            if mode == 1 {
++                l.max_provider_calls_per_attempt = 3;
++            }
++            let mut budget = LocalForwardLoadBudgetV2::new(l).unwrap();
++            let result = load_local_wide_forward_v2(&mut probe, input, &mut budget, r);
++            if mode == 2 {
++                assert!(result.is_ok());
++            } else {
++                assert_eq!(result.err(), Some(LocalForwardErrorV2::Params));
++            }
++            let spent = budget.usage();
++            assert!(spent.params.read_bytes > 0 && spent.params.work > 0 && spent.retained_requests > 0);
++            assert_eq!(spent.provider_calls_reserved, l.max_provider_calls_per_attempt);
++            if mode == 1 {
++                assert_eq!(calls.load(Ordering::SeqCst), 3);
++            }
++        });
++    }
++}
++struct Unknown;
++impl Read for Unknown {
++    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
++        panic!("unknown provider read")
++    }
++}
++impl Seek for Unknown {
++    fn seek(&mut self, _: SeekFrom) -> std::io::Result<u64> {
++        panic!("unknown provider seek")
++    }
++}
++impl LocalForwardReaderV2 for Unknown {}
++#[test]
++fn unknown_provider_quote_is_denied_before_guard_or_io() {
++    fixture(1, false, |_, input, _, _, _| {
++        let fail: TirMemoryReserverV1 = Arc::new(|_, _, _, _| panic!("unknown guard"));
++        let mut b = LocalForwardLoadBudgetV2::new(load_limits()).unwrap();
++        assert_eq!(load_local_wide_forward_v2(&mut Unknown, input, &mut b, &fail).err(), Some(LocalForwardErrorV2::Limit));
++        assert_eq!(b.usage(), LocalForwardLoadUsageV2::default());
++    });
++}
++
++fn legacy_space<'a>(input: LocalForwardInputsV2<'a>) -> &'a kaspa_consensus_core::palw_tir_step_v1::PalwTirStepSpaceV1 {
++    match input.space {
++        LocalForwardSpaceV2::Narrow(s) => s.legacy_space(),
++        _ => panic!("expected narrow metadata"),
++    }
++}
++#[test]
++fn flat_and_tiled_i32_ordinary_match_legacy_without_changing_context_or_row_width() {
++    for case in [Case::Flat, Case::Tiled] {
++        for window in [1, 3] {
++            fixture_case(case, window, false, |file, input, plan, params, r| {
++                let loaded =
++                    load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
++                assert_eq!(
++                    loaded.profile(),
++                    if matches!(case, Case::Flat) { LocalForwardProfileV2::FlatI32 } else { LocalForwardProfileV2::TiledI32 }
++                );
++                let output = loaded.forward_local(PROMPT, &mut LocalWideForwardBudgetV2::new(run_limits()).unwrap(), r).unwrap();
++                let dense = TirClassRunnerV1::new(legacy_space(input), plan, params, input.expected_class)
++                    .unwrap()
++                    .run(input.original_context, PROMPT, 1 << 16, true, &mut |_| {})
++                    .unwrap();
++                assert_eq!(output.generated(), EXPECTED_GENERATED);
++                assert_eq!(output.generated(), dense.generated.as_slice());
++                assert_eq!(output.output_root(), dense.output_root);
++                assert_eq!(output.quote().row_bytes, 4 * output.quote().vocabulary);
++                assert_eq!(loaded.original_context(), input.original_context);
++                assert_eq!(loaded.original_context().max_context_tokens, MAX_CONTEXT);
++                let mut wrong = (*input.original_context).clone();
++                wrong.trace_scheme_id = if matches!(case, Case::Flat) {
++                    tiled_logits_scheme_id_v1()
++                } else {
++                    kaspa_consensus_core::palw_v2::trace_scheme_id_v2()
++                };
++                let bad = LocalForwardInputsV2 { original_context: &wrong, expected_execution: wrong.context_hash(), ..input };
++                assert_eq!(
++                    load_local_wide_forward_v2(file, bad, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).err(),
++                    Some(LocalForwardErrorV2::UnsupportedProfile)
++                );
++            });
++        }
++    }
++}
++#[test]
++fn declared_i8_i16_idx_and_unknown_scheme_are_not_reinterpreted_as_i32() {
++    for case in [Case::I8, Case::I16, Case::Idx, Case::Unknown] {
++        fixture_case(case, 1, false, |file, input, _, _, r| {
++            let mut budget = LocalForwardLoadBudgetV2::new(load_limits()).unwrap();
++            assert_eq!(load_local_wide_forward_v2(file, input, &mut budget, r).err(), Some(LocalForwardErrorV2::UnsupportedProfile));
++            assert!(budget.usage().retained_requests > 0);
++        });
++    }
++}
++#[test]
++fn dynamic_gather_select_and_topk_follow_the_same_ordinary_and_legacy_execution() {
++    fixture_case(Case::SelectTopK, 1, false, |file, input, plan, params, r| {
++        let loaded = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
++        let output = loaded.forward_local(PROMPT, &mut LocalWideForwardBudgetV2::new(run_limits()).unwrap(), r).unwrap();
++        let dense = TirClassRunnerV1::new(legacy_space(input), plan, params, input.expected_class)
++            .unwrap()
++            .run(input.original_context, PROMPT, 1 << 16, true, &mut |_| {})
++            .unwrap();
++        // Literal fixture expectation + ordinary-versus-full parity; this is
++        // not an independent validation of the shared Select/TopK algorithm.
++        assert_eq!(output.generated(), &[0, 1, 0, 1, 0, 1]);
++        assert_eq!(dense.logits_rows, vec![vec![8, 1], vec![0, 7], vec![8, 1], vec![0, 7], vec![8, 1], vec![0, 7]]);
++        assert_eq!(output.generated(), dense.generated.as_slice());
++        assert_eq!(output.output_root(), dense.output_root);
++    });
++}
++#[test]
++fn checked_arithmetic_abort_returns_no_output_and_spends_each_attempt_like_the_legacy_runner() {
++    fixture_case(Case::Abort, 1, false, |file, input, plan, params, r| {
++        let loaded = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
++        let mut budget = LocalWideForwardBudgetV2::new(run_limits()).unwrap();
++        assert_eq!(loaded.forward_local(PROMPT, &mut budget, r).err(), Some(LocalForwardErrorV2::Execute));
++        let first = budget.usage();
++        assert_eq!(loaded.forward_local(PROMPT, &mut budget, r).err(), Some(LocalForwardErrorV2::Execute));
++        assert_eq!(budget.usage().attempts, 2);
++        assert_eq!(budget.usage().work, 2 * first.work);
++        assert_eq!(budget.usage().retained_requests, 2 * first.retained_requests);
++        assert!(
++            TirClassRunnerV1::new(legacy_space(input), plan, params, input.expected_class)
++                .unwrap()
++                .run(input.original_context, PROMPT, 1 << 16, true, &mut |_| {})
++                .is_err()
++        );
++    });
++}
++
++use misaka_palw_tir_exec::node::owned_artifact_params_v2::forward::measurement::*;
++fn dense_limits() -> DenseMeasurementLimitsV2 {
++    DenseMeasurementLimitsV2 {
++        runner: TirWideRunLimitsV2 {
++            max_positions: MAX_CONTEXT,
++            max_step_leaves: 1 << 16,
++            max_row_lanes: 64,
++            max_work: 1 << 54,
++            max_requested_bytes: 1 << 34,
++        },
++        max_extra_bytes: 1 << 34,
++        max_combined_peak_bytes: 1 << 35,
++        max_operation_bytes: 1 << 40,
++        max_geometry_visits: 1 << 48,
++        max_work_per_attempt: 1 << 56,
++        max_attempts: 2,
++        max_total_work: 1 << 60,
++        max_retained_requests: 1 << 38,
++        external_retained_bytes: 1 << 38,
++    }
++}
++#[test]
++fn measurement_borrows_same_owned_params_after_file_is_gone_and_holds_both_guard_scopes() {
++    for case in [Case::Flat, Case::Tiled, Case::Wide] {
++        fixture_case(case, 1, false, |file, input, _, _, _| {
++            let held = Arc::new(AtomicU64::new(0));
++            let calls = Arc::new(AtomicUsize::new(0));
++            let r = reserver(held.clone(), calls.clone());
++            let owner =
++                load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), &r).unwrap();
++            file.set_len(0).unwrap(); // Any hidden reopen/second payload load would fail.
++            let ordinary = owner.forward_local(PROMPT, &mut LocalWideForwardBudgetV2::new(run_limits()).unwrap(), &r).unwrap();
++            let prior = held.load(Ordering::SeqCst);
++            let previous_calls = calls.load(Ordering::SeqCst);
++            let mut budget = DenseMeasurementBudgetV2::new(dense_limits()).unwrap();
++            let prepared = owner.prepare_dense_measurement(&ordinary, &mut budget).unwrap();
++            let q = prepared.quote();
++            assert_eq!(budget.usage().attempts, 1);
++            assert_eq!(budget.usage().work, q.work);
++            assert_eq!(budget.usage().retained_requests, q.combined_peak_bytes);
++            let dense = prepared.run(PROMPT, &r).unwrap();
++            assert!(dense.matches_ordinary());
++            assert_eq!(dense.generated(), ordinary.generated());
++            assert_eq!(dense.output_root(), ordinary.output_root());
++            assert_eq!(dense.leaf_count(), q.leaves);
++            assert_eq!(calls.load(Ordering::SeqCst), previous_calls + 2); // extra +explicit required run; no global fallback.
++            let kept = if matches!(case, Case::Wide) { q.combined_peak_bytes } else { q.extra_requested_bytes };
++            assert_eq!(held.load(Ordering::SeqCst), prior + kept);
++            drop(dense);
++            assert_eq!(held.load(Ordering::SeqCst), prior);
++        });
++    }
++}
++#[test]
++fn denied_measurement_guards_and_undersized_extra_caps_preserve_budget_without_partial_comparison() {
++    fixture(1, false, |file, input, _, _, r| {
++        let owner = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
++        let ordinary = owner.forward_local(PROMPT, &mut LocalWideForwardBudgetV2::new(run_limits()).unwrap(), r).unwrap();
++        let mut l = dense_limits();
++        l.max_attempts = 1;
++        let mut budget = DenseMeasurementBudgetV2::new(l).unwrap();
++        let prepared = owner.prepare_dense_measurement(&ordinary, &mut budget).unwrap();
++        let q = prepared.quote();
++        let deny: TirMemoryReserverV1 = Arc::new(|_, _, _, _| Err("injected extra denial".into()));
++        assert_eq!(prepared.run(PROMPT, &deny).err(), Some(DenseMeasurementErrorV2::Guard));
++        let spent = budget.usage();
++        assert_eq!(owner.prepare_dense_measurement(&ordinary, &mut budget).err(), Some(DenseMeasurementErrorV2::Limit));
++        assert_eq!(budget.usage(), spent);
++        let mut l = dense_limits();
++        l.max_extra_bytes = q.extra_requested_bytes - 1;
++        let mut budget = DenseMeasurementBudgetV2::new(l).unwrap();
++        assert_eq!(owner.prepare_dense_measurement(&ordinary, &mut budget).err(), Some(DenseMeasurementErrorV2::Limit));
++        assert!(budget.usage().attempts > 0 && budget.usage().work > 0);
++    });
++}
++#[test]
++fn explicit_required_executor_denial_releases_extra_without_fallback_or_partial_comparison() {
++    for case in [Case::Tiled, Case::Wide] {
++        fixture_case(case, 1, false, |file, input, _, _, _| {
++            let held = Arc::new(AtomicU64::new(0));
++            let calls = Arc::new(AtomicUsize::new(0));
++            let actual = reserver(held.clone(), calls.clone());
++            let owner =
++                load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), &actual).unwrap();
++            let ordinary = owner.forward_local(PROMPT, &mut LocalWideForwardBudgetV2::new(run_limits()).unwrap(), &actual).unwrap();
++            let before = held.load(Ordering::SeqCst);
++            let delegate = actual.clone();
++            let runtime_calls = Arc::new(AtomicUsize::new(0));
++            let observed = runtime_calls.clone();
++            let deny_runtime: TirMemoryReserverV1 = Arc::new(move |role, class, execution, bytes| {
++                if role == "tir-dense-measurement-extra-v2" {
++                    delegate(role, class, execution, bytes)
++                } else {
++                    observed.fetch_add(1, Ordering::SeqCst);
++                    Err("injected explicit executor denial".into())
++                }
++            });
++            let mut budget = DenseMeasurementBudgetV2::new(dense_limits()).unwrap();
++            let prepared = owner.prepare_dense_measurement(&ordinary, &mut budget).unwrap();
++            // Execute is a generic runner rejection, not Miner/arithmetic blame.
++            assert_eq!(prepared.run(PROMPT, &deny_runtime).err(), Some(DenseMeasurementErrorV2::Execute));
++            assert_eq!(runtime_calls.load(Ordering::SeqCst), 1);
++            assert_eq!(held.load(Ordering::SeqCst), before);
++            assert!(budget.usage().work > 0 && budget.usage().retained_requests > 0);
++        });
++    }
++}
++
++#[test]
++fn long_prefill_one_post_leaf_quote_covers_bridge_prompt_before_any_runner_lease() {
++    for case in [Case::LongNarrow, Case::LongWide] {
++        fixture_case(case, 1, false, |file, input, _, _, r| {
++            let owner =
++                load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
++            let mut l = dense_limits();
++            l.runner.max_positions = input.original_context.max_context_tokens;
++            // Metadata-only projection: no ordinary output is fabricated and no
++            // millions-position CPU loop is run just to inspect the required quote.
++            let q = owner.quote_dense_measurement(l).unwrap();
++            assert_eq!(q.leaves, 1);
++            let encoded = 4 + 4 * u64::from(input.original_context.declared_prefill_tokens);
++            assert!(encoded >= (8 << 20) - 4);
++            assert!(q.bridge_prompt_writer_bytes >= encoded);
++            assert!(q.extra_requested_bytes >= q.bridge_prompt_writer_bytes + q.constructor_bytes);
++            l.max_extra_bytes = q.bridge_prompt_writer_bytes - 1;
++            assert_eq!(owner.quote_dense_measurement(l).err(), Some(DenseMeasurementErrorV2::Limit));
++        });
++    }
++}
++#[test]
++fn narrow_runner_work_cap_is_enforced_independently_of_larger_aggregate_cap() {
++    fixture_case(Case::Tiled, 1, false, |file, input, _, _, r| {
++        let owner = load_local_wide_forward_v2(file, input, &mut LocalForwardLoadBudgetV2::new(load_limits()).unwrap(), r).unwrap();
++        let mut l = dense_limits();
++        let q = owner.quote_dense_measurement(l).unwrap();
++        assert!(q.runner_work > 0);
++        l.runner.max_work = q.runner_work - 1;
++        assert!(l.max_work_per_attempt > q.work);
++        assert_eq!(owner.quote_dense_measurement(l).err(), Some(DenseMeasurementErrorV2::Limit));
++    });
++}
+diff --git a/testing/positive-court-a7/prepare_ordinary_cohort_plan.py b/testing/positive-court-a7/prepare_ordinary_cohort_plan.py
+new file mode 100644
+--- /dev/null
++++ b/testing/positive-court-a7/prepare_ordinary_cohort_plan.py
+@@ -0,0 +1,106 @@
++#!/usr/bin/env python3
++"""Metadata-only source preparation; NEVER reads/stat's a model payload or runs a binary.
++
++Only this repository's archived JSON/source/prompt control files are read. The
++result is a dependency/pin plan, not execution/registration/metadata-owner proof.
++"""
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import re
++
++SLUGS = ('smollm2-360m', 'smollm2-135m', 'pythia-70m')
++ARMS = ('SmolLm2360M', 'SmolLm2135M', 'Pythia70M')
++
++def sha(path):
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++def main():
++    p = argparse.ArgumentParser()
++    p.add_argument('--repository', type=Path, required=True)
++    p.add_argument('--staged-harness-source', type=Path, required=True)
++    p.add_argument('--out', type=Path, required=True)
++    args = p.parse_args()
++    root = args.repository.resolve()
++    source = args.staged_harness_source.read_text()
++    source_sha = hashlib.sha256(source.encode()).hexdigest()
++    historical = root / 'docs/evidence/positive-court-a0-2026-10-31/integration/real-llm-run-8gib-20261101'
++    manifest_record = json.loads((historical / 'manifest.json').read_text())
++    historical_models = {v['slug']: v for v in manifest_record['models']}
++    models = []
++    for slug, arm in zip(SLUGS, ARMS):
++        record = historical / slug / 'runner.json'
++        old = json.loads(record.read_text())
++        prompt_path = root / 'testing/positive-court-a7/real-llm-inputs' / (slug + '.json')
++        prompt = json.loads(prompt_path.read_text())
++        # Strict static arm parse, no Rust/model execution. All pin text must be
++        # exact archived record data, not values read from candidate artifacts.
++        body = re.search(r'Self::' + arm + r'\s*=>\s*FixedModelPinV2\s*\{(.*?)\n\s*\}', source, re.S)
++        if not body:
++            raise ValueError('source arm absent: ' + arm)
++        def string(name):
++            m = re.search(r'\b' + name + r':\s*"([^"]+)"', body.group(1))
++            if not m:
++                raise ValueError('source field absent: ' + name)
++            return m.group(1)
++        expected = {
++            'model': old['model'],
++            'class_id': old['class_id'],
++            'artifact_root': old['inputs']['artifact_root'],
++            'registered_tokenizer': old['inputs']['registered_tokenizer'],
++            'original_context_hash': old['job']['context_hash'],
++            'expected_artifact_sha256': old['artifact_sha256'],
++        }
++        expected['revision'] = historical_models[slug]['revision']
++        def number(name):
++            m = re.search(r'\b' + name + r':\s*(\d+)', body.group(1))
++            if not m:
++                raise ValueError('source numeric field absent: ' + name)
++            return int(m.group(1))
++        if number('original_max_context') != old['original_max_context'] or number('artifact_bytes') != old['inputs']['artifact_bytes']:
++            raise ValueError('source numeric pin mismatch: ' + slug)
++        if sha(prompt_path) != old['prompt_ids_sha256']:
++            raise ValueError('prompt bytes changed from archived run: ' + slug)
++        for key, value in expected.items():
++            if string(key) != value:
++                raise ValueError('source pin mismatch: ' + slug + ':' + key)
++        field = 'PYTHIA_PROMPT' if slug == 'pythia-70m' else 'SMOL_PROMPT'
++        raw = re.search(r'const ' + field + r'.*?=\s*&\[(.*?)\];', source, re.S)
++        if not raw or [int(x) for x in raw.group(1).split(',') if x.strip()] != prompt:
++            raise ValueError('literal prompt mismatch: ' + slug)
++        models.append({
++            'slug': slug, **expected, 'revision': string('revision'),
++            'original_max_context': old['original_max_context'],
++            'profile': old['resolved_profile'],
++            'prefill': old['declared_prefill_tokens'], 'decode': old['exact_decode_tokens'],
++            'prompt_ids': prompt, 'prompt_source': str(prompt_path), 'prompt_source_sha256': sha(prompt_path),
++            'archived_record': str(record), 'archived_record_sha256': sha(record),
++            'artifact_path_metadata_only': old['inputs']['artifact'],
++            'artifact_payload_read': False,
++        })
++    result = {
++        'status': 'SOURCE_PINS_MATCHED_NOT_EXECUTED',
++        'runtime_readiness': 'WAITING_INDEPENDENT_BRIDGE_REVIEW_AND_COMPLETE_EXTERNAL_METADATA_OWNER',
++        'harness_source': str(args.staged_harness_source), 'harness_sha256': source_sha,
++        'scope': 'same-owned-parameters short-local ordinary CPU then legacy dense baseline',
++        'native_authority': False, 'model_execution': False, 'cargo': False,
++        'model_payload_read_or_stat': False, 'cold_claimed': False, 'rss_limit_claimed': False,
++        'maximum_position_coverage_claimed': False, 'metadata_whole_owner_established_here': False,
++        'dependencies': [
++            'local forward r3 source060b574d93bfc062d3cd8c901f440e43c208316939e603f1350b1117d11b3b1a (UNRUN)',
++            'separate same-crate dense measurement bridge, required unobserved runner entries (UNRUN)',
++            'complete pre-guard external metadata owner/census: Header+Class+full Source+Space+Compile+controls/errors+independent aliases',
++            'Root-controlled source/binary mapping, build/run slot, finite whole host quota and outer deadline/process cleanup policy',
++        ],
++        'models': models,
++        'not_implemented_in_this_library': [
++            'self-owned metadata bootstrap/CLI', 'full-file SHA/publisher authentication',
++            'Panel one-pass record/material generation', 'Node fullrelation/Court/P/credit/settlement',
++            'new native Assignment/Result/rooted role/funding authority',
++        ],
++    }
++    args.out.write_text(json.dumps(result, indent=2) + '\n')
++
++if __name__ == '__main__':
++    main()
+diff --git a/testing/positive-court-a7/src/lib.rs b/testing/positive-court-a7/src/lib.rs
+new file mode 100644
+--- /dev/null
++++ b/testing/positive-court-a7/src/lib.rs
+@@ -0,0 +1,2 @@
++//! Local experimental measurement helpers. No production native dispatch.
++pub mod ordinary_forward_measurement;
+diff --git a/testing/positive-court-a7/src/ordinary_forward_measurement.rs b/testing/positive-court-a7/src/ordinary_forward_measurement.rs
+new file mode 100644
+--- /dev/null
++++ b/testing/positive-court-a7/src/ordinary_forward_measurement.rs
+@@ -0,0 +1,254 @@
++//! Fixed actual-trained cohort, same owned Params ordinary→dense comparison.
++//! This library component consumes EXTERNALLY PREPARED trace-free bounded
++//! metadata; it does not provide whole startup or certify caller-owned heap.
++//! No model substitution, new context, binding roots, native Result/funds/P,
++//! cold/RSS guarantee or Panel/Node role completion is produced.
++use kaspa_consensus_core::Hash64;
++use misaka_palw_tir_exec::node::{
++    memory::TirMemoryReserverV1,
++    owned_artifact_params_v2::forward::{
++        LocalForwardErrorV2, LocalForwardInputsV2, LocalForwardLoadBudgetV2, LocalForwardLoadUsageV2, LocalWideForwardBudgetV2,
++        LocalWideForwardOutputV2, LocalWideForwardUsageV2, load_local_wide_forward_v2,
++        measurement::{DenseMeasurementBudgetV2, DenseMeasurementErrorV2, DenseMeasurementOutputV2, DenseMeasurementUsageV2},
++    },
++};
++use std::{fs::File, time::Instant};
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum FixedTrainedModelV2 {
++    SmolLm2360M,
++    SmolLm2135M,
++    Pythia70M,
++}
++pub struct FixedModelPinV2 {
++    pub model: &'static str,
++    pub revision: &'static str,
++    pub original_max_context: u32,
++    pub artifact_bytes: u64,
++    pub expected_artifact_sha256: &'static str,
++    pub class_id: &'static str,
++    pub artifact_root: &'static str,
++    pub registered_tokenizer: &'static str,
++    pub original_context_hash: &'static str,
++    pub prompt: &'static [u32],
++}
++const SMOL_PROMPT: &[u32] = &[504, 3446, 282, 451, 4308, 314, 288, 2004, 3465, 20330, 351, 253, 8212, 284, 41088, 10295];
++const PYTHIA_PROMPT: &[u32] = &[510, 4096, 273, 436, 3368, 310, 281, 1924, 4217, 13782, 342, 247, 10799, 285, 41374, 10636];
++impl FixedTrainedModelV2 {
++    /// Pins copied from saved cohort inventory/old short local run records, not
++    /// from candidate metadata. They authenticate no native registration state.
++    pub fn pin(self) -> FixedModelPinV2 {
++        match self {
++            Self::SmolLm2360M => FixedModelPinV2 {
++                model: "HuggingFaceTB/SmolLM2-360M",
++                revision: "f8027fd0eaeea54caa13c31d31b9fdc459c38b49",
++                original_max_context: 8192,
++                artifact_bytes: 436395392,
++                expected_artifact_sha256: "d17a82c83fcd86736feb60b05e492ebae79f5e2507600bc35ec2c024a2fe36c8",
++                class_id: "ad6c9866ee15de51ad18c4c83c595dfafd646a931cc18db77b8bbe627b8e9f555dd87f3efb81943d098ff32729d9c5c645a88571f65b5e007061234fa5489476",
++                artifact_root: "041029123feed837f46db580ee1b89092e0c1700b4cc033c9089f50afd587be75ceab1f985700042ee934194f244fafbd9e4940299621a8c3e2b09529dd8ec12",
++                registered_tokenizer: "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
++                original_context_hash: "530ef1cb986eb4ad8c9b6fea385ff38db5d4c2e7817f9e503373d2413c79cabba7de0805c3ef863baeefd8b5e94a5789930d748b592b6c9d4377d8892c8f9de0",
++                prompt: SMOL_PROMPT,
++            },
++            Self::SmolLm2135M => FixedModelPinV2 {
++                model: "HuggingFaceTB/SmolLM2-135M",
++                revision: "93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
++                original_max_context: 8192,
++                artifact_bytes: 180336320,
++                expected_artifact_sha256: "48c72278b0d9b45c7ab92b6e70f5fbcef47fa86cc8644cd4307798354639fe90",
++                class_id: "7a2616b4b132946d21b1d396c0a82f69a144fb7f692394314efb35e3f8bff1f231b857f174e1165ad92c65ce742e1bcc57dfb11e1e5eab02b67b8cf87436c625",
++                artifact_root: "8e31580dc81f6548b9e440c9b6d45fe63bff1d42ed2dbb4b342bdb58fc4590f0b8210f10a2a23e6c352c866a4313004b547ec363997e5757d2bce31a6838eec4",
++                registered_tokenizer: "57c55fb228e8bb272c1d3e3a75eb8e7a238fe2e6a7ccc5e4cd6b874c1278fbc79342c2d466bc52d53000bb0de6de57cb196fc0a413c2751d45cfb69551615ac2",
++                original_context_hash: "a04696aa8960188b22832ac696c75d987b1a0b22831612a1d4ff5bea6cf7577f72c231308d5e8811b15377677f06942957100253dfeab2c498d6e9d1e9f219e9",
++                prompt: SMOL_PROMPT,
++            },
++            Self::Pythia70M => FixedModelPinV2 {
++                model: "EleutherAI/pythia-70m",
++                revision: "a39f36b100fe8a5377810d56c3f4789b9c53ac42",
++                original_max_context: 2048,
++                artifact_bytes: 103402560,
++                expected_artifact_sha256: "2d1010327664743f240ea8d5bc089daed5a704d4340fea322d1f9cafbe009651",
++                class_id: "356fbf891ef8ff98cc008c5187c7105bbc9eb32a53225a54361493c96fdc75f3af9d7acb1789a4fa9866771442fa1a55a8217371278bf88130ece5d2e4af91e1",
++                artifact_root: "427a912e722f173d1d0fe4b02dac4148709e9a70d245c3012768a5962fa3f6736ea9cb921b8824b9712a1f718f5dc389c00c1d81fa9c8f552fd358c96ba10ef4",
++                registered_tokenizer: "9ccc3c319505ec74ccccb984a97bbd955c2c3f30e4c8f2dbe95ff8e13b213d84074d705cf61decf466eb2026e4a1b9ebf3e33f32abdc0653382ea0a669941a43",
++                original_context_hash: "d9ca9eae0abcafa087e4e06ba9fcd8a8f71f0f435735e3302a7725d2465fb9a22eb728f4a7d3075bffcdc6208d791b999e6f1f25574864ac7b41d792379ee868",
++                prompt: PYTHIA_PROMPT,
++            },
++        }
++    }
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct HeaderFileStampV2 {
++    pub device: u64,
++    pub inode: u64,
++    pub bytes: u64,
++    pub mtime: i64,
++    pub mtime_ns: i64,
++    pub ctime: i64,
++    pub ctime_ns: i64,
++}
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum TrainedMeasureErrorV2 {
++    UnsupportedPlatform,
++    SourceIo,
++    Changed,
++    Pin,
++    Load(LocalForwardErrorV2),
++    Ordinary(LocalForwardErrorV2),
++    Dense(DenseMeasurementErrorV2),
++}
++/// Capture BEFORE bounded header reading on the same descriptor; no reopen.
++/// Stability is observed metadata, NOT an atomic immutable filesystem snapshot.
++pub fn header_file_stamp_v2(file: &File) -> Result<HeaderFileStampV2, TrainedMeasureErrorV2> {
++    #[cfg(unix)]
++    {
++        use std::os::unix::fs::MetadataExt;
++        let s = file.metadata().map_err(|_| TrainedMeasureErrorV2::SourceIo)?;
++        if !s.is_file() {
++            return Err(TrainedMeasureErrorV2::SourceIo);
++        }
++        Ok(HeaderFileStampV2 {
++            device: s.dev(),
++            inode: s.ino(),
++            bytes: s.len(),
++            mtime: s.mtime(),
++            mtime_ns: s.mtime_nsec(),
++            ctime: s.ctime(),
++            ctime_ns: s.ctime_nsec(),
++        })
++    }
++    #[cfg(not(unix))]
++    {
++        let _ = file;
++        Err(TrainedMeasureErrorV2::UnsupportedPlatform)
++    }
++}
++fn hash64(text: &str) -> Result<Hash64, TrainedMeasureErrorV2> {
++    if text.len() != 128 {
++        return Err(TrainedMeasureErrorV2::Pin);
++    }
++    let mut out = [0u8; 64];
++    for (i, b) in text.as_bytes().chunks_exact(2).enumerate() {
++        let s = std::str::from_utf8(b).map_err(|_| TrainedMeasureErrorV2::Pin)?;
++        out[i] = u8::from_str_radix(s, 16).map_err(|_| TrainedMeasureErrorV2::Pin)?;
++    }
++    Ok(Hash64::from_bytes(out))
++}
++#[derive(Clone, Copy, Debug)]
++pub struct TrainedPhaseTimesV2 {
++    pub owned_parameter_load_ns: u128,
++    pub ordinary_ns: u128,
++    pub dense_prepare_ns: u128,
++    pub dense_run_ns: u128,
++}
++/// No JSON construction/copy here. Serialization/output buffers, process control,
++/// metadata preparation, input SHA hashing and retained exports stay externally
++/// owned. The results own their true run/extra guards and drop data before them.
++pub struct TrainedOrdinaryMeasurementV2 {
++    model: FixedTrainedModelV2,
++    ordinary: LocalWideForwardOutputV2,
++    dense: DenseMeasurementOutputV2,
++    times: TrainedPhaseTimesV2,
++    load_usage: LocalForwardLoadUsageV2,
++    ordinary_usage: LocalWideForwardUsageV2,
++    dense_usage: DenseMeasurementUsageV2,
++}
++impl TrainedOrdinaryMeasurementV2 {
++    pub fn model(&self) -> FixedTrainedModelV2 {
++        self.model
++    }
++    pub fn ordinary(&self) -> &LocalWideForwardOutputV2 {
++        &self.ordinary
++    }
++    pub fn dense(&self) -> &DenseMeasurementOutputV2 {
++        &self.dense
++    }
++    pub fn times(&self) -> TrainedPhaseTimesV2 {
++        self.times
++    }
++    pub fn load_usage(&self) -> LocalForwardLoadUsageV2 {
++        self.load_usage
++    }
++    pub fn ordinary_usage(&self) -> LocalWideForwardUsageV2 {
++        self.ordinary_usage
++    }
++    pub fn dense_usage(&self) -> DenseMeasurementUsageV2 {
++        self.dense_usage
++    }
++    pub fn scope(&self) -> &'static str {
++        "same-owned-parameters ordinary CPU then legacy dense; local short-job comparison only"
++    }
++}
++/// REAL API calls, not a success stub. Actual execution is only possible after
++/// the caller supplies fully prepared bounded Header/Source/Compiled/class/job/
++/// geometry and ACTUAL complete external owned ticket. This helper neither
++/// constructs nor certifies that whole metadata census (source.owner_requests
++/// is only structdelta). r3+measurement bridge and that caller are dependencies.
++/// Budgets must persist across retries. Same required ledger handles all stages.
++/// Context is the unchanged recorded16-prompt/1-decode local noncanonical job,
++/// with ORIGINAL maximum8192/8192/2048. No native assignment or full-length claim.
++/// Input expected artifact SHA is a saved pin only; this function verifies owned
++/// weight root/class/context, NOT full-file SHA or publisher/model correctness.
++#[allow(clippy::too_many_arguments)]
++pub fn measure_prepared_trained_v2(
++    model: FixedTrainedModelV2,
++    file: &mut File,
++    at_header: HeaderFileStampV2,
++    inputs: LocalForwardInputsV2<'_>,
++    prompt: &[u32],
++    loads: &mut LocalForwardLoadBudgetV2,
++    runs: &mut LocalWideForwardBudgetV2,
++    denses: &mut DenseMeasurementBudgetV2,
++    reserver: &TirMemoryReserverV1,
++) -> Result<TrainedOrdinaryMeasurementV2, TrainedMeasureErrorV2> {
++    let pin = model.pin();
++    let now = header_file_stamp_v2(file)?;
++    if now != at_header {
++        return Err(TrainedMeasureErrorV2::Changed);
++    }
++    if now.bytes != pin.artifact_bytes
++        || inputs.expected_class != hash64(pin.class_id)?
++        || inputs.artifact != hash64(pin.artifact_root)?
++        || inputs.expected_execution != hash64(pin.original_context_hash)?
++        || inputs.class.tokenizer_id != hash64(pin.registered_tokenizer)?
++        || inputs.class.layout.max_context != pin.original_max_context
++        || inputs.original_context.max_context_tokens != pin.original_max_context
++        || inputs.original_context.declared_prefill_tokens != 16
++        || inputs.original_context.exact_decode_tokens != 1
++        || prompt != pin.prompt
++    {
++        return Err(TrainedMeasureErrorV2::Pin);
++    }
++    let start = Instant::now();
++    let owner = load_local_wide_forward_v2(file, inputs, loads, reserver).map_err(TrainedMeasureErrorV2::Load)?;
++    let load_ns = start.elapsed().as_nanos();
++    if header_file_stamp_v2(file)? != at_header {
++        return Err(TrainedMeasureErrorV2::Changed);
++    }
++    let start = Instant::now();
++    let ordinary = owner.forward_local(prompt, runs, reserver).map_err(TrainedMeasureErrorV2::Ordinary)?;
++    let ordinary_ns = start.elapsed().as_nanos();
++    let start = Instant::now();
++    let prepared = owner.prepare_dense_measurement(&ordinary, denses).map_err(TrainedMeasureErrorV2::Dense)?;
++    let prepare_ns = start.elapsed().as_nanos();
++    let start = Instant::now();
++    let dense = prepared.run(prompt, reserver).map_err(TrainedMeasureErrorV2::Dense)?;
++    let dense_ns = start.elapsed().as_nanos();
++    if header_file_stamp_v2(file)? != at_header {
++        return Err(TrainedMeasureErrorV2::Changed);
++    }
++    Ok(TrainedOrdinaryMeasurementV2 {
++        model,
++        ordinary,
++        dense,
++        times: TrainedPhaseTimesV2 {
++            owned_parameter_load_ns: load_ns,
++            ordinary_ns,
++            dense_prepare_ns: prepare_ns,
++            dense_run_ns: dense_ns,
++        },
++        load_usage: loads.usage(),
++        ordinary_usage: runs.usage(),
++        dense_usage: denses.usage(),
++    })
++}

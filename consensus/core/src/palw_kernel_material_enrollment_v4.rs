@@ -7,7 +7,7 @@ use crate::{
     palw_monetary_material_v1::{PalwMonetaryMaterialEnrollmentV1, PalwMonetaryMaterialOfferV1, PalwMonetaryMaterialTermsV1},
     palw_native_resource_v1::{NativeHeapV1, NativeRetainedV1, reserve_native_requests_v1},
     palw_prospective_kernel_material_v4::{PalwProspectiveKernelMaterialOwnedV4, PalwProspectiveKernelMaterialRequestV4},
-    palw_state_v2::{PalwChainStateV2, PalwStateParamsV2, palw_bond_committed_raw_v1},
+    palw_state_v2::{PalwChainStateV2, PalwStateParamsV2, palw_bond_committed_raw_checked_v2},
 };
 use borsh::BorshSerialize;
 pub struct PalwKernelMaterialIngressOwnedV4 {
@@ -41,13 +41,24 @@ pub fn kernel_material_enrollment_v4(
     request: &PalwProspectiveKernelMaterialRequestV4,
     verified: PalwProspectiveKernelMaterialOwnedV4,
 ) -> Result<PalwKernelMaterialIngressOwnedV4, String> {
+    kernel_material_enrollment_checked_v4(state, params, now, raw_depth, request, verified).map_err(|error| error.to_string())
+}
+/// Classified preparation; local capacity/context never becomes collateral shortage.
+pub fn kernel_material_enrollment_checked_v4(
+    state: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    now: u64,
+    raw_depth: Option<u64>,
+    request: &PalwProspectiveKernelMaterialRequestV4,
+    verified: PalwProspectiveKernelMaterialOwnedV4,
+) -> Result<PalwKernelMaterialIngressOwnedV4, crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4> {
     let local = crate::palw_native_resource_v1::native_declared_logical_limits_v1()
-        .ok_or("kernel ingress needs explicitly configured local metadata RAM/DB capacity")?;
+        .ok_or_else(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::capacity_unavailable_v4)?;
     let providers = u64::try_from(request.intent.providers.len()).map_err(|_| "kernel roster count overflow")?;
     if providers == 0 {
         return Err("kernel ingress provider roster empty".into());
     }
-    let context = verified.export_context_v4(
+    let context = verified.export_context_checked_v4(
         state,
         request,
         crate::palw_kernel_material_context_v4::PalwKernelMaterialContextLimitsV4 {
@@ -66,7 +77,7 @@ pub fn kernel_material_enrollment_v4(
     let n = request.intent.providers.len() as u64;
     let fees = policy.minimum_fee_sompi.checked_mul(n).ok_or("kernel provider funding overflows")?;
     let sponsor = state.bond(&a.producer).ok_or("kernel sponsor absent")?;
-    if u128::from(sponsor.collateral).saturating_sub(palw_bond_committed_raw_v1(state, params, &a.producer, now, raw_depth))
+    if u128::from(sponsor.collateral).saturating_sub(palw_bond_committed_raw_checked_v2(state, params, &a.producer, now, raw_depth)?)
         < u128::from(fees)
     {
         return Err("kernel sponsor has no own unused fee funding".into());
@@ -74,7 +85,7 @@ pub fn kernel_material_enrollment_v4(
     for provider in &request.intent.providers {
         let row = state.bond(provider).ok_or("kernel provider absent")?;
         if row.operator_id == sponsor.operator_id
-            || u128::from(row.collateral).saturating_sub(palw_bond_committed_raw_v1(state, params, provider, now, raw_depth))
+            || u128::from(row.collateral).saturating_sub(palw_bond_committed_raw_checked_v2(state, params, provider, now, raw_depth)?)
                 < u128::from(policy.minimum_collateral_sompi)
         {
             return Err("kernel provider is dependent or has no free collateral".into());
@@ -113,7 +124,7 @@ pub fn kernel_material_enrollment_v4(
             })
             .ok_or("kernel enrollment native size overflow")?,
     )
-    .map_err(|e| e.to_string())?;
+    .map_err(crate::palw_prospective_kernel_material_v4::PalwMaterialQuoteFaultV4::from)?;
     let monetary = PalwMonetaryMaterialEnrollmentV1 {
         terms: PalwMonetaryMaterialTermsV1 {
             version: 1,

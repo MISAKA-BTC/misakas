@@ -1,0 +1,39 @@
+{
+  "scope": "transparent native filesystem compression of exact own raw JSON records; unchanged readable paths/bytes/digests",
+  "free_before": 869830656,
+  "free_after": 871751680,
+  "files": [
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/retained-output-20261102/runtime-first.json",
+      "logical_bytes": 1101836,
+      "sha256_before_and_after": "370399201dcc73fb2f0e27bd8792754d2c36e3870d7d19b0b697826a84770d6a",
+      "allocated_before": 1105920,
+      "allocated_after": 606208,
+      "logical_content_unchanged": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/trained-roles-20261102/build-checkpoint.json",
+      "logical_bytes": 1101203,
+      "sha256_before_and_after": "55363ed3ccb3d7f1c1d89dedad35b463f529702f9065b8443a5ba428ba12fec2",
+      "allocated_before": 1101824,
+      "allocated_after": 606208,
+      "logical_content_unchanged": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/trained-roles-20261102/checkpoint-clippy.json",
+      "logical_bytes": 1100827,
+      "sha256_before_and_after": "371ed9db5baade9b8e06f529124d1c6707268637ae5f5b5db0f85e1e5431288e",
+      "allocated_before": 1101824,
+      "allocated_after": 606208,
+      "logical_content_unchanged": true
+    },
+    {
+      "path": "/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/handoff/positive-court/trained-roles-20261102/pythia-original-short-checkpoint.json",
+      "logical_bytes": 1100196,
+      "sha256_before_and_after": "5481af0840c59c7511961ce208addd79531dd69a8ae9ac8c8afded5d69619fc6",
+      "allocated_before": 1101824,
+      "allocated_after": 606208,
+      "logical_content_unchanged": true
+    }
+  ]
+}

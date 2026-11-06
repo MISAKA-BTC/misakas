@@ -1,0 +1,12 @@
+{
+  "exit_code": 0,
+  "leader_exit_code": 0,
+  "elapsed_seconds": 5.628877083974658,
+  "cleanup": {
+    "group": 27086,
+    "live_descendants": [],
+    "zombies": []
+  },
+  "log_sha256": "5a65ca3570631f41bea703ba3f92244783d7a9c79dc210f1469cbc3afd3ddbe7",
+  "scope": "Python tests only; no Rust build or full runner execution"
+}

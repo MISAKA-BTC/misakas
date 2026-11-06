@@ -1,0 +1,110 @@
+//! Actual DB closure/reopen of legacy claim certification and its reward hold.
+//! These private Gate C mechanics do not activate Positive or its new P authority.
+
+use super::*;
+use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+use kaspa_database::prelude::{ConnBuilder, DB};
+use std::{
+    path::Path,
+    sync::{Arc, Weak},
+};
+
+fn carriage_bytes(net: &Net) -> Vec<u8> {
+    borsh::to_vec(&PalwStateCarriageV2::from_state(&net.chain.tip_state().1)).expect("canonical legacy carriage")
+}
+
+fn reopen(w: World, path: &Path, weak: &mut Weak<DB>, label: &str) -> World {
+    let sink = w.net.chain.sink();
+    let root = w.net.chain.tip_state().1.state_root();
+    let bytes = carriage_bytes(&w.net);
+    let route = w.net.api();
+    let money = kernel_money_v1(&w.net.chain);
+    let payees: Vec<_> = (0..8).map(|card| minted_and_owed(&w.net, &w.net.chain, card)).collect();
+    let funding: Vec<_> =
+        w.net.funding.iter().map(|(outpoint, _)| (*outpoint, w.net.chain.ctx.consensus.get_virtual_utxo_entry(*outpoint))).collect();
+    let World { net, fx, class, jobs } = w;
+    let net = net.restart_with(|| {
+        // No retained Arc, old TestConsensus, state store or processor may keep this DB open.
+        assert_eq!(weak.strong_count(), 0, "{label}: the old DB must be closed before opening the files again");
+        assert!(weak.upgrade().is_none(), "{label}: the old connection is gone");
+        let db = ConnBuilder::default()
+            .with_files_limit(10)
+            .with_db_path(path.to_path_buf())
+            .with_create_if_missing(false)
+            .build()
+            .expect("reopen the existing database; never create a replacement");
+        *weak = Arc::downgrade(&db);
+        db
+    });
+    assert_eq!(net.chain.sink(), sink, "{label}: persisted sink");
+    assert_eq!(net.chain.tip_state().1.state_root(), root, "{label}: persisted state root");
+    assert_eq!(carriage_bytes(&net), bytes, "{label}: all canonical state bytes");
+    assert_eq!(net.api(), route, "{label}: all served kernel rows, including K/H");
+    assert_eq!(kernel_money_v1(&net.chain), money, "{label}: collateral, slash, minted/queued money, burn and source escrow");
+    for (card, expected) in payees.into_iter().enumerate() {
+        assert_eq!(minted_and_owed(&net, &net.chain, card), expected, "{label}: card {card}'s actual UTXOs and queue");
+    }
+    for (outpoint, expected) in funding {
+        assert_eq!(net.chain.ctx.consensus.get_virtual_utxo_entry(outpoint), expected, "{label}: actor funding UTXO");
+    }
+    eprintln!("LEGACY_DB_REOPEN {label}: closed old connection, matched canonical bytes, rows and funds at {sink}");
+    World { net, fx, class, jobs }
+}
+
+#[tokio::test]
+async fn g14_cert_kernel_route_pending_and_settled_rows_survive_a_closed_database_reopen() {
+    Box::pin(pending_and_settled_rows_survive_a_closed_database_reopen()).await;
+}
+
+async fn pending_and_settled_rows_survive_a_closed_database_reopen() {
+    kaspa_core::log::try_init_logger("warn");
+    // Own the directory separately: it survives both DB instances and is removed after the last node drops.
+    let dir = kaspa_database::utils::get_kaspa_tempdir();
+    let db = ConnBuilder::default().with_files_limit(10).with_db_path(dir.path().to_path_buf()).build().unwrap();
+    let mut weak = Arc::downgrade(&db);
+    let (sender, receiver) = async_channel::unbounded();
+    let mut net = Net::over_cfg(cert_config(), |config| TestConsensus::with_db(db, config, sender));
+    net._keep.push(Box::new(receiver));
+    let (w, claim, _) = Box::pin(honest_final_uncertified_on_net(net)).await;
+    let held = hold(&w.net, &claim).expect("the actual Final reward is held");
+    let pending = cert_row(&w.net, &claim).expect("pending K row");
+    let mut w = reopen(w, dir.path(), &mut weak, "pending");
+    assert_eq!(hold(&w.net, &claim), Some(held.clone()));
+    assert_eq!(cert_row(&w.net, &claim), Some(pending));
+    assert!(!palw_kernel_claim_security_certified_v1(&w.net.chain.tip_state().1, &claim));
+
+    let row = until_drawn(&mut w.net, &claim).await;
+    for (card, _) in drawn_cards(&w.net, &row) {
+        attest(&mut w.net, &claim, card, misaka_palw_kernel::model_eligibility_v1::EligibilityVerdictV1::Reproduced).await;
+    }
+    let (producer_before, _) = until_decided(&mut w.net, &claim, TEST_ONLY_KERNEL_CERT_POLICY_V1.prosecution_window_daa + 50).await;
+    let settled = cert_row(&w.net, &claim).unwrap();
+    assert_eq!(settled.outcome.map(|(outcome, _)| outcome), Some(PalwCertificationOutcomeV1::Certified));
+    assert_eq!(w.net.owed(0), producer_before + held.amount, "only the original held amount is paid");
+    assert!(hold(&w.net, &claim).is_none());
+
+    let mut w = reopen(w, dir.path(), &mut weak, "settled");
+    assert_eq!(cert_row(&w.net, &claim), Some(settled.clone()));
+    assert!(hold(&w.net, &claim).is_none());
+    let (minted, owed) = minted_and_owed(&w.net, &w.net.chain, 0);
+    for _ in 0..5 {
+        let next = w.net.daa() + 1;
+        w.net.beat_to(next).await;
+        let (now_minted, now_owed) = minted_and_owed(&w.net, &w.net.chain, 0);
+        assert_eq!(now_minted + now_owed, minted + owed, "no repeated payment after the settled restart");
+        assert_eq!(cert_row(&w.net, &claim), Some(settled.clone()));
+        assert!(hold(&w.net, &claim).is_none());
+    }
+    let node = ibd_node(&w.net).await;
+    assert_eq!(carriage_bytes(&node), carriage_bytes(&w.net), "IBD canonical state bytes");
+    assert_eq!(kernel_money_v1(&node.chain), kernel_money_v1(&w.net.chain), "IBD actual funds");
+    drop(node);
+    let node = pruned_import_node(&mut w.net).await;
+    assert_eq!(carriage_bytes(&node), carriage_bytes(&w.net), "pruning import canonical state bytes");
+    assert_eq!(kernel_money_v1(&node.chain), kernel_money_v1(&w.net.chain), "pruning import actual funds");
+    assert_eq!(cert_row(&node, &claim), Some(settled));
+    assert!(hold(&node, &claim).is_none());
+    drop(node);
+    drop(w);
+    assert_eq!(weak.strong_count(), 0, "the final reopened DB is also closed before directory cleanup");
+}

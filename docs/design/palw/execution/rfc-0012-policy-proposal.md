@@ -638,3 +638,50 @@ doc. Protocol: fleet-class hardware, release profile, an idle machine, three run
   (every row a store read plus a delta decode) cold-cache and warm-cache, and the SECOND (all hits); RSS before and after (design number 352 B/row, 42 MB per 100k blocks).
   PROPOSED gates: cold first evaluation <= 30 s per 100k blocks on the fleet disk, warm per-change evaluation <= 50 ms. A node that cannot answer a virtual change within
   one block interval when warm is the failing case.
+
+
+### 12.10 Native39 archival accounting implementation — 2026-10-30
+
+The native39 receipt-spend fold journals each actually issued quantum in aux193,
+with its original claim and receipt data, actual selected-verifier approval,
+canonical work identity and original maturity/liability clocks. Its frontier
+requires the existing certification and closed-liability predicates; optimistic
+Final, replay agreement and nominal safe weight do not replace certification.
+Under claim-local stage2, eligibility comes from that exact lot's authenticated
+dependency closure rather than an unrelated oldest unresolved claim.
+
+Once work has genuinely matured and its liabilities and dependency closure are
+closed, aux195 records the compact canonical accounting decision. Legacy sources
+are captured by aux196 before retirement and may promote only after the same
+actual approval, pricing, maturity, revocation and closure checks. Partial work
+retains separate identities, operator/class attribution and original clocks;
+quantities are never combined into a new work identity. Heavy source data can
+retire after its original material duties end and equivalent compact accounting
+exists, without extending fee or bond holds. The compact record requires the
+actual network ruleset and canonical pricing/maturity context on restore and
+import, including when all aux193/196 sources have retired.
+
+Aux194 records one prefix certified by the unchanged settlement policy, with
+exact depth, unique work and operator/class concentration statistics. Its
+supporting frontier is the irreversible covered effect, not a higher still-liable
+legacy frontier. Its parent-state commitment and actual header clocks/ancestry
+are checked in the node context. The evaluator can use this historical decision
+only for the same executed effect in its root-verified EVM walk; it cannot label
+a nonexecuted block as an EVM effect, add certificate work to new facts, or
+reinterpret a below-pruning effect as a new pruning-point execution. Compact
+facts may be reclaimed only when strictly covered by an actual certified cutoff;
+boundary facts remain available for subsequent effects.
+
+These are authenticated past ledger decisions under the existing selected
+verifier honest-fraction and validated pruning-state assumptions. Hashes,
+signatures and commitments authenticate data identity; they do not prove model
+computation. Node-local finalized-publication incident history remains separate
+and is never imported as certificate authority. If pruning has passed the last
+covered executed effect and current policy evidence cannot certify the new
+executed walk, current public Safe/Finalized labels can be null under the existing
+no-latch semantics. A D=1/W=1 fixture does not establish generic-policy liveness.
+
+The new native39 node regression includes real action79 collection, finite
+aux193 retirement, restart and the ordinary pruning-proof/trusted-anticone/state
+import path. Runtime results and a complete mixed legacy/native policy campaign
+must be reported separately from these implementation and schema checks.

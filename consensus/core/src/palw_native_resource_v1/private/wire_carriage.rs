@@ -709,6 +709,21 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
         })
     }
     let mut sum = NativeWireShapeV1::default();
+    let n = count("claims", false)?;
+    sum = sum.allocation(
+        n,
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), ()>>(),
+    )?;
+    let n = count("funded_escrows", false)?;
+    sum = sum.allocation(
+        n,
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), ()>>(),
+    )?;
+    let n = count("exec_v2", true)?;
+    sum = sum.allocation(
+        n,
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), u64>>(),
+    )?;
     let n = count("exec_v2_job_uses", false)?;
     sum = sum
         .allocation(n, std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, crate::Hash64), ()>>())?;
@@ -903,6 +918,9 @@ pub(crate) fn restore_index_native_shape_v1(counts: &[(&str, u64, u64)]) -> std:
 /// by delta replay. Byte-vector lengths never determine a node size.
 pub(crate) fn transition_node_unit_v1() -> u64 {
     let mut n = 0u64;
+    n = n
+        .max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), ()>>()
+            as u64);
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (crate::Hash64, crate::Hash64),
@@ -964,6 +982,12 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (crate::Hash64, crate::palw_state_v2::PalwCourtSideV1),
             crate::palw_state_v2::PalwCourtCloseGroupV2,
+        >,
+    >() as u64);
+    n = n.max(std::mem::size_of::<
+        crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+            (crate::Hash64, crate::palw_state_v2::PalwLegacyCarrierLocatorV9),
+            (),
         >,
     >() as u64);
     n = n.max(std::mem::size_of::<
@@ -1035,6 +1059,10 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
             crate::palw_improve_state_v1::PalwPoolEntryV2,
         >,
     >() as u64);
+    n = n.max(
+        std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, u8, crate::Hash64), ()>>()
+            as u64,
+    );
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (crate::palw_state_v2::PalwBondKeyV2, bool, u64, crate::Hash64),
@@ -1138,6 +1166,7 @@ pub(crate) fn transition_node_unit_v1() -> u64 {
     >() as u64);
     n = n.max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u64, u64), u16>>() as u64);
     n = n.max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u8, Vec<u8>), Vec<u8>>>() as u64);
+    n = n.max(std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(u8, u64, crate::Hash64), ()>>() as u64);
     n = n.max(std::mem::size_of::<
         crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
             (u8, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1),
@@ -1598,8 +1627,14 @@ pub(crate) fn scan_exec_delta_row_v1(
     new: &Option<Vec<u8>>,
 ) -> std::io::Result<NativeWireShapeV1> {
     match table {
-        PALW_EXEC_V2_TABLE_ROOTS_V1 => scan_delta_map_row_v1(&state.exec_v2.roots, key, old, new),
-        PALW_EXEC_V2_TABLE_SLICES_V1 => scan_delta_map_row_v1(&state.exec_v2.slices, key, old, new),
+        PALW_EXEC_V2_TABLE_ROOTS_V1 => scan_delta_map_row_v1(&state.exec_v2.roots, key, old, new)?.allocation(
+            u64::from(old.is_some()) + u64::from(new.is_some()),
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), u64>>(),
+        ),
+        PALW_EXEC_V2_TABLE_SLICES_V1 => scan_delta_map_row_v1(&state.exec_v2.slices, key, old, new)?.allocation(
+            u64::from(old.is_some()) + u64::from(new.is_some()),
+            std::mem::size_of::<crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<(crate::Hash64, crate::Hash64), u64>>(),
+        ),
         PALW_EXEC_V2_TABLE_JOBS_V1 => scan_delta_map_row_v1(&state.exec_v2.jobs, key, old, new),
         PALW_EXEC_V2_TABLE_ANCHORED_V1 => scan_delta_map_row_v1(&state.exec_v2.anchored, key, old, new),
         PALW_EXEC_V2_TABLE_REWARDS_V1 => scan_delta_map_row_v1(&state.exec_v2_rewards, key, old, new),
@@ -1740,6 +1775,14 @@ pub(crate) fn transition_existing_index_shape_v1(state: &PalwChainStateV2) -> st
                 .ok_or_else(|| crate::palw_native_resource_v1::wire::wire_bad("actual restore membership overflow"))?,
         ),
         (
+            "exec_v2",
+            0,
+            state
+                .exec_v2
+                .native_members_v1()
+                .ok_or_else(|| crate::palw_native_resource_v1::wire::wire_bad("actual restore membership overflow"))?,
+        ),
+        (
             "exec_v2_job_uses",
             state.exec_v2_job_uses.len() as u64,
             state
@@ -1752,6 +1795,14 @@ pub(crate) fn transition_existing_index_shape_v1(state: &PalwChainStateV2) -> st
             state.exec_v2_rewards.len() as u64,
             state
                 .exec_v2_rewards
+                .native_members_v1()
+                .ok_or_else(|| crate::palw_native_resource_v1::wire::wire_bad("actual restore membership overflow"))?,
+        ),
+        (
+            "funded_escrows",
+            state.funded_escrows.len() as u64,
+            state
+                .funded_escrows
                 .native_members_v1()
                 .ok_or_else(|| crate::palw_native_resource_v1::wire::wire_bad("actual restore membership overflow"))?,
         ),

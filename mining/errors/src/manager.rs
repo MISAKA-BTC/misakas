@@ -3,6 +3,10 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum MiningManagerError {
+    /// Local submitter authorization was lost before insertion.
+    #[error("local transaction submission withheld: {0}")]
+    LocalSubmissionWithheld(String),
+
     /// A consensus rule error
     #[error(transparent)]
     BlockTemplateBuilderError(#[from] BuilderError),

@@ -1,0 +1,201 @@
+    Finished `test` profile [unoptimized] target(s) in 0.17s
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_positive_accounting-a78f4c03e86ed9fc)
+
+running 42 tests
+test credit::consumers::tests::unassigned_native_binding_cannot_reach_any_positive_consumer ... ok
+test credit::tests::all_consumers_share_the_current_predicate_and_preserve_the_exact_weight ... ok
+test credit::tests::dependency_work_and_stack_growth_are_bounded_without_truncating_ancestors ... ok
+test credit::tests::every_nonpassed_outcome_is_uncredited_including_panel_failure_and_timeout ... ok
+test credit::tests::missing_existing_entitlement_rejects_all_eight_ready_credit_uses ... ok
+test credit::tests::fixed_admission_anchors_can_differ_across_a_valid_dependency_lineage ... ok
+test credit::tests::diamond_checks_every_expected_export_binding_even_for_an_already_visited_parent ... ok
+test credit::tests::cycles_missing_bindings_and_noncanonical_parent_lists_are_rejected ... ok
+test credit::tests::neither_saved_pass_nor_drawn_approval_replaces_local_full_coverage ... ok
+test credit::tests::lineage_membership_never_waives_the_admitted_network_or_ruleset_binding ... ok
+test credit::tests::input_branch_ruleset_output_and_plan_substitution_fail_closed ... ok
+test credit::tests::ready_paid_worker_entitlement_does_not_grant_primary_reward_weight_receipts_or_rule_e ... ok
+test credit::tests::positive_pass_does_not_replace_gate_c_or_economic_and_fraud_conditions ... ok
+test credit::tests::the_production_native_port_remains_unconditionally_closed ... ok
+test credit::tests::removing_a_parent_admission_origin_holds_its_child_and_preserves_independent_credit ... ok
+test fees::tests::a_native_projection_cannot_be_created_from_a_stale_prepare_after_rollback ... ok
+test fees::tests::a_pending_source_duty_cannot_be_closed_by_positive_completion_alone ... ok
+test fees::tests::a_recovered_handle_cannot_be_used_by_an_identically_funded_foreign_store ... ok
+test fees::tests::a_stale_positive_delivery_cannot_pay_completion_for_a_current_nonpassed_claim ... ok
+test fees::tests::account_and_tombstone_capacity_fail_closed_without_evicting_payment_markers ... ok
+test fees::tests::changes_between_prepare_and_commit_are_rechecked_with_no_partial_mutation ... ok
+test fees::tests::closure_settles_delivered_data_and_carriage_before_refunding_the_remainder ... ok
+test fees::tests::completing_panel_gets_one_scope_fee_without_mining_or_gate_c_credit ... ok
+test credit::tests::unverified_or_revoked_ancestor_holds_only_its_descendants ... ok
+test fees::tests::delivered_service_is_paid_once_when_the_claim_ends_unverified ... ok
+test fees::tests::failed_capacity_funding_or_consent_leaves_no_case_or_debit ... ok
+test fees::tests::failed_recipient_or_unknown_unit_never_charges_the_payer ... ok
+test fees::tests::fee_cap_full_schedule_burn_and_expiry_are_checked_before_admission ... ok
+test fees::tests::native_funding_has_no_placeholder_success_path ... ok
+test fees::tests::native_projection_preserves_paid_prefix_when_a_lower_source_unit_arrives_later ... ok
+test fees::tests::out_of_order_rollback_or_expired_admission_cannot_change_balances ... ok
+test fees::tests::payment_refund_burn_reservation_and_dedupe_rollback_together ... ok
+test fees::tests::preparation_is_read_only_and_identical_admission_is_one_hold ... ok
+test fees::tests::recipient_overflow_during_closure_cannot_leave_an_earlier_payment_or_refund ... ok
+test fees::tests::recover_existing_private_case_is_read_only_even_after_authority_removal_and_expiry ... ok
+test fees::tests::recover_requires_every_literal_intent_field_to_match_the_committed_case ... ok
+test fees::tests::resource_and_payer_reservations_are_shared_across_cases_and_never_reset_by_retry ... ok
+test fees::tests::recovered_handles_preserve_once_only_pay_refund_and_real_admission_rollback ... ok
+test fees::tests::source_delivery_panel_abandonment_and_bad_witness_do_not_earn_completion_fee ... ok
+test fees::tests::rollback_prevents_aba_reuse_of_an_old_prepared_payment ... ok
+test fees::tests::tokens_and_undo_cannot_be_moved_between_identically_funded_stores ... ok
+test fees::tests::unavailable_computation_credit_does_not_lock_earned_private_service_fees_or_safe_refunds ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/independent_consumer_routes.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/independent_consumer_routes-9b9419fc7af19cfe)
+
+running 1 test
+test each_consumer_forwards_the_same_claim_and_its_own_credit_use_on_every_read ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/independent_credit_graph.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/independent_credit_graph-985e3c1a19032fb4)
+
+running 8 tests
+test a_positive_ready_view_without_an_entitlement_implementation_denies_every_use ... ok
+test positive_ready_reuse_rights_do_not_create_paid_work_credit ... ok
+test paid_worker_payment_and_contract_settlement_cannot_authorize_primary_reward_or_work_credit ... ok
+test the_first_node_over_the_cap_is_not_silently_treated_as_an_approved_leaf ... ok
+test root_receives_the_requested_use_and_all_ancestors_receive_only_dependency_use ... ok
+test one_existing_use_never_implies_any_of_the_other_seven_rights ... ok
+test losing_an_ancestor_dependency_right_denies_a_fresh_read_even_with_other_rights ... ok
+test all_three_vertex_graphs_and_readiness_sets_match_the_independent_oracle ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s
+
+     Running tests/independent_fee_conservation.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/independent_fee_conservation-efa0f9285d838186)
+
+running 2 tests
+test a_free_unit_keeps_its_dedupe_position_without_creating_a_native_value_due ... ok
+test every_delivery_subset_payment_order_and_retry_conserves_and_reverses_exact_value ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running unittests src/lib.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/misaka_palw_positive_contract-a39d79176e534abc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/case_journal.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/case_journal-2e6965d03485ce20)
+
+running 9 tests
+test borrowed_decode_refs_iteration_and_identity_hashing_allocate_nothing ... ok
+test hostile_payload_aux_counts_and_lengths_cannot_allocate_or_overflow_offsets ... ok
+test independently_expected_references_reject_missing_extra_reordered_duplicate_or_substituted_material ... ok
+test every_independent_byte_count_and_logical_heap_limit_accepts_t_and_refuses_t_minus_one ... ok
+test auxiliary_materials_use_strict_serialized_byte_order_and_reject_duplicates ... ok
+test independent_python_vectors_pin_full_records_and_both_keyed_hash_domains ... ok
+test initial_sequence_and_nonempty_payload_material_rules_are_enforced ... ok
+test every_truncated_prefix_trailing_byte_and_unknown_header_is_rejected_before_allocation ... ok
+test every_full_record_byte_is_committed_when_the_mutated_envelope_remains_decodable ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/certification.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/certification-265d607a088050d0)
+
+running 6 tests
+test fixed_body_matches_independent_field_order_and_id_hash ... ok
+test full_result_output_and_conditions_cannot_borrow_another_subject_vote ... ok
+test fixed_codec_rejects_versions_unknown_verdicts_cuts_and_trailing_bytes ... ok
+test native_expectations_pin_all_identity_draw_and_material_fields ... ok
+test every_fixed_field_is_in_the_statement_id ... ok
+test actor_and_new_role_signature_are_required_for_each_literal_verdict ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/contracts.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/contracts-8185f426e3ac8f6b)
+
+running 14 tests
+test admission_scope_pins_weights_class_and_prevents_legacy_fallback ... ok
+test canonical_source_request_has_no_panel_nonce_or_trace_generation_variant ... ok
+test coverage_identity_binds_the_derivation_rules_and_complete_relation_count ... ok
+test identities_keep_result_case_claim_and_witness_distinct ... ok
+test evidence_is_borrowed_bounded_exactly_framed_and_canonically_ordered ... ok
+test panel_ownership_and_attempt_are_signed_without_resetting_case ... ok
+test signed_finite_service_consent_is_distinct_from_funding_or_completion ... ok
+test zero_decode_overflow_and_context_overrun_are_rejected ... ok
+test independent_python_byte_and_id_vectors_match_the_shared_contract ... ok
+test fixed_commit_codecs_reject_truncation_trailing_bytes_and_old_wire ... ok
+test every_signed_execution_field_changes_identity ... ok
+test source_request_signature_binds_requester_but_canonical_identity_deduplicates ... ok
+test actual_mldsa_authenticates_actor_and_role_not_arithmetic ... ok
+test relay_cannot_supply_malformed_arithmetic_as_an_honest_panel_packet ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/execution_record.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/execution_record-0c846fbd06b29fca)
+
+running 6 tests
+test unknown_magic_and_contract_versions_are_not_old_capture_fallbacks ... ok
+test framing_and_binding_do_not_assert_arithmetic_or_terminal_correctness ... ok
+test fixed_record_has_no_class_program_job_or_second_dtype_and_preserves_u32_ids ... ok
+test independent_python_struct_pack_vector_matches_every_record_byte ... ok
+test truncation_trailing_bytes_budget_and_hostile_counts_are_rejected_without_token_allocation ... ok
+test record_result_artifact_execution_and_decode_bindings_cannot_be_substituted ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/funding.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/funding-7ca5ce9bb4010c92)
+
+running 5 tests
+test consent_service_result_can_be_constructed_once_without_a_hash_fixedpoint ... ok
+test full_execution_source_service_and_plan_projection_are_bound ... ok
+test amount_overflow_zero_plan_and_exclusive_admission_expiry_fail_closed ... ok
+test independent_python_projection_and_final_links_match ... ok
+test real_payer_signature_cannot_be_reused_for_changed_terms_or_actor ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/native_namespace.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/native_namespace-b87866f978301536)
+
+running 2 tests
+test fixed_native_keys_are_versioned_distinct_and_bounded ... ok
+test central_object_reservation_does_not_overlap_an_existing_range ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_preflight_alloc.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/native_preflight_alloc-83d04c9a6f9985bc)
+
+running 1 test
+test fixed_native_result_decode_and_canonical_identity_hashes_allocate_zero_bytes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/native_rows.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/native_rows-9e3f4079f3e67303)
+
+running 5 tests
+test balances_require_conservation_and_checked_arithmetic ... ok
+test no_saved_pass_or_union_summary_can_exceed_its_own_plan ... ok
+test fixed_rows_roundtrip_and_do_not_conflate_corruption_with_absence ... ok
+test large_signed_rows_and_all_optional_references_fit_the_fixed_codec ... ok
+test signed_bundles_bind_origin_plan_consent_and_do_not_require_panel_ack ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/tir_contract.rs (/Users/wata/Downloads/MISAKA-testnet/target/debug/deps/tir_contract-8820cb1dacd584b0)
+
+running 3 tests
+test current_frame_limit_covers_both_wrappers_and_exactly_one_relation ... ok
+test cone_and_trace_are_borrowed_exact_existing_g14_payloads ... ok
+test independent_python_vectors_pin_tir_annex_domains ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests misaka_palw_positive_accounting
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests misaka_palw_positive_contract
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

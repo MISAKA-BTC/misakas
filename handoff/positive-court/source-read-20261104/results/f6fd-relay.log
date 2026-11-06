@@ -1,0 +1,85 @@
+   Compiling kaspa-utils v1.1.0 (/dev/shm/misaka-oom-positive-next/utils)
+   Compiling kaspa-hashes v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/dev/shm/misaka-oom-positive-next/math)
+   Compiling kaspa-merkle v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/merkle)
+   Compiling kaspa-muhash v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/panel)
+   Compiling kaspa-consensus-core v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/core)
+warning: unused import: `FundedAdmissionDerivationV1`
+  --> consensus/core/src/palw_funded_original_coordinator_fold_v1.rs:25:48
+   |
+25 | use crate::palw_funded_original_admission_v1::{FundedAdmissionDerivationV1, FundedAdmissionScheduleV1};
+   |                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `kaspa-consensus-core` (lib) generated 1 warning (run `cargo fix --lib -p kaspa-consensus-core` to apply 1 suggestion)
+   Compiling kaspa-txscript v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/txscript)
+   Compiling kaspa-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/notify)
+   Compiling kaspa-consensus-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/notify)
+   Compiling kaspa-mining-errors v1.1.0 (/dev/shm/misaka-oom-positive-next/mining/errors)
+   Compiling librocksdb-sys v0.17.3+10.4.2
+   Compiling rocksdb v0.24.0
+   Compiling kaspa-consensus-client v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/client)
+   Compiling kaspa-index-core v1.1.0 (/dev/shm/misaka-oom-positive-next/indexes/core)
+   Compiling kaspa-database v1.1.0 (/dev/shm/misaka-oom-positive-next/database)
+   Compiling kaspa-consensus-wasm v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/wasm)
+   Compiling kaspa-consensusmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/consensusmanager)
+   Compiling kaspa-rpc-core v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/core)
+   Compiling kaspa-p2p-lib v1.1.0 (/dev/shm/misaka-oom-positive-next/protocol/p2p)
+   Compiling kaspa-addressmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/addressmanager)
+   Compiling kaspa-mining v1.1.0 (/dev/shm/misaka-oom-positive-next/mining)
+   Compiling kaspa-connectionmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/connectionmanager)
+   Compiling kaspa-p2p-mining v1.1.0 (/dev/shm/misaka-oom-positive-next/protocol/mining)
+   Compiling kaspa-pow v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/pow)
+   Compiling kaspa-p2p-flows v1.1.0 (/dev/shm/misaka-oom-positive-next/protocol/flows)
+   Compiling kaspa-grpc-core v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/grpc/core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/exec)
+   Compiling kaspa-utxoindex v1.1.0 (/dev/shm/misaka-oom-positive-next/indexes/utxoindex)
+   Compiling kaspa-rpc-service v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/service)
+   Compiling kaspa-pq-validator-core v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/pq/validator-core)
+   Compiling misaka-palw-base0 v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/base0)
+   Compiling misaka-palw-tir-lower v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/lower)
+   Compiling kaspa-grpc-client v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/grpc/client)
+   Compiling misaka-endpoints v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/endpoints)
+   Compiling misaka-palw-sdk v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/sdk)
+   Compiling kaspa-wrpc-client v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/wrpc/client)
+   Compiling misaka-palw-remote v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/remote)
+   Compiling kaspa-wrpc-server v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/wrpc/server)
+   Compiling kaspa-evm v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/evm/core)
+   Compiling kaspa-grpc-server v1.1.0 (/dev/shm/misaka-oom-positive-next/rpc/grpc/server)
+   Compiling misaka-palw-tir-sketch v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/sketch)
+   Compiling kaspa-consensus v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus)
+    Finished `test` profile [unoptimized] target(s) in 65m 04s
+     Running unittests src/lib.rs (/dev/shm/misaka-positive-pre-isolated-target/debug/deps/kaspa_consensus-a625c93f0f85ef22)
+
+running 1 test
+
+running 1 test
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::positive_native_relay::native_relay_worker ... 
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::positive_native_relay::native_relay_worker' (1421803) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/positive_native_relay.rs:222:13:
+competing branch was not selected: selected 4a92c223079c314eaa84ed1c37c7f9eb9bc2fd9ba89c84a327545a2287661b6cb6cbafb064575d3f2c88e439715f619c1c4c02b31b7d74be398f0097c7c2578f DAA 13 blue work Uint576([28, 0, 0, 0, 0, 0, 0, 0, 0]) status Some(StatusUTXOValid), competing fc556977e5d9d110fff1872e8807ca7fc0ea75a133f56a1b5ed62e1d157372501a85fbbd665540098e11ef9b3001fac60a2c6030863cf261d037bac0dfb1b22b DAA 15 blue work Uint576([32, 0, 0, 0, 0, 0, 0, 0, 0]) status Some(StatusUTXOValid)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::g14_kernel_route_e2e::positive_native_relay::native_relay_worker
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1463 filtered out; finished in 4.45s
+
+
+thread 'pipeline::virtual_processor::tests::g14_kernel_route_e2e::positive_native_relay::positive_initial_relay_burns_once_through_the_native_node' (1421801) panicked at consensus/src/pipeline/virtual_processor/tests/g14_kernel_route_e2e/positive_native_relay.rs:44:5:
+the private native relay fixture failed: exit status: 101
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test pipeline::virtual_processor::tests::g14_kernel_route_e2e::positive_native_relay::positive_initial_relay_burns_once_through_the_native_node ... FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::g14_kernel_route_e2e::positive_native_relay::positive_initial_relay_burns_once_through_the_native_node
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1463 filtered out; finished in 4.49s
+
+error: test failed, to rerun pass `-p kaspa-consensus --lib`

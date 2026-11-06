@@ -7,6 +7,23 @@ pub(super) fn apply_object(
     ctx: &PalwBlockContextV2,
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
+    let Some(span) = palw_claim_local_object_spans_v2::prepare(builder, ctx, object)? else {
+        return apply_object_observed_v2(builder, ctx, object);
+    };
+    let previous = builder.claim_local_object_scope_active;
+    builder.claim_local_object_scope_active = true;
+    let result = apply_object_observed_v2(builder, ctx, object);
+    builder.claim_local_object_scope_active = previous;
+    if result.is_ok() {
+        palw_claim_local_object_spans_v2::complete(builder, span);
+    }
+    result
+}
+fn apply_object_observed_v2(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
     if builder.state.court_service_state_v1().is_some_and(|s| !s.claims.is_empty()) {
         let saved = builder.try_checkpoint()?;
         let previous = builder.court_end_evidence.clone();
@@ -32,14 +49,16 @@ fn apply_object_with_pair_v1(
     palw_court_capacity_fold_v1::charge_court_op_v1(builder, ctx, object)?;
     let paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
         if builder.extras.tir_public_originals.contains_key(claim));
-    if !paired {
+    let prefix_paired = matches!(object, PalwConsensusObjectV2::FreePromptCommitted { claim, .. }
+        if builder.extras.prefix_dependencies_v1.contains_key(claim));
+    if !paired && !prefix_paired {
         return apply_object_inner(builder, ctx, object);
     }
     // A prospective original is ONE native object. Failure after the ordinary
     // FP reservation/budget writes cannot leave an accepted unprotected claim.
     // `checkpoint()` is test-only on the integration line; production rollback goes through the native resource reservation.
     let saved = builder.try_checkpoint()?;
-    let result = match palw_tir_public_fold_v1::check_paired_original_v1(builder, object) {
+    let result = match if paired { palw_tir_public_fold_v1::check_paired_original_v1(builder, object) } else { Ok(()) } {
         Ok(()) => apply_object_inner(builder, ctx, object),
         Err(why) => Err(why),
     };
@@ -48,6 +67,11 @@ fn apply_object_with_pair_v1(
     }
     result
 }
+
+// One borrowed dispatch call keeps branch Result temporaries out of the common frame.
+// This private type is not a wire type or a native authorization.
+type ApplyObjectHandlerV1 =
+    fn(&mut TransitionBuilder<'_>, &PalwBlockContextV2, &PalwConsensusObjectV2) -> Result<(), PalwStateV2Error>;
 
 fn apply_object_inner(
     builder: &mut TransitionBuilder<'_>,
@@ -88,6 +112,174 @@ fn apply_object_inner(
         }
         _ => {}
     }
+    let handler: ApplyObjectHandlerV1 = match object {
+        PalwConsensusObjectV2::TirPublicControlV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TirPublicGrantReadyV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SharedCourtOpV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SourceBootstrapV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::PanelBeaconProofV3 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ExecWorkRootOpenedV2 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ExecOriginRecordedV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::VerificationVertexV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::VertexEquivocationV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TrapCommittedV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TrapRevealedV1 { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ModelLineImprovementPolicySet { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::LineageHeadRolledBack { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::HardCaseSubmitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::DataUseOptIn { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SetterSetCommitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SetterSetRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::SetterKeysRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::HardCaseKeyRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::DatasetRegistered { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TeachingArtifactCommitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TeachingArtifactRevealed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TeacherLicenceRegistered { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::CandidateSubmitted { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ImprovementPoolFunded { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::BondRegistered { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ModelBuy { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::ModelSell { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::TirShardCourtAccused { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::GenShardCourtAccused { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::HeldLeafChallengeDeclared { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::AdapterClassListed { .. } => apply_object_batch_00_v1,
+        PalwConsensusObjectV2::KernelRouteV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::KernelConstraintReceiptV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::KernelRouteChunkV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ArtifactBoundV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ArtifactBindingChallengedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::KernelBoundV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ConformanceCommittedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ConformanceEvidenceV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MonetaryMaterialEnrolledV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MonetaryMaterialReplacedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MonetaryMaterialActionV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ProviderLeaseV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ProviderChallengeV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ProviderAnswerV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DaTransferV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DisputeReservedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DisputeReacquiredV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::DisputeReleasedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldDemandedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldAnsweredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldAnswerDeclaredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyHeldAnswerChunkV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamOpenedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamLeafV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamMoveV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PublicCourtStreamOpenedNativeV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirClassLayoutPublishedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirClassContainerBoundV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ObjectiveEvidenceDeclaredV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ObjectiveEvidenceChunkV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::LegacyLeafRecomputedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::BondCapitalAssignedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SignedRegistrationV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::ReaderRouterDeclaredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::GdnStepAccusedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MemoryRoutingV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirDesignatedEventV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirPositionDissectedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirPositionClosedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirLookaheadDisclosedV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::TirLookaheadChosenV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SeatReadinessRootV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SeatReadinessDemandedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::SeatReadinessAnsweredV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::MaterialIntakeV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { .. } => apply_object_batch_01_v1,
+        PalwConsensusObjectV2::RoutedStepAccusedV2 { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::ShardCourtAccused { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::CheckpointAccused { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::DefaultAccusedHeld { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::MaterialDisclosedHeld { .. } => apply_object_batch_02_v1,
+        PalwConsensusObjectV2::RoundPermitEquivocated { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::TirShardPlanDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::TirShardReceiptLicensed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::TirSeatReadinessProved { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ClassShardPlanDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::BondShardsDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ShardReceiptLicensed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelSeed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ActivationPoolFunded { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineFounded { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelVersionPublished { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelVersionPromoted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelVersionWithdrawn { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineBenefitsDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineRolesSet { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineOwnerTransferred { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelLineRetired { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelProposalPosted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelProposalClosed { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ModelEvaluationPosted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::BondCapabilityDeclared { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::BondRetireRequested { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::GenTensorCommitted { .. } => apply_object_batch_03_v1,
+        PalwConsensusObjectV2::ClassRegisteredGenV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassRegisteredTirV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassSemanticsDeclaredV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassRegistered { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::DerivedArtifactV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::FamilyCertified { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassLaneCertified { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ClassLaneCertifiedTirV1 { .. } => apply_object_batch_04_v1,
+        PalwConsensusObjectV2::ObjectChunk { .. } => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::ClassFrozen(..) => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::PanelBound { .. } => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::ReceiptLicensed { .. } => apply_object_batch_05_v1,
+        PalwConsensusObjectV2::CourtOpened { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtClosed { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtDisclosed { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtVerdictPosted { .. } => apply_object_batch_06_v1,
+        PalwConsensusObjectV2::CourtCloseDeclared { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::SeatReadinessProved { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::SeatReadinessProvedV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ObjectiveOffence { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ClassManifestV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReceiptLicensedV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReceiptLicensedBatchV1 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::AuditReceiptBatchV1 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::AttemptRidersV1 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReporterCommitted { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::ReporterRevealed { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::MaterialDisclosedV2 { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::PanelUnavailableQuorum { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::OptimisticLicensed { .. } => apply_object_batch_07_v1,
+        PalwConsensusObjectV2::CourtCloseChunk { .. } => apply_object_batch_08_v1,
+        PalwConsensusObjectV2::CourtAttnRootClaimed { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedAnchored { .. }
+        | PalwConsensusObjectV2::CourtAttnRootClaimedHeld { .. } => apply_object_batch_08_v1,
+        PalwConsensusObjectV2::CourtAttnDissected { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtAttnChildChosen { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtTirRootClaimed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtGenRootClaimed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtEvalRootClaimed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtTirDissected { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::CourtTirChildChosen { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::ProducerDefaulted { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::DefaultAccusedTirStep { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::DefaultAccusedPipelineStep { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::ReservedPipelineDa84(..) | PalwConsensusObjectV2::ReservedPipelineDa85(..) => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::DefaultAccused { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::MaterialDisclosed { .. } => apply_object_batch_09_v1,
+        PalwConsensusObjectV2::FreePromptCommitted { .. } => apply_object_batch_10_v1,
+    };
+    handler(builder, ctx, object)?;
+    Ok(())
+}
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_00_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
     match object {
         PalwConsensusObjectV2::TirPublicControlV1 { control } => {
             let network = builder.extras.tir_public_network_domain_v1.ok_or(PalwStateV2Error::ObjectiveOffenceDormant)?;
@@ -485,6 +677,19 @@ fn apply_object_inner(
         PalwConsensusObjectV2::AdapterClassListed { payload, lister, signature: _ } => {
             palw_adapter_class_fold_v1::apply_adapter_class_listed_v1(builder, ctx, payload, lister)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_01_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         // **G14 lane D (tags 110 and 111): the kernel route** — dormant behind `palw_probabilistic_constraints_v1`, which no network
         // can arm (`palw_kernel_route_fold_v1`). A kernel refusal drops the object; only a missing fence fails the block.
         PalwConsensusObjectV2::KernelRouteV1 { bytes, signer, signature: _ } => {
@@ -691,6 +896,7 @@ fn apply_object_inner(
                 class_id: claim.class_id,
                 artifact_root,
             };
+            let court_started = crate::palw_court_observation_v1::start_v1(ctx.block);
             let verdict = crate::palw_gdn_court_v2::palw_gdn_court_verdict_v2(accusation, &actual, ladder).map_err(|e| match e {
                 crate::palw_step_refute::memory_v2::PalwGdnCourtErrorV2::Resource(cause) => PalwStateV2Error::NativeResource(cause),
                 other => PalwStateV2Error::ShardCourt(other.to_string()),
@@ -707,6 +913,17 @@ fn apply_object_inner(
                     return Err(PalwStateV2Error::ShardCourt("GDN terminal must never invent an attention dissection".into()));
                 }
             }
+            crate::palw_court_observation_v1::record_v1(
+                ctx.block,
+                claim_id,
+                claim.class_id,
+                243,
+                "GdnStep",
+                accusation.leaf_index,
+                verdict,
+                accusation.as_ref(),
+                court_started,
+            );
         }
         // RFC-0006 consumer v2 (tag 244): the router binding and the checkpoint / routed accusations.
         PalwConsensusObjectV2::MemoryRoutingV2 { object } => {
@@ -856,6 +1073,12 @@ fn apply_object_inner(
         PalwConsensusObjectV2::MaterialIntakeV1 { intake } => {
             super::palw_court_shared_material_intake_fold_v1::material_intake(builder, ctx, intake)?;
         }
+        PalwConsensusObjectV2::CourtFamilyMaterialV1 { control } => {
+            if !builder.params.family_supplier_active_at(ctx.daa_score) || !builder.extras.family_supplier_active {
+                return Err(PalwStateV2Error::CarriageInconsistent("family material dedicated fence dormant".into()));
+            }
+            super::palw_court_family_material_fold_v1::apply_family_material_v1(builder, ctx, control)?;
+        }
         // Lane g14-fam-panelda (tag 233, ADR-0206): below `palw_panel_da_disclosure_v1` the acceptance gate drops it unjudged (A-2);
         // the fold re-checks the fence.
         PalwConsensusObjectV2::PanelDaPromptDisclosedV1 { claim, prompt_token_ids } => {
@@ -864,6 +1087,19 @@ fn apply_object_inner(
         PalwConsensusObjectV2::RoutedMaterialAnsweredV2 { answer } => {
             da_sessions::apply_routed_material_answer_v2(builder, ctx, answer)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_02_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::RoutedStepAccusedV2 { accusation } => {
             let limits = builder.extras.memory_routing_court.ok_or(PalwStateV2Error::ShardCourtDormant)?;
             let claim_id = accusation.claim;
@@ -1261,6 +1497,19 @@ fn apply_object_inner(
             }
             close_da_session_refuted_v2(builder, ctx, claim_id, &claim, accused_daa, accuser, accuser_exposure, *resumed)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_03_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         // **ADR-0125 §7.3: a permit signed twice burns, and its bond pays the floor.**
         PalwConsensusObjectV2::RoundPermitEquivocated { evidence } => {
             builder.record_round_equivocation(ctx, evidence)?;
@@ -1405,7 +1654,7 @@ fn apply_object_inner(
                     // every lock on the claim, so the parts that landed first are carried too.
                     let door = PalwLicenceDoorV1::ShardPart { quorum_per_shard: params.quorum_per_shard };
                     if builder.extras.audit_2026_09_23_active
-                        && !builder.receipt_set_is_backed(claim_id, &claim, &part.receipts, ctx.daa_score, door)
+                        && !builder.receipt_set_is_backed(claim_id, &claim, &part.receipts, ctx.daa_score, door)?
                     {
                         return Ok(());
                     }
@@ -1534,7 +1783,7 @@ fn apply_object_inner(
                 // declaration's 100% check extends to (capability exposure is non-slashable
                 // standing, priced against the whole collateral as before).
                 let already = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                    builder.committed_at(bond, ctx.daa_score).saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
+                    builder.committed_at(bond, ctx.daa_score)?.saturating_add(builder.read().accuser_ledger_v1(bond, ctx.daa_score))
                 } else {
                     builder
                         .state
@@ -1633,6 +1882,19 @@ fn apply_object_inner(
                 },
             )?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_04_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::ClassRegisteredGenV1 {
             class_id,
             artifact_root,
@@ -1680,9 +1942,10 @@ fn apply_object_inner(
             builder.write_gen_class(*class_id, Some(record))?;
         }
         // **RFC-0002 Phase F (tag 61): an IR class registration**, past `palw_tir_v1` (the lock above
-        // refuses it below). Admission v10 ran at acceptance (ADR-0049 Decision H: no graph walk
-        // inside the transition); the fold derives what it keeps from the carried class — the
-        // `tir_classes` row by the one function v10 derives it with, and the registry work from the
+        // refuses it below). Chain-selected v10 or explicit wide V2 admission ran at acceptance
+        // (ADR-0049 Decision H: no full admission/range walk inside the transition);
+        // the fold derives what it keeps from the carried class — the
+        // `tir_classes` row by the same selected derivation, and the registry work from the
         // program — and folds the rest through the legacy registration's own body. A class with a
         // dissected commit point (spec 04b §9.5.1: a cone that reduces over the history) owes its
         // court's terminal move — a root claim at a dissected leaf, an acquitting close at any other
@@ -1706,8 +1969,19 @@ fn apply_object_inner(
                 });
             }
             builder.tir_registrations += 1;
-            let (record, program) = crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
-                .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?;
+            let (record, program) = match builder.params.tir_wide_registration_fence_at(ctx.daa_score) {
+                Some(selected) => crate::palw_tir_registration_dispatch_v1::palw_tir_class_record_selected_v1(
+                    &admission.class,
+                    artifact_root,
+                    &selected,
+                    ctx.daa_score,
+                )
+                .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?,
+                // The old height-only/manual and court1 paths remain exactly
+                // the legacy factory. In particular, neither can admit wide.
+                None => crate::palw_tir_admission_v1::palw_tir_class_record_v1(&admission.class, artifact_root)
+                    .map_err(|_| PalwStateV2Error::TirRegistrationRefused("the carried IR program does not decode"))?,
+            };
             if record.facts.class_id != *class_id {
                 return Err(PalwStateV2Error::TirRegistrationRefused("the declared class id is not the carried class's"));
             }
@@ -2030,6 +2304,19 @@ fn apply_object_inner(
             }
             seat_attempt_lane_class_v1(builder, ctx, class_id)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_05_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes } => {
             if *count == 0 || *count > PALW_OBJECT_CHUNK_MAX_COUNT {
                 return Err(PalwStateV2Error::ChunkCountOutOfRange { count: *count, max: PALW_OBJECT_CHUNK_MAX_COUNT });
@@ -2281,7 +2568,7 @@ fn apply_object_inner(
                 // them is refuted by the record. It pays what it tried to take: the same `reserved`
                 // the producer would have lost.
                 if builder.extras.audit_2026_09_23_active
-                    && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)
+                    && !builder.receipt_set_is_backed(*claim_id, &claim, receipts, ctx.daa_score, PalwLicenceDoorV1::Quorum)?
                 {
                     return Ok(());
                 }
@@ -2313,6 +2600,19 @@ fn apply_object_inner(
                 builder.license_claim(*claim_id, staged, ctx.daa_score)?;
             }
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_06_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtOpened { session_id, claim: claim_id, challenger_bond, space, space_size, signature: _ } => {
             // **ADR-0103 Decision 1: under the held regime nobody walks the leaf ladder.** Every
             // conviction is a one-move object or a dissection the accusation opens at its named
@@ -2615,6 +2915,19 @@ fn apply_object_inner(
             cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session))?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_07_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtCloseDeclared { session_id, side, count, chunk_digests, close_digest, verdict, signature: _ } => {
             let session = builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
             let claim = builder.state.claims.get(&session.claim).ok_or(PalwStateV2Error::MissingClaim(session.claim))?.clone();
@@ -2856,7 +3169,7 @@ fn apply_object_inner(
             // Audit #6: the full-replay seat is the whole colluding set of this door, so it must be
             // able to post the whole gain; if it cannot, the set is inert and the other doors stay open.
             if builder.extras.audit_2026_09_23_active
-                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)
+                && !builder.receipt_set_is_backed(*claim_id, &claim, &inner, ctx.daa_score, PalwLicenceDoorV1::Optimistic)?
             {
                 return Ok(());
             }
@@ -2878,6 +3191,19 @@ fn apply_object_inner(
             let staged = builder.staged_licence_v1(*claim_id, &claim, PalwLicenceDoorV1::Optimistic, &carried, ctx.daa_score);
             builder.license_claim(*claim_id, staged, ctx.daa_score)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_08_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtCloseChunk { session_id, side, index, bytes } => {
             let mut group = builder
                 .state
@@ -2959,7 +3285,10 @@ fn apply_object_inner(
             for index in 0..group.count {
                 assembled.extend_from_slice(group.chunks.get(&index).expect("a complete group holds every index below count"));
             }
-            let decoded = (palw_court_close_chunk_digest_v1(&assembled) == group.close_digest)
+            // A reserved Positive body cannot be an old CourtClosed. Refuse it
+            // before generic Borsh could allocate its peer-sized inner fields.
+            let decoded = (!crate::palw_lifecycle_objects_v2::palw_positive_object_bytes_v2(&assembled)
+                && palw_court_close_chunk_digest_v1(&assembled) == group.close_digest)
                 .then(|| borsh::from_slice::<PalwConsensusObjectV2>(&assembled).ok())
                 .flatten()
                 .filter(|object| {
@@ -3268,6 +3597,19 @@ fn apply_object_inner(
             cap_session_rung_deadline_v2(&mut session, builder.params);
             builder.write_court(*session_id, Some(session))?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_09_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::CourtAttnDissected { session_id, round, signature: _ } => {
             let mut session =
                 builder.state.court_sessions.get(session_id).ok_or(PalwStateV2Error::MissingSession(*session_id))?.clone();
@@ -3584,6 +3926,19 @@ fn apply_object_inner(
             builder.disarm_deadline(*claim_id);
             rearm_claim_after_da_session(builder, ctx, *claim_id, &restored)?;
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
+    }
+    Ok(())
+}
+
+// Contiguous original match arms; the exhaustive common dispatcher selects this batch.
+#[inline(never)]
+fn apply_object_batch_10_v1(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    object: &PalwConsensusObjectV2,
+) -> Result<(), PalwStateV2Error> {
+    match object {
         PalwConsensusObjectV2::FreePromptCommitted {
             claim: claim_id,
             class_id,
@@ -3609,6 +3964,13 @@ fn apply_object_inner(
             public_job,
             eval,
         } => {
+            crate::palw_claim_local_v1::prefix_v1::check_admission_v1(
+                &builder.state,
+                builder.params,
+                ctx,
+                object,
+                builder.extras.prefix_dependencies_v1.get(claim_id),
+            )?;
             if builder.state.claims.contains_key(claim_id) {
                 return Err(PalwStateV2Error::DuplicateClaim(*claim_id));
             }
@@ -3715,6 +4077,14 @@ fn apply_object_inner(
             if let PalwClassStatusV2::Frozen { .. } = class.status {
                 return Err(PalwStateV2Error::FrozenClass(*class_id));
             }
+            // Ordinary (eval=None) legacy free-prompt generation has no wide
+            // source/court adapter. The separate rewardless evaluation branch
+            // above keeps its existing evaluator-specific rules.
+            // This check is independent of derived-work/original-frame fences
+            // and precedes every claim, exposure and prefix-state write.
+            if let Some(record) = builder.state.tir_class_v1(class_id) {
+                crate::palw_tir_row_profile_v2::reject_known_wide_tir_row_v1(record).map_err(PalwStateV2Error::TirFence2Refused)?;
+            }
             // **2026-09-24 DoS audit #11: the class gate an attempt passes, on this lane too.**
             //
             // `apply_attempt` asks `check_class_admits_claim` before it prices anything: a class the
@@ -3774,11 +4144,7 @@ fn apply_object_inner(
             // ADR-0074 Decision 6): a class whose free-prompt path no drill has certified takes
             // no free-prompt claim, so nothing it could not be convicted over ever licenses a
             // block.
-            if let Some(certified) = &builder.params.fp_certified_classes
-                && !certified.contains(class_id)
-                && !builder.state.fp_certified_classes.contains_key(class_id)
-                && !tir_fp_lane_covered_v1(builder, class_id)
-            {
+            if !palw_fp_lane_available_v1(&builder.state, builder.params, class_id, builder.extras.tir_public_conviction_active) {
                 return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
             }
             // **ADR-0082 Decision 10: what this claim is CREDITED for.**
@@ -3942,7 +4308,7 @@ fn apply_object_inner(
             // ADR-0152 SR-7: past `palw_rcore_plus` the one committed ledger, with capability
             // exposure kept as this lane's own gate term (inside `committed` it would pin exit).
             let own = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                builder.committed_at(bond, ctx.daa_score)
+                builder.committed_at(bond, ctx.daa_score)?
             } else {
                 builder
                     .state
@@ -3953,7 +4319,7 @@ fn apply_object_inner(
             let backed = own.checked_add(declared).ok_or(PalwStateV2Error::Overflow("total exposure"))?;
             // Past the fence the one invariant's room (review M1) holds the declared term too.
             let ceiling = if builder.params.rcore_plus_active_at(ctx.daa_score) {
-                own.saturating_add(builder.gate_room(bond, ctx.daa_score, PalwRcoreGateV1::Work))
+                own.saturating_add(builder.gate_room(bond, ctx.daa_score, PalwRcoreGateV1::Work)?)
             } else {
                 (bond_record.collateral as u128)
                     .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
@@ -4050,7 +4416,7 @@ fn apply_object_inner(
                 claim.trace_retention_daa = claim.trace_retention_daa.max(frame.frame_v1().plan_v1().terms.material_until_daa);
                 None
             } else {
-                builder.prepare_staged_claim_with_job_v1(*claim_id, &mut claim, public_job.as_deref())?
+                Some(builder.prepare_staged_claim_for_budget_v1(*claim_id, &mut claim, public_job.as_deref())?)
             };
             // **Lane BUDGET (ADR-0176 D3): the commitment's reservation** — Q 1, B `quanta` receipt blocks, R `quanta` carves of this
             // block, F `quanta` quanta of weight — before the first write; refused by name. `None` below `palw_bond_budget_v1`.
@@ -4065,7 +4431,11 @@ fn apply_object_inner(
                 &claim.bond,
                 crate::palw_bond_budget_v1::PALW_BUDGET_BLOCK_UNIT_V1.saturating_mul(quanta as u64),
             )?;
-            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, &claim, quanta)?;
+            let retirement = match staged_contract.as_ref() {
+                Some(prepared) => prepared.retirement_v1(),
+                None => builder.prospective_retirement_v1(*claim_id, &claim, tir_original.as_ref())?,
+            };
+            let budget_plan = builder.plan_free_prompt_budget_v1(ctx, *claim_id, &claim, quanta, &retirement)?;
             let budget_plan = match (&probation_ticket, budget_plan) {
                 (Some(ticket), Some(plan)) if ticket.weightless() => Some(plan.without_final_weight_v1()),
                 (_, plan) => plan,
@@ -4087,13 +4457,16 @@ fn apply_object_inner(
                     public_job.as_deref(),
                 )?;
             }
-            builder.stamp_staged_claim_v1(*claim_id, staged_contract)?;
+            if let Some(prepared) = staged_contract {
+                prepared.install_v1(builder, *claim_id)?;
+            }
             if let Some(wire) = public_job_wire {
                 builder.write_public_fp_job_v1(*claim_id, Some(wire))?;
             }
             if let Some(plan) = budget_plan {
                 builder.commit_bond_budget_v1(ctx, *claim_id, plan)?;
             }
+            super::palw_claim_local_prefix_reservation_v1::admit(builder, ctx, *claim_id)?;
             if let Some(ticket) = probation_ticket {
                 super::palw_model_eligibility_fold_v1::eligibility_probation_commit_v1(builder, ctx, claim_id, ticket)?;
             }
@@ -4131,6 +4504,9 @@ fn apply_object_inner(
                         (*class_id, *bond, crate::palw_fp_answer_accounting_v1::palw_fp_answer_row_key_v1(claim_id)),
                         Some(answer_row),
                     )?;
+                    if let Some(carrier) = builder.extras.fp_winning_carriers.get(claim_id) {
+                        super::palw_claim_local_carrier_lineage_v9::write_actual_winner_v9(builder, ctx, *claim_id, *carrier)?;
+                    }
                 }
             }
             // ADR-0088 Decision 3's recorded gap: a free-prompt claim names no root, so it is
@@ -4156,26 +4532,9 @@ fn apply_object_inner(
                 palw_tir_public_fold_v1::install_original_admission_v1(builder, ctx, frame, &prompt_row)?;
             }
         }
+        _ => unreachable!("private object dispatcher selected another batch"),
     }
     Ok(())
-}
-
-/// **RFC-0002 Phase H: an IR class's free-prompt lane is authenticated by coverage** — past the TIR public frame's fence (the IR
-/// lane's), a registered IR class whose every reachable primitive one certified family covers (either lane: the generic interpreter
-/// court is the same court for an attempt and a free prompt; the free-prompt doors are the frame's, in consensus code). `false`
-/// below the fence and for every non-IR class, so the legacy gate is byte-identical there. No per-class drill, no model review.
-fn tir_fp_lane_covered_v1(builder: &TransitionBuilder<'_>, class_id: &Hash64) -> bool {
-    if !builder.extras.tir_public_conviction_active {
-        return false;
-    }
-    let Some(record) = builder.state.tir_class_v1(class_id) else { return false };
-    let families = builder
-        .state
-        .certified_family_records(PalwCertifiedLaneV1::Attempt)
-        .values()
-        .chain(builder.state.certified_family_records(PalwCertifiedLaneV1::FreePrompt).values())
-        .map(|record| &record.family);
-    crate::palw_tir_fp_lane_v1::palw_tir_fp_lane_covered_v1(record, families).is_ok()
 }
 
 /// **D2 on seat readiness (REQ-T6-3, restricted; `palw_court_model_scope_v1`)**: `SeatReadinessLeaves` publishes ~16 plaintext

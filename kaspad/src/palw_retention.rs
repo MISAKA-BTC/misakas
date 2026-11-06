@@ -24,7 +24,7 @@
 //! will, is classified the same way as one it holds.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
@@ -49,6 +49,153 @@ const PALW_RETENTION_PARTIAL_HORIZON: Duration = Duration::from_secs(3600);
 const PALW_RETENTION_PERIOD: Duration = Duration::from_secs(60);
 /// The free-prompt capture's envelope magic (`palw_fp_capture_encode_v1`).
 const FP_CAPTURE_MAGIC: &[u8; 4] = b"FPC1";
+const ATTEMPT_PRESSURE_GRACE_MAGIC: &[u8; 4] = b"APG1";
+const ATTEMPT_PRESSURE_GRACE_EXTENSION: &str = "attempt-pressure";
+const ATTEMPT_PRESSURE_GRACE_BYTES: usize = 4 + 64 + 64 + 40;
+
+// Lead and rider publications stay registered through their in-process handoff.
+// The guard can cross asynchronous submission without holding the mutex.
+static ACTIVE_ATTEMPT_PUBLICATIONS: Mutex<std::collections::BTreeMap<Hash64, usize>> = Mutex::new(std::collections::BTreeMap::new());
+
+pub(crate) struct AttemptPublicationGuard(Hash64);
+
+pub(crate) fn pin_attempt_publication(claim: Hash64) -> AttemptPublicationGuard {
+    *ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().entry(claim).or_default() += 1;
+    AttemptPublicationGuard(claim)
+}
+
+impl AttemptPublicationGuard {
+    pub(crate) fn claim(&self) -> Hash64 {
+        self.0
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn attempt_publication_is_pinned(claim: Hash64) -> bool {
+    ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(&claim)
+}
+
+impl Drop for AttemptPublicationGuard {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
+        let count = active.get_mut(&self.0).expect("publication guard must be registered");
+        *count -= 1;
+        if *count == 0 {
+            active.remove(&self.0);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RetainedPublication {
+    Replace,
+    KeepExisting,
+    DurableReplace,
+}
+
+/// Publish complete bytes from a private staging name in the same directory.
+/// Callers retain their claim pin for the full write and publication.
+pub(crate) fn publish_retained_file(path: &Path, bytes: &[u8], mode: RetainedPublication) -> std::io::Result<bool> {
+    use std::io::{Error, ErrorKind, Write};
+    let dir = path.parent().ok_or_else(|| Error::other("retention directory absent"))?;
+    let name = path.file_name().ok_or_else(|| Error::other("retention filename absent"))?;
+    let existing = || std::fs::symlink_metadata(path).map(|meta| meta.is_file());
+    if matches!(mode, RetainedPublication::KeepExisting) {
+        match existing() {
+            Ok(true) => return Ok(false),
+            Ok(false) => return Err(Error::new(ErrorKind::AlreadyExists, "retained path is not a regular file")),
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+    }
+    std::fs::create_dir_all(dir)?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(name).suffix(".partial");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        builder.permissions(std::fs::Permissions::from_mode(0o666));
+    }
+    let mut pending = builder.tempfile_in(dir)?;
+    pending.write_all(bytes)?;
+    if matches!(mode, RetainedPublication::DurableReplace) {
+        pending.as_file().sync_all()?;
+    }
+    if matches!(mode, RetainedPublication::KeepExisting) {
+        return match pending.persist_noclobber(path) {
+            Ok(_) => Ok(true),
+            Err(e) if e.error.kind() == ErrorKind::AlreadyExists && matches!(existing(), Ok(true)) => Ok(false),
+            Err(e) => Err(e.error),
+        };
+    }
+    pending.persist(path).map_err(|e| e.error)?;
+    if matches!(mode, RetainedPublication::DurableReplace) {
+        sync_retained_directory(dir)?;
+    }
+    Ok(true)
+}
+
+fn sync_retained_directory(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()?;
+        if let Some(parent) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            std::fs::File::open(parent)?.sync_all()?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
+/// Reuse an exact replay without staging a second copy under storage pressure.
+/// Re-sync the file and directory in case an earlier publication failed there.
+pub(crate) fn ensure_retained_replay<T>(
+    path: &Path,
+    bytes: &[u8],
+    reserve: impl FnOnce() -> std::io::Result<T>,
+) -> std::io::Result<bool> {
+    use std::io::{ErrorKind, Read};
+
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.is_file() && meta.len() == bytes.len() as u64 => {
+            let snapshot = RetainedFileV1::new(path.to_path_buf(), &meta);
+            let mut file = std::fs::File::open(path)?;
+            if snapshot.matches(&file.metadata()?) {
+                let mut buf = [0; 16 * 1024];
+                let mut identical = true;
+                for expected in bytes.chunks(buf.len()) {
+                    match file.read_exact(&mut buf[..expected.len()]) {
+                        Ok(()) if &buf[..expected.len()] == expected => {}
+                        Ok(()) => {
+                            identical = false;
+                            break;
+                        }
+                        Err(e) if e.kind() == ErrorKind::UnexpectedEof => {
+                            identical = false;
+                            break;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                if identical && snapshot.matches(&file.metadata()?) {
+                    file.sync_all()?;
+                    let dir = path.parent().ok_or_else(|| std::io::Error::other("replay directory absent"))?;
+                    sync_retained_directory(dir)?;
+                    if std::fs::symlink_metadata(path).is_ok_and(|meta| snapshot.matches(&meta)) {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(meta) if !meta.is_file() => return Err(std::io::Error::other("replay path is not a regular file")),
+        Ok(_) => {}
+        Err(e) if e.kind() == ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    let _storage = reserve()?;
+    publish_retained_file(path, bytes, RetainedPublication::DurableReplace)
+}
 
 /// **The free space the space rule keeps**: `max(8 GiB, 5 % of the volume)`.
 pub(crate) fn retention_reserve_bytes_v1(total_bytes: u64) -> u64 {
@@ -59,11 +206,152 @@ pub(crate) fn retention_reserve_bytes_v1(total_bytes: u64) -> u64 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RetainedClaimV1 {
     pub claim: Hash64,
-    pub paths: Vec<PathBuf>,
+    pub files: Vec<RetainedFileV1>,
     pub bytes: u64,
     /// The newest of its files' ages (`None` = unreadable, treated as old).
     pub age: Option<Duration>,
     pub kind: RetainedKindV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedFileV1 {
+    path: PathBuf,
+    bytes: u64,
+    version: Option<FileVersion>,
+}
+
+#[cfg(unix)]
+type FileVersion = (u64, u64, i64, i64);
+#[cfg(not(unix))]
+type FileVersion = (std::time::SystemTime, std::time::SystemTime);
+
+impl RetainedFileV1 {
+    fn version(meta: &std::fs::Metadata) -> Option<FileVersion> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            Some((meta.dev(), meta.ino(), meta.ctime(), meta.ctime_nsec()))
+        }
+        #[cfg(not(unix))]
+        {
+            Some((meta.created().ok()?, meta.modified().ok()?))
+        }
+    }
+
+    pub(crate) fn new(path: PathBuf, meta: &std::fs::Metadata) -> Self {
+        Self { path, bytes: meta.len(), version: Self::version(meta) }
+    }
+
+    /// Serialize the final file check with in-process publishers.
+    pub(crate) fn unlink_if_current(&self, claim: Option<Hash64>) -> bool {
+        let active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
+        if claim.is_some_and(|claim| active.contains_key(&claim)) {
+            return false;
+        }
+        std::fs::symlink_metadata(&self.path).is_ok_and(|meta| self.matches(&meta)) && std::fs::remove_file(&self.path).is_ok()
+    }
+
+    fn matches(&self, meta: &std::fs::Metadata) -> bool {
+        meta.is_file() && meta.len() == self.bytes && self.version.is_some() && Self::version(meta) == self.version
+    }
+}
+
+fn attempt_capture_identity(meta: &std::fs::Metadata) -> Option<[u8; 40]> {
+    #[cfg(unix)]
+    let (dev, ino, ctime, ctime_ns) = RetainedFileV1::version(meta)?;
+    #[cfg(unix)]
+    let identity = [meta.len(), dev, ino, ctime as u64, ctime_ns as u64];
+    #[cfg(not(unix))]
+    let identity = {
+        let (created, modified) = RetainedFileV1::version(meta)?;
+        let epoch = std::time::SystemTime::UNIX_EPOCH;
+        let created = created.duration_since(epoch).ok()?;
+        let modified = modified.duration_since(epoch).ok()?;
+        [meta.len(), created.as_secs(), u64::from(created.subsec_nanos()), modified.as_secs(), u64::from(modified.subsec_nanos())]
+    };
+    let mut bytes = [0u8; 40];
+    for (out, value) in bytes.chunks_exact_mut(8).zip(identity) {
+        out.copy_from_slice(&value.to_le_bytes());
+    }
+    Some(bytes)
+}
+
+pub(crate) fn attempt_pressure_grace_disk_quote_v1(material: &Path) -> std::io::Result<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(std::fs::symlink_metadata(material)?.blksize().max(4 << 10))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = material;
+        Ok(64 << 10)
+    }
+}
+
+pub(crate) fn stage_attempt_pressure_grace_v1(
+    material: &Path,
+    publication: &AttemptPublicationGuard,
+    carrier: Hash64,
+    material_bytes: u64,
+) -> std::io::Result<()> {
+    let meta = std::fs::symlink_metadata(material)?;
+    let claim = material.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.parse::<Hash64>().ok());
+    if !meta.is_file()
+        || meta.len() != material_bytes
+        || material_bytes == 0
+        || carrier == Hash64::default()
+        || material.extension().is_none_or(|ext| ext != "material")
+        || claim != Some(publication.claim())
+    {
+        return Err(std::io::Error::other("the model attempt capture or carrier is not ready for publication"));
+    }
+    let identity =
+        attempt_capture_identity(&meta).ok_or_else(|| std::io::Error::other("the attempt capture identity is unavailable"))?;
+    let mut frame = [0; ATTEMPT_PRESSURE_GRACE_BYTES];
+    frame[..4].copy_from_slice(ATTEMPT_PRESSURE_GRACE_MAGIC);
+    frame[4..68].copy_from_slice(&publication.claim().as_bytes());
+    frame[68..132].copy_from_slice(&carrier.as_bytes());
+    frame[132..].copy_from_slice(&identity);
+    publish_retained_file(&material.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION), &frame, RetainedPublication::DurableReplace)
+        .map(|_| ())
+}
+
+// This is a local pressure grace, never an acceptance witness. A missing or
+// damaged sidecar supplies no grace. The claim's native obligation is checked
+// separately, and the marker cannot refresh the material's original age.
+fn attempt_pressure_grace_v1(row: &RetainedClaimV1, now: std::time::SystemTime, horizon: Duration) -> bool {
+    use std::io::Read;
+    if row.kind != RetainedKindV1::Attempt || row.age.is_none_or(|age| age >= horizon) {
+        return false;
+    }
+    let Some(material) = row.files.iter().find(|file| file.path.extension().is_some_and(|ext| ext == "material")) else {
+        return false;
+    };
+    let path = material.path.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW);
+    }
+    let Ok(mut file) = options.open(path) else { return false };
+    let mut frame = [0; ATTEMPT_PRESSURE_GRACE_BYTES];
+    if !file.metadata().is_ok_and(|meta| meta.is_file() && meta.len() == frame.len() as u64)
+        || file.read_exact(&mut frame).is_err()
+        || !file.read(&mut [0]).is_ok_and(|n| n == 0)
+        || &frame[..4] != ATTEMPT_PRESSURE_GRACE_MAGIC
+        || frame[4..68] != row.claim.as_bytes()
+        || frame[68..132].iter().all(|&byte| byte == 0)
+    {
+        return false;
+    }
+    std::fs::symlink_metadata(&material.path).is_ok_and(|meta| {
+        material.matches(&meta)
+            && attempt_capture_identity(&meta).is_some_and(|identity| frame[132..] == identity)
+            && meta.modified().ok().and_then(|at| now.duration_since(at).ok()).is_some_and(|age| age < horizon)
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -104,23 +392,28 @@ pub(crate) fn retention_prune_plan_v1(
     free: u64,
     reserve: u64,
 ) -> (Vec<usize>, u64) {
-    retention_prune_plan_with_material_v1(claims, chain, |_| false, attempt_horizon, free, reserve)
+    retention_prune_plan_with_material_v1(claims, |row| chain(&row.claim), |_| Ok(false), attempt_horizon, free, reserve)
 }
 
-/// The monetary root oracle also applies to kernel/provider subjects which have
-/// no native claim row. A missing native view cannot discharge an actual queue hold.
+/// The material oracle also covers kernel/provider subjects without native
+/// claim rows. Only a successful read can clear a material obligation.
 fn retention_prune_plan_with_material_v1(
     claims: &[RetainedClaimV1],
-    chain: impl Fn(&Hash64) -> Option<RetainedChainViewV1>,
-    material_owed: impl Fn(&Hash64) -> bool,
+    chain: impl Fn(&RetainedClaimV1) -> Option<RetainedChainViewV1>,
+    material_owed: impl Fn(&RetainedClaimV1) -> Result<bool, String>,
     attempt_horizon: Duration,
     free: u64,
     reserve: u64,
 ) -> (Vec<usize>, u64) {
-    let mut doomed: Vec<usize> = Vec::new();
+    let mut doomed = Vec::new();
+    let mut pressure_candidates = Vec::new();
     let mut freed = 0u64;
     for (i, c) in claims.iter().enumerate() {
-        if material_owed(&c.claim) || chain(&c.claim).as_ref().is_some_and(|view| view.da_owed) {
+        if !matches!(material_owed(c), Ok(false)) {
+            continue;
+        }
+        let view = chain(c);
+        if view.as_ref().is_some_and(|view| view.da_owed) {
             continue;
         }
         let due = match c.kind {
@@ -130,74 +423,97 @@ fn retention_prune_plan_with_material_v1(
                 Some((&PalwClaimSourceV2::Attempt, &PalwClaimPhaseV2::Provisional)),
                 attempt_horizon,
             ),
-            RetainedKindV1::FreePrompt => {
-                let view = chain(&c.claim);
-                !view.as_ref().is_some_and(|view| view.da_owed)
-                    && crate::palw_producer::retained_capture_prune_due_v1(
-                        c.age,
-                        view.as_ref().map(|view| (&view.source, &view.phase)),
-                        attempt_horizon,
-                    )
-            }
+            RetainedKindV1::FreePrompt => crate::palw_producer::retained_capture_prune_due_v1(
+                c.age,
+                view.as_ref().map(|view| (&view.source, &view.phase)),
+                attempt_horizon,
+            ),
             // The panel prunes its foreign copies by age as it writes them; here they only yield space.
             RetainedKindV1::Foreign => false,
         };
         if due {
             doomed.push(i);
             freed = freed.saturating_add(c.bytes);
+        } else if free < reserve && c.kind != RetainedKindV1::FreePrompt {
+            pressure_candidates.push(i);
         }
     }
-    // **The space rule**: the oldest re-makeable bytes first — own attempt captures, then foreign copies,
-    // only captures whose actual obligations have ended (RFC08 material audit).
+    // The space rule picks the oldest eligible attempts first, then eligible
+    // foreign copies. DA-owed copies were excluded above in both cases.
     let mut short = reserve.saturating_sub(free.saturating_add(freed));
     if short > 0 {
-        let age = |c: &RetainedClaimV1| c.age.unwrap_or(Duration::MAX);
-        let rank: Vec<u8> = claims
-            .iter()
-            .map(|c| if c.kind == RetainedKindV1::Foreign { retained_foreign_rank_v1(chain(&c.claim).as_ref()) } else { 0 })
-            .collect();
-        for kind in [RetainedKindV1::Attempt, RetainedKindV1::Foreign] {
-            let mut order: Vec<usize> = (0..claims.len())
-                .filter(|i| {
-                    claims[*i].kind == kind
-                        && !doomed.contains(i)
-                        && !material_owed(&claims[*i].claim)
-                        && !chain(&claims[*i].claim).as_ref().is_some_and(|view| view.da_owed)
-                })
-                .collect();
-            order.sort_by(|a, b| (rank[*a], age(&claims[*b])).cmp(&(rank[*b], age(&claims[*a]))));
-            for i in order {
-                if short == 0 {
-                    break;
-                }
-                doomed.push(i);
-                short = short.saturating_sub(claims[i].bytes);
+        pressure_candidates.sort_unstable_by_key(|&i| {
+            let c = &claims[i];
+            (c.kind == RetainedKindV1::Foreign, std::cmp::Reverse(c.age.unwrap_or(Duration::MAX)), i)
+        });
+        for i in pressure_candidates {
+            if short == 0 {
+                break;
             }
+            doomed.push(i);
+            short = short.saturating_sub(claims[i].bytes);
         }
     }
     (doomed, short)
 }
 
-/// **How late the space rule takes a foreign copy** (P2-7; lower goes first): `0`, nothing an R-core
-/// session can still demand of it; `1`, a session can (`da_owed`) and it is an attempt claim's, which
-/// any node re-makes from its block; `2`, a session can and it is a free-prompt claim's, whose job is
-/// not chain data — for a full-mask signer the one copy it answers from, so taking it is an S4 the
-/// signer could not avoid if the producer withholds (the P2-7 review's LOW).
-pub(crate) fn retained_foreign_rank_v1(view: Option<&RetainedChainViewV1>) -> u8 {
-    match view {
-        Some(view) if view.da_owed && matches!(view.source, PalwClaimSourceV2::FreePrompt { .. }) => 2,
-        Some(view) if view.da_owed => 1,
-        _ => 0,
+fn prune_retained_claims_v1(
+    claims: &[RetainedClaimV1],
+    doomed: Vec<usize>,
+    material_owed: impl Fn(&RetainedClaimV1) -> Result<bool, String>,
+) -> (usize, u64) {
+    let mut removed = 0usize;
+    let mut bytes = 0u64;
+    let mut unchanged = Vec::new();
+    'claims: for i in doomed {
+        let c = &claims[i];
+        // Keep registration serialized with the final check and unlink.
+        let active = ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap();
+        if active.contains_key(&c.claim) || !matches!(material_owed(c), Ok(false)) {
+            continue;
+        }
+        // A publication can replace a file and release its guard between the
+        // scan and this lock. Discard the old plan for the whole capture.
+        unchanged.clear();
+        for file in &c.files {
+            match std::fs::symlink_metadata(&file.path) {
+                Ok(meta) if file.matches(&meta) => unchanged.push(file),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                _ => continue 'claims,
+            }
+        }
+        let mut removed_file = false;
+        for file in &unchanged {
+            match std::fs::remove_file(&file.path) {
+                Ok(()) => {
+                    removed_file = true;
+                    bytes = bytes.saturating_add(file.bytes);
+                    if c.kind != RetainedKindV1::Foreign && file.path.extension().is_some_and(|ext| ext == "material") {
+                        let marker = file.path.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+                        if let Ok(meta) = std::fs::symlink_metadata(&marker)
+                            && meta.is_file()
+                            && std::fs::remove_file(marker).is_ok()
+                        {
+                            bytes = bytes.saturating_add(meta.len());
+                        }
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", file.path.display()),
+            }
+        }
+        removed += usize::from(removed_file);
     }
+    (removed, bytes)
 }
 
 /// Read `dir` (and `dir/foreign`) into retained claims; `.partial` files older than an hour are
 /// returned separately, to be removed.
-pub(crate) fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<RetainedClaimV1>, Vec<PathBuf>) {
+fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<RetainedClaimV1>, Vec<(Option<Hash64>, RetainedFileV1)>) {
     let mut own: std::collections::BTreeMap<Hash64, RetainedClaimV1> = std::collections::BTreeMap::new();
     let mut claims = Vec::new();
     let mut abandoned = Vec::new();
-    let age_of = |meta: &std::fs::Metadata| meta.modified().ok().and_then(|t| now.duration_since(t).ok());
+    let age_of = |meta: &std::fs::Metadata| meta.modified().ok().map(|t| now.duration_since(t).unwrap_or_default());
     for (sub, foreign) in [(dir.to_path_buf(), false), (dir.join("foreign"), true)] {
         let Ok(entries) = std::fs::read_dir(&sub) else { continue };
         for entry in entries.flatten() {
@@ -210,36 +526,57 @@ pub(crate) fn scan_retention_v1(dir: &Path, now: std::time::SystemTime) -> (Vec<
             let age = age_of(&meta);
             if name.ends_with(".partial") {
                 if age.is_none_or(|a| a >= PALW_RETENTION_PARTIAL_HORIZON) {
-                    abandoned.push(path);
+                    let claim = name.split_once('.').and_then(|(stem, _)| stem.parse().ok());
+                    abandoned.push((claim, RetainedFileV1::new(path, &meta)));
+                }
+                continue;
+            }
+            if !foreign
+                && path.extension().is_some_and(|ext| ext == ATTEMPT_PRESSURE_GRACE_EXTENSION)
+                && let Some(claim) = path.file_stem().and_then(|stem| stem.to_str()).and_then(|stem| stem.parse::<Hash64>().ok())
+            {
+                let material = path.with_extension("material");
+                if std::fs::symlink_metadata(material).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+                    abandoned.push((Some(claim), RetainedFileV1::new(path, &meta)));
                 }
                 continue;
             }
             let (stem, material) = match (name.strip_suffix(".material"), name.strip_suffix(".answer")) {
-                (Some(stem), _) => (stem.to_owned(), true),
-                (None, Some(stem)) => (stem.to_owned(), false),
+                (Some(stem), _) => (stem, true),
+                (None, Some(stem)) => (stem, false),
+                _ if foreign => match name.strip_suffix(".replay") {
+                    Some(stem) => (stem, false),
+                    None => continue,
+                },
                 _ => continue,
             };
             let Ok(claim) = stem.parse::<Hash64>() else { continue };
             if foreign {
-                claims.push(RetainedClaimV1 { claim, paths: vec![path], bytes: meta.len(), age, kind: RetainedKindV1::Foreign });
+                claims.push(RetainedClaimV1 {
+                    claim,
+                    files: vec![RetainedFileV1::new(path, &meta)],
+                    bytes: meta.len(),
+                    age,
+                    kind: RetainedKindV1::Foreign,
+                });
                 continue;
             }
             let kind = if material && starts_with_fp_magic(&path) { RetainedKindV1::FreePrompt } else { RetainedKindV1::Attempt };
             let row = own.entry(claim).or_insert(RetainedClaimV1 {
                 claim,
-                paths: Vec::new(),
+                files: Vec::new(),
                 bytes: 0,
                 age: None,
                 kind: RetainedKindV1::Attempt,
             });
             // The claim is as young as its youngest file; an unreadable age reads as old.
-            row.age = match (row.paths.is_empty(), row.age, age) {
+            row.age = match (row.files.is_empty(), row.age, age) {
                 (true, _, age) => age,
                 (false, Some(a), Some(b)) => Some(a.min(b)),
                 (false, Some(a), None) => Some(a),
                 (false, None, b) => b,
             };
-            row.paths.push(path);
+            row.files.push(RetainedFileV1::new(path, &meta));
             row.bytes = row.bytes.saturating_add(meta.len());
             if material {
                 row.kind = kind;
@@ -347,43 +684,46 @@ impl PalwRetentionJanitor {
     fn pass_with(&self, free: u64, reserve: u64) -> (usize, u64, u64) {
         let now = std::time::SystemTime::now();
         let (claims, abandoned) = scan_retention_v1(&self.dir, now);
-        for path in &abandoned {
-            if let Err(e) = std::fs::remove_file(path) {
-                trace!("[{PALW_RETENTION}] cannot remove the abandoned write {}: {e}", path.display());
-            }
-        }
+        let removed_abandoned = abandoned.iter().filter(|(claim, file)| file.unlink_if_current(*claim)).count();
         if claims.is_empty() {
-            return (abandoned.len(), 0, 0);
+            return (removed_abandoned, 0, 0);
         }
         let session = self.consensus_manager.consensus().unguarded_session();
         let now_daa = session.get_virtual_daa_score();
         let rcore = self.rcore_plus.is_some_and(|fence| fence.is_active(now_daa));
-        let chain = |claim: &Hash64| {
-            session.palw_derived_artifacts_v1(*claim).map(|(state, _, _)| RetainedChainViewV1 {
+        // The resident obligation oracle covers DA for all file kinds.
+        // Only a free-prompt age decision still needs the legacy claim phase.
+        let chain = |row: &RetainedClaimV1| {
+            if row.kind != RetainedKindV1::FreePrompt {
+                return None;
+            }
+            session.palw_derived_artifacts_v1(row.claim).map(|(state, _, _)| RetainedChainViewV1 {
                 da_owed: rcore && kaspa_consensus_core::palw_da_rcore_v1::palw_da_material_owed_v1(&state, now_daa),
                 source: state.source,
                 phase: state.phase,
             })
         };
-        let owed = |claim: &Hash64| {
-            session.palw_material_income_hold_until_v1(*claim).is_some_and(|until| until == u64::MAX || now_daa < until)
-        };
-        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, chain, owed, self.attempt_horizon, free, reserve);
-        let mut removed = 0usize;
-        let mut bytes = 0u64;
-        for i in doomed {
-            let c = &claims[i];
-            for path in &c.paths {
-                match std::fs::remove_file(path) {
-                    Ok(()) => {}
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => trace!("[{PALW_RETENTION}] cannot prune {}: {e}", path.display()),
-                }
+        let owed = |row: &RetainedClaimV1| {
+            if ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(&row.claim)
+                || (free < reserve && attempt_pressure_grace_v1(row, now, self.attempt_horizon))
+            {
+                return Ok(true);
             }
-            removed += 1;
-            bytes = bytes.saturating_add(c.bytes);
-        }
-        (removed + abandoned.len(), bytes, short)
+            session.with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(row.claim))
+        };
+        let (doomed, _) = retention_prune_plan_with_material_v1(&claims, chain, owed, self.attempt_horizon, free, reserve);
+        let (removed, bytes) = prune_retained_claims_v1(&claims, doomed, |row| {
+            if free < reserve && attempt_pressure_grace_v1(row, std::time::SystemTime::now(), self.attempt_horizon) {
+                return Ok(true);
+            }
+            // Planning can race a new income hold or DA obligation. The
+            // resident oracle checks both rules at the current branch and DAA.
+            self.consensus_manager
+                .consensus()
+                .unguarded_session()
+                .with_consensus_api_v1(|consensus| consensus.palw_material_retention_owed_v1(row.claim))
+        });
+        (removed + removed_abandoned, bytes, reserve.saturating_sub(free.saturating_add(bytes)))
     }
 
     async fn worker(self: &Arc<Self>) {
@@ -448,13 +788,7 @@ mod tests {
     const MIN: Duration = Duration::from_secs(60);
 
     fn claim(n: u64, kind: RetainedKindV1, bytes: u64, age_min: u64) -> RetainedClaimV1 {
-        RetainedClaimV1 {
-            claim: Hash64::from_u64_word(n),
-            paths: vec![PathBuf::from(format!("{n}.material"))],
-            bytes,
-            age: Some(MIN * age_min as u32),
-            kind,
-        }
+        RetainedClaimV1 { claim: Hash64::from_u64_word(n), files: vec![], bytes, age: Some(MIN * age_min as u32), kind }
     }
 
     /// **The floor is 8 GiB, or 5 % of a volume big enough for that to be more.**
@@ -463,25 +797,357 @@ mod tests {
         let claims = vec![
             RetainedClaimV1 {
                 claim: Hash64::from_u64_word(1),
-                paths: vec![],
+                files: vec![],
                 bytes: 40,
                 age: Some(Duration::MAX),
                 kind: RetainedKindV1::Attempt,
             },
             RetainedClaimV1 {
                 claim: Hash64::from_u64_word(2),
-                paths: vec![],
+                files: vec![],
                 bytes: 30,
                 age: Some(Duration::MAX),
                 kind: RetainedKindV1::Foreign,
             },
         ];
-        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| true, 60 * MIN, 0, 100);
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| Ok(true), 60 * MIN, 0, 100);
         assert!(doomed.is_empty());
         assert_eq!(short, 100, "owed material cannot satisfy space reclamation");
-        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| false, 60 * MIN, 0, 100);
+        let (doomed, short) = retention_prune_plan_with_material_v1(&claims, |_| None, |_| Ok(false), 60 * MIN, 0, 100);
         assert_eq!(doomed, vec![0, 1]);
         assert_eq!(short, 30, "both copies become reclaimable after their exact release");
+    }
+
+    #[test]
+    fn retention_read_failure_pins_files_during_planning_and_immediately_before_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut claims = [
+            claim(1, RetainedKindV1::Attempt, 40, 90),
+            claim(2, RetainedKindV1::FreePrompt, 20, 5000),
+            claim(3, RetainedKindV1::Foreign, 30, 900),
+        ];
+        for claim in &mut claims {
+            let path = dir.path().join(format!("{}.material", claim.claim));
+            std::fs::write(&path, vec![0; claim.bytes as usize]).unwrap();
+            claim.files.push(RetainedFileV1::new(path.clone(), &std::fs::metadata(path).unwrap()));
+        }
+        let plan = |owed: fn(&RetainedClaimV1) -> Result<bool, String>| {
+            retention_prune_plan_with_material_v1(&claims, |_| None, owed, 60 * MIN, 0, 100)
+        };
+        let unavailable = |_: &RetainedClaimV1| Err("accepted snapshot unavailable".into());
+        let unowed = |_: &RetainedClaimV1| Ok(false);
+        assert_eq!(plan(unavailable), (vec![], 100));
+
+        let (doomed, short) = plan(unowed);
+        assert_eq!((doomed.as_slice(), short), (&[0, 1, 2][..], 10));
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Err("selected branch changed".into())), (0, 0));
+        assert!(claims.iter().all(|claim| claim.files[0].path.is_file()));
+
+        let (doomed, _) = plan(unowed);
+        let newly_owed = |row: &RetainedClaimV1| Ok(row.claim == claims[0].claim);
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, newly_owed), (2, 50));
+        assert!(claims[0].files[0].path.is_file());
+        assert_eq!(prune_retained_claims_v1(&claims, vec![0], unowed), (1, 40));
+        assert!(claims.iter().all(|claim| !claim.files[0].path.exists()));
+    }
+
+    #[test]
+    fn active_lead_publication_keeps_material_through_pressure_reclaim() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut row = claim(15, RetainedKindV1::Attempt, 3, 0);
+        let material = dir.path().join("claim.material");
+        // The deletion plan predates the publication. Both guards share the
+        // same claim, and an early exit drops only its own guard.
+        let first = pin_attempt_publication(row.claim);
+        let second = pin_attempt_publication(row.claim);
+        std::fs::write(&material, b"new").unwrap();
+        row.files.push(RetainedFileV1::new(material.clone(), &std::fs::metadata(&material).unwrap()));
+        drop(first);
+        assert_eq!(prune_retained_claims_v1(&[row.clone()], vec![0], |_| Ok(false)), (0, 0));
+        assert_eq!(std::fs::read(&material).unwrap(), b"new");
+        drop(second);
+        assert_eq!(prune_retained_claims_v1(&[row], vec![0], |_| Ok(false)), (1, 3));
+    }
+
+    #[test]
+    fn durable_attempt_pressure_grace_survives_rescan_but_never_extends_the_existing_age() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Hash64::from_u64_word(220);
+        let carrier = Hash64::from_u64_word(221);
+        let material = dir.path().join(format!("{id}.material"));
+        let marker = material.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+        publish_retained_file(&material, b"the exact capture", RetainedPublication::DurableReplace).unwrap();
+        assert!(attempt_pressure_grace_disk_quote_v1(&material).unwrap() >= 4 << 10);
+        let written = std::fs::metadata(&material).unwrap().modified().unwrap();
+        let horizon = 60 * MIN;
+        let early = written + 59 * MIN;
+        let plan = |rows: &[RetainedClaimV1], now, free, reserve| {
+            retention_prune_plan_with_material_v1(
+                rows,
+                |_| None,
+                |row| Ok(free < reserve && attempt_pressure_grace_v1(row, now, horizon)),
+                horizon,
+                free,
+                reserve,
+            )
+        };
+        let (before, _) = scan_retention_v1(dir.path(), early);
+        let (doomed, _) = plan(&before, early, 0, 1);
+        assert_eq!(doomed, vec![0], "legacy or unmarked captures keep their old pressure behavior");
+
+        let pin = pin_attempt_publication(id);
+        assert!(stage_attempt_pressure_grace_v1(&material, &pin, carrier, 1).is_err());
+        assert!(!marker.exists());
+        stage_attempt_pressure_grace_v1(&material, &pin, carrier, 17).unwrap();
+        drop(pin);
+        assert!(!attempt_publication_is_pinned(id));
+        assert_eq!(std::fs::metadata(&marker).unwrap().len(), ATTEMPT_PRESSURE_GRACE_BYTES as u64);
+        assert_eq!(
+            prune_retained_claims_v1(&before, doomed, |row| Ok(attempt_pressure_grace_v1(row, early, horizon))),
+            (0, 0),
+            "a pressure plan predating the marker cannot delete its capture"
+        );
+        let (reopened, _) = scan_retention_v1(dir.path(), early);
+        assert_eq!(plan(&reopened, early, 0, 1), (vec![], 1));
+
+        let expired = written + horizon;
+        let (aged, _) = scan_retention_v1(dir.path(), expired);
+        assert_eq!(plan(&aged, expired, 0, 0), (vec![0], 0), "the normal time rule is unchanged");
+        assert!(!attempt_pressure_grace_v1(&aged[0], expired, horizon));
+        let answer = material.with_extension("answer");
+        std::fs::write(&answer, b"fresh answer cache").unwrap();
+        std::fs::File::open(&answer).unwrap().set_times(std::fs::FileTimes::new().set_modified(early)).unwrap();
+        let (with_answer, _) = scan_retention_v1(dir.path(), expired);
+        assert_eq!(plan(&with_answer, expired, 0, 0), (vec![], 0), "the normal youngest-file age is unchanged");
+        let (doomed, _) = plan(&with_answer, expired, 0, 1);
+        assert_eq!(doomed, vec![0], "rewriting an answer does not restart the capture's pressure grace");
+        assert_eq!(prune_retained_claims_v1(&with_answer, doomed, |_| Ok(false)).0, 1);
+        assert!(!material.exists() && !marker.exists() && !answer.exists());
+    }
+
+    #[test]
+    fn invalid_or_unreadable_attempt_grace_does_not_pin_a_capture_and_orphans_are_reclaimed() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = Hash64::from_u64_word(230);
+        let carrier = Hash64::from_u64_word(231);
+        let material = dir.path().join(format!("{id}.material"));
+        let marker = material.with_extension(ATTEMPT_PRESSURE_GRACE_EXTENSION);
+        std::fs::write(&material, b"old").unwrap();
+        let pin = pin_attempt_publication(id);
+        std::fs::create_dir(&marker).unwrap();
+        let now = std::time::SystemTime::now();
+        let (rows, _) = scan_retention_v1(dir.path(), now);
+        assert!(!attempt_pressure_grace_v1(&rows[0], now, MIN));
+        assert!(stage_attempt_pressure_grace_v1(&material, &pin, carrier, 3).is_err());
+        std::fs::remove_dir(&marker).unwrap();
+        std::fs::write(&marker, [0; ATTEMPT_PRESSURE_GRACE_BYTES]).unwrap();
+        assert!(!attempt_pressure_grace_v1(&rows[0], now, MIN));
+        stage_attempt_pressure_grace_v1(&material, &pin, carrier, 3).unwrap();
+        publish_retained_file(&material, b"new", RetainedPublication::DurableReplace).unwrap();
+        let later = std::time::SystemTime::now();
+        let (replaced, _) = scan_retention_v1(dir.path(), later);
+        assert!(!attempt_pressure_grace_v1(&replaced[0], later, MIN), "a replacement does not inherit the old marker");
+        std::fs::remove_file(&material).unwrap();
+        let (rows, orphans) = scan_retention_v1(dir.path(), later);
+        assert!(rows.is_empty());
+        assert_eq!(orphans.len(), 1);
+        assert!(!orphans[0].1.unlink_if_current(orphans[0].0), "an active publication owns its marker");
+        drop(pin);
+        assert!(orphans[0].1.unlink_if_current(orphans[0].0));
+        assert!(!marker.exists());
+    }
+
+    #[test]
+    fn pressure_plan_can_reclaim_other_material_while_a_lead_is_publishing() {
+        let active = claim(16, RetainedKindV1::Attempt, 40, 90);
+        let other = claim(17, RetainedKindV1::Attempt, 50, 30);
+        let _pin = pin_attempt_publication(active.claim);
+        let owed = |row: &RetainedClaimV1| Ok(ACTIVE_ATTEMPT_PUBLICATIONS.lock().unwrap().contains_key(&row.claim));
+        assert_eq!(retention_prune_plan_with_material_v1(&[active, other], |_| None, owed, 60 * MIN, 0, 40), (vec![1], 0));
+    }
+
+    #[test]
+    fn pressure_plan_reads_each_eligible_row_once_and_preserves_order() {
+        use std::cell::Cell;
+
+        let claims = [
+            claim(101, RetainedKindV1::Foreign, 10, 120),
+            claim(102, RetainedKindV1::Attempt, 10, 30),
+            claim(103, RetainedKindV1::Attempt, 10, 30),
+            claim(104, RetainedKindV1::Attempt, 10, 90),
+            claim(105, RetainedKindV1::Foreign, 10, 130),
+        ];
+        let chain_reads = Cell::new(0);
+        let obligation_reads = Cell::new(0);
+        let chain = |_: &RetainedClaimV1| {
+            chain_reads.set(chain_reads.get() + 1);
+            None
+        };
+        let owed = |_: &RetainedClaimV1| {
+            obligation_reads.set(obligation_reads.get() + 1);
+            Ok(false)
+        };
+        assert_eq!(retention_prune_plan_with_material_v1(&claims, chain, owed, 60 * MIN, 0, 40), (vec![3, 1, 2, 4], 0));
+        assert_eq!((chain_reads.get(), obligation_reads.get()), (claims.len(), claims.len()));
+    }
+
+    #[test]
+    fn replay_retry_reuses_exact_durable_bytes_without_reserving_space() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claim.replay");
+        let bytes = vec![7; 32 * 1024 + 1];
+        let refuse = || Err::<(), _>(std::io::Error::other("storage budget exhausted"));
+        assert!(ensure_retained_replay(&path, &bytes, refuse).is_err());
+        assert!(!path.exists());
+        assert!(ensure_retained_replay(&path, &bytes, || Ok(())).unwrap());
+        assert!(!ensure_retained_replay(&path, &bytes, refuse).unwrap());
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+        let mut different = bytes.clone();
+        *different.last_mut().unwrap() ^= 1;
+        assert!(ensure_retained_replay(&path, &different, refuse).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert!(ensure_retained_replay(&path, &different, || Ok(())).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), different);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replay_retry_rejects_symlinks_even_with_matching_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("existing");
+        let replay = dir.path().join("claim.replay");
+        std::fs::write(&existing, b"matching").unwrap();
+        std::os::unix::fs::symlink(&existing, &replay).unwrap();
+        assert!(ensure_retained_replay(&replay, b"matching", || Ok(())).is_err());
+        assert_eq!(std::fs::read(existing).unwrap(), b"matching");
+        assert!(std::fs::symlink_metadata(replay).unwrap().is_symlink());
+    }
+
+    #[test]
+    fn licensed_replay_is_kept_separately_and_remains_subject_to_claim_gc() {
+        let dir = tempfile::tempdir().unwrap();
+        let foreign = dir.path().join("foreign");
+        let claim = Hash64::from_u64_word(115);
+        let material = foreign.join(format!("{claim}.material"));
+        let replay = foreign.join(format!("{claim}.replay"));
+        std::fs::create_dir_all(&foreign).unwrap();
+        std::fs::write(&material, b"legacy truncated capture").unwrap();
+        assert!(publish_retained_file(&replay, b"verified replay job", RetainedPublication::DurableReplace).unwrap());
+        assert_eq!(std::fs::read(&material).unwrap(), b"legacy truncated capture");
+        assert_eq!(std::fs::read(&replay).unwrap(), b"verified replay job");
+        let (claims, _) = scan_retention_v1(dir.path(), std::time::SystemTime::now());
+        assert_eq!(claims.len(), 2);
+        assert!(claims.iter().all(|row| row.claim == claim && row.kind == RetainedKindV1::Foreign));
+        let needed = |row: &RetainedClaimV1| Ok(row.claim == claim);
+        assert_eq!(retention_prune_plan_with_material_v1(&claims, |_| None, needed, 60 * MIN, 0, 1), (vec![], 1));
+        let (doomed, _) = retention_prune_plan_v1(&claims, |_| None, 60 * MIN, 0, u64::MAX);
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Ok(false)).0, 2);
+        assert!(!material.exists() && !replay.exists());
+    }
+
+    #[test]
+    fn retained_publishers_never_expose_partial_or_overwrite_a_write_once_copy() {
+        use std::sync::Barrier;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("claim.material");
+        let start = Barrier::new(8);
+        let results = std::thread::scope(|scope| {
+            let writers: Vec<_> = (0u8..8)
+                .map(|byte| {
+                    let (path, start) = (&path, &start);
+                    scope.spawn(move || {
+                        let bytes = vec![byte; 64 * 1024];
+                        start.wait();
+                        publish_retained_file(path, &bytes, RetainedPublication::KeepExisting).unwrap().then_some(byte)
+                    })
+                })
+                .collect();
+            writers.into_iter().filter_map(|writer| writer.join().unwrap()).collect::<Vec<_>>()
+        });
+        assert_eq!(results.len(), 1);
+        assert_eq!(std::fs::read(&path).unwrap(), vec![results[0]; 64 * 1024]);
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+
+        assert!(publish_retained_file(&path, b"replacement", RetainedPublication::Replace).unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), b"replacement");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn abandoned_scan_cannot_remove_an_active_or_replaced_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        let claim = Hash64::from_u64_word(113);
+        let path = dir.path().join(format!("{claim}.material.partial"));
+        std::fs::write(&path, b"old").unwrap();
+        let later = std::time::SystemTime::now() + PALW_RETENTION_PARTIAL_HORIZON;
+        let (_, abandoned) = scan_retention_v1(dir.path(), later);
+        let (id, file) = &abandoned[0];
+        assert_eq!(*id, Some(claim));
+
+        let pin = pin_attempt_publication(claim);
+        assert!(!file.unlink_if_current(*id));
+        let pending = dir.path().join("replacement");
+        std::fs::write(&pending, b"new").unwrap();
+        std::fs::rename(pending, &path).unwrap();
+        drop(pin);
+        assert!(!file.unlink_if_current(*id));
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+
+        let later = std::time::SystemTime::now() + PALW_RETENTION_PARTIAL_HORIZON;
+        let (_, abandoned) = scan_retention_v1(dir.path(), later);
+        assert!(abandoned[0].1.unlink_if_current(abandoned[0].0));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn a_capture_written_after_scan_start_is_new_for_age_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let before_write = std::time::UNIX_EPOCH;
+        let material = dir.path().join(format!("{}.material", Hash64::from_u64_word(112)));
+        std::fs::write(material, b"new").unwrap();
+        let (claims, _) = scan_retention_v1(dir.path(), before_write);
+        assert_eq!(claims[0].age, Some(Duration::ZERO));
+        assert_eq!(retention_prune_plan_v1(&claims, |_| None, 60 * MIN, 100, 0), (vec![], 0));
+    }
+
+    #[test]
+    fn pressure_plan_cannot_delete_a_capture_replaced_after_the_scan() {
+        let dir = tempfile::tempdir().unwrap();
+        let claim = Hash64::from_u64_word(111);
+        let material = dir.path().join(format!("{claim}.material"));
+        let answer = dir.path().join(format!("{claim}.answer"));
+        std::fs::write(&material, b"old").unwrap();
+        std::fs::write(&answer, b"answer").unwrap();
+        let (claims, _) = scan_retention_v1(dir.path(), std::time::SystemTime::now());
+        let (doomed, _) = retention_prune_plan_v1(&claims, |_| None, 60 * MIN, 0, 9);
+        assert_eq!(doomed, vec![0]);
+
+        let pin = pin_attempt_publication(claim);
+        let replacement = dir.path().join("replacement");
+        std::fs::write(&replacement, b"new").unwrap();
+        std::fs::rename(replacement, &material).unwrap();
+        drop(pin);
+        assert_eq!(prune_retained_claims_v1(&claims, doomed, |_| Ok(false)), (0, 0));
+        assert_eq!(std::fs::read(&material).unwrap(), b"new");
+        assert_eq!(std::fs::read(&answer).unwrap(), b"answer");
+    }
+
+    #[test]
+    fn retention_reclaim_reports_only_files_it_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut row = claim(1, RetainedKindV1::Attempt, 400, 90);
+        let material = dir.path().join("claim.material");
+        let missing = dir.path().join("gone.material");
+        std::fs::write(&material, b"retained bytes").unwrap();
+        std::fs::write(&missing, b"removed by another pass").unwrap();
+        for path in [&material, &missing] {
+            row.files.push(RetainedFileV1::new(path.clone(), &std::fs::metadata(path).unwrap()));
+        }
+        std::fs::remove_file(missing).unwrap();
+        assert_eq!(prune_retained_claims_v1(&[row.clone()], vec![0], |_| Ok(false)), (1, 14));
+        assert!(!material.exists());
+        assert_eq!(prune_retained_claims_v1(&[row], vec![0], |_| Ok(false)), (0, 0));
     }
 
     #[test]
@@ -576,16 +1242,6 @@ mod tests {
         assert_eq!((doomed, short), (vec![], 15 * GIB), "an old own attempt is pinned by both age and pressure");
         let (doomed, short) = retention_prune_plan_v1(&own, |_| Some(attempt(false)), 60 * MIN, 0, 15 * GIB);
         assert_eq!((doomed, short), (vec![0], 5 * GIB), "the same capture yields once its actual obligation ends");
-        assert_eq!(
-            [
-                retained_foreign_rank_v1(None),
-                retained_foreign_rank_v1(Some(&view(false))),
-                retained_foreign_rank_v1(Some(&attempt(false))),
-                retained_foreign_rank_v1(Some(&attempt(true))),
-                retained_foreign_rank_v1(Some(&view(true))),
-            ],
-            [0, 0, 0, 1, 2]
-        );
     }
 
     /// **The directory is read by its bytes and names**: an `FPC1` material is a free-prompt capture, a
@@ -607,9 +1263,11 @@ mod tests {
         std::fs::write(&partial, [0u8; 2]).unwrap();
         let later = std::time::SystemTime::now() + Duration::from_secs(2 * 3600);
         let (claims, abandoned) = scan_retention_v1(&dir, later);
-        assert_eq!(abandoned, vec![partial]);
+        assert_eq!(abandoned.len(), 1);
+        assert_eq!(abandoned[0].0, Some(a));
+        assert_eq!(abandoned[0].1.path, partial);
         let by = |c: &Hash64| claims.iter().find(|x| &x.claim == c).cloned().unwrap();
-        assert_eq!((by(&a).kind, by(&a).bytes, by(&a).paths.len()), (RetainedKindV1::Attempt, 8, 2));
+        assert_eq!((by(&a).kind, by(&a).bytes, by(&a).files.len()), (RetainedKindV1::Attempt, 8, 2));
         assert_eq!(by(&f).kind, RetainedKindV1::FreePrompt);
         assert_eq!(by(&g).kind, RetainedKindV1::Foreign);
         assert!(by(&a).age.is_some_and(|age| age >= Duration::from_secs(7000)), "two hours after the writes");

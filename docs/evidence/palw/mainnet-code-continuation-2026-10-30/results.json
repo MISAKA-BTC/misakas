@@ -1,0 +1,281 @@
+[
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "finite_provider_fee",
+    "exit_code": 0,
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 1.91
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "ordinary_verifier_fee",
+    "exit_code": 0,
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "ordinary_fee",
+    "exit_code": 0,
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "verifier_draw",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "material_intake",
+    "exit_code": 0,
+    "passed": 9,
+    "failed": 0,
+    "ignored": 1,
+    "elapsed_seconds": 854.09
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "a_positive_material_storage_fee",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 3.45
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "family_supplier",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.19
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "g14_native_funded_candidate_fixture_generator_v1",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 3.65
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "funded_escrow",
+    "exit_code": 0,
+    "passed": 19,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "original_aggregate",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 6.32
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "r5_required_amount",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "rfc40",
+    "exit_code": 0,
+    "passed": 5,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.11
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "rfc23",
+    "exit_code": 0,
+    "passed": 60,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.5
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "rfc0038",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "palw_fp_answer_accounting",
+    "exit_code": 0,
+    "passed": 10,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.06
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "palw_row_stream_v1",
+    "exit_code": 0,
+    "passed": 12,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "direct_row_export",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "rfc37",
+    "exit_code": 0,
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.04
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "the_state_root_preimage_is_exactly_the_adr_0043_list",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "the_version_22_state_root_golden_vectors",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "rfc0041",
+    "exit_code": 0,
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.01
+  },
+  {
+    "package": "kaspa_consensus_core",
+    "filter": "rfc0012_native39_receipt_quantum_is_work",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.02
+  },
+  {
+    "package": "kaspa_consensus",
+    "filter": "rfc0041_production_recovery",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 33.47
+  },
+  {
+    "package": "kaspa_consensus",
+    "filter": "funded_original",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 1.04
+  },
+  {
+    "package": "kaspad_lib",
+    "filter": "accounting_seat",
+    "exit_code": 0,
+    "passed": 6,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 9.34
+  },
+  {
+    "package": "kaspad_lib",
+    "filter": "recovery_draws",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.06
+  },
+  {
+    "package": "kaspad_lib",
+    "filter": "recovery_adopts",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.05
+  },
+  {
+    "package": "kaspa_p2p_flows",
+    "filter": "row_snapshot",
+    "exit_code": 0,
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 2.91
+  },
+  {
+    "package": "kaspa_p2p_flows",
+    "filter": "row_stream_protocol",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 0.03
+  },
+  {
+    "package": "kaspa_p2p_flows",
+    "filter": "palw_snapshot_chunks",
+    "exit_code": 0,
+    "passed": 25,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 1.77
+  },
+  {
+    "package": "kaspa_p2p_lib",
+    "filter": "row_stream_generation",
+    "exit_code": 0,
+    "passed": 1,
+    "failed": 0,
+    "ignored": 0,
+    "elapsed_seconds": 1.03
+  }
+]

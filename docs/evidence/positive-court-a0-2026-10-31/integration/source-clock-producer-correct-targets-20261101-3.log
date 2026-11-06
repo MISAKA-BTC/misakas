@@ -1,0 +1,26 @@
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec)
+   Compiling misaka-palw-positive-accounting-node v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/positive-accounting-node)
+    Finished `test` profile [unoptimized] target(s) in 9.95s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/misaka_palw_positive_accounting_node-079fcdd0641abd4c)
+
+running 17 tests
+test native_funds::tests::duplicate_cases_original_points_and_cross_namespace_locks_are_rejected ... ok
+test native_funds::tests::contradictory_same_block_settlement_clock_is_rejected_by_the_spend_proposal ... ok
+test native_funds::tests::expiry_does_not_unlock_and_same_prefix_provisional_outputs_are_unspendable ... ok
+test native_funds::tests::same_block_clocks_are_exact_while_cross_block_clocks_are_monotone ... ok
+test native_funds::tests::a_transaction_cannot_cross_fund_two_locked_inputs_or_place_its_escrow_second ... ok
+test native_funds::tests::panel_attempt_and_accepting_origin_changes_cannot_purchase_another_completion_or_carrier_fee ... ok
+test native_funds::tests::actual_transaction_identity_and_supported_payload_are_required ... ok
+test native_funds::tests::fee_payments_cannot_spend_the_capital_or_surplus_legs ... ok
+test native_funds::tests::source_payment_preserves_all_three_legs_and_returns_no_native_authority ... ok
+test native_funds::tests::free_source_units_and_court_fees_do_not_increase_source_due_usage_at_settlement ... ok
+test native_funds::tests::bond_legacy_and_positive_burn_share_one_actual_fee_allocation ... ok
+test native_funds::tests::snapshot_guards_detect_changed_case_result_funding_and_receipts ... ok
+test native_funds::tests::refunds_keep_three_leg_accounting_and_require_a_resolution_reference ... ok
+test native_funds::tests::wrong_recipient_remainder_or_relay_subsidy_is_rejected ... ok
+test native_funds::tests::source_pending_dues_are_payable_once_but_duplicates_and_settled_receipts_are_not ... ok
+test native_funds::tests::source_provider_response_and_schedule_are_bound_to_the_current_receipt ... ok
+test native_funds::tests::clocks_cannot_rewind_after_a_previous_settlement_or_before_a_response ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 40 filtered out; finished in 0.00s
+

@@ -160,6 +160,11 @@ pub struct ConvertRequest {
     pub gdn_core_wide: bool,
     /// Explicit decoder linear weight profile; 8 preserves legacy artifact bytes.
     pub linear_weight_bits: u8,
+    /// Output storage profile only: 32 preserves the old Q24 recipe; 64 is
+    /// explicit decoder-only i64 Q24. It grants no network admission.
+    pub logits_bits: u8,
+    pub attention_weight_bits: u8,
+    pub mlp_down_weight_bits: u8,
     /// Explicit pins for a freshly converted full25 artifact; legacy conversion has none.
     pub full_court_source_pin: Option<crate::full_court_source25::SourcePinV25>,
     pub chunk_store: Option<std::path::PathBuf>,
@@ -209,6 +214,9 @@ impl ConvertRequest {
             max_window: None,
             gdn_core_wide: false,
             linear_weight_bits: 8,
+            logits_bits: 32,
+            attention_weight_bits: 8,
+            mlp_down_weight_bits: 8,
             full_court_source_pin: None,
             chunk_store: None,
             keep_chunks: false,
@@ -260,6 +268,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
     use crate::float_ref::stream::Streamed;
     use crate::lower::{LowerOpts, StreamOpts};
     use crate::quantfmt::QuantRegistry;
+    if !matches!(req.logits_bits, 32 | 64) {
+        return Err(LowerError::bad("logits_bits must be 32 or 64"));
+    }
     let t0 = std::time::Instant::now();
     // Before the model is opened: lowering evaluates RoPE frequencies and the like, in this mode.
     crate::detmath::set_mode(req.math);
@@ -267,6 +278,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         max_window: req.max_window,
         gdn_core_wide: req.gdn_core_wide,
         linear_weight_bits: req.linear_weight_bits,
+        logits_bits: req.logits_bits,
+        attention_weight_bits: req.attention_weight_bits,
+        mlp_down_weight_bits: req.mlp_down_weight_bits,
         ..LowerOpts::default()
     };
     let reg = QuantRegistry::with_files(&req.quant_formats)?;
@@ -288,6 +302,9 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
         (None, None) => crate::fidelity::open_model_full(&req.model, &opts, &reg, &read)?,
     };
     let prep = &opened.prepared;
+    if req.logits_bits == 64 && !prep.lowered.program.wide_logits_q24() {
+        return Err(LowerError::not_lowerable("wide Q24 is currently a decoder logit profile"));
+    }
     let ck = opened.source.as_ref();
     let descriptors = match &req.gguf_source {
         // The header again, through the same source (its first windows are still cached): no local path to open.
@@ -471,6 +488,15 @@ pub fn convert_model(req: &ConvertRequest, log: &dyn Fn(String)) -> Result<Conve
                 "lowered_context_max": req.context, "complete_component_inventory": true,
                 "source_fidelity_or_native_eligibility": false
             });
+        }
+        if req.logits_bits != 32 {
+            meta["logits_bits"] = serde_json::json!(req.logits_bits);
+        }
+        if req.mlp_down_weight_bits == 16 {
+            meta["mlp_down_weight_bits"] = serde_json::json!(16);
+        }
+        if req.attention_weight_bits == 16 {
+            meta["attention_weight_bits"] = serde_json::json!(16);
         }
         if req.linear_weight_bits == 16 {
             meta["linear_weight_profile"] = serde_json::json!({"schema": "misaka.palw.decoder-linear-weights.v16", "main_bits": 16, "stored_quant_formats": "unchanged"});

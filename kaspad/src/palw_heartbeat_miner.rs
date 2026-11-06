@@ -405,8 +405,7 @@ impl PalwHeartbeatMinerService {
                         HeartbeatRoleV1::Stepped { daa } => {
                             stepped += 1;
                             info!(
-                                "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — granted: it merges the beat that held the slot \
-                                 and advanced the clock to DAA {daa}"
+                                "[{PALW_HEARTBEAT}] heartbeat #{mined} {hash} — granted: its mergeset advanced the clock to DAA {daa}"
                             );
                         }
                         HeartbeatRoleV1::HoldsSlot { daa } => {
@@ -626,6 +625,9 @@ impl PalwHeartbeatMinerService {
             return Ok(PassOutcomeV1::Idle);
         };
         submitted.map_err(|e| format!("the chain refused a heartbeat this node mined: {e}"))?;
+        trace!(
+            "[{PALW_HEARTBEAT}] minted {hash}: local_hint={hint:?} yield_decision={decision:?} template_earliest_ms={earliest} role={role:?}"
+        );
         Ok(PassOutcomeV1::Minted { hash, role, carriers })
     }
 }

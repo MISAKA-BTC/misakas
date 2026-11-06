@@ -1,0 +1,96 @@
+{
+  "schema": "misaka.a1.wide-native-registration.source-review.v1",
+  "date": "2026-11-02",
+  "base": "cc22b0da13784eb03a023cbd1781969577883d9e",
+  "branch": "codex/a1-wide-native-registration",
+  "source_head": "fb204eb8a471e2fb483445afb3b946d238491432",
+  "source_commits": [
+    "4bab4b9d27590a802af66f99e1ff4419729e50d0",
+    "fb204eb8a471e2fb483445afb3b946d238491432"
+  ],
+  "scope": "source-only; no runtime acceptance or full trained-model completion",
+  "file_sha256": {
+    "consensus/core/src/lib.rs": "8ecd30e1d04856720f8524931d621a7192c05f70e78b4a02d9064c237b79e31b",
+    "consensus/core/src/palw_exec_v2_fold.rs": "fd1da1833dc4be655ffeef8c0786aab5517e5b2e422de01591ef11d2d48adaad",
+    "consensus/core/src/palw_staged_court_state_v1.rs": "e6104322ddddc85ff97aa49c2caab7a9c41bce3dd0fd853d0aa70a4066f71675",
+    "consensus/core/src/palw_state_v2.rs": "f77bb48b2ff44b7e19891afb2796c5ebb6f1bfb82853061733fa2c5de17e465b",
+    "consensus/core/src/palw_state_v2/da_sessions.rs": "751f493224b5586f711a5a0f28635ea30ee8b74d134d0afa0502c6b306fe060e",
+    "consensus/core/src/palw_state_v2/objects.rs": "adc622b81d71df0e3252a4b8f98c762767ff93046157d0e61a00a5869a2b8db4",
+    "consensus/core/src/palw_state_v2/state_params.rs": "bf0ce15c7b9939d492495320c4415e76c7139ba041083c77b0c5ffea9528af92",
+    "consensus/core/src/palw_state_v2/tests.rs": "0baeef4867cabdb9901cdd90a635c85a488d6560019c5b3d2284e3e7e6ccaa1a",
+    "consensus/core/src/palw_tir_fp_lane_v1.rs": "fec3a8b357fbe1a08d8cd79b58379b84457ec895451aade629eca241ba5dead5",
+    "consensus/core/src/palw_tir_public_fold_v1.rs": "14012d315ea9cf4bd7a98d43ed1861a751f6e527180d046df74d827b88a360cf",
+    "consensus/core/src/palw_tir_registration_dispatch_v1.rs": "f3bd6874419e12e500898d7d0ace5d48e7af77315fa26c094683561b719d71d1",
+    "consensus/core/src/palw_tir_row_profile_v2.rs": "73c6ac698676867d23ea4e04f0d4464e9088337c73724cdcf30ad5978b67af3c",
+    "consensus/core/src/palw_tir_row_profile_v2/tests.rs": "2f91286fefe4ee403d5bf3bcbc080534501e13bf8398a3cac5ed5f3c0102858c",
+    "consensus/core/src/palw_tir_v1.rs": "a5aeabbd8a24a96b90c9a9b6c3b52158c2258346e10383fe2ec5994b21f5d986",
+    "consensus/src/pipeline/virtual_processor/processor/palw_validate/class_registration.rs": "fdf54477033a855ddcd5a7b8047437f0c4848de14887af24b4f958911a599392",
+    "consensus/src/pipeline/virtual_processor/tests.rs": "54d7422fa4dcbf1c079e1f904b4a009100e8e741609d5411667cb1059d1d1362",
+    "consensus/src/pipeline/virtual_processor/tests/tir_wide_registration_e2e.rs": "f26444be0b097df7b1b6daa9ff6e05535ef0bb5121f2dc34fe97dcf23816631b",
+    "misaka/palw/sdk/src/tir_registration.rs": "d6c22836bf6d5768a8f147e5b6adbfcd79b235740e024dfbc537fe9f5916f47a",
+    "misaka/palw/sdk/tests/tir_registration_dispatch.rs": "2c74d417691762b540090195451c0c61f8e821a4adcb7cd608bd5113a1643847"
+  },
+  "static_checks": {
+    "rustfmt": {
+      "result": "PASS",
+      "files": 19,
+      "config": "skip_children=true,reorder_modules=false",
+      "note": "module ordering is preserved; default reorder check flags pre-existing module order"
+    },
+    "git_diff_check": "PASS",
+    "independent_source_reviews": [
+      {
+        "agent": "contract_review",
+        "scope": "legacy reader guards, mutation ordering, Mesh and rider calls",
+        "result": "no remaining blocking finding after early-guard fix"
+      },
+      {
+        "agent": "review_core",
+        "scope": "selector, Params mirror, SDK/native/fold, SDK3/node5 tests, early claim guard and off/on direct/own/merged unit fixtures",
+        "result": "no remaining blocking finding statically"
+      }
+    ],
+    "docs": {
+      "result": "PASS_no_new_regressions",
+      "baseline_issue_occurrences": 43,
+      "new_issue_occurrences": 0,
+      "record": "docs-check.json"
+    }
+  },
+  "review_fixes": [
+    {
+      "issue": "late Mesh hook guard was fence-dependent and ran after claim writes",
+      "resolution": "moved refusal to legacy apply_attempt before admission/reservation writes; rider batch preflights every class before lead writes; removed late guard; off/on/direct/own/merged source regressions added"
+    },
+    {
+      "issue": "court2 narrow factory failures changed static fold error text",
+      "resolution": "both fold arms use original legacy static refusal text"
+    }
+  ],
+  "test_source_counts": {
+    "new_dispatch_unit": 4,
+    "new_row_guard_unit": 2,
+    "new_legacy_claim_unit": 2,
+    "sdk_integration": 3,
+    "node_integration": 5
+  },
+  "runtime": {
+    "cargo": "NOT_RUN_HOLD",
+    "rustc": "NOT_RUN_HOLD",
+    "clippy": "NOT_RUN_HOLD",
+    "build": "NOT_RUN_HOLD",
+    "tests": "NOT_RUN_HOLD",
+    "target_cache_access": "NONE",
+    "large_model_execution": "NONE"
+  },
+  "boundaries": [
+    "private isolated aux141 source uses documented record-pin exemption and full validation, not public T12 record validation evidence",
+    "rider rejection mutation ordering was source-reviewed; no direct rider runtime regression in this delta",
+    "registration schema1 storage is not completion of native wide claims or court readers",
+    "existing explicit full-layout wide metadata/source-only checkers are unchanged",
+    "new Assignment/r1 Result/roles/funding/P remains unadopted; seven credit consumers stay closed",
+    "original model tiers, context/program/numerics/commit flags, wire tag/domain and public presets unchanged",
+    "wide decoding is repeated in bounded sequential stages; no CPU/RAM timing claim"
+  ],
+  "next": "Root builds/tests under its exclusive slot. Retained trained-cohort carrier source will be a separate commit."
+}

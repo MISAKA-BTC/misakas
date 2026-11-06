@@ -1,0 +1,40 @@
+   Compiling kaspa-utils v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/utils)
+   Compiling kaspa-hashes v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/hashes)
+   Compiling kaspa-math v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/math)
+   Compiling kaspa-merkle v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/merkle)
+   Compiling kaspa-muhash v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/crypto/muhash)
+   Compiling misaka-palw-panel v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/panel)
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+   Compiling misaka-palw-tir-exec v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/misaka/palw/tir/exec)
+    Finished `test` profile [unoptimized] target(s) in 3m 31s
+     Running tests/court.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/court-57b812b3f5327f8b)
+
+running 7 tests
+test one_position_replay_does_not_allocate_for_a_100k_position_job ... ok
+test replay_work_is_shared_across_all_source_requests_until_the_next_builder_move ... ok
+test replay_storage_and_position_caps_refuse_before_replaying_and_preserve_every_model_leaf ... ok
+test bounded_cone_builders_match_canonical_and_refuse_at_the_whole_move_boundary ... ok
+test the_step_tree_opens_as_the_consensus_tree ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts has been running for over 60 seconds
+test the_node_builds_what_the_court_acquits_and_convicts ... ok
+test the_inventory_tree_opens_as_the_consensus_inventory ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 139.11s
+
+     Running tests/positive_check.rs (/Users/wata/.cache/misaka-positive-a1-target/debug/deps/positive_check-97bb7a2163754630)
+
+running 10 tests
+test stochastic_selection_is_unsupported_instead_of_a_miner_refutation ... ok
+test unauthenticated_model_material_cannot_replace_the_registered_inventory ... ok
+test wrong_model_input_count_and_empty_schedule_are_rejected ... ok
+test sparse_legacy_commitments_do_not_authorize_full_coverage ... ok
+test budgets_overflow_heap_caps_and_malformed_vectors_fail_closed ... ok
+test merkle_authenticated_arithmetic_lie_rejects_only_the_panel_candidate ... ok
+test missing_logits_bridge_and_forged_losing_lane_are_rejected ... ok
+test output_mismatch_is_reported_only_after_complete_arithmetic ... ok
+test omitted_final_leaf_duplicate_and_reordering_cannot_complete ... ok
+test cold_node_checks_all_leaves_history_and_every_output_row ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

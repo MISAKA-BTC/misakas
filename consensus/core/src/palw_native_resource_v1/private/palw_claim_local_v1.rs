@@ -37,8 +37,13 @@ impl NativeWireScanV1 for PalwClaimLocalWorkRefV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0..=2 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
+            0 | 1 | 2 | 6 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader),
             3 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?
+                .merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?),
+            4 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?
+                .merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?),
+            5 => <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?
+                .merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?
                 .merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?),
             _ => Err(io::Error::new(io::ErrorKind::InvalidData, "unknown claim-local work namespace")),
         }
@@ -48,16 +53,20 @@ impl NativeWireScanV1 for PalwClaimLocalWorkRefV1 {
 native_struct!(PalwClaimLiabilityFrameV1; point, network_identity, fired_forks, policy, claims, native_changes, prior_state, current_state, accepted_objects, origin_headers, inputs);
 native_enum!(PalwClaimLocalInputV1;
     Attempt { block, execution_key, envelope }, ReceiptSpend { block, spend },
-    History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope }, FreePromptNative { claim, job_pin, public_job, eval });
+    History { claim, pledge }, PublicBinding { claim, header }, CustodyDelegation { claim, delegation }, TirOriginal { claim, envelope }, FreePromptNative { claim, job_pin, public_job, eval }, PrefixDependency { claim, envelope },
+    ConsumedCarrier { consumer, source });
 
 impl NativeWireScanV1 for PalwClaimLocalInputV1 {
     fn scan_native_wire_v1<R: Read>(reader: &mut NativeWireReaderV1<R>) -> io::Result<NativeWireShapeV1> {
         reader.step()?;
         let tag = reader.byte()?;
-        if tag > 6 {
+        if tag > 8 {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown liability input kind"));
         }
         let mut sum = <Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+        if tag == 8 {
+            return sum.merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?);
+        }
         let payload = match tag {
             0 => {
                 sum = sum.merge(<Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -82,6 +91,11 @@ impl NativeWireScanV1 for PalwClaimLocalInputV1 {
                     )?,
                 )?;
                 <Option<Box<(crate::palw_improve_eval_v1::PalwEvalJobV1, crate::palw_improve_eval_v1::PalwEvalClaimTailV1)>> as NativeWireScanV1>::scan_native_wire_v1(reader)?
+            }
+            7 => {
+                <Box<crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1> as NativeWireScanV1>::scan_native_wire_v1(
+                    reader,
+                )?
             }
             _ => unreachable!(),
         };
@@ -113,7 +127,16 @@ impl NativeWireScanV1 for PalwClaimLiabilityFrameV1 {
         sum =
             sum.merge(<crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum = sum.merge(<BTreeSet<Hash64> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
-        sum = sum.merge(<Vec<PalwClaimLocalNativeChangeV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+        let changes = <Vec<PalwClaimLocalNativeChangeV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?;
+        sum = sum.merge(changes)?.allocation(
+            changes.outer_entries,
+            std::mem::size_of::<
+                crate::palw_native_resource_v1::typed::BTreeNodeEnvelopeV1<
+                    (crate::Hash64, crate::palw_state_v2::PalwLegacyCarrierLocatorV9),
+                    (),
+                >,
+            >(),
+        )?;
         // Each raw state frame has its own exact byte boundary. Scan the real
         // carriage, not just Vec<u8>, before any embedded Borsh allocation.
         for _ in 0..2 {
@@ -135,5 +158,26 @@ impl NativeWireScanV1 for PalwClaimLiabilityFrameV1 {
         sum = sum.merge(<Vec<crate::palw_state_v2::PalwConsensusObjectV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum = sum.merge(<BTreeMap<Hash64, Vec<u8>> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
         sum.merge(<Vec<PalwClaimLocalInputV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)
+    }
+}
+
+#[cfg(test)]
+mod namespace_tests {
+    use super::*;
+
+    #[test]
+    fn rfc23s2_row_owner_and_work_namespaces_have_distinct_tags() {
+        use crate::palw_native_resource_v1::preflight_native_value_v1;
+        for owner in [PalwClaimLocalRowOwnerV1::KernelRoute, PalwClaimLocalRowOwnerV1::ExecV2, PalwClaimLocalRowOwnerV1::ChainClaims] {
+            let bytes = borsh::to_vec(&owner).unwrap();
+            preflight_native_value_v1::<PalwClaimLocalRowOwnerV1>(&bytes[..], bytes.len() as u64).unwrap();
+        }
+        // Tag 6 is an allocated work identity, never a fourth journal owner.
+        assert!(preflight_native_value_v1::<PalwClaimLocalRowOwnerV1>(&[6][..], 1).is_err());
+        let work = PalwClaimLocalWorkRefV1::KernelClaim { claim: Hash64::from_u64_word(0x144) };
+        let bytes = borsh::to_vec(&work).unwrap();
+        assert_eq!(bytes[0], 6);
+        preflight_native_value_v1::<PalwClaimLocalWorkRefV1>(&bytes[..], bytes.len() as u64).unwrap();
+        assert_eq!(borsh::from_slice::<PalwClaimLocalWorkRefV1>(&bytes).unwrap(), work);
     }
 }

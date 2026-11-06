@@ -3,9 +3,16 @@ use crate::palw_court_shared_tir_state_v1 as shared;
 use crate::palw_court_shared_tir_stream_v1::{
     SharedStreamActionV1 as Action, SharedStreamTargetV1 as Target, SignedSharedStreamV1, check_shared_stream_part_v1,
 };
+use crate::palw_native_resource_v1::{
+    NativeCoverageV1, NativeDecodeErrorV1, NativeDemandLeaseV1, NativeRetainedV1, TirNativeRequestsV1,
+    reserve_native_pending_requests_v1, reserve_native_requests_v1,
+};
 use crate::palw_staged_court_state_v1::{PalwStagedCourtKeyV1 as Key, PalwStagedCourtRowV1 as Row};
 use crate::palw_tir_public_owned_v1::PALW_TIR_PUBLIC_OWNED_PART_BYTES_V1 as PART;
-use crate::palw_tir_public_source_v1::{PalwTirPublicRequestV1 as Query, PalwTirPublicSourceV1 as Source};
+use crate::palw_tir_public_source_v1::{
+    PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1, PalwTirPublicAuthenticatedIdsV1, PalwTirPublicRequestV1 as Query, PalwTirPublicResponseV1,
+    PalwTirPublicSourceV1 as Source, full_ids_wire_bytes_v1,
+};
 use crate::{
     BlockHash, Hash64,
     palw_state_v2::{PalwBondKeyV2, PalwChainStateV2},
@@ -342,39 +349,53 @@ pub(crate) fn target_bound(
 pub(crate) fn decode_ids_body(
     source: &Source,
     body: &[u8],
-) -> Result<crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_tir_public_source_v1::PalwTirPublicAuthenticatedIdsV1>, String>
-{
-    let mut q = crate::palw_native_resource_v1::TirNativeRequestsV1::new();
-    q.exact_v1::<u32>(u64::from(source.decode_count_v1())).map_err(|e| e.to_string())?;
-    let _ids = crate::palw_native_resource_v1::reserve_native_requests_v1(q.bytes_v1()).map_err(|e| e.to_string())?;
+) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, String> {
+    decode_ids_body_reserved_v1(source, body, reserve_native_requests_v1).map_err(|error| error.to_string())
+}
+
+pub(crate) fn decode_ids_body_classified_v1(
+    source: &Source,
+    body: &[u8],
+) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, NativeDecodeErrorV1<String>> {
+    decode_ids_body_reserved_v1(source, body, reserve_native_pending_requests_v1)
+}
+
+fn decode_ids_body_reserved_v1(
+    source: &Source,
+    body: &[u8],
+    reserve: impl FnOnce(u64) -> Result<Option<NativeDemandLeaseV1>, NativeCoverageV1>,
+) -> Result<NativeRetainedV1<PalwTirPublicAuthenticatedIdsV1>, NativeDecodeErrorV1<String>> {
+    use NativeDecodeErrorV1 as E;
+    let bad = |reason: &str| E::Decode(reason.into());
+    let count = source.decode_count_v1();
+    source.check_request_v1(&Query::Ids { offset: 0 }).map_err(E::Decode)?;
+    if body.len() as u64 != full_ids_wire_bytes_v1(count) {
+        return Err(bad("shared ID body differs from exact original EOF length"));
+    }
+    let mut q = TirNativeRequestsV1::new();
+    q.exact_v1::<u32>(u64::from(count)).map_err(E::Resource)?;
+    let lease = reserve(q.bytes_v1()).map_err(E::Resource)?;
     let mut ids = Vec::new();
-    ids.try_reserve_exact(source.decode_count_v1() as usize).map_err(|_| "shared IDs allocation refused")?;
+    ids.try_reserve_exact(count as usize).map_err(|_| {
+        E::Resource(NativeCoverageV1::unsupported::<Vec<u32>>("shared original IDs", "ID allocation refused"))
+    })?;
     let mut at = 0usize;
     let mut rows = None;
-    for offset in (0..source.decode_count_v1()).step_by(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
+    for offset in (0..count).step_by(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1 as usize) {
         let request = Query::Ids { offset };
-        let bound = source.unit_bound_v1(&request)?;
-        let _decode =
-            crate::palw_native_resource_v1::reserve_native_requests_v1(bound.resident_ram_bytes).map_err(|e| e.to_string())?;
-        let len = usize::try_from(bound.maximum_response_bytes).map_err(|_| "shared ID chunk address space")?;
-        let end = at.checked_add(len).filter(|end| *end <= body.len()).ok_or("shared ID body truncated")?;
-        let crate::palw_tir_public_source_v1::PalwTirPublicResponseV1::Ids { rows_root, ids: chunk } =
-            source.decode_response_v1(&request, &body[at..end])?
+        let tokens = (count - offset).min(PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1);
+        let end = at + full_ids_wire_bytes_v1(tokens) as usize;
+        let response = source.decode_response_native_v2(&request, &body[at..end])?;
+        let PalwTirPublicResponseV1::Ids { rows_root, ids: chunk } = &*response
         else {
-            return Err("shared ID body type".into());
+            return Err(bad("shared ID body type"));
         };
-        if chunk.len()
-            != (source.decode_count_v1() - offset).min(crate::palw_tir_public_source_v1::PALW_TIR_PUBLIC_IDS_PER_CHUNK_V1) as usize
-            || rows.is_some_and(|r| r != rows_root)
-        {
-            return Err("shared ID canonical count/root mismatch".into());
+        if chunk.len() != tokens as usize || rows.is_some_and(|r| r != *rows_root) {
+            return Err(bad("shared ID canonical count/root mismatch"));
         }
-        rows = Some(rows_root);
-        ids.extend_from_slice(&chunk);
+        rows = Some(*rows_root);
+        ids.extend_from_slice(chunk);
         at = end;
     }
-    if at != body.len() {
-        return Err("shared ID body trailing bytes".into());
-    }
-    source.retain_complete_ids_v1(rows.ok_or("shared empty ID stream")?, &ids)
+    source.authenticate_owned_ids_classified_v2(rows.ok_or_else(|| bad("shared empty ID stream"))?, ids, lease)
 }

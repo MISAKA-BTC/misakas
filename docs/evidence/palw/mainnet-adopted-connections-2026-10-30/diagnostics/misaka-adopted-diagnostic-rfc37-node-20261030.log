@@ -1,0 +1,20 @@
+
+running 2 tests
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_actual_snapshot_bridge_inventory_validation_and_native_import_agree ... 
+thread 'pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_actual_snapshot_bridge_inventory_validation_and_native_import_agree' (488745) panicked at consensus/src/pipeline/virtual_processor/tests/pruning_snapshot_readiness_v1.rs:202:89:
+called `Result::unwrap()` on an `Err` value: "snapshot class 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000 has no declaration index row"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_store_bridge_pins_source_and_suffix_before_any_output ... 
+thread 'pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_store_bridge_pins_source_and_suffix_before_any_output' (488793) panicked at consensus/src/pipeline/virtual_processor/tests/pruning_snapshot_readiness_v1.rs:175:89:
+called `Result::unwrap()` on an `Err` value: "snapshot class 00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100000000000000 has no declaration index row"
+FAILED
+
+failures:
+
+failures:
+    pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_actual_snapshot_bridge_inventory_validation_and_native_import_agree
+    pipeline::virtual_processor::tests::pruning_snapshot_readiness_v1::rfc37_store_bridge_pins_source_and_suffix_before_any_output
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 1317 filtered out; finished in 0.65s
+

@@ -1,0 +1,15 @@
+{
+  "manual_codec": "PalwKernelRouteStateV1",
+  "classification": "adapter",
+  "old_hash": "e341c97eb511a52c27cad7cb94085c46c42015fef9f17955d8d1bf64f321f782",
+  "new_hash": "1b6dce017df079501e0d51637b898a6960f7799c416255500666591b24e68dd6",
+  "reviewed_change": "fixed142-byte previous Positive key, strict ascending checked before value decode and map insert; legacy other-table order unchanged",
+  "guards_retained": [
+    "aux151 key142 cap",
+    "aux151 value16384 cap",
+    "shared VALUE identity/shape",
+    "duplicate rejection",
+    "external aggregate native resource preflight still mandatory"
+  ],
+  "NumericalManifest_pinned_unchanged": "2f0c22e8f59e71fc823b26b9a23e724c32b9314637db8d19bf3440f3bf75e164"
+}

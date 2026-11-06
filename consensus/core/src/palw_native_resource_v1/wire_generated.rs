@@ -20,10 +20,7 @@ impl NativeWireScanV1 for crate::evm::model_market::PalwEvmMarketActionKindV1 {
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -102,6 +99,19 @@ wire_struct!(crate::palw_attn_dissect::PalwAttnRootClaimV1; u16, u16, u16, u16, 
 wire_struct!(crate::palw_audit_door_v1::PalwAuditEntryV1; crate::Hash64, crate::Hash64);
 wire_struct!(crate::palw_audit_door_v1::PalwAuditStatusV1; Vec<(crate::palw_state_v2::PalwBondKeyV2, u64)>);
 wire_struct!(crate::palw_backend::PalwTirPublicPreparedDescriptorV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u64, u32, u32, u64, crate::Hash64, u64);
+wire_struct!(crate::palw_batch_court_v1::BatchCourtWindowV1; u64, u64, u64, u64);
+wire_struct!(crate::palw_batch_court_v1::BatchDemandV1; crate::Hash64, crate::palw_batch_court_v1::BatchCourtWindowV1, u64, u64, u64, u32, Vec<crate::palw_batch_court_v1::BatchRangeV1>);
+impl NativeWireScanV1 for crate::palw_batch_court_v1::BatchRangeAuthenticationV1 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
+wire_struct!(crate::palw_batch_court_v1::BatchRangeV1; crate::Hash64, u32, crate::palw_batch_court_v1::BatchRangeAuthenticationV1);
 wire_struct!(crate::palw_batch_licence_v1::PalwBatchLicenceEntryV1; crate::Hash64, crate::Hash64, Vec<crate::palw_batch_licence_v1::PalwBatchSeatReceiptV1>);
 wire_struct!(crate::palw_batch_licence_v1::PalwBatchSeatReceiptV1; u8, u16, crate::palw_panel_v2::PalwReceiptVerdictV2, crate::palw_verification_v2::PalwSegmentMaskV2, u64, u32, Vec<crate::Hash64>);
 wire_struct!(crate::palw_batch_licence_v1::PalwSeatWindowRootV1; crate::palw_state_v2::PalwBondKeyV2, u64, u64, crate::Hash64, u32, Vec<u8>, Vec<crate::Hash64>);
@@ -119,14 +129,8 @@ impl NativeWireScanV1 for crate::palw_bisect::PalwBisectSpaceV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -135,22 +139,10 @@ impl NativeWireScanV1 for crate::palw_bisect::PalwBisectTurnV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -164,70 +156,22 @@ impl NativeWireScanV1 for crate::palw_bond_budget_v1::PalwBudgetOriginV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            8 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            9 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            10 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            11 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            12 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            13 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            14 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            15 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
+            9 => Ok(NativeWireShapeV1::default()),
+            10 => Ok(NativeWireShapeV1::default()),
+            11 => Ok(NativeWireShapeV1::default()),
+            12 => Ok(NativeWireShapeV1::default()),
+            13 => Ok(NativeWireShapeV1::default()),
+            14 => Ok(NativeWireShapeV1::default()),
+            15 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -240,10 +184,7 @@ impl NativeWireScanV1 for crate::palw_bond_budget_v1::PalwPaidConsumerStatusV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -290,6 +231,11 @@ impl NativeWireScanV1 for crate::palw_bond_budget_v1::PalwMaterialPaymentV1 {
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            4 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -309,10 +255,7 @@ impl NativeWireScanV1 for crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1 
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             3 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -389,18 +332,9 @@ impl NativeWireScanV1 for crate::palw_claim_challenge_v2::PalwPaidClaimIndexKind
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -412,22 +346,21 @@ wire_struct!(crate::palw_claim_compact_v4::PalwPaidCompactProofBindingV4; u16, [
 wire_struct!(crate::palw_claim_interactive_v3::PalwPaidClaimRoundV3; [u8;64], u32, [u8;64], [u8;64], u64, misaka_palw_challenge::subject::ChallengeSubjectV1, misaka_palw_challenge::beacon::BeaconContextV1, misaka_palw_kernel::beacon_source::BeaconSourceTargetV1, Option<crate::palw_state_v2::PalwBondKeyV2>, Option<crate::palw_claim_challenge_v2::PalwPaidClaimLockV2>, [u8;64], Vec<misaka_palw_kernel::claim_paid_v2::PaidClaimReceiptV2>);
 wire_struct!(crate::palw_claim_local_v1::PalwClaimLocalClockPolicyV1; u64, u64, u64, u64, u64, u64, u64);
 wire_struct!(crate::palw_claim_local_v1::PalwClaimLocalPolicyContextV1; crate::palw_claim_local_v1::PalwClaimLocalClockPolicyV1, Vec<crate::palw_detection_policy_v1::PalwDetectionPolicyV1>, Option<crate::palw_security_certification_v1::PalwSecurityCertificationPolicyV1>, Option<crate::palw_court_capacity_v1::PalwCourtCapacityPolicyV1>);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixDependencyEnvelopeV1; Vec<u8>, Vec<crate::palw_claim_local_v1::prefix_v1::PalwSignedPrefixExportV1>, Option<crate::palw_claim_local_v1::prefix_v1::PalwSignedPrefixUseV1>);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1; crate::Hash64, crate::Hash64, crate::Hash64, u64, u64);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIntentV1; u8, crate::Hash64, u8, crate::Hash64, crate::Hash64, crate::Hash64, u32, crate::palw_freeprompt_v3::PalwFpPrefixStateV1, u64, u64);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportRefutationV1; u8, crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1, u32, crate::palw_step_leg::PalwStepBindingV2, Vec<crate::palw_prefix_state_court_v1::PalwPrefixKvTileV1>);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportReservationV1; crate::Hash64, crate::palw_state_v2::PalwBlockContextV2, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, u64, u64, u128, Option<u64>);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwPrefixUseIntentV1; u8, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIdentityV1, crate::palw_freeprompt_v3::PalwFpPrefixStateV1, u64, u64);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwSignedPrefixExportV1; crate::palw_claim_local_v1::prefix_v1::PalwPrefixExportIntentV1, Vec<u8>);
+wire_struct!(crate::palw_claim_local_v1::prefix_v1::PalwSignedPrefixUseV1; crate::palw_claim_local_v1::prefix_v1::PalwPrefixUseIntentV1, Vec<u8>);
 impl NativeWireScanV1 for crate::palw_class_registration_origin_v1::PalwClassRegistrationDoorV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -439,18 +372,9 @@ impl NativeWireScanV1 for crate::palw_class_semantics_v1::PalwPrefixStateRelatio
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -514,10 +438,7 @@ impl NativeWireScanV1 for crate::palw_conformance_evidence_v1::ResultV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<String as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -595,24 +516,15 @@ impl NativeWireScanV1 for crate::palw_constraint_stream_carriage_v1::PalwConstra
                 sum = sum.merge(<Vec<u32> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             5 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(
@@ -622,10 +534,7 @@ impl NativeWireScanV1 for crate::palw_constraint_stream_carriage_v1::PalwConstra
                 )?;
                 Ok(sum)
             }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            6 => Ok(NativeWireShapeV1::default()),
             7 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -686,10 +595,7 @@ impl NativeWireScanV1 for crate::palw_constraint_stream_carriage_v1::PalwConstra
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            16 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            16 => Ok(NativeWireShapeV1::default()),
             17 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(
@@ -774,10 +680,7 @@ impl NativeWireScanV1 for crate::palw_constraint_stream_carriage_v1::PalwConstra
                 sum = sum.merge(<Option<u32> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            27 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            27 => Ok(NativeWireShapeV1::default()),
             28 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(
@@ -803,10 +706,7 @@ impl NativeWireScanV1 for crate::palw_constraint_stream_carriage_v1::PalwConstra
                 sum = sum.merge(<Option<u32> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            31 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            31 => Ok(NativeWireShapeV1::default()),
             32 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(
@@ -832,10 +732,7 @@ impl NativeWireScanV1 for crate::palw_constraint_stream_carriage_v1::PalwConstra
                 )?;
                 Ok(sum)
             }
-            35 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            35 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -883,42 +780,24 @@ impl NativeWireScanV1 for crate::palw_constraint_stream_court_v1::PalwConstraint
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
 }
 wire_struct!(crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintCheckpointV1; crate::palw_constraint_stream_court_v1::PalwConstraintStreamCheckpointV1, u64, u64, u64);
 wire_struct!(crate::palw_constraint_stream_owned_v1::PalwOwnedConstraintStreamV1; crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_rendering_resources_v1::PalwRenderingClaimTermsV1, u64, u64, u64, u64, u64, crate::palw_constraint_stream_court_v1::PalwConstraintStreamCourtV1);
-wire_struct!(crate::palw_court_archive_discharge_v1::ArchiveDeclarationProgressV1; u16, crate::Hash64, crate::palw_state_v2::PalwCourtSideV1, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u64, crate::palw_state_v2::PalwBlockContextV2, u64, BTreeMap<u8,crate::palw_state_v2::PalwBlockContextV2>, Option<crate::palw_court_archive_discharge_v1::ArchivedPositiveFulfillmentV1>);
+wire_struct!(crate::palw_court_archive_discharge_v1::ArchiveDeclarationProgressV1; u16, crate::Hash64, crate::palw_state_v2::PalwCourtSideV1, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u64, crate::palw_state_v2::PalwBlockContextV2, u64, BTreeMap<u8, crate::palw_state_v2::PalwBlockContextV2>, Option<crate::palw_court_archive_discharge_v1::ArchivedPositiveFulfillmentV1>);
 wire_struct!(crate::palw_court_archive_discharge_v1::ArchivedPositiveFulfillmentV1; crate::palw_state_v2::PalwBlockContextV2, Box<crate::palw_state_v2::PalwConsensusObjectV2>);
 wire_struct!(crate::palw_court_capacity_v1::PalwCourtCapacityPolicyV1; u16, crate::palw_court_capacity_v1::PalwCourtCostV1, [u64; crate::palw_court_capacity_v1::PALW_COURT_OP_CLASSES_V1], u64, u64, u64, u64, crate::palw_court_capacity_v1::PalwCourtCostV1, u16);
 wire_struct!(crate::palw_court_capacity_v1::PalwCourtCostV1; u64, u64, u64);
@@ -955,10 +834,7 @@ impl NativeWireScanV1 for crate::palw_court_end_archive_v1::CourtEndEvidenceV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -979,11 +855,21 @@ impl NativeWireScanV1 for crate::palw_court_end_archive_v1::CourtEndEvidenceV1 {
                 sum = sum.merge(<crate::palw_state_v2::PalwBlockContextV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            4 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
 }
 wire_struct!(crate::palw_court_end_archive_v1::PendingCourtArchiveV1; u16, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_state_v2::PalwCourtSessionStateV2, u128, Option<Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>, BTreeMap<crate::palw_state_v2::PalwCourtSideV1, crate::palw_state_v2::PalwCourtCloseGroupV2>, BTreeMap<crate::palw_state_v2::PalwCourtSideV1, u64>, BTreeSet<crate::palw_state_v2::PalwCourtSideV1>, crate::palw_staged_court_state_v1::PalwSharedCourtV1<crate::palw_court_end_archive_v1::CourtEndEvidenceV1>);
+wire_struct!(crate::palw_court_family_material_v1::CheckedFamilyTableInventoryV1; crate::Hash64, crate::Hash64, u32, u64);
 wire_struct!(crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureAnswerV1; crate::Hash64, u32, crate::palw_court_model_scope_routes_v1::readiness_root::ReadinessDigestPathV1);
 wire_struct!(crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureCaseV1; crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureDemandV1, u64, u64, crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureOutcomeV1);
 wire_struct!(crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2DisclosureDemandV1; crate::Hash64, u32, crate::palw_state_v2::PalwBondKeyV2, u64, u64);
@@ -991,10 +877,7 @@ impl NativeWireScanV1 for crate::palw_court_model_scope_routes_v1::readiness_dis
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum=sum.merge(<crate::palw_court_model_scope_routes_v1::readiness_root::ReadinessDigestPathV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1062,10 +945,7 @@ impl NativeWireScanV1 for crate::palw_court_model_scope_routes_v1::readiness_dis
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1088,18 +968,9 @@ impl NativeWireScanV1 for crate::palw_court_numerical_transport_v1::NumericalKin
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1155,10 +1026,7 @@ impl NativeWireScanV1 for crate::palw_court_shared_material_intake_v1::MaterialT
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1169,15 +1037,14 @@ impl NativeWireScanV1 for crate::palw_court_shared_material_intake_v1::MaterialT
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
 }
 wire_struct!(crate::palw_court_shared_material_intake_v1::SignedMaterialIntakeV1; u16, crate::Hash64, crate::Hash64, crate::palw_court_shared_material_intake_v1::MaterialTargetV1, crate::palw_state_v2::PalwBondKeyV2, crate::palw_court_shared_material_intake_v1::MaterialActionV1, Vec<u8>);
+wire_struct!(crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayBudgetV1; crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1, u64, u64, u64, u64);
+wire_struct!(crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayProfileV1; crate::Hash64, crate::palw_court_shared_material_intake_v1::batch::numerical_verification::NumericalBatchReplayBudgetV1);
 impl NativeWireScanV1 for crate::palw_court_shared_op_carriage_v1::PalwSharedCourtOpV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -1250,10 +1117,7 @@ impl NativeWireScanV1 for crate::palw_court_shared_tir_stream_v1::SharedStreamTa
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1491,18 +1355,9 @@ impl NativeWireScanV1 for crate::palw_da_rcore_v1::PalwDaStageV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1584,10 +1439,7 @@ impl NativeWireScanV1 for crate::palw_decode_constraint_v1::PalwConstraintAction
                 sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             3 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1622,22 +1474,10 @@ impl NativeWireScanV1 for crate::palw_detection_policy_v1::PalwDetectionRouteV1 
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1647,14 +1487,8 @@ impl NativeWireScanV1 for crate::palw_detection_policy_v1::PalwInspectionMethodV
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1686,14 +1520,8 @@ impl NativeWireScanV1 for crate::palw_detection_policy_v1::PalwLocalisationV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1714,22 +1542,10 @@ impl NativeWireScanV1 for crate::palw_econ_contracts_v1::PalwModelVerificationOu
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1741,18 +1557,9 @@ impl NativeWireScanV1 for crate::palw_economic_safety_v1::PalwLicenceDoorTagV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             3 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1801,10 +1608,7 @@ impl NativeWireScanV1 for crate::palw_flat_constraint_stream_v1::PalwFlatConstra
                 sum = sum.merge(<Vec<u32> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            3 => Ok(NativeWireShapeV1::default()),
             4 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1843,14 +1647,8 @@ impl NativeWireScanV1 for crate::palw_flat_constraint_stream_v1::PalwFlatConstra
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -1901,10 +1699,7 @@ impl NativeWireScanV1 for crate::palw_flat_model_vector_da_v7::FlatVectorUnitKin
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1927,10 +1722,7 @@ impl NativeWireScanV1 for crate::palw_flat_model_vector_da_v9::FlatVectorUnitKin
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -1941,10 +1733,7 @@ impl NativeWireScanV1 for crate::palw_flat_model_vector_da_v9::FlatVectorUnitKin
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2007,27 +1796,15 @@ impl NativeWireScanV1 for crate::palw_float_constraint_source_v1::PalwFloatSourc
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2082,14 +1859,8 @@ impl NativeWireScanV1 for crate::palw_freeprompt_v3::PalwFpStopReasonV3 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2097,7 +1868,7 @@ impl NativeWireScanV1 for crate::palw_freeprompt_v3::PalwFpStopReasonV3 {
 wire_struct!(crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3; crate::palw_freeprompt_v3::PalwFreePromptJobV3, crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64, u32, crate::palw_freeprompt_v3::PalwFpStopReasonV3, u64, crate::Hash64, u32, u64);
 wire_struct!(crate::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3; u16, crate::Hash64, crate::Hash64, crate::Hash64, u32, crate::Hash64, crate::tx::TransactionOutpoint, Vec<u8>);
 wire_struct!(crate::palw_funded_escrow_v1::PalwEscrowSettlementFactV1; crate::Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1);
-wire_struct!(crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1; u16, crate::Hash64, crate::Hash64, crate::tx::TransactionOutpoint, u64, crate::Hash64, crate::Hash64, u64, u64, u64, u64, u64, bool, Option<crate::Hash64>, u64);
+wire_struct!(crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1; u16, crate::Hash64, crate::Hash64, crate::tx::TransactionOutpoint, u64, crate::Hash64, crate::Hash64, u64, u64, u64, u64, u64, bool, Option<crate::Hash64>, u64, u64, crate::Hash64, crate::Hash64);
 wire_struct!(crate::palw_funded_execution_v11::PalwFundedExecutionFenceV11; crate::config::params::ForkActivation, crate::palw_flat_execution_v11::NativeExecutionPoliciesV11);
 wire_struct!(crate::palw_g14_lane_closure_v1::PalwKernelSignerLockRowV1; u8, [u8; 64], crate::palw_state_v2::PalwBondKeyV2, u64, u64);
 wire_struct!(crate::palw_g14_lane_closure_v1::PalwServedMaterialRowV1; u8, [u8; 64], u64, u64);
@@ -2117,10 +1888,7 @@ impl NativeWireScanV1 for crate::palw_gen_class_v1::PalwGenProfileOffersV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::palw_gen_class_v1::PalwGenImageOffersV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -2313,10 +2081,7 @@ impl NativeWireScanV1 for crate::palw_history_custody_v1::PalwHistoryRecoveryAct
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -2335,10 +2100,7 @@ impl NativeWireScanV1 for crate::palw_history_custody_v1::PalwHistoryRecoveryAct
                 sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2521,10 +2283,7 @@ impl NativeWireScanV1 for crate::palw_improve_material_v1::PalwCaseReferenceV1 {
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2538,10 +2297,7 @@ impl NativeWireScanV1 for crate::palw_improve_material_v1::PalwCaseSourceV1 {
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -2573,18 +2329,9 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwEpochRetireV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2593,34 +2340,13 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwEpochStateV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2635,10 +2361,7 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwEvalSubjectV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -2657,22 +2380,10 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwHeadCauseV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2683,19 +2394,13 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwImprovementLineStatu
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<Option<u64> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2711,10 +2416,7 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwItemSourceV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -2744,30 +2446,12 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwNoChangeReasonV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2829,30 +2513,12 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwRewardStageV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2861,10 +2527,7 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwRollbackCauseV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -2889,22 +2552,10 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwScoringKindV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2945,30 +2596,12 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwTeacherClassV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -2977,30 +2610,12 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwTeachingArtifactKind
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3009,22 +2624,10 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwTrustLabelV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3033,14 +2636,8 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwUsageMeasureV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3050,22 +2647,10 @@ impl NativeWireScanV1 for crate::palw_improve_state_v1::PalwVerificationTypeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3256,10 +2841,7 @@ impl NativeWireScanV1 for crate::palw_legacy_held_da_v2::PalwLegacyHeldUnitV2 {
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3276,26 +2858,11 @@ impl NativeWireScanV1 for crate::palw_material_capacity_v1::PalwMaterialCodecV1 
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3514,18 +3081,9 @@ impl NativeWireScanV1 for crate::palw_model_eligibility_v1::PalwEligibilityExamO
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3540,22 +3098,10 @@ impl NativeWireScanV1 for crate::palw_model_eligibility_v1::PalwEligibilityStage
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3566,14 +3112,8 @@ impl NativeWireScanV1 for crate::palw_model_lines_v1::PalwModelLineStatusV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3585,23 +3125,14 @@ impl NativeWireScanV1 for crate::palw_model_lines_v1::PalwVersionStatusV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3615,14 +3146,8 @@ impl NativeWireScanV1 for crate::palw_model_registry_v1::PalwModelLifecycleV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -3633,18 +3158,9 @@ impl NativeWireScanV1 for crate::palw_model_registry_v1::PalwModelLifecycleV1 {
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             7 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -3665,6 +3181,29 @@ wire_struct!(crate::palw_model_vector_da_v2::ModelVectorServedV2; u64, [u8;64]);
 wire_struct!(crate::palw_model_vector_da_v2::ModelVectorUnitV2; u32, u16, u16, u8, u64, u64);
 wire_struct!(crate::palw_model_vector_v2::ModelVectorHeaderV2; [u8;64], crate::Hash64, crate::Hash64, u32, u32, u64, u64, crate::palw_state_v2::PalwBondKeyV2, u64, u64, u64, bool, bool);
 wire_struct!(crate::palw_model_vector_v2::ModelVectorRowV2; crate::palw_model_vector_v2::ModelVectorHeaderV2, Vec<u8>);
+wire_struct!(crate::palw_monetary_material_fee_v2::PalwMaterialFeeEnrollmentV2; crate::Hash64, crate::palw_monetary_material_v1::PalwMonetaryMaterialEnrollmentV1, Vec<Vec<u8>>);
+wire_struct!(crate::palw_monetary_material_fee_v2::PalwMaterialFeeRowV2; crate::Hash64, u16, crate::Hash64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondKeyV2, u64, u64, u64, Option<u64>, crate::palw_monetary_material_fee_v2::PalwMaterialFeeStatusV2);
+impl NativeWireScanV1 for crate::palw_monetary_material_fee_v2::PalwMaterialFeeStatusV2 {
+    fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
+        reader.step()?;
+        match reader.byte()? {
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            3 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
+        }
+    }
+}
 impl NativeWireScanV1 for crate::palw_monetary_material_v1::PalwMonetaryMaterialActionV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -3752,6 +3291,26 @@ impl NativeWireScanV1 for crate::palw_monetary_material_v1::PalwMonetaryMaterial
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            9 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_monetary_material_fee_v2::PalwMaterialFeeEnrollmentV2> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            10 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(
+                    <Box<crate::palw_monetary_material_fee_v2::PalwMaterialFeeEnrollmentV2> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3764,6 +3323,7 @@ wire_struct!(crate::palw_monetary_material_v1::PalwMonetaryMaterialProviderV1; c
 wire_struct!(crate::palw_monetary_material_v1::PalwMonetaryMaterialReplacementV1; crate::Hash64, crate::Hash64, u64, crate::palw_monetary_material_v1::PalwMonetaryMaterialEnrollmentV1);
 wire_struct!(crate::palw_monetary_material_v1::PalwMonetaryMaterialRowV1; crate::palw_monetary_material_v1::PalwMonetaryMaterialTermsV1, crate::Hash64, u64, u64, bool, Option<crate::palw_attempt_material_v3::PalwNativeMaterialBindingV3>, Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialProviderV1>, Vec<crate::palw_monetary_material_v1::PalwMonetaryMaterialChallengeV1>, Option<u64>, Option<crate::Hash64>, Option<u64>, Option<crate::palw_monetary_material_v1::PalwMonetaryMaterialPaymentObservationV1>, crate::Hash64, u64, u128, u128, crate::Hash64, std::collections::BTreeMap<crate::Hash64, crate::Hash64>);
 wire_struct!(crate::palw_monetary_material_v1::PalwMonetaryMaterialTermsV1; u16, crate::Hash64, Vec<crate::Hash64>, Option<crate::Hash64>, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64, u64, Option<crate::palw_material_capacity_v1::PalwMaterialManifestV1>, Option<crate::palw_attempt_material_v3::PalwNativeMaterialSessionV3>, u64, u64, bool);
+wire_struct!(crate::palw_native39_settlement_checkpoint_v1::Native39SettlementFoldV1; crate::palw_native_settlement_v1::PalwDnsRetirementV1, kaspa_hashes::Hash, u64, Option<crate::config::params::ForkActivation>);
 wire_struct!(crate::palw_native_carriage_v22::NativeCarriageMassParamsV22; u16, u64, u64, u64, u64, u64, u64);
 wire_struct!(crate::palw_native_carriage_v22::NativeCarrierEnvelopeV22; u64, u32, u32, u64, u64, u64, u64);
 wire_struct!(crate::palw_native_execution_v39::NativeClassRecordV39; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u32, [u8;64], [u8;64], [u8;64]);
@@ -3777,10 +3337,7 @@ impl NativeWireScanV1 for crate::palw_native_final_v27::NativeFinalPurposeV34 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -3815,26 +3372,11 @@ impl NativeWireScanV1 for crate::palw_native_job_v39::NativeJobTerminalV39 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3853,14 +3395,8 @@ impl NativeWireScanV1 for crate::palw_native_master_v39::NativeMetadataTargetV39
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3886,6 +3422,7 @@ wire_struct!(crate::palw_native_queue_v30::NativeQueueLeaseV30; u16, [u8;64], [u
 wire_struct!(crate::palw_native_queue_v30::NativeQueuePlanRecordV30; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u64, u64, u64);
 wire_struct!(crate::palw_native_queue_v30::NativeQueuePolicyV30; u16, [u8;64], u32, u32, u64, u32, u64, u64, bool);
 wire_struct!(crate::palw_native_reply_parts_v29::NativeReplyProgressV29; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u8, [u8;64], u16, u32, u8, bool, bool);
+wire_struct!(crate::palw_native_resource_v1::NativeSnapshotResourceLimitsV1; u64, u64);
 impl NativeWireScanV1 for crate::palw_native_resource_v1::typed::NativeCoverageV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -3912,7 +3449,10 @@ impl NativeWireScanV1 for crate::palw_native_resource_v1::typed::NativeCoverageV
         }
     }
 }
-wire_struct!(crate::palw_native_settlement_v1::NativeDeltaEvidenceV1; std::collections::BTreeMap<crate::Hash64, u64>, Vec<(crate::Hash64, crate::palw_state_v2::PalwClaimStateV2)>, Vec<(crate::Hash64, crate::palw_state_v2::PalwClaimStateV2, Vec<u32>)>, Vec<crate::Hash64>, Vec<crate::Hash64>);
+wire_struct!(crate::palw_native_settlement_v1::Native39QuantumV1; crate::Hash64, crate::Hash64, u32, crate::Hash64, u128, u64, crate::Hash64, crate::Hash64, crate::Hash64, u64, u64, u64, u64);
+wire_struct!(crate::palw_native_settlement_v1::NativeDeltaEvidenceV1; std::collections::BTreeMap<crate::Hash64, u64>, Vec<(crate::Hash64, crate::palw_state_v2::PalwClaimStateV2)>, Vec<(crate::Hash64, crate::palw_state_v2::PalwClaimStateV2, Vec<u32>)>, Vec<crate::Hash64>, Vec<crate::Hash64>, Vec<crate::palw_native_settlement_v1::Native39QuantumV1>, Vec<crate::Hash64>, u64);
+wire_struct!(crate::palw_native_settlement_v1::PalwDnsRetirementV1; crate::config::params::ForkActivation, crate::palw_native_settlement_v1::PalwSettlementPolicyV1, u64);
+wire_struct!(crate::palw_native_settlement_v1::PalwSettlementPolicyV1; u64, u128, u16, u16);
 wire_struct!(crate::palw_native_text_stop_v29::NativeTextBookV29; crate::palw_native_text_stop_v29::NativeTextFundingV29, Option<crate::palw_native_text_stop_v29::NativeTextClaimV29>, crate::palw_native_text_stop_v29::NativeTextTerminalV29, u64, Option<crate::palw_native_text_stop_v29::NativeTextSettlementV29>);
 wire_struct!(crate::palw_native_text_stop_v29::NativeTextClaimV29; [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, u32, [u8;64], [u8;64], [u8;64], crate::palw_native_text_stop_v29::NativeTextStopV29, u64, u64, u64);
 wire_struct!(crate::palw_native_text_stop_v29::NativeTextClassV29; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, [u8;64], [u8;64], [u8;64]);
@@ -3926,14 +3466,8 @@ impl NativeWireScanV1 for crate::palw_native_text_stop_v29::NativeTextStopV29 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3942,26 +3476,11 @@ impl NativeWireScanV1 for crate::palw_native_text_stop_v29::NativeTextTerminalV2
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -3997,38 +3516,15 @@ impl NativeWireScanV1 for crate::palw_offence_v1::PalwOffenceKindV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4071,30 +3567,12 @@ impl NativeWireScanV1 for crate::palw_onboarding_v1::ConformanceAttemptEndV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4126,24 +3604,15 @@ impl NativeWireScanV1 for crate::palw_panel_v2::PalwReceiptVerdictV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4192,7 +3661,7 @@ wire_struct!(crate::palw_pipeline_da_v1::PalwPipelineTensorPartsV1; crate::Hash6
 impl NativeWireScanV1 for crate::palw_pipeline_da_v1::PalwReservedObjectV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
-        let _ = reader.byte()?;
+        reader.byte()?;
         Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant"))
     }
 }
@@ -4214,10 +3683,7 @@ impl NativeWireScanV1 for crate::palw_prefix_family_court_v1::PalwPrefixCourtAct
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             3 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -4286,10 +3752,7 @@ impl NativeWireScanV1 for crate::palw_prefix_family_court_v1::PalwPrefixCourtAct
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            13 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            13 => Ok(NativeWireShapeV1::default()),
             14 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -4306,10 +3769,7 @@ impl NativeWireScanV1 for crate::palw_prefix_family_court_v1::PalwPrefixCourtAct
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            17 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            17 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4372,10 +3832,7 @@ impl NativeWireScanV1 for crate::palw_prefix_public_source_v1::PalwPrefixPublicA
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             3 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(
@@ -4404,10 +3861,7 @@ impl NativeWireScanV1 for crate::palw_prefix_public_source_v1::PalwPrefixPublicA
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4421,14 +3875,8 @@ impl NativeWireScanV1 for crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4556,10 +4004,7 @@ impl NativeWireScanV1 for crate::palw_public_material_v1::PublicUnitV1 {
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -4593,10 +4038,7 @@ impl NativeWireScanV1 for crate::palw_real_share_v1::PalwFloorModeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -4650,14 +4092,8 @@ impl NativeWireScanV1 for crate::palw_routed_material_v2::PalwRoutedMaterialTarg
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -4680,34 +4116,13 @@ impl NativeWireScanV1 for crate::palw_security_certification_v1::PalwCertificati
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4726,66 +4141,22 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementConsumer
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            8 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            9 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            10 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            11 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            12 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            13 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            14 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            15 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
+            9 => Ok(NativeWireShapeV1::default()),
+            10 => Ok(NativeWireShapeV1::default()),
+            11 => Ok(NativeWireShapeV1::default()),
+            12 => Ok(NativeWireShapeV1::default()),
+            13 => Ok(NativeWireShapeV1::default()),
+            14 => Ok(NativeWireShapeV1::default()),
+            15 => Ok(NativeWireShapeV1::default()),
+            16 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4822,6 +4193,12 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementDebitV1 
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            5 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::tx::TransactionOutpoint as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4830,82 +4207,30 @@ impl NativeWireScanV1 for crate::palw_settlement_once_v1::PalwSettlementLegV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            8 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            9 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            10 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            11 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            12 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            13 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            14 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            15 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            16 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            17 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            18 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            19 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
+            9 => Ok(NativeWireShapeV1::default()),
+            10 => Ok(NativeWireShapeV1::default()),
+            11 => Ok(NativeWireShapeV1::default()),
+            12 => Ok(NativeWireShapeV1::default()),
+            13 => Ok(NativeWireShapeV1::default()),
+            14 => Ok(NativeWireShapeV1::default()),
+            15 => Ok(NativeWireShapeV1::default()),
+            16 => Ok(NativeWireShapeV1::default()),
+            17 => Ok(NativeWireShapeV1::default()),
+            18 => Ok(NativeWireShapeV1::default()),
+            19 => Ok(NativeWireShapeV1::default()),
+            20 => Ok(NativeWireShapeV1::default()),
+            21 => Ok(NativeWireShapeV1::default()),
+            22 => Ok(NativeWireShapeV1::default()),
+            23 => Ok(NativeWireShapeV1::default()),
+            24 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -4974,18 +4299,9 @@ impl NativeWireScanV1 for crate::palw_source_bootstrap_v1::PalwSourceBootstrapCo
                 )?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -5002,10 +4318,7 @@ impl NativeWireScanV1 for crate::palw_source_verifier_economics_v2::PalwSourceVe
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -5029,10 +4342,7 @@ impl NativeWireScanV1 for crate::palw_source_verifier_economics_v2::PalwSourceVe
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -5092,18 +4402,9 @@ impl NativeWireScanV1 for crate::palw_staged_bundle_v1::PalwStagedFamilyV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -5256,10 +4557,7 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            12 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            12 => Ok(NativeWireShapeV1::default()),
             13 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -5352,6 +4650,33 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtKeyV
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 sum = sum.merge(<crate::palw_state_v2::PalwBondKeyV2 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            30 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            31 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            32 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            33 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            34 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
@@ -5625,6 +4950,43 @@ impl NativeWireScanV1 for crate::palw_staged_court_state_v1::PalwStagedCourtRowV
                 > as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
+            37 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_tir_owner_schedule_v2::TirOwnerScheduleRowV2> as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                Ok(sum)
+            }
+            38 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum=sum.merge(<Box<crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
+                Ok(sum)
+            }
+            39 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_batch_court_v1::rooted::RootedBatchDemandV1> as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                Ok(sum)
+            }
+            40 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_batch_court_v1::rooted::RootedBatchStopReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            41 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_batch_court_v1::rooted::RootedBatchNumericalReceiptV1> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -5636,10 +4998,7 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwBondStatusV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -5688,30 +5047,21 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwCertifiedLaneV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
 }
-wire_struct!(crate::palw_state_v2::PalwChainStateV2; BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondStateV2>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u128>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassTargetV2>, BTreeMap<crate::Hash64, u16>, Option<crate::palw_state_v2::PalwEpochBudgetsV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassTargetV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCapabilityStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClaimStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPanelStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCourtSessionStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwEpochCounterV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwEpochCounterV2>, BTreeMap<crate::Hash64, crate::palw_model_market_v1::PalwModelMarketV1>, BTreeMap<(crate::Hash64, crate::Hash64), u64>, BTreeMap<crate::Hash64, crate::palw_model_lines_v1::PalwModelLineV1>, BTreeMap<(crate::Hash64, u32), crate::palw_model_lines_v1::PalwModelVersionV1>, BTreeMap<crate::Hash64, crate::palw_model_benefits_v1::PalwModelBenefitsV1>, BTreeMap<(crate::Hash64, crate::Hash64), u64>, BTreeMap<crate::Hash64, crate::palw_model_lines_v1::PalwModelProposalV1>, BTreeMap<(crate::Hash64, u32, crate::palw_state_v2::PalwBondKeyV2), crate::palw_model_lines_v1::PalwModelEvaluationV1>, BTreeMap<crate::Hash64, crate::Hash64>, BTreeMap<u32, crate::evm::model_market::PalwEvmSettlementV1>, BTreeMap<crate::Hash64, crate::palw_shard_licensing_v1::PalwClassShardPlanV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), Vec<u32>>, BTreeMap<crate::Hash64, crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>, BTreeMap<crate::Hash64, crate::palw_held_da_v1::PalwHeldMissingV1>, BTreeMap<crate::Hash64, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u64>>, BTreeMap<crate::Hash64, u64>, BTreeMap<crate::Hash64, u64>, crate::palw_vertex_v1::PalwVertexStateV1, crate::palw_work_slice_v2::PalwExecV2StateV1, BTreeMap<crate::Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2), u64>, BTreeMap<crate::Hash64, crate::palw_work_slice_v2::PalwExecOriginV1>, BTreeMap<crate::Hash64, crate::palw_work_slice_v2::PalwExecJobUseV1>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, BTreeSet<crate::Hash64>>, BTreeMap<crate::Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>, BTreeMap<crate::Hash64, crate::palw_tir_shard_v1::PalwTirShardClaimV1>, Option<crate::palw_real_share_v1::PalwFloorStateV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>, Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>, Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPanelDutyRowV1>, u64, u64, BTreeMap<crate::Hash64, crate::palw_execution_lane_v1::PalwExecFinalV1>, BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecScheduleV1>, BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecSnapshotV1>, BTreeMap<(u64, u64), u16>, BTreeMap<(u64, u64), u16>, Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>, BTreeMap<crate::Hash64, crate::palw_model_registry_v1::PalwModelLifecycleRowV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>, BTreeMap<crate::Hash64, crate::palw_economic_payout_v1::PalwClaimEconomicsV1>, Option<crate::palw_work_target_v1::PalwWorkTargetV2>, BTreeMap<u64, BTreeMap<crate::Hash64, u128>>, Option<crate::palw_work_target_v1::PalwWorkTargetV2>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_model_lines_v1::PalwArtifactOwnerV1>, BTreeMap<crate::Hash64, Box<crate::palw_step::PalwShapeProfileV3>>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), crate::palw_state_v2::PalwFpClaimPromptV1>, BTreeMap<crate::Hash64, crate::palw_offence_v1::PalwConsumedOffenceV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1>, BTreeMap<crate::Hash64, crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u128>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassWalkV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPayoutV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCertifiedFamilyStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCertifiedFamilyStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassLaneCertificationV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPendingChunksV2>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwCourtSideV1), crate::palw_state_v2::PalwCourtCloseGroupV2>, BTreeMap<crate::palw_derived_v1::PalwDerivedKeyV1, crate::palw_derived_v1::PalwDerivedRowV1>, u128, u128, u64, crate::BlockHash, Option<crate::palw_state_v2::PalwBlockContextV2>, u128, u64, Vec<u64>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, Vec<u64>>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPendingRewardV1>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwReporterCommitV1>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPayoutV2>, crate::palw_state_v2::PalwReporterCountersV1, BTreeMap<crate::Hash64, crate::palw_vesting_v1::PalwVestingRowV1>, crate::palw_vesting_v1::PalwVestingCountersV1, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2), crate::palw_da_rcore_v1::PalwDaSessionV1>, BTreeMap<crate::Hash64, crate::palw_da_rcore_v1::PalwDaClaimV1>, BTreeMap<crate::Hash64, crate::palw_activation_pool_v1::PalwActivationPoolV1>, crate::palw_activation_pool_v1::PalwActivationPoolCountersV1, BTreeMap<(crate::Hash64, crate::Hash64), u64>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2), u64>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_state_v2::PalwHeldForfeitV1>, BTreeMap<crate::Hash64, crate::palw_model_registry_v1::PalwProbationMemoryV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwBondFreezeV1>, BTreeMap<crate::Hash64, crate::palw_audit_door_v1::PalwAuditStatusV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u64>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), u64>, BTreeMap<u64, u32>, BTreeMap<crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1, crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>, BTreeMap<crate::Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>, BTreeMap<crate::Hash64, Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>, BTreeMap<crate::Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementLineV1>, BTreeMap<(crate::Hash64, u64), crate::palw_improve_state_v1::PalwImprovementEpochV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementPolicyRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementUsageV1>, BTreeMap<(crate::Hash64, u32), crate::palw_improve_state_v1::PalwLineageHeadEntryV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementPoolV1>, BTreeMap<(crate::Hash64, u64), crate::palw_improve_state_v1::PalwMaterialFrontierV1>, BTreeMap<(crate::Hash64, u64, u32), crate::palw_improve_state_v1::PalwEpochCandidateV1>, BTreeMap<(crate::Hash64, u64, u8, crate::Hash64), crate::palw_improve_state_v1::PalwPoolEntryV2>, BTreeMap<(crate::Hash64, u64, u32), crate::palw_improve_state_v1::PalwEvalItemV1>, BTreeMap<(crate::Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), crate::palw_improve_state_v1::PalwEvalResultV1>, BTreeMap<(crate::Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u64>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwHardCaseRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_material_v1::PalwDataUseOptInRecordV1>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwSetterSetRecordV1>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwDatasetRecordV1>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwTeachingArtifactRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1>, BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>, Option<misaka_palw_panel::PermissionlessPanelStateV1>, BTreeMap<crate::Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>, crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1, BTreeMap<crate::Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>, crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1, BTreeMap<crate::Hash64, Vec<u8>>, BTreeMap<crate::Hash64, crate::palw_panel_da_disclosure_v1::PalwPanelDaDisclosureRowV1>, BTreeMap<crate::Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>, BTreeMap<crate::Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>, BTreeMap<
+wire_struct!(crate::palw_state_v2::PalwChainStateV2; BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondStateV2>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u128>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassTargetV2>, BTreeMap<crate::Hash64, u16>, Option<crate::palw_state_v2::PalwEpochBudgetsV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassTargetV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCapabilityStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClaimStateV2>, BTreeSet<(crate::Hash64, crate::Hash64)>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPanelStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCourtSessionStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwEpochCounterV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwEpochCounterV2>, BTreeMap<crate::Hash64, crate::palw_model_market_v1::PalwModelMarketV1>, BTreeMap<(crate::Hash64, crate::Hash64), u64>, BTreeMap<crate::Hash64, crate::palw_model_lines_v1::PalwModelLineV1>, BTreeMap<(crate::Hash64, u32), crate::palw_model_lines_v1::PalwModelVersionV1>, BTreeMap<crate::Hash64, crate::palw_model_benefits_v1::PalwModelBenefitsV1>, BTreeMap<(crate::Hash64, crate::Hash64), u64>, BTreeMap<crate::Hash64, crate::palw_model_lines_v1::PalwModelProposalV1>, BTreeMap<(crate::Hash64, u32, crate::palw_state_v2::PalwBondKeyV2), crate::palw_model_lines_v1::PalwModelEvaluationV1>, BTreeMap<crate::Hash64, crate::Hash64>, BTreeMap<u32, crate::evm::model_market::PalwEvmSettlementV1>, BTreeMap<crate::Hash64, crate::palw_shard_licensing_v1::PalwClassShardPlanV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), Vec<u32>>, BTreeMap<crate::Hash64, crate::palw_shard_licensing_v1::PalwShardLicensingProgressV1>, BTreeMap<crate::Hash64, crate::palw_held_da_v1::PalwHeldMissingV1>, BTreeMap<crate::Hash64, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u64>>, BTreeMap<crate::Hash64, u64>, BTreeMap<crate::Hash64, u64>, crate::palw_vertex_v1::PalwVertexStateV1, crate::palw_work_slice_v2::PalwExecV2StateV1, BTreeMap<(crate::Hash64, crate::Hash64), u64>, BTreeSet<(crate::Hash64, crate::palw_state_v2::PalwLegacyCarrierLocatorV9)>, bool, BTreeMap<crate::Hash64, crate::palw_work_slice_v2::PalwExecV2RewardRowV1>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2), u64>, BTreeMap<crate::Hash64, crate::palw_work_slice_v2::PalwExecOriginV1>, BTreeMap<crate::Hash64, crate::palw_work_slice_v2::PalwExecJobUseV1>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, BTreeSet<crate::Hash64>>, BTreeMap<crate::Hash64, crate::palw_tir_shard_v1::PalwTirShardPlanV1>, BTreeMap<crate::Hash64, crate::palw_tir_shard_v1::PalwTirShardClaimV1>, Option<crate::palw_real_share_v1::PalwFloorStateV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_seat_availability_v1::PalwSeatAvailabilityV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>, Option<crate::palw_kernel_route_v1::PalwKernelRouteStateV1>, Option<crate::palw_bond_budget_v1::PalwBondBudgetStateV1>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPanelDutyRowV1>, u64, u64, BTreeMap<crate::Hash64, crate::palw_execution_lane_v1::PalwExecFinalV1>, BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecScheduleV1>, BTreeMap<u64, crate::palw_execution_lane_v1::PalwExecSnapshotV1>, BTreeMap<(u64, u64), u16>, BTreeMap<(u64, u64), u16>, Option<crate::palw_execution_lane_v1::PalwExecSeedAnchorV1>, BTreeMap<crate::Hash64, crate::palw_model_registry_v1::PalwModelLifecycleRowV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), crate::palw_model_registry_v1::PalwSeatReadinessRowV1>, BTreeMap<crate::Hash64, crate::palw_economic_payout_v1::PalwClaimEconomicsV1>, Option<crate::palw_work_target_v1::PalwWorkTargetV2>, BTreeMap<u64, BTreeMap<crate::Hash64, u128>>, Option<crate::palw_work_target_v1::PalwWorkTargetV2>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_model_lines_v1::PalwArtifactOwnerV1>, BTreeMap<crate::Hash64, Box<crate::palw_step::PalwShapeProfileV3>>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), crate::palw_state_v2::PalwFpClaimPromptV1>, BTreeMap<crate::Hash64, crate::palw_offence_v1::PalwConsumedOffenceV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), crate::palw_panel_var_v1::PalwSlashableLockV1>, BTreeMap<crate::Hash64, crate::palw_panel_var_v1::PalwPanelLiabilityRecordV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u128>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassWalkV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPayoutV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCertifiedFamilyStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwCertifiedFamilyStateV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwClassLaneCertificationV2>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPendingChunksV2>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwCourtSideV1), crate::palw_state_v2::PalwCourtCloseGroupV2>, BTreeMap<crate::palw_derived_v1::PalwDerivedKeyV1, crate::palw_derived_v1::PalwDerivedRowV1>, u128, u128, u64, crate::BlockHash, Option<crate::palw_state_v2::PalwBlockContextV2>, u128, u64, Vec<u64>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, Vec<u64>>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPendingRewardV1>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwReporterCommitV1>, BTreeMap<crate::Hash64, crate::palw_state_v2::PalwPayoutV2>, crate::palw_state_v2::PalwReporterCountersV1, BTreeMap<crate::Hash64, crate::palw_vesting_v1::PalwVestingRowV1>, crate::palw_vesting_v1::PalwVestingCountersV1, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2), crate::palw_da_rcore_v1::PalwDaSessionV1>, BTreeMap<crate::Hash64, crate::palw_da_rcore_v1::PalwDaClaimV1>, BTreeMap<crate::Hash64, crate::palw_activation_pool_v1::PalwActivationPoolV1>, crate::palw_activation_pool_v1::PalwActivationPoolCountersV1, BTreeMap<(crate::Hash64, crate::Hash64), u64>, BTreeMap<(crate::Hash64, crate::palw_state_v2::PalwBondKeyV2), u64>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_state_v2::PalwHeldForfeitV1>, BTreeMap<crate::Hash64, crate::palw_model_registry_v1::PalwProbationMemoryV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_aggregate_liability_v1::PalwBondFreezeV1>, BTreeMap<crate::Hash64, crate::palw_audit_door_v1::PalwAuditStatusV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u64>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, crate::palw_issuance_slots_v1::PalwIssuanceBucketV1>, BTreeMap<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64), u64>, BTreeMap<u64, u32>, BTreeMap<crate::palw_capacity_s567_v1::PalwCapacityLedgerKeyV1, crate::palw_capacity_s567_v1::PalwCapacityLedgerRowV1>, BTreeMap<crate::Hash64, crate::palw_tir_admission_v1::PalwTirClassRecordV1>, BTreeMap<crate::Hash64, Box<crate::palw_tir_dissect_v1::PalwTirDissectPhaseV1>>, BTreeMap<crate::Hash64, crate::palw_gen_class_v1::PalwGenClassRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementLineV1>, BTreeMap<(crate::Hash64, u64), crate::palw_improve_state_v1::PalwImprovementEpochV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementPolicyRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementUsageV1>, BTreeMap<(crate::Hash64, u32), crate::palw_improve_state_v1::PalwLineageHeadEntryV1>, BTreeMap<crate::Hash64, crate::palw_improve_state_v1::PalwImprovementPoolV1>, BTreeMap<(crate::Hash64, u64), crate::palw_improve_state_v1::PalwMaterialFrontierV1>, BTreeMap<(crate::Hash64, u64, u32), crate::palw_improve_state_v1::PalwEpochCandidateV1>, BTreeMap<(crate::Hash64, u64, u8, crate::Hash64), crate::palw_improve_state_v1::PalwPoolEntryV2>, BTreeMap<(crate::Hash64, u64, u32), crate::palw_improve_state_v1::PalwEvalItemV1>, BTreeMap<(crate::Hash64, u64, u32, crate::palw_improve_state_v1::PalwEvalSubjectV1), crate::palw_improve_state_v1::PalwEvalResultV1>, BTreeMap<(crate::Hash64, u64, u32), crate::palw_improve_state_v1::PalwRewardGrantV1>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u64>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwHardCaseRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_material_v1::PalwDataUseOptInRecordV1>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwSetterSetRecordV1>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwDatasetRecordV1>, BTreeMap<(crate::Hash64, crate::Hash64), crate::palw_improve_material_v1::PalwTeachingArtifactRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_material_v1::PalwTeacherLicenceRecordV1>, BTreeMap<crate::Hash64, crate::palw_improve_composite_v1::PalwTirCompositeRefV1>, BTreeMap<crate::palw_improve_eval_v1::PalwEvalJobKeyV1, crate::palw_improve_eval_v1::PalwEvalJobStateV1>, Option<misaka_palw_panel::PermissionlessPanelStateV1>, BTreeMap<crate::Hash64, crate::palw_legacy_public_filer_v1::PalwDisputeClaimV1>, crate::palw_tir_designated_answers_v1::PalwTirDesignatedRegistryV1, BTreeMap<crate::Hash64, crate::palw_funded_escrow_v1::PalwFundedEscrowRowV1>, BTreeSet<(crate::Hash64, crate::Hash64)>, crate::palw_court_model_scope_routes_v1::readiness_disclosure::PalwD2ReadinessRegistryV1, BTreeMap<crate::Hash64, Vec<u8>>, BTreeMap<crate::Hash64, crate::palw_panel_da_disclosure_v1::PalwPanelDaDisclosureRowV1>, BTreeMap<crate::Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>, BTreeMap<crate::Hash64, crate::palw_class_semantics_v1::PalwClassSemanticsV1>, BTreeMap<
         crate::palw_legacy_answer_chunks_v2::PalwLegacyAnswerKeyV2,
         crate::palw_legacy_answer_chunks_v2::PalwPendingLegacyAnswerV2,
-    >, BTreeMap<crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>, BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeMap<crate::Hash64, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>, BTreeMap<crate::Hash64, BTreeSet<(u8, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, u64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::Hash64, BTreeSet<crate::Hash64>>, BTreeSet<(u64, crate::Hash64, u64)>, u32, u64, BTreeSet<(crate::Hash64, crate::Hash64, u64, crate::Hash64)>, BTreeSet<(crate::Hash64, crate::Hash64, u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64, crate::Hash64)>, BTreeSet<(crate::Hash64, u64, u8, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::Hash64, crate::palw_improve_eval_v1::PalwEvalJobKeyV1>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::Hash64, crate::Hash64>, BTreeMap<crate::Hash64, u32>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, (crate::Hash64, crate::palw_state_v2::PalwCourtSideV1))>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u32>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, bool, u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, crate::palw_weight_cap_v1::PalwBondWeightIndexV1);
+    >, BTreeMap<crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1, crate::palw_staged_court_state_v1::PalwStagedCourtRowV1>, BTreeMap<crate::palw_terminal_carriage_v1::PalwTerminalKeyV1, crate::palw_terminal_carriage_v1::PalwPendingTerminalV1>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeMap<crate::Hash64, BTreeSet<(u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>, BTreeSet<(crate::Hash64, crate::Hash64)>, BTreeMap<crate::Hash64, BTreeSet<(u8, u64, crate::palw_staged_court_state_v1::PalwStagedCourtKeyV1)>>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64, u64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::Hash64, BTreeSet<crate::Hash64>>, BTreeSet<(u64, crate::Hash64, u64)>, u32, u64, BTreeSet<(crate::Hash64, crate::Hash64, u64, crate::Hash64)>, BTreeSet<(crate::Hash64, crate::Hash64, u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64, crate::Hash64)>, BTreeSet<(crate::Hash64, u64, u8, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::Hash64, crate::palw_improve_eval_v1::PalwEvalJobKeyV1>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeMap<crate::Hash64, crate::Hash64>, BTreeMap<crate::Hash64, u32>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, (crate::Hash64, crate::palw_state_v2::PalwCourtSideV1))>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeMap<crate::palw_state_v2::PalwBondKeyV2, u32>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, bool, u64, crate::Hash64)>, BTreeSet<(u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, BTreeSet<(u64, crate::Hash64)>, BTreeSet<(crate::palw_state_v2::PalwBondKeyV2, crate::Hash64)>, crate::palw_weight_cap_v1::PalwBondWeightIndexV1);
 impl NativeWireScanV1 for crate::palw_state_v2::PalwClaimPhaseV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -5751,10 +5101,7 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwClaimSourceV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -5774,10 +5121,7 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwClassStatusV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -7105,6 +6449,15 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwConsensusObjectV2 {
                 )?;
                 Ok(sum)
             }
+            250 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <Box<crate::palw_court_family_material_v1::SignedFamilyMaterialV1> as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -7115,14 +6468,8 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwCourtSideV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -7131,14 +6478,8 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwCourtVerdictV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8409,10 +7750,7 @@ impl NativeWireScanV1 for crate::palw_state_v2::PalwPanelV3BeaconSourceV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum
@@ -8454,87 +7792,29 @@ wire_struct!(crate::palw_state_v2::PalwReporterCommitV1; crate::palw_state_v2::P
 wire_struct!(crate::palw_state_v2::PalwReporterCountersV1; u128, u128);
 wire_struct!(crate::palw_state_v2::PalwRewardWinnerV1; u64, crate::Hash64, crate::palw_state_v2::PalwBondKeyV2, crate::Hash64);
 wire_struct!(crate::palw_state_v2::PalwStateDeltaV2; crate::palw_state_v2::PalwBlockContextV2, Vec<crate::palw_state_v2::PalwDeltaEntryV2>);
-wire_struct!(crate::palw_state_v2::PalwTransitionExtrasV1; Option<crate::palw_court_close_receipt_v1::NativeCourtRulesV1>, Option<([u8; 32], [u8; 32])>, std::collections::BTreeSet<crate::BlockHash>, Option<crate::Hash64>, Option<crate::palw_work_target_v1::PalwWorkTargetFoldV1>, bool, bool, bool, Option<crate::palw_state_v2::PalwEconomicSafetyFoldV1>, Option<u64>, Option<u64>, Option<u64>, bool, bool, bool, bool, bool, bool, bool, bool, std::collections::BTreeSet<crate::Hash64>, bool, bool, bool, bool, Option<u64>, Vec<crate::evm::model_market::PalwEvmMarketActionV1>, Vec<crate::palw_state_v2::PalwCarrierRefundV1>, bool, bool, Option<u64>, Option<crate::palw_gdn_court_v2::PalwGdnCourtLimitsV2>, Option<crate::palw_source_bootstrap_v1::PalwSourceBootstrapContextFaultV1>, Option<
-        std::sync::Arc<
-            crate::palw_native_resource_v1::NativeRetainedV1<crate::palw_source_bootstrap_v1::PalwSourceBootstrapOwnContextV1>,
-        >,
-    >, Option<crate::palw_shard_licensing_v1::PalwShardLicensingParamsV1>, bool, Option<u64>, bool, bool, bool, bool, Option<u64>, bool, bool, Option<crate::palw_activation_pool_v1::PalwActivationPoolTermsV1>, bool, bool, bool, bool, bool, u32, Option<crate::palw_execution_lane_v1::PalwExecLaneFoldV1>, Vec<crate::palw_execution_lane_v1::PalwExecPermitUseV1>, Vec<crate::palw_bond_budget_v1::PalwRoundFeeIncomeV1>, Vec<crate::palw_funded_escrow_v1::PalwEscrowSettlementFactV1>, Option<u64>, Vec<crate::palw_work_slice_v2::PalwExecV2CoveredSliceV1>, BTreeMap<crate::Hash64, Vec<u8>>, #[cfg(test)] Option<u64>, #[cfg(test)] Vec<(crate::Hash64, u32)>, #[cfg(test)] Vec<(u8, Vec<u8>, Option<Vec<u8>>)>, Option<crate::palw_exec_v2_anchor::PalwExecV2AnchorFoldV1>, Option<crate::palw_reward_v2::PalwRewardParamsV2>, Option<crate::palw_model_registry_v1::PalwModelRegistryFoldV1>, Option<crate::palw_economic_payout_v1::PalwEconomicPayoutFoldV1>, Option<u64>, Option<u64>, Option<crate::palw_rendering_resources_v1::PalwStagedPublicCourtConfigV1>, bool, Option<crate::palw_tir_public_allocation_v1::PalwTirPublicAllocationRulesV1>, Option<crate::Hash64>, BTreeMap<crate::Hash64, crate::palw_tir_public_fp_envelope_v1::PalwTirPublicFpEnvelopeV1>, BTreeMap<crate::Hash64, crate::palw_funded_original_coordinator_v1::PalwFundedOriginalPairingV1>, #[cfg(test)] Option<crate::palw_funded_original_coordinator_v1::PalwFundedOriginalScheduleV1>, bool, Option<crate::palw_court_service_binding_v1::CourtServiceInclusionPremiseV1>, Option<crate::palw_kernel_court_admission_v1::KernelCourtAdmissionScheduleV1>, bool, bool, BTreeMap<crate::Hash64, Vec<u32>>, bool, bool, Option<u64>, bool, BTreeMap<crate::Hash64, crate::palw_history_custody_v1::PalwHistoryCustodyPledgeV1>, BTreeMap<crate::Hash64, crate::palw_public_binding_v1::PalwPublicExecutionBindingHeaderV1>, BTreeMap<crate::Hash64, crate::palw_history_custody_v1::PalwProducerCustodyDelegationV1>, Option<u64>, Option<crate::Hash64>, crate::Hash64, Option<u64>, Option<u64>, Option<crate::palw_panel_v2::PalwSw8DrawInputsV1>, bool, std::collections::BTreeMap<crate::Hash64, u64>, Option<crate::palw_state_v2::PalwPanelV3InputsV1>, Option<crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1>);
 impl NativeWireScanV1 for crate::palw_state_v2::PalwVoidReasonV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            8 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            9 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            10 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            120 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            121 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            122 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            130 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            131 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            132 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            140 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
+            9 => Ok(NativeWireShapeV1::default()),
+            10 => Ok(NativeWireShapeV1::default()),
+            120 => Ok(NativeWireShapeV1::default()),
+            121 => Ok(NativeWireShapeV1::default()),
+            122 => Ok(NativeWireShapeV1::default()),
+            130 => Ok(NativeWireShapeV1::default()),
+            131 => Ok(NativeWireShapeV1::default()),
+            132 => Ok(NativeWireShapeV1::default()),
+            140 => Ok(NativeWireShapeV1::default()),
+            141 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8544,18 +7824,9 @@ impl NativeWireScanV1 for crate::palw_step::PalwContractionSiteV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8566,14 +7837,8 @@ impl NativeWireScanV1 for crate::palw_step::PalwStepLaneV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8582,18 +7847,9 @@ impl NativeWireScanV1 for crate::palw_step::PalwStepNodeRoleV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8603,78 +7859,24 @@ impl NativeWireScanV1 for crate::palw_step::PalwStepOpKindV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            8 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            9 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            10 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            11 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            12 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            13 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            14 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            15 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            16 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            17 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
+            9 => Ok(NativeWireShapeV1::default()),
+            10 => Ok(NativeWireShapeV1::default()),
+            11 => Ok(NativeWireShapeV1::default()),
+            12 => Ok(NativeWireShapeV1::default()),
+            13 => Ok(NativeWireShapeV1::default()),
+            14 => Ok(NativeWireShapeV1::default()),
+            15 => Ok(NativeWireShapeV1::default()),
+            16 => Ok(NativeWireShapeV1::default()),
+            17 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8702,26 +7904,11 @@ impl NativeWireScanV1 for crate::palw_step::PalwTranscendentalSiteV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8816,16 +8003,14 @@ wire_struct!(crate::palw_tir_container_v1::PalwArtRootOpeningV1; u16, crate::Has
 wire_struct!(crate::palw_tir_container_v1::PalwArtSectionOpeningV1; u16, u16, String, u16, crate::Hash64, u64, crate::Hash64);
 wire_struct!(crate::palw_tir_container_v1::PalwTirContainerBindingV1; u16, crate::Hash64, crate::Hash64, crate::palw_tir_container_v1::PalwArtRootOpeningV1);
 wire_struct!(crate::palw_tir_container_v1::PalwTirContainerRowV1; crate::Hash64, crate::Hash64, u16, u64, u64);
+wire_struct!(crate::palw_tir_court_v1::PalwTirBuilderWorkLimitsV1; misaka_palw_tir::demand::DemandLimits, u64, u64);
 wire_struct!(crate::palw_tir_court_v1::PalwTirConeRefutationV1; crate::palw_tir_step_v1::PalwTirStepBindingV1, crate::palw_step_leg::PalwStepOpeningV1, crate::palw_step_leg::PalwStepTileLeafV1, crate::palw_step_refute::PalwStepInputRowV1, crate::palw_tir_court_v1::PalwTirParamOpeningV1, Vec<u32>, Vec<crate::palw_prompt_ids_v1::PalwPromptIdsOpeningV1>, Option<crate::palw_step_refute::PalwDecodeTokenPinV1>);
 wire_struct!(crate::palw_tir_court_v1::PalwTirLogitsConsistencyV1; crate::palw_tir_step_v1::PalwTirStepBindingV1, crate::palw_step_leg::PalwStepOpeningV1, crate::palw_step_leg::PalwStepTileLeafV1, crate::palw_tir_court_v1::PalwTirTraceLanesV1);
 impl NativeWireScanV1 for crate::palw_tir_court_v1::PalwTirParamOpeningV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::palw_artifact::PalwArtifactMultiproofV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -8958,14 +8143,8 @@ impl NativeWireScanV1 for crate::palw_tir_dissect_v1::PalwTirFoldV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -8989,10 +8168,7 @@ impl NativeWireScanV1 for crate::palw_tir_prefix_state_v1::PalwTirPrefixStateVer
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -9011,10 +8187,7 @@ impl NativeWireScanV1 for crate::palw_tir_public_carriage_v1::PalwTirPublicContr
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(
@@ -9069,14 +8242,8 @@ impl NativeWireScanV1 for crate::palw_tir_public_carriage_v1::PalwTirPublicContr
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9211,38 +8378,14 @@ impl NativeWireScanV1 for crate::palw_tir_public_owned_v1::PalwTirPublicWorkPhas
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9321,10 +8464,7 @@ impl NativeWireScanV1 for crate::palw_tokenizer_artifact_inventory_v1::PalwToken
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9340,14 +8480,15 @@ impl NativeWireScanV1 for crate::palw_tokenizer_rendering_v1::PalwTokenizerRende
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
 }
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwDerivedTokenizerRenderingV2; crate::palw_tokenizer_rendering_v2::PalwTokenizerRenderingStatementV2, u64, u64, u64, crate::Hash64, u32, u32);
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwRootedTokenizerRegistrationRowV1; u16, crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2, crate::palw_class_semantics_v1::PalwClassSemanticsV1, crate::palw_state_v2::PalwBlockContextV2, crate::palw_state_v2::PalwBlockContextV2, crate::Hash64, crate::palw_tokenizer_rendering_v2::PalwDerivedTokenizerRenderingV2);
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwTfp1TokenizerIntakePinsV2; crate::Hash64, crate::Hash64, crate::Hash64, crate::Hash64);
+wire_struct!(crate::palw_tokenizer_rendering_v2::PalwTokenizerRenderingStatementV2; crate::Hash64, u64, crate::Hash64, u32, crate::palw_tokenizer_rendering_v1::PalwTokenizerRenderingRuleV1);
 wire_struct!(crate::palw_tokenizer_table_stream_v1::PalwAuthenticatedRenderingDigestStreamV1; crate::Hash64, bool, u32, u32, crate::Hash64, crate::palw_rendering_stream_v1::LeafHashContinuationV1, crate::palw_rendering_stream_v1::LeafHashContinuationV1);
 wire_struct!(crate::palw_tokenizer_table_stream_v1::PalwTokenizerStreamPacketV1; u64, Vec<u8>, Vec<crate::palw_json_key_set_v1::PalwJsonKeyCompactProofV1>);
 wire_struct!(crate::palw_tokenizer_table_stream_v1::PalwTokenizerTableStreamV1; crate::Hash64, u64, u64, u64, crate::palw_tokenizer_json_stream_v1::PalwTokenizerJsonStreamV1, crate::palw_tokenizer_table_stream_v1::PalwAuthenticatedRenderingDigestStreamV1);
@@ -9356,10 +8497,7 @@ impl NativeWireScanV1 for crate::palw_v2::PalwLogitsDtypeV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9368,10 +8506,7 @@ impl NativeWireScanV1 for crate::palw_v2::PalwStopReasonV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9381,20 +8516,19 @@ impl NativeWireScanV1 for crate::palw_v2::PalwTracePhaseV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
 }
 wire_struct!(crate::palw_v2::PalwTraceSummaryV2; u32, crate::palw_v2::PalwLogitsDtypeV2, u32, u32, u32, crate::palw_v2::PalwTracePhaseV2, crate::palw_v2::PalwTracePhaseV2, crate::Hash64, crate::palw_v2::PalwStopReasonV2);
 wire_struct!(crate::palw_verification_v2::PalwSegmentMaskV2; u32);
+wire_struct!(crate::palw_verifier_fee_consent_v1::HeldVerifierFeeV1; misaka_palw_kernel::verifier_fee_consent_v1::VerifierFeeConsentV1, u64, Option<u64>);
+wire_struct!(crate::palw_verifier_watch_v1::PalwFrozenWatcherPoolV1; [u8; 64], u64, u64, u64, [u8; 64], Vec<crate::palw_verifier_watch_v1::PalwFrozenWatcherV1>);
+wire_struct!(crate::palw_verifier_watch_v1::PalwFrozenWatcherV1; [u8; 64], crate::Hash64, u64, u64);
+wire_struct!(crate::palw_verifier_watch_v1::PalwVerifierWatchRowV1; misaka_palw_kernel::verifier_watch_v1::VerifierWatchTermsV1, u64, crate::Hash64);
+wire_struct!(crate::palw_verifier_watch_v1::PalwWatcherClaimContextV1; [u8; 64], crate::palw_verifier_watch_v1::PalwFrozenWatcherPoolV1, crate::Hash64, misaka_palw_challenge::beacon::BeaconContextV1, u64, Option<Vec<[u8; 64]>>, bool);
 impl NativeWireScanV1 for crate::palw_vertex_v1::PalwClaimRefV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -9457,22 +8591,10 @@ impl NativeWireScanV1 for crate::palw_vesting_v1::PalwVestingLegKindV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9602,18 +8724,9 @@ impl NativeWireScanV1 for crate::palw_work_slice_v2::PalwExecV2RewardActionV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             3 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<crate::Hash64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -9627,14 +8740,8 @@ impl NativeWireScanV1 for crate::palw_work_slice_v2::PalwExecV2RewardFundV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9645,14 +8752,8 @@ impl NativeWireScanV1 for crate::palw_work_slice_v2::PalwWorkPrefixStageV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -9678,14 +8779,8 @@ impl NativeWireScanV1 for crate::palw_work_slice_v2::PalwWorkRootPhaseV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -9707,10 +8802,7 @@ impl NativeWireScanV1 for crate::palw_work_slice_v2::PalwWorkSliceStageV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -9739,6 +8831,7 @@ impl NativeWireScanV1 for crate::palw_work_slice_v2::PalwWorkSliceStageV2 {
 }
 wire_struct!(crate::palw_work_target_v1::PalwWorkTargetFoldV1; u64, u32, u32, BTreeMap<crate::Hash64, crate::palw_model_registry_v1::PalwModelWorkV1>);
 wire_struct!(crate::palw_work_target_v1::PalwWorkTargetV2; u128, u128, u128, u128, u64, u64, u64);
+wire_struct!(crate::subnets::SubnetworkId; [u8; crate::subnets::SUBNETWORK_ID_SIZE]);
 wire_struct!(crate::tx::TransactionOutpoint; crate::Hash64, crate::tx::TransactionIndexType);
 wire_struct!(misaka_palw_challenge::approval_scope::LifetimeCounterV3; u128, u128, std::collections::BTreeSet<[u8;64]>, std::collections::BTreeSet<([u8;64], [u8;64])>);
 wire_struct!(misaka_palw_challenge::approval_scope::LifetimeReviewScopeV3; u16, [u8;64], [u8;64], u64, u64, Vec<misaka_palw_challenge::policy::ReviewedTupleV2>, u128, u128, u128, [u8;64], [u8;64], [u8;64]);
@@ -9788,10 +8881,7 @@ impl NativeWireScanV1 for misaka_palw_challenge::beacon::FinalPathV1 {
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9802,38 +8892,14 @@ impl NativeWireScanV1 for misaka_palw_challenge::beacon::WorkSourceKindV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9846,26 +8912,11 @@ impl NativeWireScanV1 for misaka_palw_challenge::conformance::ConformanceStatusV
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9874,42 +8925,15 @@ impl NativeWireScanV1 for misaka_palw_challenge::lifecycle::OnboardingFailureV1 
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            8 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            9 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
+            9 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9919,38 +8943,14 @@ impl NativeWireScanV1 for misaka_palw_challenge::lifecycle::OnboardingStateV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9960,18 +8960,9 @@ impl NativeWireScanV1 for misaka_palw_challenge::policy::InteractiveModeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -9981,19 +8972,13 @@ impl NativeWireScanV1 for misaka_palw_challenge::policy::ReviewedFailureBoundV2 
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10005,20 +8990,14 @@ impl NativeWireScanV1 for misaka_palw_challenge::sealed::SourceFateV3 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum =
                     sum.merge(<misaka_palw_challenge::beacon::WorkFinalEventV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10027,10 +9006,7 @@ impl NativeWireScanV1 for misaka_palw_challenge::soundness::RelationSoundnessV1 
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -10045,10 +9021,7 @@ impl NativeWireScanV1 for misaka_palw_challenge::subject::RootV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<[u8; 64] as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -10062,30 +9035,12 @@ impl NativeWireScanV1 for misaka_palw_challenge::subject::SubjectKindV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10188,22 +9143,10 @@ impl NativeWireScanV1 for misaka_palw_kernel::claim_compact_v1::CompactRelationC
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10263,14 +9206,8 @@ impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimCheckingV2
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10459,22 +9396,10 @@ impl NativeWireScanV1 for misaka_palw_kernel::claim_paid_v2::PaidClaimTargetV2 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10488,14 +9413,8 @@ impl NativeWireScanV1 for misaka_palw_kernel::descriptor::KernelStatusV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -10525,18 +9444,9 @@ impl NativeWireScanV1 for misaka_palw_kernel::econ_contracts_v1::ModelVerificati
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10550,26 +9460,11 @@ impl NativeWireScanV1 for misaka_palw_kernel::family::CheckerIdV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10578,38 +9473,14 @@ impl NativeWireScanV1 for misaka_palw_kernel::family::ConstraintFamilyV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
+            7 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10618,22 +9489,10 @@ impl NativeWireScanV1 for misaka_palw_kernel::family::CourtIdV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10650,34 +9509,13 @@ impl NativeWireScanV1 for misaka_palw_kernel::flat_execution11::ExecutionTermina
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            6 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
+            6 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10721,10 +9559,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::flat_material_output39::OutputProj
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -10756,27 +9591,15 @@ wire_struct!(misaka_palw_kernel::flat_quota11::owning39::SourcePlanRecordV39; u1
 wire_struct!(misaka_palw_kernel::flat_quota11::owning39::source::SourceObligationV39; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u32, u32, bool, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11);
 wire_struct!(misaka_palw_kernel::flat_quota11::source16::SourceObligationV16; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u32, u32, u32, bool, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11);
 wire_struct!(misaka_palw_kernel::flat_quota11::source16::SourcePlanRecordV16; u16, [u8;64], [u8;64], [u8;64], [u8;64], [u8;64], u32, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11, misaka_palw_kernel::flat_quota11::QuotaQuantitiesV11);
-wire_struct!(misaka_palw_kernel::flat_quota11::source16::opening::HeaderV16; u8, u8, [u64;4], [u8;64], [u8;64]);
+wire_struct!(misaka_palw_kernel::flat_quota11::source16::opening::HeaderV16; u8, u8, [u64; 4], [u8;64], [u8;64]);
 impl NativeWireScanV1 for misaka_palw_kernel::flat_quota11::stage14::StageAdjudicationKindV14 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10786,26 +9609,11 @@ impl NativeWireScanV1 for misaka_palw_kernel::flat_quota11::stage14::StageTermin
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10815,26 +9623,11 @@ impl NativeWireScanV1 for misaka_palw_kernel::flat_quota11::stage14::bounded28::
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10852,18 +9645,9 @@ impl NativeWireScanV1 for misaka_palw_kernel::flat_scope7::FlatRelationCourtV7 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10883,10 +9667,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::job::DecodeRuleV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -10947,10 +9728,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::lifecycle::ClaimStateV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -11019,14 +9797,8 @@ impl NativeWireScanV1 for misaka_palw_kernel::mode::VerificationModeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11037,14 +9809,8 @@ impl NativeWireScanV1 for misaka_palw_kernel::model_eligibility_v1::EligibilityE
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11053,18 +9819,9 @@ impl NativeWireScanV1 for misaka_palw_kernel::model_eligibility_v1::EligibilityV
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11105,10 +9862,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::public::MaterialResponseV1 {
                 sum = sum.merge(<misaka_palw_kernel::merkle::TensorOpeningV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11121,10 +9875,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::receipt::ReceiptVerdictV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -11132,10 +9883,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::receipt::ReceiptVerdictV1 {
                 sum = sum.merge(<u16 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11696,6 +10444,22 @@ impl NativeWireScanV1 for misaka_palw_kernel::route::KernelRouteObjectV1 {
                 )?;
                 Ok(sum)
             }
+            77 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <misaka_palw_kernel::verifier_fee_consent_v1::VerifierFeeConsentV1 as NativeWireScanV1>::scan_native_wire_v1(
+                        reader,
+                    )?,
+                )?;
+                Ok(sum)
+            }
+            78 => {
+                let mut sum = NativeWireShapeV1::default();
+                sum = sum.merge(
+                    <misaka_palw_kernel::verifier_watch_v1::VerifierWatchTermsV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?,
+                )?;
+                Ok(sum)
+            }
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -11792,10 +10556,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::seg_da::ChunkBodyV1 {
                 sum = sum.merge(<misaka_palw_kernel::merkle3::RowRangeV3 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            2 => Ok(NativeWireShapeV1::default()),
             3 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<misaka_palw_kernel::hide::HidingHashRangeV1 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -11976,10 +10737,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::spec::composite::QuerySourceV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12040,10 +10798,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::spec::composite::TokenSourceV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12070,10 +10825,7 @@ impl NativeWireScanV1 for misaka_palw_kernel::spec::retrieval::IndexV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -12100,6 +10852,7 @@ wire_struct!(misaka_palw_kernel::spec::retrieval::RetrievedV1; u64, i64, [u8;64]
 wire_struct!(misaka_palw_kernel::spec::retrieval::SliceResponseV1; Vec<misaka_palw_kernel::spec::retrieval::RetrievalItemV1>, Vec<Vec<[u8;64]>>);
 wire_struct!(misaka_palw_kernel::spec::retrieval::SnapshotV1; u64, u16, u16, u32, [u8;64]);
 wire_struct!(misaka_palw_kernel::trace::ParamCommitmentsV1; BTreeMap<(u16, Option<u16>), [u8;64]>);
+wire_struct!(misaka_palw_kernel::verifier_fee_consent_v1::VerifierFeeConsentV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], u64, [u8;64], u64, u64, u64, [u8;64], u64, bool);
 wire_struct!(misaka_palw_kernel::verifier_pay::VerifierPayPolicyV1; u64, u64, u8, u64, u64, u8);
 impl NativeWireScanV1 for misaka_palw_kernel::verifier_pay::VerifierPayRowV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
@@ -12171,14 +10924,12 @@ impl NativeWireScanV1 for misaka_palw_kernel::verifier_pay::VerifierPayRowV1 {
         }
     }
 }
+wire_struct!(misaka_palw_kernel::verifier_watch_v1::VerifierWatchTermsV1; u16, [u8;64], [u8;64], [u8;64], [u8;64], u64, u64, u64, u64, [u8;64], u64);
 impl NativeWireScanV1 for misaka_palw_kernel::verify::ScopeV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<Vec<u32> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12200,14 +10951,8 @@ impl NativeWireScanV1 for misaka_palw_panel::ClaimPhaseV3 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
             2 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12248,26 +10993,11 @@ impl NativeWireScanV1 for misaka_palw_panel::NonFraudReasonV1 {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -12282,6 +11012,7 @@ wire_struct!(misaka_palw_panel::PanelSnapshotV1; crate::Hash64, crate::Hash64, u
 wire_struct!(misaka_palw_panel::PanelStrataV1; u16, u16, bool);
 wire_struct!(misaka_palw_panel::PermissionlessPanelStateV1; u16, crate::Hash64, crate::Hash64, misaka_palw_panel::PanelPolicyV1, crate::Hash64, u64, u64, u64, BTreeMap<crate::Hash64, misaka_palw_panel::ClaimRecordV3>, BTreeSet<crate::Hash64>, BTreeMap<u64, crate::Hash64>, BTreeMap<misaka_palw_panel::BondIdV1, u128>, BTreeMap<u64, misaka_palw_panel::EpochSourceSetV1>);
 wire_struct!(misaka_palw_panel::SeatCandidateV1; misaka_palw_panel::BondIdV1, crate::Hash64, crate::Hash64, u64, u64, crate::Hash64, crate::Hash64, u8);
+wire_struct!(misaka_palw_tir::demand::DemandLimits; u64, u64);
 impl NativeWireScanV1 for misaka_palw_tir::pipeline::Binding {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
@@ -12336,26 +11067,11 @@ impl NativeWireScanV1 for misaka_palw_tir::pipeline::TokenSource {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             5 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12375,22 +11091,10 @@ impl NativeWireScanV1 for misaka_palw_tir::pipeline::TripRule {
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -12399,30 +11103,12 @@ impl NativeWireScanV1 for misaka_palw_tir::prim::Cmp {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -12431,10 +11117,7 @@ impl NativeWireScanV1 for misaka_palw_tir::prim::Prim {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
             1 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<Vec<u8> as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12451,10 +11134,7 @@ impl NativeWireScanV1 for misaka_palw_tir::prim::Prim {
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            4 => Ok(NativeWireShapeV1::default()),
             5 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12468,26 +11148,11 @@ impl NativeWireScanV1 for misaka_palw_tir::prim::Prim {
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            7 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            8 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            9 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            10 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            11 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            7 => Ok(NativeWireShapeV1::default()),
+            8 => Ok(NativeWireShapeV1::default()),
+            9 => Ok(NativeWireShapeV1::default()),
+            10 => Ok(NativeWireShapeV1::default()),
+            11 => Ok(NativeWireShapeV1::default()),
             12 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12509,31 +11174,16 @@ impl NativeWireScanV1 for misaka_palw_tir::prim::Prim {
                 sum = sum.merge(<i64 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            16 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            17 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            18 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            19 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            16 => Ok(NativeWireShapeV1::default()),
+            17 => Ok(NativeWireShapeV1::default()),
+            18 => Ok(NativeWireShapeV1::default()),
+            19 => Ok(NativeWireShapeV1::default()),
             20 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<misaka_palw_tir::prim::Cmp as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            21 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            21 => Ok(NativeWireShapeV1::default()),
             22 => {
                 let mut sum = NativeWireShapeV1::default();
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
@@ -12558,18 +11208,9 @@ impl NativeWireScanV1 for misaka_palw_tir::prim::Rounding {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -12693,10 +11334,7 @@ impl NativeWireScanV1 for misaka_palw_tir::program_v2::RandomDist {
                 sum = sum.merge(<u8 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -12706,30 +11344,12 @@ impl NativeWireScanV1 for misaka_palw_tir::types::DType {
     fn scan_native_wire_v1<R: std::io::Read>(reader: &mut NativeWireReaderV1<R>) -> std::io::Result<NativeWireShapeV1> {
         reader.step()?;
         match reader.byte()? {
-            0 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            2 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            3 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            4 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
-            5 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            0 => Ok(NativeWireShapeV1::default()),
+            1 => Ok(NativeWireShapeV1::default()),
+            2 => Ok(NativeWireShapeV1::default()),
+            3 => Ok(NativeWireShapeV1::default()),
+            4 => Ok(NativeWireShapeV1::default()),
+            5 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }
@@ -12743,10 +11363,7 @@ impl NativeWireScanV1 for misaka_palw_tir::types::Dim {
                 sum = sum.merge(<u32 as NativeWireScanV1>::scan_native_wire_v1(reader)?)?;
                 Ok(sum)
             }
-            1 => {
-                let mut sum = NativeWireShapeV1::default();
-                Ok(sum)
-            }
+            1 => Ok(NativeWireShapeV1::default()),
             _ => Err(crate::palw_native_resource_v1::wire::wire_bad("unknown Borsh enum variant")),
         }
     }

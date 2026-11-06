@@ -1,0 +1,92 @@
+{
+  "date": "2026-10-31",
+  "branch": "codex/positive-court-a1",
+  "source_candidate": "900058dec9eec81a8a375799a5cfed85a8d651b5",
+  "implementation_commit": "3b26100c03b08ba8b21b20336450019d23932bbd",
+  "registration_commit": "900058dec9eec81a8a375799a5cfed85a8d651b5",
+  "pre_migration_commit": "a5f11612893fe733299cf802d65f393acd1bcfb5",
+  "tests": {
+    "log": "regression.log",
+    "targets": {
+      "positive_check": 13,
+      "positive_check_hardening": 2,
+      "positive_contract": 13,
+      "positive_expanded_plan": 4,
+      "positive_production_port": 3,
+      "positive_record": 4
+    },
+    "passed": 39,
+    "failed": 0,
+    "separate_phase_counts_not_added": true
+  },
+  "core_production_typecheck": {
+    "passed": true,
+    "log": "core-check-final.log"
+  },
+  "node_package_clippy": {
+    "passed": true,
+    "scope": "library and positive_production_port target; --no-deps -D warnings",
+    "log": "node-clippy.log"
+  },
+  "core_strict_clippy": {
+    "passed": false,
+    "log": "core-clippy.log",
+    "exact_unchanged_findings": [
+      "clone_on_copy:consensus/core/src/palw_model_panel_one_v1.rs:92",
+      "nonminimal_bool:consensus/core/src/palw_state_v2/chain_state.rs:3728"
+    ],
+    "migrated_source_findings": 0
+  },
+  "docs": {
+    "mode": "no-new-regressions",
+    "passed": true,
+    "known_missing": 43,
+    "new_occurrences": 0,
+    "log": "docs-check.log"
+  },
+  "migration": {
+    "mechanical_equivalence": "migration-equivalence.json",
+    "independent_readonly_review": "No algorithm, enumeration, budget, attribution or codec changes; only namespace changes and read-only witness_id accessor. No blocker found.",
+    "shared_record_byte_identical_to_a0": true,
+    "a0_record_sha256": "43b885cec90f6928d01d87cc2d72eb84ec0f3b42500c8ec7f79ab89ff828cb05"
+  },
+  "dependency_report": "dependency-graph.json",
+  "scope": {
+    "one_checker_implementation": true,
+    "exec_paths_are_type_identical_reexports": true,
+    "core_depends_on_exec": false,
+    "consensus_normal_exec_dependency_added": false,
+    "a4_court_thin_adapter_owned_by_a4": true,
+    "a4_event_176_driver_validated_here": false,
+    "new_wire_or_derivation": false,
+    "native_activation": false,
+    "total_node_rss_qualified": false
+  },
+  "source_sha256": {
+    "Cargo.lock": "bdd237c284b1e1b5362358db98361698bc3fb1de69c9849f2d4438ee8582c77e",
+    "consensus/core/Cargo.toml": "6a62f42bee5b7bc07b1feeecd11a66a0d78f519f08877f4fa4608ade58335b29",
+    "consensus/core/src/lib.rs": "71be010b563be36716eb336bc6db6ae915729abdbc5ec9bdc17259b93a704443",
+    "consensus/core/src/palw_positive_check_v2.rs": "8da9b5339184d63c789919bcb464c910a1ff09e6f1ebe5813727a7bba9a0f086",
+    "consensus/core/src/palw_positive_check_v2/expanded_plan.rs": "e36b5ed32db0c91c5a938fb3703662197ee26c2c1512a0ab36192b6a209104f3",
+    "consensus/core/src/palw_positive_contract_v2.rs": "0aff4e0569b2dac43704710cffc8026f41288b99fc21b36245c7a70b8e447243",
+    "consensus/core/src/palw_positive_contract_v2/record.rs": "5c3cb4540967af355ba780770b42371837d10218dd88b9f9b45a3cd4625a5c44",
+    "misaka/palw/tir/exec/src/node/positive_check.rs": "b6ecaa54453fae4f8804f91f9d9ca8c39ea1081ca8bdf0f46dc3d63573b1218c",
+    "misaka/palw/tir/exec/src/node/positive_contract.rs": "66c0e905939fac356cc50a6104bfddf3fedf02c308dad364ce633f920f242a15",
+    "misaka/palw/tir/exec/tests/positive_production_port.rs": "c455e74852f24d8e6786d6f44a8b073815c7482e816104242af7b392750110a8",
+    "misaka/palw/positive-contract/src/record.rs": "43b885cec90f6928d01d87cc2d72eb84ec0f3b42500c8ec7f79ab89ff828cb05",
+    "misaka/palw/tir/exec/Cargo.toml": "90039d68f73d1810af7c4e863df0bfd69cbaae9668591baa061b5106a7527926",
+    "consensus/Cargo.toml": "623586e150fed14d9df4c55465be33374427a1730d4f763c4289316bc34b9c83"
+  },
+  "evidence_sha256": {
+    "core-check-final.log": "2ebf1e792b57ff2142fa415ea22e350b54d2d8f4451735f139cb9b5828a08bdd",
+    "core-check-initial.log": "3efb108779a00a1f87d41806be2e972e2764913f69dc0f41ee6bbcf9c27d86fa",
+    "core-clippy.log": "21288fae5cbaa5021b345fb0bbf43d9ab1cc5065e22bcb50f243705c1c3119f2",
+    "dependency-graph.json": "3dd45d7a6b6bca0474844d299353b60e41dceabc5b828ddd64270f59564112d0",
+    "docs-check.log": "d5c2e8049f9b12f200d58f69ea6a9abc18c0734c57510e402f5e1688770586ba",
+    "final-commands.json": "09eabafd2f3cd33596c3e8f28f1d1ba4e951f8dd2ef329e5e71f25f9a7dd4552",
+    "initial-missing-test-target.log": "ae2ee1134bf6aede6c89d07e4a1ff35de7f8729f7108b55e97dee2c8f78f046a",
+    "migration-equivalence.json": "04afca56b867db420c838d6ff40d5f34338393733124e459085ef0670898b3aa",
+    "node-clippy.log": "aeb91359e6089b96ae17694d93633a4477d6180ad31de5ab43ee0f383ff81112",
+    "regression.log": "58d12f2b180a16fa817689f8b8632159750428a2ccec2418eb9ae50cb3fbe92e"
+  }
+}

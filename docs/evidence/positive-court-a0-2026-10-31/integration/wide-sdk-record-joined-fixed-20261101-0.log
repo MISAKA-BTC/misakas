@@ -1,0 +1,14 @@
+   Compiling kaspa-consensus-core v1.1.0 (/Users/wata/.codex/worktrees/positive-court-a0/MISAKA-testnet/consensus/core)
+    Finished `test` profile [unoptimized] target(s) in 1m 58s
+     Running unittests src/lib.rs (/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/kaspa_consensus_core-5b3fb8e6accaaca6)
+
+running 6 tests
+test palw_tir_class_record_v2::tests::dissection_sites_remain_graph_metadata_with_narrow_history_and_wide_final ... ok
+test palw_tir_class_record_v2::tests::caps_precede_copy_or_decode_and_no_unknown_scheme_falls_back ... ok
+test palw_tir_class_record_v2::tests::original_held_prompt_form_survives_schema1_record_reconstruction ... ok
+test palw_tir_class_record_v2::tests::stored_row_artifact_key_layout_and_derived_fact_substitutions_are_rejected ... ok
+test palw_tir_class_record_v2::tests::narrow_schema1_record_rooted_bytes_and_jobs_are_identical ... ok
+test palw_tir_class_record_v2::tests::wide_schema1_payload_resolves_explicit_profile_without_redefining_tiled_bit ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 5451 filtered out; finished in 0.04s
+

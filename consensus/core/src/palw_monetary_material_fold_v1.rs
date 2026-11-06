@@ -17,6 +17,9 @@ fn policy(builder: &TransitionBuilder<'_>, now: u64) -> Result<PalwMonetaryMater
     Ok(p)
 }
 fn write(builder: &mut TransitionBuilder<'_>, root: Hash64, row: Option<&PalwMonetaryMaterialRowV1>) -> Result<(), PalwStateV2Error> {
+    if let (Some(point), Some(row)) = (builder.claim_local_lock_point_v6, row) {
+        return super::palw_claim_local_source_contract_generation_v8::write_native_covenant_v8(builder, point, root, row);
+    }
     builder.write_kernel_row_encoded_v1(PALW_MONETARY_MATERIAL_TABLE_V1, root.as_byte_slice(), row)
 }
 fn active(builder: &TransitionBuilder<'_>, key: &PalwBondKeyV2) -> Result<PalwBondStateV2, PalwStateV2Error> {
@@ -38,6 +41,31 @@ fn check_enrollment(
 ) -> Result<(), PalwStateV2Error> {
     let p = policy(builder, ctx.daa_score)?;
     let t = &e.terms;
+    for offer in &e.offers {
+        builder.state.material_fee_row_checked_v2(e.id(), offer.provider)?;
+    }
+    if let Some(old) = prior {
+        for p in &old.providers {
+            builder.state.material_fee_row_checked_v2(p.fee_context, p.provider)?;
+        }
+    }
+
+    if builder.params.settlement_once_active_at(ctx.daa_score)
+        && e.offers.iter().any(|o| {
+            builder.state.material_fee_row_v2(e.id(), o.provider).is_none_or(|f| {
+                f.version != 2
+                    || f.root != t.root
+                    || f.sponsor != t.sponsor
+                    || f.amount != o.prepaid_fee_sompi
+                    || f.horizon != t.enrollment_until_daa
+                    || f.accepted_daa != ctx.daa_score
+                    || !matches!(f.status, PalwMaterialFeeStatusV2::Held)
+            })
+        })
+    {
+        return Err(refused("new provider fees require atomic signed finite fee enrollment"));
+    }
+
     if t.version != 1
         || t.root == Hash64::default()
         || t.nonce == Hash64::default()
@@ -115,10 +143,14 @@ fn check_enrollment(
     }
     if let Some(old) = prior
         && (old.terms != *t
-            || old.providers.iter().filter(|p| !p.charged || !p.fee_paid).count() + e.offers.len()
+            || old.providers.iter().filter(|p| !p.charged || !builder.state.material_provider_fee_complete_v2(p)).count()
+                + e.offers.len()
                 > PALW_MONETARY_MATERIAL_MAX_PROVIDERS_V1
             || e.offers.iter().any(|o| {
-                old.providers.iter().any(|previous| previous.provider == o.provider && (!previous.charged || !previous.fee_paid))
+                old.providers.iter().any(|previous| {
+                    previous.provider == o.provider
+                        && (!previous.charged || !builder.state.material_provider_fee_complete_v2(previous))
+                })
             }))
     {
         return Err(refused("replacement changes the accepted obligation or reuses an old provider"));
@@ -150,14 +182,22 @@ fn check_enrollment(
             .ok_or_else(|| refused("provider material capacity overflows"))?;
         if held.len() >= p.max_contracts_per_provider as usize
             || bytes > p.max_bytes_per_provider
-            || u128::from(provider.collateral).saturating_sub(builder.committed_at(&offer.provider, ctx.daa_score))
-                < u128::from(offer.collateral_sompi)
+            || u128::from(provider.collateral).saturating_sub(super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(
+                builder,
+                &offer.provider,
+                ctx.daa_score,
+            )?) < u128::from(offer.collateral_sompi)
         {
             return Err(refused("provider has no unused bytes/contracts/collateral capacity"));
         }
         fees = fees.checked_add(offer.prepaid_fee_sompi).ok_or_else(|| refused("material prepaid fee overflows"))?;
     }
-    if u128::from(sponsor.collateral).saturating_sub(builder.committed_at(&t.sponsor, ctx.daa_score)) < u128::from(fees) {
+    if u128::from(sponsor.collateral).saturating_sub(super::palw_court_capacity_fold_v1::fee_reserved_principal_v1(
+        builder,
+        &t.sponsor,
+        ctx.daa_score,
+    )?) < u128::from(fees)
+    {
         return Err(refused("material service must be prepaid from sponsor-owned free collateral"));
     }
     sponsor.slashed.checked_add(fees).ok_or_else(|| refused("material escrow cumulative debit overflows"))?;
@@ -174,7 +214,10 @@ fn check_enrollment(
                 id,
                 offer.provider,
                 ctx.daa_score,
-                ctx.daa_score,
+                builder
+                    .state
+                    .material_fee_row_checked_v2(e.id(), offer.provider)?
+                    .map_or(ctx.daa_score, |f| f.horizon.max(ctx.daa_score)),
                 offer.prepaid_fee_sompi,
                 &mut journal,
             )
@@ -215,7 +258,9 @@ fn fund(
         return Err(refused("material escrow was not fully prepaid"));
     }
     for offer in &e.offers {
-        builder.reserve_source_income_v1(ctx, e.id(), e.terms.root, offer.provider, ctx.daa_score, offer.prepaid_fee_sompi)?;
+        let until =
+            builder.state.material_fee_row_checked_v2(e.id(), offer.provider)?.map_or(ctx.daa_score, |f| f.horizon.max(ctx.daa_score));
+        builder.reserve_source_income_v1(ctx, e.id(), e.terms.root, offer.provider, until, offer.prepaid_fee_sompi)?;
         let id = super::palw_bond_budget_fold_v1::source_income_id_v1(e.id(), e.terms.root, &offer.provider);
         builder
             .bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |b, _, j| {
@@ -223,6 +268,7 @@ fn fund(
             })?
             .ok_or_else(|| refused("material fee provenance engine is missing"))?
             .map_err(|e| refused(e.to_string()))?;
+        super::palw_claim_local_source_contract_generation_v8::reference_provider_income_v8(builder, *ctx, e, offer.provider)?;
     }
     Ok(())
 }
@@ -291,7 +337,11 @@ pub(super) fn enroll(
         queued_entitlements: BTreeMap::new(),
     };
     append_service_fee_history(&mut row, e)?;
-    super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    // The first header is still created by the route fold. A header that already exists is this
+    // contract's authority; re-entering that fold's probabilistic-constraints gate is outside the fee path.
+    if builder.state.kernel_route().is_none() {
+        super::palw_kernel_route_fold_v1::ensure_route_header(builder, ctx)?;
+    }
     write(builder, e.terms.root, Some(&row))?;
     fund(builder, ctx, e)?;
     Ok(())
@@ -326,7 +376,12 @@ pub(super) fn replace_generation_with_recovery_v4(
     check_enrollment(builder, ctx, &r.enrollment, Some(&old))?;
     append_service_fee_history(&mut old, &r.enrollment)?;
 
-    old.providers.retain(|p| !p.charged || !p.fee_paid);
+    for provider in
+        old.providers.iter().filter(|p| p.charged && builder.state.material_provider_fee_complete_v2(p)).cloned().collect::<Vec<_>>()
+    {
+        remove_fee_v2(builder, &provider)?;
+    }
+    old.providers.retain(|p| !p.charged || !builder.state.material_provider_fee_complete_v2(p));
     old.providers.extend(providers(&r.enrollment, ctx.daa_score));
     old.sequence = r.sequence;
     old.consent = consent;
@@ -358,12 +413,21 @@ fn action_inner_v4(
     signer: &PalwBondKeyV2,
     recovery_answer: bool,
 ) -> Result<(), PalwStateV2Error> {
+    match a {
+        PalwMonetaryMaterialActionV1::EnrollFeeV2(e) => return enroll_fee_v2(builder, ctx, e, None, signer),
+        PalwMonetaryMaterialActionV1::ReplaceFeeV2 { previous, sequence, enrollment } => {
+            return enroll_fee_v2(builder, ctx, enrollment, Some((*previous, *sequence)), signer);
+        }
+        _ => {}
+    }
     if let PalwMonetaryMaterialActionV1::RecoveryV2(recovery) = a {
         return super::palw_material_release_recovery_fold_v2::action(builder, ctx, recovery, signer);
     }
     let p = policy(builder, ctx.daa_score)?;
     let root = match a {
-        PalwMonetaryMaterialActionV1::RecoveryV2(_) => unreachable!("dispatched above"),
+        PalwMonetaryMaterialActionV1::RecoveryV2(_)
+        | PalwMonetaryMaterialActionV1::EnrollFeeV2(_)
+        | PalwMonetaryMaterialActionV1::ReplaceFeeV2 { .. } => unreachable!("dispatched above"),
         PalwMonetaryMaterialActionV1::SegmentedChallenge { root, .. }
         | PalwMonetaryMaterialActionV1::SegmentedAnswer { root, .. }
         | PalwMonetaryMaterialActionV1::HeldChallenge { root, .. }
@@ -423,7 +487,9 @@ fn action_inner_v4(
         return Err(refused("new recovery contract answer requires atomic V4 applied checkpoint"));
     }
     match a {
-        PalwMonetaryMaterialActionV1::RecoveryV2(_) => unreachable!("dispatched above"),
+        PalwMonetaryMaterialActionV1::RecoveryV2(_)
+        | PalwMonetaryMaterialActionV1::EnrollFeeV2(_)
+        | PalwMonetaryMaterialActionV1::ReplaceFeeV2 { .. } => unreachable!("dispatched above"),
         PalwMonetaryMaterialActionV1::SegmentedChallenge { provider, dependency, position, part, valid_until_daa, .. } => {
             let challenger = active(builder, signer)?;
             let source = active(builder, provider)?;
@@ -460,7 +526,7 @@ fn action_inner_v4(
             {
                 return Err(refused("segmented unit is outside its canonical position/part layout"));
             }
-            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score))
+            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)?)
                 < u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1)
             {
                 return Err(refused("segmented material challenger is unfunded"));
@@ -552,7 +618,7 @@ fn action_inner_v4(
                 builder.extras.prompt_ids_form_v1(),
             )
             .map_err(|e| refused(e.to_string()))?;
-            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score))
+            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)?)
                 < u128::from(crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1)
             {
                 return Err(refused("native material challenger is unfunded"));
@@ -650,7 +716,7 @@ fn action_inner_v4(
                 return Err(refused("material challenge is replayed, foreign, stale or outside court capacity"));
             }
             let bond = crate::palw_provider_court_v1::PALW_PROVIDER_CHALLENGE_BOND_SOMPI_V1;
-            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)) < u128::from(bond) {
+            if u128::from(challenger.collateral).saturating_sub(builder.committed_at(signer, ctx.daa_score)?) < u128::from(bond) {
                 return Err(refused("material challenger is unfunded"));
             }
             let claim = builder
@@ -754,7 +820,14 @@ fn action_inner_v4(
                 return Err(refused("material covenant has unspent rights or a substituted tail"));
             }
             super::palw_material_release_recovery_fold_v2::released(builder, ctx, root, *consent, *tail_block)?;
-            write(builder, root, None)?;
+            for provider in &row.providers {
+                remove_fee_v2(builder, provider)?;
+            }
+            if let Some(point) = builder.claim_local_lock_point_v6 {
+                super::palw_claim_local_source_contract_generation_v8::delete_released_covenant_v8(builder, point, &row)?;
+            } else {
+                write(builder, root, None)?;
+            }
             return Ok(());
         }
     }
@@ -785,11 +858,66 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
     if builder.params.monetary_material_at_v1(ctx.daa_score).is_none() {
         return Ok(());
     }
-    capture_queue_entitlements(builder)?;
     for mut row in builder.state.monetary_material_rows_v1() {
         let before = row.clone();
+        row.root_seen |= row.native_binding.is_some()
+            || builder.state.claims.contains_key(&row.terms.root)
+            || builder.state.kernel_route().and_then(|r| r.kernel_claim_row_v1(&row.terms.root)).is_some();
+        let failed: Vec<_> =
+            row.challenges.iter().filter(|c| !c.answered && ctx.daa_score > c.deadline_daa).map(|c| c.provider).collect();
+        for challenge in
+            row.challenges.iter().filter(|c| !c.answered && (ctx.daa_score > c.deadline_daa || failed.contains(&c.provider)))
+        {
+            super::palw_material_release_recovery_fold_v2::release_answer_event_v4(builder, row.terms.root, &challenge.provider)?;
+        }
+        for provider in failed {
+            if let Some(p) = row.providers.iter_mut().find(|p| p.provider == provider && !p.charged) {
+                // RFC-0008 once-only settlement (dormant): one provider's default on one root is charged once across consumers.
+                let kid = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&provider);
+                let once = {
+                    use crate::palw_settlement_once_v1::{
+                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
+                    };
+                    builder.settle_once_liable_v1(
+                        ctx.daa_score,
+                        PalwSettlementObligationV1::with_party(
+                            PalwSettlementLegV1::MaterialProviderDefault,
+                            row.terms.root.as_bytes(),
+                            kid,
+                            0,
+                        ),
+                        PalwSettlementConsumerV1::MonetaryMaterial,
+                        p.collateral_sompi,
+                        PalwSettlementDebitV1::Collateral { bond: kid, amount: p.collateral_sompi },
+                        // RFC08-2: a charge on the defaulting provider's collateral; it pays no liable party.
+                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim("a provider's default charge"),
+                    )?
+                };
+                if once.pays() {
+                    builder.slash_bond(provider, u128::from(p.collateral_sompi))?;
+                }
+                if let Some(mut fee) = builder.state.material_fee_row_checked_v2(p.fee_context, p.provider)?
+                    && matches!(fee.status, PalwMaterialFeeStatusV2::Held)
+                    && ctx.daa_score <= fee.horizon
+                    && fee.defaulted_daa.is_none()
+                {
+                    fee.defaulted_daa = Some(ctx.daa_score);
+                    write_fee_v2(builder, &fee)?;
+                }
+                p.charged = true;
+            }
+            row.challenges.retain(|c| c.provider != provider);
+        }
+        row.challenges.retain(|c| ctx.daa_score <= c.deadline_daa);
         if queue_fees {
             for provider in &mut row.providers {
+                if let Some(fee) = builder.state.material_fee_row_checked_v2(provider.fee_context, provider.provider)? {
+                    settle_fee_v2(builder, ctx, provider, fee)?;
+                    continue;
+                }
+                if builder.params.settlement_once_active_at(provider.fee_accepted_daa) {
+                    return Err(refused("new provider fee lacks its immutable fee-only consent"));
+                }
                 if provider.fee_queued || ctx.daa_score <= provider.fee_accepted_daa {
                     continue;
                 }
@@ -842,8 +970,8 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                         // RFC08-2: the provider stands behind an event-relative covenant (service until every right terminated and
                         // the last payment + W), which has no finite liability horizon or signed hard deadline an at-once fee could
                         // be checked against — refused past the fence, never defaulted.
-                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::Unsourced(
-                            "a material provider's fee: its covenant's liability horizon is event-relative (no finite horizon or hard deadline)",
+                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim(
+                            "provider fee accepted before the finite fee fence keeps its original settlement contract",
                         ),
                     )?
                 };
@@ -864,47 +992,7 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
                 provider.fee_queued = true;
             }
         }
-        row.root_seen |= row.native_binding.is_some()
-            || builder.state.claims.contains_key(&row.terms.root)
-            || builder.state.kernel_route().and_then(|r| r.kernel_claim_row_v1(&row.terms.root)).is_some();
-        let failed: Vec<_> =
-            row.challenges.iter().filter(|c| !c.answered && ctx.daa_score > c.deadline_daa).map(|c| c.provider).collect();
-        for challenge in
-            row.challenges.iter().filter(|c| !c.answered && (ctx.daa_score > c.deadline_daa || failed.contains(&c.provider)))
-        {
-            super::palw_material_release_recovery_fold_v2::release_answer_event_v4(builder, row.terms.root, &challenge.provider)?;
-        }
-        for provider in failed {
-            if let Some(p) = row.providers.iter_mut().find(|p| p.provider == provider && !p.charged) {
-                // RFC-0008 once-only settlement (dormant): one provider's default on one root is charged once across consumers.
-                let kid = crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&provider);
-                let once = {
-                    use crate::palw_settlement_once_v1::{
-                        PalwSettlementConsumerV1, PalwSettlementDebitV1, PalwSettlementLegV1, PalwSettlementObligationV1,
-                    };
-                    builder.settle_once_liable_v1(
-                        ctx.daa_score,
-                        PalwSettlementObligationV1::with_party(
-                            PalwSettlementLegV1::MaterialProviderDefault,
-                            row.terms.root.as_bytes(),
-                            kid,
-                            0,
-                        ),
-                        PalwSettlementConsumerV1::MonetaryMaterial,
-                        p.collateral_sompi,
-                        PalwSettlementDebitV1::Collateral { bond: kid, amount: p.collateral_sompi },
-                        // RFC08-2: a charge on the defaulting provider's collateral; it pays no liable party.
-                        super::palw_settlement_liability_fold_v1::PalwLegLiabilityV1::NoLiableClaim("a provider's default charge"),
-                    )?
-                };
-                if once.pays() {
-                    builder.slash_bond(provider, u128::from(p.collateral_sompi))?;
-                }
-                p.charged = true;
-            }
-            row.challenges.retain(|c| c.provider != provider);
-        }
-        row.challenges.retain(|c| ctx.daa_score <= c.deadline_daa);
+
         match raw_hold(&builder.state, builder.params, &row, ctx.daa_score) {
             Some(u64::MAX) => {
                 row.tail_block = None;
@@ -942,6 +1030,10 @@ fn tick_inner(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2, que
             write(builder, row.terms.root, Some(&row))?;
         }
     }
+    // Persist newly queued portions in this same block. The next block can
+    // physically pay them before its monetary tick, and Step1f must already
+    // know the original funded entitlement when it observes that drain.
+    capture_queue_entitlements(builder)?;
     Ok(())
 }
 
@@ -981,10 +1073,50 @@ pub(super) fn observe_payment(
                     entitlement: None,
                 })
             }
+            crate::palw_bond_budget_v1::PalwMaterialPaymentV1::Queued { income: None, queue: Some(q), paid_daa: None, .. }
+                if income == Hash64::default() && q == queue =>
+            {
+                m.root.map(|root| PalwMonetaryMaterialPaymentObservationV1 {
+                    root,
+                    income: *material_receipt_id,
+                    queue,
+                    amount: m.amount,
+                    coinbase_queue_amount,
+                    paid_block: ctx.block,
+                    paid_daa: ctx.daa_score,
+                    material_receipt_id: *material_receipt_id,
+                    entitlement: None,
+                })
+            }
             _ => None,
         })
         .collect();
+    let fees: Vec<PalwMaterialFeeRowV2> = builder
+        .state
+        .kernel_route()
+        .into_iter()
+        .flat_map(|r| r.aux.iter())
+        .filter(|((table, _), _)| *table == crate::palw_monetary_material_v1::fee_v2::TABLE)
+        .map(|(_, bytes)| borsh::from_slice(bytes).map_err(|_| refused("malformed provider fee payment row")))
+        .collect::<Result<_, _>>()?;
+    let mut refunds = BTreeMap::new();
+    for fee in fees {
+        if let PalwMaterialFeeStatusV2::RefundQueued { queue, receipt } = fee.status
+            && refunds.insert((queue, receipt), fee).is_some()
+        {
+            return Err(refused("duplicate provider refund receipt"));
+        }
+    }
     for observation in observations {
+        if let Some(mut fee) = refunds.remove(&(observation.queue, observation.material_receipt_id))
+            && matches!(fee.status,PalwMaterialFeeStatusV2::RefundQueued{queue,receipt} if queue==observation.queue && receipt==observation.material_receipt_id)
+        {
+            if fee.root != observation.root || fee.amount != observation.amount {
+                return Err(refused("provider refund receipt differs from its exact escrow"));
+            }
+            fee.status = PalwMaterialFeeStatusV2::RefundPaid { daa: ctx.daa_score };
+            write_fee_v2(builder, &fee)?;
+        }
         for mut row in builder.state.monetary_material_rows_v1() {
             if !builder.state.monetary_material_scope_v1(&row).contains(&observation.root) {
                 continue;
@@ -1472,6 +1604,37 @@ mod tests {
         assert_eq!(builder.state, recovered);
     }
     #[test]
+    fn ordinary_fee_physical_queue_updates_the_exact_covenant_payment_history() {
+        let (state, params, e) = fixture();
+        let extras = PalwTransitionExtrasV1 {
+            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                network_domain: h(1),
+                ruleset_digest: h(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        enroll(&mut b, &ctx(2), &e).unwrap();
+        let claim = h(9).as_bytes();
+        let verifier = h(8).as_bytes();
+        let payload = b.state.bond(&bond(2)).unwrap().payout_payload;
+        let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+        b.hold_verifier_fee_material_v1(3, claim, verifier, 0, 17).unwrap();
+        b.add_kernel_payout(payload, 17).unwrap();
+        b.finish_verifier_fee_material_v1(4, claim, verifier, 0, 17, Some(queue)).unwrap();
+        observe_payment(&mut b, &ctx(1000), Hash64::default(), queue).unwrap();
+        assert!(b.state.monetary_material_row_v1(h(9)).unwrap().last_payment.is_none(), "queueing is not physical payment");
+        b.write_payout(queue, None).unwrap();
+        observe_payment(&mut b, &ctx(1000), Hash64::default(), queue).unwrap();
+        let observation = b.state.monetary_material_row_v1(h(9)).unwrap().last_payment.unwrap();
+        assert_eq!(observation.root, h(9));
+        assert_eq!(observation.amount, 17);
+        assert_eq!(observation.paid_daa, 1000);
+        assert_eq!(observation.queue, queue);
+        assert_eq!(observation.entitlement, None, "ordinary verifier cash cannot mark a provider fee paid");
+    }
+    #[test]
     fn monetary_material_unknown_clock_tail_and_release_are_root_exact_and_journaled() {
         let (state, params, e) = fixture();
         let extras = PalwTransitionExtrasV1 {
@@ -1538,6 +1701,350 @@ mod tests {
             apply_delta_entry(&mut reverted, entry, true).unwrap();
         }
         assert_eq!(reverted, state);
+    }
+    #[test]
+    fn finite_provider_fee_horizon_default_and_original_contract_are_separate() {
+        for default_at in [None, Some(100), Some(101)] {
+            let (state, params, e) = fixture();
+            let params = params.with_settlement_once_from(Some(1));
+            let extras = PalwTransitionExtrasV1 {
+                kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                    network_domain: h(1),
+                    ruleset_digest: h(2),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+            assert!(enroll(&mut b, &ctx(2), &e).is_err(), "new cohort cannot use old prepaid fee");
+            let fee = PalwMaterialFeeEnrollmentV2 {
+                ruleset: h(2),
+                enrollment: e.clone(),
+                provider_fee_signatures: vec![vec![1]; e.offers.len()],
+            };
+            enroll_fee_v2(&mut b, &ctx(2), &fee, None, &e.terms.sponsor).unwrap();
+            // Full carriage decoding runs the same consistency checks as a cold
+            // node; reconstructing a TransitionBuilder alone is not a restore.
+            let cold_restore = |stage: &str, state: &PalwChainStateV2| {
+                let root = state.state_root();
+                let bytes = borsh::to_vec(&PalwStateCarriageV2::from_state(state)).unwrap();
+                let restored = borsh::from_slice::<PalwStateCarriageV2>(&bytes)
+                    .unwrap()
+                    .into_state(&params, Some(root))
+                    .unwrap_or_else(|error| panic!("provider fee cold restore stage={stage} default_at={default_at:?}: {error:?}"));
+                assert_eq!(restored.state_root(), root);
+                assert_eq!(restored.bonds, state.bonds, "cold restore cannot change principal");
+                assert_eq!(restored.pending_payouts, state.pending_payouts, "cold restore cannot recreate or lose cash");
+                assert_eq!(restored.monetary_material_row_v1(e.terms.root), state.monetary_material_row_v1(e.terms.root));
+                for offer in &e.offers {
+                    assert_eq!(
+                        restored.material_fee_row_checked_v2(e.id(), offer.provider).unwrap(),
+                        state.material_fee_row_checked_v2(e.id(), offer.provider).unwrap()
+                    );
+                }
+                restored
+            };
+            let funded = b.state.clone();
+            cold_restore("funded", &funded);
+            if default_at.is_none() {
+                let saved = b.try_checkpoint().unwrap();
+                let payload = b.state.bond(&bond(2)).unwrap().payout_payload;
+                let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+                b.write_payout(queue, Some(PalwPayoutV2 { payload, amount: u64::MAX })).unwrap();
+                tick(&mut b, &ctx(101)).unwrap();
+                assert_eq!(b.state.material_fee_row_v2(e.id(), bond(2)).unwrap().status, PalwMaterialFeeStatusV2::Held);
+                assert!(!b.state.monetary_material_row_v1(e.terms.root).unwrap().providers[0].fee_queued);
+                assert_eq!(b.state.pending_payouts[&queue].amount, u64::MAX);
+                cold_restore("queue-overflow-held", &b.state);
+                b.write_payout(queue, None).unwrap();
+                tick(&mut b, &ctx(102)).unwrap();
+                assert_eq!(b.state.pending_payouts[&queue].amount, 7);
+                assert_eq!(b.state.material_fee_row_v2(e.id(), bond(2)).unwrap().status, PalwMaterialFeeStatusV2::ProviderQueued);
+                tick(&mut b, &ctx(103)).unwrap();
+                assert_eq!(b.state.pending_payouts[&queue].amount, 7, "deferred fee queues only once after recovery");
+                b.restore(saved);
+                assert_eq!(b.state, funded);
+            }
+            if default_at.is_none() {
+                let mut row = b.state.monetary_material_row_v1(e.terms.root).unwrap();
+                row.challenges.push(PalwMonetaryMaterialChallengeV1 {
+                    provider: bond(2),
+                    dependency: e.terms.root,
+                    stage: 0,
+                    position: 0,
+                    challenger: bond(4),
+                    deadline_daa: 200,
+                    answered: false,
+                    native_missing: None,
+                    native_binding: None,
+                    segment_part: None,
+                });
+                write(&mut b, e.terms.root, Some(&row)).unwrap();
+            }
+            tick(&mut b, &ctx(100)).unwrap();
+            assert!(b.state.pending_payouts.is_empty());
+            if let Some(at) = default_at {
+                let mut row = b.state.monetary_material_row_v1(e.terms.root).unwrap();
+                row.challenges.push(PalwMonetaryMaterialChallengeV1 {
+                    provider: bond(2),
+                    dependency: e.terms.root,
+                    stage: 0,
+                    position: 0,
+                    challenger: bond(4),
+                    deadline_daa: at - 1,
+                    answered: false,
+                    native_missing: None,
+                    native_binding: None,
+                    segment_part: None,
+                });
+                write(&mut b, e.terms.root, Some(&row)).unwrap();
+                tick(&mut b, &ctx(at)).unwrap();
+            }
+            tick(&mut b, &ctx(101)).unwrap();
+            let f = b.state.material_fee_row_v2(e.id(), bond(2)).unwrap();
+            assert_eq!(f.defaulted_daa, default_at.filter(|at| *at <= 100));
+            assert_eq!(matches!(f.status, PalwMaterialFeeStatusV2::RefundQueued { .. }), default_at == Some(100));
+            let row = b.state.monetary_material_row_v1(e.terms.root).unwrap();
+            assert_eq!(row.terms, e.terms);
+            assert!(!row.root_seen, "fee may mature without a published root");
+            if matches!(f.status, PalwMaterialFeeStatusV2::ProviderQueued) {
+                assert!(
+                    row.queued_entitlements.values().any(|income| *income == row.providers[0].fee_income),
+                    "the queue-creating block must persist its exact provider entitlement before the next block can pay it"
+                );
+            }
+            assert_eq!(b.state.pending_payouts.values().map(|p| p.amount).sum::<u64>(), 14);
+            let queued = cold_restore("queued", &b.state);
+            let mut after_restart = TransitionBuilder::new(&queued, &params, false, false, false, false, &extras);
+            tick(&mut after_restart, &ctx(102)).unwrap();
+            assert_eq!(after_restart.state.pending_payouts, queued.pending_payouts, "restart cannot duplicate a queued fee");
+            let checkpoint = b.try_checkpoint().unwrap();
+            tick(&mut b, &ctx(102)).unwrap();
+            assert_eq!(b.state.pending_payouts.values().map(|p| p.amount).sum::<u64>(), 14);
+            b.restore(checkpoint);
+            b.state.assert_monetary_material_consistency_v1(&params).unwrap();
+            if let PalwMaterialFeeStatusV2::RefundQueued { queue, .. } = f.status {
+                observe_payment(&mut b, &ctx(103), Hash64::default(), queue).unwrap();
+                assert!(matches!(
+                    b.state.material_fee_row_v2(e.id(), bond(2)).unwrap().status,
+                    PalwMaterialFeeStatusV2::RefundQueued { .. }
+                ));
+                let before_drain = b.try_checkpoint().unwrap();
+                b.write_payout(queue, None).unwrap();
+                // Run the real post-coinbase-drain coordinator. The contract
+                // observer alone updates RefundPaid but cannot acknowledge the
+                // budget's exact queued material receipt; that intermediate
+                // state is not a completed native block and cannot be restored.
+                super::super::palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut b, &ctx(103)).unwrap();
+                assert_eq!(
+                    b.state.material_fee_row_v2(e.id(), bond(2)).unwrap().status,
+                    PalwMaterialFeeStatusV2::RefundPaid { daa: 103 }
+                );
+                assert!(
+                    !b.state.monetary_material_row_v1(e.terms.root).unwrap().providers[0].fee_paid,
+                    "refund must never be provider revenue"
+                );
+                cold_restore("refund-paid", &b.state);
+                b.restore(before_drain);
+                assert!(matches!(
+                    b.state.material_fee_row_v2(e.id(), bond(2)).unwrap().status,
+                    PalwMaterialFeeStatusV2::RefundQueued { .. }
+                ));
+            }
+            if matches!(f.status, PalwMaterialFeeStatusV2::ProviderQueued) {
+                let payload = b.state.bond(&bond(2)).unwrap().payout_payload;
+                let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+                let before_drain = b.try_checkpoint().unwrap();
+                assert_eq!(b.state.pending_payouts[&queue].amount, 7);
+                b.write_payout(queue, None).unwrap();
+                super::super::palw_bond_budget_fold_v1::tick_bond_budget_v1(&mut b, &ctx(103)).unwrap();
+                let row = b.state.monetary_material_row_v1(e.terms.root).unwrap();
+                assert!(row.providers[0].fee_paid, "only the observed physical provider payment earns revenue");
+                assert_eq!(row.service_fee_paid_sompi, 7);
+                assert_eq!(b.state.pending_payouts.values().map(|p| p.amount).sum::<u64>(), 7);
+                cold_restore("provider-paid", &b.state);
+                b.restore(before_drain);
+                assert!(!b.state.monetary_material_row_v1(e.terms.root).unwrap().providers[0].fee_paid);
+                assert_eq!(
+                    b.state.pending_payouts.values().map(|p| p.amount).sum::<u64>(),
+                    14,
+                    "reorg restores cash and fee acknowledgement"
+                );
+            }
+            let corrupt = b.try_checkpoint().unwrap();
+            b.write_kernel_row(
+                crate::palw_monetary_material_v1::fee_v2::TABLE,
+                crate::palw_monetary_material_v1::fee_v2::fee_key(e.id(), bond(2)),
+                Some(vec![255]),
+            )
+            .unwrap();
+            assert!(b.state.material_fee_row_checked_v2(e.id(), bond(2)).is_err());
+            assert!(tick(&mut b, &ctx(104)).is_err());
+            b.restore(corrupt);
+            assert_eq!(funded.material_fee_row_v2(e.id(), bond(2)).unwrap().status, PalwMaterialFeeStatusV2::Held);
+        }
+    }
+    #[test]
+    fn finite_provider_fee_sdk_signs_distinct_service_fee_and_atomic_sponsor_messages() {
+        let (_, _, e) = fixture();
+        use libcrux_ml_dsa::ml_dsa_87::{generate_key_pair, sign, verify};
+        let keys: BTreeMap<_, _> = std::iter::once(e.terms.sponsor)
+            .chain(e.offers.iter().map(|o| o.provider))
+            .enumerate()
+            .map(|(i, bond)| (bond, generate_key_pair([0x50 + i as u8; 32])))
+            .collect();
+        let mut messages = Vec::new();
+        let obj = crate::palw_monetary_material_v1::fee_v2::monetary_material_fee_object_v2(
+            h(1),
+            h(2),
+            e.clone(),
+            None,
+            |bond, msg, context| {
+                let signature = sign(&keys.get(bond)?.signing_key, msg, context, [0x60; 32]).ok()?;
+                let bytes = signature.as_ref().to_vec();
+                messages.push((*bond, msg.to_vec(), context.to_vec(), signature));
+                Some(bytes)
+            },
+        )
+        .unwrap();
+        for (bond, message, context, signature) in &messages {
+            verify(&keys[bond].verification_key, message, context, signature).unwrap();
+            assert!(verify(&keys[bond].verification_key, message, b"wrong-fee-context", signature).is_err());
+        }
+        assert_eq!(messages[0].0, messages[2].0, "same provider signs two distinct duties");
+        assert!(
+            verify(&keys[&messages[0].0].verification_key, &messages[0].1, &messages[0].2, &messages[2].3).is_err(),
+            "a fee signature cannot authorize the original service contract"
+        );
+        assert_eq!(messages.len(), 5);
+        assert_ne!(messages[0].1, messages[2].1);
+        let PalwConsensusObjectV2::MonetaryMaterialActionV1 { action, signer, signature } = obj else { panic!() };
+        assert_eq!(signer, e.terms.sponsor);
+        assert_eq!(signature, messages[4].3.as_ref());
+        let sponsor_message =
+            crate::palw_provider_court_v1::palw_provider_court_message_v1(h(1), 242, &signer, &borsh::to_vec(&action).unwrap());
+        assert_eq!(messages[4].1, sponsor_message.as_byte_slice());
+        let PalwMonetaryMaterialActionV1::EnrollFeeV2(fee) = *action else { panic!() };
+        let service_message = crate::palw_provider_court_v1::palw_provider_court_message_v1(
+            h(1),
+            240,
+            &fee.enrollment.offers[0].provider,
+            &fee.enrollment.payload(),
+        );
+        let fee_message = crate::palw_provider_court_v1::palw_provider_court_message_v1(
+            h(1),
+            242,
+            &fee.enrollment.offers[0].provider,
+            &fee.fee_payload(),
+        );
+        assert_eq!(messages[0].1, service_message.as_byte_slice());
+        assert_eq!(messages[2].1, fee_message.as_byte_slice());
+        assert_eq!(fee.enrollment.offers[0].signature, messages[0].3.as_ref());
+        assert_eq!(fee.provider_fee_signatures[0], messages[2].3.as_ref());
+        assert_eq!(borsh::to_vec(&PalwMonetaryMaterialActionV1::EnrollFeeV2(fee.clone())).unwrap()[0], 9);
+        let mut changed = (*fee).clone();
+        changed.enrollment.terms.enrollment_until_daa += 1;
+        assert_ne!(fee.fee_payload(), changed.fee_payload());
+        let tampered = crate::palw_provider_court_v1::palw_provider_court_message_v1(
+            h(1),
+            242,
+            &changed.enrollment.offers[0].provider,
+            &changed.fee_payload(),
+        );
+        assert!(verify(&keys[&messages[2].0].verification_key, tampered.as_byte_slice(), &messages[2].2, &messages[2].3).is_err());
+        changed = (*fee).clone();
+        changed.enrollment.offers[0].prepaid_fee_sompi += 1;
+        assert_ne!(fee.fee_payload(), changed.fee_payload());
+        changed = (*fee).clone();
+        changed.ruleset = h(88);
+        assert_ne!(fee.fee_payload(), changed.fee_payload());
+        changed = (*fee).clone();
+        changed.enrollment.terms.policy = h(77);
+        assert_ne!(fee.fee_payload(), changed.fee_payload());
+    }
+    #[test]
+    fn rfc23s2_monetary_direct_member_index_normal_writer_cold_and_reorg() {
+        let (state, params, e) = fixture();
+        let extras = PalwTransitionExtrasV1 {
+            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                network_domain: h(1),
+                ruleset_digest: h(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        enroll(&mut b, &ctx(2), &e).unwrap();
+        let indexed = &b.state.material_contracts_by_member_v8;
+        assert_eq!(indexed.iter().copied().collect::<Vec<_>>(), vec![(e.terms.root, e.terms.root)]);
+        super::super::palw_monetary_material_scope_v8::validate_v8(&b.state).unwrap();
+        let before_root = b.state.state_root();
+        let raw = borsh::to_vec(b.state.kernel_route().unwrap()).unwrap();
+        let mut cold = b.state.clone();
+        cold.kernel_route = Some(borsh::from_slice(&raw).unwrap());
+        cold.material_contracts_by_member_v8.clear();
+        super::super::palw_monetary_material_scope_v8::rebuild_v8(&mut cold).unwrap();
+        assert_eq!(cold.material_contracts_by_member_v8, b.state.material_contracts_by_member_v8);
+        assert_eq!(cold.state_root(), before_root, "unhashed derived membership never changes consensus state root");
+        let row = b.state.monetary_material_row_v1(e.terms.root).unwrap();
+        let old = Some(borsh::to_vec(&row).unwrap());
+        let none = None;
+        // Exercise the actual common native row deletion primitive. Native
+        // signed Release authority is checked by its owner, not by this index.
+        b.write_kernel_row_encoded_v1::<PalwMonetaryMaterialRowV1>(
+            PALW_MONETARY_MATERIAL_TABLE_V1,
+            e.terms.root.as_byte_slice(),
+            None,
+        )
+        .unwrap();
+        assert!(b.state.material_contracts_by_member_v8.is_empty());
+        super::super::apply_kernel_route_row_v1(
+            &mut b.state,
+            PALW_MONETARY_MATERIAL_TABLE_V1,
+            e.terms.root.as_byte_slice(),
+            &old,
+            &none,
+            true,
+        )
+        .unwrap();
+        assert_eq!(b.state.material_contracts_by_member_v8, cold.material_contracts_by_member_v8);
+        assert_eq!(b.state.state_root(), before_root, "real native undo restores both bytes and exact direct scope");
+        super::super::apply_kernel_route_row_v1(
+            &mut b.state,
+            PALW_MONETARY_MATERIAL_TABLE_V1,
+            e.terms.root.as_byte_slice(),
+            &old,
+            &none,
+            false,
+        )
+        .unwrap();
+        assert!(b.state.material_contracts_by_member_v8.is_empty());
+    }
+    #[test]
+    fn rfc23s2_monetary_direct_member_query_does_not_expand_unrelated_contracts() {
+        let (state, params, e) = fixture();
+        let extras = PalwTransitionExtrasV1 {
+            kernel_route: Some(crate::palw_kernel_route_v1::PalwKernelRouteExtrasV1 {
+                network_domain: h(1),
+                ruleset_digest: h(2),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut b = TransitionBuilder::new(&state, &params, false, false, false, false, &extras);
+        enroll(&mut b, &ctx(2), &e).unwrap();
+        let expected = super::super::palw_monetary_material_scope_v8::direct_roots_v8(&b.state, e.terms.root).collect::<Vec<_>>();
+        for n in [10u8, 11] {
+            let mut other = e.clone();
+            other.terms.root = h(n);
+            other.terms.nonce = h(n + 20);
+            enroll(&mut b, &ctx(3), &other).unwrap();
+        }
+        let got = super::super::palw_monetary_material_scope_v8::direct_roots_v8(&b.state, e.terms.root).collect::<Vec<_>>();
+        assert_eq!(got, expected, "unrelated actual provider enrollments do not become source members");
+        assert_eq!(got, vec![e.terms.root]);
+        assert_eq!(b.state.material_contracts_by_member_v8.len(), 3);
+        super::super::palw_monetary_material_scope_v8::validate_v8(&b.state).unwrap();
     }
 }
 
@@ -1758,5 +2265,188 @@ pub(super) fn routed_answer_v2(
         )?;
     }
     write(b, root, Some(&row))?;
+    Ok(())
+}
+
+fn remove_fee_v2(b: &mut TransitionBuilder<'_>, p: &PalwMonetaryMaterialProviderV1) -> Result<(), PalwStateV2Error> {
+    if b.state.material_fee_row_checked_v2(p.fee_context, p.provider)?.is_some() {
+        if !b.state.material_provider_fee_complete_v2(p) {
+            return Err(refused("provider fee still awaits physical payment"));
+        }
+        b.write_kernel_row_encoded_v1::<PalwMaterialFeeRowV2>(
+            crate::palw_monetary_material_v1::fee_v2::TABLE,
+            &crate::palw_monetary_material_v1::fee_v2::fee_key(p.fee_context, p.provider),
+            None,
+        )?;
+    }
+    Ok(())
+}
+fn write_fee_v2(b: &mut TransitionBuilder<'_>, row: &PalwMaterialFeeRowV2) -> Result<(), PalwStateV2Error> {
+    b.write_kernel_row_encoded_v1(
+        crate::palw_monetary_material_v1::fee_v2::TABLE,
+        &crate::palw_monetary_material_v1::fee_v2::fee_key(row.enrollment, row.provider),
+        Some(row),
+    )
+}
+fn enroll_fee_v2(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    fee: &PalwMaterialFeeEnrollmentV2,
+    replacement: Option<(Hash64, u64)>,
+    signer: &PalwBondKeyV2,
+) -> Result<(), PalwStateV2Error> {
+    if fee.ruleset == Hash64::default()
+        || b.state.kernel_route().is_none_or(|r| r.header.policy.ruleset_digest != fee.ruleset.as_bytes())
+        || !b.params.settlement_once_active_at(ctx.daa_score)
+        || signer != &fee.enrollment.terms.sponsor
+        || fee.provider_fee_signatures.len() != fee.enrollment.offers.len()
+        || fee.provider_fee_signatures.iter().any(Vec::is_empty)
+        || fee.enrollment.terms.enrollment_until_daa <= ctx.daa_score
+        || fee.enrollment.terms.enrollment_until_daa == u64::MAX
+        || !fee.enrollment.terms.payment_relative_until_finality
+    {
+        return Err(refused("finite provider fee is dormant or lacks exact joint consent"));
+    }
+    let checkpoint = b.try_checkpoint()?;
+    let result = (|| {
+        let e = &fee.enrollment;
+        for offer in &e.offers {
+            if b.state.material_fee_row_checked_v2(e.id(), offer.provider)?.is_some() {
+                return Err(refused("finite provider fee consent already exists"));
+            }
+            write_fee_v2(
+                b,
+                &PalwMaterialFeeRowV2 {
+                    ruleset: fee.ruleset,
+                    version: 2,
+                    enrollment: e.id(),
+                    root: e.terms.root,
+                    sponsor: e.terms.sponsor,
+                    provider: offer.provider,
+                    amount: offer.prepaid_fee_sompi,
+                    horizon: e.terms.enrollment_until_daa,
+                    accepted_daa: ctx.daa_score,
+                    defaulted_daa: None,
+                    status: PalwMaterialFeeStatusV2::Held,
+                },
+            )?;
+        }
+        match replacement {
+            None => enroll(b, ctx, e)?,
+            Some((previous, sequence)) => {
+                replace(b, ctx, &PalwMonetaryMaterialReplacementV1 { root: e.terms.root, previous, sequence, enrollment: e.clone() })?;
+            }
+        }
+        for offer in &e.offers {
+            b.admit_material_provider_fee_v1(e.id(), offer.provider, ctx.daa_score)?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        b.restore(checkpoint);
+    }
+    result
+}
+
+fn settle_fee_v2(
+    b: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    p: &mut PalwMonetaryMaterialProviderV1,
+    mut fee: PalwMaterialFeeRowV2,
+) -> Result<(), PalwStateV2Error> {
+    if fee.version != 2
+        || fee.amount != p.prepaid_fee_sompi
+        || fee.accepted_daa != p.fee_accepted_daa
+        || fee.enrollment != p.fee_context
+        || fee.provider != p.provider
+    {
+        return Err(refused("provider fee sidecar differs from original funded contract"));
+    }
+    let refund = fee.defaulted_daa.is_some_and(|at| at <= fee.horizon);
+    if !matches!(fee.status, PalwMaterialFeeStatusV2::Held) || (!refund && ctx.daa_score <= fee.horizon.max(fee.accepted_daa)) {
+        return Ok(());
+    }
+    let payee = if refund { fee.sponsor } else { fee.provider };
+    let payload = b.state.bond(&payee).ok_or_else(|| refused("provider fee payee missing"))?.payout_payload;
+    let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+    if !b.state.pending_payouts.contains_key(&queue)
+        && (b.state.pending_payouts.len() >= PALW_V2_MAX_PENDING_PAYOUTS
+            || b.state.pending_payouts.len() >= PALW_V2_MAX_PAYOUTS_PER_BLOCK)
+    {
+        return Ok(());
+    }
+    if b.state.pending_payouts.get(&queue).map_or(0, |r| r.amount).checked_add(fee.amount).is_none() {
+        // Existing cash for this recipient can drain in later blocks. Keep the
+        // whole fee held and its obligation unconsumed until it fits.
+        return Ok(());
+    }
+    // Pay and refund both use the signed fee-only tranche. The service bond stays a separate leg.
+    match b.material_provider_fee_terms_v1(fee.enrollment, fee.provider, ctx.daa_score, fee.amount) {
+        Ok(None) => {}
+        Ok(Some(terms)) => {
+            crate::palw_settlement_liability_v1::palw_settlement_liability_sourced_v1(&terms)
+                .map_err(super::palw_settlement_liability_fold_v1::liability_refused_v1)?;
+        }
+        Err(why) => return Err(super::palw_settlement_liability_fold_v1::liability_refused_v1(why)),
+    }
+    use crate::palw_settlement_once_v1::*;
+    let once = b.settle_once_v1(
+        ctx.daa_score,
+        PalwSettlementObligationV1::with_party(
+            PalwSettlementLegV1::MaterialProviderFee,
+            fee.enrollment.as_bytes(),
+            crate::palw_kernel_route_v1::palw_kernel_bond_id_v1(&fee.provider),
+            0,
+        ),
+        PalwSettlementConsumerV1::MonetaryMaterial,
+        fee.amount,
+        PalwSettlementDebitV1::Held { amount: fee.amount },
+    )?;
+    if !once.pays() {
+        return Err(refused("unresolved provider fee has an already consumed obligation"));
+    }
+    if refund {
+        b.cancel_source_income_v1(ctx, fee.enrollment, fee.root, fee.provider, fee.accepted_daa)?;
+        b.add_kernel_payout(payload, fee.amount)?;
+        let receipt = crate::palw_bond_budget_v1::material_queue_receipt_id_v1(p.fee_income, queue, ctx.daa_score);
+        b.bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |book, _, j| {
+            if book.material_income.contains_key(&receipt) {
+                return Err(crate::palw_bond_budget_v1::PalwBudgetRefusalV1::Duplicate);
+            }
+            book.put_material_income_v1(
+                receipt,
+                Some(crate::palw_bond_budget_v1::PalwMaterialIncomeV1 {
+                    root: Some(fee.root),
+                    amount: fee.amount,
+                    accepted_daa: fee.accepted_daa,
+                    payment: crate::palw_bond_budget_v1::PalwMaterialPaymentV1::Queued {
+                        income: None,
+                        queue: Some(queue),
+                        queued_daa: ctx.daa_score,
+                        paid_daa: None,
+                        release_daa: None,
+                    },
+                }),
+                j,
+            )
+        })?
+        .ok_or_else(|| refused("provider refund material engine missing"))?
+        .map_err(|e| refused(e.to_string()))?;
+        fee.status = PalwMaterialFeeStatusV2::RefundQueued { queue, receipt };
+    } else {
+        b.settle_source_income_v1(
+            ctx,
+            fee.enrollment,
+            fee.root,
+            fee.provider,
+            fee.accepted_daa,
+            fee.horizon.max(fee.accepted_daa),
+            fee.amount,
+        )?;
+        b.add_kernel_payout(payload, fee.amount)?;
+        fee.status = PalwMaterialFeeStatusV2::ProviderQueued;
+    }
+    write_fee_v2(b, &fee)?;
+    p.fee_queued = true;
     Ok(())
 }

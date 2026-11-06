@@ -107,9 +107,44 @@ impl PalwTirClassEntryV1 {
     /// The canonical job's context — consensus's yardstick (`palw_tir_attempt_v1::palw_tir_job_context_v1`),
     /// what a registration carries.
     pub fn canonical_context(&self) -> PalwJobContextV2 {
+        self.canonical_context_v2(self.class.program.len()).expect("a loaded TIR entry has a valid canonical profile")
+    }
+
+    /// Explicit profile metadata only. This is not a native permission or a heap/work lease;
+    /// caller-owned class/program storage and hashing work need their own resource preflight.
+    /// Use its `job_for_anchor` for a wide attempt rather than legacy facts-only helpers.
+    pub fn resolved_job_profile_v2(
+        &self,
+        max_program_bytes: usize,
+    ) -> Result<kaspa_consensus_core::palw_tir_profile_resolver_v2::ResolvedTirJobProfileV2, String> {
+        let resolved = kaspa_consensus_core::palw_tir_profile_resolver_v2::ResolvedTirJobProfileV2::new(
+            &self.class,
+            self.artifact_root,
+            max_program_bytes,
+        )
+        .map_err(|e| format!("TIR profile: {e:?}"))?;
+        if resolved.canonical() != Some(self.canonical_job) {
+            return Err("the entry's canonical counts differ from the explicit profile formula".into());
+        }
+        Ok(resolved)
+    }
+
+    /// Fallible context derivation. Narrow keeps the exact legacy counts and identity fields;
+    /// wide derives its distinct scheme through the explicit V2 resolver at the original context.
+    pub fn canonical_context_v2(&self, max_program_bytes: usize) -> Result<PalwJobContextV2, String> {
+        if max_program_bytes == 0 || self.class.program.len() > max_program_bytes {
+            return Err("TIR profile: raw program byte limit".into());
+        }
+        let program = self.class.decode_program().map_err(|e| e.to_string())?;
+        if program.wide_logits_q24() {
+            return self
+                .resolved_job_profile_v2(max_program_bytes)?
+                .ctx()
+                .ok_or_else(|| "the wide profile has no canonical job".into());
+        }
         use kaspa_consensus_core::palw_tir_attempt_v1::{PalwTirJobFactsV1, palw_tir_job_context_v1};
-        let facts = PalwTirJobFactsV1::of(&self.class, &self.artifact.plan().program, self.class_id());
-        palw_tir_job_context_v1(&facts, self.canonical_job)
+        let facts = PalwTirJobFactsV1::of(&self.class, &program, self.class_id());
+        Ok(palw_tir_job_context_v1(&facts, self.canonical_job))
     }
 }
 

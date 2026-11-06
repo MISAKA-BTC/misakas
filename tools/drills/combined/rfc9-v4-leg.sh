@@ -8,8 +8,7 @@
 #                                                                palw-evidence>   (INT13_AT, as dc.sh's --palw-drill-int13-at; default 110)
 #   plan      the leg's timeline in DAA (claim, bind, licence, Final, draw slot, use window) against H' = INT13_AT
 #   dry       preflight: every binary and flag the leg uses, the keyring, the ports; nothing written, nothing started
-#   prepare   BEFORE `dc.sh up`: the builder node's extra argument (--palw-redemption-auth-dir, BUILDER_NODE, default new0 — a bonded floor
-#             producer that is NOT the executor), the leg's directories, and the reference DA provider (palw-evidence serve on 127.0.0.1)
+#   prepare   BEFORE `dc.sh up`: configure the builder (BUILDER_NODE, default new0) to mirror the reference HTTP provider, then start the provider.
 #   certify   after `up` (DAA >= 2): the floor's free-prompt lane certified ON CHAIN — the FP drill evidence (FamilyCertified, as
 #             ObjectChunks) then the lane binding (ClassLaneCertified), each with `misaka palw submit-object`, funded by main-0. The drill
 #             genesis certifies the floor's FP lane in its params only; until this lands every FP commitment on the floor is skipped
@@ -18,9 +17,7 @@
 #             directory provider and then the HTTP provider (palw-evidence publish), its RDA4 authorization (500 bps, every quantum) to both
 #             providers (redemption-publish). Then the executor is OFFLINE: this script never reads its key again. Run it early (DAA < 40):
 #             Final is ~150 DAA later and the draw slot 400 after that, so the redemption lands ~DAA 600, well past H'
-#   sync      the builder's side, any time and repeatedly (cron-able): mirror every valid authorization from the providers into the
-#             builder node's --palw-redemption-auth-dir (palw-evidence redemption-sync). The node redeems on its own once the fence is armed,
-#             the claim is Final and a quantum wins (kaspad builder mode, `produce_redemption`)
+#   sync      manual recovery: mirror authorizations to the builder directory. The normal drill relies on the builder's automatic mirror.
 #   status    the claim's phase and quanta spent, the providers' availability of its evidence, the builder's REDEMPTION lines
 #   verdict   §3.4's PASS items, read from the nodes: (a) no PFS4 header below H' and the redemption at/after H'; (b) the merging chain
 #             block's coinbase splits exactly leg + fee = the authorization's bps of the worker reward, the leg to the EXECUTOR bond's
@@ -65,7 +62,7 @@ plan() {
     cat <<EOF
 == RFC-0009 fence 4 (palw_receipt_spend_v4) leg — H' = $INT13_AT
   executor     keyring seat $EXEC_SEAT (no node); funds its claim from the seat's fee float; offline after 'claim'
-  builder      $BUILDER_NODE's bond (a floor producer), --palw-redemption-auth-dir=$LEG/builder-auth
+  builder      $BUILDER_NODE's bond (a floor producer), mirrors http://127.0.0.1:$PROV_PORT into $LEG/builder-auth
   providers    $(providers)   (the reference server is started by 'prepare')
   timeline     certify at DAA >= 2 (two blocks for the chunks, then the lane binding)
                claim at DAA < 40 → bound ~+20 (anchor delay) → licensed by the panel → Final at licence + 121
@@ -83,7 +80,7 @@ dry() {
     echo "== preflight"
     for b in "$KASPAD_BIN" "$CLI_BIN" "$RAIL_BIN" "$PRODUCER_BIN" "$EVIDENCE_BIN"; do [ -x "$b" ] && ok "$b" || bad "missing $b"; done
     local h; h=$("$KASPAD_BIN" --help 2>/dev/null || true)
-    for f in --palw-drill-int13-at --palw-redemption-auth-dir; do grep -q -- "$f" <<<"$h" && ok "kaspad lists $f" || bad "kaspad lacks $f"; done
+    for f in --palw-drill-int13-at --palw-redemption-auth-dir --palw-redemption-providers; do grep -q -- "$f" <<<"$h" && ok "kaspad lists $f" || bad "kaspad lacks $f"; done
     local out
     grep -aq -- "--redeem-auth-out" "$RAIL_BIN" && ok "the rail takes --redeem-auth-out" || bad "the rail has no --redeem-auth-out"
     out=$("$PRODUCER_BIN" --bogus 2>&1 || true); grep -q 'plain|' <<<"$out" && ok "the producer knows --kind plain (and fp-certification)" || bad "the producer has no --kind plain (rebuild from this tree)"
@@ -95,8 +92,10 @@ dry() {
 
 prepare() {
     mkdir -p "$LEG"/{prov-dir,prov-http,builder-auth,cert,outbox} "$WORK_DIR/$BUILDER_NODE"
-    local x="$WORK_DIR/$BUILDER_NODE/extra-args" arg="--palw-redemption-auth-dir=$LEG/builder-auth"
-    grep -qxF -- "$arg" "$x" 2>/dev/null || echo "$arg" >> "$x"
+    local x="$WORK_DIR/$BUILDER_NODE/extra-args" arg
+    for arg in "--palw-redemption-auth-dir=$LEG/builder-auth" "--palw-redemption-providers=http://127.0.0.1:$PROV_PORT"; do
+        grep -qxF -- "$arg" "$x" 2>/dev/null || echo "$arg" >> "$x"
+    done
     say "$BUILDER_NODE: $(cat "$x" | tr '\n' ' ')"
     if ! lsof -nP -iTCP:"$PROV_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
         nohup "$EVIDENCE_BIN" serve --root "$LEG/prov-http" --listen "127.0.0.1:$PROV_PORT" > "$LEG/provider.out" 2>&1 & echo $! > "$LEG/provider.pid"

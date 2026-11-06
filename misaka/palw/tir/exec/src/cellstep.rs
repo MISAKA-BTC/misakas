@@ -66,9 +66,13 @@ impl TirCellStepperV1 for CpuCellStepperV1<'_> {
         carry_in: &[Vec<i128>],
         sink: &mut dyn StepSink,
     ) -> misaka_palw_tir::TirResult<Vec<Vec<i128>>> {
+        if self.0.plan().program.wide_logits_q24() {
+            return Err(misaka_palw_tir::TirError::new(misaka_palw_tir::TirErrorKind::Operand, "V1 cell stepper refuses wide Q24"));
+        }
         self.0.step_cell(token, occ, carry_in, sink)
     }
     fn logits_lanes(&self) -> Vec<i32> {
+        assert!(!self.0.plan().program.wide_logits_q24(), "V1 cell logits cannot read wide Q24; an explicit V2 cell API is required");
         self.0.logits().1.to_i128s().into_iter().map(|v| v as i32).collect()
     }
     fn fixed_lanes(&self, state: u16, layer: Option<u16>, first: usize, n: usize, out: &mut Vec<u8>) -> Result<(), String> {

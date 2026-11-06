@@ -1,0 +1,15 @@
+
+running 1 test
+test palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_four_role_prefix_native_original_and_financial_transitions ... 
+thread 'palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_four_role_prefix_native_original_and_financial_transitions' (647139) panicked at consensus/core/src/palw_tir_public_claim_v1.rs:1202:84:
+called `Result::unwrap()` on an `Err` value: "unaligned TIR prefix boundary"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    palw_state_v2::palw_tir_public_fold_v1::conviction_e2e_tests::family_supplier_four_role_prefix_native_original_and_financial_transitions
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 5364 filtered out; finished in 0.17s
+

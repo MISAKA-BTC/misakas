@@ -1,0 +1,30 @@
+{
+  "misaka_palw_tir": {
+    "opt_level": "2",
+    "debuginfo": 0,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": false
+  },
+  "kaspa_consensus_core": {
+    "opt_level": "2",
+    "debuginfo": 0,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": false
+  },
+  "misaka_palw_tir_exec": {
+    "opt_level": "2",
+    "debuginfo": 0,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": false
+  },
+  "positive_wide_material_v2": {
+    "opt_level": "2",
+    "debuginfo": 0,
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": true
+  }
+}

@@ -95,6 +95,9 @@ pub const PALW_BUDGET_TABLE_REPORTER_INCOME_V1: u8 = 9;
 mod consumer;
 pub use consumer::*;
 
+mod activation;
+pub use activation::*;
+
 // RFC-0008: allocation/history invariance under relabelling, order swaps and splits (source controls).
 #[cfg(test)]
 mod invariance_tests_v1;
@@ -824,6 +827,12 @@ impl Params {
     }
 
     pub fn validate_palw_reporter_income_v2(&self) -> Result<(), PalwModeV2Error> {
+        let from = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.reporter_income_from() != from
+        {
+            return Err(PalwModeV2Error::Invalid("reporter income fence disagrees with its state mirror"));
+        }
         let Some(at) = self.palw_reporter_income_v2.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
         if !self
             .palw_bond_budget_v1
@@ -832,9 +841,7 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("palw_reporter_income_v2 requires palw_bond_budget_v1 at or below it"));
         }
-        Err(PalwModeV2Error::Invalid(
-            "palw_reporter_income_v2 cannot be armed: monetary schema v2 and legacy cash migration are dormant pending complete activation validation",
-        ))
+        self.validate_palw_income_record_v1(PalwIncomeSchemaV1::ReporterV2, at.daa_score(), PALW_INCOME_ARMING_RECORDS_V1)
     }
 
     pub fn palw_material_income_active_at(&self, daa: u64) -> bool {
@@ -843,6 +850,12 @@ impl Params {
     }
 
     pub fn validate_palw_material_income_v3(&self) -> Result<(), PalwModeV2Error> {
+        let from = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()).map(|at| at.daa_score());
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode
+            && bundle.state.material_income_from() != from
+        {
+            return Err(PalwModeV2Error::Invalid("material income fence disagrees with its state mirror"));
+        }
         let Some(at) = self.palw_material_income_v3.filter(|at| *at != ForkActivation::never()) else { return Ok(()) };
         if !self
             .palw_bond_budget_v1
@@ -852,9 +865,7 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid("palw_material_income_v3 requires budget and reporter schema at or below it"));
         }
-        Err(PalwModeV2Error::Invalid(
-            "palw_material_income_v3 cannot be armed: complete signed material/TTL and all consumer lifecycle validation remain pending",
-        ))
+        self.validate_palw_income_record_v1(PalwIncomeSchemaV1::MaterialV3, at.daa_score(), PALW_INCOME_ARMING_RECORDS_V1)
     }
 
     /// Whether the model-bond allocation is in force at `daa_score` — never, in this binary (it needs the budget too).
@@ -1266,6 +1277,36 @@ pub fn palw_capital_assignment_message_v1(
             &sequence.to_le_bytes(),
         ],
     )
+}
+
+/// Canonical header commitment grammar shared with bounded row import. The
+/// optional nested income tables enter only in the version that names them.
+pub fn palw_bond_budget_header_root_v1(
+    header: &PalwBondBudgetHeaderV1,
+    income: Hash64,
+    material: Hash64,
+    consumers: Hash64,
+) -> Hash64 {
+    let encoded = enc(header);
+    let mut parts: [&[u8]; 7] = [&[]; 7];
+    parts[0] = encoded.as_slice();
+    let mut len = 1;
+    if header.version >= PALW_BOND_BUDGET_STATE_VERSION_V2 {
+        parts[len] = b"reporter_income/v1";
+        parts[len + 1] = income.as_byte_slice();
+        len += 2;
+    }
+    if header.version >= PALW_BOND_BUDGET_STATE_VERSION_V3 {
+        parts[len] = b"material_income/v1";
+        parts[len + 1] = material.as_byte_slice();
+        len += 2;
+    }
+    if header.version >= PALW_BOND_BUDGET_STATE_VERSION_V4 {
+        parts[len] = b"consumer_contract/v1";
+        parts[len + 1] = consumers.as_byte_slice();
+        len += 2;
+    }
+    keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &parts[..len])
 }
 
 fn keyed64(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
@@ -1750,54 +1791,24 @@ impl PalwBondBudgetStateV1 {
     /// The table roots and the header digest the V2 root block writes, in table order.
     pub fn root_parts(&self) -> (Hash64, [Hash64; 6]) {
         use crate::palw_state_v2::palw_collection_root_of_entries_v1 as root;
-        let header = if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V2 {
-            let income = root(
+        let header = palw_bond_budget_header_root_v1(
+            &self.header,
+            root(
                 b"bond_budget_reporter_income/v1",
                 self.reporter_income.len(),
                 self.reporter_income.iter().map(|(k, v)| (enc(k), enc(v))),
-            );
-            if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V3 {
-                let material = root(
-                    b"bond_budget_material_income/v1",
-                    self.material_income.len(),
-                    self.material_income.iter().map(|(k, v)| (enc(k), enc(v))),
-                );
-                if self.header.version >= PALW_BOND_BUDGET_STATE_VERSION_V4 {
-                    let consumers = root(
-                        b"bond_budget_consumer_contract/v1",
-                        self.consumer_contracts.len(),
-                        self.consumer_contracts.iter().map(|(k, v)| (enc(k), enc(v))),
-                    );
-                    keyed64(
-                        PALW_BOND_BUDGET_HEADER_DOMAIN_V1,
-                        &[
-                            &enc(&self.header),
-                            b"reporter_income/v1",
-                            income.as_byte_slice(),
-                            b"material_income/v1",
-                            material.as_byte_slice(),
-                            b"consumer_contract/v1",
-                            consumers.as_byte_slice(),
-                        ],
-                    )
-                } else {
-                    keyed64(
-                        PALW_BOND_BUDGET_HEADER_DOMAIN_V1,
-                        &[
-                            &enc(&self.header),
-                            b"reporter_income/v1",
-                            income.as_byte_slice(),
-                            b"material_income/v1",
-                            material.as_byte_slice(),
-                        ],
-                    )
-                }
-            } else {
-                keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header), b"reporter_income/v1", income.as_byte_slice()])
-            }
-        } else {
-            keyed64(PALW_BOND_BUDGET_HEADER_DOMAIN_V1, &[&enc(&self.header)])
-        };
+            ),
+            root(
+                b"bond_budget_material_income/v1",
+                self.material_income.len(),
+                self.material_income.iter().map(|(k, v)| (enc(k), enc(v))),
+            ),
+            root(
+                b"bond_budget_consumer_contract/v1",
+                self.consumer_contracts.len(),
+                self.consumer_contracts.iter().map(|(k, v)| (enc(k), enc(v))),
+            ),
+        );
         (
             header,
             [
@@ -3088,6 +3099,79 @@ impl PalwBondBudgetStateV1 {
         Ok(reservation)
     }
 
+    /// ADR-0176 (2026-10-15 amendment): native receipt block rewards are
+    /// indivisible and their native formula sets reduction_allowed=false. The
+    /// whole R ask remains subject to the same producer/model/hold budgets; this
+    /// is not user escrow and receives no model-allocation exemption.
+    pub(crate) fn preview_native_mining_unreduced_v39(
+        &self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        bond: PalwBondKeyV2,
+        model: Option<Hash64>,
+        ask: PalwBudgetAskV1,
+        mode: PalwHoldModeV1,
+    ) -> Result<PalwBudgetVectorV1, PalwBudgetRefusalV1> {
+        let mut reservation = palw_bond_budget_reservation_v1(policy, ask);
+        reservation.reward_sompi = ask.reward_sompi;
+        if let (Some(model), Some(_)) = (model, self.header.allocation)
+            && !self.allocation_bootstrapping_v1()
+            && self.model_available(&model) < reservation.reward_sompi
+        {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        if reservation.reward_sompi > 0 && self.has_unattributed_income_v1() {
+            return Err(PalwBudgetRefusalV1::Exhausted { dim: PalwBudgetDimV1::Reward });
+        }
+        palw_bond_budget_admit_v1(policy, capital, self.bonds.get(&bond), &reservation, ask.liability_sompi)?;
+        self.hold_admit_v1(policy, capital, &bond, &reservation, ask.liability_sompi, mode)?;
+        Ok(reservation)
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn reserve_native_mining_unreduced_v39(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        capital: u64,
+        claim_id: Hash64,
+        bond: PalwBondKeyV2,
+        model: Option<Hash64>,
+        accepted_daa: u64,
+        ask: PalwBudgetAskV1,
+        mode: PalwHoldModeV1,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<PalwBudgetVectorV1, PalwBudgetRefusalV1> {
+        if self.claims.contains_key(&claim_id) {
+            return Err(PalwBudgetRefusalV1::Duplicate);
+        }
+        let reservation = self.preview_native_mining_unreduced_v39(policy, capital, bond, model, ask, mode)?;
+        let model = match (model, self.header.allocation) {
+            (Some(m), Some(epoch)) => Some((m, epoch.index)),
+            _ => None,
+        };
+        if let Some((model, _)) = model
+            && reservation.reward_sompi > 0
+            && !self.allocation_bootstrapping_v1()
+        {
+            let reserved = self.reserve_model_reward(&model, reservation.reward_sompi, j);
+            debug_assert_eq!(reserved, reservation.reward_sompi, "same checked model balance");
+        }
+        self.reserve_liable_moded_v1(
+            policy,
+            capital,
+            claim_id,
+            bond,
+            model,
+            accepted_daa,
+            reservation,
+            ask.liability_sompi,
+            PalwBudgetOriginV1::FreePrompt,
+            false,
+            mode,
+            j,
+        )?;
+        Ok(reservation)
+    }
+
     /// **[`Self::preview_claim_v1`] for a claim of `origin`** (RFC-0016 P4, user decision 2026-10-15). A coinbase-derived origin is
     /// [`Self::preview_claim_v1`] unchanged. A user-paid escrow origin ([`palw_budget_origin_is_user_escrow_v1`]):
     ///
@@ -3605,6 +3689,185 @@ mod tests {
             weight_value: PalwWeightValuePolicyV1::Unknown,
             hold: None,
         }
+    }
+
+    #[test]
+    fn native39_unreduced_whole_rewards_preserve_period_caps_and_atomic_failures() {
+        let mut p = crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
+        p.slice_rights_by_rho = true;
+        let capital = p.capital_unit_sompi * 100;
+        let carve = 320_084_650_080u64; // Actual T12 month-0 worker carve; no payout reduction.
+        let full = carve * 4;
+        let liability = (u128::from(full) * 1000).div_ceil(u128::from(p.export_cap_permille));
+        let ask = PalwBudgetAskV1 {
+            block_units: 4 * PALW_BUDGET_BLOCK_UNIT_V1,
+            reward_sompi: full,
+            final_weight: 4,
+            liability_sompi: liability,
+        };
+        let mut state = PalwBondBudgetStateV1::new(0, &p);
+        let mut journal = Vec::new();
+        let clipped = state.preview_claim_moded_v1(&p, capital, bond(0), None, ask, PalwHoldModeV1::PanelZero).unwrap();
+        assert_eq!(clipped.reward_sompi, p.reward_per_unit_sompi / p.claims_per_unit_at_rho());
+        assert!(clipped.reward_sompi < carve, "generic sliced rewards cannot pay even one actual native block");
+        let before = (state.root_parts(), journal.len());
+        assert!(
+            state
+                .reserve_native_mining_unreduced_v39(
+                    &p,
+                    p.capital_unit_sompi,
+                    h(70),
+                    bond(0),
+                    None,
+                    1,
+                    ask,
+                    PalwHoldModeV1::PanelZero,
+                    &mut journal
+                )
+                .is_err()
+        );
+        assert_eq!((state.root_parts(), journal.len()), before, "insufficient actual capital writes nothing");
+        let mut over = ask;
+        over.reward_sompi = palw_bond_budget_caps_v1(&p, capital).reward_sompi + 1;
+        assert!(
+            state
+                .reserve_native_mining_unreduced_v39(
+                    &p,
+                    capital,
+                    h(70),
+                    bond(0),
+                    None,
+                    1,
+                    over,
+                    PalwHoldModeV1::PanelZero,
+                    &mut journal
+                )
+                .is_err()
+        );
+        assert_eq!((state.root_parts(), journal.len()), before, "unreduced is still bounded by the producer's real period R cap");
+        let granted = state
+            .reserve_native_mining_unreduced_v39(&p, capital, h(70), bond(0), None, 1, ask, PalwHoldModeV1::PanelZero, &mut journal)
+            .unwrap();
+        assert_eq!(granted.reward_sompi, full);
+        assert_eq!(granted.block_units, ask.block_units);
+        assert_eq!(granted.final_weight, clipped.final_weight, "existing F ceiling remains unchanged");
+        assert_eq!(state.bond_row(&bond(0)).unwrap().window.reward_sompi, full);
+        assert_eq!(state.claim_row(&h(70)).unwrap().liability_sompi, liability);
+        for _ in 0..4 {
+            state
+                .consume(&h(70), PalwBudgetDimV1::BlockUnits, u128::from(PALW_BUDGET_BLOCK_UNIT_V1), true, &mut journal)
+                .unwrap()
+                .unwrap();
+            state.consume(&h(70), PalwBudgetDimV1::Reward, u128::from(carve), true, &mut journal).unwrap().unwrap();
+            assert!(state.claim_row(&h(70)).unwrap().consumed.reward_sompi <= palw_bond_budget_export_cap_v1(&p, liability));
+        }
+        let before = (state.root_parts(), journal.len());
+        assert!(state.consume(&h(70), PalwBudgetDimV1::Reward, 1, true, &mut journal).unwrap().is_err());
+        assert_eq!((state.root_parts(), journal.len()), before, "a fifth payment cannot create or consume new rights");
+        state.check_consistency().unwrap();
+    }
+    #[test]
+    fn native39_unreduced_collection_forget_preserves_existing_window_and_shadow_clocks() {
+        let mut p = crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
+        p.slice_rights_by_rho = true;
+        let capital = p.capital_unit_sompi * 100;
+        let reward = 320_084_650_080u64;
+        let liability = (u128::from(reward) * 1000).div_ceil(u128::from(p.export_cap_permille));
+        let ask = PalwBudgetAskV1 {
+            block_units: PALW_BUDGET_BLOCK_UNIT_V1,
+            reward_sompi: reward,
+            final_weight: 1,
+            liability_sompi: liability,
+        };
+        let mut state = PalwBondBudgetStateV1::new(0, &p);
+        let initial = state.clone();
+        let mut journal = Vec::new();
+        state
+            .reserve_native_mining_unreduced_v39(&p, capital, h(72), bond(0), None, 1, ask, PalwHoldModeV1::PanelZero, &mut journal)
+            .unwrap();
+        let window = state.claim_row(&h(72)).unwrap().reuse_not_before;
+        // The owning fold has established collection eligibility. Its existing
+        // terminal+H_L policy still controls the independent liability shadow.
+        let terminal = 2;
+        let liability_until = terminal + p.liability_hold_daa;
+        state.close_keeping_liability_v1(&h(72), liability_until, &mut journal);
+        state.forget(&h(72), &mut journal);
+        assert!(!state.claim_row(&h(72)).unwrap().live && state.claim_row(&h(72)).unwrap().in_window);
+        assert_eq!(state.kept_liability_v1(&bond(0)), liability);
+        let before = (state.root_parts(), journal.len());
+        state.forget(&h(72), &mut journal);
+        assert_eq!((state.root_parts(), journal.len()), before, "repeatforget cannot reopen or duplicate liability");
+        // The deployed H_L may extend beyond W. Exercise both boundaries in
+        // actual clock order; release_due is not a rewind operation.
+        let mut boundaries = [window - 1, window, liability_until - 1, liability_until];
+        boundaries.sort_unstable();
+        for now in boundaries {
+            state.release_due(now, &mut journal);
+            assert_eq!(state.claim_row(&h(72)).is_some(), now < window, "financial W boundary is unchanged at {now}");
+            assert_eq!(
+                state.kept_liability_v1(&bond(0)),
+                if now < liability_until { liability } else { 0 },
+                "independent H_L boundary is unchanged at {now}"
+            );
+        }
+        assert!(state.claim_row(&h(72)).is_none(), "the exact collected native mainrow is reclaimed when its ownwindow ends");
+        state.check_consistency().unwrap();
+        let restored: PalwBondBudgetStateV1 = borsh::from_slice(&borsh::to_vec(&state).unwrap()).unwrap();
+        assert_eq!(restored.root_parts(), state.root_parts());
+        let mut replay = initial;
+        for write in &journal {
+            if let PalwBudgetWriteV1::Row { table, key, old, new } = write {
+                replay.apply_row(*table, key, old, new, false).unwrap();
+            }
+        }
+        assert_eq!(replay.root_parts(), state.root_parts());
+    }
+
+    #[test]
+    fn native39_unreduced_reward_never_bypasses_model_allocation() {
+        let mut p = crate::palw_values_p4_v1::palw_bond_budget_policy_provisional_v1();
+        p.slice_rights_by_rho = true;
+        let capital = p.capital_unit_sompi * 100;
+        let ap = PalwModelAllocationPolicyV1 {
+            version: PALW_MODEL_ALLOCATION_POLICY_VERSION_V2,
+            epoch_daa: 10,
+            seasoning_epochs: 1,
+            curve: PalwAllocationCurveV1 { alpha_halves: 4 },
+            max_models_per_bond: 4,
+            average: None,
+        };
+        let mut state = PalwBondBudgetStateV1::new(0, &p);
+        let mut j = Vec::new();
+        state.assign(&ap, bond(0), &[(h(1), capital)], 1, capital, 1, |_| true, &mut j).unwrap();
+        state.roll_epoch(&ap, 3, 30, |_| (capital, true), &mut j);
+        state.accrue(100, &mut j);
+        assert_eq!(state.model_available(&h(1)), 100);
+        let ask = PalwBudgetAskV1 { block_units: PALW_BUDGET_BLOCK_UNIT_V1, reward_sompi: 101, final_weight: 1, liability_sompi: 404 };
+        let before = (state.root_parts(), j.len());
+        assert!(
+            state
+                .reserve_native_mining_unreduced_v39(
+                    &p,
+                    capital,
+                    h(71),
+                    bond(0),
+                    Some(h(1)),
+                    31,
+                    ask,
+                    PalwHoldModeV1::PanelZero,
+                    &mut j
+                )
+                .is_err()
+        );
+        assert_eq!((state.root_parts(), j.len()), before, "no clipped partial reward or model debit on failure");
+        let ask = PalwBudgetAskV1 { reward_sompi: 100, ..ask };
+        state
+            .reserve_native_mining_unreduced_v39(&p, capital, h(71), bond(0), Some(h(1)), 31, ask, PalwHoldModeV1::PanelZero, &mut j)
+            .unwrap();
+        assert_eq!(state.model_available(&h(1)), 0);
+        assert_eq!(state.claim_row(&h(71)).unwrap().model, Some((h(1), 3)));
+        assert_eq!(state.claim_row(&h(71)).unwrap().reserved.reward_sompi, 100);
+        state.check_consistency().unwrap();
     }
 
     /// Deterministic xorshift for the property tests (no external crate).
@@ -5371,6 +5634,7 @@ mod tests {
             assert!(params.palw_fences_v1().iter().any(|(name, at)| *name == "palw_reporter_income_v2" && at.is_none()));
             let mut future = params.clone();
             future.palw_reporter_income_v2 = Some(ForkActivation::new(9_000_001));
+            future.sync_palw_bond_budget_v1();
             assert_ne!(params.consensus_params_id(), future.consensus_params_id());
             assert_ne!(params.consensus_schedule_id(), future.consensus_schedule_id());
             assert_eq!(params.consensus_identity_id(), future.consensus_identity_id());
@@ -5391,6 +5655,29 @@ mod tests {
             assert_eq!(params.consensus_identity_id(), never.consensus_identity_id());
             assert!(never.validate_palw_reporter_income_v2().is_ok());
         }
+    }
+
+    #[test]
+    fn dormant_income_fences_refuse_an_active_state_mirror() {
+        use crate::config::params::palw_t12_shipped_params;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        let mut reporter = palw_t12_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut reporter.palw_consensus_mode else { panic!("T12 V2") };
+        bundle.state = bundle.state.clone().with_reporter_income_from(Some(17_400));
+        assert!(reporter.palw_reporter_income_v2.is_none());
+        let error = reporter.validate_palw_reporter_income_v2().unwrap_err();
+        assert!(error.to_string().contains("state mirror"));
+        reporter.sync_palw_bond_budget_v1();
+        reporter.validate_palw_reporter_income_v2().unwrap();
+
+        let mut material = palw_t12_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut material.palw_consensus_mode else { panic!("T12 V2") };
+        bundle.state = bundle.state.clone().with_material_income_from(Some(17_400));
+        assert!(material.palw_material_income_v3.is_none());
+        let error = material.validate_palw_material_income_v3().unwrap_err();
+        assert!(error.to_string().contains("state mirror"));
+        material.sync_palw_bond_budget_v1();
+        material.validate_palw_material_income_v3().unwrap();
     }
 
     #[test]
@@ -5703,3 +5990,90 @@ mod tests {
 // Read-only native allocation inventory; no state/root/codec field is added.
 #[path = "palw_native_resource_v1/private/palw_bond_budget_v1.rs"]
 mod native_resource_inventory_v1;
+
+impl PalwBondBudgetStateV1 {
+    /// An already debited verifier escrow may be smaller than its drawn maximum.
+    /// Keep the entire original R reservation until physical payment + W; never
+    /// increase the cash amount or relax the existing exact source-fee API.
+    /// Ordinary verifier compensation whose actual timely conviction/default
+    /// has already been authenticated by the native fold, with no Clean claim
+    /// carrying liability. Its fee may mature before the alternative Clean H;
+    /// the originally reserved full R remains charged through real payment + W.
+    pub(crate) fn queue_terminal_verifier_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        now: u64,
+        collected: u64,
+        queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let row = self
+            .claims
+            .get(income_id)
+            .filter(|r| r.origin == PalwBudgetOriginV1::SourceFee && r.live && r.in_window && !r.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if collected == 0 || collected > row.reserved.reward_sompi || row.consumed.reward_sompi != 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("terminal verifier cash exceeds unconsumed drawn R"));
+        }
+        self.pay_native_income_inner_v1(policy, income_id, now, collected, Some(queue_id), true, j)
+    }
+
+    pub fn queue_collected_source_income_v1(
+        &mut self,
+        policy: &PalwBondBudgetPolicyV1,
+        income_id: &Hash64,
+        liability_until: u64,
+        now: u64,
+        collected: u64,
+        queue_id: Hash64,
+        j: &mut Vec<PalwBudgetWriteV1>,
+    ) -> Result<(), PalwBudgetRefusalV1> {
+        let row = self
+            .claims
+            .get(income_id)
+            .filter(|r| r.origin == PalwBudgetOriginV1::SourceFee && r.live && r.in_window && !r.open)
+            .ok_or(PalwBudgetRefusalV1::NotOpen)?;
+        if now <= liability_until || collected == 0 || collected > row.reserved.reward_sompi || row.consumed.reward_sompi != 0 {
+            return Err(PalwBudgetRefusalV1::Assignment("collected source cash exceeds its reserved maximum or is not mature"));
+        }
+        self.pay_native_income_inner_v1(policy, income_id, now, collected, Some(queue_id), true, j)
+    }
+}
+
+#[cfg(test)]
+mod collected_verifier_fee_tests {
+    use super::*;
+    #[test]
+    fn collected_fee_queue_never_exceeds_reserved_r_and_preserves_unused_cap_until_real_payment() {
+        let mut p = PalwBondBudgetPolicyV1::unapproved_probe_v1();
+        p.capital_unit_sompi = 1_000;
+        p.rho = 1;
+        p.reward_per_unit_sompi = 100;
+        p.claims_per_unit = 2;
+        p.max_open_claims_per_bond = 10;
+        p.window_daa = 100;
+        let bond = PalwBondKeyV2(crate::tx::TransactionOutpoint::new(Default::default(), 0));
+        let id = Hash64::from_u64_word(91);
+        let queue = Hash64::from_u64_word(92);
+        let mut b = PalwBondBudgetStateV1::new(100, &p);
+        let mut j = Vec::new();
+        b.reserve_source_income_v1(&p, 1_000, id, bond, 100, 200, 17, &mut j).unwrap();
+        let before = b.clone();
+        let n = j.len();
+        assert!(b.queue_collected_source_income_v1(&p, &id, 200, 201, 18, queue, &mut j).is_err());
+        assert_eq!(b, before);
+        assert_eq!(j.len(), n);
+        assert!(b.queue_collected_source_income_v1(&p, &id, 200, 200, 9, queue, &mut j).is_err());
+        b.queue_collected_source_income_v1(&p, &id, 200, 201, 9, queue, &mut j).unwrap();
+        let held = b.claim_row(&queue).unwrap();
+        assert_eq!(held.reserved.reward_sompi, 17);
+        assert_eq!(held.consumed.reward_sompi, 9);
+        assert!(b.queue_collected_source_income_v1(&p, &id, 200, 202, 9, queue, &mut j).is_err());
+        b.release_due(10_000, &mut j);
+        assert!(b.claim_row(&queue).unwrap().live, "time cannot release unpaid cash R");
+        b.confirm_native_income_payment_v1(&p, &queue, 10_000, &mut j).unwrap();
+        assert_eq!(b.claim_row(&queue).unwrap().reuse_not_before, 10_100);
+        b.check_consistency().unwrap();
+    }
+}

@@ -3,8 +3,10 @@ use crate::pb::RejectMessage;
 use crate::pb::{KaspadMessage, kaspad_message::Payload as KaspadMessagePayload};
 use crate::{KaspadMessagePayloadType, common::ProtocolError};
 use crate::{Peer, make_message};
+use kaspa_core::memory_budget::MemoryBudget;
 use kaspa_core::{debug, error, info, trace, warn};
 use kaspa_utils::networking::PeerId;
+use kaspa_utils_tower::transport::{Outbound, connection_budget};
 use parking_lot::{Mutex, RwLock};
 use seqlock::SeqLock;
 use std::fmt::{Debug, Display};
@@ -144,7 +146,8 @@ pub struct Router {
     routing_map_by_id: RwLock<HashMap<u32, MpscSender<KaspadMessage>>>,
 
     /// The outgoing route for sending messages to this peer
-    outgoing_route: MpscSender<KaspadMessage>,
+    outgoing_route: MpscSender<Outbound<KaspadMessage>>,
+    outgoing_budget: Arc<MemoryBudget>,
 
     /// A channel sender for internal event management. Used to send information from each router to a central hub object
     hub_sender: MpscSender<HubEvent>,
@@ -190,7 +193,7 @@ impl Router {
         is_outbound: bool,
         hub_sender: MpscSender<HubEvent>,
         mut incoming_stream: Streaming<KaspadMessage>,
-        outgoing_route: MpscSender<KaspadMessage>,
+        outgoing_route: MpscSender<Outbound<KaspadMessage>>,
     ) -> Arc<Self> {
         let (start_sender, start_receiver) = oneshot_channel();
         let (shutdown_sender, mut shutdown_receiver) = oneshot_channel();
@@ -203,6 +206,7 @@ impl Router {
             routing_map_by_type: RwLock::new(HashMap::new()),
             routing_map_by_id: RwLock::new(HashMap::new()),
             outgoing_route,
+            outgoing_budget: connection_budget(),
             hub_sender,
             mutable_state: Mutex::new(RouterMutableState::new(Some(start_sender), Some(shutdown_sender))),
         });
@@ -382,6 +386,9 @@ impl Router {
         if !prefix_history_message_bounded_v1(msg.payload.as_ref().expect("payload was just verified")) {
             return Err(ProtocolError::Other("public prefix history message exceeds its bounded wire envelope"));
         }
+        if !row_stream_generation_bounded_v1(msg.payload.as_ref().expect("payload was just verified")) {
+            return Err(ProtocolError::Other("PALW row stream generation is not one bounded current generation"));
+        }
         let msg_type: KaspadMessagePayloadType = msg.payload.as_ref().expect("payload was just verified").into();
         // Handle the special case of a reject message ending the connection
         if msg_type == KaspadMessagePayloadType::Reject {
@@ -421,7 +428,35 @@ impl Router {
 
     /// Enqueues a locally-originated message to be sent to the network peer
     pub async fn enqueue(&self, msg: KaspadMessage) -> Result<(), ProtocolError> {
+        self.enqueue_with_resources(msg, Vec::new()).await
+    }
+
+    /// Carry generation/session reservations through queue, codec, and final HTTP
+    /// Bytes ownership. Dropping the queue item or a failed send releases all tickets.
+    pub async fn enqueue_with_resources(
+        &self,
+        msg: KaspadMessage,
+        resources: tonic::codec::RetainedResources,
+    ) -> Result<(), ProtocolError> {
         assert!(msg.payload.is_some(), "Kaspad P2P message should always have a value");
+        let msg = Outbound::with_resources(msg, &self.outgoing_budget, resources)
+            .map_err(|error| ProtocolError::LocalTransportCapacityUnavailable(error.to_string()))?;
+        self.enqueue_admitted(msg)
+    }
+
+    /// Transfer a preconstruction ticket without an additional global raw charge.
+    pub async fn enqueue_preallocated(
+        &self,
+        msg: KaspadMessage,
+        lease: kaspa_core::memory_budget::MemoryLease,
+        resources: tonic::codec::RetainedResources,
+    ) -> Result<(), ProtocolError> {
+        let msg = Outbound::with_preallocated(msg, &self.outgoing_budget, lease, resources)
+            .map_err(|error| ProtocolError::LocalTransportCapacityUnavailable(error.to_string()))?;
+        self.enqueue_admitted(msg)
+    }
+
+    fn enqueue_admitted(&self, msg: Outbound<KaspadMessage>) -> Result<(), ProtocolError> {
         match self.outgoing_route.try_send(msg) {
             Ok(_) => Ok(()),
             Err(TrySendError::Closed(_)) => Err(ProtocolError::ConnectionClosed),
@@ -468,6 +503,18 @@ impl Router {
         self.hub_sender.send(HubEvent::PeerClosing(self.clone())).await.expect("hub receiver should never drop before senders");
 
         true
+    }
+}
+
+fn row_stream_generation_bounded_v1(payload: &KaspadMessagePayload) -> bool {
+    match payload {
+        KaspadMessagePayload::PruningPointPalwRowStream(message) => {
+            message.generation == kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1
+                && message.byte_len == message.generation_bytes.len() as u64
+                && message.generation_bytes.len() <= 4 << 20
+                && message.pruning_point_hash.as_ref().is_some_and(|hash| hash.bytes.len() == 64)
+        }
+        _ => true,
     }
 }
 
@@ -521,6 +568,26 @@ mod prefix_history_tests {
             crate::pb::PalwPrefixHistoryRequestMessage { request: vec![0; 513] }
         )));
     }
+
+    #[test]
+    fn a_row_stream_generation_must_be_the_one_current_bounded_generation() {
+        let ok = crate::pb::PruningPointPalwRowStreamMessage {
+            pruning_point_hash: Some(crate::pb::Hash { bytes: vec![1; 64] }),
+            generation: kaspa_consensus_core::palw_row_stream_v1::PALW_ROW_STREAM_CURRENT_GENERATION_V1,
+            byte_len: 4,
+            generation_bytes: vec![9; 4],
+        };
+        assert!(row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(ok.clone())));
+        let mut history = ok.clone();
+        history.generation = 2;
+        assert!(!row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(history)));
+        let mut truncated = ok.clone();
+        truncated.byte_len = 3;
+        assert!(!row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(truncated)));
+        let mut unnamed = ok;
+        unnamed.pruning_point_hash = None;
+        assert!(!row_stream_generation_bounded_v1(&KaspadMessagePayload::PruningPointPalwRowStream(unnamed)));
+    }
 }
 
 #[cfg(test)]
@@ -543,6 +610,83 @@ mod candidate_summary_route_tests {
             outgoing_route,
             hub_sender,
             mutable_state: Mutex::new(RouterMutableState::new(None, None)),
+        }
+    }
+
+    // t12 2026-10-31: optional summary timeout was tolerated, but its late reply
+    // reached the next block request and disconnected an otherwise usable peer.
+    #[tokio::test]
+    async fn a_shared_summary_route_reproduces_the_relay_disconnect() {
+        let router = router();
+        let mut route = router.subscribe(vec![]);
+        let expired: Result<_, ProtocolError> =
+            dequeue_with_timeout!(route, KaspadMessagePayload::IbdCandidateSummary, Duration::from_millis(1));
+        assert!(expired.is_err());
+        router
+            .route_to_flow(make_response!(
+                KaspadMessagePayload::IbdCandidateSummary,
+                IbdCandidateSummaryMessage::default(),
+                route.id()
+            ))
+            .unwrap();
+        router.route_to_flow(make_response!(KaspadMessagePayload::Block, BlockMessage::default(), route.id())).unwrap();
+        let block: Result<_, ProtocolError> = dequeue_with_timeout!(route, KaspadMessagePayload::Block);
+        assert!(matches!(block, Err(ProtocolError::UnexpectedMessage(..))));
+    }
+
+    #[tokio::test]
+    async fn late_candidate_summaries_do_not_poison_block_or_locator_responses() {
+        let router = router();
+        let mut relay = router.subscribe(vec![]);
+        let mut summary = router.subscribe(vec![]);
+        let expired: Result<_, ProtocolError> =
+            dequeue_with_timeout!(summary, KaspadMessagePayload::IbdCandidateSummary, Duration::from_millis(1));
+        assert!(expired.is_err());
+        // A late reply before the block, then another before the locator.
+        for payload in
+            [KaspadMessagePayload::Block(BlockMessage::default()), KaspadMessagePayload::BlockLocator(BlockLocatorMessage::default())]
+        {
+            router
+                .route_to_flow(make_response!(
+                    KaspadMessagePayload::IbdCandidateSummary,
+                    IbdCandidateSummaryMessage::default(),
+                    summary.id()
+                ))
+                .unwrap();
+            router.route_to_flow(KaspadMessage { payload: Some(payload), response_id: relay.id(), request_id: 0 }).unwrap();
+        }
+        let block: Result<_, ProtocolError> = dequeue_with_timeout!(relay, KaspadMessagePayload::Block);
+        assert!(block.is_ok());
+        let locator: Result<_, ProtocolError> = dequeue_with_timeout!(relay, KaspadMessagePayload::BlockLocator);
+        assert!(locator.is_ok());
+        // Late replies stay on the live optional route; they do not cause a no-route disconnect.
+        assert!(summary.try_recv().is_ok());
+        assert!(summary.try_recv().is_ok());
+        assert!(relay.try_recv().is_err());
+    }
+}
+
+#[cfg(test)]
+mod candidate_summary_route_tests {
+    use super::*;
+    use crate::pb::{BlockLocatorMessage, BlockMessage, IbdCandidateSummaryMessage};
+    use crate::{dequeue_with_timeout, make_response};
+    use std::time::Duration;
+
+    fn router() -> Router {
+        let (outgoing_route, _) = mpsc_channel(8);
+        let (hub_sender, _) = mpsc_channel(8);
+        Router {
+            identity: Default::default(),
+            net_address: "127.0.0.1:26311".parse().unwrap(),
+            is_outbound: true,
+            connection_started: Instant::now(),
+            routing_map_by_type: Default::default(),
+            routing_map_by_id: Default::default(),
+            outgoing_route,
+            hub_sender,
+            mutable_state: Mutex::new(RouterMutableState::new(None, None)),
+            outgoing_budget: connection_budget(),
         }
     }
 

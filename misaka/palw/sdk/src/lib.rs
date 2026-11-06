@@ -54,6 +54,7 @@ pub mod improve_eval;
 /// RFC-0004's objects (A10), built and signed offline: policy, hard cases, setter sets, datasets, teaching
 /// artifacts, licences, candidates, rollbacks — what `palw-class improve …` writes.
 pub mod improve_objects;
+pub mod chain_registered;
 pub mod lineage;
 pub mod lineages {
     pub mod dense;
@@ -668,3 +669,6 @@ mod provider_reader_fixture;
 
 /// RFC-0006 offline immutable per-reader router declarations (tag 244).
 pub mod router_binding_v2;
+
+/// Explicit RFC-0042 independent service consents and material controls.
+pub mod court_family_supplier_v1;

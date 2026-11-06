@@ -1,7 +1,9 @@
-# ADR-0210 — 全モデルの新規 producer claim を G14 の 1 席経路へ移す
+# ADR-0210 (AllModelG14PanelOne) — 全モデルの新規 producer claim を G14 の 1 席経路へ移す
+
+> **並行割当衝突:** 同番号の [ADR-0210 (CourtSupplierConsent)](0210-court-family-supplier-consent-and-native-reservation.md) は別の主文書です。両方の元番号・完全パス・採択内容・wire/署名domainを保持し、修飾名と完全パスで区別します。[番号台帳](../maintenance/numbering.md#2026-11-02-並行割当衝突)。
 
 Status: **ユーザー指定方針 / 実装・検証中、未有効化**（2026-10-31）。
-Specification: [RFC-0042](../rfc/0042-all-model-g14-panel-one.md)。
+Specification: [RFC-0042 (AllModelG14PanelOne)](../rfc/0042-all-model-g14-panel-one.md)。
 
 ## 決定
 

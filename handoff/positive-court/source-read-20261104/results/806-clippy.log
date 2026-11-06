@@ -1,0 +1,74 @@
+    Checking kaspa-consensus-core v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/core)
+   Compiling nom v7.1.3
+    Checking num-bigint v0.4.6
+    Checking alloy-eip2930 v0.1.0
+    Checking kaspa-wasm-core v1.1.0 (/dev/shm/misaka-oom-positive-next/wasm/core)
+   Compiling either v1.13.0
+   Compiling itertools v0.13.0
+    Checking kaspa-txscript v1.1.0 (/dev/shm/misaka-oom-positive-next/crypto/txscript)
+    Checking num-rational v0.4.2
+   Compiling cexpr v0.6.0
+    Checking num-iter v0.1.45
+    Checking num-complex v0.4.6
+   Compiling bitflags v2.9.4
+   Compiling bindgen v0.72.1
+    Checking num v0.4.3
+    Checking alloy-eip7702 v0.1.1
+    Checking revm-primitives v10.0.0
+   Compiling librocksdb-sys v0.17.3+10.4.2
+    Checking hex v0.4.3
+    Checking substrate-bn v0.6.0
+    Checking aurora-engine-modexp v1.2.0
+    Checking alloy-eip7702 v0.4.2
+    Checking nybbles v0.3.4
+    Checking ripemd v0.1.3
+    Checking revm-precompile v11.0.3
+    Checking alloy-trie v0.7.9
+    Checking alloy-eips v0.8.3
+    Checking kaspa-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/notify)
+    Checking revm-interpreter v10.0.3
+    Checking revm v14.0.3
+    Checking kaspa-consensus-notify v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/notify)
+    Checking alloy-consensus v0.8.3
+    Checking rocksdb v0.24.0
+    Checking kaspa-pq-validator-core v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/pq/validator-core)
+    Checking misaka-palw-tir-artifact v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/tir/artifact)
+    Checking bincode v1.3.3
+    Checking misaka-palw-host-security v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/security)
+    Checking kaspa-consensusmanager v1.1.0 (/dev/shm/misaka-oom-positive-next/components/consensusmanager)
+    Checking misaka-palw-base0 v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/palw/base0)
+    Checking kaspa-database v1.1.0 (/dev/shm/misaka-oom-positive-next/database)
+    Checking kaspa-evm v1.1.0 (/dev/shm/misaka-oom-positive-next/misaka/evm/core)
+    Checking kaspa-pow v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus/pow)
+    Checking kaspa-consensus v1.1.0 (/dev/shm/misaka-oom-positive-next/consensus)
+error: this function has too many arguments (11/10)
+   --> consensus/src/pipeline/virtual_processor/processor/palw_accept.rs:630:5
+    |
+630 | /     pub(super) fn palw_v2_accepted_objects_and_originals(
+631 | |         &self,
+632 | |         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+633 | |         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+...   |
+659 | |         PalwLocalTransitionFaultV1,
+660 | |     > {
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#too_many_arguments
+    = note: `-D clippy::too-many-arguments` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::too_many_arguments)]`
+
+error: this function has too many arguments (12/10)
+   --> consensus/src/pipeline/virtual_processor/processor/palw_accept.rs:834:5
+    |
+834 | /     pub(super) fn palw_v2_accepted_objects_and_refunds_inner(
+835 | |         &self,
+836 | |         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+837 | |         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+...   |
+867 | |         PalwLocalTransitionFaultV1,
+868 | |     > {
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.93.0/index.html#too_many_arguments
+
+error: could not compile `kaspa-consensus` (lib) due to 2 previous errors

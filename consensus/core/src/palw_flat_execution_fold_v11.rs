@@ -578,7 +578,7 @@ fn fund(
     if owners.len() >= EXECUTION_JOBS_PER_REQUESTER_V11 || count >= EXECUTION_LIVE_JOBS_MAX_V11 {
         return Err(refused("native funded job catalog full"));
     }
-    if requester_bond.collateral as u128 - builder.committed_at(signer, ctx.daa_score).min(requester_bond.collateral as u128)
+    if requester_bond.collateral as u128 - builder.committed_at(signer, ctx.daa_score)?.min(requester_bond.collateral as u128)
         < request.reward as u128
     {
         return Err(refused("native original requester escrow unavailable"));
@@ -892,7 +892,7 @@ fn commit(
     let post = decode_flat_execution_post_v11(bytes).map_err(|e| refused(e.to_string()))?;
     checked_flat_execution_post_v11(builder.state.kernel_route.as_ref().unwrap(), &class, &book, &post).map_err(refused)?;
     let producer = builder.state.bonds.get(signer).ok_or_else(|| refused("native producer absent"))?;
-    let free = (producer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score));
+    let free = (producer.collateral as u128).saturating_sub(builder.committed_at(signer, ctx.daa_score)?);
     if free < class.record().required_producer_reserve as u128 {
         return Err(refused("native original producer reserve unavailable"));
     }

@@ -1,0 +1,484 @@
+//! UNRUN source regressions. No native activation, global allocator/RSS or all-NF
+//! CPU claim. Synthetic coherent binding roots authenticate data association;
+//! the tiny ordinary CPU check merely compares known native literal endpoints.
+use super::*;
+use crate::{NodeValue, StepSink};
+use kaspa_consensus_core::{
+    palw_artifact::{PalwArtifactMerkleFrontierV1, artifact_leaf_parts_v1},
+    palw_tir_class_v1::{PalwTirClassV1, PalwTirLayoutV1},
+    palw_tir_step_v1::{PalwTirStepSpaceV2, palw_tir_execution_root_v1, verify_tir_binding_v2},
+};
+use misaka_palw_tir::{DType, Ref, builder::ProgramBuilder, program::LOGITS_I64_Q24_SCHEME_V2};
+use misaka_palw_tir_artifact::write_container_v1;
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
+    },
+};
+
+// Explicit conservative external test allowance: independently constructed
+// binding+opaque verified space/context, TempDir/path, raw fixture payloads,
+// expected program/layout/tokenizer copies, counters/callbacks and this budget.
+// This is a finite declared owner allowance, not measured physical RSS.
+const EXTERNAL: u64 = 8 << 20;
+const ALLOWANCE: u64 = 32 << 20;
+struct Fixture {
+    _dir: tempfile::TempDir,
+    path: PathBuf,
+    binding: PalwTirStepBindingV1,
+    verified: PalwTirVerifiedBindingV2,
+    ctx: PalwJobContextV2,
+    first_offset: u64,
+    last_end: u64,
+}
+impl Fixture {
+    fn new(empty: bool) -> Self {
+        let mut b = ProgramBuilder::new(2, 1 << 18);
+        let signed = b.param("signed", DType::I8, &[2], false);
+        let index = b.param("index", DType::Idx, &[2], false);
+        let logits = b.param("logits", DType::I64, &[2], false);
+        let mut pre = b.block("pre", vec![]);
+        let signed = pre.reshape_fixed(signed, &[2]);
+        pre.commit(signed);
+        let index = pre.reshape_fixed(index, &[2]);
+        pre.commit(index);
+        let pre = pre.finish(&[]);
+        let mut post = b.block("post", vec![]);
+        let logits = post.reshape_fixed(logits, &[2]);
+        post.commit(logits);
+        let Ref::Node(logits) = logits else { unreachable!() };
+        let post = post.finish(&[]);
+        let mut p = b.finish(pre, vec![], post, logits);
+        p.logits_scheme_id = LOGITS_I64_Q24_SCHEME_V2;
+        // Independent input literals are pinned BEFORE candidate file writing.
+        let data = [
+            vec![128, 127],
+            vec![0, 0, 0, 0, 255, 255, 255, 255],
+            vec![0, 0, 0, 0, 0, 0, 0, 128, 255, 255, 255, 255, 255, 255, 255, 127],
+        ];
+        let mut frontier = PalwArtifactMerkleFrontierV1::new();
+        for (j, raw) in data.iter().enumerate() {
+            frontier.push(artifact_leaf_parts_v1(&p.params[j].name, None, 0, raw));
+        }
+        let artifact = frontier.root().unwrap();
+        let class = PalwTirClassV1 {
+            version: 1,
+            program: p.encode(),
+            layout: PalwTirLayoutV1 {
+                version: 1,
+                max_context: 16,
+                checkpoint_interval: 1,
+                h_tile: 1,
+                commit_tiles: vec![4; 3],
+                state_tiles: vec![],
+            },
+            tokenizer_id: Hash64::from_u64_word(18),
+        };
+        let zero = Hash64::from_u64_word(0);
+        let ctx = PalwJobContextV2 {
+            version: 2,
+            network_id: b"testnet-12".to_vec(),
+            job_id: Hash64::from_u64_word(42),
+            job_nullifier: zero,
+            assignment_id: zero,
+            execution_seed: [3; 32],
+            model_profile_id: zero,
+            runtime_manifest_hash: zero,
+            runtime_class_id: zero,
+            shape_profile_id: class.class_id(&artifact),
+            trace_scheme_id: Hash64::from_bytes(LOGITS_I64_Q24_SCHEME_V2),
+            cu_ruleset_id: zero,
+            tokenizer_id: zero,
+            prompt_token_ids_hash: zero,
+            declared_prefill_tokens: 1,
+            exact_decode_tokens: 1,
+            max_context_tokens: 16,
+        };
+        let count = PalwTirStepSpaceV2::new(&class).unwrap().leaf_count_capped(&ctx, 1024).unwrap();
+        let trace = Hash64::from_u64_word(61);
+        let step = Hash64::from_u64_word(62);
+        let binding = PalwTirStepBindingV1 {
+            version: 1,
+            job_context: ctx.clone(),
+            class: class.clone(),
+            artifact_root: artifact,
+            full_logits_trace_root: trace,
+            step_leaf_count: count,
+            step_merkle_root: step,
+            committed_execution_root: palw_tir_execution_root_v1(&ctx.context_hash(), &trace, &ctx.shape_profile_id, count, &step),
+        };
+        let verified = verify_tir_binding_v2(&binding, 1024).unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("original.palwtir");
+        write_container_v1(
+            &path,
+            &p,
+            if empty { vec![] } else { borsh::to_vec(&class.layout).unwrap() },
+            class.tokenizer_id.as_bytes(),
+            "literal-owned-startup-test".into(),
+            &mut |j, _| Ok(data[j as usize].clone()),
+        )
+        .unwrap();
+        // Test-only metadata inspection is external inventory; production
+        // starts afresh from the SAME File supplied to load_wide_artifact_v2.
+        let mut probe = File::open(&path).unwrap();
+        let len = probe.metadata().unwrap().len();
+        let h = read_header_bounded_v1(&mut probe, len, limits().header).unwrap();
+        let first_offset = h.header().tensors[0].offset;
+        let e = h.header().tensors.last().unwrap();
+        let last_end = e.offset + e.bytes;
+        Self { _dir: dir, path, binding, verified, ctx, first_offset, last_end }
+    }
+    fn inputs(&self) -> LoadedWideInputsV2<'_> {
+        LoadedWideInputsV2 {
+            expected: &self.binding,
+            verified: &self.verified,
+            original_context: &self.ctx,
+            external_retained_bytes: EXTERNAL,
+            external_ticket: self,
+        }
+    }
+    fn file(&self) -> File {
+        OpenOptions::new().read(true).write(true).open(&self.path).unwrap()
+    }
+    fn bad_root(&self) {
+        let mut f = self.file();
+        f.seek(SeekFrom::Start(self.first_offset)).unwrap();
+        f.write_all(&[0]).unwrap();
+    }
+}
+fn limits() -> LoadedWideLimitsV2 {
+    LoadedWideLimitsV2 {
+        header: PalwTirHeaderLimitsV1 {
+            max_file_bytes: 1 << 20,
+            max_header_bytes: 1 << 16,
+            max_program_bytes: 1 << 18,
+            max_layout_bytes: 1 << 16,
+            max_tensors: 32,
+            max_meta_bytes: 1024,
+            max_native_bytes: 1 << 16,
+            max_copy_bytes: 1 << 16,
+            max_work: 1 << 32,
+            max_operation_bytes: 1 << 30,
+            external_retained_bytes: 0,
+        },
+        source: SourceProgramLocalLimitsV1 {
+            max_program_bytes: 1 << 18,
+            max_scan_steps: 1 << 32,
+            max_nf_items: 1 << 20,
+            max_native_requests: 1 << 20,
+        },
+        compile: TirPlanCompileLimitsV2 {
+            max_quote_visits: 1 << 24,
+            max_retained_bytes: 1 << 22,
+            max_scratch_bytes: 1 << 24,
+            max_operation_bytes: 1 << 30,
+            external_retained_bytes: 0,
+        },
+        params: OwnedParamLimitsV2 {
+            max_tensor_bytes: 1 << 20,
+            max_payload_bytes: 1 << 20,
+            max_chunk_bytes: 32768,
+            max_metadata_bytes: 1 << 20,
+            max_native_bytes: 1 << 20,
+            max_inventory_leaves: 1024,
+            max_work_per_attempt: 1 << 32,
+            max_attempts: 4,
+            max_total_read_bytes: 1 << 22,
+            max_total_inventory_leaves: 4096,
+            max_total_work: 1 << 36,
+            max_operation_bytes: 1 << 30,
+            external_retained_bytes: 0,
+        },
+        max_new_owner_bytes: ALLOWANCE,
+        max_operation_bytes: 1 << 30,
+        max_attempts: 4,
+        max_total_read_bytes: 1 << 24,
+        max_total_work: 1 << 40,
+        max_total_source_steps: 1 << 36,
+        max_retained_claims: 4 * ALLOWANCE,
+    }
+}
+fn cell_limits(external: u64) -> WideCellLimitsV2 {
+    WideCellLimitsV2 {
+        max_frame_bytes: 1 << 20,
+        max_decoded_bytes: 1 << 20,
+        max_operation_bytes: 1 << 30,
+        max_total_read_bytes: 1 << 24,
+        max_total_write_bytes: 1 << 24,
+        max_messages: 32,
+        max_steps: 4,
+        max_program_bytes: 1 << 18,
+        max_params: 32,
+        max_param_bytes: 1 << 20,
+        max_values: 32,
+        max_lanes: 1024,
+        max_carry_vectors: 8,
+        max_rank: 8,
+        max_name_bytes: 256,
+        max_workspace_bytes: 512 << 20,
+        max_work: 1 << 48,
+        external_retained_bytes: external,
+    }
+}
+struct Guard(Arc<AtomicU64>, u64);
+impl Drop for Guard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(self.1, Ordering::SeqCst);
+    }
+}
+fn reserver(held: Arc<AtomicU64>, calls: Arc<AtomicUsize>) -> TirMemoryReserverV1 {
+    Arc::new(move |role, _, _, bytes| {
+        assert_eq!(role, "tir-loaded-wide-artifact-v2");
+        assert_eq!(bytes, ALLOWANCE);
+        calls.fetch_add(1, Ordering::SeqCst);
+        held.fetch_add(bytes, Ordering::SeqCst);
+        Ok(Box::new(Guard(held.clone(), bytes)))
+    })
+}
+fn audited() -> bool {
+    if require_source_program_local_profile_v1().is_err() {
+        eprintln!("LOADED_WIDE_UNSUPPORTED_PROFILE: refusing; no successful startup/CPU execution claimed");
+        false
+    } else {
+        true
+    }
+}
+#[derive(Default)]
+struct Sink {
+    nodes: usize,
+}
+impl StepSink for Sink {
+    fn node(&mut self, value: &NodeValue<'_>) {
+        assert!(value.commit);
+        self.nodes += 1;
+    }
+}
+
+#[test]
+fn regular_file_to_private_source_compile_native_values_and_wide_cpu_endpoints() {
+    if !audited() {
+        return;
+    }
+    for empty in [false, true] {
+        let f = Fixture::new(empty);
+        let original_ctx = f.ctx.clone();
+        let original_class = f.binding.class.clone();
+        let held = Arc::new(AtomicU64::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let reserve = reserver(held.clone(), calls.clone());
+        let mut budget = LoadedWideStartupBudgetV2::new(limits()).unwrap();
+        let owner = load_wide_artifact_v2(f.file(), f.inputs(), &mut budget, Some(&reserve)).unwrap();
+        assert_eq!(owner.artifact_root(), f.binding.artifact_root);
+        assert_eq!(owner.quote().params.leaves, 3);
+        assert_eq!(owner.original_context(), &original_ctx);
+        assert_eq!(f.ctx, original_ctx);
+        assert_eq!(f.binding.class, original_class);
+        assert_eq!(owner.header.header().layout.is_empty(), empty);
+        assert_eq!(owner.source.program().encode(), f.binding.class.program);
+        assert_eq!(owner.header.header().tokenizer_id, Hash64::from_u64_word(18).as_bytes());
+        assert_eq!(owner.original_context().tokenizer_id, Hash64::from_u64_word(0));
+        assert_eq!(
+            owner.layout_origin(),
+            if empty { OwnedParamLayoutOriginV2::IndependentlyExpectedOnly } else { OwnedParamLayoutOriginV2::DeclaredInFile }
+        );
+        assert_eq!(held.load(Ordering::SeqCst), ALLOWANCE);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(owner.quote().operation_retained_bytes, ALLOWANCE + EXTERNAL);
+        assert!(owner.quote().retained_bytes <= ALLOWANCE);
+        assert!(owner.resident_open().is_ok());
+        owner.recheck_file_stamp().unwrap();
+        {
+            let l = cell_limits(owner.quote().operation_retained_bytes);
+            let prepared = owner.prepared_cell(l).unwrap();
+            assert!(prepared.open_work(l).unwrap() <= l.max_work);
+            let mut cell = prepared.open_cell(0..2, l).unwrap();
+            assert!(cell.kernel_work_for_next(0..2).unwrap() <= l.max_work);
+            let mut sink = Sink::default();
+            let carry = cell.step_data(0, 0..2, &[], &mut sink).unwrap();
+            assert!(carry.is_empty());
+            assert_eq!(sink.nodes, 3);
+            assert_eq!(cell.logits_lanes().unwrap(), [i64::MIN, i64::MAX]);
+            assert_eq!(held.load(Ordering::SeqCst), ALLOWANCE);
+        }
+        // Prepared borrows have ended; the actual data owner still owns lease.
+        assert_eq!(held.load(Ordering::SeqCst), ALLOWANCE);
+        assert_eq!(budget.source_usage().0, 1);
+        assert_eq!(budget.params_usage().read_bytes, 26);
+        drop(owner);
+        assert_eq!(held.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[test]
+fn header_source_compile_and_params_failures_keep_precharges_and_release_whole_guard() {
+    if !audited() {
+        return;
+    }
+    let f = Fixture::new(false);
+    for stage in 0..4 {
+        let mut l = limits();
+        match stage {
+            0 => l.header.max_native_bytes = (size_of::<BoundedPalwTirHeaderV1>() - 1) as u64,
+            1 => l.source.max_native_requests = 1,
+            2 => l.compile.max_retained_bytes = 1,
+            _ => l.params.max_payload_bytes = 25,
+        }
+        let want = [E::Header, E::Source, E::Compile, E::Params][stage];
+        let held = Arc::new(AtomicU64::new(0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let reserve = reserver(held.clone(), calls.clone());
+        let mut b = LoadedWideStartupBudgetV2::new(l).unwrap();
+        assert_eq!(load_wide_artifact_v2(f.file(), f.inputs(), &mut b, Some(&reserve)).err(), Some(want));
+        let u = b.usage();
+        assert_eq!(u.attempts, 1);
+        assert_eq!(u.retained_claims, ALLOWANCE);
+        assert_eq!(held.load(Ordering::SeqCst), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        if stage == 0 {
+            assert_eq!(u.charged_read_bytes, 0);
+            assert_eq!(u.charged_work, 0);
+        } else {
+            assert!(u.charged_read_bytes > 0);
+            assert!(u.charged_work > 0);
+        }
+        assert_eq!(b.source_usage().0, if stage >= 2 { 1 } else { 0 });
+        assert_eq!(b.params_usage().attempts, if stage == 3 { 1 } else { 0 });
+        assert_eq!(b.params_usage().read_bytes, 0); // refused before payload admission/read.
+    }
+}
+
+#[test]
+fn bad_actual_root_retries_keep_read_work_and_claims_until_attempt_cap() {
+    if !audited() {
+        return;
+    }
+    let f = Fixture::new(false);
+    f.bad_root();
+    let held = Arc::new(AtomicU64::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reserve = reserver(held.clone(), calls.clone());
+    let mut l = limits();
+    l.max_attempts = 2;
+    let mut b = LoadedWideStartupBudgetV2::new(l).unwrap();
+    let mut first = None;
+    for attempt in 1..=2 {
+        assert_eq!(load_wide_artifact_v2(f.file(), f.inputs(), &mut b, Some(&reserve)).err(), Some(E::Params));
+        let u = b.usage();
+        assert_eq!(u.attempts, attempt);
+        assert_eq!(u.retained_claims, attempt * ALLOWANCE);
+        assert_eq!(b.source_usage().0, attempt);
+        assert_eq!(b.params_usage().read_bytes, attempt * 26);
+        assert_eq!(b.params_usage().leaves, attempt * 3);
+        assert_eq!(calls.load(Ordering::SeqCst), attempt as usize);
+        assert_eq!(held.load(Ordering::SeqCst), 0);
+        if let Some(old) = first {
+            let old: LoadedWideUsageV2 = old;
+            assert_eq!(u.charged_read_bytes, old.charged_read_bytes * 2);
+            assert_eq!(u.charged_work, old.charged_work * 2);
+        } else {
+            first = Some(u);
+        }
+    }
+    let before = b.usage();
+    assert_eq!(load_wide_artifact_v2(f.file(), f.inputs(), &mut b, Some(&reserve)).err(), Some(E::Limit));
+    assert_eq!(b.usage(), before);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(held.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn truncated_regular_file_is_refused_by_split_table_before_any_owned_payload() {
+    if !audited() {
+        return;
+    }
+    let f = Fixture::new(false);
+    f.file().set_len(f.last_end - 1).unwrap();
+    let held = Arc::new(AtomicU64::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reserve = reserver(held.clone(), calls.clone());
+    let mut b = LoadedWideStartupBudgetV2::new(limits()).unwrap();
+    assert_eq!(load_wide_artifact_v2(f.file(), f.inputs(), &mut b, Some(&reserve)).err(), Some(E::Header));
+    assert_eq!(held.load(Ordering::SeqCst), 0);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(b.usage().retained_claims, ALLOWANCE);
+    assert!(b.usage().charged_read_bytes > 0);
+    assert_eq!(b.source_usage().0, 1);
+    assert_eq!(b.params_usage().read_bytes, 0);
+}
+
+#[test]
+fn bridge_floor_precedes_prepared_path_and_terminal_serve_preserves_upstream_usage() {
+    if !audited() {
+        return;
+    }
+    use std::io::Cursor;
+    let f = Fixture::new(true);
+    let held = Arc::new(AtomicU64::new(0));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let reserve = reserver(held.clone(), calls.clone());
+    let mut b = LoadedWideStartupBudgetV2::new(limits()).unwrap();
+    let owner = load_wide_artifact_v2(f.file(), f.inputs(), &mut b, Some(&reserve)).unwrap();
+    let floor = owner.quote().operation_retained_bytes;
+    assert_eq!(owner.prepared_cell(cell_limits(floor - 1)).err(), Some(E::Limit));
+    let mut low_reader = Cursor::new(Vec::<u8>::new());
+    let mut low_writer = Vec::new();
+    let refused = owner.serve(&mut low_reader, &mut low_writer, cell_limits(floor - 1)).unwrap_err();
+    assert_eq!(refused.kind, E::Limit);
+    assert_eq!(refused.usage, zero_session_usage());
+    assert_eq!(low_reader.position(), 0);
+    assert!(low_writer.is_empty());
+    // This asserts admission order by fixed refusal/untouched transport, not
+    // instrumentation of the internal context hash or allocator.
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(held.load(Ordering::SeqCst), ALLOWANCE);
+    let l = cell_limits(floor);
+    // Two literal Hello2 frames: first accepted, duplicate is terminal. No fake
+    // model peer/computation and no Open/execution is involved in this test.
+    let mut frames = Vec::new();
+    for _ in 0..2 {
+        frames.extend_from_slice(&5u64.to_le_bytes());
+        frames.extend_from_slice(&[0, 2, 0, 0, 0]);
+    }
+    let mut reader = Cursor::new(frames.clone());
+    let mut written = Vec::new();
+    let error = owner.serve(&mut reader, &mut written, l).unwrap_err();
+    assert_eq!(error.kind, E::Session);
+    assert_eq!(error.usage.read_bytes, 26);
+    assert_eq!(error.usage.steps, 0);
+    assert!(error.usage.work > 0);
+    assert!(error.usage.written_bytes > 0);
+    assert_eq!(error.usage.written_bytes, written.len() as u64);
+    let prepared = owner.prepared_cell(l).unwrap();
+    let mut original_reader = Cursor::new(frames);
+    let mut original_written = Vec::new();
+    let upstream = super::super::super::cell_ipc_v2::serve_wide_v2_for_plan(&mut original_reader, &mut original_written, &prepared, l)
+        .unwrap_err();
+    assert_eq!(error.usage, upstream.usage);
+    assert_eq!(written, original_written);
+    assert_eq!(held.load(Ordering::SeqCst), ALLOWANCE);
+}
+
+#[test]
+fn unsupported_build_explicitly_refuses_without_startup_success_claim() {
+    if require_source_program_local_profile_v1().is_ok() {
+        return;
+    }
+    // Do not construct the fixture or enter its canonical parse on an unknown
+    // profile. This case verifies only the dedicated nonallocating facade.
+    let b = LoadedWideStartupBudgetV2::new(limits()).unwrap();
+    assert_eq!(b.usage(), LoadedWideUsageV2::default());
+    // The dedicated Core facade is the first statement of the constructor;
+    // no unchecked external-binding test constructor is introduced to bypass it.
+    assert_eq!(
+        require_source_program_local_profile_v1(),
+        Err(kaspa_consensus_core::palw_native_resource_v1::SourceProgramLocalErrorV1::UnsupportedCoverage)
+    );
+    assert_eq!(b.source_usage().0, 0);
+    assert_eq!(b.params_usage().attempts, 0);
+    eprintln!("LOADED_WIDE_UNSUPPORTED_PROFILE: fixed profile refusal only, no successful startup claimed");
+}

@@ -1,0 +1,86 @@
+diff --git a/misaka/palw/remote/tests/positive_panel_sources_r1.rs b/misaka/palw/remote/tests/positive_panel_sources_r1.rs
+index f0661507e..701973c21 100644
+--- a/misaka/palw/remote/tests/positive_panel_sources_r1.rs
++++ b/misaka/palw/remote/tests/positive_panel_sources_r1.rs
+@@ -80,6 +80,7 @@ struct Duty {
+     bounds: DutyBoundsV2,
+     clock: Cell<u64>,
+     revoked: Cell<bool>,
++    complete: Cell<bool>,
+ }
+ impl CanonicalDataDutyV2 for Duty {
+     fn request(&self) -> &SourceRequest {
+@@ -95,7 +96,7 @@ impl CanonicalDataDutyV2 for Duty {
+         Ok(DutyBoundsV2 { now: self.clock.get(), ..self.bounds })
+     }
+     fn status(&self, _index: u64) -> Result<MinerDataStatus, MinerErrorV2> {
+-        Ok(MinerDataStatus::Pending)
++        Ok(if self.complete.get() { MinerDataStatus::Complete } else { MinerDataStatus::Pending })
+     }
+ }
+ fn duty(cache: &PanelSourceCacheR1, result: &MinerResultCommit, kind: SourceKind) -> Duty {
+@@ -112,6 +113,7 @@ fn duty(cache: &PanelSourceCacheR1, result: &MinerResultCommit, kind: SourceKind
+         },
+         clock: Cell::new(1),
+         revoked: Cell::new(false),
++        complete: Cell::new(false),
+     }
+ }
+ struct TempPath(PathBuf);
+@@ -175,7 +177,13 @@ fn actual_a2_fallback_sources_rebuild_cold_panel_artifact_and_replay() {
+             &f.key,
+             &signature,
+             &providers,
+-            ProcessLimitsV2 { max_units_per_request: 16, max_tracked_units: 16, max_provider_reads: 64, max_prepared_bytes: 1 << 22 },
++            ProcessLimitsV2 {
++                max_units_per_request: 16,
++                max_tracked_units: 16,
++                max_provider_reads: 64,
++                max_status_checks: 64,
++                max_prepared_bytes: 1 << 22,
++            },
+         )
+         .unwrap();
+         let artifact_duty = duty(&cache, &result, SourceKind::ArtifactInventory);
+@@ -207,6 +215,19 @@ fn actual_a2_fallback_sources_rebuild_cold_panel_artifact_and_replay() {
+         }
+         assert_eq!(responder.meter(), meter);
+         assert!(replacement.next_missing_request(SourceKind::ArtifactInventory, 16).unwrap().is_none());
++        // Model a canonical A4 receipt, independently of the Panel's cache
++        // import/ACK. A completed duty still requires bounded status lookups,
++        // while it must not fetch or prepare those source units again.
++        artifact_duty.complete.set(true);
++        let reads = (good.reads.get(), bad.reads.get());
++        let before_complete_lookup = responder.meter();
++        assert_eq!(replacement.acquire(&mut responder, &artifact_duty).unwrap(), 0);
++        let after_complete_lookup = responder.meter();
++        assert_eq!((good.reads.get(), bad.reads.get()), reads);
++        let expected_status_checks =
++            before_complete_lookup.status_checks.checked_add(artifact_duty.request.end - artifact_duty.request.first).unwrap();
++        assert_eq!(after_complete_lookup, PreparationMeterV2 { status_checks: expected_status_checks, ..before_complete_lookup });
++        assert_eq!(replacement.retained_bytes(), retained);
+         let artifact = replacement.assemble_artifact(&temp.0).unwrap();
+         assert_eq!(artifact.inventory_root().unwrap().0, f.artifact);
+         assert_eq!(artifact.class().unwrap(), f.class);
+@@ -330,13 +351,20 @@ fn altered_g14_units_and_foreign_request_cannot_populate_cache() {
+             &f.key,
+             &signature,
+             &providers,
+-            ProcessLimitsV2 { max_units_per_request: 16, max_tracked_units: 16, max_provider_reads: 64, max_prepared_bytes: 1 << 22 },
++            ProcessLimitsV2 {
++                max_units_per_request: 16,
++                max_tracked_units: 16,
++                max_provider_reads: 64,
++                max_status_checks: 64,
++                max_prepared_bytes: 1 << 22,
++            },
+         )
+         .unwrap();
+         let mut wrong = duty(&cache, &result, SourceKind::Input);
+         wrong.request.source = d(99);
+         assert_eq!(cache.acquire(&mut responder, &wrong), Err(PanelSourceErrorR1::Binding));
+         assert_eq!(responder.meter().provider_reads, 0);
++        assert_eq!(responder.meter().status_checks, 0);
+     });
+ }
+ 

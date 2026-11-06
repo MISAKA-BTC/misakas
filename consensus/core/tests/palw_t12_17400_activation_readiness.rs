@@ -58,7 +58,7 @@ fn independent_full_list_blockers_remain_visible_beyond_the_first_refusal() {
     p.sync_palw_claim_local_settlement_v1();
     let local = format!("{:?}", p.validate_palw_claim_local_settlement_v1().unwrap_err());
     println!("RFC23_STAGE2: {local}");
-    assert!(local.contains("runtime integration is incomplete"));
+    assert!(local.contains("no pinned measured readiness record"));
 }
 
 #[test]

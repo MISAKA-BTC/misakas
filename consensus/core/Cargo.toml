@@ -68,6 +68,9 @@ libcrux-ml-dsa.workspace = true
 # RFC-0002 Phase F: PALW-TIR v1 — the primitive set, programs, the reference evaluator and the demand
 # evaluator the IR court runs. A leaf crate (borsh + thiserror), consensus-grade by construction.
 misaka-palw-tir.workspace = true
+# RFC-0044: fixed Positive Result/Witness DTOs and aux151 row schemas. A leaf
+# without consensus or execution dependencies; no native authority constructors.
+misaka-palw-positive-contract.workspace = true
 # RFC-0003 Part I: deterministic randomness R and canonical outputs (rand_set_id, output_set_id, the
 # court's derived inputs and output digests). A leaf crate (blake2b + borsh).
 misaka-palw-gen.workspace = true
@@ -84,6 +87,8 @@ workflow-serializer.workspace = true
 workflow-wasm.workspace = true
 
 [dev-dependencies]
+# Court receipt/recovery tests use the real private book, never a runtime dependency.
+misaka-palw-positive-accounting.workspace = true
 criterion.workspace = true
 # DA16: the sketch's fixture weights for the public-material tests (an artifact, its inventory, its kernel commitments).
 misaka-palw-tir-sketch = { path = "../../misaka/palw/tir/sketch" }

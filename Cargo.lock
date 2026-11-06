@@ -3818,9 +3818,11 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-challenge",
  "misaka-palw-kernel",
+ "misaka-palw-positive-contract",
  "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir",
+ "misaka-palw-tir-artifact",
  "misaka-palw-tir-exec",
  "misaka-palw-tir-lower",
  "misaka-palw-tir-sketch",
@@ -3833,6 +3835,7 @@ dependencies = [
  "secp256k1",
  "serde",
  "serde_json",
+ "sha2 0.10.8",
  "smallvec",
  "thiserror 1.0.64",
  "tokio",
@@ -3899,6 +3902,8 @@ dependencies = [
  "misaka-palw-gen",
  "misaka-palw-kernel",
  "misaka-palw-panel",
+ "misaka-palw-positive-accounting",
+ "misaka-palw-positive-contract",
  "misaka-palw-tir",
  "misaka-palw-tir-sketch",
  "rand 0.8.6",
@@ -4140,13 +4145,17 @@ dependencies = [
  "kaspa-notify",
  "kaspa-rpc-core",
  "kaspa-utils",
+ "kaspa-utils-tower",
  "log",
  "paste",
+ "proc-macro2",
  "prost",
  "protoc-bin-vendored",
+ "quote",
  "rand 0.8.6",
  "regex",
  "serde_json",
+ "syn 2.0.110",
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",
@@ -4460,10 +4469,13 @@ dependencies = [
  "kaspa-utils-tower",
  "log",
  "parking_lot",
+ "proc-macro2",
  "prost",
+ "quote",
  "rand 0.8.6",
  "seqlock",
  "serde",
+ "syn 2.0.110",
  "thiserror 1.0.64",
  "tokio",
  "tokio-stream",
@@ -4915,9 +4927,13 @@ dependencies = [
  "futures",
  "http-body",
  "http-body-util",
+ "kaspa-core",
  "log",
  "pin-project-lite",
+ "prost",
  "tokio",
+ "tonic",
+ "tonic-prost",
  "tower",
  "tower-http",
 ]
@@ -5370,6 +5386,7 @@ dependencies = [
  "misaka-palw",
  "misaka-palw-base0",
  "misaka-palw-kernel",
+ "misaka-palw-positive-contract",
  "misaka-palw-remote",
  "misaka-palw-sdk",
  "misaka-palw-tir",
@@ -6292,11 +6309,13 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "libc",
+ "misaka-palw-base0",
  "misaka-palw-kernel",
  "misaka-palw-remote",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "serde_json",
+ "sha2 0.10.8",
 ]
 
 [[package]]
@@ -6309,6 +6328,38 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.64",
+]
+
+[[package]]
+name = "misaka-palw-positive-accounting"
+version = "1.1.0"
+dependencies = [
+ "misaka-palw-positive-contract",
+]
+
+[[package]]
+name = "misaka-palw-positive-accounting-node"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "libcrux-ml-dsa",
+ "misaka-palw-kernel",
+ "misaka-palw-positive-accounting",
+ "misaka-palw-positive-contract",
+ "misaka-palw-tir",
+ "misaka-palw-tir-exec",
+]
+
+[[package]]
+name = "misaka-palw-positive-contract"
+version = "1.1.0"
+dependencies = [
+ "blake2b_simd",
+ "borsh",
+ "libcrux-ml-dsa",
+ "serde_json",
 ]
 
 [[package]]
@@ -6361,9 +6412,12 @@ dependencies = [
  "misaka-endpoints",
  "misaka-palw-challenge",
  "misaka-palw-kernel",
+ "misaka-palw-positive-contract",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
+ "misaka-palw-tir-exec",
  "misaka-palw-tir-sketch",
+ "rocksdb",
  "serde",
  "serde_json",
  "thiserror 1.0.64",
@@ -6389,6 +6443,7 @@ dependencies = [
  "misaka-palw-base0",
  "misaka-palw-challenge",
  "misaka-palw-gen",
+ "misaka-palw-host-security",
  "misaka-palw-kernel",
  "misaka-palw-panel",
  "misaka-palw-tir",
@@ -6466,14 +6521,20 @@ dependencies = [
  "blake2b_simd",
  "borsh",
  "cc",
+ "kaspa-consensus",
  "kaspa-consensus-core",
+ "kaspa-database",
  "libc",
+ "libcrux-ml-dsa",
  "misaka-palw-base0",
+ "misaka-palw-positive-accounting",
+ "misaka-palw-positive-contract",
  "misaka-palw-tir",
  "misaka-palw-tir-artifact",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rayon",
+ "rocksdb",
  "serde_json",
  "tempfile",
 ]
@@ -9195,8 +9256,6 @@ dependencies = [
 [[package]]
 name = "tonic"
 version = "0.14.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fec7c61a0695dc1887c1b53952990f3ad2e3a31453e1f49f10e75424943a93ec"
 dependencies = [
  "async-trait",
  "axum",

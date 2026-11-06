@@ -1,0 +1,30 @@
+[package]
+name = "misaka-palw-positive-accounting-node"
+description = "Node-side A5 adapters for checked TIR terminals and existing funded escrow"
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["tir-checker"]
+tir-checker = ["dep:misaka-palw-tir-exec"]
+
+[dependencies]
+misaka-palw-positive-accounting = { path = "../positive-accounting" }
+misaka-palw-positive-contract = { path = "../positive-contract" }
+misaka-palw-tir-exec = { path = "../tir/exec", optional = true, features = ["positive-contract"] }
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+
+[dev-dependencies]
+misaka-palw-tir = { path = "../tir/core" }
+libcrux-ml-dsa.workspace = true
+borsh.workspace = true
+misaka-palw-kernel.workspace = true
+
+[lints]
+workspace = true

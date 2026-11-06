@@ -1,0 +1,22 @@
+{
+  "command": [
+    "cargo",
+    "test",
+    "--offline",
+    "--locked",
+    "-p",
+    "misaka-palw-positive-accounting-node",
+    "--config",
+    "profile.dev.package.kaspa-consensus-core.opt-level=0"
+  ],
+  "environment": {
+    "CARGO_TARGET_DIR": "/Users/wata/.cache/misaka-positive-accounting-node-target",
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "2"
+  },
+  "exit_code": 0,
+  "raw_log": "registered-node-full.log",
+  "base_commit": "31831d48c91e5fc45aaeb155eac50daf67a21215"
+}

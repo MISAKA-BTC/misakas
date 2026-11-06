@@ -1,0 +1,42 @@
+{
+  "head": "84d7186471454c050c85fd3170b1ba9dea0d9987",
+  "files": [
+    {
+      "path": "Cargo.lock",
+      "sha256": "d7b066553e2213b205e2ae0edce36a560e1d02277f966d96439204e994375200"
+    },
+    {
+      "path": "consensus/core/tests/palw_tir_court_verify_cpu.rs",
+      "sha256": "a58ebdd11fcecda426aa0d3daf00423fb64c87a295886e13f0803ac95ccb496c"
+    },
+    {
+      "path": "consensus/core/tests/palw_tir_fixture_common.rs",
+      "sha256": "bb756bad4d221de2451017efe0f8ee258f56d76e64825a6e7315913a79d5b3bc"
+    }
+  ],
+  "host": {
+    "sysctl": "hw.model: Mac13,1\nhw.memsize: 34359738368\nhw.ncpu: 10",
+    "uptime_before": "12:30  up 15:19, 1 user, load averages: 8.17 10.67 10.29",
+    "uptime_after": "13:00  up 15:50, 1 user, load averages: 11.96 10.99 11.44"
+  },
+  "stage": "built",
+  "command": [
+    "/Users/wata/Downloads/MISAKA-wt-b/buildslot.sh",
+    "cargo",
+    "test",
+    "--offline",
+    "--release",
+    "-p",
+    "kaspa-consensus-core",
+    "--test",
+    "palw_tir_court_verify_cpu",
+    "--no-run"
+  ],
+  "exit_code": 0,
+  "wall_seconds": 1843.5,
+  "identity_matches": true,
+  "pinned_binary": {
+    "path": "/Users/wata/.codex/artifacts/g14-17000-measure/pins/palw_tir_court_verify_cpu-0941f87a6f6eb3cb",
+    "sha256": "bc13a045eb79b795365c9f21050da122a2e3de479246c9e3beb2a02c9c1e4ac7"
+  }
+}

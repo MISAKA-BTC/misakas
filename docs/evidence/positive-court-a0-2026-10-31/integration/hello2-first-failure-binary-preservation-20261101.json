@@ -1,0 +1,11 @@
+{
+  "source_commit": "9795a6038",
+  "scope": "Initial Hello2 actual OS child FAIL, oldcapture4/oldcell12/newHello2five PASS; one failure+ignoredhelper, not complete success. Preserve binary before sourcefix/relink.",
+  "path": "/Users/wata/.codex/worktrees/positive-court-a0/target/debug/deps/cell_ipc_v2-24d04baed76552cc",
+  "bytes": 21257136,
+  "sha256": "54ed7e50c3458e8cbfc990730c87403c24a3fa89a9e36d5bb3d65b7bf1215a0d",
+  "gzip_path": "/Users/wata/.codex/worktrees/positive-court-a0/target/stack-before-0df5-preserved-20261101/hello2-9795-first-failure.gz",
+  "gzip_bytes": 5169914,
+  "gzip_sha256": "bd658aea64efe5d0be7203e18f64c27ac74558847e67dac0c31cc10d1c11e315",
+  "decompression_sha256_verified": true
+}

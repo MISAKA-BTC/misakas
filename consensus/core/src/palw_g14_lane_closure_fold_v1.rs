@@ -32,6 +32,7 @@ pub(super) fn lock_kernel_signer_v1(
     claim_reward: u64,
     quorum: u8,
 ) -> Result<bool, PalwStateV2Error> {
+    super::palw_verifier_fee_consent_fold_v1::clean_receipt_gate(builder, claim, seat, ctx.daa_score)?;
     let key = palw_kernel_signer_lock_key_v1(&palw_kernel_bond_id_v1(seat), claim);
     let Some(route) = builder.state.kernel_route.as_ref() else { return Ok(false) };
     if route.aux.contains_key(&(PALW_G14_LANE_CLOSURE_TABLE_V1, key.clone())) {
@@ -42,7 +43,7 @@ pub(super) fn lock_kernel_signer_v1(
     if !matches!(record.status, PalwBondStatusV2::Active) {
         return Ok(false);
     }
-    let free = u128::from(record.collateral).saturating_sub(builder.committed_at(seat, ctx.daa_score));
+    let free = u128::from(record.collateral).saturating_sub(builder.committed_at(seat, ctx.daa_score)?);
     if free < u128::from(amount) {
         return Ok(false);
     }
@@ -184,7 +185,7 @@ pub(super) fn charge_exec_root_signers_on_proven_false_v1(
     if covering.is_empty() {
         return Ok(());
     }
-    let conv = builder.open_conviction_v1(&covering, now_daa);
+    let conv = builder.open_conviction_v1(&covering, now_daa)?;
     let g = builder.claim_g_v1(&root_id).map(|gains| gains.g()).unwrap_or(0);
     builder.charge_covering_signers_v1(&conv, root_id, &covering, g)
 }

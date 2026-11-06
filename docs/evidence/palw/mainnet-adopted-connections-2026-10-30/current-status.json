@@ -1,0 +1,89 @@
+{
+  "updated_utc": "2026-10-30T10:26:18.609536+00:00",
+  "classification": "diagnostic progress only; no final same-source completion proof",
+  "implementation_complete": false,
+  "last_unified_build": "build11 running seven-package lib no-run from rebuilt target; core production library compiled, rest pending; no final same-source result",
+  "passed_diagnostics": {
+    "original_three_filters": 3,
+    "rfc37_actual_peer_transfer": 3,
+    "sdk_family": 2,
+    "winning_carrier_seat": 6,
+    "zero_genesis_bond_actual_node": 1,
+    "probe8_rfc23s2": 57,
+    "probe8_native39_including_unreduced_budget": 5,
+    "probe8_authenticated_table_geometry": 1,
+    "probe9_rfc23s2": 59,
+    "probe9_family_eog_validation": 1,
+    "probe12_rfc23s2": 61
+  },
+  "open_runtime_failures": {
+    "family_original": "probe12 stopped on semantic/full allocation material-horizon mismatch; clock3 scoped correction written, rerun pending",
+    "native39_actual_node": "real seven-attestor GateC passed before PNR9 clipped-budget refusal; unreduced mapping and native liability lifecycle corrections written, fullnode rerun pending",
+    "native39_window_regression": "probe12 8 pass / 1 fail; test moved time backwards; chronology fixed, rerun pending",
+    "native_common_capital": "probe12 typed malformed197 codec error misclassified as resource; bounded typed decoder fix in progress"
+  },
+  "required_remaining": [
+    "complete genuine family intake/material/adjudication positive tests",
+    "real network/bond-bound A-C selected-chain campaign alongside independent native B",
+    "full finite native/EXEC material closure and checkpoint GC validation",
+    "stage2 measurements and adopted readiness validator integration; guard retained",
+    "native39 full payout/conviction/collection and EVM Safe/Finalized pruning campaign",
+    "final frozen-source unified build, normal node binary and full targeted tests with exact binary hashes",
+    "versioned scoped checkpoint material references eliminating unrelated whole-world journal amplification",
+    "prove actual family supplier block packing fits original preparation/opening deadlines",
+    "18400 existing G14 schedule/records/fleet identity and boundary/startup verification"
+  ],
+  "activation_request": {
+    "network": "testnet-12",
+    "requested_daa": 18400,
+    "old_g14": "Source changed to18400: shipped preset, new height-bound records and consumers, fleet template; record reproduction PASS84 entries. Rust startup/boundary and final fingerprint repin pending.",
+    "additional_features": "not ready for blanket activation; same-candidate E2E and material retention accounting remain incomplete",
+    "public_deployment": "not performed"
+  },
+  "implementation_by_item": [
+    {
+      "item": 1,
+      "state": "finite signed verifier/provider fee code written; latest same-source payout/undo validation pending"
+    },
+    {
+      "item": 2,
+      "state": "native funded intake/escrow/settlement code written; genuine original runtime and fullnode campaign incomplete"
+    },
+    {
+      "item": 3,
+      "state": "signed supplier charges and normalized finance storage written; global checkpoint amplification accounting unresolved"
+    },
+    {
+      "item": 4,
+      "state": "four-role original reservation and clock3 code written; actual block-packing schedule and end-to-end acceptance incomplete"
+    },
+    {
+      "item": 5,
+      "state": "dependency archives and compact source code written;61 core diagnostics passed; current material references and actual full-profile E2E incomplete"
+    },
+    {
+      "item": 6,
+      "state": "authenticated prefix birth/export code written; targeted regression passed; actual source-consumer fullnode campaign incomplete"
+    },
+    {
+      "item": 7,
+      "state": "native39 closed facts and EVM bridge code written; native-budget bug fixes and actual EVM pruning campaign not yet validated"
+    },
+    {
+      "item": 8,
+      "state": "P2P109 opt-in stream connection written;3 peer diagnostics passed; latest full import bridge regressions not rerun"
+    },
+    {
+      "item": 9,
+      "state": "accepted winning carrier persisted and seat binding written;6 seat diagnostics passed; final same-source rerun pending"
+    },
+    {
+      "item": 10,
+      "state": "zero-genesis-bond startup implemented; real-node diagnostic passed; final same-source rerun pending"
+    },
+    {
+      "item": 11,
+      "state": "incomplete; seven-package diagnostic rebuild running; production node build and final frozen-source E2E pending"
+    }
+  ]
+}

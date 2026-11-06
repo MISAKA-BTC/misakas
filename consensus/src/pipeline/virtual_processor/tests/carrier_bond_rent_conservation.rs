@@ -78,8 +78,8 @@ async fn palw_bond_burn_and_object_rent_cannot_spend_the_same_actual_fee() {
         row.slashed = burn;
         row.status = PalwBondStatusV2::Retiring { since_daa: 0, settled_at_since: 0 };
         let state = carriage.into_state(&bundle.state, None).unwrap();
-        let locked = vp.palw_v2_locked_bond_outpoints(&state, now);
-        let burns = vp.palw_v2_bond_burn_obligations(&state, now);
+        let locked = vp.palw_v2_locked_bond_outpoints(&state, now).unwrap();
+        let burns = vp.palw_v2_bond_burn_obligations(&state, now).unwrap();
         assert!(!locked.contains(&bond.0));
         assert_eq!(burns.get(&bond.0).copied().unwrap_or(0), burn);
         let group = kaspa_hashes::Hash64::from_u64_word(0xB0F0 + case);

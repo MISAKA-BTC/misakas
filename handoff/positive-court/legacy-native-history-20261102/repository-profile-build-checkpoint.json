@@ -1,0 +1,9 @@
+{
+  "operator_action": "terminate own build-only attempt before adding the prepared regression, to compile the final test candidate once",
+  "process_group": 20310,
+  "verified_parent": "20310 /Users/wata/.rustup/toolchains/1.93.0-aarch64-apple-darwin/bin/cargo test --message-format=json-render-diagnostics --offline --locked -p kaspa-consensus --lib -- g14_cert_kernel_route_ --nocapture --test-threads=1",
+  "runtime_tests_observed": 0,
+  "new_core_dependency_compiled": true,
+  "reason": "batch the two unchanged regressions and actual DB-reopen regression in one final source candidate",
+  "time_unix": 1793619771.75981
+}

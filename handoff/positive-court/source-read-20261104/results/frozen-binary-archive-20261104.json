@@ -1,0 +1,14 @@
+[
+  {
+    "original_path": "/dev/shm/misaka-positive-pre-isolated-target/debug/deps/kaspa_consensus-a625c93f0f85ef22",
+    "archive_path": "/tmp/misaka-positive-frozen-binaries.7e9xqr1z/kaspa_consensus-a625c93f0f85ef22",
+    "bytes": 441079792,
+    "sha256": "583efd6d80d36d6de19d4bc9db21d0e96a6700fcf686975fa634253f4289cadd"
+  },
+  {
+    "original_path": "/dev/shm/misaka-positive-pre-isolated-target/debug/deps/kaspa_consensus_core-db4a5219334e38e8",
+    "archive_path": "/tmp/misaka-positive-frozen-binaries.7e9xqr1z/kaspa_consensus_core-db4a5219334e38e8",
+    "bytes": 176577168,
+    "sha256": "ccacfce66004821a4e9ed9bd3bcc5b1cdf5e22f0729a4eaa07e74692b04c5749"
+  }
+]

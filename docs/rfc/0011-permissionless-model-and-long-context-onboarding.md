@@ -1,5 +1,7 @@
 # RFC-0011: Permissionless model onboarding with probabilistic constraint verification and court on dispute
 
+> **2026-10-15 ユーザー恒久決定による除外:** 本文に残る GKR・sum-check・FRI 等を計算 validity argument として使う記述、暗号学的な計算証明・集約の候補は履歴であり、採用・実装・研究候補から除外する。[PRINCIPLES §8](../PRINCIPLES.md) を優先する。直接の確率的スポットチェック、公開証拠による局所化、決定論的裁定と、前提を明示した抽選検証者の承認を用いる。
+
 > **変更管理:** 採用済み部分は原則凍結。パラメーター調整と重大問題時の新規RFC + ADRは [凍結規程](../governance/design-freeze.md) に従う。Draft全文の採用や有効化ではない。
 
 > **適用時期の現行方針（2026-10-17 文書化）:** 本書が参照する画像・動画生成および RFC-0004 の改善に限り **mainnet 後へ延期・当面無効**。初期 mainnet の必須実装・提供・有効化に含めず、mainnet 開始による自動有効化もしない。共有のテキスト・固定登録・検証・会計は維持する。過去の Status・実装・試験・全面有効化計画はこの範囲の有効化承認ではない。[正式な範囲・無効化要求・再開条件](../governance/post-mainnet-scope.md)。今回 node コードは変更しておらず、runtime の無効化は未確認。

@@ -137,6 +137,10 @@ impl ConsensusInstance {
         Self { session_lock, consensus, startup: Arc::new(StartupGate::new(false)) }
     }
 
+    pub(crate) fn matches_api_v1(&self, pinned: &dyn ConsensusApi) -> bool {
+        std::ptr::eq(self.consensus.as_ref(), pinned)
+    }
+
     pub(crate) fn finish_startup(&self) {
         self.startup.finish();
     }
@@ -1227,6 +1231,15 @@ impl ConsensusSessionOwned {
     }
 
     /// Same store-tip read profile as `palw_producer_facts_v2` below. Empty off ConsensusV2.
+    pub fn palw_locked_bond_outpoints_checked_v3(
+        &self,
+    ) -> Result<Vec<kaspa_consensus_core::tx::TransactionOutpoint>, kaspa_consensus_core::palw_state_v2::PalwStateV2Error> {
+        self.consensus.palw_locked_bond_outpoints_checked_v3()
+    }
+
+    // Preserve the deprecated API's diagnostic fallback semantics when forwarding.
+    #[allow(deprecated)]
+    #[deprecated(note = "diagnostic-only compatibility; funding must use palw_locked_bond_outpoints_checked_v3")]
     pub fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
         self.consensus.palw_locked_bond_outpoints_v2()
     }
@@ -1739,6 +1752,12 @@ impl ConsensusSessionOwned {
 
     pub async fn async_get_pruning_point_proof(&self) -> Arc<PruningPointProof> {
         self.clone().spawn_blocking(|c| c.get_pruning_point_proof()).await
+    }
+
+    pub async fn async_try_get_pruning_point_proof(
+        &self,
+    ) -> kaspa_consensus_core::errors::pruning::PruningImportResult<Arc<PruningPointProof>> {
+        self.clone().spawn_blocking(|c| c.try_get_pruning_point_proof()).await
     }
 
     pub async fn async_create_virtual_selected_chain_block_locator(

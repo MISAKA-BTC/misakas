@@ -2427,6 +2427,9 @@ pub struct Params {
     /// G14 TIR required-family staged route (native-context seeds/answers over the decode view).
     /// Dormant everywhere; requires `palw_staged_public_court_v1` at or below it.
     pub palw_staged_tir_route_v1: Option<ForkActivation>,
+    /// RFC-0026 §11 BCT1 transport and rent. Independent of the legacy
+    /// material route and disabled until the complete Batch profile is ready.
+    pub palw_batch_court_v1: Option<ForkActivation>,
     /// Original paid TIR public-conviction allocations and signed controls.
     /// Independent and dormant on every shipped preset; never reprices old claims.
     pub palw_tir_public_conviction_v1: Option<ForkActivation>,
@@ -3062,6 +3065,12 @@ pub struct Params {
     /// RFC-0002 §II.14: owning39 ordinary mining (registration, seats, mining claims, receipts; stage actions 73–79 and the
     /// `PNR9` receipt-block carriage). Dormant on every preset; `validate_palw_native_mining_v39` refuses it armed.
     pub palw_native_mining_v39: Option<crate::palw_native_mining_v39::PalwNativeMiningFenceV39>,
+    /// RFC-0044 native Positive Court. Private finite profile; no public activation is assigned.
+    pub palw_positive_court_v2: Option<PositiveCourtFenceV2>,
+    /// RFC-0045 result-free canonical assignments. No public activation is assigned.
+    pub palw_positive_assignment_v2: Option<PositiveAssignmentFenceV2>,
+    /// RFC-0046 limited funding-relay metadata intake. Dormant on every preset.
+    pub palw_positive_funding_relay_v2: Option<PositiveFundingRelayFenceV2>,
 
     /// **ADR-0178: rule E, the fork choice that heals a partition on bonded participation** ([`crate::palw_fork_choice_rule_e_v1`]):
     /// past it the sink search weighs every valid tip, the deep-reorg gate and the IBD commit compare the two tips' EXCLUSIVE pasts
@@ -3086,6 +3095,8 @@ pub struct Params {
     /// default's demander share is held to the liability horizon. **Dormant**: `None` on every preset, Some-only hashed, collapsed from
     /// `Some(never())`, refused when armed ([`Self::validate_palw_verifier_pay_v1`]).
     pub palw_verifier_pay_v1: Option<ForkActivation>,
+    /// Explicit M*-49 watcher pool/draw policy; no shipped default values.
+    pub palw_verifier_watch_v1: Option<crate::palw_verifier_watch_v1::PalwVerifierWatchFenceV1>,
     /// **RFC-0002 P0: protected candidate refutations** ([`crate::palw_model_refutation_seal_v4`], lane RFC02-T): past this height
     /// a refutation of a candidate statement (model artifact binding v2, model vector v2, flat model vector v3) is admitted only as
     /// the reveal of the signer's own mature seal (kernel inner 36 / 37), and the frozen unsealed refutations (inner 23 / 27 / 32)
@@ -3236,6 +3247,8 @@ pub struct Params {
     /// fingerprints and the fork id, collapsed from `Some(never())`; refused when armed without `palw_fp_derived_work` and
     /// `palw_canonical_work` at or below it ([`crate::palw_fp_answer_accounting_v1`]).
     pub palw_fp_answer_accounting_v1: Option<ForkActivation>,
+    /// RFC-0042 new supplier contracts; separate version upgrade, dormant on every preset.
+    pub palw_court_family_supplier_v1: Option<ForkActivation>,
     /// **palw_claim_hard_deadline_v1** — register X3: past it a claim's dispute hard deadline is fixed at acceptance and never extended. **Dormant, with no activation height**: `None` on every preset and in no flag-day list, hashed Some-only
     /// in both fingerprints, collapsed from `Some(never())`, refused when armed ([`Self::validate_palw_2026_10_12_ruling_fences_v1`])
     /// until its rule is built and verified (user ruling 2026-10-12, docs/design/palw/integration/mainnet-spec-register-2026-10-12.md).
@@ -4338,6 +4351,14 @@ pub fn palw_v2_bond_withdrawal_delay_at_v1(
 mod activation;
 mod full_activation_v1;
 mod identity;
+mod positive_court_v2;
+pub use positive_court_v2::{PositiveCourtFenceV2, PositiveCourtPolicyV2};
+mod positive_assignment_v2;
+mod positive_funding_relay_v2;
+pub use positive_assignment_v2::{
+    AssignmentNativePreimagesV2, AssignmentServiceCapacityV2, PositiveAssignmentFenceV2, PositiveAssignmentRuleScopeV2,
+};
+pub use positive_funding_relay_v2::{AssignmentFundingRelayProfileV2, PositiveFundingRelayFenceV2, PositiveFundingRelayRuleScopeV2};
 mod mirror;
 mod validation;
 pub use full_activation_v1::*;
@@ -5098,6 +5119,13 @@ impl Params {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) if f != ForkActivation::never() => Some(f),
             _ => None,
         }
+    }
+
+    pub fn palw_batch_court_v1_fence(&self) -> Option<ForkActivation> {
+        let batch = self.palw_batch_court_v1.filter(|f| *f != ForkActivation::never())?;
+        let tir = self.palw_tir_public_conviction_v1_fence()?;
+        let audit = self.palw_audit_2026_09_11_fence()?;
+        (batch.daa_score() >= tir.daa_score().max(audit.daa_score())).then_some(batch)
     }
 
     /// **G14's original paid TIR public-conviction route** — in force only where every rule its verdicts consume is in force too
@@ -6251,6 +6279,7 @@ impl Params {
             palw_court_commitment_scope_v1: self.palw_court_commitment_scope_v1,
             palw_staged_public_court_v1: self.palw_staged_public_court_v1,
             palw_staged_tir_route_v1: self.palw_staged_tir_route_v1,
+            palw_batch_court_v1: self.palw_batch_court_v1,
             palw_tir_public_conviction_v1: self.palw_tir_public_conviction_v1,
             palw_tir_container_identity_v1: self.palw_tir_container_identity_v1,
             palw_tir_frame_cost_v1: self.palw_tir_frame_cost_v1,
@@ -6315,10 +6344,14 @@ impl Params {
             palw_stage_execution_v28: self.palw_stage_execution_v28.clone(),
             palw_native_execution_v39: self.palw_native_execution_v39.clone(),
             palw_native_mining_v39: self.palw_native_mining_v39.clone(),
+            palw_positive_court_v2: self.palw_positive_court_v2.clone(),
+            palw_positive_assignment_v2: self.palw_positive_assignment_v2.clone(),
+            palw_positive_funding_relay_v2: self.palw_positive_funding_relay_v2.clone(),
             palw_fork_choice_rule_e_v1: self.palw_fork_choice_rule_e_v1,
             palw_typed_roots_v1: self.palw_typed_roots_v1,
             palw_fork_choice_commitment_v1: self.palw_fork_choice_commitment_v1,
             palw_verifier_pay_v1: self.palw_verifier_pay_v1,
+            palw_verifier_watch_v1: self.palw_verifier_watch_v1.clone(),
             palw_model_refutation_seal_v1: self.palw_model_refutation_seal_v1,
             palw_window_class_v37: self.palw_window_class_v37,
             palw_beacon_source_opt_in_v1: self.palw_beacon_source_opt_in_v1,
@@ -6351,6 +6384,7 @@ impl Params {
             palw_court_model_scope_v1: self.palw_court_model_scope_v1,
             palw_public_evidence_reward_v1: self.palw_public_evidence_reward_v1,
             palw_fp_answer_accounting_v1: self.palw_fp_answer_accounting_v1,
+            palw_court_family_supplier_v1: self.palw_court_family_supplier_v1,
             palw_claim_hard_deadline_v1: self.palw_claim_hard_deadline_v1,
             palw_cell_coverage_closure_v1: self.palw_cell_coverage_closure_v1,
             palw_g14_route_required_v1: self.palw_g14_route_required_v1,
@@ -7436,6 +7470,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
@@ -7496,10 +7531,14 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
+    palw_positive_court_v2: None,
+    palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -7532,6 +7571,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -7813,6 +7853,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
@@ -7873,10 +7914,14 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
+    palw_positive_court_v2: None,
+    palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -7909,6 +7954,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -8172,6 +8218,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
@@ -8232,10 +8279,14 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
+    palw_positive_court_v2: None,
+    palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -8268,6 +8319,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,
@@ -13523,6 +13575,7 @@ pub fn palw_v2_params_on_base(
     params.sync_palw_class_registration_origin_v1();
     // RFC-0008's once-only settlement registry and RFC-0007 §4.1's paid-claim trap, likewise.
     params.sync_palw_settlement_once_v1();
+    params.sync_palw_court_family_supplier_v1();
     params.sync_palw_paid_claim_trap_v1();
     params.sync_palw_native_liability_horizon_v1();
     // RFC-0016's two dormant fences (V+ block rights, elastic Final capacity), likewise.
@@ -13758,6 +13811,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_commitment_scope_v1: None,
     palw_staged_public_court_v1: None,
     palw_staged_tir_route_v1: None,
+    palw_batch_court_v1: None,
     palw_tir_public_conviction_v1: None,
     palw_tir_container_identity_v1: None,
     palw_tir_frame_cost_v1: None,
@@ -13836,10 +13890,14 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_stage_execution_v28: None,
     palw_native_execution_v39: None,
     palw_native_mining_v39: None,
+    palw_positive_court_v2: None,
+    palw_positive_assignment_v2: None,
+    palw_positive_funding_relay_v2: None,
     palw_fork_choice_rule_e_v1: None,
     palw_typed_roots_v1: None,
     palw_fork_choice_commitment_v1: None,
     palw_verifier_pay_v1: None,
+    palw_verifier_watch_v1: None,
     palw_model_refutation_seal_v1: None,
     palw_window_class_v37: None,
     palw_beacon_source_opt_in_v1: None,
@@ -13872,6 +13930,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_court_model_scope_v1: None,
     palw_public_evidence_reward_v1: None,
     palw_fp_answer_accounting_v1: None,
+    palw_court_family_supplier_v1: None,
     palw_claim_hard_deadline_v1: None,
     palw_cell_coverage_closure_v1: None,
     palw_g14_route_required_v1: None,

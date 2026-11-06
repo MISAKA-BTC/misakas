@@ -72,14 +72,19 @@ pub fn palw_improvement_sink_binding_refusal_v1(tx: &crate::tx::Transaction) -> 
     if !tx.outputs.iter().any(|output| crate::mldsa87_primitives::p2pkh_mldsa87_payload(&output.script_public_key).is_some()) {
         return Some((first.0, "an improvement sink's carrier pays no P2PKH-ML-DSA-87 output a refusal could be paid back to"));
     }
-    let bound = match borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) {
-        Ok(payload) if payload.version == PALW_LIFECYCLE_TX_VERSION_V2 => match payload.object {
-            crate::palw_state_v2::PalwConsensusObjectV2::ImprovementPoolFunded { payload } => {
-                Some((payload.sink_index as usize, payload.line_id, payload.amount))
-            }
+    // Tag176 belongs to another decoder; do not allocate its body here.
+    let bound = if crate::palw_lifecycle_objects_v2::palw_positive_lifecycle_payload_v2(&tx.payload) {
+        None
+    } else {
+        match borsh::from_slice::<PalwLifecycleTxPayloadV2>(&tx.payload) {
+            Ok(payload) if payload.version == PALW_LIFECYCLE_TX_VERSION_V2 => match payload.object {
+                crate::palw_state_v2::PalwConsensusObjectV2::ImprovementPoolFunded { payload } => {
+                    Some((payload.sink_index as usize, payload.line_id, payload.amount))
+                }
+                _ => None,
+            },
             _ => None,
-        },
-        _ => None,
+        }
     };
     for (index, line) in std::iter::once(first).chain(sinks) {
         match bound {

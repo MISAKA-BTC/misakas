@@ -418,6 +418,42 @@ pub(super) fn check_fee_hold_admits_v1(
     Ok(!builder.state.kernel_route.as_ref().is_some_and(|route| route.aux.contains_key(&(PALW_PAID_CLAIM_TRAP_TABLE_V1, key))))
 }
 
+/// Admission of the funded fee reuses the immutable draw reservation; a late
+/// fate event cannot manufacture R or use the producer's income identity.
+pub(super) fn validate_held_check_fee_income_v1(
+    builder: &TransitionBuilder<'_>,
+    row: &PalwHeldCheckFeeRowV1,
+    now: u64,
+) -> Result<(), PalwStateV2Error> {
+    if !builder.params.bond_budget_active_at(now) || row.fee == 0 {
+        return Ok(());
+    }
+    let bond = builder
+        .state
+        .kernel_route
+        .as_ref()
+        .and_then(|r| r.bond_key_of(&row.verifier))
+        .ok_or_else(|| refused("paid fee verifier absent"))?;
+    let context = crate::palw_verifier_fee_consent_v1::verifier_fee_income_context_v1(row.claim, row.verifier, row.slot);
+    let income = super::palw_bond_budget_fold_v1::source_income_id_v1(context, Hash64::from_bytes(row.claim), &bond);
+    let reserve = builder
+        .state
+        .bond_budget
+        .as_ref()
+        .and_then(|b| b.claim_row(&income))
+        .ok_or_else(|| refused("paid fee has no drawn-slot R reservation"))?;
+    if reserve.origin != crate::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee
+        || !reserve.live
+        || !reserve.in_window
+        || reserve.open
+        || reserve.reserved.reward_sompi < row.fee
+        || reserve.consumed.reward_sompi != 0
+    {
+        return Err(refused("paid fee exceeds unconsumed drawn-slot R"));
+    }
+    Ok(())
+}
+
 /// Write a held check fee (its `fee` is what the poster's escrow actually gave up). A zero fee holds nothing.
 pub(super) fn write_held_check_fee_v1(
     builder: &mut TransitionBuilder<'_>,
@@ -440,29 +476,76 @@ pub(super) fn release_held_check_fee_v1(
     convicted_clean_signer: bool,
     now: u64,
 ) -> Result<(), PalwStateV2Error> {
-    let key = palw_paid_trap_held_fee_key_v1(&row.claim, &row.verifier, row.slot);
-    builder.write_kernel_row_encoded_v1::<PalwHeldCheckFeeRowV1>(PALW_PAID_CLAIM_TRAP_TABLE_V1, &key, None)?;
-    let (_, kept) = if convicted_clean_signer { palw_paid_trap_forfeit_v1(row.fee) } else { (0, row.fee) };
-    let once = builder.settle_once_liable_v1(
-        now,
-        PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, row.claim, row.verifier, row.slot),
-        PalwSettlementConsumerV1::PaidClaimTrap,
-        kept,
-        PalwSettlementDebitV1::Escrow { poster: row.poster, amount: row.fee },
-        PalwLegLiabilityV1::VerifierCheck { claim: row.claim, fee: row.fee, horizon: row.release_after_daa },
-    );
-    let Ok(once) = local_capacity_or_v1(once)? else { return Ok(()) };
-    if !once.pays() || kept == 0 {
-        return Ok(());
+    let checkpoint = builder.try_checkpoint()?;
+    let result = (|| {
+        let (_, kept) = if convicted_clean_signer { palw_paid_trap_forfeit_v1(row.fee) } else { (0, row.fee) };
+        let bond = builder
+            .state
+            .kernel_route
+            .as_ref()
+            .and_then(|r| r.bond_key_of(&row.verifier))
+            .ok_or_else(|| refused("paid check fee recipient missing"))?;
+        let payload = builder.state.bonds.get(&bond).ok_or_else(|| refused("paid check fee payout missing"))?.payout_payload;
+        let context = crate::palw_verifier_fee_consent_v1::verifier_fee_income_context_v1(row.claim, row.verifier, row.slot);
+        let income = super::palw_bond_budget_fold_v1::source_income_id_v1(context, Hash64::from_bytes(row.claim), &bond);
+        let mirror = builder.bond_budget_mirror_at(now);
+        if mirror.is_some() && row.fee > 0 {
+            let reserved = builder
+                .state
+                .bond_budget
+                .as_ref()
+                .and_then(|b| b.claim_row(&income))
+                .ok_or_else(|| refused("paid verifier fee lacks its original drawn-slot R reservation"))?;
+            if reserved.origin != crate::palw_bond_budget_v1::PalwBudgetOriginV1::SourceFee
+                || !reserved.live
+                || reserved.reserved.reward_sompi < row.fee
+                || reserved.consumed.reward_sompi != 0
+            {
+                return Err(refused("paid verifier escrow differs from drawn-slot R reservation"));
+            }
+        }
+        let once = builder.settle_once_liable_v1(
+            now,
+            PalwSettlementObligationV1::with_party(PalwSettlementLegV1::VerifierCheckFee, row.claim, row.verifier, row.slot),
+            PalwSettlementConsumerV1::PaidClaimTrap,
+            kept,
+            PalwSettlementDebitV1::Escrow { poster: row.poster, amount: row.fee },
+            PalwLegLiabilityV1::VerifierCheck { claim: row.claim, fee: row.fee, horizon: row.release_after_daa },
+        )?;
+        let paid = if once.pays() { kept } else { 0 };
+        let queue = crate::palw_kernel_route_v1::palw_kernel_payout_key_v1(&payload);
+        if let Some(mirror) = mirror
+            && row.fee > 0
+        {
+            let queued = super::palw_bond_budget_fold_v1::native_queued_income_id_v1(queue, &bond);
+            builder
+                .bond_budget_op(super::palw_bond_budget_fold_v1::PalwBudgetGrowthV1::point(), |book, _, j| {
+                    if paid > 0 {
+                        book.queue_collected_source_income_v1(&mirror.policy, &income, row.release_after_daa, now, paid, queued, j)
+                    } else {
+                        book.cancel_source_income_v1(&income, j)
+                    }
+                })?
+                .ok_or_else(|| refused("paid verifier fee budget engine missing"))?
+                .map_err(refused)?;
+        }
+        if paid > 0 {
+            builder.add_kernel_payout(payload, paid)?;
+        }
+        if row.fee > 0 {
+            builder.finish_verifier_fee_material_v1(now, row.claim, row.verifier, row.slot, paid, (paid > 0).then_some(queue))?;
+        }
+        builder.write_kernel_row_encoded_v1::<PalwHeldCheckFeeRowV1>(
+            PALW_PAID_CLAIM_TRAP_TABLE_V1,
+            &palw_paid_trap_held_fee_key_v1(&row.claim, &row.verifier, row.slot),
+            None,
+        )?;
+        Ok(())
+    })();
+    if result.is_err() {
+        builder.restore(checkpoint);
     }
-    let Some(bond) = builder.state.kernel_route.as_ref().and_then(|route| route.bond_key_of(&row.verifier)) else { return Ok(()) };
-    let Some(payload) = builder.state.bonds.get(&bond).map(|record| record.payout_payload) else { return Ok(()) };
-    // The same R/F accounting the kernel's `FinalReward` arm does for a check fee, then the payout row.
-    if local_capacity_or_v1(builder.consume_kernel_final_reward_v1(&row.claim, bond, payload, now, kept))?.is_err() {
-        return Ok(());
-    }
-    let _ = local_capacity_or_v1(builder.add_kernel_payout(payload, kept))?;
-    Ok(())
+    result
 }
 
 /// **The closing tick's sweep** (before the ledger's own tick; a no-op below the fence): held check fees whose reveal window has
